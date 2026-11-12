@@ -2,6 +2,7 @@ import type React from 'react';
 import type { Session } from '../../types/backend';
 import { formatDateTime } from '../../utils/format';
 import SessionActivityIndicator from './SessionActivityIndicator';
+import { formatRelativeTime as formatLocalizedRelativeTime, t } from '../../../../shared/core/i18n/index';
 
 function formatRelativeTime(value: string | null | undefined): string {
   const time = new Date(value || '').getTime();
@@ -13,15 +14,15 @@ function formatRelativeTime(value: string | null | undefined): string {
   const hour = 60 * minute;
   const day = 24 * hour;
   if (elapsedMs < minute) {
-    return '刚刚';
+    return t('navigation.sessions.justNow');
   }
   if (elapsedMs < hour) {
-    return `${Math.floor(elapsedMs / minute)} 分钟前`;
+    return formatLocalizedRelativeTime(-Math.floor(elapsedMs / minute), 'minute');
   }
   if (elapsedMs < day) {
-    return `${Math.floor(elapsedMs / hour)} 小时前`;
+    return formatLocalizedRelativeTime(-Math.floor(elapsedMs / hour), 'hour');
   }
-  return `${Math.floor(elapsedMs / day)} 天前`;
+  return formatLocalizedRelativeTime(-Math.floor(elapsedMs / day), 'day');
 }
 
 export default function AgentSessionsSessionButton({
@@ -59,18 +60,18 @@ export default function AgentSessionsSessionButton({
         event.stopPropagation();
         onOpenMenu(session, event.clientX, event.clientY);
       }}
-      title={`${session.title || '未命名'}\n${session.session_id}`}
+      title={`${session.title || t('navigation.sessions.untitled')}\n${session.session_id}`}
     >
-      <span className="session-title">{session.title || '未命名'}</span>
+      <span className="session-title">{session.title || t('navigation.sessions.untitled')}</span>
       <SessionActivityIndicator running={running} unread={unread} />
       <span className="session-time">
-        {relativeTime || formatDateTime(session.updated_at || session.created_at) || 'now'}
+        {relativeTime || formatDateTime(session.updated_at || session.created_at) || t('navigation.sessions.now')}
       </span>
       {showToggle ? (
         <span
           className={`codicon codicon-chevron-${expanded ? 'down' : 'right'} session-tree-chevron`}
           aria-hidden="true"
-          title={expanded ? '折叠子会话' : '展开子会话'}
+          title={expanded ? t('navigation.sessions.collapseChildren') : t('navigation.sessions.expandChildren')}
           onClick={(event) => {
             event.stopPropagation();
             onToggle?.();

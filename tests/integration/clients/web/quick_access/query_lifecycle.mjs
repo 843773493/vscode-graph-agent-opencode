@@ -110,7 +110,7 @@ try {
     await expect(quick).toContainText('选择快速访问搜索范围');
     for (const target of targets) await quick.locator('.monaco-list-row').filter({ hasText: target.gateway_id })
       .filter({ hasText: target.workspace_id }).getByRole('checkbox').check();
-    await quick.getByRole('button', { name: 'OK', exact: true }).click();
+    await quick.getByRole('button', { name: '确定', exact: true }).click();
   };
   result.phase = 'typing-and-shared-roots';
   await command('workbench.action.quickOpen', '');

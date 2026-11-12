@@ -1,3 +1,5 @@
+import actionTitles from '../../shared/core/i18n/actionTitles.en.json';
+import { t, formatNumber } from '../../shared/core/i18n/index.js';
 import { Action2, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
 import { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
@@ -25,7 +27,7 @@ async function selectRecoveryFiles(): Promise<unknown> {
 }
 
 registerAction2(class extends Action2 {
-  constructor() { super({ id: 'boxteam.workspaceIdentity.importRecovery', title: { value: '导入工作区身份恢复材料', original: 'Import Workspace Identity Recovery' }, f1: true }); }
+  constructor() { super({ id: 'boxteam.workspaceIdentity.importRecovery', title: { value: t('workbench.identityRecovery.import'), original: actionTitles['workbench.identityRecovery.import'] }, f1: true }); }
   async run(accessor: ServicesAccessor, input?: unknown): Promise<unknown> {
     const notifications = accessor.get(INotificationService), groups = accessor.get(IEditorGroupsService);
     const storage = accessor.get(IStorageService), instantiation = accessor.get(IInstantiationService);
@@ -33,7 +35,7 @@ registerAction2(class extends Action2 {
     if (source === undefined) return;
     const materials = parseWorkspaceIdentityRecoveries(typeof source === 'string' ? JSON.parse(source) : source);
     const connectedGateway = await browserGatewayId(0);
-    if (!materials.some(material => material.registry_gateway_id === connectedGateway)) throw new Error('恢复材料未包含当前连接的登记 Gateway，原记录未改动');
+    if (!materials.some(material => material.registry_gateway_id === connectedGateway)) throw new Error(t('workbench.identityRecovery.gatewayMissing'));
     const report = await recoverWorkspaceIdentity(materials);
     const editors = { storage: 'workbench-editors', changed: 0, issues: [] as { key: string; message: string }[] };
     for (const group of groups.groups) {
@@ -49,14 +51,14 @@ registerAction2(class extends Action2 {
     }
     // 无 Gateway 来源的旧面板键保留，不因当前连接恰有同名 alias 而改投。
     for (const key of storage.keys(StorageScope.WORKSPACE, StorageTarget.MACHINE)) {
-      if (key.startsWith('boxteam.workspacePanel.gw_')) editors.issues.push({ key, message: '旧面板记录缺少来源 Gateway，原记录已保留' });
+      if (key.startsWith('boxteam.workspacePanel.gw_')) editors.issues.push({ key, message: t('workbench.identityRecovery.oldPanel') });
     }
     report.batches.push(editors);
     await storage.flush(WillSaveStateReason.NONE);
     for (const material of materials) await updateBrowserView(browserViewKey(material.registry_gateway_id, 'workspace-identity-recovery', material.migration_id), () => report);
     const issues = report.batches.flatMap(batch => batch.issues.map(issue => `${batch.storage} / ${issue.key}：${issue.message}`));
-    if (issues.length) notifications.error(`工作区身份恢复有 ${issues.length} 项未完成，原件保留，可重试同一材料：\n${issues.join('\n')}`);
-    else notifications.info('工作区身份恢复已保存，请重载工作台以恢复选择和待确认操作。');
+    if (issues.length) notifications.error(t('workbench.identityRecovery.incomplete', formatNumber(issues.length), issues.join('\n')));
+    else notifications.info(t('workbench.identityRecovery.saved'));
     return report;
   }
 });

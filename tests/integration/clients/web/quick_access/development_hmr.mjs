@@ -74,7 +74,7 @@ try {
   const scriptPaths = result.scripts.map(source => new URL(source).pathname);
   expect(scriptPaths.filter(path => path === '/out/main.js')).toHaveLength(0);
   expect(scriptPaths.filter(path => path === '/@vite/client')).toHaveLength(1);
-  expect(scriptPaths.filter(path => path === '/src/main.ts')).toHaveLength(1);
+  expect(scriptPaths.filter(path => path === '/src/bootstrap.ts')).toHaveLength(1);
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';
 } catch (error) {

@@ -1,3 +1,4 @@
+import { formatNumber, t } from '../../../../shared/core/i18n/index.js';
 import { useMemo, type ReactNode } from "react";
 import { buildSessionTree, type SessionTreeNode } from "../../state/session/sessionTree";
 import type { Session } from "../../types/backend";
@@ -103,7 +104,7 @@ export default function AgentSessionsSessionTree({
           className="session-show-more-button"
           onClick={() => onToggleShowAllRoots(treeId)}
         >
-          {showAllRoots ? "收起其余会话" : `显示剩余 ${hiddenSessionCount} 个会话`}
+          {showAllRoots ? t('navigation.sessions.collapseRemaining') : t('navigation.sessions.showRemaining', formatNumber(hiddenSessionCount))}
         </button>
       ) : null}
     </>

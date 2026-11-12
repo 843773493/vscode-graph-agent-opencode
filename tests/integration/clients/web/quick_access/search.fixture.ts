@@ -1,3 +1,4 @@
+import '../../../../harness/js/workbench-locale.ts';
 import { URI } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';
 import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { extUri, type IExtUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';

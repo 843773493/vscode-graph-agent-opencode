@@ -9,29 +9,45 @@ import sys
 from pathlib import Path
 from typing import cast
 
+import httpx
 import pytest
 
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
-    browser_backend as browser_backend,  # noqa: PLC0414
+    chat_backend as chat_backend,  # noqa: PLC0414
+)
+from tests.integration.clients.web.test_basic_chat_tool_loop import (
+    chat_backend_boxteam_home as chat_backend_boxteam_home,  # noqa: PLC0414
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
-from tests.support.processes.gateway import close_gateway_process, start_gateway_process
+from tests.support.processes.gateway import (
+    LOCAL_TOKEN_HEADERS,
+    close_gateway_process,
+    start_gateway_process,
+)
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 
 
 async def test_thread_outline_pages_preview_cancel_and_accept(
-    request: pytest.FixtureRequest, browser_backend: tuple[str, Path, ModelStreamReplay],
+    request: pytest.FixtureRequest, chat_backend: tuple[str, Path, ModelStreamReplay],
+    chat_backend_boxteam_home: Path,
+    prepared_developer_tools_package: Path,
     web_workbench_assets: Path, search_gateway_port: int,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "Thread 大纲验收需要 Chromium"
-    backend_url, workspace, replay = browser_backend
+    backend_url, workspace, replay = chat_backend
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, chat_backend_boxteam_home)
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspace,
-        default_backend_url=backend_url, port=search_gateway_port, artifacts_dir=context.artifacts_dir / "gateway",
+        default_backend_url=backend_url, port=search_gateway_port,
+        artifacts_dir=context.artifacts_dir / "gateway", boxteam_home=chat_backend_boxteam_home,
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     model = "browser-chat-tool-loop-stub"
     endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
@@ -46,6 +62,13 @@ async def test_thread_outline_pages_preview_cancel_and_accept(
     supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
                           "--timeout-seconds", "720", "--", *command]
     try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}",
+                                     headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
+            response = await client.get("/api/gateway/workspaces?check_health=false")
+            response.raise_for_status()
+            owner = response.json()["data"]["active_workspace"]
+            await enable_developer_tools_plugins(client, gateway_id=owner["gateway_id"],
+                                                 workspace_id=owner["workspace_id"], plugin_ids=("terminal", "browser"))
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(subprocess.run, supervised_command, cwd=context.project_root,
                 env={**os.environ, **temporary, **replay.environment,

@@ -4,9 +4,13 @@ import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/sr
 import { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
+import { setLocaleResources } from '../../../../../src/clients/shared/core/i18n/index.js';
+import english from '../../../../../src/clients/shared/core/i18n/messages/en.json';
+import chinese from '../../../../../src/clients/shared/core/i18n/messages/zh-cn.json';
 
 /** 真实正文 Provider 与联邦 HTTP 客户端；仅宿主 Picker 事件和 Gateway 响应为装具。 */
-export async function contentSelectionContract(mode) {
+export async function contentSelectionContract({ mode, locale = 'zh-cn' }) {
+  setLocaleResources(locale, locale === 'en' ? english : chinese);
   const originalFetch = globalThis.fetch, before = workspaceContext.getSnapshot();
   const owner = { gatewayId: 'gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', workspaceId: '019a0000-0000-7000-8000-000000000001' };
   const otherOwner = { ...owner, workspaceId: '019a0000-0000-7000-8000-000000000002' };
@@ -103,7 +107,7 @@ export async function contentSelectionContract(mode) {
       await until(() => errors.length === 1);
       return { requests, shows, errors, cancelled: choice.token.isCancellationRequested, beforeConfirm, preset };
     }
-    choice.resolve(mode === 'cancel' ? undefined : choice.items.filter(item => categories.includes(item.label)));
+    choice.resolve(mode === 'cancel' ? undefined : choice.items.filter(item => categories.includes(item.category)));
     await until(() => requests.length === (mode === 'cancel' ? 2 : 1) && !current.picker.busy);
     let retryLabel;
     if (mode === 'logs') {
@@ -112,7 +116,8 @@ export async function contentSelectionContract(mode) {
       await until(() => requests.length === 2 && !current.picker.busy);
     }
     return { requests, shows, errors, beforeConfirm, preset, canPickMany: choice.options.canPickMany,
-      choices: choice.items.map(item => item.label), placeholder: current.picker.placeholder, query: current.picker.value, retryLabel,
+      choices: choice.items.map(item => item.label), choiceTitle: choice.options.title, choiceHint: choice.options.placeHolder,
+      placeholder: current.picker.placeholder, query: current.picker.value, retryLabel,
       labels: current.picker.items.map(item => item.label) };
   } finally {
     closing = true;
@@ -121,6 +126,6 @@ export async function contentSelectionContract(mode) {
       host.lifetime.dispose(); host.provider.dispose(); host.cancellation.dispose(true);
       for (const event of [host.changes, host.accepts, host.buttons]) event.dispose();
     }
-    workspaceContext.publish(before); globalThis.fetch = originalFetch;
+    workspaceContext.publish(before); globalThis.fetch = originalFetch; setLocaleResources('zh-cn', chinese);
   }
 }

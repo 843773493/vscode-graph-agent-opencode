@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import * as glob from '../../upstream/src/vs/base/common/glob.js';
 import type { IExtUri } from '../../upstream/src/vs/base/common/resources.js';
 import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
@@ -34,7 +35,7 @@ export async function canonicalFileQuery<T extends ICommonQueryProps<URI>>(query
       extraFileResources: query.extraFileResources?.map(resource => mapped.get(resource)!) };
   } catch (error) {
     if (token.isCancellationRequested) throw new CancellationError();
-    if (Date.now() >= deadlineAt) throw new Error('文件搜索超过本次总期限', { cause: error });
+    if (Date.now() >= deadlineAt) throw new Error(t('quickAccess.files.deadlineExceeded'), { cause: error });
     throw error;
   } finally { clearTimeout(timer); cancellation.dispose(); }
 }
@@ -42,30 +43,30 @@ export async function canonicalFileQuery<T extends ICommonQueryProps<URI>>(query
 export function businessQuery(query: ICommonQueryProps<URI>): boolean {
   const resources = [...query.folderQueries.map(folder => folder.folder), ...(query.extraFileResources ?? [])];
   if (!resources.some(resource => resource.scheme === fileScheme)) return false;
-  if (resources.some(resource => resource.scheme !== fileScheme)) throw new Error('业务搜索不能混入原生容器或其它资源根');
-  if (!query.folderQueries.length) throw new Error('业务搜索必须提供明确目录根');
+  if (resources.some(resource => resource.scheme !== fileScheme)) throw new Error(t('quickAccess.query.mixedRoots'));
+  if (!query.folderQueries.length) throw new Error(t('quickAccess.query.rootsRequired'));
   return true;
 }
 
 export function patterns(expression?: glob.IExpression): string[] {
   return Object.entries(expression ?? {}).flatMap(([pattern, enabled]) => {
-    if (typeof enabled !== 'boolean') throw new Error('业务文件搜索尚未支持 sibling 条件模式');
+    if (typeof enabled !== 'boolean') throw new Error(t('quickAccess.query.siblingUnsupported'));
     return enabled ? [pattern] : [];
   });
 }
 
 export function fileOptions(query: ICommonQueryProps<URI>, folder: IFolderQuery, identity: IExtUri): ResourceNavigationSearchOptions {
   // TODO：其余显式选项仍需迁齐目标 owner；未支持时不能悄悄弱化查询。
-  if (query.ignoreGlobCase || folder.ignoreGlobCase) throw new Error('业务文件搜索尚未支持忽略 glob 大小写');
-  if (folder.fileEncoding && !/^utf-?8$/i.test(folder.fileEncoding)) throw new Error('业务文件搜索只支持 UTF-8');
-  if (folder.ignoreSymlinks) throw new Error('业务文件搜索尚未支持忽略符号链接');
+  if (query.ignoreGlobCase || folder.ignoreGlobCase) throw new Error(t('quickAccess.query.globCaseUnsupported'));
+  if (folder.fileEncoding && !/^utf-?8$/i.test(folder.fileEncoding)) throw new Error(t('quickAccess.query.utf8Only'));
+  if (folder.ignoreSymlinks) throw new Error(t('quickAccess.query.symlinksUnsupported'));
   if (folder.disregardGlobalIgnoreFiles === false || folder.disregardParentIgnoreFiles === false) {
-    throw new Error('业务文件搜索尚未支持全局或父目录 ignore 文件');
+    throw new Error(t('quickAccess.query.ignoreFilesUnsupported'));
   }
   const globalIncludes = patterns(query.includePattern), folderIncludes = patterns(folder.includePattern);
-  if (globalIncludes.length && folderIncludes.length) throw new Error('业务文件搜索尚未支持两层 include 模式的交集');
+  if (globalIncludes.length && folderIncludes.length) throw new Error(t('quickAccess.query.includeIntersectionUnsupported'));
   const excludes = (folder.excludePattern ?? []).flatMap(exclude => {
-    if (exclude.folder && !identity.isEqual(exclude.folder, folder.folder)) throw new Error('业务文件搜索尚未支持子目录限定的 exclude 模式');
+    if (exclude.folder && !identity.isEqual(exclude.folder, folder.folder)) throw new Error(t('quickAccess.query.nestedExcludeUnsupported'));
     return patterns(exclude.pattern);
   });
   return { case_mode: 'sensitive', is_regex: false, whole_word: false, is_multiline: false, all_matches: false, context_lines: 0,
@@ -83,17 +84,17 @@ function uniqueFolders(query: ICommonQueryProps<URI>, identity: IExtUri): IFolde
     const previous = folders.find(item => identity.isEqual(item.folder, folder.folder));
     if (!previous) folders.push(folder);
     else if (JSON.stringify(fileOptions(query, folder, identity)) !== JSON.stringify(fileOptions(query, previous, identity))) {
-      throw new Error('同一搜索目录具有冲突的局部选项，请分别查询');
+      throw new Error(t('quickAccess.query.folderOptionConflict'));
     }
   }
   return folders;
 }
 
 export function validateQuery<T extends ICommonQueryProps<URI>>(query: T, identity: IExtUri): T {
-  if (!businessQuery(query)) throw new Error('业务文件 Provider 只接受明确的业务资源根');
-  if (query.onlyFileScheme) throw new Error('业务搜索不能限定为原生 file scheme');
+  if (!businessQuery(query)) throw new Error(t('quickAccess.query.resourceRootsRequired'));
+  if (query.onlyFileScheme) throw new Error(t('quickAccess.query.nativeSchemeUnsupported'));
   if (query.maxResults !== undefined && (!Number.isSafeInteger(query.maxResults) || query.maxResults < 0)) {
-    throw new Error('搜索结果上限必须是非负整数');
+    throw new Error(t('quickAccess.query.resultLimitInvalid'));
   }
   for (const folder of query.folderQueries) {
     workspaceFileSource(folder.folder);
@@ -102,7 +103,7 @@ export function validateQuery<T extends ICommonQueryProps<URI>>(query: T, identi
   for (const resource of query.extraFileResources ?? []) {
     workspaceFileSource(resource);
     if (!query.folderQueries.some(folder => identity.isEqualOrParent(resource, folder.folder))) {
-      throw new Error('额外搜索文件不属于本次明确目录根');
+      throw new Error(t('quickAccess.query.extraFileOutsideScope'));
     }
   }
   return { ...query, folderQueries: uniqueFolders(query, identity), extraFileResources: query.extraFileResources
@@ -112,18 +113,18 @@ export function validateQuery<T extends ICommonQueryProps<URI>>(query: T, identi
 export function validateTextQuery(query: ITextQuery, identity: IExtUri): ITextQuery {
   query = validateQuery(query, identity);
   if (query.surroundingContext !== undefined && (!Number.isSafeInteger(query.surroundingContext) || query.surroundingContext < 0 || query.surroundingContext > 100)) {
-    throw new Error('搜索前后文行数必须是 0～100 的整数');
+    throw new Error(t('quickAccess.query.contextInvalid'));
   }
-  if (!query.contentPattern.pattern) throw new Error('文件内容搜索不能为空');
+  if (!query.contentPattern.pattern) throw new Error(t('quickAccess.query.patternRequired'));
   if (query.previewOptions) {
     // TODO：原文件 owner 支持多行片段后，贯通其独立位置与预览行数；目前只交付有界首行。
-    if (query.previewOptions.matchLines !== 1) throw new Error('业务文件搜索目前只支持单行预览');
+    if (query.previewOptions.matchLines !== 1) throw new Error(t('quickAccess.query.singleLinePreviewOnly'));
     if (!Number.isSafeInteger(query.previewOptions.charsPerLine) || query.previewOptions.charsPerLine < 1) {
-      throw new Error('文件搜索预览列数必须是正整数');
+      throw new Error(t('quickAccess.query.previewColumnsInvalid'));
     }
   }
   if (query.maxFileSize !== undefined && (!Number.isSafeInteger(query.maxFileSize) || query.maxFileSize < 1 || query.maxFileSize > 33554432)) {
-    throw new Error('业务文件搜索的文件读取上限必须在 1～33554432 字节内');
+    throw new Error(t('quickAccess.query.fileSizeInvalid'));
   }
   return query;
 }

@@ -1,10 +1,12 @@
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { taskLabel as label } from "./taskPresentation";
+import { formatLocalTimestamp } from "../../../utils/format";
 import { useEffect, useState } from "react";
 import { inspectPersistentTaskRun, type PersistentTaskRunDTO, type PersistentTaskRunDetailDTO, type TaskThreadTargetDTO } from "../../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import { errorMessage } from "../../../utils/errorMessage";
 
-const time = (value: string | undefined) => value ? new Date(value).toLocaleString() : "—";
+const time = (value: string | undefined) => value ? formatLocalTimestamp(value) : "—";
 
 function RunDetail({ apiPort, target, run, onOpenThread }: {
   apiPort: number; target: GatewayWorkspaceRequestTarget; run: PersistentTaskRunDTO;
@@ -26,21 +28,21 @@ function RunDetail({ apiPort, target, run, onOpenThread }: {
     try { await onOpenThread(thread); }
     catch (cause) { setError(errorMessage(cause)); }
   };
-  return <section aria-label={`运行详情 ${run.run_id}`}>
-    <button onClick={() => setVersion((value) => value + 1)}>刷新运行详情</button>
+  return <section aria-label={t("tasks.history.aria", run.run_id)}>
+    <button onClick={() => setVersion((value) => value + 1)}>{t("tasks.history.refresh")}</button>
     {error ? <div role="alert">{error}</div> : null}
-    {!detail && !error ? <p role="status">正在读取冻结输入与执行证据…</p> : null}
+    {!detail && !error ? <p role="status">{t("tasks.history.loadingDetail")}</p> : null}
     {detail ? <>
-      <p>触发：{time(run.scheduled_for ?? run.created_at)} · {label(run.trigger_type)} · 定义版本 {run.definition_revision}</p>
-      {detail.evaluation_target ? <p><button onClick={() => void open(detail.evaluation_target!)}>打开判断 Thread</button> <code>{detail.evaluation_target.uri}</code></p> : null}
-      {detail.work_target ? <p><button onClick={() => void open(detail.work_target!)}>打开工作 Thread</button> <code>{detail.work_target.uri}</code></p> : null}
-      {detail.consumption ? <p>已消费：输入已进入派发的模型请求。<br />模型调用：<code>{detail.consumption.model_call_id}</code><br />Assembly：<code>{detail.consumption.assembly_id}</code><br />请求 hash：<code>{detail.consumption.request_hash}</code></p>
-        : <p>尚无输入进入派发请求的证据。</p>}
-      {detail.execution_outcome ? <p>工作执行：{label(detail.execution_outcome)}</p> : null}
-      {detail.action_content ? <details open><summary>实际投递正文（canonical）</summary><pre>{detail.action_content}</pre></details> : null}
-      {run.decision ? <details><summary>结构化判断结果</summary><pre>{JSON.stringify(run.decision.result, null, 2)}</pre></details> : null}
-      <details><summary>冻结判断输入</summary><pre>{JSON.stringify(detail.check_input, null, 2)}</pre></details>
-      <details><summary>本次运行的任务定义</summary><pre>{JSON.stringify(detail.configuration, null, 2)}</pre></details>
+      <p>{t("tasks.history.triggered", time(run.scheduled_for ?? run.created_at), label(run.trigger_type), formatNumber(run.definition_revision))}</p>
+      {detail.evaluation_target ? <p><button onClick={() => void open(detail.evaluation_target!)}>{t("tasks.history.openEvaluation")}</button> <code>{detail.evaluation_target.uri}</code></p> : null}
+      {detail.work_target ? <p><button onClick={() => void open(detail.work_target!)}>{t("tasks.history.openWork")}</button> <code>{detail.work_target.uri}</code></p> : null}
+      {detail.consumption ? <p>{t("tasks.history.consumed")}<br />{t("tasks.history.modelCall")}<code>{detail.consumption.model_call_id}</code><br />{t("tasks.history.assembly")}<code>{detail.consumption.assembly_id}</code><br />{t("tasks.history.hash")}<code>{detail.consumption.request_hash}</code></p>
+        : <p>{t("tasks.history.notConsumed")}</p>}
+      {detail.execution_outcome ? <p>{t("tasks.history.outcome", label(detail.execution_outcome))}</p> : null}
+      {detail.action_content ? <details open><summary>{t("tasks.history.content")}</summary><pre>{detail.action_content}</pre></details> : null}
+      {run.decision ? <details><summary>{t("tasks.history.decision")}</summary><pre>{JSON.stringify(run.decision.result, null, 2)}</pre></details> : null}
+      <details><summary>{t("tasks.history.input")}</summary><pre>{JSON.stringify(detail.check_input, null, 2)}</pre></details>
+      <details><summary>{t("tasks.history.configuration")}</summary><pre>{JSON.stringify(detail.configuration, null, 2)}</pre></details>
     </> : null}
   </section>;
 }
@@ -51,14 +53,14 @@ function RunRow({ apiPort, target, run, onOpenSession, onOpenThread }: {
 }) {
   const [expanded, setExpanded] = useState(false);
   return <li>
-    <strong>{run.check_only ? "检查试运行" : label(run.trigger_type)} · {label(run.phase)}</strong>
-    <div>{time(run.scheduled_for ?? run.created_at)} · 定义版本 {run.definition_revision}</div>
+    <strong>{run.check_only ? t("tasks.action.checkOnly") : label(run.trigger_type)} · {label(run.phase)}</strong>
+    <div>{t("tasks.history.revision", time(run.scheduled_for ?? run.created_at), formatNumber(run.definition_revision))}</div>
     {run.decision ? <p>{label(run.decision.decision)}：{run.decision.reason}</p> : null}
-    {run.delivery ? <p>{run.delivery.state === "saved" ? "内容已保存，尚不代表模型已消费" : run.delivery.state === "accepted" ? "执行已接受，尚不代表执行已完成" : `未知投递状态：${run.delivery.state}`}<br />来源：<code>{run.delivery.source_id}</code>{run.delivery.execution_id ? <><br />执行：<code>{run.delivery.execution_id}</code></> : null}</p> : null}
-    {run.evaluation ? <p>判断 Thread：<code>{run.evaluation.thread_uri}</code><br />判断执行：<code>{run.evaluation.execution_id}</code></p> : null}
-    {run.generation ? <div><strong>会话动作：{run.generation.status}</strong>{run.generation.outputs.map((output) => <p key={output.session_id}><button onClick={() => void onOpenSession(output.session_id)}>{output.title || output.session_id}</button> · {output.navigation_path.join("/") || "工作区根"}</p>)}{run.generation.job_id ? <p>工作执行：<code>{run.generation.job_id}</code></p> : null}{run.generation.report_back_job_id ? <p>回报执行：<code>{run.generation.report_back_job_id}</code></p> : null}</div> : null}
+    {run.delivery ? <p>{run.delivery.state === "saved" ? t("tasks.history.saved") : run.delivery.state === "accepted" ? t("tasks.history.accepted") : t("tasks.history.unknownDelivery", run.delivery.state)}<br />{t("tasks.history.source")}<code>{run.delivery.source_id}</code>{run.delivery.execution_id ? <><br />{t("tasks.history.execution")}<code>{run.delivery.execution_id}</code></> : null}</p> : null}
+    {run.evaluation ? <p>{t("tasks.history.evaluationThread")}<code>{run.evaluation.thread_uri}</code><br />{t("tasks.history.evaluationExecution")}<code>{run.evaluation.execution_id}</code></p> : null}
+    {run.generation ? <div><strong>{t("tasks.history.sessionAction", label(run.generation.status))}</strong>{run.generation.outputs.map((output) => <p key={output.session_id}><button onClick={() => void onOpenSession(output.session_id)}>{output.title || output.session_id}</button> · {output.navigation_path.join("/") || t("tasks.generation.workspaceRoot")}</p>)}{run.generation.job_id ? <p>{t("tasks.history.workExecution")}<code>{run.generation.job_id}</code></p> : null}{run.generation.report_back_job_id ? <p>{t("tasks.history.reportExecution")}<code>{run.generation.report_back_job_id}</code></p> : null}</div> : null}
     {run.error ? <div role="alert">{run.error}</div> : null}
-    <button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "收起运行详情" : "查看运行详情"}</button>
+    <button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? t("tasks.history.collapse") : t("tasks.history.expand")}</button>
     {expanded ? <RunDetail apiPort={apiPort} target={target} run={run} onOpenThread={onOpenThread} /> : null}
   </li>;
 }

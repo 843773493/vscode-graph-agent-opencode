@@ -26,7 +26,7 @@ export async function verifySearchRecovery({ page, command, api, result, fileUri
   const groups = page.locator('.editor-group-container');
   const a = groups.first().locator('.search-editor'), b = groups.nth(1).locator('.search-editor');
   const lines = editor => editor.locator('.monaco-editor .view-lines');
-  const input = editor => editor.getByRole('textbox', { name: 'Search: Type Search Term and press Enter to search', exact: true });
+  const input = editor => editor.getByRole('textbox', { name: '搜索: 键入搜索词，然后按 Enter 进行搜索', exact: true });
   const rerun = async (editor, query, expected, owner) => {
     const before = result.searches.length;
     await input(editor).fill(query);

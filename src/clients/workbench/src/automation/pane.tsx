@@ -1,4 +1,5 @@
 import { EditorPane } from '../../upstream/src/vs/workbench/browser/parts/editor/editorPane.js';
+import { t } from '../../../shared/core/i18n/index.js';
 import { EditorInput } from '../../upstream/src/vs/workbench/common/editor/editorInput.js';
 import type { IEditorOpenContext } from '../../upstream/src/vs/workbench/common/editor.js';
 import type { IEditorOptions } from '../../upstream/src/vs/platform/editor/common/editor.js';
@@ -40,7 +41,7 @@ export class AutomationPane extends EditorPane {
   override async setInput(input: EditorInput, options: AutomationEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
     this.clearInput();
     await super.setInput(input, options, context, token);
-    if (!(input instanceof AutomationInput)) throw new Error('自动化编辑器需要明确任务 owner');
+    if (!(input instanceof AutomationInput)) throw new Error(t('workbench.automation.ownerRequired'));
     await gateway.resolveWorkspace(input.owner);
     if (token.isCancellationRequested || this.input !== input) return;
     this.current = input;

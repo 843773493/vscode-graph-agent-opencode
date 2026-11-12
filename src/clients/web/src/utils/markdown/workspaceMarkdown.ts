@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { resourceFileRootUri } from "../workspaceFileReferences";
 
 export type WorkspaceMarkdownTarget =
@@ -13,7 +14,7 @@ export function resolveWorkspaceMarkdownTarget(
 ): WorkspaceMarkdownTarget {
   const trimmed = target.trim();
   if (!trimmed) {
-    throw new Error("Markdown 资源地址不能为空");
+    throw new Error(t("workspace.markdown.errors.emptyAddress"));
   }
   if (trimmed.startsWith("#")) {
     return { kind: "anchor", href: trimmed };
@@ -37,16 +38,16 @@ export function resolveWorkspaceMarkdownTarget(
   try {
     decodedPath = decodeURIComponent(encodedPath);
   } catch (error) {
-    throw new Error(`Markdown 资源地址包含非法转义: ${target}`, { cause: error });
+    throw new Error(t("workspace.markdown.errors.invalidEscape", target), { cause: error });
   }
 
   if (decodedPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(decodedPath)) {
     return { kind: "workspace", path: decodedPath, fragment };
   }
   const resourceRootUri = resourceFileRootUri(markdownPath);
-  if (resourceRootUri === null) throw new Error("Markdown 文件缺少资源 URI");
+  if (resourceRootUri === null) throw new Error(t("workspace.markdown.errors.fileMissingUri"));
   const resourceRootEndIndex = resourceRootUri.length;
-  if (resourceRootEndIndex === markdownPath.length) throw new Error("Markdown 地址没有指向文件");
+  if (resourceRootEndIndex === markdownPath.length) throw new Error(t("workspace.markdown.errors.addressNotFile"));
   const baseSegments = markdownPath.slice(resourceRootEndIndex + 1).split("/").slice(0, -1).map(decodeURIComponent);
   for (const segment of decodedPath.replace(/\\/g, "/").split("/")) {
     if (!segment || segment === ".") {
@@ -54,7 +55,7 @@ export function resolveWorkspaceMarkdownTarget(
     }
     if (segment === "..") {
       if (baseSegments.length === 0) {
-        throw new Error(`Markdown 资源地址越过工作区根目录: ${target}`);
+        throw new Error(t("workspace.markdown.errors.outsideWorkspace", target));
       }
       baseSegments.pop();
       continue;
@@ -62,7 +63,7 @@ export function resolveWorkspaceMarkdownTarget(
     baseSegments.push(segment);
   }
   if (baseSegments.length === 0) {
-    throw new Error(`Markdown 资源地址没有指向文件: ${target}`);
+    throw new Error(t("workspace.markdown.errors.targetNotFile", target));
   }
   return {
     kind: "workspace",

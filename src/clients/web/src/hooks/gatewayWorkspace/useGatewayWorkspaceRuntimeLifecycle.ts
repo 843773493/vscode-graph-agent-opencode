@@ -22,6 +22,7 @@ import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState
 import { errorMessage } from "../../utils/errorMessage";
 import { pauseWorkspaceObservations } from "../workspace/workspaceObservationLifecycle";
 import { activeGatewayWorkspaceFields } from "./activeGatewayWorkspaceFields";
+import { t } from "../../../../shared/core/i18n/index.js";
 
 type RefreshGatewayState = (expectedSelectionIntent?: number) => Promise<void>;
 
@@ -60,7 +61,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
     setState((prev) => requestIsCurrent() ? ({
       ...prev,
       gatewayError: null,
-      status: "正在重新连接工作区",
+      status: t("gateway.workspace.reconnectingWorkspace"),
     }) : prev);
 
     const outcome = await runGatewayWorkspaceListTask<ReconnectOutcome>(async () => {
@@ -102,18 +103,18 @@ export function useGatewayWorkspaceRuntimeLifecycle({
     });
 
     if (outcome.kind === "readback-failed") {
-      const message = `${errorMessage(outcome.postError)}；读取 Gateway 工作区列表失败: ${errorMessage(outcome.readbackError)}`;
+      const message = t("gateway.workspace.operationAndListReadFailed", errorMessage(outcome.postError), errorMessage(outcome.readbackError));
       setState((prev) => {
         if (!requestIsCurrent()) {
-          const scopedFailure = `重新连接工作区失败: ${message}`;
-          return { ...prev, status: prev.status ? `${prev.status}；${scopedFailure}` : scopedFailure };
+          const scopedFailure = t("gateway.workspace.reconnectFailed", message);
+          return { ...prev, status: prev.status ? `${prev.status}${t("gateway.workspace.blockerSeparator")}${scopedFailure}` : scopedFailure };
         }
         return {
           ...prev,
           gatewayWorkspacesStale: true,
           workspaceSwitching: false,
           gatewayError: message,
-          status: `重新连接工作区失败: ${message}`,
+          status: t("gateway.workspace.reconnectFailed", message),
         };
       });
       throw outcome.postError;
@@ -123,25 +124,25 @@ export function useGatewayWorkspaceRuntimeLifecycle({
     const activeWorkspaceIsListed = nullableGatewayWorkspaceKey(workspaces.active_workspace) === null
       || workspaces.items.some((item) => gatewayWorkspaceKey(item) === nullableGatewayWorkspaceKey(workspaces.active_workspace));
     if (!activeWorkspaceIsListed) {
-      const detail = `Gateway 返回的活动工作区不在工作区列表中: ${nullableGatewayWorkspaceKey(workspaces.active_workspace)}`;
+      const detail = t("gateway.workspace.activeWorkspaceMissingFromList", nullableGatewayWorkspaceKey(workspaces.active_workspace));
       if (outcome.kind === "readback") {
-        const message = `${errorMessage(outcome.postError)}；读取 Gateway 工作区列表失败: ${detail}`;
+        const message = t("gateway.workspace.operationAndListReadFailed", errorMessage(outcome.postError), detail);
         setState((prev) => {
           if (!requestIsCurrent()) {
-            const scopedFailure = `重新连接工作区失败: ${message}`;
-            return { ...prev, status: prev.status ? `${prev.status}；${scopedFailure}` : scopedFailure };
+            const scopedFailure = t("gateway.workspace.reconnectFailed", message);
+            return { ...prev, status: prev.status ? `${prev.status}${t("gateway.workspace.blockerSeparator")}${scopedFailure}` : scopedFailure };
           }
           return {
             ...prev,
             gatewayWorkspacesStale: true,
             workspaceSwitching: false,
             gatewayError: message,
-            status: `重新连接工作区失败: ${message}`,
+            status: t("gateway.workspace.reconnectFailed", message),
           };
         });
         throw outcome.postError;
       }
-      const message = `已重新连接，但界面同步失败: ${detail}`;
+      const message = t("gateway.workspace.reconnectedButSyncFailed", detail);
       setState((prev) => requestIsCurrent() ? ({
         ...prev,
         gatewayWorkspacesStale: true,
@@ -165,13 +166,13 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       expectedListRequest = gatewayListRequestRef.current;
       const appliedWorkspaceId = await refresh;
       if (appliedWorkspaceId === null) {
-        throw new Error("工作区刷新未生效：本轮刷新已被更新的请求作废");
+        throw new Error(t("gateway.workspace.refreshSuperseded"));
       }
       if (appliedWorkspaceId !== nullableGatewayWorkspaceKey(workspaces.active_workspace)) {
-        throw new Error(`工作区刷新结果与 Gateway 活动工作区不一致: ${appliedWorkspaceId}`);
+        throw new Error(t("gateway.workspace.refreshActiveWorkspaceMismatch", appliedWorkspaceId));
       }
       if (expectedListRequest !== gatewayListRequestRef.current || !selectionIsCurrent()) {
-        throw new Error("工作区刷新结果已被更新的请求取代");
+        throw new Error(t("gateway.workspace.refreshResultReplaced"));
       }
     } catch (error) {
       finishError = error;
@@ -181,25 +182,25 @@ export function useGatewayWorkspaceRuntimeLifecycle({
     if (finishFailed) {
       const detail = errorMessage(finishError);
       if (outcome.kind === "readback") {
-        const message = `${errorMessage(outcome.postError)}；界面同步失败: ${detail}`;
+        const message = t("gateway.workspace.operationAndSyncFailed", errorMessage(outcome.postError), detail);
         setState((prev) => {
           if (expectedListRequest !== gatewayListRequestRef.current || !selectionIsCurrent()) {
-            const scopedFailure = `重新连接工作区失败: ${message}`;
-            return { ...prev, status: prev.status ? `${prev.status}；${scopedFailure}` : scopedFailure };
+            const scopedFailure = t("gateway.workspace.reconnectFailed", message);
+            return { ...prev, status: prev.status ? `${prev.status}${t("gateway.workspace.blockerSeparator")}${scopedFailure}` : scopedFailure };
           }
           return {
             ...prev,
             workspaceSwitching: false,
             gatewayError: message,
-            status: `重新连接工作区失败: ${message}`,
+            status: t("gateway.workspace.reconnectFailed", message),
           };
         });
         throw outcome.postError;
       }
-      const message = `已重新连接，但界面同步失败: ${detail}`;
+      const message = t("gateway.workspace.reconnectedButSyncFailed", detail);
       setState((prev) => {
         if (expectedListRequest !== gatewayListRequestRef.current || !selectionIsCurrent()) {
-          return { ...prev, status: prev.status ? `${prev.status}；${message}` : message };
+          return { ...prev, status: prev.status ? `${prev.status}${t("gateway.workspace.blockerSeparator")}${message}` : message };
         }
         return {
           ...prev,
@@ -212,7 +213,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
     }
 
     if (outcome.kind === "readback") {
-      const message = `Gateway 拒绝了重新连接请求，但已读取最新工作区状态: ${errorMessage(outcome.postError)}`;
+      const message = t("gateway.workspace.reconnectRejectedButLatestStateRead", errorMessage(outcome.postError));
       setState((prev) => expectedListRequest === gatewayListRequestRef.current && selectionIsCurrent() ? ({
         ...prev,
         workspaceSwitching: false,
@@ -237,7 +238,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         setState((prev) => ({
           ...prev,
           gatewayError: null,
-          status: "正在安全排空并重启 Workspace 后端",
+          status: t("gateway.workspace.safelyDrainingAndRestartingBackend"),
         }));
         let result: GatewayRuntimeRestartResult;
         try {
@@ -247,8 +248,8 @@ export function useGatewayWorkspaceRuntimeLifecycle({
             groupRequest,
           ), (result) => {
             const actionStatus = result.status === "blocked"
-              ? result.blockers.map((blocker) => `${blocker.workspace_id}: ${blocker.detail ?? blocker.resource_id}`).join("；")
-              : result.status === "stopped" ? "Backend 已关闭，成员已退出" : "Backend 完整组已重启";
+              ? result.blockers.map((blocker) => t("gateway.workspace.runtimeBlocker", blocker.workspace_id, blocker.detail ?? blocker.resource_id)).join(t("gateway.workspace.blockerSeparator"))
+              : result.status === "stopped" ? t("gateway.workspace.backendGroupStoppedExited") : t("gateway.workspace.backendGroupRestarted");
             setState((prev) => ({
               ...withFreshGatewayWorkspaceList(prev, result.workspaces.items),
               ...(selectionIntent === selectionIntentRef.current ? {
@@ -266,14 +267,14 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
             gatewayError: message,
-            status: `安全重启 Workspace 后端失败: ${message}`,
+            status: t("gateway.workspace.safeRestartBackendFailed", message),
           }) : prev);
           throw error;
         }
 
         const actionStatus = result.status === "blocked"
-          ? result.blockers.map((blocker) => `${blocker.workspace_id}: ${blocker.detail ?? blocker.resource_id}`).join("；")
-          : result.status === "stopped" ? "Backend 已关闭，成员已退出" : "Backend 完整组已重启";
+          ? result.blockers.map((blocker) => t("gateway.workspace.runtimeBlocker", blocker.workspace_id, blocker.detail ?? blocker.resource_id)).join(t("gateway.workspace.blockerSeparator"))
+          : result.status === "stopped" ? t("gateway.workspace.backendGroupStoppedExited") : t("gateway.workspace.backendGroupRestarted");
         try {
           await finishWorkspaceRefresh(currentSessionId, { selectionIntent });
         } catch (error) {
@@ -282,7 +283,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           } catch {
             // 二次读取失败已由 refreshGatewayState 写入界面。
           }
-          const message = `${actionStatus || "Backend 重启受阻"}；刷新 Gateway 状态失败: ${errorMessage(error)}`;
+          const message = t("gateway.workspace.actionAndStatusRefreshFailed", actionStatus || t("gateway.workspace.backendRestartBlocked"), errorMessage(error));
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({ ...prev, gatewayError: message, status: message }) : prev);
           throw error;
         }
@@ -304,7 +305,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       ]);
       try {
         const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
-        setState((prev) => ({ ...prev, gatewayError: null, status: "正在启动工作区" }));
+        setState((prev) => ({ ...prev, gatewayError: null, status: t("gateway.workspace.startingWorkspace") }));
         let result: GatewayRuntimeStateResult;
         try {
           result = await runGatewayWorkspaceListTask(() => apiStartManagedGatewayWorkspaceBackend(
@@ -316,7 +317,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
               ...withFreshGatewayWorkspaceList(prev, result.workspaces.items),
               ...(selectionIntent === selectionIntentRef.current ? {
                 ...activeGatewayWorkspaceFields(result.workspaces), gatewayError: null, error: null,
-                status: result.status === "started" ? "Backend 完整组已启动" : "Backend 完整组未启动",
+                status: result.status === "started" ? t("gateway.workspace.backendGroupStarted") : t("gateway.workspace.backendGroupNotStarted"),
               } : {}),
             }));
           });
@@ -330,19 +331,19 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
             gatewayError: message,
-            status: `启动工作区失败: ${message}`,
+            status: t("gateway.workspace.startWorkspaceFailed", message),
           }) : prev);
           throw error;
         }
         if (result.status === "blocked") {
-          const message = result.blockers.map((blocker) => `${blocker.workspace_id}: ${blocker.detail ?? blocker.resource_id}`).join("；");
+          const message = result.blockers.map((blocker) => t("gateway.workspace.runtimeBlocker", blocker.workspace_id, blocker.detail ?? blocker.resource_id)).join(t("gateway.workspace.blockerSeparator"));
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({ ...prev, gatewayError: message, status: message }) : prev);
           throw new Error(message);
         }
         try {
           await finishWorkspaceRefresh(currentSessionId, { selectionIntent });
         } catch (error) {
-          const message = `工作区已启动，但刷新 Gateway 状态失败: ${errorMessage(error)}`;
+          const message = t("gateway.workspace.workspaceStartedButStatusRefreshFailed", errorMessage(error));
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
             workspaceSwitching: false,
@@ -367,7 +368,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       ]);
       try {
         const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
-        setState((prev) => ({ ...prev, gatewayError: null, status: "正在关闭工作区" }));
+        setState((prev) => ({ ...prev, gatewayError: null, status: t("gateway.workspace.stoppingWorkspace") }));
         let result: GatewayRuntimeStateResult;
         try {
           result = await runGatewayWorkspaceListTask(() => apiStopManagedGatewayWorkspaceBackend(
@@ -379,7 +380,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
               ...withFreshGatewayWorkspaceList(prev, result.workspaces.items),
               ...(selectionIntent === selectionIntentRef.current ? {
                 ...activeGatewayWorkspaceFields(result.workspaces),
-                status: result.status === "blocked" ? "工作区仍有活动任务，未关闭" : "工作区已关闭",
+                status: result.status === "blocked" ? t("gateway.workspace.workspaceStillHasActiveTasks") : t("gateway.workspace.workspaceStopped"),
               } : {}),
             }));
           });
@@ -393,16 +394,18 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
             gatewayError: message,
-            status: `关闭工作区失败: ${message}`,
+            status: t("gateway.workspace.stopWorkspaceFailed", message),
           }) : prev);
           throw error;
         }
 
         if (result.status === "blocked") {
           const details = result.blockers
-            .map((blocker) => `${blocker.workspace_id}:${blocker.kind}:${blocker.resource_id}`)
-            .join("、");
-          const error = new Error(`工作区仍有 ${result.blockers.length} 个活动任务，未关闭${details ? `（${details}）` : ""}`);
+            .map((blocker) => t("gateway.workspace.runtimeBlockerWithKind", blocker.workspace_id, blocker.kind, blocker.resource_id))
+            .join(t("gateway.workspace.blockerSeparator"));
+          const error = new Error(details
+            ? t("gateway.workspace.workspaceHasActiveTasksWithDetails", result.blockers.length, details)
+            : t("gateway.workspace.workspaceHasActiveTasks", result.blockers.length));
           try {
             await refreshGatewayState(selectionIntent);
           } catch {
@@ -412,7 +415,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
             gatewayError: message,
-            status: `关闭工作区失败: ${message}`,
+            status: t("gateway.workspace.stopWorkspaceFailed", message),
           }) : prev);
           throw error;
         }
@@ -424,7 +427,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           } catch {
             // 二次读取失败已由 refreshGatewayState 写入界面状态。
           }
-          const message = `工作区已关闭，但刷新 Gateway 状态失败: ${errorMessage(error)}`;
+          const message = t("gateway.workspace.workspaceStoppedButStatusRefreshFailed", errorMessage(error));
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({ ...prev, gatewayError: message, status: message }) : prev);
           throw error;
         }
@@ -448,7 +451,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         setState((prev) => ({
           ...prev,
           gatewayError: null,
-          status: "正在中断活动任务并强制重启 Workspace 后端",
+          status: t("gateway.workspace.interruptingAndForceRestartingBackend"),
         }));
         let result: GatewayRuntimeRestartResult;
         try {
@@ -458,8 +461,8 @@ export function useGatewayWorkspaceRuntimeLifecycle({
             groupRequest,
           ), (result) => {
             const actionStatus = result.status === "blocked"
-              ? result.blockers.map((blocker) => `${blocker.workspace_id}: ${blocker.detail ?? blocker.resource_id}`).join("；")
-              : result.status === "stopped" ? "Backend 已关闭，成员已退出" : "Backend 完整组已重启";
+              ? result.blockers.map((blocker) => t("gateway.workspace.runtimeBlocker", blocker.workspace_id, blocker.detail ?? blocker.resource_id)).join(t("gateway.workspace.blockerSeparator"))
+              : result.status === "stopped" ? t("gateway.workspace.backendGroupStoppedExited") : t("gateway.workspace.backendGroupRestarted");
             setState((prev) => ({
               ...withFreshGatewayWorkspaceList(prev, result.workspaces.items),
               ...(selectionIntent === selectionIntentRef.current ? {
@@ -477,14 +480,14 @@ export function useGatewayWorkspaceRuntimeLifecycle({
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
             gatewayError: message,
-            status: `强制重启 Workspace 后端失败: ${message}`,
+            status: t("gateway.workspace.forceRestartBackendFailed", message),
           }) : prev);
           throw error;
         }
 
         const actionStatus = result.status === "blocked"
-          ? result.blockers.map((blocker) => `${blocker.workspace_id}: ${blocker.detail ?? blocker.resource_id}`).join("；")
-          : result.status === "stopped" ? "Backend 已关闭，成员已退出" : "Backend 完整组已重启";
+          ? result.blockers.map((blocker) => t("gateway.workspace.runtimeBlocker", blocker.workspace_id, blocker.detail ?? blocker.resource_id)).join(t("gateway.workspace.blockerSeparator"))
+          : result.status === "stopped" ? t("gateway.workspace.backendGroupStoppedExited") : t("gateway.workspace.backendGroupRestarted");
         try {
           await finishWorkspaceRefresh(currentSessionId, { selectionIntent });
         } catch (error) {
@@ -494,8 +497,8 @@ export function useGatewayWorkspaceRuntimeLifecycle({
             // 二次读取失败已由 refreshGatewayState 写入界面。
           }
           const message = result.status === "blocked"
-            ? `${actionStatus || "Backend 重启受阻"}；刷新 Gateway 状态失败: ${errorMessage(error)}`
-            : `${actionStatus}，但刷新 Gateway 状态失败: ${errorMessage(error)}`;
+            ? t("gateway.workspace.actionAndStatusRefreshFailed", actionStatus || t("gateway.workspace.backendRestartBlocked"), errorMessage(error))
+            : t("gateway.workspace.actionButStatusRefreshFailed", actionStatus, errorMessage(error));
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({ ...prev, gatewayError: message, status: message }) : prev);
           throw error;
         }
@@ -514,7 +517,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
       setState((prev) => ({
         ...prev,
         gatewayError: null,
-        status: "正在重新探测外部后端",
+        status: t("gateway.workspace.probingExternalBackend"),
       }));
       try {
         await runGatewayWorkspaceListTask(() => apiProbeExternalGatewayWorkspace(resolvedApiPort, workspaceId), (workspaces) => {
@@ -529,7 +532,7 @@ export function useGatewayWorkspaceRuntimeLifecycle({
         setState((prev) => selectionIntent === selectionIntentRef.current ? ({
           ...prev,
           gatewayError: message,
-          status: `重新探测外部后端失败: ${message}`,
+          status: t("gateway.workspace.probeExternalBackendFailed", message),
         }) : prev);
         throw error;
       }

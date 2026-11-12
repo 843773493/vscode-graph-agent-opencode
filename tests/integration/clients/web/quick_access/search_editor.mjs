@@ -2,7 +2,7 @@ import { expect } from 'playwright/test';
 
 /** 沿原命令、控件、复制与持久化入口验收；不直接写 Input 或模型配置。 */
 export async function verifySearchEditors({ page, command, result, fileUri, ownerA, ownerB }) {
-  const queryInput = editor => editor.getByRole('textbox', { name: 'Search: Type Search Term and press Enter to search', exact: true });
+  const queryInput = editor => editor.getByRole('textbox', { name: '搜索: 键入搜索词，然后按 Enter 进行搜索', exact: true });
   const lines = editor => editor.locator('.monaco-editor .view-lines');
   const query = async (editor, value, expected, owner) => {
     const before = result.searches.length;
@@ -42,7 +42,7 @@ export async function verifySearchEditors({ page, command, result, fileUri, owne
   await expect(lines(b)).not.toContainText('dirtyword');
   // A 复制的旧标签仍留在同组；复用命令只能复用同范围，不能把它改写为 B。
   const groups = page.locator('.editor-group-container');
-  await expect(groups.nth(1).locator('.tabs-container .tab').filter({ hasText: 'Search:' })).toHaveCount(2);
+  await expect(groups.nth(1).locator('.tabs-container .tab').filter({ hasText: '搜索:' })).toHaveCount(2);
   await query(a, 'dirtyword', 'dirtyword', ownerA);
   await query(b, 'foreign-buffer', 'foreign-buffer', ownerB);
   result.editorSplitScopes = true;
@@ -119,7 +119,7 @@ export async function verifySearchEditors({ page, command, result, fileUri, owne
   await expect(scopes).toBeVisible();
   const targetB = scopes.locator('.monaco-list-row').filter({ hasText: '搜索隔离 B' });
   await targetB.getByRole('checkbox').click();
-  await scopes.getByRole('button', { name: 'OK', exact: true }).click();
+  await scopes.getByRole('button', { name: '确定', exact: true }).click();
   await expect(legacy.locator('.boxteam-search-scope')).toContainText('搜索隔离 B');
   await expect(lines(legacy)).toContainText('foreign-buffer quickscope');
   await expect(lines(legacy)).not.toContainText('legacy-display-only');

@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { NodeDebugBreakpoint, NodeDebugState } from "../../types/backend";
@@ -66,14 +67,14 @@ export default function NodeDebugSourceView({
   const outputLineCount = state?.output?.length ?? 0;
   const sourceNotice = status === "paused" && activeFrame
     ? {
-      message: `已暂停在 ${activeFrame.path ?? activeFrame.url}:${activeFrame.line}，${localVariableCount} 个局部变量。`,
-      actionLabel: "查看调用栈与变量",
+      message: t("debug.source.paused", activeFrame.path ?? activeFrame.url, activeFrame.line, formatNumber(localVariableCount)),
+      actionLabel: t("debug.source.context"),
       onAction: onShowContext,
     }
     : status === "exited" && outputLineCount > 0
       ? {
-        message: `调试已结束，保留 ${outputLineCount} 行程序输出。`,
-        actionLabel: "查看控制台",
+        message: t("debug.source.exited", formatNumber(outputLineCount)),
+        actionLabel: t("debug.source.console"),
         onAction: onShowConsole,
       }
       : null;
@@ -82,8 +83,8 @@ export default function NodeDebugSourceView({
     <div className="node-debug-view node-debug-source-view" role="tabpanel">
       {!sourcePath ? (
         <div className="debug-empty-state compact" role="status">
-          <span>尚未选择 JavaScript 入口。</span>
-          <button type="button" onClick={onShowConfiguration}>配置调试入口</button>
+          <span>{t("debug.source.noEntry")}</span>
+          <button type="button" onClick={onShowConfiguration}>{t("debug.source.configure")}</button>
         </div>
       ) : null}
       <NodeDebugSourcePreview
@@ -108,14 +109,14 @@ export default function NodeDebugSourceView({
         ) : null}
       </div>
       <details className="node-debug-secondary" open={extensionWindow}>
-        <summary>断点列表与高级设置 <span>{breakpoints.length}</span></summary>
+        <summary>{t("debug.source.breakpoints")} <span>{formatNumber(breakpoints.length)}</span></summary>
         <div className="node-debug-breakpoint-form">
-          <input value={breakpointLine} onChange={(event) => setBreakpointLine(event.target.value)} inputMode="numeric" placeholder="行" aria-label="源码断点行号" />
-          <input value={breakpointCondition} onChange={(event) => setBreakpointCondition(event.target.value)} placeholder="条件（可选）" aria-label="源码断点条件" />
-          <button type="button" onClick={onAddBreakpoint} disabled={!sessionId || actionBusy}>添加</button>
+          <input value={breakpointLine} onChange={(event) => setBreakpointLine(event.target.value)} inputMode="numeric" placeholder={t("debug.source.line")} aria-label={t("debug.source.lineAria")} />
+          <input value={breakpointCondition} onChange={(event) => setBreakpointCondition(event.target.value)} placeholder={t("debug.source.conditionOptional")} aria-label={t("debug.source.conditionAria")} />
+          <button type="button" onClick={onAddBreakpoint} disabled={!sessionId || actionBusy}>{t("debug.source.add")}</button>
         </div>
         <div className="node-debug-breakpoint-list">
-          {breakpoints.length === 0 ? <span className="debug-muted">尚未设置源码断点</span> : null}
+          {breakpoints.length === 0 ? <span className="debug-muted">{t("debug.source.noBreakpoints")}</span> : null}
           {breakpoints.map((breakpoint) => (
             <div className="node-debug-breakpoint-row" key={breakpoint.breakpoint_id}>
               <span className={breakpoint.relocation_status === "pending_update" || breakpoint.relocation_status === "source_deleted" ? "stale" : breakpoint.verified ? "verified" : "unverified"} aria-hidden="true" />
@@ -126,11 +127,11 @@ export default function NodeDebugSourceView({
               >
                 {breakpoint.path}:{breakpoint.line}
                 {` · ${nodeDebugBreakpointLabel(breakpoint)}`}
-                {breakpoint.relocation_status === "relocated" ? " · 已重定位" : ""}
-                {breakpoint.relocation_status === "pending_update" ? " · 待更新" : ""}
-                {breakpoint.relocation_status === "source_deleted" ? " · 文件已删除" : ""}
+                {breakpoint.relocation_status === "relocated" ? t("debug.source.relocated") : ""}
+                {breakpoint.relocation_status === "pending_update" ? t("debug.source.pendingUpdate") : ""}
+                {breakpoint.relocation_status === "source_deleted" ? t("debug.source.deleted") : ""}
               </button>
-              <button type="button" onClick={() => onClearBreakpoint(breakpoint.breakpoint_id)} aria-label="清除断点">
+              <button type="button" onClick={() => onClearBreakpoint(breakpoint.breakpoint_id)} aria-label={t("debug.source.clear")}>
                 <span className="codicon codicon-close" aria-hidden="true" />
               </button>
             </div>

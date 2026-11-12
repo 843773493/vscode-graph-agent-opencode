@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import { createPortal } from "react-dom";
 import type { AttachmentRef } from "../../../types/backend";
@@ -86,7 +87,7 @@ function ImageViewer({
       className="message-media-viewer"
       role="dialog"
       aria-modal="true"
-      aria-label={`查看图片：${item.name}`}
+      aria-label={t("chat.media.view", item.name)}
       onClick={onClose}
     >
       <header className="message-media-viewer-toolbar" onClick={(event) => event.stopPropagation()}>
@@ -95,10 +96,10 @@ function ImageViewer({
           <span>{index + 1} / {items.length}</span>
         </div>
         <div className="message-media-viewer-actions">
-          <button type="button" onClick={() => setScale((value) => Math.max(0.25, value - 0.25))} aria-label="缩小图片">−</button>
-          <button type="button" onClick={() => setScale(1)} aria-label="恢复图片大小">{Math.round(scale * 100)}%</button>
-          <button type="button" onClick={() => setScale((value) => Math.min(4, value + 0.25))} aria-label="放大图片">＋</button>
-          <button type="button" onClick={onClose} aria-label="关闭图片查看器">×</button>
+          <button type="button" onClick={() => setScale((value) => Math.max(0.25, value - 0.25))} aria-label={t("chat.media.zoomOut")}>−</button>
+          <button type="button" onClick={() => setScale(1)} aria-label={t("chat.media.resetZoom")}>{Math.round(scale * 100)}%</button>
+          <button type="button" onClick={() => setScale((value) => Math.min(4, value + 0.25))} aria-label={t("chat.media.zoomIn")}>＋</button>
+          <button type="button" onClick={onClose} aria-label={t("chat.media.close")}>×</button>
         </div>
       </header>
       {items.length > 1 ? (
@@ -111,7 +112,7 @@ function ImageViewer({
               setIndex((index - 1 + items.length) % items.length);
               setScale(1);
             }}
-            aria-label="上一张图片"
+            aria-label={t("chat.media.previous")}
           ><span className="codicon codicon-chevron-left" aria-hidden="true" /></button>
           <button
             type="button"
@@ -121,7 +122,7 @@ function ImageViewer({
               setIndex((index + 1) % items.length);
               setScale(1);
             }}
-            aria-label="下一张图片"
+            aria-label={t("chat.media.next")}
           ><span className="codicon codicon-chevron-right" aria-hidden="true" /></button>
         </>
       ) : null}
@@ -133,7 +134,7 @@ function ImageViewer({
             style={{ transform: `scale(${scale})` }}
           />
         ) : (
-          <div className="message-media-load-error" role="alert">图片内容不可用</div>
+          <div className="message-media-load-error" role="alert">{t("chat.media.unavailable")}</div>
         )}
       </div>
     </div>,
@@ -172,7 +173,7 @@ export default function MessageAttachments({
   }
 
   return (
-    <div className="message-attachments" aria-label="消息附件">
+    <div className="message-attachments" aria-label={t("chat.media.attachments")}>
       {items.map((item) => {
         const source = sources.get(item.id);
         const error = errors.get(item.id);
@@ -191,7 +192,7 @@ export default function MessageAttachments({
                     setViewerIndex(imageIndex);
                   }
                 }}
-                aria-label={onOpenAttachment ? `在右侧打开附件：${item.name}` : `查看图片：${item.name}`}
+                aria-label={onOpenAttachment ? t("chat.media.open", item.name) : t("chat.media.view", item.name)}
               >
                 <img src={source} alt={item.name} className="message-attachment-thumb" />
                 <span className="message-attachment-open-hint" aria-hidden="true">
@@ -204,7 +205,7 @@ export default function MessageAttachments({
                 className="message-attachment-open-button"
                 onClick={() => onOpenAttachment?.(item.attachment)}
                 disabled={unavailable || !onOpenAttachment}
-                aria-label={`在右侧打开附件：${item.name}`}
+                aria-label={t("chat.media.open", item.name)}
               >
                 {/* TODO: 在媒体查看器中接入音频波形与视频播放器后，替换对应类型的占位卡片。 */}
                 <span className="message-attachment-icon" aria-hidden="true">
@@ -221,7 +222,7 @@ export default function MessageAttachments({
             >
               <span className="message-attachment-name">{item.name}</span>
             </button>
-            {unavailable ? <span role="status">附件不可用</span> : null}
+            {unavailable ? <span role="status">{t("chat.media.attachmentUnavailable")}</span> : null}
             {error && !unavailable ? (
               <button
                 type="button"
@@ -229,7 +230,7 @@ export default function MessageAttachments({
                 title={error}
                 onClick={reload}
               >
-                重新加载附件预览
+                {t("chat.media.reload")}
               </button>
             ) : null}
           </article>

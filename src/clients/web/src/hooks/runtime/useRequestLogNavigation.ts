@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useEffect, useState } from "react";
 import { locateLLMRequestLog, type LocatedLLMRequestLog } from "../../api/session/sessionMessages";
 import type { LLMRequestLogMatchDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
@@ -18,7 +19,7 @@ export function useRequestLogNavigation(apiPort: number, workspaceId: string, se
     if (!match) return;
     const controller = new AbortController();
     const load = async () => {
-      if (!match.reference || match.reference.session_id !== sessionId) throw new Error("请求日志命中与目标 Session 归属不一致");
+      if (!match.reference || match.reference.session_id !== sessionId) throw new Error(t("inspection.navigation.requestOwner"));
       const location = await locateLLMRequestLog(apiPort, match.reference, workspaceId, controller.signal);
       if (!controller.signal.aborted) setState({ match, location });
     };

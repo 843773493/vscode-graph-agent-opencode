@@ -1,3 +1,5 @@
+import actionTitles from '../../shared/core/i18n/actionTitles.en.json';
+import { t } from '../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey } from "../../web/src/api/workspaceIdentity.js";
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { Disposable } from '../upstream/src/vs/base/common/lifecycle.js';
@@ -37,10 +39,10 @@ export class ChangeDocuments extends Disposable implements ITextModelContentProv
     if (!pending) {
       const promise = (async () => {
         const target = await gateway.resolveWorkspaceTarget(owner);
-        if (target.status !== 'ready') throw new Error(`更改工作区当前不可用（${target.status}），请明确启动或连接`);
+        if (target.status !== 'ready') throw new Error(t('workbench.changes.workspaceUnavailable', target.status));
         const data = await gateway.request<SessionChangesetDTO>(`/api/v1/sessions/${encodeURIComponent(owner.sessionId)}/changesets/${encodeURIComponent(changesetId)}`,
           { headers: gatewayWorkspaceRequestHeaders(target) }, gatewayWorkspaceKey(target));
-        if (data.session_id !== owner.sessionId || data.changeset_id !== changesetId) throw new Error('更改响应 owner 不匹配');
+        if (data.session_id !== owner.sessionId || data.changeset_id !== changesetId) throw new Error(t('workbench.changes.ownerMismatch'));
         return data;
       })();
       pending = { promise, readers: 0 };
@@ -50,7 +52,7 @@ export class ChangeDocuments extends Disposable implements ITextModelContentProv
     try {
       const data = await pending.promise;
       const file = data.files.find(file => file.file_path === source.filePath);
-      if (!file) throw new Error('此文件已不在指定会话变更中');
+      if (!file) throw new Error(t('workbench.changes.fileRemoved'));
       // URI 打开与前后模型在同一次读取作用域内消费；结清即释放，不缓存第二份正文。
       return await use(file);
     } finally {
@@ -64,10 +66,10 @@ export class ChangeDocuments extends Disposable implements ITextModelContentProv
     if (existing) return existing;
     const source = changeFileSource(resource);
     return this.withFile(source, file => {
-      if (file.latest_edit_id !== source.editId) throw new Error('此更改版本已变化，请重新从会话更改列表打开');
+      if (file.latest_edit_id !== source.editId) throw new Error(t('workbench.changes.versionChanged'));
       const content = source.phase === 'patch' ? file.diff_text : source.phase === 'before' ? file.before_preview : file.after_preview;
       const absent = source.phase === 'before' && file.kind === 'create' || source.phase === 'after' && file.kind === 'delete';
-      if (content == null && !absent) throw new Error('后端未提供更改预览');
+      if (content == null && !absent) throw new Error(t('workbench.changes.previewMissing'));
       return this.models.createModel(content ?? '', this.languages.createByFilepathOrFirstLine(resource), resource);
     });
   }
@@ -78,14 +80,14 @@ registerWorkbenchContribution2(ChangeDocuments.ID, ChangeDocuments, WorkbenchPha
 // 原生差异编辑器读取前后预览；完整 unified diff 仍由同一后端变更提供。
 registerAction2(class OpenChangePatch extends Action2 {
   constructor() {
-    super({ id: 'boxteam.changes.openPatch', title: { value: '打开完整补丁', original: 'Open Full Patch' },
+    super({ id: 'boxteam.changes.openPatch', title: { value: t('workbench.changes.openPatch'), original: actionTitles['workbench.changes.openPatch'] },
       icon: Codicon.diff, f1: true, precondition: ContextKeyExpr.equals('resourceScheme', scheme),
       menu: { id: MenuId.EditorTitle, group: 'navigation', when: ContextKeyExpr.equals('resourceScheme', scheme) } });
   }
   async run(accessor: ServicesAccessor): Promise<void> {
     const editors = accessor.get(IEditorService);
     const resource = EditorResourceAccessor.getCanonicalUri(editors.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
-    if (!resource || resource.scheme !== scheme) throw new Error('当前编辑器不是会话文件更改');
+    if (!resource || resource.scheme !== scheme) throw new Error(t('workbench.changes.editorRequired'));
     const source = changeFileSource(resource);
     await editors.openEditor({ resource: changeFileUri(source.owner, source.changesetId,
       { file_path: source.filePath, latest_edit_id: source.editId }, 'patch'), options: { pinned: true } });

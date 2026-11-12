@@ -1,4 +1,5 @@
 import type { GatewayRemoteConnectionSummary, GatewayWorkspace } from "../../../types/backend";
+import { t } from "../../../../../shared/core/i18n/index.js";
 
 export interface GatewayWorkspaceGroup {
   key: string;
@@ -21,8 +22,8 @@ export function groupGatewayWorkspaces(
       } else {
         groups.set("local", {
           key: "local",
-          title: "本机 Gateway",
-          connectionLabel: "当前控制面 · 127.0.0.1:8014",
+          title: t("gateway.groups.localGateway"),
+          connectionLabel: t("gateway.groups.localConnection", "127.0.0.1:8014"),
           gatewayLabel: null,
           remote: null,
           workspaces: [workspace],
@@ -31,9 +32,7 @@ export function groupGatewayWorkspaces(
       continue;
     }
     if (!workspace.remote_gateways.length) {
-      throw new Error(
-        `远程工作区 ${workspace.workspace_id} 缺少 Gateway 连接摘要`,
-      );
+      throw new Error(t("gateway.groups.remoteWorkspaceGatewaySummaryMissing", workspace.workspace_id));
     }
     for (const remote of workspace.remote_gateways) {
       const key = `remote:${remote.gateway_connection_id}`;

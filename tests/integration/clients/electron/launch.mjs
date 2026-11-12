@@ -12,7 +12,7 @@ const required = name => {
   return value;
 };
 
-export async function launchElectron({ run, result, usePage, observe = (_label, operation) => operation() }) {
+export async function launchElectron({ run, result, usePage, extraArgs = [], observe = (_label, operation) => operation() }) {
   const runtime = required('BOXTEAM_ELECTRON_RUNTIME'), artifacts = required('BOXTEAM_ELECTRON_ARTIFACTS');
   const cwd = join(runtime, 'launch-directory'), emptyPath = join(runtime, 'empty-path'), home = join(runtime, 'profile');
   await mkdir(cwd, { recursive: true });
@@ -33,7 +33,7 @@ export async function launchElectron({ run, result, usePage, observe = (_label, 
   };
   const open = async () => {
     const number = native.launches.length + 1;
-    const args = ['--no-sandbox', `--gateway=${required('BOXTEAM_ELECTRON_GATEWAY')}`];
+    const args = ['--no-sandbox', ...extraArgs, `--gateway=${required('BOXTEAM_ELECTRON_GATEWAY')}`];
     const instance = await observe('electron.launch', () => _electron.launch({
       executablePath: required('BOXTEAM_ELECTRON_EXECUTABLE'), args, cwd,
       env: { ...process.env, BOXTEAM_HOME: home, PATH: emptyPath }, timeout: 60_000,

@@ -1,3 +1,4 @@
+import '../../../../harness/js/workbench-locale.ts';
 import { CommandsRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
 import { parse } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/json.js';
 import { IQuickInputService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickInput.js';

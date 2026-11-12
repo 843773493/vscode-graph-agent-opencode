@@ -1,3 +1,4 @@
+import { t } from '../../../../src/clients/shared/core/i18n/index.js';
 import { afterAll, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -6,6 +7,9 @@ import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/ty
 import { parse, parseTree } from '../../../../src/clients/workbench/upstream/src/vs/base/common/json.js';
 import { applyEdits, setProperty } from '../../../../src/clients/workbench/upstream/src/vs/base/common/jsonEdit.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+
+// 实际声明依赖同一产品翻译入口。
+const localizedFunction = (...parts) => new Function('t', ...parts).bind(undefined, t);
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/settings_private_parameter_location.test.mjs').prepare();
 const path = 'src/clients/workbench/src/settings/pluginConfiguration.ts';
@@ -17,7 +21,7 @@ const code = names.map(name => {
   if (!node) throw new Error(`实际源码缺少 ${name}`);
   return ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, '');
 }).join('\n');
-const factory = new Function('parse', 'parseTree', 'applyEdits', 'setProperty', 'sameBinding',
+const factory = localizedFunction('parse', 'parseTree', 'applyEdits', 'setProperty', 'sameBinding',
   `${ts.transpile(code, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None })}\nreturn { privateParameterLocation, updateJsonc, writeOnlyFields, bindingJsonc };`);
 const { privateParameterLocation, updateJsonc, writeOnlyFields, bindingJsonc } = factory(parse, parseTree, applyEdits, setProperty,
   (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id);
@@ -78,7 +82,7 @@ test('参数入口按来源期望版本校验，pending 换版与解绑不受旧
     effective: payload([{ ...binding, enabled: true }]), jsonc: '{}' };
   let parameterPrompts = 0;
   const owner = { async list() { return { sources: [] }; }, async read() { return doc; } };
-  const manage = new Function('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'parse',
+  const manage = localizedFunction('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'parse',
     `${manageCode}\nreturn manageConfig;`)(class { constructor() { return owner; } }, async () => ({ source_key: 'workspace' }),
     (value, keys) => keys.reduce((current, key) => current[key], value),
     (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, parse);
@@ -140,7 +144,7 @@ test('三类管理范围只读取原正式来源的完整合并期望，不先�
   const calls = [];
   const desired = { ...binding, package_version: '2.0.0', enabled: false };
   const defaults = { ...binding, package_version: '3.0.0', enabled: true };
-  const readBindings = new Function('ConfigurationSourceOwner', 'bindingsAt', `${readCode}\nreturn readPluginBindings;`)(class {
+  const readBindings = localizedFunction('ConfigurationSourceOwner', 'bindingsAt', `${readCode}\nreturn readPluginBindings;`)(class {
     constructor(target) { this.target = target; }
     async read(source) {
       calls.push({ target: this.target, source });
@@ -170,7 +174,7 @@ test('批量开关读取来源后拒绝已换版项，继续提交未变化的�
     const submitted = [], preflights = [];
     const owner = { async list() { return { sources: [] }; }, async read() { return document; },
       intent(_key, jsonc) { return { jsonc }; }, async preflight(intent) { preflights.push(intent); } };
-    const batch = new Function('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'bindingJsonc', 'sourceBaseline', 'saveSourceEdit', 'sourceStatus',
+    const batch = localizedFunction('ConfigurationSourceOwner', 'chooseSource', 'bindingsAt', 'sameBinding', 'bindingJsonc', 'sourceBaseline', 'saveSourceEdit', 'sourceStatus',
       `${batchCode}\nreturn setPluginBindings;`)(class { constructor() { return owner; } }, async () => ({ source_key: 'source' }),
       (value, keys) => keys.reduce((current, key) => current[key], value),
       (a, b) => a.package_id === b.package_id && a.plugin_id === b.plugin_id, bindingJsonc, () => ({}),

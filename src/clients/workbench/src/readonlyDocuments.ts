@@ -1,3 +1,4 @@
+import { t } from '../../shared/core/i18n/index.js';
 import { basename } from '../upstream/src/vs/base/common/resources.js';
 import { URI, type UriComponents } from '../upstream/src/vs/base/common/uri.js';
 import { EditorExtensions, type IEditorFactoryRegistry, type IEditorSerializer, type IUntypedFileEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
@@ -25,7 +26,7 @@ export function changeFileSource(resource: URI): ChangeSource {
   const parts = resource.path.slice(1).split('/').map(decodeURIComponent);
   if (resource.scheme !== 'boxteam-change' || !resource.authority || parts.length !== 7 || parts.some(part => !part)
     || !['before', 'after', 'patch'].includes(parts[4]) || resource.query || resource.fragment) {
-    throw new Error('更改编辑器记录缺少稳定身份或包含过时路由，请从会话更改列表重新打开');
+    throw new Error(t('workbench.readonly.changeIdentityInvalid'));
   }
   const [workspaceId, sessionId, changesetId, editId, phase, filePath] = parts;
   return { owner: { gatewayId: resource.authority, workspaceId, sessionId }, changesetId, editId, phase: phase as Phase, filePath };
@@ -40,7 +41,7 @@ export function normalizeReadonlyInput(input: TextInput): TextInput {
     const source = JSON.parse(resource.query) as ChangeSource;
     if (!source.owner?.gatewayId || source.owner.workspaceId !== resource.authority || !source.owner.sessionId
       || !source.changesetId || !source.editId || !source.filePath || !['before', 'after', 'patch'].includes(source.phase)) {
-      throw new Error('旧更改记录缺少可核验的稳定身份，请从会话更改列表重新打开或移除此记录');
+      throw new Error(t('workbench.readonly.oldChangeIdentityInvalid'));
     }
     resource = changeFileUri(source.owner, source.changesetId, { file_path: source.filePath, latest_edit_id: source.editId }, source.phase);
   }
@@ -72,31 +73,31 @@ export class ReadonlyDocumentSerializer implements IEditorSerializer {
     try { parsed = JSON.parse(value); }
     catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
-      return new UnavailableReadonlyDocumentInput(value, `只读文档恢复 JSON 损坏：${error.message}`, '无法恢复的只读文档');
+      return new UnavailableReadonlyDocumentInput(value, t('workbench.readonly.invalidJson', error.message), t('workbench.readonly.unavailableTitle'));
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return new UnavailableReadonlyDocumentInput(parsed, '只读文档恢复记录必须是对象', '无法恢复的只读文档');
+      return new UnavailableReadonlyDocumentInput(parsed, t('workbench.readonly.objectRequired'), t('workbench.readonly.unavailableTitle'));
     }
     const stored = parsed as { version?: number; resource?: UriComponents; name?: string; description?: string;
       unavailable?: unknown; reason?: string };
-    const name = typeof stored.name === 'string' && stored.name ? stored.name : '无法恢复的只读文档';
+    const name = typeof stored.name === 'string' && stored.name ? stored.name : t('workbench.readonly.unavailableTitle');
     const unavailable = (reason: string) => new UnavailableReadonlyDocumentInput(parsed, reason, name);
-    if (stored.version !== 1) return unavailable(`不支持的只读文档恢复版本：${String(stored.version)}`);
+    if (stored.version !== 1) return unavailable(t('workbench.readonly.unsupportedVersion', String(stored.version)));
     if (Object.hasOwn(stored, 'unavailable')) return new UnavailableReadonlyDocumentInput(stored.unavailable,
-      typeof stored.reason === 'string' ? stored.reason : '只读文档记录无法恢复', name);
+      typeof stored.reason === 'string' ? stored.reason : t('workbench.readonly.unavailableRecord'), name);
     if (!stored.resource || typeof stored.resource.scheme !== 'string' || typeof stored.resource.path !== 'string') {
-      return unavailable('只读文档恢复记录缺少资源身份');
+      return unavailable(t('workbench.readonly.identityMissing'));
     }
     let resource: URI;
     try {
       resource = URI.revive(stored.resource);
-      if (!['boxteam-change', 'boxteam-source'].includes(resource.scheme)) return unavailable('只读文档恢复记录不是项目资源');
+      if (!['boxteam-change', 'boxteam-source'].includes(resource.scheme)) return unavailable(t('workbench.readonly.projectResourceRequired'));
       resource = normalizeReadonlyInput({ resource }).resource!;
       if (resource.scheme === 'boxteam-change') changeFileSource(resource);
       else sourceDocumentSource(resource);
     } catch (error) {
       if (!(error instanceof Error)) throw error;
-      return unavailable(`只读文档恢复引用无效：${error.message}`);
+      return unavailable(t('workbench.readonly.invalidReference', error.message));
     }
     return instantiation.invokeFunction(accessor => accessor.get(ITextEditorService).createTextEditor({ resource,
       label: name, description: typeof stored.description === 'string' ? stored.description : undefined }));

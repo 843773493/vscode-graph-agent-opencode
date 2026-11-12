@@ -100,7 +100,7 @@ describe("工作区 Browser 的复制入口", () => {
 describe("工作区 Browser 的精确 Thread 关联", () => {
   test("明确选择的 Browser 消失后报告原 ID，不连接其它 Browser", () => {
     const mounted = mount(resource(), currentThread, "browser_deleted");
-    expect(mounted.renderer.root.findByProps({ role: "alert" }).props.children.join(""))
+    expect(String(mounted.renderer.root.findByProps({ role: "alert" }).props.children))
       .toContain("browser_deleted");
     expect(mounted.renderer.root.findAllByType("iframe")).toHaveLength(0);
     expect(mounted.calls).toEqual([]);

@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import { errorMessage } from "../../../utils/errorMessage";
 import {
@@ -54,7 +55,7 @@ const PendingQueueItem = React.memo(function PendingQueueItem({
       role="listitem"
       data-message-id={userMessage.message_id}
       data-turn-id={conversation.turnId}
-      aria-label={`排队消息 ${conversation.enqueueSequence ?? conversation.pendingPosition ?? ""}：${userMessage.content}`}
+      aria-label={t("chat.pending.item", conversation.enqueueSequence ?? conversation.pendingPosition ?? "", userMessage.content)}
       title={conversation.waitingReason ?? undefined}
     >
       <div className="chat-pending-composer-item-row">
@@ -62,7 +63,7 @@ const PendingQueueItem = React.memo(function PendingQueueItem({
           <span className="codicon codicon-arrow-right" />
         </span>
         <span className="chat-pending-composer-item-content">
-          {userMessage.content || "（附件消息）"}
+          {userMessage.content || t("chat.pending.attachment")}
         </span>
         <div className="chat-pending-composer-item-actions">
           <button
@@ -74,14 +75,14 @@ const PendingQueueItem = React.memo(function PendingQueueItem({
             onClick={() => setDirectionOpen((open) => !open)}
           >
             <span aria-hidden="true">↪</span>
-            调整方向
+            {t("chat.pending.direction")}
           </button>
           <button
             type="button"
             className="chat-pending-icon-button"
             disabled={actionRunning}
-            title="撤回排队消息"
-            aria-label="撤回排队消息"
+            title={t("chat.pending.withdraw")}
+            aria-label={t("chat.pending.withdraw")}
             onClick={() => void runAction(() => onRemove(userMessage.message_id))}
           >
             <span className="codicon codicon-trash" aria-hidden="true" />
@@ -89,7 +90,7 @@ const PendingQueueItem = React.memo(function PendingQueueItem({
         </div>
       </div>
       {directionOpen ? (
-        <div className="chat-pending-direction-menu" role="menu" aria-label="调整投递方向">
+        <div className="chat-pending-direction-menu" role="menu" aria-label={t("chat.pending.directionMenu")}>
           {DELIVERY_POLICIES.map((policy) => (
             <button
               key={policy}
@@ -169,7 +170,7 @@ export default function PendingQueueBar({
   return (
     <div
       className="chat-pending-composer-bar"
-      aria-label={`待处理消息队列，共 ${queued.length} 条`}
+      aria-label={t("chat.pending.count", queued.length)}
       data-queue-size={queued.length}
     >
       <div className="chat-pending-composer-items" role="list">
@@ -186,8 +187,8 @@ export default function PendingQueueBar({
         type="button"
         className="chat-pending-composer-clear"
         disabled={clearing}
-        title="全部撤回"
-        aria-label="全部撤回"
+        title={t("chat.pending.withdrawAll")}
+        aria-label={t("chat.pending.withdrawAll")}
         onClick={() => void clear()}
       >
         <span className="codicon codicon-trash" aria-hidden="true" />

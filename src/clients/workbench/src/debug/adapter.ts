@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { AbstractDebugAdapter } from '../../upstream/src/vs/workbench/contrib/debug/common/abstractDebugAdapter.js';
 import type { IConfig, IDebugSession } from '../../upstream/src/vs/workbench/contrib/debug/common/debug.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
@@ -22,7 +23,7 @@ export function launchContext(config: IConfig): PluginDebugLaunch {
     || context.owner.gatewayId !== context.debugger.gateway_id || context.owner.workspaceId !== context.debugger.workspace_id
     || context.start.debugger_registration_id !== context.debugger.registration_id
     || context.start.session_id !== context.owner.sessionId || context.start.thread_id !== context.owner.threadId) {
-    throw new Error('调试配置缺少发起时冻结的 Thread 与插件绑定；请从 Thread 重新启动');
+    throw new Error(t('workbench.debug.launchContextInvalid'));
   }
   return context;
 }
@@ -49,11 +50,11 @@ export class PluginDebugAdapter extends AbstractDebugAdapter {
     const state = await gateway.request<NodeDebugStateDTO>('/api/v1/debug/node/start',
       { method: 'POST', body: JSON.stringify(start) }, owner.workspaceKey);
     if (state.session_id !== owner.sessionId || state.thread_id !== owner.threadId || !state.run_id
-      || state.debugger_binding?.registration_id !== binding.registration_id) throw new Error('调试启动回执与冻结的 Thread／插件绑定不一致');
+      || state.debugger_binding?.registration_id !== binding.registration_id) throw new Error(t('workbench.debug.launchReceiptMismatch'));
     // 启动已提交而 UI 被关闭时保留真实 run，不重放也不自动停止。
-    if (this.stopped) throw new Error('调试界面已关闭；已启动运行可由原 Thread 查询和停止');
+    if (this.stopped) throw new Error(t('workbench.debug.viewClosed'));
     const token = await getGatewayToken(0);
-    if (this.stopped) throw new Error('调试界面已关闭；已启动运行可由原 Thread 查询和停止');
+    if (this.stopped) throw new Error(t('workbench.debug.viewClosed'));
     const url = new URL(`/api/v1/debug/node/runs/${encodeURIComponent(state.run_id)}/dap`, location.href);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     for (const [key, value] of Object.entries({ token, gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
@@ -62,7 +63,7 @@ export class PluginDebugAdapter extends AbstractDebugAdapter {
     this.releaseToken = onGatewayTokenInvalidated(0, () => socket.close(1000, 'Gateway 凭据已失效'));
     socket.addEventListener('message', event => {
       try {
-        if (typeof event.data !== 'string') throw new Error('DAP 响应必须为 JSON 文本');
+        if (typeof event.data !== 'string') throw new Error(t('workbench.debug.jsonRequired'));
         const value: unknown = JSON.parse(event.data);
         this.acceptMessage(this.projectSources(value, true) as DebugProtocol.ProtocolMessage);
       } catch (error) {
@@ -72,21 +73,21 @@ export class PluginDebugAdapter extends AbstractDebugAdapter {
     });
     socket.addEventListener('close', event => {
       this.releaseToken?.(); this.releaseToken = undefined;
-      if (!this.stopped) this._onError.fire(new Error(`调试连接已关闭：${event.code} ${event.reason}；未自动重放任何操作`));
+      if (!this.stopped) this._onError.fire(new Error(t('workbench.debug.connectionClosed', event.code, event.reason)));
       this._onExit.fire(null);
     }, { once: true });
     await new Promise<void>((resolve, reject) => {
       const finish = (error?: Error) => { clearTimeout(timer); socket.removeEventListener('open', open); socket.removeEventListener('close', close); socket.removeEventListener('error', failed); error ? reject(error) : resolve(); };
       const open = () => finish();
-      const close = (event: CloseEvent) => finish(new Error(`调试连接未建立：${event.code} ${event.reason}`));
-      const failed = () => finish(new Error('调试连接建立失败；已提交启动结果不自动重放'));
-      const timer = setTimeout(() => { finish(new Error('等待调试连接超时；已提交启动结果不自动重放')); socket.close(); }, 30_000);
+      const close = (event: CloseEvent) => finish(new Error(t('workbench.debug.connectionNotOpened', event.code, event.reason)));
+      const failed = () => finish(new Error(t('workbench.debug.connectionFailed')));
+      const timer = setTimeout(() => { finish(new Error(t('workbench.debug.connectionTimeout'))); socket.close(); }, 30_000);
       socket.addEventListener('open', open, { once: true }); socket.addEventListener('close', close, { once: true }); socket.addEventListener('error', failed, { once: true });
     });
   }
 
   sendMessage(message: DebugProtocol.ProtocolMessage): void {
-    if (this.stopped || this.socket?.readyState !== WebSocket.OPEN) throw new Error('调试连接不可用；操作未自动重放');
+    if (this.stopped || this.socket?.readyState !== WebSocket.OPEN) throw new Error(t('workbench.debug.connectionUnavailable'));
     this.socket.send(JSON.stringify(this.projectSources(message, false)));
   }
 
@@ -96,13 +97,13 @@ export class PluginDebugAdapter extends AbstractDebugAdapter {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => {
       if (source && key === 'path' && typeof item === 'string') {
         if (incoming) {
-          if (!item.startsWith('boxteam://')) throw new Error('DAP 源码必须提供目标资源 URI');
+          if (!item.startsWith('boxteam://')) throw new Error(t('workbench.debug.sourceUriRequired'));
           const root = this.context.rootUris.find(root => item === root || item.startsWith(root + '/'));
-          if (!root) throw new Error('DAP 源码不属于目标文件 owner 返回的根');
+          if (!root) throw new Error(t('workbench.debug.sourceRootMismatch'));
           return [key, workspaceFileUri(this.context.owner, item, root).toString()];
         }
         const file = workspaceFileSource(URI.parse(item));
-        if (file.gatewayId !== this.context.owner.gatewayId || file.workspaceId !== this.context.owner.workspaceId) throw new Error('断点源码不属于此调试目标');
+        if (file.gatewayId !== this.context.owner.gatewayId || file.workspaceId !== this.context.owner.workspaceId) throw new Error(t('workbench.debug.breakpointOwnerMismatch'));
         return [key, file.path];
       }
       return [key, this.projectSources(item, incoming, key === 'source' || key === 'sources')];
@@ -118,7 +119,7 @@ export class PluginDebugAdapter extends AbstractDebugAdapter {
       const closed = () => { clearTimeout(timer); resolve(); };
       const timer = setTimeout(() => {
         socket.removeEventListener('close', closed);
-        reject(new Error('等待调试连接关闭超时；目标运行状态请从原 Thread 查询'));
+        reject(new Error(t('workbench.debug.closeTimeout')));
       }, 5_000);
       socket.addEventListener('close', closed, { once: true });
       socket.close(1000, '调试界面断开');

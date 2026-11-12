@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import { conversationModelUsage, conversationTokenUsage } from "../../../state/tokenUsage";
 import { buildPendingStatusItem, isLiveConversationView } from "../../../state/trace/traceAggregation";
@@ -99,7 +100,7 @@ export default function ChatTurnResponseBody({
     <>
       <RewindStatusPart conversation={conversation} />
       {workspaceId && hasConnectionOperation ? <a target="_blank" rel="noopener noreferrer"
-        href={`/?mcp_workspace=${encodeURIComponent(workspaceId)}`}>查看此工作区的 MCP 授权与连接状态</a> : null}
+        href={`/?mcp_workspace=${encodeURIComponent(workspaceId)}`}>{t("chat.turn.mcpStatus")}</a> : null}
       {historyTurn ? (
         <TurnActivitySummary
           conversation={conversation}
@@ -123,7 +124,7 @@ export default function ChatTurnResponseBody({
       {summaryOnly && !historyTurn ? (
         <div className="chat-turn-detail-loading" role="status">
           <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
-          <span>正在加载完整内容…</span>
+          <span>{t("chat.turn.loadingFull")}</span>
         </div>
       ) : null}
       {status ? (
@@ -149,9 +150,9 @@ export default function ChatTurnResponseBody({
         />
       ) : null}
       {actions.confirmAction ? (
-        <div className="chat-turn-action-confirmation" role="group" aria-label="确认轮次操作">
+        <div className="chat-turn-action-confirmation" role="group" aria-label={t("chat.turn.confirmAction")}>
           <div className="chat-turn-action-warning">
-            将移除此消息之后的会话上下文，但不会撤销已产生的文件修改。
+            {t("chat.turn.rewindWarning")}
           </div>
           <div className="chat-request-edit-actions">
             <button
@@ -159,7 +160,7 @@ export default function ChatTurnResponseBody({
               disabled={actions.actionRunning}
               onClick={() => actions.setConfirmAction(null)}
             >
-              取消
+              {t("chat.cancel")}
             </button>
             <button
               type="button"
@@ -168,10 +169,10 @@ export default function ChatTurnResponseBody({
               onClick={() => void actions.executeReplay(actions.confirmAction!)}
             >
               {actions.actionRunning
-                ? "正在执行..."
+                ? t("chat.turn.executing")
                 : actions.confirmAction === "regenerate"
-                  ? "确认重新生成"
-                  : "确认重试"}
+                  ? t("chat.turn.regenerate")
+                  : t("chat.turn.retry")}
             </button>
           </div>
         </div>

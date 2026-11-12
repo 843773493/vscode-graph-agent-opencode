@@ -18,7 +18,10 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
-    browser_backend as browser_backend,  # noqa: PLC0414
+    chat_backend as chat_backend,  # noqa: PLC0414
+)
+from tests.integration.clients.web.test_basic_chat_tool_loop import (
+    chat_backend_boxteam_home as chat_backend_boxteam_home,  # noqa: PLC0414
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
@@ -27,9 +30,10 @@ from tests.support.processes.gateway import close_gateway_process, start_gateway
 
 
 async def test_canonical_tool_result_opens_in_original_readonly_editor(
-    request: pytest.FixtureRequest, browser_backend: tuple[str, Path, ModelStreamReplay], web_workbench_assets: Path,
+    request: pytest.FixtureRequest, chat_backend: tuple[str, Path, ModelStreamReplay],
+    chat_backend_boxteam_home: Path, web_workbench_assets: Path,
 ) -> None:
-    backend, workspace, replay = browser_backend
+    backend, workspace, replay = chat_backend
     workspace_id = read_workspace_id(workspace)
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "规范来源打开验收需要 Chromium"
@@ -45,7 +49,8 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
             deltas=[{"role": "assistant", **reply}], finish_reason="tool_calls" if "tool_calls" in reply else "stop"),
     ).raw["interactions"])[0] for index, reply in enumerate(replies)]
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspace, default_backend_url=backend,
-        port=ports.port(20), artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
+        port=ports.port(20), artifacts_dir=context.artifacts_dir / "gateway", boxteam_home=chat_backend_boxteam_home,
+        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     command = ["node", "tests/integration/clients/web/quick_access/resource_opener_sources.mjs"]
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",

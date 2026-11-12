@@ -46,6 +46,59 @@ async function exercise(name, argument) {
   } finally { await context.close(); }
 }
 
+for (const category of ['会话', 'Thread', '文件', '会话消息', '工具结果', 'LLM 请求记录', 'Trace']) test(`${category}接受原owner规范URI，跨Gateway同名及独立位置交原Opener`, async () => {
+  const result = await exercise('canonicalSearchContract', { category });
+  expect(result.errors).toEqual([]); expect(result.requests).toHaveLength(1);
+  expect(result.beforeAccept.some(path => path.includes('resource-addresses') || path.endsWith('main-thread'))).toBe(false);
+  const positions = ['会话消息', '工具结果', 'LLM 请求记录', 'Trace'].includes(category);
+  expect(result.opened).toHaveLength(positions ? 2 : 1); expect(new Set(result.ids).size).toBe(positions ? 2 : 1);
+  expect(result.parses).toEqual(Array(positions ? 2 : 1).fill({ uri: result.expectedUri,
+    local_gateway_id: 'gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', resource_gateway_id: result.expectedOwner.gatewayId }));
+  expect(result.opened.every(item => item.owner.gatewayId === result.expectedOwner.gatewayId && item.owner.workspaceId === result.expectedOwner.workspaceId)).toBe(true);
+  expect(result.opened[0].group).toBe(8); expect(result.opened[0].options.preserveFocus).toBe(false);
+  if (category !== '文件') expect(result.opened.every(item => item.label === (category === 'Thread' || category === '会话消息' || category === '工具结果' ? 'needle Thread' : 'needle Session'))).toBe(true);
+  if (positions) {
+    const location = category === 'Trace' ? 'boxteamTrace' : category === 'LLM 请求记录' ? 'boxteamRequestLog' : 'boxteamMessage';
+    expect(result.opened.map(item => item.options[location].reference.start_codepoint)).toEqual([2, 8]);
+    expect(result.opened[1].group).toBe(7); expect(result.opened[1].options.preserveFocus).toBe(true);
+  }
+  if (category !== '文件') expect(result.opened.every(item => item.owner.threadId === (category === '会话' || category === 'LLM 请求记录' ? 'main' : 'child'))).toBe(true);
+  expect(result.paths.filter(path => path.endsWith('main-thread'))).toHaveLength(category === '会话' ? 1 : category === 'LLM 请求记录' ? 2 : 0);
+  expect(result.folderHasResource).toBe(false);
+});
+
+for (const category of ['Trace', 'LLM 请求记录']) test(`${category}独立位置与规范Session不符时拒绝打开及空分屏`, async () => {
+  const result = await exercise('canonicalSearchContract', { category, mismatch: true });
+  expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('日志位置与规范 Session／Thread 资源不匹配');
+  expect(result.opened).toEqual([]); expect(result.addedGroups).toBe(0); expect(result.parses).toHaveLength(1);
+  expect(result.paths.slice(result.paths.lastIndexOf('/api/gateway/resource-addresses/parse') + 1)).toEqual([]);
+});
+
+for (const category of ['会话', 'Thread']) test(`${category}命中缺少规范URI时明确失败且不从ID重造打开`, async () => {
+  const result = await exercise('canonicalSearchContract', { category, omitUri: true });
+  expect(result.errors).toEqual([]); expect(result.opened).toEqual([]);
+  expect(result.labels.filter(label => label.includes('查询失败：'))).toHaveLength(2);
+  expect(result.labels.some(label => label.includes('规范 URI'))).toBe(true);
+  expect(result.paths.some(path => path.includes('resource-addresses') || path.endsWith('main-thread'))).toBe(false);
+});
+
+test('英文Trace候选侧开仍原样消费规范URI及独立位置', async () => {
+  const result = await exercise('canonicalSearchContract', { category: 'Trace', locale: 'en' });
+  expect(result.errors).toEqual([]); expect(result.buttonTooltips).toEqual(['Open to the side', 'Copy resource URI']);
+  expect(result.labels).toContain('Trace'); expect(result.labels.some(label => label.endsWith(' · Search complete'))).toBe(true);
+  expect(result.placeholder).toContain('Search content · Trace');
+  expect(result.parses.map(parse => parse.uri)).toEqual([result.expectedUri, result.expectedUri]);
+  expect(result.opened.map(item => item.options.boxteamTrace.reference.start_codepoint)).toEqual([2, 8]);
+  expect(result.opened.map(item => item.group)).toEqual([8, 7]);
+});
+
+test('英文Opener明确拒绝与规范资源不匹配的位置并保持零打开', async () => {
+  const result = await exercise('canonicalSearchContract', { category: 'Trace', mismatch: true, locale: 'en' });
+  expect(result.errors).toEqual(['Error: The log location does not match the canonical Session/Thread resource']);
+  expect(result.opened).toEqual([]); expect(result.addedGroups).toBe(0); expect(result.parses).toHaveLength(1);
+  expect(result.paths.slice(result.paths.lastIndexOf('/api/gateway/resource-addresses/parse') + 1)).toEqual([]);
+});
+
 for (const mode of ['typing', 'retry']) test(`逐键 ${mode} 合并查询、同浮层复用成功文件根且重新打开后重读`, async () => {
   const result = await exercise('typingSearchContract', mode);
   expect(result.errors).toEqual([]); expect(result.synchronousHistory).toBe(true); expect(result.earlyRequests).toBe(0);
@@ -130,7 +183,7 @@ for (const mode of ['success', 'failure', 'cancel', 'unsupported']) test(`Compos
 });
 
 test('正文类别集合确认后同时查询消息和工具，未选类别及工作区零请求', async () => {
-  const result = await exercise('contentSelectionContract', 'confirm');
+  const result = await exercise('contentSelectionContract', { mode: 'confirm' });
   expect(result.beforeConfirm).toBe(0); expect(result.canPickMany).toBe(true);
   expect(result.preset).toEqual(['会话消息']);
   expect(result.choices).toEqual(['会话消息', '工具结果', 'LLM 请求记录', 'Trace', '运行日志', 'Gateway 日志']);
@@ -145,8 +198,24 @@ test('正文类别集合确认后同时查询消息和工具，未选类别及�
   expect(result.errors).toEqual([]);
 });
 
+test('英文正文类别选择使用译文展示并保留原wire类别和恢复参数', async () => {
+  const result = await exercise('contentSelectionContract', { mode: 'confirm', locale: 'en' });
+  expect(result.errors).toEqual([]); expect(result.beforeConfirm).toBe(0);
+  expect(result.choiceTitle).toBe('Choose content categories');
+  expect(result.choiceHint).toBe('Search only selected categories after confirmation; use % for file content');
+  expect(result.choices).toEqual(['Session messages', 'Tool results', 'LLM request logs', 'Trace', 'Runtime logs', 'Gateway logs']);
+  expect(result.preset).toEqual(['Session messages']);
+  expect(result.requests).toHaveLength(1);
+  expect(result.requests[0].queries.map(query => query.category)).toEqual(['message', 'tool_result']);
+  expect(result.shows[0]).toMatchObject({ contentCategories: ['会话消息', '工具结果'], searchGroup: 7,
+    searchOwners: [{ gatewayId: federatedOwners[0].gateway_id, workspaceId: sharedWorkspaceId }] });
+  expect(result.placeholder).toContain('Search content · Session messages, Tool results');
+  expect(result.labels).toContain('Session messages · No matching resources');
+  expect(result.labels).toContain('Tool results · No matching resources');
+});
+
 test('正文类别集合取消恢复原查询、类别、范围和发起组', async () => {
-  const result = await exercise('contentSelectionContract', 'cancel');
+  const result = await exercise('contentSelectionContract', { mode: 'cancel' });
   expect(result.beforeConfirm).toBe(1); expect(result.preset).toEqual(['会话消息', '工具结果']);
   expect(result.query).toBe('content 原始😀查询'); expect(result.requests).toHaveLength(2);
   expect(result.requests[1].queries).toEqual(result.requests[0].queries);
@@ -157,7 +226,7 @@ test('正文类别集合取消恢复原查询、类别、范围和发起组', as
 });
 
 test('正文类别集合同时选择两类日志只发一个 wire query，来源和工作区筛选独立且只重试失败来源', async () => {
-  const result = await exercise('contentSelectionContract', 'logs');
+  const result = await exercise('contentSelectionContract', { mode: 'logs' });
   const gateway_id = federatedOwners[0].gateway_id, other = '019a0000-0000-7000-8000-000000000002';
   const workspace = { gateway_id, scope: { source: 'workspace', workspace_ids: [sharedWorkspaceId, other] } };
   const gateway = { gateway_id, scope: { source: 'gateway', workspace_ids: [] } };
@@ -174,14 +243,14 @@ test('正文类别集合同时选择两类日志只发一个 wire query，来源
 });
 
 for (const mode of ['user', 'gateway']) test(`正文类别集合在 ${mode} 身份失效时取消旧选择且零查询`, async () => {
-  const result = await exercise('contentSelectionContract', mode);
+  const result = await exercise('contentSelectionContract', { mode });
   expect(result.cancelled).toBe(true); expect(result.beforeConfirm).toBe(0);
   expect(result.requests).toEqual([]); expect(result.shows).toEqual([]);
   expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('Gateway 或访问凭据已改变');
 });
 
 test('正文类别集合保留文件独立转 %，不发送正文类别请求', async () => {
-  const result = await exercise('contentSelectionContract', 'file');
+  const result = await exercise('contentSelectionContract', { mode: 'file' });
   expect(result.requests).toEqual([]); expect(result.choices).toBe(0);
   expect(result.shows).toHaveLength(1);
   expect(result.shows[0]).toMatchObject({ value: '%原始😀查询', searchGroup: 7,

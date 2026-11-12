@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React, { useEffect, useState } from "react";
 import {
   useWorkspaceFileReferenceContext,
@@ -60,15 +61,15 @@ export default function WorkspaceFileReferenceLink({
     const { reference } = resolution;
     const lineLabel = reference.selection
       ? reference.selection.startLine === reference.selection.endLine
-        ? `，第 ${reference.selection.startLine} 行`
-        : `，第 ${reference.selection.startLine}-${reference.selection.endLine} 行`
+        ? t("chat.file.line", reference.selection.startLine)
+        : t("chat.file.lines", reference.selection.startLine, reference.selection.endLine)
       : "";
     return (
       <button
         type="button"
         className={`chat-file-reference${inlineCode ? " inline-code" : ""}`}
-        title={`在预览区打开 ${reference.path}${lineLabel}`}
-        aria-label={`在预览区打开文件 ${reference.path}${lineLabel}`}
+        title={t("chat.file.open", reference.path, lineLabel)}
+        aria-label={t("chat.file.openAria", reference.path, lineLabel)}
         onClick={() => context.open(resolution)}
       >
         <span className="codicon codicon-file" aria-hidden="true" />
@@ -78,7 +79,7 @@ export default function WorkspaceFileReferenceLink({
   }
 
   const errorTitle = resolution?.status === "error"
-    ? `文件引用验证失败：${resolution.message}`
+    ? t("chat.file.validationFailed", resolution.message)
     : undefined;
   return inlineCode ? (
     <code title={errorTitle}>{children}</code>

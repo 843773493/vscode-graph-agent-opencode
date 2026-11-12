@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { Event } from '../../upstream/src/vs/base/common/event.js';
 import { Disposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ExtensionType, TargetPlatform, type IExtension } from '../../upstream/src/vs/platform/extensions/common/extensions.js';
@@ -56,7 +57,7 @@ export class WebExtensionManagementService extends Disposable implements IProfil
 }
 
 function unsupported(): never {
-  throw new Error('用户 VSIX／Gallery 安装已退役，请使用插件包管理入口');
+  throw new Error(t('plugins.vsixRetired'));
 }
 
 /** 原工作台消费者仍读取内置清单，不再装配工作区安装库存或用户安装任务。 */
@@ -84,11 +85,11 @@ export class ExtensionManagementServerService extends Disposable implements IExt
   readonly webExtensionManagementServer: IExtensionManagementServer;
   constructor(@IWebExtensionsScannerService scanner: IWebExtensionsScannerService) {
     super();
-    this.webExtensionManagementServer = { id: 'web', label: '产品内置扩展',
+    this.webExtensionManagementServer = { id: 'web', label: t('plugins.builtinExtensions'),
       extensionManagementService: this._register(new WebExtensionManagementService(scanner)) };
   }
   getExtensionManagementServer(extension: IExtension): IExtensionManagementServer {
-    if (!extension.isBuiltin) throw new Error('用户 Extension Host 已退役，不能取得用户扩展安装目标');
+    if (!extension.isBuiltin) throw new Error(t('plugins.userHostRetired'));
     return this.webExtensionManagementServer;
   }
   getExtensionInstallLocation(extension: IExtension): ExtensionInstallLocation {

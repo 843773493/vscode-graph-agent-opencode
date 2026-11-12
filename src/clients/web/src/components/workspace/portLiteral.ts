@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 /**
  * 端口字面量校验的唯一实现。
  *
@@ -14,7 +15,7 @@ export function isValidPortLiteral(value: string): boolean {
 
 export function parsePortLiteral(value: string, label: string): number {
   if (!isValidPortLiteral(value)) {
-    throw new Error(`${label}必须是 1–65535 之间的十进制整数`);
+    throw new Error(t('ports.invalidLiteral', label));
   }
   return Number(value);
 }

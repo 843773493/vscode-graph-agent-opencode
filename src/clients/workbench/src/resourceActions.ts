@@ -1,4 +1,6 @@
 import { URI } from '../upstream/src/vs/base/common/uri.js';
+import { t } from '../../shared/core/i18n/index.js';
+import actionTitles from '../../shared/core/i18n/actionTitles.en.json';
 import { Action2, MenuId, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
 import { IClipboardService } from '../upstream/src/vs/platform/clipboard/common/clipboardService.js';
 import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/contextkey.js';
@@ -39,14 +41,14 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
     : resource.scheme === 'boxteam-file' ? workspaceFileSource(resource)
     : resource.scheme === 'boxteam-source' ? sourceDocumentSource(resource) : undefined;
   const owner = thread ?? change?.owner ?? source ?? (configuration && { gatewayId: configuration.target.gateway_id, workspaceId: configuration.target.workspace_id });
-  if (!owner) throw new Error('此资源尚未提供规范 URI 复制能力');
+  if (!owner) throw new Error(t('workbench.resource.referenceUnavailable'));
   let sourceUri = source && ('path' in source ? source.path : source.uri);
   const gatewayId = workspaceContext.getSnapshot().gatewayId;
-  if (!gatewayId) throw new Error('尚未取得发起 Gateway 身份，无法复制资源引用');
+  if (!gatewayId) throw new Error(t('workbench.resource.gatewayMissing'));
   let invalidated = false;
   const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新复制资源引用');
+    if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error(t('workbench.resource.referenceAccessChanged'));
   };
   try {
     if (configuration) {
@@ -54,7 +56,7 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
       const listed = await new ConfigurationSourceOwner(configuration.target).list();
       assertAccess();
       const entry = listed.sources.find(item => item.source_key === configuration.sourceKey);
-      if (!entry?.uri) throw new Error('此配置来源没有可复制的规范 URI，请使用原设置来源入口');
+      if (!entry?.uri) throw new Error(t('workbench.resource.configurationReferenceUnavailable'));
       sourceUri = entry.uri;
     }
     const address = await gateway.request<GatewayResourceAddressDTO>(change ? '/api/gateway/resource-addresses/change' : thread
@@ -74,16 +76,16 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
         && (address.scope === 'inline' || address.scope === 'user' || address.scope === 'gateway' && address.scope_id === owner.gatewayId)
         || resource.scheme === 'boxteam-source' && address.scope === 'gateway' && address.kind === 'skills' && address.scope_id === owner.gatewayId;
     if (address.gateway_id !== owner.gatewayId || !sameScope) {
-      throw new Error('资源引用的 Gateway／工作区归属不匹配');
+      throw new Error(t('workbench.resource.referenceOwnerMismatch'));
     }
     if (thread && (address.kind !== 'session' || address.session_id !== thread.sessionId || address.thread_id !== thread.threadId)) {
-      throw new Error('资源引用不属于指定的 Session／Thread');
+      throw new Error(t('workbench.resource.referenceThreadMismatch'));
     }
-    if (configuration && address.kind !== 'config') throw new Error('配置来源没有返回规范配置资源 URI');
+    if (configuration && address.kind !== 'config') throw new Error(t('workbench.resource.configurationUriMissing'));
     if (change && (address.kind !== 'changes' || address.session_id !== change.owner.sessionId || address.changeset_id !== change.changesetId)) {
-      throw new Error('更改引用不属于指定的 Session／变更范围');
+      throw new Error(t('workbench.resource.referenceChangesMismatch'));
     }
-    if (usage === 'chat' && address.kind === 'changes') throw new Error('更改 URI 用于打开 Diff；请使用选定正文粘贴到聊天草稿');
+    if (usage === 'chat' && address.kind === 'changes') throw new Error(t('workbench.resource.attachChangesUnavailable'));
     return address.reference_uri;
   } finally { release(); }
 }
@@ -92,14 +94,14 @@ const referenceContext = ContextKeyExpr.or(...['boxteam-file', 'boxteam-source',
 
 registerAction2(class CopyResourceUri extends Action2 {
   constructor() {
-    super({ id: COPY_RESOURCE_URI, title: { value: '复制资源 URI', original: 'Copy Resource URI' },
+    super({ id: COPY_RESOURCE_URI, title: { value: t('workbench.resource.copyUri'), original: actionTitles['workbench.resource.copyUri'] },
       f1: true, precondition: referenceContext,
       menu: { id: MenuId.EditorTitleContext, group: '2_copy', when: referenceContext } });
   }
   async run(accessor: ServicesAccessor, supplied?: URI, owner?: ResourceReferenceOwner): Promise<void> {
-    if (supplied !== undefined && !URI.isUri(supplied)) throw new Error('复制资源引用需要明确的编辑器 URI');
+    if (supplied !== undefined && !URI.isUri(supplied)) throw new Error(t('workbench.resource.copyUriRequired'));
     const resource = supplied ?? EditorResourceAccessor.getCanonicalUri(accessor.get(IEditorService).activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
-    if (!resource) throw new Error('没有明确的资源引用目标');
+    if (!resource) throw new Error(t('workbench.resource.referenceTargetMissing'));
     const clipboard = accessor.get(IClipboardService);
     await clipboard.writeText(await resourceReference(resource, owner));
   }

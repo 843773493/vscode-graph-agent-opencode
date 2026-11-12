@@ -97,6 +97,8 @@ async function observeLocalRelease(scriptUrl, targetPlatform, scenario) {
   for (const [relative, body] of sourceFiles) {
     fs.writeFileSync(path.join(projectRoot, relative), body);
   }
+  fs.mkdirSync(path.join(projectRoot, "src/clients/shared"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "scripts/plugins"), { recursive: true });
   process.env.BOXTEAM_PROJECT_ROOT = projectRoot;
   const { buildReleaseInstallCommand, ensureCurrentLocalPackage } = await import(scriptUrl);
   const { computeBuildInputFingerprint } = await import(new URL("../../packaging/runtime/build-input-fingerprint.mjs", scriptUrl));

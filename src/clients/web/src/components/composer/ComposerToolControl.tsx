@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React, {
   useCallback,
   useEffect,
@@ -101,7 +102,7 @@ export default function ComposerToolControl({
       return;
     }
     void load().catch(() => {
-      onStatus("工具列表加载失败");
+      onStatus(t("composer.tools.loadFailed"));
     });
   }, [load, onStatus, open]);
 
@@ -130,7 +131,7 @@ export default function ComposerToolControl({
           })
           .catch((pollError: unknown) => {
             if (pollScopeKeyRef.current !== requestScopeKey) return;
-            setError(`测试进度读取失败：${errorMessage(pollError)}`);
+            setError(t("composer.tools.progressFailed", errorMessage(pollError)));
           });
       }
     }, 1000);
@@ -192,14 +193,14 @@ export default function ComposerToolControl({
       onStatus(successMessage);
     } catch (saveError) {
       const message = errorMessage(saveError);
-      setError(`工具设置保存失败：${message}`);
+      setError(t("composer.tools.saveFailedDetail", message));
       try {
         const refreshedTools = await getToolCatalog(apiPort, agentId, workspaceId);
         setTools(restoreToolSelectionAfterSaveFailure(previousTools, refreshedTools));
       } catch (refreshError) {
         setTools(restoreToolSelectionAfterSaveFailure(previousTools, null));
         const refreshMessage = errorMessage(refreshError);
-        setError(`工具设置保存失败，且状态刷新失败：${message}；${refreshMessage}`);
+        setError(t("composer.tools.saveAndRefreshFailed", message, refreshMessage));
       }
       throw saveError;
     } finally {
@@ -224,9 +225,9 @@ export default function ComposerToolControl({
         execution_enabled: !tool.execution_enabled,
         model_visible: tool.execution_enabled ? false : tool.model_visible,
       }],
-      `${tool.name} 工具设置已保存`,
+      t("composer.tools.saved", tool.name),
     ).catch(() => {
-      onStatus("工具设置保存失败");
+      onStatus(t("composer.tools.saveFailed"));
     });
   };
 
@@ -241,9 +242,9 @@ export default function ComposerToolControl({
         execution_enabled: true,
         model_visible: !tool.model_visible,
       }],
-      `${tool.name} 的模型可见性已保存`,
+      t("composer.tools.visibilitySaved", tool.name),
     ).catch(() => {
-      onStatus("工具设置保存失败");
+      onStatus(t("composer.tools.saveFailed"));
     });
   };
 
@@ -268,8 +269,8 @@ export default function ComposerToolControl({
         ? (enableGroup ? tool.model_visible : false)
         : (tool.execution_enabled && enableGroup),
     }));
-    void saveChanges(changes, `${group.name} 工具组设置已保存`).catch(() => {
-      onStatus("工具组设置保存失败");
+    void saveChanges(changes, t("composer.tools.groupSaved", group.name)).catch(() => {
+      onStatus(t("composer.tools.groupSaveFailed"));
     });
   };
 
@@ -279,11 +280,11 @@ export default function ComposerToolControl({
     void startToolTest(apiPort, tool.tool_id, agentId, workspaceId)
       .then((run) => {
         setRuns((current) => new Map(current).set(tool.tool_id, run));
-        onStatus(`已启动 ${tool.name} 模型工具测试`);
+        onStatus(t("composer.tools.testStarted", tool.name));
       })
       .catch((testError: unknown) => {
         const message = errorMessage(testError);
-        setError(`测试启动失败：${message}`);
+        setError(t("composer.tools.testStartFailed", message));
         setTestingTools((current) => {
           const next = new Set(current);
           next.delete(tool.tool_id);
@@ -301,8 +302,8 @@ export default function ComposerToolControl({
         ref={buttonRef}
         type="button"
         className={`composer-icon-button composer-tool-button${open ? " active" : ""}`}
-        title="选择和测试工具"
-        aria-label="选择和测试工具"
+        title={t("composer.tools.select")}
+        aria-label={t("composer.tools.select")}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
@@ -316,23 +317,23 @@ export default function ComposerToolControl({
       >
         <section
           className="composer-tool-menu"
-          aria-label="工具选择与测试"
+          aria-label={t("composer.tools.menu")}
         >
           <header className="composer-tool-menu-header">
             <div>
-              <strong>工具</strong>
+              <strong>{t("composer.tools.title")}</strong>
               <span>
                 {loading
-                  ? "正在读取…"
-                  : `${executionCount}/${tools.length} 可调用 · ${modelVisibleCount}/${tools.length} 模型可见`}
+                  ? t("composer.tools.loading")
+                  : t("composer.tools.count", executionCount, tools.length, modelVisibleCount)}
               </span>
             </div>
             <div className="composer-tool-menu-header-actions">
               <button
                 type="button"
                 className="composer-tool-refresh"
-                title="刷新工具列表"
-                aria-label="刷新工具列表"
+                title={t("composer.tools.refresh")}
+                aria-label={t("composer.tools.refresh")}
                 disabled={loading}
                 onClick={() => void load()}
               >
@@ -341,8 +342,8 @@ export default function ComposerToolControl({
               <button
                 type="button"
                 className="composer-tool-close"
-                title="关闭工具面板"
-                aria-label="关闭工具面板"
+                title={t("composer.tools.close")}
+                aria-label={t("composer.tools.close")}
                 onClick={() => setOpen(false)}
               >
                 <span className="codicon codicon-close" aria-hidden="true" />

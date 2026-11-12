@@ -1,3 +1,4 @@
+import { t } from '../../../../src/clients/shared/core/i18n/index.js';
 import { afterAll, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -14,6 +15,9 @@ import { FilePermission, FileType, FileSystemProviderCapabilities, FileSystemPro
 import { HttpRequestError, invalidateGatewayToken } from '../../../../src/clients/web/src/api/http.js';
 import { getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource } from '../../../../src/clients/web/src/api/configSources.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+
+// 实际声明依赖同一产品翻译入口。
+const localizedFunction = (...parts) => new Function('t', ...parts).bind(undefined, t);
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/settings_source_transport.test.mjs').prepare();
 const fingerprints = [];
@@ -46,12 +50,12 @@ function fixture({ confirm }) {
     return call.method === 'PUT' ? { ...document, jsonc: call.intent.jsonc,
       edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true } } : document;
   };
-  const { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus } = new Function('gateway',
+  const { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus } = localizedFunction('gateway',
     `${ownerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus };`)({ request: transport });
   const environment = { VSBuffer, Event, CancellationError, getErrorMessage, Disposable, parse, dirname, resolvePath, URI,
     FilePermission, FileType, FileSystemProviderCapabilities, FileSystemProviderErrorCode, createFileSystemProviderError,
     HttpRequestError, ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus };
-  const { ConfigurationSourceFiles } = new Function(...Object.keys(environment), `${filesCode}\nreturn { ConfigurationSourceFiles };`)(...Object.values(environment));
+  const { ConfigurationSourceFiles } = localizedFunction(...Object.keys(environment), `${filesCode}\nreturn { ConfigurationSourceFiles };`)(...Object.values(environment));
   const files = new ConfigurationSourceFiles({ confirm }, { info() {}, error() {} });
   const target = { gateway_id: document.gateway_id, gateway_connection_id: 'original-route' };
   const resource = files.prepareEditor(target, sourceKey, document);
@@ -63,7 +67,7 @@ test('工作区配置列表、读取、预检和保存向 HTTP 层传递选定�
   const target = { gateway_id: 'gateway-b', workspace_id: 'workspace-b', gateway_connection_id: 'selected-route-b' };
   const document = { ...target, source_key: 'workspace_user', jsonc: '{}', edit: { idempotency_key: 'original-edit' } };
   const requests = [], originalFetch = globalThis.fetch;
-  const Owner = new Function('getConfigSourceDocument', 'listConfigSources', 'preflightConfigSource', 'saveConfigSource',
+  const Owner = localizedFunction('getConfigSourceDocument', 'listConfigSources', 'preflightConfigSource', 'saveConfigSource',
     `${ownerCode}\nreturn ConfigurationSourceOwner;`)(getConfigSourceDocument, listConfigSources, preflightConfigSource, saveConfigSource);
   invalidateGatewayToken(0);
   globalThis.fetch = async (url, init) => {
@@ -105,7 +109,7 @@ test('同一 URI 重选连接时，在途保存结清原路由，后续读取使
 });
 
 test('共享来源预览说明观察范围，未上报结果不伪报成功', () => {
-  const { sourceFanoutStatus } = new Function(`${ownerCode}\nreturn { sourceFanoutStatus };`)();
+  const { sourceFanoutStatus } = localizedFunction(`${ownerCode}\nreturn { sourceFanoutStatus };`)();
   const document = { workspace_id: 'workspace-a', source_key: 'workspace_mutable_override',
     fanout: { coverage: 'observed_only', source_generation: 2, fanout_id: 'original-fanout', result: 'fanout_partial', workspaces: [
       { workspace_id: 'workspace-a', status: 'applied', result: 'unchanged' },

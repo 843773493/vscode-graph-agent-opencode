@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { useState } from "react";
 import type {
   SessionResource,
@@ -9,6 +10,7 @@ import type { ResourceThreadRef } from "../../../api/workspaceResources";
 import { resourceThreadAssociations } from "../../../state/display/workspaceResourceDisplay";
 import {
   actionLabel,
+  kindLabel,
   resourceMetadataRows,
   resourceTreeDescription,
   resourceKindIcon,
@@ -63,10 +65,10 @@ export default function ResourceTreeRow({
     && (resource.metadata.retention_scope === "workspace" || resourceThreadAssociations(resource).length > 0);
   const title = resourceTreeTitle(resource);
   const description = resourceTreeDescription(resource);
-  const openLabel = previewContext === "thread" ? `在当前会话标签内打开${resource.kind === "terminal" ? "终端" : "浏览器"}`
-    : previewContext === "workspace" ? "在工作区面板打开浏览器"
-      : resource.kind === "terminal" ? extensionWindow ? "在扩展窗口查看终端" : "在底部面板打开终端"
-        : extensionWindow ? "打开浏览器预览" : "在扩展窗口打开浏览器";
+  const openLabel = previewContext === "thread" ? t("resources.open.thread", kindLabel(resource.kind))
+    : previewContext === "workspace" ? t("resources.open.workspaceBrowser")
+      : resource.kind === "terminal" ? extensionWindow ? t("resources.open.extensionTerminalView") : t("resources.open.bottomTerminal")
+        : extensionWindow ? t("resources.open.previewBrowser") : t("resources.open.extensionBrowser");
 
   const handleOpen = () => {
     if (resource.kind === "terminal" && canOpen) {
@@ -95,7 +97,7 @@ export default function ResourceTreeRow({
         <button
           type="button"
           className="resource-tree-chevron"
-          aria-label={expanded ? `收起 ${title} 详情` : `展开 ${title} 详情`}
+          aria-label={expanded ? t("resources.collapse", title) : t("resources.expand", title)}
           aria-expanded={expanded}
           onClick={() => setExpanded((open) => !open)}
         >
@@ -120,14 +122,14 @@ export default function ResourceTreeRow({
             <small>{description}</small>
           </span>
           <span className={`resource-tree-status resource-status-${resource.status}`}>
-            {selected ? "当前" : resourceTreeStatus(resource)}
+            {selected ? t("resources.current") : resourceTreeStatus(resource)}
           </span>
         </button>
       </div>
 
       {expanded ? (
         <div className="resource-tree-detail">
-          <div className="resource-tree-actions" aria-label={`${title}操作`}>
+          <div className="resource-tree-actions" aria-label={t("resources.actions", title)}>
             {canOpen && resource.kind === "terminal" ? (
               <button
                 type="button"
@@ -146,8 +148,8 @@ export default function ResourceTreeRow({
                 className="resource-action-extension"
                 disabled={busy}
                 onClick={() => onOpenTerminalExtension(resource.resource_id)}
-                title="在扩展窗口打开终端"
-                aria-label="在扩展窗口打开终端"
+                title={t("resources.open.extensionTerminal")}
+                aria-label={t("resources.open.extensionTerminal")}
               >
                 <span className="codicon codicon-open-preview" aria-hidden="true" />
               </button>
@@ -171,8 +173,8 @@ export default function ResourceTreeRow({
                 className={`resource-action-${action}`}
                 disabled={busy}
                 onClick={() => onControl(resource.kind, resource.resource_id, action)}
-                title={busy ? "处理中…" : actionLabel(resource, action)}
-                aria-label={busy ? "处理中…" : actionLabel(resource, action)}
+                title={busy ? t("resources.busy") : actionLabel(resource, action)}
+                aria-label={busy ? t("resources.busy") : actionLabel(resource, action)}
               >
                 <span className={`codicon ${resourceActionIcon(action)}`} aria-hidden="true" />
               </button>
@@ -184,34 +186,35 @@ export default function ResourceTreeRow({
                 className="resource-action-replace"
                 disabled={busy}
                 onClick={onReplaceBrowser}
-                title="新建替代浏览器"
-                aria-label="新建替代浏览器"
+                title={t("resources.replaceBrowser")}
+                aria-label={t("resources.replaceBrowser")}
               >
                 <span className="codicon codicon-add" aria-hidden="true" />
               </button>
             ) : null}
           </div>
           {["terminal", "browser"].includes(resource.kind) ? <div className="resource-tree-lifecycle">
-            <span>{resource.metadata.retention_scope === "workspace" ? "保留到工作区" : "随来源线程释放"}</span>
-            {resource.metadata.retention_scope === "thread" && onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "promote")}>保留到工作区</button> : null}
+            <span>{resource.metadata.retention_scope === "workspace" ? t("resources.keep") : t("resources.releaseWithThread")}</span>
+            {resource.metadata.retention_scope === "thread" && onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "promote")}>{t("resources.keep")}</button> : null}
             {resourceThreadAssociations(resource).filter((ref) => extensionWindow || previewContext === "workspace" || ref.session_id === resource.session_id).map((ref) => <span key={`${ref.session_id}/${ref.thread_id}`} title={`${ref.session_id} / ${ref.thread_id}`}>
-              线程 {ref.thread_id.slice(-8)}
-              {onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "detach", ref)}>解除关联</button> : null}
+              {t("resources.thread", ref.thread_id.slice(-8))}
+              {onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "detach", ref)}>{t("resources.detach")}</button> : null}
             </span>)}
-            {canAttachCurrent && onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "attach")}>关联当前会话</button> : null}
-            {typeof resource.metadata.reclaim_at === "string" ? <span>无关联，将于 {formatDateTime(resource.metadata.reclaim_at)} 回收</span> : null}
+            {canAttachCurrent && onOwnerControl ? <button type="button" disabled={busy || resource.metadata.reconciliation_status !== "verified"} onClick={() => onOwnerControl(resource.resource_id, "attach")}>{t("resources.attach")}</button> : null}
+            {typeof resource.metadata.reclaim_at === "string" ? <span>{t("resources.reclaim", formatDateTime(resource.metadata.reclaim_at))}</span> : null}
             {resource.metadata.error ? <span role="alert">{String(resource.metadata.error)}</span> : null}
           </div> : null}
           {metadataRows.length > 0 ? (
             <details className="resource-details">
-              <summary>高级信息</summary>
+              <summary>{t("resources.advanced")}</summary>
               <div className="resource-tree-lifecycle">
-                <span>创建 {formatDateTime(resource.created_at) || "未知"}</span>
-                {resource.ended_at ? <span>结束 {formatDateTime(resource.ended_at)}</span> : null}
+                <span>{t("resources.created", formatDateTime(resource.created_at) || t("resources.unknown"))}</span>
+                {resource.ended_at ? <span>{t("resources.ended", formatDateTime(resource.ended_at))}</span> : null}
                 <span title={resource.resource_id}>ID {resource.resource_id}</span>
               </div>
               <button type="button" onClick={() => onCopy(resource.resource_id)}>
-                复制 ID
+
+                {t("resources.copyId")}
               </button>
               <dl className="resource-detail-grid">
                 {metadataRows.map(([key, value]) => (

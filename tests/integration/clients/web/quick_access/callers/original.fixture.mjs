@@ -1,3 +1,4 @@
+import '../../../../../harness/js/workbench-locale.ts';
 import * as q from '../query.fixture.ts';
 import { PickerHost } from './picker.fixture.mjs';
 import { WorkspaceQuickAccess } from '../../../../../../src/clients/workbench/src/search/quickAccess.js';

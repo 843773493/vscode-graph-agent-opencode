@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { getWorkspaceFiles } from "../../../api";
 import { HttpRequestError } from "../../../api/http";
 import type { WorkspaceDirectoryKey, WorkspaceDirectoryRevision, WorkspaceFileList } from "../../../types/backend";
@@ -169,7 +170,7 @@ export function useWorkspaceFileTreeDirectories({
             ...prev,
             [path]: failedDirectoryEntry(prev[path], message, Date.now()),
           }));
-          onStatusChange(`文件树加载失败: ${message}`);
+          onStatusChange(t("fileTree.status.loadFailed", message));
           return false;
         } finally {
           if (directoryRequestsRef.current.get(path)?.controller === controller) {

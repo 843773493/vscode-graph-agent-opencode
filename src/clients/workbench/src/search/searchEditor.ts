@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { Button } from '../../upstream/src/vs/base/browser/ui/button/button.js';
 import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { isCancellationError } from '../../upstream/src/vs/base/common/errors.js';
@@ -51,7 +52,7 @@ export class ScopedSearchEditor extends SearchEditor {
     super.createEditor(parent);
     this.scopeButton = this._register(new Button(this.queryEditorContainer, { ...defaultButtonStyles, secondary: true }));
     this.scopeButton.element.classList.add('boxteam-search-scope');
-    this.scopeButton.label = '历史结果 · 请选择搜索范围';
+    this.scopeButton.label = t('quickAccess.editor.chooseScope');
     this._register(this.scopeButton.onDidClick(() => { void this.chooseScope().catch(error => this.reportFailure(error)); }));
   }
 
@@ -71,17 +72,17 @@ export class ScopedSearchEditor extends SearchEditor {
     this.scopeRequest?.abort();
     const controller = this.scopeRequest = new AbortController();
     this.scopeKey = key;
-    this.scopeFailure = new Error('正在核验搜索范围');
+    this.scopeFailure = new Error(t('quickAccess.editor.validating'));
     if (this.input) this.updateReadonly(this.input);
-    if (this.scopeButton) this.scopeButton.label = '正在核验搜索范围…';
+    if (this.scopeButton) this.scopeButton.label = t('quickAccess.editor.validatingProgress');
     this.pendingScope = (async () => {
-      if (!scope) throw new Error('历史结果没有明确范围，请先选择搜索工作区');
+      if (!scope) throw new Error(t('quickAccess.editor.historyScopeMissing'));
       let resolved = scope;
       if (scope.kind === 'workspace') {
         // 只重解已登记路由；不启动、连接目标，也不使用现在的配置推测旧根。
         const workspaces = await Promise.all(scope.workspaces.map(async target => {
           const current = await gateway.resolveWorkspaceTarget(target, controller.signal);
-          if (current.status !== 'ready') throw new Error(`工作区 ${current.name} 当前不可查询（${current.status}）`);
+          if (current.status !== 'ready') throw new Error(t('quickAccess.editor.workspaceUnavailable', current.name, current.status));
           return { ...target, label: current.name };
         }));
         if (generation !== this.scopeGeneration) return;
@@ -91,14 +92,14 @@ export class ScopedSearchEditor extends SearchEditor {
       if (generation !== this.scopeGeneration) return;
       this.scopeFailure = undefined;
       if (this.input) this.updateReadonly(this.input);
-      if (this.scopeButton) this.scopeButton.label = resolved.kind === 'native' ? '搜索范围 · 原生虚拟工作区'
-        : `搜索范围 · ${resolved.workspaces.map(target => target.label).join('、')}`;
+      if (this.scopeButton) this.scopeButton.label = resolved.kind === 'native' ? t('quickAccess.editor.nativeScope')
+        : t('quickAccess.editor.scope', resolved.workspaces.map(target => target.label).join(t('quickAccess.listSeparator')));
     })().catch(error => {
       if (generation !== this.scopeGeneration) return;
       controller.abort();
       this.scopeFailure = error;
       if (this.input) this.updateReadonly(this.input);
-      if (this.scopeButton) this.scopeButton.label = `历史结果 · ${error instanceof Error ? error.message : String(error)}`;
+      if (this.scopeButton) this.scopeButton.label = t('quickAccess.editor.history', error instanceof Error ? error.message : String(error));
     });
     return this.pendingScope;
   }
@@ -141,7 +142,7 @@ export class ScopedSearchEditor extends SearchEditor {
 
   protected override buildTextQuery(content: IPatternInfo, options: ITextQueryBuilderOptions, config: SearchConfiguration): ITextQuery {
     const scope = parseSearchEditorScope(config.scope);
-    if (!scope || this.scopeFailure) throw this.scopeFailure ?? new Error('请先选择明确搜索范围');
+    if (!scope || this.scopeFailure) throw this.scopeFailure ?? new Error(t('quickAccess.editor.scopeRequired'));
     return scope.kind === 'native' ? super.buildTextQuery(content, options, config)
       : this.scopedInstantiation.createInstance(QueryBuilder).text(content, this.searchContext.getWorkspace().folders.map(folder => folder.uri), options);
   }
@@ -149,7 +150,7 @@ export class ScopedSearchEditor extends SearchEditor {
   private async chooseScope(): Promise<void> {
     const input = this.input, generation = this.inputGeneration;
     const snapshot = workspaceContext.getSnapshot();
-    if (snapshot.loading || snapshot.error || !snapshot.gatewayId) throw new Error(snapshot.error ?? '工作区登记信息尚未加载');
+    if (snapshot.loading || snapshot.error || !snapshot.gatewayId) throw new Error(snapshot.error ?? t('quickAccess.scope.registrationPending'));
     const current = input instanceof SearchEditorInput ? parseSearchEditorScope(input.tryReadConfigSync()?.scope) : undefined;
     const picks = snapshot.workspaces.map(target => {
       const owner = gatewayWorkspaceOwner(target);
@@ -157,16 +158,16 @@ export class ScopedSearchEditor extends SearchEditor {
         && current.workspaces.some(item => item.workspaceId === owner.workspaceId && item.gatewayId === owner.gatewayId) };
     });
     const selected = await this.instantiationService.invokeFunction(accessor => accessor.get(IQuickInputService).pick(picks,
-      { canPickMany: true, title: '选择搜索工作区', placeHolder: '仅查询选定的已登记工作区；不会自动启动或连接' }));
+      { canPickMany: true, title: t('quickAccess.editor.workspacesTitle'), placeHolder: t('quickAccess.editor.workspacesHint') }));
     if (!selected?.length || !(input instanceof SearchEditorInput) || this.input !== input || generation !== this.inputGeneration) return;
     this.cancelInputSearch();
     const scopeGeneration = ++this.scopeGeneration;
     this.scopeRequest?.abort();
     const controller = this.scopeRequest = new AbortController();
     this.scopeKey = undefined;
-    this.scopeFailure = new Error('正在核验新的搜索范围');
+    this.scopeFailure = new Error(t('quickAccess.editor.validatingNew'));
     this.updateReadonly(input);
-    if (this.scopeButton) this.scopeButton.label = '正在核验新的搜索范围…';
+    if (this.scopeButton) this.scopeButton.label = t('quickAccess.editor.validatingNewProgress');
     const data = await input.resolveModels();
     if (this.input !== input || generation !== this.inputGeneration || scopeGeneration !== this.scopeGeneration) return;
     data.resultsModel.setValue('');
@@ -179,7 +180,7 @@ export class ScopedSearchEditor extends SearchEditor {
       controller.abort();
       if (this.input !== input || generation !== this.inputGeneration || scopeGeneration !== this.scopeGeneration) return;
       this.scopeFailure = error;
-      if (this.scopeButton) this.scopeButton.label = `搜索范围不可用 · ${error instanceof Error ? error.message : String(error)}`;
+      if (this.scopeButton) this.scopeButton.label = t('quickAccess.editor.unavailable', error instanceof Error ? error.message : String(error));
       throw error;
     }
     if (this.input !== input || generation !== this.inputGeneration || scopeGeneration !== this.scopeGeneration) return;
@@ -194,7 +195,7 @@ export class ScopedSearchEditor extends SearchEditor {
     ++this.scopeGeneration;
     this.scopeRequest?.abort();
     this.scopeKey = undefined;
-    this.scopeFailure = new Error('搜索范围尚未绑定');
+    this.scopeFailure = new Error(t('quickAccess.editor.unbound'));
     this.pendingScope = this.searchContext.updateScope({ version: 1, workspaces: [] });
   }
 

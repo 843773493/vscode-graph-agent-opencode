@@ -174,7 +174,7 @@ async def metadata_frontend(
             html = await frontend.get("/")
             assert html.status_code == 200
             assert 'src="/@vite/client"' in html.text
-            assert 'src="/src/main.ts"' in html.text
+            assert 'src="/src/bootstrap.ts"' in html.text
             assert 'src="/out/main.js"' not in html.text
         (context.artifacts_dir / "vite-initialization.json").write_text(json.dumps({
             "command": command, "pid": process.pid, "base_url": base_url,

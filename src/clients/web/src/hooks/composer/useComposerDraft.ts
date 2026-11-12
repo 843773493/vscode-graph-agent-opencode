@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { composerDraftScopeKey, composerDraftExceedsLimit, readComposerDraft, writeComposerDraft } from "../../state/composerDrafts/storage";
 import { readBrowserView, updateBrowserView } from "../../state/browserViewStore";
@@ -19,7 +20,7 @@ function useStoredDraft<T>(scopeKey: string | null, empty: T, read: (key: string
   const report = useRef(onError); report.current = onError;
   const [failure, setFailure] = useState<Error | null>(null);
   const reportFailure = useCallback((error: unknown) => {
-    const message = `草稿尚未保存：${errorMessage(error)}`;
+    const message = t("composer.draft.unsaved", errorMessage(error));
     if (report.current) report.current(message);
     else setFailure(new Error(message));
   }, []);
@@ -41,8 +42,8 @@ function useStoredDraft<T>(scopeKey: string | null, empty: T, read: (key: string
   }, [scope, read, reportFailure]);
   const apply = useCallback(async (action: SetStateAction<T>, requireReady: boolean) => {
     const before = current.current;
-    if (!scope.active || before.scope !== scope) throw new Error("接收草稿已关闭或改变，请重新选择 Thread");
-    if (requireReady && !before.ready) throw new Error("接收草稿尚未恢复，请稍后重试");
+    if (!scope.active || before.scope !== scope) throw new Error(t("composer.draft.closed"));
+    if (requireReady && !before.ready) throw new Error(t("composer.draft.restoring"));
     const value = typeof action === "function" ? (action as (current: T) => T)(before.value) : action;
     current.current = { scope, value, ready: true };
     setDraft(current.current);
@@ -58,7 +59,7 @@ function useStoredDraft<T>(scopeKey: string | null, empty: T, read: (key: string
 }
 
 async function saveText(key: string | null, value: string): Promise<void> {
-  if (composerDraftExceedsLimit(value)) throw new Error("输入超过 100000 个字符，当前内容仅保留在输入框中");
+  if (composerDraftExceedsLimit(value)) throw new Error(t("composer.draft.tooLong"));
   await writeComposerDraft(key, value);
 }
 

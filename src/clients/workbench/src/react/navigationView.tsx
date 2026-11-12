@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../../web/src/api/workspaceIdentity.js";
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AgentSessionsPanel from '../../../web/src/components/panels/sessionPanels/AgentSessionsPanel.js';
@@ -62,7 +63,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   const gesture = useRef({ pinned: false, sideBySide: false });
   const openRequests = useRef(new Map<number, number>());
   const created = useCallback(async (session: Session, workspaceKey: string | null) => {
-    if (!workspaceKey || !session.thread_id) throw new Error('新建会话回执缺少工作区路由或主 Thread');
+    if (!workspaceKey || !session.thread_id) throw new Error(t('navigation.sessions.createdReceiptMissing'));
     await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
       sessionId: session.session_id, threadId: session.thread_id, title: session.title }), { pinned: true });
   }, [editors]);
@@ -70,7 +71,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   const refreshEditors = useCallback(async (target: GatewayWorkspaceRequestTarget, signal: AbortSignal) => {
     const snapshot = workspaceContext.getSnapshot();
     const workspace = snapshot.workspaces.find(item => gatewayWorkspaceKey(item) === gatewayWorkspaceKey(target));
-    if (!workspace || !snapshot.gatewayId) throw new Error('编辑器目录对账缺少工作区登记身份');
+    if (!workspace || !snapshot.gatewayId) throw new Error(t('navigation.catalog.editorOwnerMissing'));
     const owner = gatewayWorkspaceOwner(workspace);
     const matchingEditors = () => editors.getEditors(EditorsOrder.SEQUENTIAL).filter((entry): entry is IEditorIdentifier & { editor: ThreadInput } =>
       entry.editor instanceof ThreadInput && entry.editor.owner.gatewayId === owner.gatewayId
@@ -93,7 +94,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       }
       signal.throwIfAborted();
       if (session.session_id !== sessionId || session.workspace_id !== owner.workspaceId) {
-        throw new Error(`编辑器目录对账返回了其它会话身份：${target.workspace_id}/${sessionId}`);
+        throw new Error(t('navigation.catalog.editorOwnerMismatch', target.workspace_id, sessionId));
       }
       for (const { editor } of matchingEditors()) {
         if (editor.owner.sessionId === sessionId && editor.owner.threadId === session.thread_id) editor.setTitle(session.title);
@@ -115,7 +116,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   const activateWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.activate, workspaceOwnerFromKey(id)), [commands]);
   const reconnectWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.reconnect, workspaceOwnerFromKey(id)), [commands]);
   const startWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.start, workspaceOwnerFromKey(id)), [commands]);
-  useEffect(() => { if (state.status) console.info('导航状态：', state.status); }, [state.status]);
+  useEffect(() => { if (state.status) console.info(t('navigation.statusPrefix'), state.status); }, [state.status]);
   const openSession = useCallback(async (workspaceKey: string, sessionId: string, options = gesture.current) => {
     // 点击时冻结目标组和打开意图，不能让异步完成后的焦点改变会话归属。
     const group = options.sideBySide ? SIDE_GROUP : groups.activeGroup.id;
@@ -210,11 +211,11 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       preferences={resolveAgentSessionsPreferences(state.uiSettings)} onPreferencesChange={updater => {
         void runtime.updateUiSettings(current => ({ session_sidebar: updater(current.session_sidebar) })).catch(cause => reportError(String(cause)));
       }} />
-    <SessionNameDialog open={actions.nameDialog !== null} title="重命名会话" label="会话名称" initialValue={actions.nameDialog?.initialTitle ?? ''}
-      confirmText="保存" submitting={actions.nameDialogSubmitting} error={actions.nameDialogError} onCancel={actions.closeNameDialog} onSubmit={actions.submitNameDialog} />
+    <SessionNameDialog open={actions.nameDialog !== null} title={t('navigation.sessions.rename')} label={t('navigation.sessions.name')} initialValue={actions.nameDialog?.initialTitle ?? ''}
+      confirmText={t('navigation.save')} submitting={actions.nameDialogSubmitting} error={actions.nameDialogError} onCancel={actions.closeNameDialog} onSubmit={actions.submitNameDialog} />
     <SessionContextForkDialog state={actions.forkDialog} onCancel={actions.closeForkDialog} onSubmit={actions.submitForkDialog} onSelectionChange={actions.updateForkDialogSelection} />
-    {gatewayOpen ? <div className="native-navigation-dialog" role="dialog" aria-label="Gateway 控制中心">
-      <button type="button" className="sidebar-icon-button" aria-label="关闭 Gateway 控制中心" onClick={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }}><span className="codicon codicon-close" /></button>
+    {gatewayOpen ? <div className="native-navigation-dialog" role="dialog" aria-label={t('navigation.workspace.gatewayControl')}>
+      <button type="button" className="sidebar-icon-button" aria-label={t('navigation.workspace.closeGatewayControl')} onClick={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }}><span className="codicon codicon-close" /></button>
       <GatewayControlCenter apiPort={0} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
         onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
         onRemoteGatewayReconnected={notifyPluginCommandGatewayReconnected}
@@ -225,7 +226,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
         diagnosticLocation={logLocation} onCloseDiagnosticLocation={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }} />
     </div> : null}
     {diagnostic ? <div className="native-navigation-dialog" role="dialog" aria-label={diagnostic.title}>
-      <button type="button" className="sidebar-icon-button" aria-label="关闭诊断" onClick={() => setDiagnostic(null)}><span className="codicon codicon-close" /></button>
+      <button type="button" className="sidebar-icon-button" aria-label={t('navigation.diagnostic.close')} onClick={() => setDiagnostic(null)}><span className="codicon codicon-close" /></button>
       <h3>{diagnostic.title}</h3><pre>{diagnostic.detail}</pre>
     </div> : null}
   </div>;
@@ -258,18 +259,18 @@ export class NavigationSurface {
   async runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void): Promise<void> {
     if (!this.workspaceActions) await (this.actionsReady ??= new DeferredPromise<WorkspaceActionHandlers>()).p;
     assertAccess();
-    if (!this.workspaceActions) throw new Error('工作区导航已关闭，原动作尚未执行');
+    if (!this.workspaceActions) throw new Error(t('navigation.workspace.navigationClosedAction'));
     await this.workspaceActions[action](workspaceKey);
   }
   revealDiagnosticLog(request: GatewayDiagnosticLogLocateRequest): void { this.render(undefined, request); }
   async runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void, source?: SessionForkSourceSelection): Promise<void> {
     if (!this.sessionActions) await (this.sessionActionsReady ??= new DeferredPromise<SessionActionHandlers>()).p;
     assertAccess();
-    if (!this.sessionActions) throw new Error('会话导航已关闭，原动作尚未执行');
+    if (!this.sessionActions) throw new Error(t('navigation.sessions.navigationClosedAction'));
     await this.sessionActions[action](sessionId, title, workspaceKey, assertAccess, source);
   }
   revealFolder(target: GatewayWorkspaceRequestTarget, nodeId: string, focus: boolean): Promise<void> {
-    this.reveal?.abort(new Error('文件夹定位已被新的导航替换'));
+    this.reveal?.abort(new Error(t('navigation.catalog.revealSuperseded')));
     const controller = this.reveal = new AbortController();
     return new Promise<void>((complete, fail) => {
       controller.signal.addEventListener('abort', () => fail(controller.signal.reason), { once: true });
@@ -280,9 +281,9 @@ export class NavigationSurface {
     });
   }
   dispose(): void {
-    this.reveal?.abort(new Error('会话导航已关闭'));
-    if (this.actionsReady) void this.actionsReady.error(new Error('工作区导航已关闭，原动作尚未执行'));
-    if (this.sessionActionsReady) void this.sessionActionsReady.error(new Error('会话导航已关闭，原动作尚未执行'));
+    this.reveal?.abort(new Error(t('navigation.sessions.navigationClosed')));
+    if (this.actionsReady) void this.actionsReady.error(new Error(t('navigation.workspace.navigationClosedAction')));
+    if (this.sessionActionsReady) void this.sessionActionsReady.error(new Error(t('navigation.sessions.navigationClosedAction')));
     this.sessionActions = undefined;
     this.workspaceActions = undefined;
     this.surface.dispose();

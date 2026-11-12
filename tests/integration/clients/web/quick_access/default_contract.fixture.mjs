@@ -1,3 +1,4 @@
+import '../../../../harness/js/workbench-locale.ts';
 import { WorkspaceQuickAccess } from '../../../../../src/clients/workbench/src/search/quickAccess.js';
 import { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';
 import { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
@@ -16,6 +17,7 @@ export { contentBranchContract, nameBranchContract, fileBranchContract, cursorRe
 export { contentSelectionContract } from './content_selection.fixture.mjs';
 export { quickAccessControllerContract } from './quick_access_controller.fixture.mjs';
 export { typingSearchContract } from './typing_performance.fixture.mjs';
+export { canonicalSearchContract } from './canonical_search.fixture.mjs';
 
 /** 原非文本 Provider 的分页更新，不替代真实 Thread 页面接线验收。 */
 export async function outlineContract(accept) {

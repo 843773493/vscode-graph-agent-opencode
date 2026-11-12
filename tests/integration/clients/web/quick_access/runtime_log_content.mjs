@@ -92,7 +92,7 @@ try {
   await expect(rows().first()).toBeVisible();
   await quick.getByRole('button', { name: '选择搜索范围', exact: true }).click();
   await quick.locator('.monaco-list-row').filter({ hasText: b.workspace_id }).getByRole('checkbox').check();
-  await quick.getByRole('button', { name: 'OK', exact: true }).click();
+  await quick.getByRole('button', { name: '确定', exact: true }).click();
   await expect(rows().first()).toBeVisible();
   await expect(quick.locator('.monaco-progress-container.active')).toHaveCount(0);
   await Promise.all(reads);

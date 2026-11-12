@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 // 请求重放投影：把后端记录的 Prompt 组成、工具定义与统计值投影成展示模型。
 
 import type { LLMRequestLogRecord } from "../../types/backend";
@@ -70,7 +71,7 @@ export function buildRequestReplayDisplay(
     }
     promptComponents.push({
       source: typeof item.source === "string" ? item.source : "unknown_middleware",
-      label: typeof item.label === "string" ? item.label : `Prompt 组成 ${index + 1}`,
+      label: typeof item.label === "string" ? item.label : t("inspection.request.promptComponent", formatNumber(index + 1)),
       operation,
       contentBlocks,
       blockCount: numberField(item, "block_count") ?? contentBlocks.length,

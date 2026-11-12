@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { raceCancellationError } from '../../upstream/src/vs/base/common/async.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
@@ -17,7 +18,7 @@ import { canonicalFileQuery, fileOptions, openResources, resourceInFolder, resou
 /** 只把原文件 owner 的精确区间投影为搜索结果，不为片段再读一次正文。 */
 export function textMatch(hit: ResourceNavigationMatchDTO, previewOptions?: ITextSearchPreviewOptions): ITextSearchMatch {
   if (hit.end_line === undefined || hit.utf16_column === undefined || hit.utf16_end_column === undefined || hit.snippet_start_utf16_column === undefined) {
-    throw new Error('文件搜索响应缺少完整 UTF-16 区间');
+    throw new Error(t('quickAccess.files.missingUtf16Range'));
   }
   const start = hit.utf16_column - hit.snippet_start_utf16_column;
   const end = hit.end_line === hit.line ? hit.utf16_end_column - hit.snippet_start_utf16_column : hit.text.length;
@@ -63,7 +64,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     query = query.type === QueryType.Text ? validateTextQuery(query, identity) : validateQuery(query, identity);
     models = new ResourceSet([...models], this.resourceKey);
     if (token.isCancellationRequested) throw new CancellationError();
-    if (this._store.isDisposed) throw new Error('文件搜索服务已释放');
+    if (this._store.isDisposed) throw new Error(t('quickAccess.files.disposed'));
     const source = new CancellationTokenSource(token), controller = new AbortController();
     const cancellation = source.token.onCancellationRequested(() => controller.abort());
     this.active.add(source);
@@ -149,36 +150,36 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           if (event.type === 'scope') { scope = event.scope!.scope; return; }
           if (!event.branch?.branch) return;
           const plan = byKey.get(searchBranchKey(event.branch.branch));
-          if (!plan) throw new Error('文件搜索返回了其它目录根');
+          if (!plan) throw new Error(t('quickAccess.files.unexpectedRoot'));
           const { owner, folder, target, exact } = plan;
           if (event.type === 'branch') {
             const diagnostic = [event.branch.code && `code: ${event.branch.code}`, event.branch.message,
               event.branch.error_owner && `error_owner: ${event.branch.error_owner}`, event.branch.reason && `reason: ${event.branch.reason}`,
               event.branch.http_status !== undefined && `http_status: ${event.branch.http_status}`, `request_id: ${event.request_id}`].filter(Boolean).join(' · ');
             if (event.branch.state === 'failed' || event.branch.state === 'cancelled') throw new Error(
-              `文件搜索${event.branch.state === 'cancelled' ? '已取消' : '失败'}：${diagnostic}`, { cause: event });
+              t(event.branch.state === 'cancelled' ? 'quickAccess.files.cancelled' : 'quickAccess.files.failed', diagnostic), { cause: event });
             if (event.branch.state === 'limited') {
               if (query.type === QueryType.File && event.branch.code === 'result_limit') moreFiles = true;
               if (event.branch.cursor || event.branch.code === 'output_limit') branches.push({ branch: event.branch.branch, cursor: event.branch.cursor });
               else {
                 limitHit = true;
-                messages.push({ type: TextSearchCompleteMessageType.Warning, text: `文件搜索受限：${diagnostic}（${owner.path}）` });
+                messages.push({ type: TextSearchCompleteMessageType.Warning, text: t('quickAccess.files.limited', diagnostic, owner.path) });
               }
             }
             return;
           }
           if (event.type !== 'page') return;
           const page = event.page?.files;
-          if (!page || page.node?.uri !== owner.path) throw new Error('文件搜索响应目标与请求不一致');
-          if (exact && page.node.resource_shape !== 'file') throw new Error('显式搜索文件返回了目录或其它资源');
+          if (!page || page.node?.uri !== owner.path) throw new Error(t('quickAccess.files.targetMismatch'));
+          if (exact && page.node.resource_shape !== 'file') throw new Error(t('quickAccess.files.expectedFile'));
           const canonical = new Map(page.entries.map(entry => [entry.uri, entry.canonical_uri ?? entry.uri]));
           const rows = query.type === QueryType.Text ? page.matches.map(hit => ({ uri: hit.uri, hit })) : page.entries
             .filter(entry => entry.resource_shape === 'file').map(entry => ({ uri: entry.uri, hit: undefined }));
           for (const row of rows) {
             if (source.token.isCancellationRequested) throw new CancellationError();
             const resource = workspaceFileUri(owner, canonical.get(row.uri) ?? row.uri, owner.root);
-            if (exact && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件');
-            if (!resourceInFolder(resource, query, folder, identity)) throw new Error('文件搜索响应越过本次目录或过滤范围');
+            if (exact && !identity.isEqual(resource, target)) throw new Error(t('quickAccess.files.exactFileMismatch'));
+            if (!resourceInFolder(resource, query, folder, identity)) throw new Error(t('quickAccess.files.outsideScope'));
             if (models.has(resource)) continue;
             const key = this.resourceKey(resource);
             const matchKey = key + (row.hit ? `:${row.hit.line}:${row.hit.utf16_column}:${row.hit.end_line}:${row.hit.utf16_end_column}` : '');
@@ -195,8 +196,8 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           for (const line of page.contexts) {
             if (source.token.isCancellationRequested) throw new CancellationError();
             const resource = workspaceFileUri(owner, canonical.get(line.uri) ?? line.uri, owner.root);
-            if (exact && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件的上下文');
-            if (!resourceInFolder(resource, query, folder, identity)) throw new Error('文件搜索上下文越过本次目录或过滤范围');
+            if (exact && !identity.isEqual(resource, target)) throw new Error(t('quickAccess.files.contextFileMismatch'));
+            if (!resourceInFolder(resource, query, folder, identity)) throw new Error(t('quickAccess.files.contextOutsideScope'));
             if (models.has(resource)) continue;
             const key = this.resourceKey(resource);
             const lines = contexts.get(key) ?? new Map<number, ResourceNavigationContextDTO>();
@@ -204,7 +205,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
             contexts.set(key, lines);
           }
         } }), source.token);
-        if (!scope) throw new Error('文件搜索缺少冻结范围');
+        if (!scope) throw new Error(t('quickAccess.files.missingFrozenScope'));
         // 原 owner 的 result_limit 已确认下一文件；字节受限仍须沿续点探测。
         if (count >= maximum && moreFiles) limitHit = true;
         continuation = branches.length ? { scope, branches } : undefined;
@@ -228,14 +229,14 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
             const context = { lineNumber: line.line, text: line.text + (line.truncated ? '…' : '') };
             file.results!.push(context);
             onProgress?.({ resource: file.resource, results: [context] });
-            if (line.truncated) messages.push({ type: TextSearchCompleteMessageType.Warning, text: `搜索上下文行已截断：${line.uri}:${line.line}` });
+            if (line.truncated) messages.push({ type: TextSearchCompleteMessageType.Warning, text: t('quickAccess.files.contextTruncated', line.uri, line.line) });
           }
         }
       }
       if (source.token.isCancellationRequested) throw new CancellationError();
       return { results: [...results.values()], messages, limitHit };
     } catch (error) {
-      if (timedOut) throw new Error('文件搜索超过本次总期限', { cause: error });
+      if (timedOut) throw new Error(t('quickAccess.files.deadlineExceeded'), { cause: error });
       throw error;
     } finally {
       clearTimeout(timer); cancellation.dispose(); source.dispose(); this.active.delete(source);

@@ -1,4 +1,5 @@
 [test]
+preload = ["./tests/harness/js/workbench-locale.ts"]
 # 固定上游、参考仓库和正式测试产物不是项目的 Bun 测试输入。
 pathIgnorePatterns = [
   "reference_repo/**",

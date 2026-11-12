@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import MarkdownContent from "./MarkdownContent";
@@ -10,20 +11,20 @@ type WorkItem =
 function activePreview(items: WorkItem[]): string {
   const latest = items[items.length - 1];
   if (!latest) {
-    return "查看思考过程";
+    return t("chat.thinking.view");
   }
   if (latest.kind === "aggregated_tool") {
-    if (latest.active) return `正在运行 ${latest.toolName}`;
-    if (latest.outcomeUnknown) return `${latest.toolName} 结果未知`;
-    if (latest.failed) return `${latest.toolName} 执行失败`;
-    return `已运行 ${latest.toolName}`;
+    if (latest.active) return t("chat.tool.running", latest.toolName);
+    if (latest.outcomeUnknown) return t("chat.tool.unknown", latest.toolName);
+    if (latest.failed) return t("chat.tool.failed", latest.toolName);
+    return t("chat.tool.completed", latest.toolName);
   }
   const plain = latest.text.slice(0, 512)
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/[*_`>#-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return plain.length > 88 ? `${plain.slice(0, 88)}…` : plain || "查看思考过程";
+  return plain.length > 88 ? `${plain.slice(0, 88)}…` : plain || t("chat.thinking.view");
 }
 
 export function compactWorkMarkdown(value: string): string {
@@ -75,14 +76,14 @@ function ThinkingSection({
         type="button"
         className="chat-thinking-toggle"
         aria-expanded={open}
-        aria-label={`${open ? "收起" : "展开"} Turn 中间消息：${preview}`}
+        aria-label={t(open ? "chat.thinking.collapse" : "chat.thinking.expand", preview)}
         onClick={() => setOpen((current) => !current)}
       >
         <span
           className={`codicon ${active ? "codicon-loading codicon-modifier-spin" : "codicon-check"}`}
           aria-hidden="true"
         />
-        {active ? <span className="chat-thinking-label">正在思考</span> : null}
+        {active ? <span className="chat-thinking-label">{t("chat.thinking.active")}</span> : null}
         {!open ? (
           <span className="chat-thinking-preview">
             {preview}
@@ -98,7 +99,7 @@ function ThinkingSection({
           {hasRedactedThinking ? (
             <div className="chat-thinking-notice" role="status">
               <span className="codicon codicon-lock" aria-hidden="true" />
-              <span>部分思考内容已隐藏</span>
+              <span>{t("chat.thinking.redacted")}</span>
             </div>
           ) : null}
           {items.map((item) =>

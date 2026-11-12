@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { TraceNavigation } from "../../../hooks/runtime/useTraceNavigation";
 import { formatDateTime } from "../../../utils/format";
@@ -25,10 +26,10 @@ import { useEventQueuePagination } from "../../eventQueue/useEventQueuePaginatio
 export const INITIAL_VISIBLE_EVENT_COUNT = 30;
 
 function sourceLabel(source: FrontendReceivedEvent["source"]): string {
-  if (source === "frontend") return "页面操作";
-  if (source === "initial_load") return "历史加载";
-  if (source === "recovery") return "连接恢复";
-  if (source === "sse") return "实时事件";
+  if (source === "frontend") return t("inspection.event.source.frontend");
+  if (source === "initial_load") return t("inspection.event.source.initial");
+  if (source === "recovery") return t("inspection.event.source.recovery");
+  if (source === "sse") return t("inspection.event.source.sse");
   return source;
 }
 
@@ -50,7 +51,7 @@ function MessageCreatedSummary({
       {names.length > 0 ? (
         <div className="event-queue-attachments">
           {names.map((name) => (
-            <span key={name}>附件: {name}</span>
+            <span key={name}>{t("inspection.event.attachment", name)}</span>
           ))}
         </div>
       ) : null}
@@ -133,8 +134,8 @@ const EventQueueCard = React.memo(function EventQueueCard({
           <span className="event-queue-compact-content">{compactContent}</span>
         ) : null}
         <div className="panel-time">
-          {eventTime ? <span>事件 {eventTime}</span> : null}
-          {receivedTime ? <span>收到 {receivedTime}</span> : null}
+          {eventTime ? <span>{t("inspection.event.time", eventTime)}</span> : null}
+          {receivedTime ? <span>{t("inspection.event.received", receivedTime)}</span> : null}
         </div>
       </summary>
 
@@ -157,7 +158,7 @@ const EventQueueCard = React.memo(function EventQueueCard({
 
           {toolSummary ? (
             <div className="event-queue-tool-summary">
-              <span>{type === "tool_call_start" ? "输入" : "结果"}</span>
+              <span>{type === "tool_call_start" ? t("inspection.event.input") : t("inspection.event.result")}</span>
               <code>{toolSummary.summary}</code>
             </div>
           ) : null}
@@ -167,7 +168,7 @@ const EventQueueCard = React.memo(function EventQueueCard({
           ) : null}
 
           <LazyPrettyJsonDetails title="payload" getValue={getPayload} />
-          <LazyPrettyJsonDetails title="完整事件" getValue={getEvent} />
+          <LazyPrettyJsonDetails title={t("inspection.event.full")} getValue={getEvent} />
         </div>
       ) : null}
     </details>
@@ -203,7 +204,7 @@ function summarizeTextDeltaGroup(items: FrontendReceivedEvent[]) {
   const preview = previewParts.join("");
   return {
     previewText: mergedTextLength > LARGE_STRING_DISPLAY_LIMIT
-      ? `${preview}…（已截断展示，原文 ${mergedTextLength} 字符）`
+      ? t("inspection.event.truncated", preview, formatNumber(mergedTextLength))
       : preview,
     stats: {
       delta_count: items.length,
@@ -262,8 +263,8 @@ const TextDeltaGroupCard = React.memo(function TextDeltaGroupCard({
           </span>
         ) : null}
         <div className="panel-time">
-          {eventTime ? <span>首条 {eventTime}</span> : null}
-          {receivedTime ? <span>末条收到 {receivedTime}</span> : null}
+          {eventTime ? <span>{t("inspection.event.first", eventTime)}</span> : null}
+          {receivedTime ? <span>{t("inspection.event.lastReceived", receivedTime)}</span> : null}
         </div>
       </summary>
 
@@ -277,15 +278,15 @@ const TextDeltaGroupCard = React.memo(function TextDeltaGroupCard({
           </div>
 
           <div className="event-queue-stats">
-            <span>delta 数: {stats.delta_count}</span>
-            <span>合并字符: {stats.merged_text_length}</span>
+            <span>{t("inspection.event.deltas", formatNumber(stats.delta_count))}</span>
+            <span>{t("inspection.event.mergedCharacters", formatNumber(stats.merged_text_length))}</span>
             {stats.delta_kinds.length > 0 ? (
               <span>kind: {stats.delta_kinds.join(", ")}</span>
             ) : null}
           </div>
 
-          <LazyPrettyJsonDetails title="合并文本" getValue={getMergedPayload} />
-          <LazyPrettyJsonDetails title="原始 text_delta 列表" getValue={getOriginalEvents} />
+          <LazyPrettyJsonDetails title={t("inspection.event.merged")} getValue={getMergedPayload} />
+          <LazyPrettyJsonDetails title={t("inspection.event.originalDeltas")} getValue={getOriginalEvents} />
         </div>
       ) : null}
     </details>
@@ -309,27 +310,22 @@ const KeyTraceSummary = React.memo(function KeyTraceSummary({
 
   return (
     <div className="event-queue-key-trace">
-      <div className="event-queue-key-trace-title">关键链路</div>
+      <div className="event-queue-key-trace-title">{t("inspection.event.keyFlow")}</div>
       <div className="event-queue-key-trace-items">
         {acceptedSkillLoads.length > 0 ? (
-          <span>已接受的 Skill 加载：{acceptedSkillLoads.join("、")}</span>
+          <span>{t("inspection.event.skillLoads", acceptedSkillLoads.join(", "))}</span>
         ) : null}
         {keyFlowToolCalls.map((call) => (
           <span key={`${call.invocationToolName ?? ""}:${call.toolName}:${call.skillNames.join(":")}`}>
-            调用扩展工具：{call.invocationToolName ? `${call.invocationToolName} -> ` : ""}
-            {call.toolName}
-            {call.skillNames.length > 0
-              ? `（${call.skillNames.join("、")} 记录）`
-              : ""}
+            {t("inspection.event.toolCall", call.invocationToolName ? `${call.invocationToolName} -> ` : "", call.toolName, call.skillNames.length > 0 ? t("inspection.event.skillRecords", call.skillNames.join(", ")) : "")}
           </span>
         ))}
         {keyFlowToolResults.map((result) => (
           <span key={`${result.invocationToolName ?? ""}:${result.toolName}:${result.skillNames.join(":")}:${result.resultText}`}>
-            扩展工具结果：{result.invocationToolName ? `${result.invocationToolName} -> ` : ""}
-            {result.toolName} -&gt; {result.resultText}
+            {t("inspection.event.toolResult", result.invocationToolName ? `${result.invocationToolName} -> ` : "", result.toolName, result.resultText)}
           </span>
         ))}
-        {finalText ? <span>最终文本：{finalText}</span> : null}
+        {finalText ? <span>{t("inspection.event.final", finalText)}</span> : null}
       </div>
     </div>
   );
@@ -398,14 +394,14 @@ export default function EventQueuePanel({
   return (
     <section className="panel-view event-queue-panel">
       <div className="panel-header">
-        <div className="panel-title">事件视图</div>
+        <div className="panel-title">{t("inspection.event.title")}</div>
         <div className="panel-header-meta">
           <span>{displayItems.length} events</span>
-          <span>已显示 {renderedItems.length}</span>
-          <span>权威 trace</span>
-          {hiddenEventCount > 0 ? <span>已隐藏 {hiddenEventCount} 条传输/轮询重复事件</span> : null}
-          <span>流程顺序</span>
-          <span>上限 {limit}</span>
+          <span>{t("inspection.request.shown", formatNumber(renderedItems.length))}</span>
+          <span>{t("inspection.event.authority")}</span>
+          {hiddenEventCount > 0 ? <span>{t("inspection.event.hidden", formatNumber(hiddenEventCount))}</span> : null}
+          <span>{t("inspection.event.order")}</span>
+          <span>{t("inspection.event.limit", formatNumber(limit))}</span>
           <span>{sessionId}</span>
         </div>
       </div>
@@ -413,7 +409,7 @@ export default function EventQueuePanel({
       {historyError ? (
         <div className="event-queue-history-error" role="alert">
           <span>{historyError}</span>
-          <button type="button" onClick={onRetryHistory}>重新加载事件历史</button>
+          <button type="button" onClick={onRetryHistory}>{t("inspection.event.retry")}</button>
         </div>
       ) : null}
 
@@ -433,10 +429,10 @@ export default function EventQueuePanel({
                 onClick={revealOlderEvents}
               >
                 {firstVisibleIndex > 0
-                  ? "向上滚动加载更早事件"
+                  ? t("inspection.event.scrollOlder")
                   : historyLoadingOlder
-                    ? "正在读取更早事件…"
-                    : "加载更早事件"}
+                    ? t("inspection.event.loadingOlder")
+                    : t("inspection.event.older")}
               </button>
             ) : null}
             {renderedItems.map((item, index) => {
@@ -462,7 +458,7 @@ export default function EventQueuePanel({
       ) : (
         historyError ? null : (
           <div className="empty-state">
-            {historyLoading ? "正在读取事件历史…" : "当前会话还没有事件"}
+            {historyLoading ? t("inspection.event.loading") : t("inspection.event.empty")}
           </div>
         )
       )}
@@ -483,16 +479,16 @@ function LocatedTrace({ navigation, onClose }: { navigation: TraceNavigation; on
       match: characters.slice(start, end).join(""), after: characters.slice(end, end + 1000).join(""),
       hasBefore: start > 1000, hasAfter: end + 1000 < characters.length };
   }, [location]);
-  return <section className="panel-view event-queue-panel" aria-label="Trace 搜索定位">
+  return <section className="panel-view event-queue-panel" aria-label={t("inspection.event.locatedAria")}>
     <div className="panel-header"><span>Thread Trace · {navigation.match.reference?.event_id}</span>
-      <button type="button" onClick={onClose}>关闭 Trace 定位</button></div>
-    {navigation.error ? <div className="empty-state error-state" role="alert">Trace 命中无法打开：{navigation.error}</div>
+      <button type="button" onClick={onClose}>{t("inspection.event.closeLocation")}</button></div>
+    {navigation.error ? <div className="empty-state error-state" role="alert">{t("inspection.event.matchFailed", navigation.error)}</div>
       : location && source ? <div className="panel-list">
-        <section aria-label="Trace 命中原文"><p>命中原文（Unicode 码点 {location.reference!.start_codepoint}–{location.reference!.end_codepoint}；相邻上下文最多各 1000 字符）</p>
+        <section aria-label={t("inspection.event.originalAria")}><p>{t("inspection.match.original", formatNumber(location.reference!.start_codepoint), formatNumber(location.reference!.end_codepoint))}</p>
           <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>
         <EventQueueCard index={0} item={{ kind: "trace", id: location.record.event_id,
           sessionId: location.record.session_id, receivedAt: new Date().toISOString(), source: "initial_load",
           event: location.record }} />
-      </div> : <div className="empty-state" role="status">正在核验并读取命中的 Trace 记录…</div>}
+      </div> : <div className="empty-state" role="status">{t("inspection.event.locating")}</div>}
   </section>;
 }

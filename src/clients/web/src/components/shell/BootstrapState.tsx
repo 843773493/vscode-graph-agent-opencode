@@ -1,3 +1,4 @@
+import { t, formatNumber } from '../../../../shared/core/i18n/index.js';
 import { useEffect, useState } from "react";
 import { errorMessage } from "../../utils/errorMessage";
 
@@ -7,12 +8,12 @@ interface BootstrapStateProps {
 
 function bootstrappingHint(elapsedSeconds: number): string {
   if (elapsedSeconds >= 25) {
-    return "本地后端响应仍未完成，可能正在冷启动或请求排队。";
+    return t('shell.bootstrap.slow');
   }
   if (elapsedSeconds >= 10) {
-    return "仍在等待本地后端返回工作区和会话数据。";
+    return t('shell.bootstrap.waiting');
   }
-  return "正在连接本地后端并加载会话数据。";
+  return t('shell.bootstrap.connecting');
 }
 
 export default function BootstrapState({ onRetry }: BootstrapStateProps): React.ReactNode {
@@ -35,7 +36,7 @@ export default function BootstrapState({ onRetry }: BootstrapStateProps): React.
       await onRetry();
     } catch (error: unknown) {
       const message = errorMessage(error);
-      setRetryError(`重试失败：${message}`);
+      setRetryError(t('shell.bootstrap.retryFailed', message));
     } finally {
       setRetrying(false);
     }
@@ -43,15 +44,15 @@ export default function BootstrapState({ onRetry }: BootstrapStateProps): React.
 
   return (
     <div className="empty-state bootstrap-state" aria-live="polite">
-      <div className="empty-state-title">正在加载工作区与会话...</div>
+      <div className="empty-state-title">{t('shell.bootstrap.title')}</div>
       <div>{bootstrappingHint(elapsedSeconds)}</div>
       {elapsedSeconds >= 10 ? (
-        <div className="bootstrap-elapsed">已等待 {elapsedSeconds} 秒</div>
+        <div className="bootstrap-elapsed">{t('shell.bootstrap.elapsed', formatNumber(elapsedSeconds))}</div>
       ) : null}
       {elapsedSeconds >= 10 ? (
         <div className="bootstrap-actions">
           <button type="button" onClick={() => void handleRetry()} disabled={retrying}>
-            {retrying ? "正在重试..." : "重试加载"}
+            {retrying ? t('shell.bootstrap.retrying') : t('shell.bootstrap.retry')}
           </button>
           {retryError ? <div className="bootstrap-retry-error" role="alert">{retryError}</div> : null}
         </div>

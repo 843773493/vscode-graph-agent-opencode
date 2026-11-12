@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 import {
   DEFAULT_BACKEND_PORT,
   getWorkspaceFileContent,
@@ -126,7 +127,7 @@ export function useWorkspacePreviewTabs({
     if (workspaceChanged) {
       setVisible(false);
       setPersistenceReady(true);
-      onStatusChange("已切换工作区；文件预览已清空，避免显示其他工作区的旧文件");
+      onStatusChange(t("workspace.preview.status.workspaceChanged"));
       return () => {
         cancelled = true;
       };
@@ -168,7 +169,7 @@ export function useWorkspacePreviewTabs({
             ? { ...content, previewType: "file", selection: null }
             : tab,
         ));
-        onStatusChange(`已恢复 ${filePaths.length} 个文件选择`);
+        onStatusChange(t("workspace.preview.status.restoredFiles", filePaths.length));
       })
       .catch((restoreError: unknown) => {
         if (cancelled || fileOpenIntentRef.current !== intent) {
@@ -176,7 +177,7 @@ export function useWorkspacePreviewTabs({
         }
         const message = errorDisplayMessage(restoreError);
         setError(message);
-        onStatusChange(`恢复文件选择失败: ${message}`);
+        onStatusChange(t("workspace.preview.status.restoreFailed", message));
       })
       .finally(() => {
         if (cancelled) {
@@ -269,14 +270,14 @@ export function useWorkspacePreviewTabs({
       ...prev.filter((tab) => tab.path !== content.path),
       { ...content, previewType: "file", selection },
     ]);
-    onStatusChange(`已选择文件: ${content.path}`);
+    onStatusChange(t("workspace.preview.status.fileSelected", content.path));
   }, [onStatusChange]);
 
   const selectWorkspacePreviewTab = useCallback((path: string) => {
     if (!isWorkspaceTextFilePath(path)) {
       setError(null);
       setLoadingPath(null);
-      onStatusChange(`二进制文件不支持文本预览: ${path}`);
+      onStatusChange(t("workspace.preview.status.binaryUnsupported", path));
       return;
     }
     const tab = tabs.find((item) => item.path === path);
@@ -288,7 +289,7 @@ export function useWorkspacePreviewTabs({
       return;
     }
     setLoadingPath(path);
-    onStatusChange(`正在读取文件: ${path}`);
+    onStatusChange(t("workspace.preview.status.readingFile", path));
     void loadWorkspaceFileContent(path)
       .then((content) => {
         if (fileOpenIntentRef.current !== intent) {
@@ -302,7 +303,7 @@ export function useWorkspacePreviewTabs({
         }
         const message = errorDisplayMessage(openError);
         setError(message);
-        onStatusChange(`文件读取失败: ${message}`);
+        onStatusChange(t("workspace.preview.status.readFailed", message));
       })
       .finally(() => {
         if (fileOpenIntentRef.current === intent) {
@@ -321,7 +322,7 @@ export function useWorkspacePreviewTabs({
     if (!isWorkspaceTextFilePath(path)) {
       setError(null);
       setLoadingPath(null);
-      onStatusChange(`二进制文件不支持文本预览: ${path}`);
+      onStatusChange(t("workspace.preview.status.binaryUnsupported", path));
       return;
     }
     const existingTab = tabs.find((tab) => tab.path === path);
@@ -343,7 +344,7 @@ export function useWorkspacePreviewTabs({
             : tab,
         ));
       }
-      onStatusChange(`已切换文件: ${existingTab.path}`);
+      onStatusChange(t("workspace.preview.status.fileSwitched", existingTab.path));
       return;
     }
 
@@ -351,7 +352,7 @@ export function useWorkspacePreviewTabs({
     setActivePath(path);
     setLoadingPath(path);
     setError(null);
-    onStatusChange(`正在读取文件: ${path}`);
+    onStatusChange(t("workspace.preview.status.readingFile", path));
 
     const intent = beginFileOpenIntent();
 
@@ -367,7 +368,7 @@ export function useWorkspacePreviewTabs({
       }
       const message = errorDisplayMessage(openError);
       setError(message);
-      onStatusChange(`文件读取失败: ${message}`);
+      onStatusChange(t("workspace.preview.status.readFailed", message));
     } finally {
       if (fileOpenIntentRef.current === intent) {
         setLoadingPath(null);
@@ -400,7 +401,7 @@ export function useWorkspacePreviewTabs({
 
   const openTerminalPreview = (terminalId: string, thread?: ResourceThreadRef) => {
     if (!workspaceId) {
-      throw new Error("打开终端需要当前会话的 Gateway workspace_id");
+      throw new Error(t("workspace.preview.errors.terminalNeedsWorkspace"));
     }
     const tabPath = `terminal://${terminalId}`;
     beginFileOpenIntent();
@@ -413,17 +414,17 @@ export function useWorkspacePreviewTabs({
       {
         previewType: "terminal",
         path: tabPath,
-        name: `终端 ${terminalId.slice(0, 8)}`,
+        name: `${t("workspace.runtime.terminal")} ${terminalId.slice(0, 8)}`,
         terminalId,
         attachUrl: buildGatewayAttachUrl("terminal", workspaceId, terminalId, true, thread),
       },
     ]);
-    onStatusChange(`已选择终端: ${terminalId}`);
+    onStatusChange(t("workspace.preview.status.terminalSelected", terminalId));
   };
 
   const openBrowserPreview = (browserId: string, thread?: ResourceThreadRef) => {
     if (!workspaceId) {
-      throw new Error("打开浏览器需要当前会话的 Gateway workspace_id");
+      throw new Error(t("workspace.preview.errors.browserNeedsWorkspace"));
     }
     const tabPath = `browser://${browserId}`;
     beginFileOpenIntent();
@@ -436,12 +437,12 @@ export function useWorkspacePreviewTabs({
       {
         previewType: "browser",
         path: tabPath,
-        name: `浏览器 ${browserId.slice(0, 8)}`,
+        name: `${t("workspace.runtime.browser")} ${browserId.slice(0, 8)}`,
         browserId,
         attachUrl: buildGatewayAttachUrl("browser", workspaceId, browserId, true, thread),
       },
     ]);
-    onStatusChange(`已选择浏览器: ${browserId}`);
+    onStatusChange(t("workspace.preview.status.browserSelected", browserId));
   };
 
   const openSessionChangePreview = useCallback(
@@ -465,7 +466,7 @@ export function useWorkspacePreviewTabs({
           changesetLabel: changeset.label,
         },
       ]);
-      onStatusChange(`已打开会话变更: ${file.file_path}`);
+      onStatusChange(t("workspace.preview.status.sessionChangeOpened", file.file_path));
     },
     [beginFileOpenIntent, onStatusChange],
   );
@@ -473,16 +474,16 @@ export function useWorkspacePreviewTabs({
   const beginWorkspaceFileEdit = async (path: string) => {
     const tab = tabs.find((item) => item.path === path);
     if (!tab || tab.previewType !== "file") {
-      throw new Error(`只有已加载的文本文件可以编辑: ${path}`);
+      throw new Error(t("workspace.preview.errors.onlyLoadedTextEditable", path));
     }
     if (
       editingPath &&
       editingPath !== path &&
       hasUnsavedEdit &&
       !(await confirm({
-        title: "放弃未保存修改",
-        message: "当前文件有未保存修改，放弃修改并编辑另一个文件？",
-        confirmText: "放弃修改",
+        title: t("workspace.preview.confirm.discardTitle"),
+        message: t("workspace.preview.confirm.discardBeforeEditing"),
+        confirmText: t("workspace.preview.confirm.discard"),
         danger: true,
       }))
     ) {
@@ -491,16 +492,16 @@ export function useWorkspacePreviewTabs({
     setEditingPath(path);
     setDraftContent(tab.content);
     setError(null);
-    onStatusChange(`正在编辑: ${path}`);
+    onStatusChange(t("workspace.preview.status.editingFile", path));
   };
 
   const cancelWorkspaceFileEdit = async () => {
     if (
       hasUnsavedEdit &&
       !(await confirm({
-        title: "放弃未保存修改",
-        message: "放弃当前文件的未保存修改？",
-        confirmText: "放弃修改",
+        title: t("workspace.preview.confirm.discardTitle"),
+        message: t("workspace.preview.confirm.discardCurrent"),
+        confirmText: t("workspace.preview.confirm.discard"),
         danger: true,
       }))
     ) {
@@ -509,12 +510,12 @@ export function useWorkspacePreviewTabs({
     setEditingPath(null);
     setDraftContent("");
     setError(null);
-    onStatusChange("已退出文件编辑");
+    onStatusChange(t("workspace.preview.status.editingEnded"));
   };
 
   const saveWorkspaceFileEdit = async () => {
     if (!editingPath || !editingTab || editingTab.previewType !== "file") {
-      throw new Error("当前没有可保存的文件编辑");
+      throw new Error(t("workspace.preview.errors.noEditableFile"));
     }
     setSavingPath(editingPath);
     setError(null);
@@ -539,11 +540,11 @@ export function useWorkspacePreviewTabs({
       ));
       setEditingPath(saved.path);
       setDraftContent(saved.content);
-      onStatusChange(`已保存文件: ${saved.path}`);
+      onStatusChange(t("workspace.preview.status.fileSaved", saved.path));
     } catch (saveError) {
       const message = errorDisplayMessage(saveError);
       setError(message);
-      onStatusChange(`保存文件失败: ${message}`);
+      onStatusChange(t("workspace.preview.status.saveFailed", message));
     } finally {
       setSavingPath(null);
     }
@@ -554,9 +555,9 @@ export function useWorkspacePreviewTabs({
       path === editingPath &&
       hasUnsavedEdit &&
       !(await confirm({
-        title: "关闭未保存文件",
-        message: "该文件有未保存修改，仍要关闭标签吗？",
-        confirmText: "关闭标签",
+        title: t("workspace.preview.confirm.closeUnsavedTitle"),
+        message: t("workspace.preview.confirm.closeUnsavedMessage"),
+        confirmText: t("workspace.preview.confirm.closeTab"),
         danger: true,
       }))
     ) {

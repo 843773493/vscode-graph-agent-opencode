@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { transformNlsCalls } from './nlsTransform.mjs';
 import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTransform.mjs';
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 import { fileDialogSourcePaths, transformFileDialog } from './fileDialogTransform.mjs';
@@ -60,6 +61,12 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/services/configuration/common/configurationCache.ts',
   'src/vs/platform/workspaces/common/workspaces.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
+  'src/vs/platform/languagePacks/browser/languagePacks.ts',
+  'src/vs/nls.ts',
+  'src/vs/workbench/contrib/localization/common/localizationsActions.ts',
+  'src/vs/workbench/contrib/localization/browser/localization.contribution.ts',
+  'src/vs/workbench/services/localization/browser/localeService.ts',
+  'src/vs/workbench/services/host/browser/browserHostService.ts',
   'src/vs/platform/product/common/product.ts',
   'src/vs/workbench/contrib/webview/common/webview.ts',
   'src/vs/workbench/api/common/extHostWebview.ts',
@@ -94,7 +101,7 @@ function replaceOnce(source, marker, replacement) {
 }
 
 /** 构建与 Vite 共用上游源码定制，不改写固定子模块。 */
-export function sourceTransform(root, productConfiguration, extensions) {
+export function sourceTransform(root, productConfiguration, extensions, nlsMessages = new Map(), localizationAssets = {}) {
   if (productConfiguration.commit !== pinnedUpstreamCommit) throw new Error(`上游版本不匹配：要求 ${pinnedUpstreamCommit}`);
   const upstream = join(root, 'upstream');
   const product = {
@@ -160,6 +167,194 @@ export function sourceTransform(root, productConfiguration, extensions) {
   }
 
 \toverride getName(): string {`);
+    }
+    if (path === join(upstream, 'src/vs/platform/languagePacks/browser/languagePacks.ts')) {
+      // 浏览器只提供随产物分发的两种语言；不得从 Gallery 查询或下载翻译。
+      contents = replaceOnce(contents,
+        "import { URI } from '../../../base/common/uri.js';\n",
+        "import { URI } from '../../../base/common/uri.js';\nimport { Language } from '../../../base/common/platform.js';\n");
+      const start = contents.indexOf('export class WebLanguagePacksService');
+      if (start < 0) throw new Error('缺少 WebLanguagePacksService 定义');
+      const localizationResourceMap = JSON.stringify(localizationAssets);
+      contents = contents.slice(0, start) + `const builtinLocalizationResources: Record<string, string> = ${localizationResourceMap};
+
+export class WebLanguagePacksService extends LanguagePackBaseService {
+  constructor(@IExtensionGalleryService extensionGalleryService: IExtensionGalleryService) {
+    super(extensionGalleryService);
+  }
+
+  async getAvailableLanguages(): Promise<ILanguagePackItem[]> {
+    return [this.createQuickPickItem('zh-cn', Language.value() === 'en' ? 'Chinese (Simplified)' : '简体中文'), this.createQuickPickItem('en', 'English')];
+  }
+
+  async getBuiltInExtensionTranslationsUri(id: string, language: string): Promise<URI | undefined> {
+    const path = language === 'zh-cn' ? builtinLocalizationResources[id] : undefined;
+    if (!path) return undefined;
+    const root = globalThis._VSCODE_FILE_ROOT;
+    if (!root) throw new Error('缺少 Workbench 静态资源根目录');
+    return URI.joinPath(URI.parse(root), path);
+  }
+
+  getInstalledLanguages(): Promise<ILanguagePackItem[]> {
+    return Promise.resolve([]);
+  }
+}`;
+      for (const unused of [
+        "import { CancellationTokenSource } from '../../../base/common/cancellation.js';\n",
+        "import { IExtensionResourceLoaderService } from '../../extensionResourceLoader/common/extensionResourceLoader.js';\n",
+        "import { ILogService } from '../../log/common/log.js';\n",
+      ]) contents = replaceOnce(contents, unused, '');
+    }
+    if (path === join(upstream, 'src/vs/nls.ts')) {
+      contents = replaceOnce(contents,
+        `export function localize(data: ILocalizeInfo | string /* | number when built */, message: string /* | null when built */, ...args: (string | number | boolean | undefined | null)[]): string {
+	if (typeof data === 'number') {
+		return _format(lookupMessage(data, message), args);
+	}
+	return _format(message, args);
+}`,
+        `export function localize(data: ILocalizeInfo | string /* | number when built */, message: string /* | null when built */, ...args: (string | number | boolean | undefined | null)[]): string {
+  const key = typeof data === 'number' ? data : typeof data === 'string' ? data : data.key;
+  return _format(lookupMessage(key, message), args);
+}`);
+      contents = replaceOnce(contents,
+        'function lookupMessage(index: number, fallback: string | null): string {\n\tconst message = getNLSMessages()?.[index];',
+        `function lookupMessage(index: number | string, fallback: string | null): string {
+  const messages = getNLSMessages();
+  let message: string | undefined;
+  if (typeof index === 'number') message = messages?.[index];
+  else {
+    const separator = index.indexOf('#');
+    if (separator >= 0) {
+      const messageMap = messages as unknown as Record<string, Record<string, string>> | undefined;
+      message = messageMap?.[index.slice(0, separator)]?.[index.slice(separator + 1)];
+      if (typeof message !== 'string' && fallback) {
+        const extension = /^extensions\\/([^/]+)/.exec(index.slice(0, separator))?.[1];
+        if (extension) {
+          const extensionMap = messages as unknown as { extensions?: Record<string, Record<string, string>> };
+          message = extensionMap.extensions?.['vscode.' + extension]?.[fallback];
+        }
+      }
+    }
+  }`);
+      contents = replaceOnce(contents,
+        `export function localize2(data: ILocalizeInfo | string /* | number when built */, originalMessage: string, ...args: (string | number | boolean | undefined | null)[]): ILocalizedString {
+	let message: string;
+	if (typeof data === 'number') {
+		message = lookupMessage(data, originalMessage);
+	} else {
+		message = originalMessage;
+	}`,
+        `export function localize2(data: ILocalizeInfo | string /* | number when built */, originalMessage: string, ...args: (string | number | boolean | undefined | null)[]): ILocalizedString {
+  const key = typeof data === 'number' ? data : typeof data === 'string' ? data : data.key;
+  const message = lookupMessage(key, originalMessage);`);
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/localization/common/localizationsActions.ts')) {
+      contents = replaceOnce(contents,
+        `localize2('configureLocaleDescription', "Changes the locale of VS Code based on installed language packs. Common languages include French, Chinese, Spanish, Japanese, German, Korean, and more.")`,
+        `localize2('boxteamConfigureLocaleDescription', "Choose Simplified Chinese or English as the Workbench display language.")`);
+      contents = contents.replace("import { ILocaleService } from '../../../services/localization/common/locale.js';\n", "import { ILocaleService } from '../../../services/localization/common/locale.js';\nimport { Language } from '../../../../base/common/platform.js';\n");
+      contents = contents.replace("import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';\n", "import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';\nimport { INotificationService } from '../../../../platform/notification/common/notification.js';\n");
+      contents = contents.replace("\t\tconst languagePackService: ILanguagePackService = accessor.get(ILanguagePackService);\n", '');
+      contents = contents.replace("\t\tconst localeService: ILocaleService = accessor.get(ILocaleService);\n", "\t\tconst localeService: ILocaleService = accessor.get(ILocaleService);\n\t\tconst notificationService: INotificationService = accessor.get(INotificationService);\n");
+      contents = contents.replace("import { IExtensionsWorkbenchService } from '../../extensions/common/extensions.js';\n", '');
+      contents = contents.replace("\t\tconst extensionWorkbenchService: IExtensionsWorkbenchService = accessor.get(IExtensionsWorkbenchService);\n", '');
+      contents = contents.replace("import { ILanguagePackItem, ILanguagePackService }", "import { ILanguagePackItem }");
+      contents = contents.replace('useSeparators: true', 'useSeparators: false');
+      const begin = contents.indexOf('\t\tconst installedLanguages = await languagePackService.getInstalledLanguages();');
+      const finish = contents.indexOf('\n\t\tqp.show();', begin);
+      if (begin < 0 || finish < 0) throw new Error('缺少显示语言 Quick Pick 区块');
+      contents = contents.slice(0, begin) + `\t\tconst disposables = new DisposableStore();
+\t\tconst qp = disposables.add(quickInputService.createQuickPick<ILanguagePackItem>({ useSeparators: false }));
+\t\tqp.matchOnDescription = true;
+\t\tqp.placeholder = localize('chooseLocale', 'Select Display Language');
+\t\tqp.items = [
+\t\t\t{ id: 'zh-cn', label: (Language.value() === 'en' ? 'Chinese (Simplified)' : '简体中文'), description: Language.value() === 'zh-cn' ? localize('currentDisplayLanguage', 'Current') : undefined },
+\t\t\t{ id: 'en', label: 'English', description: Language.value() === 'en' ? localize('currentDisplayLanguage', 'Current') : undefined },
+\t\t];
+\t\tdisposables.add(qp.onDidHide(() => disposables.dispose()));
+\t\tdisposables.add(qp.onDidAccept(async () => {
+\t\t\tconst selectedLanguage = qp.activeItems[0] as ILanguagePackItem | undefined;
+\t\t\tif (!selectedLanguage) return;
+\t\t\tqp.hide();
+\t\t\ttry {
+\t\t\t\tawait localeService.setLocale(selectedLanguage);
+\t\t\t} catch (error) {
+\t\t\t\tnotificationService.error(error);
+\t\t\t}
+\t\t}));` + contents.slice(finish);
+      contents = contents.replace("import { IQuickInputService, IQuickPickSeparator }", "import { IQuickInputService }");
+      const buttonMethod = '\n\tprivate withMoreInfoButton';
+      const buttonStart = contents.indexOf(buttonMethod);
+      if (buttonStart >= 0) {
+        const buttonEnd = contents.indexOf('\n\t}\n}', buttonStart);
+        if (buttonEnd < 0) throw new Error('缺少扩展详情按钮方法结尾');
+        contents = contents.slice(0, buttonStart) + contents.slice(buttonEnd + 3);
+      }
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/localization/browser/localization.contribution.ts')) {
+      contents = replaceOnce(contents,
+        "import { Registry } from '../../../../platform/registry/common/platform.js';\n",
+        '');
+      contents = replaceOnce(contents,
+        "import { Extensions as WorkbenchExtensions, IWorkbenchContributionsRegistry } from '../../../common/contributions.js';",
+        "import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';");
+      contents = replaceOnce(contents,
+        "import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';\n",
+        '');
+      contents = replaceOnce(contents,
+        "const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);\nworkbenchRegistry.registerWorkbenchContribution(WebLocalizationWorkbenchContribution, LifecyclePhase.Eventually);",
+        "registerWorkbenchContribution2('boxteam.localization.web', WebLocalizationWorkbenchContribution, WorkbenchPhase.BlockRestore);");
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/localization/browser/localeService.ts')) {
+      // 清除偏好回到固定中文；语言包扩展 ID 不再参与本地语言 owner。
+      contents = contents.replaceAll('\t\t\tthis.hostService.restart();', '\t\t\tawait this.hostService.restart();');
+      contents = replaceOnce(contents,
+        "detail: localize('clearDisplayLanguageDetail', \"Press the reload button to refresh the page and use your browser's language.\"),",
+        "detail: localize('clearDisplayLanguageDetail', \"Press the reload button to use Simplified Chinese.\"),");
+      contents = replaceOnce(contents,
+        'if (locale === Language.value() || (!locale && Language.value() === navigator.language.toLowerCase())) {',
+        'if (locale === Language.value()) {');
+      contents = replaceOnce(contents,
+        'if (Language.value() === navigator.language.toLowerCase()) {',
+        "if (Language.value() === 'zh-cn') {");
+      contents = replaceOnce(contents,
+        "\t\t\tif (languagePackItem.extensionId) {\n\t\t\t\tlocaleStorage.setExtensionId(languagePackItem.extensionId);\n\t\t\t}",
+        '');
+      contents = contents.replace(/\n\s*localeStorage\.clearExtensionId\(\);/g, '');
+      contents = replaceOnce(contents, '\tprivate static readonly LOCAL_STORAGE_EXTENSION_ID_KEY = \'vscode.nls.languagePackExtensionId\';\n', '');
+      contents = contents.replace(/\n\tsetExtensionId\(extensionId: string\): void \{[\s\S]*?\n\t\}/, '');
+      contents = contents.replace(/\n\tgetExtensionId\(\): string \| null \{[\s\S]*?\n\t\}/, '');
+      contents = contents.replace(/\n\tclearExtensionId\(\): void \{[\s\S]*?\n\t\}/, '');
+      const serviceStart = contents.indexOf('class WebActiveLanguagePackService');
+      const serviceEndMarker = '\nregisterSingleton(ILocaleService';
+      const serviceEnd = contents.indexOf(serviceEndMarker, serviceStart);
+      if (serviceStart < 0 || serviceEnd < 0) throw new Error('缺少 WebActiveLanguagePackService 边界');
+      contents = contents.slice(0, serviceStart) + `class WebActiveLanguagePackService implements IActiveLanguagePackService {
+  _serviceBrand: undefined;
+  async getExtensionIdProvidingCurrentLocale(): Promise<string | undefined> { return undefined; }
+}
+` + contents.slice(serviceEnd);
+      for (const unused of [
+        ['Language, LANGUAGE_DEFAULT', 'Language'],
+        "import { CancellationToken } from '../../../../base/common/cancellation.js';\n",
+        "import { IExtensionGalleryService } from '../../../../platform/extensionManagement/common/extensionManagement.js';\n",
+        "import { ILogService } from '../../../../platform/log/common/log.js';\n",
+      ]) {
+        if (Array.isArray(unused)) contents = replaceOnce(contents, unused[0], unused[1]);
+        else contents = replaceOnce(contents, unused, '');
+      }
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/host/browser/browserHostService.ts')) {
+      // renderer reload 与窗口关闭复用同一展示态提交入口。
+      contents = replaceOnce(contents, '\t\tthis.reload();', '\t\tawait this.reload();');
+      contents = replaceOnce(contents,
+        '\tasync reload(): Promise<void> {\n\t\tawait this.handleExpectedShutdown(ShutdownReason.RELOAD);',
+        `\tasync reload(): Promise<void> {
+\t\tconst lifecycle = (globalThis as typeof globalThis & { boxteamWorkbenchLifecycle?: { prepareToClose(): Promise<void> } }).boxteamWorkbenchLifecycle;
+\t\tif (!lifecycle) throw new Error('缺少 Workbench renderer 状态提交入口');
+\t\tawait lifecycle.prepareToClose();
+\t\tawait this.handleExpectedShutdown(ShutdownReason.RELOAD);`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts')) {
       contents = replaceOnce(contents,
@@ -364,7 +559,7 @@ if (input.resource.scheme === 'boxteam-file') {
     this._viewer?.clear();
     this._objectUrl.clear();
     this._fileSize = undefined;
-    this._setMessage(localize('imagePreview.identityChanged', "Gateway 或访问凭据已改变，请重新打开图片"));
+    this._setMessage(localize('workbench.imagePreview.identityChanged', "Gateway or access credentials changed. Reopen the image."));
     this._onDidChangeImageInfo.fire();
   })));
 }`);
@@ -572,7 +767,8 @@ try {
     }
     contents = transformOutline(root, path, contents, replaceOnce);
     contents = transformMcp(root, path, contents, replaceOnce);
-    return transformSearchEditor(root, path, contents, replaceOnce);
+    contents = transformSearchEditor(root, path, contents, replaceOnce);
+    return transformNlsCalls(upstream, path, contents, nlsMessages);
   };
 }
 

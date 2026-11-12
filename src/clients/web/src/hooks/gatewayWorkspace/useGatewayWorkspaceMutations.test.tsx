@@ -1200,7 +1200,7 @@ describe("Gateway 受管工作区新增", () => {
     spyOnGatewayApi("listGatewayWorkspaces").mockRejectedValue(new Error("完整列表不可用"));
     const { hook, state, calls } = await mountHook(appState({ gatewayWorkspacesStale: false }));
 
-    const message = "工作区已添加，但界面同步失败: 读取 Gateway 工作区列表失败: 完整列表不可用；刷新工作区列表未生效：本轮刷新已被更新的请求作废";
+    const message = "工作区已添加，但界面同步失败: 读取 Gateway 工作区列表失败: 完整列表不可用；工作区刷新未生效：本轮刷新已被更新的请求作废";
     await expect(hook.addManagedGatewayWorkspace(addPayload)).rejects.toThrow(message);
 
     expect(calls.finish).toBe(1);

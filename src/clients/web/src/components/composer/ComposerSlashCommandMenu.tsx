@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { SlashCommandOption } from "../../state/slashCommands";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
@@ -30,7 +31,7 @@ export default function ComposerSlashCommandMenu({
     <div
       className="composer-slash-menu"
       role="listbox"
-      aria-label="斜杠指令"
+      aria-label={t("composer.slash.label")}
     >
       {commands.length > 0 ? (
         <>
@@ -61,7 +62,7 @@ export default function ComposerSlashCommandMenu({
           ))}
           {commands.length > 8 ? (
             <div className="composer-slash-more" role="presentation">
-              滚动查看更多指令
+              {t("composer.slash.more")}
             </div>
           ) : null}
         </>
@@ -74,9 +75,9 @@ export default function ComposerSlashCommandMenu({
         >
           <span className="composer-slash-command">/{query}</span>
           <span className="composer-slash-copy">
-            <span className="composer-slash-title">未找到指令</span>
+            <span className="composer-slash-title">{t("composer.slash.missing")}</span>
             <span className="composer-slash-description">
-              输入 / 查看可用指令
+              {t("composer.slash.hint")}
             </span>
           </span>
         </div>

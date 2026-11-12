@@ -1,3 +1,4 @@
+import { formatNumber, t } from '../../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type {
@@ -224,7 +225,7 @@ export default function AgentSessionsPanel({
         await onRefreshWorkspaceSessions(workspaceId);
       } catch (error) {
         onError(
-          `工作区已启动，但刷新会话列表失败 (${workspaceId}): ${errorMessage(error)}`,
+          t('navigation.workspace.startedRefreshFailed', workspaceId, errorMessage(error)),
         );
       }
       onInvalidateSessionCatalog(workspaceId);
@@ -338,22 +339,22 @@ export default function AgentSessionsPanel({
   const applyFilterMode = (mode: SessionFilterMode, label: string) => {
     onPreferencesChange(() => ({ filter_mode: mode }));
     setFilterMenuOpen(false);
-    onStatusChange(`已筛选会话: ${label}`);
+    onStatusChange(t('navigation.filter.applied', label));
   };
   const applySortMode = (mode: SessionSortMode, label: string) => {
     onPreferencesChange(() => ({ sort_mode: mode }));
     setFilterMenuOpen(false);
-    onStatusChange(`已排序会话: ${label}`);
+    onStatusChange(t('navigation.filter.sorted', label));
   };
   const applyGroupingMode = (mode: SessionGroupingMode, label: string) => {
     onPreferencesChange(() => ({ grouping_mode: mode }));
     setFilterMenuOpen(false);
-    onStatusChange(`已分组会话: ${label}`);
+    onStatusChange(t('navigation.filter.grouped', label));
   };
   const toggleWorkspaceGroupCapping = (capped: boolean) => {
     onPreferencesChange(() => ({ workspace_group_capped: capped }));
     setFilterMenuOpen(false);
-    onStatusChange(capped ? '仅显示最近工作区会话' : '显示全部工作区会话');
+    onStatusChange(capped ? t('navigation.filter.recentWorkspaceSessions') : t('navigation.filter.allWorkspaceSessions'));
   };
   const toggleSessionSection = (sectionId: string) => {
     onPreferencesChange((current) => ({
@@ -367,7 +368,7 @@ export default function AgentSessionsPanel({
       collapsed_section_ids: sessionSections.map((section) => section.id),
     }));
     setFilterMenuOpen(false);
-    onStatusChange('已折叠全部会话分组');
+    onStatusChange(t('navigation.filter.allCollapsed'));
   };
   return (
     <aside
@@ -378,8 +379,8 @@ export default function AgentSessionsPanel({
     >
       <div className="agent-sessions-panel-shell">
         <header className="panel-header agent-sessions-panel-header">
-          <span className="panel-title">会话</span>
-          <section className="sessions-sidebar-actions" aria-label="会话操作">
+          <span className="panel-title">{t('navigation.sessions.title')}</span>
+          <section className="sessions-sidebar-actions" aria-label={t('navigation.sessions.actions')}>
             <button
               type="button"
               className="new-session-pill"
@@ -387,20 +388,20 @@ export default function AgentSessionsPanel({
                 void onCreateSession().catch((error: unknown) => {
                   if (isErrorReported(error)) return;
                   const message = errorMessage(error);
-                  onError(`创建会话失败: ${message}`);
+                  onError(t('navigation.sessions.createError', message));
                 });
               }}
-              title="新建会话"
+              title={t('navigation.sessions.new')}
             >
-              <span>新</span>
+              <span>{t('navigation.sessions.newShort')}</span>
               <kbd>Ctrl+N</kbd>
             </button>
             <button
               ref={filterButtonRef}
               type="button"
               className={`sidebar-icon-button${filterMenuOpen ? ' active' : ''}`}
-              title="筛选会话"
-              aria-label="筛选会话"
+              title={t('navigation.filter.sessions')}
+              aria-label={t('navigation.filter.sessions')}
               aria-haspopup="menu"
               aria-expanded={filterMenuOpen}
               onClick={() => setFilterMenuOpen((open) => !open)}
@@ -410,8 +411,8 @@ export default function AgentSessionsPanel({
             <button
               type="button"
               className={`sidebar-icon-button${searchOpen ? ' active' : ''}`}
-              title="搜索会话"
-              aria-label="搜索会话"
+              title={t('navigation.search.sessions')}
+              aria-label={t('navigation.search.sessions')}
               aria-pressed={searchOpen}
               onClick={() => {
                 setSearchOpen((open) => {
@@ -449,34 +450,34 @@ export default function AgentSessionsPanel({
         <div className="panel-body agent-sessions-panel-body">
           {searchOpen ? (
             <label className="sessions-search-box">
-              <span>查找会话</span>
+              <span>{t('navigation.search.findSessions')}</span>
               <input
                 autoFocus
                 type="search"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="按标题或 ID 搜索"
+                placeholder={t('navigation.search.placeholder')}
               />
             </label>
           ) : null}
-          <section className="agent-sessions-sidebar-groups" aria-label="会话导航">
+          <section className="agent-sessions-sidebar-groups" aria-label={t('navigation.sessions.navigation')}>
             <button
               type="button"
               className="agent-sessions-nav-row"
               aria-disabled="true"
-              title="已固定：Web 端暂未接入固定会话"
-              onClick={() => onStatusChange('已固定：Web 端暂未接入固定会话')}
+              title={t('navigation.sessions.pinnedUnavailable')}
+              onClick={() => onStatusChange(t('navigation.sessions.pinnedUnavailable'))}
             >
               <span className="codicon codicon-pinned agent-sessions-nav-icon" aria-hidden="true" />
-              <span>已固定</span>
-              <span className="agent-sessions-nav-unavailable">暂不可用</span>
+              <span>{t('navigation.sessions.pinned')}</span>
+              <span className="agent-sessions-nav-unavailable">{t('navigation.sessions.unavailable')}</span>
             </button>
-            <button type="button" className="agent-sessions-nav-row" onClick={() => applyFilterMode('all', 'Chats')}>
+            <button type="button" className="agent-sessions-nav-row" onClick={() => applyFilterMode('all', t('navigation.sessions.chats'))}>
               <span className="codicon codicon-comment-discussion agent-sessions-nav-icon" aria-hidden="true" />
-              <span>Chats</span>
+              <span>{t('navigation.sessions.chats')}</span>
             </button>
             {gatewayWorkspaces.length === 0 && matchingSessionCount === 0 ? (
-              <div className="agent-sessions-no-chats">No chats</div>
+              <div className="agent-sessions-no-chats">{t('navigation.sessions.noChats')}</div>
             ) : null}
           </section>
 
@@ -485,7 +486,7 @@ export default function AgentSessionsPanel({
             // 不能让用户把陈旧的工作区结构当成当前权威数据。
             <div className="agent-sessions-stale-notice" role="alert">
               <span className="codicon codicon-warning" aria-hidden="true" />
-              <span>工作区结构刷新失败，以下列表可能已过期</span>
+              <span>{t('navigation.workspace.staleStructure')}</span>
             </div>
           ) : null}
 
@@ -531,7 +532,7 @@ export default function AgentSessionsPanel({
           {gatewayWorkspaces.length === 0 ? (
             <section className="agent-sessions-section agent-sessions-list-section">
             {matchingSessionCount === 0 && gatewayWorkspaces.length === 0 ? (
-              <div className="empty-state small">暂无会话</div>
+              <div className="empty-state small">{t('navigation.sessions.empty')}</div>
             ) : (
               <>
                 {sessionSections.map((section) => {
@@ -573,7 +574,7 @@ export default function AgentSessionsPanel({
                             onOpenMenu={(session, x, y) =>
                               openSessionMenu(
                                 session,
-                                activeGatewayWorkspaceId ?? (() => { throw new Error('会话菜单缺少 Gateway／UUID 归属'); })(),
+                                activeGatewayWorkspaceId ?? (() => { throw new Error(t('navigation.sessions.menuOwnerMissing')); })(),
                                 x,
                                 y,
                               )
@@ -585,7 +586,7 @@ export default function AgentSessionsPanel({
                               className="session-show-more-button"
                               onClick={() => toggleWorkspaceGroupCapping(false)}
                             >
-                              显示全部 {section.showMoreCount} 个更多会话
+                              {t('navigation.sessions.showAllRemaining', formatNumber(section.showMoreCount))}
                             </button>
                           ) : null}
                           {groupingMode === 'workspace' &&
@@ -596,7 +597,7 @@ export default function AgentSessionsPanel({
                               className="session-show-more-button"
                               onClick={() => toggleWorkspaceGroupCapping(true)}
                             >
-                              仅显示最近会话
+                              {t('navigation.filter.recentOnly')}
                             </button>
                           ) : null}
                         </>
@@ -621,7 +622,7 @@ export default function AgentSessionsPanel({
               (error: unknown) => {
                 if (isErrorReported(error)) return;
                 const message = errorMessage(error);
-                onError(`解除会话绑定失败 (${workspaceId}/${sessionId}): ${message}`);
+                onError(t('navigation.sessions.unbindFailed', workspaceId, sessionId, message));
               },
             );
           }}
@@ -634,7 +635,7 @@ export default function AgentSessionsPanel({
               await onActivateWorkspace(workspaceId);
             }
             await onCreateSession(workspaceId);
-            onStatusChange(`已在 ${targetWorkspaceName} 创建会话`);
+            onStatusChange(t('navigation.sessions.createdInWorkspace', targetWorkspaceName));
           }}
           onRequestCreateSessionFolder={(workspaceId, parentNodeId, locationName) => {
             setSessionFolderDialog({ workspaceId, parentNodeId, locationName });
@@ -645,7 +646,7 @@ export default function AgentSessionsPanel({
               (candidate) => gatewayWorkspaceKey(candidate) === workspaceId,
             );
             if (!workspace) {
-              onError(`无法重命名未知工作区: ${workspaceId}`);
+              onError(t('navigation.workspace.renameUnknown', workspaceId));
               return;
             }
             setRenamingWorkspace(workspace);
@@ -673,17 +674,17 @@ export default function AgentSessionsPanel({
         />
         <WarmActionDialog
           open={sessionFolderDialog !== null}
-          title={sessionFolderDialog?.parentNodeId ? "新建子文件夹" : "新建会话文件夹"}
+          title={sessionFolderDialog?.parentNodeId ? t('navigation.folder.newChild') : t('navigation.folder.newSessionFolder')}
           description={sessionFolderDialog
-            ? `创建位置：${sessionFolderDialog.locationName}`
+            ? t('navigation.folder.createLocation', sessionFolderDialog.locationName)
             : undefined}
-          inputLabel="文件夹名称"
-          initialValue="新建文件夹"
-          confirmText="创建"
+          inputLabel={t('navigation.folder.name')}
+          initialValue={t('navigation.folder.newName')}
+          confirmText={t('navigation.create')}
           onClose={() => setSessionFolderDialog(null)}
           onConfirm={async (name) => {
             if (!sessionFolderDialog) {
-              throw new Error("会话文件夹创建目标已失效");
+              throw new Error(t('navigation.folder.createTargetExpired'));
             }
             if (sessionFolderDialog.workspaceId !== activeGatewayWorkspaceId) {
               await onActivateWorkspace(sessionFolderDialog.workspaceId);
@@ -693,7 +694,7 @@ export default function AgentSessionsPanel({
               sessionFolderDialog.parentNodeId,
               name,
             );
-            onStatusChange(`文件夹 ${name} 已保存本地待同步变更，等待提交`);
+            onStatusChange(t('navigation.folder.createPending', name));
           }}
         />
       </div>

@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useCallback } from "react";
 import { getSessionInformation } from "../../api";
@@ -19,7 +20,7 @@ export function useSessionInformationClipboard(apiPort: number) {
           (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
         );
         if (!gatewayWorkspace) {
-          throw new Error(`Gateway 不存在目标工作区: ${workspaceId}`);
+          throw new Error(t('navigation.workspace.notFound', workspaceId));
         }
 
         const dump = buildSessionInformationDump(information, gatewayWorkspace);

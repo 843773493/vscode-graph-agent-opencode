@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { Virtuoso } from "react-virtuoso";
 import {
   decodeFileTreePath,
@@ -113,6 +114,7 @@ export default function WorkspaceFileTree({
   const [rootsReloadNonce, setRootsReloadNonce] = useState(0);
   const ROOT_PATH = roots?.workspace_uri ?? "";
   const FILESYSTEM_ROOT_PATH = roots?.filesystem_uri ?? "";
+  const filesystemLabel = roots?.filesystem_label ?? t("fileTree.filesystem");
   useEffect(() => {
     let cancelled = false;
     setRoots(null);
@@ -272,7 +274,7 @@ export default function WorkspaceFileTree({
       for (const change of changes) {
         const treePath = changedPathToTreePath(change.path);
         if (treePath === null) {
-          onStatusChange(`忽略无法定位的文件变更路径: ${change.path}`);
+          onStatusChange(t("fileTree.status.unlocatableChangeIgnored", change.path));
           continue;
         }
         if (change.kind === "delete") {
@@ -324,7 +326,7 @@ export default function WorkspaceFileTree({
       if (detail.directories.length > 0) {
         acceptSnapshots(detail.snapshots);
         void reconcileDirectories(detail.directories).catch((error: unknown) => {
-          onStatusChange(`文件目录版本同步失败: ${errorDisplayMessage(error)}`);
+          onStatusChange(t("fileTree.status.directorySyncFailed", errorDisplayMessage(error)));
         });
       }
       for (const change of detail.changes) {
@@ -393,7 +395,7 @@ export default function WorkspaceFileTree({
           if (!cancelled) {
             const message = errorDisplayMessage(error);
             setSettingsError(message);
-            onStatusChange(`快捷路径加载失败: ${message}`);
+            onStatusChange(t("fileTree.status.shortcutLoadFailed", message));
           }
         });
     }, SESSION_AUXILIARY_LOAD_DELAY_MS);
@@ -470,7 +472,7 @@ export default function WorkspaceFileTree({
     const collapsedPaths = [ROOT_PATH];
     commitExpandedPaths(new Set(collapsedPaths));
     scheduleExpandedPathsPersistence(collapsedPaths);
-    onStatusChange("文件树已全部折叠");
+    onStatusChange(t("fileTree.status.collapsedAll"));
   }, [collapseVersion, onStatusChange, scheduleExpandedPathsPersistence, ROOT_PATH]);
 
   useEffect(() => {
@@ -552,7 +554,7 @@ export default function WorkspaceFileTree({
       return (
         <div className="files-tree-item files-tree-loading" style={{ paddingLeft: `${22 + depth * 14}px` }}>
           <span className="file-icon">◇</span>
-          <span className="file-label">正在读取...</span>
+          <span className="file-label">{t("fileTree.row.loading")}</span>
         </div>
       );
     }
@@ -562,7 +564,7 @@ export default function WorkspaceFileTree({
         <div className="files-tree-error" style={{ marginLeft: `${22 + depth * 14}px` }}>
           <span>{directory.error}</span>
           <button type="button" onClick={() => void loadDirectory(path)}>
-            重试
+            {t("fileTree.retry")}
           </button>
         </div>
       );
@@ -576,7 +578,7 @@ export default function WorkspaceFileTree({
       return (
         <div className="files-tree-item muted" style={{ paddingLeft: `${22 + depth * 14}px` }}>
           <span className="file-icon">◇</span>
-          <span className="file-label">空目录</span>
+          <span className="file-label">{t("fileTree.row.empty")}</span>
         </div>
       );
     }
@@ -585,7 +587,7 @@ export default function WorkspaceFileTree({
       return (
         <div className="files-tree-item muted" style={{ paddingLeft: `${22 + depth * 14}px` }}>
           <span className="file-icon">◇</span>
-          <span className="file-label">无匹配文件</span>
+          <span className="file-label">{t("fileTree.row.noMatches")}</span>
         </div>
       );
     }
@@ -602,12 +604,12 @@ export default function WorkspaceFileTree({
             onClick={() => void loadDirectory(path, false, true)}
           >
             {directory.loading
-              ? "正在加载下一页..."
-              : `加载更多（当前 ${directory.items.length} 项）`}
+              ? t("fileTree.row.loadingNextPage")
+              : t("fileTree.row.loadMore", directory.items.length)}
           </button>
         ) : directory.truncated ? (
           <div className="files-tree-note" style={{ marginLeft: `${22 + depth * 14}px` }}>
-            目录仍有未加载项目，请刷新后重试
+            {t("fileTree.row.truncated")}
           </div>
         ) : null}
       </>
@@ -676,7 +678,7 @@ export default function WorkspaceFileTree({
     workspaceLabel: rootLabel,
     workspaceTitle: workspaceRoot || rootLabel,
     workspaceRootPath: ROOT_PATH,
-    filesystemRootPath: FILESYSTEM_ROOT_PATH, filesystemLabel: roots?.filesystem_label ?? "文件系统",
+    filesystemRootPath: FILESYSTEM_ROOT_PATH, filesystemLabel,
   }) : [], [
     directories,
     expandedPaths,
@@ -684,7 +686,7 @@ export default function WorkspaceFileTree({
     searchQuery,
     nodeMatchesSearch,
     shortcuts,
-    workspaceRoot, ROOT_PATH, FILESYSTEM_ROOT_PATH, roots?.filesystem_label,
+    workspaceRoot, ROOT_PATH, FILESYSTEM_ROOT_PATH, filesystemLabel,
   ]);
 
   const searchStatus = useMemo(() => {
@@ -696,7 +698,7 @@ export default function WorkspaceFileTree({
       (directory) => !directory.loading && !directory.error,
     );
     if (loadedDirectories.length === 0) {
-      return "正在筛选已加载文件...";
+      return t("fileTree.search.filteringLoaded");
     }
     const normalizedQuery = query.toLowerCase();
     let hasDirectMatch = false;
@@ -716,11 +718,11 @@ export default function WorkspaceFileTree({
       }
     }
     if (hasDirectMatch) {
-      return `正在筛选：${query}`;
+      return t("fileTree.search.filtering", query);
     }
     return hasUnloadedDirectory
-      ? `未找到已加载文件“${query}”（展开目录后可继续搜索）`
-      : `未找到“${query}”`;
+      ? t("fileTree.search.noLoadedMatches", query)
+      : t("fileTree.search.noMatches", query);
   }, [directories, searchQuery]);
 
   const directoryLoading = useMemo(
@@ -745,9 +747,9 @@ export default function WorkspaceFileTree({
   }
   if (!roots && rootsError === null) {
     // 错误优先显示；加载态仍保留在队列中，可通过同一个轮播按钮查看。
-    notifications.push({ kind: "roots_loading", message: "正在读取文件根…" });
+    notifications.push({ kind: "roots_loading", message: t("fileTree.loadingRoots") });
   } else if (roots && fileTreeLoading) {
-    notifications.push({ kind: "workspace_loading", message: "正在加载工作区文件…" });
+    notifications.push({ kind: "workspace_loading", message: t("fileTree.loadingWorkspace") });
   }
   const activeNotificationIndex = Math.max(
     0,
@@ -785,7 +787,7 @@ export default function WorkspaceFileTree({
           )}
           <span className="file-label">{row.label}</span>
           {row.icon === "shortcut" ? (
-            <span className="files-tree-shortcut-kind">快捷路径</span>
+            <span className="files-tree-shortcut-kind">{t("fileTree.shortcut.label")}</span>
           ) : null}
         </button>
       );
@@ -798,7 +800,7 @@ export default function WorkspaceFileTree({
         <div className="files-tree-error" style={{ marginLeft: `${22 + row.depth * 14}px` }}>
           <span>{row.text}</span>
           <button type="button" onClick={() => void loadDirectory(row.directoryPath)}>
-            重试
+            {t("fileTree.retry")}
           </button>
         </div>
       );
@@ -851,7 +853,7 @@ export default function WorkspaceFileTree({
                 <span title={activeNotification.message}>{activeNotification.message}</span>
                 <button
                   type="button"
-                  aria-label="关闭文件操作错误"
+                  aria-label={t("fileTree.status.closeActionError")}
                   onClick={menu.clearActionError}
                 >
                   <span className="codicon codicon-close" aria-hidden="true" />
@@ -866,11 +868,11 @@ export default function WorkspaceFileTree({
               >
                 <span
                   title={activeNotification.kind === "settings"
-                    ? `快捷路径加载失败：${activeNotification.message}`
+                    ? t("fileTree.status.shortcutLoadFailed", activeNotification.message)
                     : activeNotification.message}
                 >
                   {activeNotification.kind === "settings"
-                    ? `快捷路径加载失败：${activeNotification.message}`
+                    ? t("fileTree.status.shortcutLoadFailed", activeNotification.message)
                     : activeNotification.message}
                 </span>
                 <button
@@ -886,7 +888,7 @@ export default function WorkspaceFileTree({
                     }
                   }}
                 >
-                  重试
+                  {t("fileTree.retry")}
                 </button>
               </div>
             )}
@@ -894,8 +896,8 @@ export default function WorkspaceFileTree({
               <button
                 type="button"
                 className="files-tree-notification-next"
-                title={`下一条提示 ${activeNotificationIndex + 1}/${notifications.length}`}
-                aria-label={`下一条提示 ${activeNotificationIndex + 1}/${notifications.length}`}
+                title={t("fileTree.status.nextNotification", activeNotificationIndex + 1, notifications.length)}
+                aria-label={t("fileTree.status.nextNotification", activeNotificationIndex + 1, notifications.length)}
                 onClick={() => {
                   const nextIndex = (activeNotificationIndex + 1) % notifications.length;
                   setActiveNotificationKind(notifications[nextIndex].kind);
@@ -913,8 +915,8 @@ export default function WorkspaceFileTree({
           <input
             type="search"
             value={searchQuery}
-            placeholder="筛选文件"
-            aria-label="筛选文件"
+            placeholder={t("fileTree.search.placeholder")}
+            aria-label={t("fileTree.search.placeholder")}
             autoFocus
             onChange={(event) => setSearchQuery(event.target.value)}
             onKeyDown={(event) => {
@@ -928,8 +930,8 @@ export default function WorkspaceFileTree({
             <button
               type="button"
               className="files-tree-search-clear"
-              aria-label="清除文件搜索"
-              title="清除搜索"
+              aria-label={t("fileTree.search.clear")}
+              title={t("fileTree.search.clearTitle")}
               onClick={() => setSearchQuery("")}
             >
               <span className="codicon codicon-close" aria-hidden="true" />
@@ -942,7 +944,7 @@ export default function WorkspaceFileTree({
           >
             <span title={searchStatus ?? undefined}>{searchStatus}</span>
             {searchQuery ? (
-              <button type="button" onClick={() => setSearchQuery("")}>清除</button>
+              <button type="button" onClick={() => setSearchQuery("")}>{t("fileTree.search.clear")}</button>
             ) : null}
           </div>
         </div>
@@ -954,10 +956,10 @@ export default function WorkspaceFileTree({
             `${entry.directoryPath}${entry.directoryPath.endsWith("/") || !entry.directoryPath ? "" : "/"}${entry.name}`,
             entry.name, "directory", null, entry.operationId)}>
           <span className="file-label">{entry.name}</span>
-          <span className="files-tree-meta">{entry.state === "pending_local" ? "等待受理" : "已受理，等待完成"}</span>
+          <span className="files-tree-meta">{entry.state === "pending_local" ? t("fileTree.operation.waitingAcceptance") : t("fileTree.operation.acceptedWaitingCompletion")}</span>
         </button>
       ))}
-      <div className="files-tree-root" role="tree" aria-label="工作区文件树" aria-busy={fileTreeLoading}>
+      <div className="files-tree-root" role="tree" aria-label={t("fileTree.ariaLabel")} aria-busy={fileTreeLoading}>
         {visibleRows.length > FILE_TREE_VIRTUALIZATION_THRESHOLD ? (
           <Virtuoso
             className="files-tree-virtualized"
@@ -994,7 +996,7 @@ export default function WorkspaceFileTree({
                   />
                   <span className="codicon codicon-bookmark file-icon" aria-hidden="true" />
                   <span className="file-label">{shortcut.label}</span>
-                  <span className="files-tree-shortcut-kind">快捷路径</span>
+                  <span className="files-tree-shortcut-kind">{t("fileTree.shortcut.label")}</span>
                 </button>
               </div>
               {expanded ? renderDirectory(treePath, 0) : null}
@@ -1029,14 +1031,14 @@ export default function WorkspaceFileTree({
         <button
           type="button"
           className="files-tree-item root files-tree-row"
-          title={roots?.filesystem_label ?? "文件系统"}
+          title={filesystemLabel}
           disabled={!roots}
           aria-expanded={filesystemRootExpanded}
-          onClick={() => toggleDirectory(FILESYSTEM_ROOT_PATH, roots?.filesystem_label ?? "文件系统")}
+          onClick={() => toggleDirectory(FILESYSTEM_ROOT_PATH, filesystemLabel)}
           onContextMenu={(event) => openContextMenu(
             event,
             FILESYSTEM_ROOT_PATH,
-            roots?.filesystem_label ?? "文件系统",
+            filesystemLabel,
             "directory",
           )}
         >
@@ -1045,7 +1047,7 @@ export default function WorkspaceFileTree({
             aria-hidden="true"
           />
           <span className="codicon codicon-file-directory file-icon directory" aria-hidden="true" />
-          <span className="file-label">{roots?.filesystem_label ?? "文件系统"}</span>
+          <span className="file-label">{filesystemLabel}</span>
         </button>
         {filesystemRootExpanded ? renderDirectory(FILESYSTEM_ROOT_PATH, 0) : null}
           </>
@@ -1056,7 +1058,7 @@ export default function WorkspaceFileTree({
         type="file"
         multiple
         hidden
-        aria-label="上传本地文件"
+        aria-label={t("fileTree.menu.uploadLocal")}
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? []);
           event.currentTarget.value = "";

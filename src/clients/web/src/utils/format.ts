@@ -1,10 +1,12 @@
-const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+import { formatNumber, getLocale } from '../../../shared/core/i18n/index.js';
+
+const TIME_FORMATTER = new Intl.DateTimeFormat(getLocale(), {
   hour: '2-digit',
   minute: '2-digit',
   second: '2-digit',
 });
 
-const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+const DATE_TIME_FORMATTER = new Intl.DateTimeFormat(getLocale(), {
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
@@ -14,12 +16,16 @@ const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
   timeZoneName: 'short',
 });
 
-// 保留浏览器默认语言与时区，等价于无选项的 Date 本地时间格式化。
-const LOCAL_DATE_TIME_FORMATTER = new Intl.DateTimeFormat();
-const LOCAL_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+// 显示语言在模块加载前确定；保留原选项和本地时区，格式器沿本次启动复用。
+const LOCAL_DATE_TIME_FORMATTER = new Intl.DateTimeFormat(getLocale());
+const LOCAL_TIME_FORMATTER = new Intl.DateTimeFormat(getLocale(), {
   hour: 'numeric',
   minute: 'numeric',
   second: 'numeric',
+});
+const LOCAL_TIMESTAMP_FORMATTER = new Intl.DateTimeFormat(getLocale(), {
+  year: 'numeric', month: 'numeric', day: 'numeric',
+  hour: 'numeric', minute: 'numeric', second: 'numeric',
 });
 
 export function escapeHtml(value: unknown): string {
@@ -60,15 +66,21 @@ export function formatDateTime(value: unknown): string {
 export function formatLocalDateTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
-    ? date.toLocaleString()
+    ? date.toString()
     : LOCAL_DATE_TIME_FORMATTER.format(date);
 }
 
 export function formatLocalTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
-    ? date.toLocaleTimeString()
+    ? date.toString()
     : LOCAL_TIME_FORMATTER.format(date);
+}
+
+/** 与原生 toLocaleString 的完整日期时间字段相同，语言使用本次启动选择。 */
+export function formatLocalTimestamp(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? date.toString() : LOCAL_TIMESTAMP_FORMATTER.format(date);
 }
 
 /**
@@ -80,10 +92,10 @@ export function formatByteSize(value: number | null | undefined): string {
     return "";
   }
   if (value < 1024) {
-    return `${value} B`;
+    return `${formatNumber(value, { useGrouping: false })} B`;
   }
   if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
+    return `${formatNumber(value / 1024, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })} KB`;
   }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  return `${formatNumber(value / 1024 / 1024, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })} MB`;
 }

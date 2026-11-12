@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 export type SessionResourceDragItem =
   | {
       kind: "workspace_folder";
@@ -111,12 +112,12 @@ export function decideSessionResourceDrop(
     }
     if (target.kind === "workspace") {
       if (zone === "inside") {
-        return { allowed: false, reason: "工作区文件夹不能放入工作区" };
+        return { allowed: false, reason: t('navigation.drag.folderIntoWorkspace') };
       }
       if (target.parentWorkspaceId !== null) {
         return {
           allowed: false,
-          reason: "工作区文件夹不能插入子工作区列表",
+          reason: t('navigation.drag.folderIntoChildWorkspaces'),
         };
       }
       return {
@@ -129,10 +130,10 @@ export function decideSessionResourceDrop(
       };
     }
     if (target.kind !== "workspace_folder") {
-      return { allowed: false, reason: "工作区文件夹只能放入或插入工作区文件夹层级" };
+      return { allowed: false, reason: t('navigation.drag.workspaceFolderHierarchyRequired') };
     }
     if (source.nodeId === target.nodeId) {
-      return { allowed: false, reason: "工作区文件夹不能放入自身" };
+      return { allowed: false, reason: t('navigation.drag.folderIntoSelf') };
     }
     return {
       allowed: true,
@@ -149,7 +150,7 @@ export function decideSessionResourceDrop(
   if (source.kind === "workspace") {
     if (target.kind === "workspace") {
       if (source.workspaceId === target.workspaceId) {
-        return { allowed: false, reason: "工作区不能成为自己的子工作区" };
+        return { allowed: false, reason: t('navigation.drag.workspaceIntoSelf') };
       }
       if (zone !== "inside") {
         if (target.parentWorkspaceId === null) {
@@ -197,7 +198,7 @@ export function decideSessionResourceDrop(
         },
       };
     }
-    return { allowed: false, reason: "工作区只能放入父工作区或工作区文件夹" };
+    return { allowed: false, reason: t('navigation.drag.workspaceHierarchyRequired') };
   }
 
   if (
@@ -205,17 +206,17 @@ export function decideSessionResourceDrop(
     target.kind !== "session" &&
     target.kind !== "session_folder"
   ) {
-    return { allowed: false, reason: "会话资源只能在所属工作区的会话树内移动" };
+    return { allowed: false, reason: t('navigation.drag.sessionHierarchyRequired') };
   }
   if (source.workspaceId !== target.workspaceId) {
-    return { allowed: false, reason: "会话和会话文件夹不能拖到其他工作区" };
+    return { allowed: false, reason: t('navigation.drag.crossWorkspaceSession') };
   }
   const parentNodeId = target.kind === "workspace" ? null : target.nodeId;
   if (source.nodeId === parentNodeId) {
-    return { allowed: false, reason: "会话资源不能放入自身" };
+    return { allowed: false, reason: t('navigation.drag.sessionIntoSelf') };
   }
   if (source.parentNodeId === parentNodeId) {
-    return { allowed: false, reason: "会话资源已经位于该位置" };
+    return { allowed: false, reason: t('navigation.drag.alreadyThere') };
   }
   return {
     allowed: true,

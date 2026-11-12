@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { MessageStreamActivity } from "../../../state/messageStream/index";
 
@@ -6,21 +7,21 @@ export type ActivityRenderer = (
 ) => React.ReactNode;
 
 function activityLabel(activity: MessageStreamActivity): string {
-  if (activity.status === "waiting") return "等待继续";
-  if (activity.status === "stopping") return "正在停止";
-  if (activity.status === "completed") return "已完成";
-  if (activity.status === "failed") return "处理失败";
-  if (activity.status === "unknown") return "结果未知";
-  return "正在处理";
+  if (activity.status === "waiting") return t("chat.activity.waiting");
+  if (activity.status === "stopping") return t("chat.activity.stopping");
+  if (activity.status === "completed") return t("chat.activity.completed");
+  if (activity.status === "failed") return t("chat.activity.failed");
+  if (activity.status === "unknown") return t("chat.activity.unknown");
+  return t("chat.activity.running");
 }
 
 function compactionLabel(activity: MessageStreamActivity): string {
-  if (activity.status === "waiting") return "等待上下文压缩继续";
-  if (activity.status === "stopping") return "正在完成上下文压缩";
-  if (activity.status === "completed") return "上下文压缩已完成";
-  if (activity.status === "failed") return "上下文压缩失败";
-  if (activity.status === "unknown") return "上下文压缩结果未知";
-  return "正在压缩上下文";
+  if (activity.status === "waiting") return t("chat.compaction.waiting");
+  if (activity.status === "stopping") return t("chat.compaction.stopping");
+  if (activity.status === "completed") return t("chat.compaction.completed");
+  if (activity.status === "failed") return t("chat.compaction.failed");
+  if (activity.status === "unknown") return t("chat.compaction.unknown");
+  return t("chat.compaction.running");
 }
 
 type ActivityLabels = Record<MessageStreamActivity["status"], string>;
@@ -45,14 +46,14 @@ function resourceActivityLabels(
   const operation = activity.detail?.operation;
   const isBrowserOperation = typeof operation === "string"
     && BROWSER_OPERATIONS.has(operation);
-  const subject = isBrowserOperation ? "浏览器操作" : "工作区资源操作";
+  const subject = isBrowserOperation ? t("chat.resource.browser") : t("chat.resource.workspace");
   return {
-    running: `正在处理${subject}`,
-    waiting: `等待${subject}继续`,
-    stopping: `正在停止${subject}`,
-    completed: `${subject}已完成`,
-    failed: `${subject}失败`,
-    unknown: `${subject}结果未知`,
+    running: t("chat.resource.running", subject),
+    waiting: t("chat.resource.waiting", subject),
+    stopping: t("chat.resource.stopping", subject),
+    completed: t("chat.resource.completed", subject),
+    failed: t("chat.resource.failed", subject),
+    unknown: t("chat.resource.unknown", subject),
   };
 }
 
@@ -70,8 +71,8 @@ function renderKnownActivity(
       {!activity.detail_available ? (
         <span className="chat-working-detail">
           {activity.status === "failed" || activity.status === "unknown"
-            ? "详细结果不可用，请查看会话历史"
-            : "详细进度不可用"
+            ? t("chat.activity.noResult")
+            : t("chat.activity.noProgress")
           }
         </span>
       ) : null}
@@ -88,7 +89,7 @@ function genericActivityRenderer(activity: MessageStreamActivity): React.ReactNo
         <span className="chat-working-detail">{activity.summary}</span>
       ) : null}
       {!activity.detail_available ? (
-        <span className="chat-working-detail">当前 Activity 仅提供通用状态</span>
+        <span className="chat-working-detail">{t("chat.activity.generic")}</span>
       ) : null}
     </>
   );
@@ -106,8 +107,8 @@ const builtInRenderers: Record<string, ActivityRenderer> = {
         {!activity.detail_available ? (
           <span className="chat-working-detail">
             {activity.status === "failed" || activity.status === "unknown"
-              ? "压缩细节不可用，请查看会话历史"
-              : "压缩细节将在完成后写入历史"}
+              ? t("chat.compaction.noDetails")
+              : t("chat.compaction.detailsLater")}
           </span>
         ) : null}
       </>
@@ -116,30 +117,30 @@ const builtInRenderers: Record<string, ActivityRenderer> = {
   "approval.wait": (activity) => (
     <>
       {renderKnownActivity(activity, {
-        running: "正在处理审批",
-        waiting: "等待审批",
-        stopping: "正在停止审批",
-        completed: "审批已完成",
-        failed: "审批失败",
-        unknown: "审批结果未知",
+        running: t("chat.approval.running"),
+        waiting: t("chat.approval.waiting"),
+        stopping: t("chat.approval.stopping"),
+        completed: t("chat.approval.completed"),
+        failed: t("chat.approval.failed"),
+        unknown: t("chat.approval.unknown"),
       })}
       {activity.status === "waiting" ? (
-        <span className="chat-working-detail">需要用户确认后继续</span>
+        <span className="chat-working-detail">{t("chat.approval.needsUser")}</span>
       ) : null}
     </>
   ),
   "subagent.run": (activity) => (
     <>
       {renderKnownActivity(activity, {
-        running: "子 Agent 正在运行",
-        waiting: "子 Agent 等待继续",
-        stopping: "子 Agent 正在停止",
-        completed: "子 Agent 已完成",
-        failed: "子 Agent 执行失败",
-        unknown: "子 Agent 结果未知",
+        running: t("chat.subagent.running"),
+        waiting: t("chat.subagent.waiting"),
+        stopping: t("chat.subagent.stopping"),
+        completed: t("chat.subagent.completed"),
+        failed: t("chat.subagent.failed"),
+        unknown: t("chat.subagent.unknown"),
       })}
       {activity.resumable && activity.status !== "completed" ? (
-        <span className="chat-working-detail">后端重启后可从 checkpoint 恢复</span>
+        <span className="chat-working-detail">{t("chat.subagent.resume")}</span>
       ) : null}
     </>
   ),
@@ -148,14 +149,14 @@ const builtInRenderers: Record<string, ActivityRenderer> = {
       {renderKnownActivity(activity, resourceActivityLabels(activity))}
       {activity.status === "failed" && activity.detail?.retryable === true ? (
         <span className="chat-working-detail">
-          可恢复：{activity.detail.recovery === "page_reset"
-            ? "页面已重置，请重新读取页面后重试"
-            : "请按错误提示重试"}
+          {t("chat.resource.recoverable", activity.detail.recovery === "page_reset"
+            ? t("chat.resource.pageReset")
+            : t("chat.resource.retry"))}
         </span>
       ) : null}
       {activity.resource_refs.length > 0 ? (
         <span className="chat-working-detail">
-          {activity.resource_refs.length} 个资源关联
+          {t("chat.resource.references", formatNumber(activity.resource_refs.length))}
         </span>
       ) : null}
     </>

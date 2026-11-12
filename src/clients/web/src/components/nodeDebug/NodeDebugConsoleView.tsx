@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 import { useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -39,19 +40,19 @@ export default function NodeDebugConsoleView({
   return (
     <div className="node-debug-view node-debug-console-view" role="tabpanel">
       <section className="node-debug-section">
-        <div className="debug-section-title-row"><h3>表达式控制台</h3><span>{status === "paused" ? "可用" : "需暂停"}</span></div>
+        <div className="debug-section-title-row"><h3>{t("debug.console.expression")}</h3><span>{status === "paused" ? t("debug.console.available") : t("debug.console.pauseRequired")}</span></div>
         <div className="node-debug-evaluate-row">
           <input
             value={expression}
             onChange={(event) => setExpression(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Enter") onEvaluate(); }}
-            placeholder="例如 counter += 1"
-            aria-label="调试控制台表达式"
+            placeholder={t("debug.console.example")}
+            aria-label={t("debug.console.expressionAria")}
           />
-          <button type="button" onClick={onEvaluate} disabled={actionBusy || status !== "paused"}>求值</button>
+          <button type="button" onClick={onEvaluate} disabled={actionBusy || status !== "paused"}>{t("debug.console.evaluate")}</button>
         </div>
         <div className="node-debug-evaluation-list">
-          {(state?.evaluations ?? []).length === 0 ? <span className="debug-muted">暂无表达式求值</span> : null}
+          {(state?.evaluations ?? []).length === 0 ? <span className="debug-muted">{t("debug.console.noEvaluations")}</span> : null}
           {recentEvaluations.map((evaluation) => (
             <div key={`${evaluation.evaluated_at}-${evaluation.expression}`}>
               <code>{evaluation.expression}</code>
@@ -61,13 +62,13 @@ export default function NodeDebugConsoleView({
         </div>
       </section>
       <section className="node-debug-section">
-        <div className="debug-section-title-row"><h3>调试控制台</h3><span>{state?.output?.length ?? 0} 行</span></div>
-        <pre className="node-debug-output">{outputText || "暂无程序输出"}</pre>
+        <div className="debug-section-title-row"><h3>{t("debug.console.title")}</h3><span>{t("debug.console.lines", formatNumber(state?.output?.length ?? 0))}</span></div>
+        <pre className="node-debug-output">{outputText || t("debug.console.noOutput")}</pre>
       </section>
       <section className="node-debug-section">
-        <div className="debug-section-title-row"><h3>模型 / 用户动作</h3><span>{state?.actions?.length ?? 0}</span></div>
+        <div className="debug-section-title-row"><h3>{t("debug.console.actions")}</h3><span>{formatNumber(state?.actions?.length ?? 0)}</span></div>
         <div className="node-debug-action-list">
-          {recentActions.length === 0 ? <span className="debug-muted">暂无调试动作</span> : null}
+          {recentActions.length === 0 ? <span className="debug-muted">{t("debug.console.noActions")}</span> : null}
           {recentActions.map((action) => (
             <div key={action.action_id}>
               <span className={action.actor === "ai" ? "agent" : "human"}>{nodeDebugActionActor(action)}</span>

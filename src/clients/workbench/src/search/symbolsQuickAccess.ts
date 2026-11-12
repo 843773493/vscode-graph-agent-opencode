@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { CancellationTokenSource, type CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { toDisposable, type DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
@@ -17,7 +18,7 @@ export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
   private picker?: Parameters<SymbolsQuickAccessProvider['provide']>[0];
 
   override provide(picker: Parameters<SymbolsQuickAccessProvider['provide']>[0], token: CancellationToken, options: SearchInvocationOptions = {}) {
-    if (options.searchOwners || options.searchOwner || options.searchOwnerError) picker.placeholder = `工作区符号 · ${options.searchOwners?.map(owner => owner.workspaceId).join('、') ?? options.searchOwner?.workspaceId ?? '归属不可用'}`;
+    if (options.searchOwners || options.searchOwner || options.searchOwnerError) picker.placeholder = t('quickAccess.symbols.placeholder', options.searchOwners?.map(owner => owner.workspaceId).join(t('quickAccess.listSeparator')) ?? options.searchOwner?.workspaceId ?? t('quickAccess.symbols.ownerUnavailable'));
     this.picker = picker;
     this.openToken = token;
     const access = new CancellationTokenSource(token);
@@ -57,29 +58,29 @@ export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
       const roots = this.workspaceContextService.getWorkspace().folders;
       const windowOwners = new Set(roots.map(folder => gatewayWorkspaceKey(workspaceFileSource(folder.uri))));
       if (!selected.size || !windowOwners.size || selected.size !== windowOwners.size || [...windowOwners].some(owner => !selected.has(owner))) {
-        throw new Error('内置符号 Provider 使用完整窗口工作区；请选择全部窗口工作区，部分范围尚不支持');
+        throw new Error(t('quickAccess.symbols.fullScopeRequired'));
       }
       const providers = WorkspaceSymbolProviderRegistry.all();
-      if (!providers.length) throw new Error('当前窗口没有可用的内置工作区符号 Provider');
+      if (!providers.length) throw new Error(t('quickAccess.symbols.providerMissing'));
       const results = new Map<IWorkspaceSymbolProvider, readonly WorkspaceSymbolItem[]>();
       const failures = new Map<IWorkspaceSymbolProvider, unknown>();
       const pending = new Set(providers);
-      const target = owners.map(gatewayWorkspaceKey).join('、');
+      const target = owners.map(gatewayWorkspaceKey).join(t('quickAccess.listSeparator'));
       const prepared = prepareQuery(filter);
       const symbolQuery = prepared.values && prepared.values.length > 1 ? pieceToQuery(prepared.values[0]) : prepared;
       const publish = () => {
         if (token.isCancellationRequested) return;
         const picks = this.toSymbolPicks(prepared, pickOptions, token, coalesceWorkspaceSymbols([...results.values()].flat()));
         for (const [provider, error] of failures) picks.push({
-          label: `工作区符号不可用：${String(error)}`,
+          label: t('quickAccess.symbols.unavailable', String(error)),
           description: `${target} · Provider ${providers.indexOf(provider) + 1}`,
-          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: '仅重试此符号 Provider' }],
+          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.symbols.retry') }],
           trigger: async () => {
             if (!token.isCancellationRequested && failures.has(provider)) await query([provider]);
             return TriggerAction.NO_ACTION;
           },
         });
-        if (!picks.length) picks.push({ label: pending.size ? '正在查询工作区符号…' : '没有匹配的工作区符号' });
+        if (!picks.length) picks.push({ label: pending.size ? t('quickAccess.symbols.loading') : t('quickAccess.symbols.noResults') });
         progress(picks, pending.size > 0);
       };
       const query = async (selected: readonly IWorkspaceSymbolProvider[]) => {
@@ -98,7 +99,7 @@ export class WorkspaceSymbolsQuickAccess extends SymbolsQuickAccessProvider {
       publish();
       await this.delayer.trigger(() => query(providers));
     } catch (error) {
-      if (!token.isCancellationRequested) progress([{ label: `工作区符号不可用：${String(error)}` }], false);
+      if (!token.isCancellationRequested) progress([{ label: t('quickAccess.symbols.unavailable', String(error)) }], false);
     }
   }
 }

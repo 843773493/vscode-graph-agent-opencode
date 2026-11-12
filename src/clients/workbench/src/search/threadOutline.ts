@@ -1,3 +1,4 @@
+import { formatNumber, t } from '../../../shared/core/i18n/index.js';
 import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Emitter } from '../../upstream/src/vs/base/common/event.js';
 import { escapeIcons } from '../../upstream/src/vs/base/common/iconLabels.js';
@@ -29,14 +30,14 @@ class ThreadOutline extends Disposable implements IOutline<ThreadOutlineEntry> {
   private loading = false;
   private error?: string;
   private restart = false;
-  private readonly continuation: ThreadOutlineEntry = { ordinal: -1, label: '加载更早轮次' };
+  private readonly continuation: ThreadOutlineEntry = { ordinal: -1, label: t('quickAccess.outline.loadEarlier') };
   private readonly target: NonNullable<ThreadPane['threadTarget']>;
   readonly config: IOutlineListConfig<ThreadOutlineEntry>;
 
   constructor(private readonly pane: ThreadPane, token: CancellationToken) {
     super();
     const target = pane.threadTarget;
-    if (!target) throw new Error('Thread 编辑器尚未就绪');
+    if (!target) throw new Error(t('quickAccess.outline.editorNotReady'));
     this.target = target;
     this._register(toDisposable(() => this.controller.abort()));
     this._register(token.onCancellationRequested(() => this.dispose()));
@@ -50,13 +51,13 @@ class ThreadOutline extends Disposable implements IOutline<ThreadOutlineEntry> {
       delegate: { getHeight: () => 22, getTemplateId: () => renderer.templateId }, renderers: [renderer],
       comparator: { compareByPosition: compare, compareByType: compare, compareByName: (a, b) => a.label.localeCompare(b.label) },
       options: { multipleSelectionSupport: false, identityProvider: { getId: entry => entry.turnId ?? 'continue' },
-        accessibilityProvider: { getAriaLabel: entry => entry.label, getWidgetAriaLabel: () => 'Thread 轮次大纲' },
+        accessibilityProvider: { getAriaLabel: entry => entry.label, getWidgetAriaLabel: () => t('quickAccess.outline.ariaLabel') },
         keyboardNavigationLabelProvider: { getKeyboardNavigationLabel: entry => entry.label } },
       treeDataSource: { getChildren: element => element === this ? this.visibleEntries : [] },
       breadcrumbsDataSource: { getBreadcrumbElements: () => [] },
       quickPickDataSource: { getQuickPickElements: () => this.visibleEntries.map(entry => ({
         element: entry, label: entry.turnId ? `$(comment-discussion) ${escapeIcons(entry.label)}`
-          : `$(history) ${this.error ? '读取大纲失败，重新读取' : this.loading ? '正在读取更早轮次…' : '加载更早轮次'}`,
+          : `$(history) ${this.error ? t('quickAccess.outline.retry') : this.loading ? t('quickAccess.outline.loadingEarlier') : t('quickAccess.outline.loadEarlier')}`,
         description: [this.coverage, !entry.turnId ? this.error : undefined].filter(Boolean).join(' · '),
         ariaLabel: entry.label, acceptInPlace: !entry.turnId,
       })) },
@@ -67,7 +68,8 @@ class ThreadOutline extends Disposable implements IOutline<ThreadOutlineEntry> {
   get activeElement() { return undefined; }
   private get visibleEntries() { return this.hasBefore || this.error ? [...this.entries, this.continuation] : this.entries; }
   private get coverage() {
-    return `已载入 ${this.entries.length} 轮${this.error ? '，历史读取失败' : this.hasBefore ? '，更早历史未载入' : '，本次历史已覆盖'}`;
+    return t(this.error ? 'quickAccess.outline.failedCoverage'
+      : this.hasBefore ? 'quickAccess.outline.partialCoverage' : 'quickAccess.outline.completeCoverage', formatNumber(this.entries.length));
   }
   private isTarget() { return this.pane.threadTarget?.conversation === this.target.conversation; }
   private isCurrent() { return !this.controller.signal.aborted && this.isTarget(); }
@@ -84,18 +86,18 @@ class ThreadOutline extends Disposable implements IOutline<ThreadOutlineEntry> {
         cursor: this.restart ? undefined : this.cursor, turns: PAGE_TURNS, include: ['user', 'metadata'],
       }, owner.workspaceKey, this.controller.signal, owner.threadId);
       if (!this.isCurrent()) return;
-      if (page.thread_id !== owner.threadId) throw new Error('Thread 大纲历史归属不一致');
+      if (page.thread_id !== owner.threadId) throw new Error(t('quickAccess.outline.ownerMismatch'));
       if (this.restart) this.entries = [];
       const existing = new Set(this.entries.map(entry => entry.turnId));
       for (const turn of page.summaries ?? []) {
         if (existing.has(turn.turn_id)) continue;
         const title = (turn.user_messages ?? []).map(message => message.preview ?? '').join(' ').replace(/\s+/g, ' ').trim();
-        this.entries.push({ turnId: turn.turn_id, ordinal: turn.ordinal, label: `第 ${turn.ordinal} 轮 · ${title || '无文本消息'}` });
+        this.entries.push({ turnId: turn.turn_id, ordinal: turn.ordinal, label: t('quickAccess.outline.turn', formatNumber(turn.ordinal), title || t('quickAccess.outline.noText')) });
       }
       this.entries.sort((a, b) => a.ordinal - b.ordinal);
       this.cursor = page.before_cursor ?? undefined;
       this.hasBefore = page.has_before ?? false;
-      if (this.hasBefore && !this.cursor) throw new Error('Thread 大纲缺少更早历史续点');
+      if (this.hasBefore && !this.cursor) throw new Error(t('quickAccess.outline.cursorMissing'));
       this.restart = false;
     } catch (error) {
       if (this.controller.signal.aborted) return;

@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import { deriveToolRowDisplay } from "../../state/display/toolDisplay";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
@@ -15,42 +16,42 @@ function toolStatus(item: ToolItem): {
   if (item.active) {
     return {
       icon: "codicon-loading codicon-modifier-spin",
-      label: `正在运行 ${item.toolName}`,
+      label: t("chat.tool.running", item.toolName),
       className: "is-active",
     };
   }
   if (item.incomplete) {
     return {
       icon: "codicon-debug-stop",
-      label: `${item.toolName} 调用未完成`,
+      label: t("chat.tool.incomplete", item.toolName),
       className: "is-incomplete",
     };
   }
   if (item.outcomeUnknown) {
     return {
       icon: "codicon-warning",
-      label: `${item.toolName} 结果未知`,
+      label: t("chat.tool.unknown", item.toolName),
       className: "is-unknown",
     };
   }
   if (item.failed) {
     return {
       icon: "codicon-error",
-      label: `${item.toolName} 执行失败`,
+      label: t("chat.tool.failed", item.toolName),
       className: "is-failed",
     };
   }
   return {
     icon: "codicon-check",
-    label: `已运行 ${item.toolName}`,
+    label: t("chat.tool.completed", item.toolName),
     className: "is-complete",
   };
 }
 
 function fallbackContent(item: ToolItem): string {
   return [
-    item.inputText ? `**输入**\n\n\`\`\`json\n${item.inputText}\n\`\`\`` : "",
-    item.resultText ? `**输出**\n\n\`\`\`text\n${item.resultText}\n\`\`\`` : "",
+    item.inputText ? t("chat.tool.inputBody", item.inputText) : "",
+    item.resultText ? t("chat.tool.outputBody", item.resultText) : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -124,7 +125,7 @@ function ToolRow({
         <span className={`codicon ${loading ? "codicon-loading codicon-modifier-spin" : status.icon}`} aria-hidden="true" />
         <span className="chat-tool-label">{status.label}</span>
         <span className="chat-tool-preview">
-          {loading ? "正在加载工具详情…" : display.previewText}
+          {loading ? t("chat.tool.loading") : display.previewText}
         </span>
         {hasDetails ? (
           <span
@@ -142,7 +143,7 @@ function ToolRow({
           {content ? <MarkdownContent value={content} /> : null}
           {showRawDetails ? (
             <details className="chat-tool-raw">
-              <summary>原始数据</summary>
+              <summary>{t("chat.tool.raw")}</summary>
               <pre>{JSON.stringify({ start: item.rawStart, end: item.rawEnd }, null, 2)}</pre>
             </details>
           ) : null}

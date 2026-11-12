@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { MessageType } from '../../upstream/src/vs/base/browser/ui/inputbox/inputBox.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import type { IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
@@ -28,13 +29,13 @@ export class ScopedSearchView extends SearchView {
     return pending.then(async scope => {
       if (generation !== this.scopeGeneration) return;
       const context = this.contextService;
-      if (!(context instanceof SearchWorkspaceContext)) throw new Error('搜索视图没有通过业务范围 child 创建');
+      if (!(context instanceof SearchWorkspaceContext)) throw new Error(t('quickAccess.search.contextMissing'));
       await context.updateScope(scope);
-      if (generation === this.scopeGeneration) this.updateTitleDescription(scope.workspaces.map(target => target.label).join('、'));
+      if (generation === this.scopeGeneration) this.updateTitleDescription(scope.workspaces.map(target => target.label).join(t('quickAccess.listSeparator')));
     }).catch(error => {
       if (generation !== this.scopeGeneration) return;
       this.scopeError = error;
-      this.updateTitleDescription(`搜索范围不可用：${error instanceof Error ? error.message : String(error)}`);
+      this.updateTitleDescription(t('quickAccess.search.scopeUnavailable', error instanceof Error ? error.message : String(error)));
     });
   }
 

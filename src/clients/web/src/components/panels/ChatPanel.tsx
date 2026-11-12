@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
 import type { SessionViewState } from "../../state/sessionViewState";
 import React from "react";
@@ -127,7 +128,7 @@ const renderChatPanelItem: ItemContent<
     return (
       <div className="chat-virtual-item">
         <InternalExecutionTranscriptItem displayPart={item.displayPart} />
-        {canOpenReport ? <button type="button" onClick={() => state.onOpenChildReport?.(source)}>查看来源报告</button> : null}
+        {canOpenReport ? <button type="button" onClick={() => state.onOpenChildReport?.(source)}>{t("chat.sourceReport")}</button> : null}
       </div>
     );
   }
@@ -467,7 +468,8 @@ export default function ChatPanel({
           onClick={() => scrollToLatest("smooth")}
         >
           <span className="codicon codicon-arrow-down" aria-hidden="true" />
-          跳到最新消息
+
+          {t("chat.latest")}
         </button>
       ) : null}
     </section></MessageSearchLocationContext.Provider>

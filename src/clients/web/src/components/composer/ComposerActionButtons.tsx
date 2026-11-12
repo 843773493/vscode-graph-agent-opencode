@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { DeliveryPolicy } from "../../types/backend";
 import { DELIVERY_POLICY_LABELS } from "../deliveryPolicyPresentation";
@@ -27,7 +28,7 @@ export default function ComposerActionButtons({
         <button
           id="clearInputButton"
           type="button"
-          title="清空输入"
+          title={t("composer.actions.clear")}
           className="composer-icon-button hover-only"
           onClick={onClear}
         >
@@ -49,7 +50,7 @@ export default function ComposerActionButtons({
           type="button"
           className="composer-icon-button interrupt-button"
           onClick={onInterrupt}
-          title="中断生成"
+          title={t("composer.actions.interrupt")}
         >
           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
             <rect
@@ -70,8 +71,8 @@ export default function ComposerActionButtons({
         className="send-button"
         disabled={!hasContent}
         onClick={onSend}
-        title={hasContent ? "发送消息" : "输入消息以启用发送"}
-        aria-label={hasContent ? "发送消息" : "输入消息以启用发送"}
+        title={hasContent ? t("composer.actions.send") : t("composer.actions.emptySend")}
+        aria-label={hasContent ? t("composer.actions.send") : t("composer.actions.emptySend")}
       >
         <svg viewBox="0 0 16 16" width="12" height="12">
           <path d="M1.5 1.5L14.5 8L1.5 14.5V9L10 8L1.5 7V1.5Z" />
@@ -83,8 +84,8 @@ export default function ComposerActionButtons({
           className="composer-icon-button queue-message-button"
           disabled={!hasContent}
           onClick={onAlternate}
-          title="使用下一种投递边界发送"
-          aria-label="使用下一种投递边界发送"
+          title={t("composer.actions.alternate")}
+          aria-label={t("composer.actions.alternate")}
         >
           <span
             className="codicon codicon-list-ordered"
@@ -97,8 +98,8 @@ export default function ComposerActionButtons({
           type="button"
           className="composer-icon-button hover-only"
           onClick={onToggleDefault}
-          title={`新消息默认：${DELIVERY_POLICY_LABELS[defaultDeliveryPolicy]}；点击切换`}
-          aria-label={`切换新消息默认投递策略（当前为${DELIVERY_POLICY_LABELS[defaultDeliveryPolicy]}）`}
+          title={t("composer.actions.default", DELIVERY_POLICY_LABELS[defaultDeliveryPolicy])}
+          aria-label={t("composer.actions.changeDefault", DELIVERY_POLICY_LABELS[defaultDeliveryPolicy])}
         >
           <span className="codicon codicon-settings-gear" aria-hidden="true" />
         </button>

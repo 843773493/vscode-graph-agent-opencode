@@ -7,7 +7,7 @@ export async function confirmContentCategories(quick, categories) {
   for (const category of categories) {
     await quick.locator(`.monaco-list-row:has([data-quick-input-id="content-category-${category}"])`).getByRole('checkbox').check();
   }
-  await quick.getByRole('button', { name: 'OK', exact: true }).click();
+  await quick.getByRole('button', { name: '确定', exact: true }).click();
 }
 
 /** 用真实滚轮访问末尾状态，避免滚动条鼠标按下清空列表焦点。 */

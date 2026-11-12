@@ -90,7 +90,7 @@ const remoteGatewayWorkspace: GatewayWorkspace = {
 };
 
 const hoverTitle = workspaceHoverTitle(remoteGatewayWorkspace);
-if (hoverTitle !== "远程开发\nhostname: 192.0.2.10") {
+if (hoverTitle !== "远程开发\n主机名: 192.0.2.10") {
   throw new Error(`远程工作区悬停提示与展示合同不符: ${hoverTitle}`);
 }
 

@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import {
   useEffect,
   useRef,
@@ -52,10 +53,10 @@ export function nodeDebugBreakpointLabel(
   breakpoint: NodeDebugBreakpoint | null,
 ): string {
   const kind = nodeDebugBreakpointKind(breakpoint);
-  if (kind === "condition") return `条件断点：${breakpoint?.condition}`;
-  if (kind === "hit") return `命中次数断点：第 ${breakpoint?.hit_condition} 次`;
-  if (kind === "log") return `日志点：${breakpoint?.log_message}`;
-  return kind === "ordinary" ? "普通断点" : "未设置断点";
+  if (kind === "condition") return t("debug.breakpoint.conditionLabel", breakpoint?.condition);
+  if (kind === "hit") return t("debug.breakpoint.hitLabel", breakpoint?.hit_condition);
+  if (kind === "log") return t("debug.breakpoint.logLabel", breakpoint?.log_message);
+  return kind === "ordinary" ? t("debug.breakpoint.ordinary") : t("debug.breakpoint.none");
 }
 
 function breakpointIcon(breakpoint: NodeDebugBreakpoint): string {
@@ -161,19 +162,19 @@ export default function NodeDebugBreakpointGutter({
     if (normalizedHitCondition !== null && (
       !Number.isSafeInteger(normalizedHitCondition) || normalizedHitCondition < 1
     )) {
-      setValidationError("命中次数必须是正整数");
+      setValidationError(t("debug.breakpoint.invalidHits"));
       return;
     }
     if (editorKind === "condition" && !normalizedCondition) {
-      setValidationError("请输入条件表达式");
+      setValidationError(t("debug.breakpoint.conditionRequired"));
       return;
     }
     if (editorKind === "hit" && normalizedHitCondition === null) {
-      setValidationError("请输入命中次数");
+      setValidationError(t("debug.breakpoint.hitsRequired"));
       return;
     }
     if (editorKind === "log" && !normalizedLogMessage) {
-      setValidationError("请输入日志消息");
+      setValidationError(t("debug.breakpoint.logRequired"));
       return;
     }
     applyDefinition({
@@ -192,43 +193,45 @@ export default function NodeDebugBreakpointGutter({
         top: Math.max(8, Math.min(menuPosition.y, window.innerHeight - (editorKind ? 330 : 230))),
       }}
       role={editorKind ? "dialog" : "menu"}
-      aria-label={editorKind ? "编辑特殊断点" : `第 ${line} 行断点菜单`}
+      aria-label={editorKind ? t("debug.breakpoint.editor") : t("debug.breakpoint.menu", line)}
     >
       {editorKind ? (
         <form onSubmit={saveSpecialBreakpoint}>
           <header>
             <strong>
-              {editorKind === "condition" ? "条件断点" : null}
-              {editorKind === "hit" ? "命中次数断点" : null}
-              {editorKind === "log" ? "日志点" : null}
+              {editorKind === "condition" ? t("debug.breakpoint.condition") : null}
+              {editorKind === "hit" ? t("debug.breakpoint.hit") : null}
+              {editorKind === "log" ? t("debug.breakpoint.log") : null}
             </strong>
             <span>{path}:{line}</span>
           </header>
           {editorKind === "log" ? (
             <label>
-              日志消息
+
+              {t("debug.breakpoint.logMessage")}
               <input
                 autoFocus
                 value={logMessage}
                 onChange={(event) => setLogMessage(event.target.value)}
-                placeholder="例如 count={count}"
+                placeholder={t("debug.breakpoint.logExample")}
               />
             </label>
           ) : null}
           {editorKind === "condition" || editorKind === "hit" ? (
             <label>
-              条件表达式{editorKind === "hit" ? "（可选）" : ""}
+              {t(editorKind === "hit" ? "debug.breakpoint.expressionOptional" : "debug.breakpoint.expression")}
               <input
                 autoFocus={editorKind === "condition"}
                 value={condition}
                 onChange={(event) => setCondition(event.target.value)}
-                placeholder="例如 count > 5"
+                placeholder={t("debug.breakpoint.expressionExample")}
               />
             </label>
           ) : null}
           {editorKind === "hit" ? (
             <label>
-              命中次数
+
+              {t("debug.breakpoint.hitCount")}
               <input
                 autoFocus
                 type="number"
@@ -236,43 +239,45 @@ export default function NodeDebugBreakpointGutter({
                 step="1"
                 value={hitCondition}
                 onChange={(event) => setHitCondition(event.target.value)}
-                placeholder="例如 3"
+                placeholder={t("debug.breakpoint.hitExample")}
               />
             </label>
           ) : null}
           {editorKind === "log" ? (
             <details>
-              <summary>触发条件（可选）</summary>
+              <summary>{t("debug.breakpoint.triggerOptional")}</summary>
               <label>
-                条件表达式
+
+                {t("debug.breakpoint.expression")}
                 <input
                   value={condition}
                   onChange={(event) => setCondition(event.target.value)}
-                  placeholder="例如 count > 5"
+                  placeholder={t("debug.breakpoint.expressionExample")}
                 />
               </label>
               <label>
-                命中次数
+
+                {t("debug.breakpoint.hitCount")}
                 <input
                   type="number"
                   min="1"
                   step="1"
                   value={hitCondition}
                   onChange={(event) => setHitCondition(event.target.value)}
-                  placeholder="每次都输出"
+                  placeholder={t("debug.breakpoint.everyHit")}
                 />
               </label>
             </details>
           ) : null}
           {validationError ? <p role="alert">{validationError}</p> : null}
           <footer>
-            <button type="button" onClick={() => setEditorKind(null)}>返回</button>
-            <button type="submit" className="primary">保存</button>
+            <button type="button" onClick={() => setEditorKind(null)}>{t("debug.breakpoint.back")}</button>
+            <button type="submit" className="primary">{t("debug.breakpoint.save")}</button>
           </footer>
         </form>
       ) : (
         <>
-          <header><strong>第 {line} 行断点</strong><span>{markerTitle}</span></header>
+          <header><strong>{t("debug.breakpoint.line", line)}</strong><span>{markerTitle}</span></header>
           <button
             type="button"
             role="menuitem"
@@ -284,19 +289,19 @@ export default function NodeDebugBreakpointGutter({
             })}
           >
             <span className="codicon codicon-debug-breakpoint" aria-hidden="true" />
-            {breakpoint ? "转换为普通断点" : "添加普通断点"}
+            {breakpoint ? t("debug.breakpoint.convert") : t("debug.breakpoint.addOrdinary")}
           </button>
           <button type="button" role="menuitem" className={kind === "condition" ? "active" : ""} onClick={() => setEditorKind("condition")}>
             <span className="codicon codicon-debug-breakpoint-conditional" aria-hidden="true" />
-            {kind === "condition" ? "编辑条件断点…" : "添加条件断点…"}
+            {kind === "condition" ? t("debug.breakpoint.editCondition") : t("debug.breakpoint.addCondition")}
           </button>
           <button type="button" role="menuitem" className={kind === "hit" ? "active" : ""} onClick={() => setEditorKind("hit")}>
             <span className="codicon codicon-debug-breakpoint-data" aria-hidden="true" />
-            {kind === "hit" ? "编辑命中次数断点…" : "添加命中次数断点…"}
+            {kind === "hit" ? t("debug.breakpoint.editHits") : t("debug.breakpoint.addHits")}
           </button>
           <button type="button" role="menuitem" className={kind === "log" ? "active" : ""} onClick={() => setEditorKind("log")}>
             <span className="codicon codicon-debug-breakpoint-log" aria-hidden="true" />
-            {kind === "log" ? "编辑日志点…" : "添加日志点…"}
+            {kind === "log" ? t("debug.breakpoint.editLog") : t("debug.breakpoint.addLog")}
           </button>
           {breakpoint ? (
             <button
@@ -309,7 +314,8 @@ export default function NodeDebugBreakpointGutter({
               }}
             >
               <span className="codicon codicon-trash" aria-hidden="true" />
-              删除断点
+
+              {t("debug.breakpoint.delete")}
             </button>
           ) : null}
         </>
@@ -323,10 +329,10 @@ export default function NodeDebugBreakpointGutter({
       <button
         type="button"
         className={`${className}${breakpoint ? ` has-breakpoint breakpoint-${kind}${breakpoint.verified === true ? "" : " breakpoint-unverified"}` : ""}`}
-        aria-label={`${breakpoint ? "清除" : "设置"}第 ${line} 行断点；右键打开特殊断点菜单`}
+        aria-label={t(breakpoint ? "debug.breakpoint.clearAria" : "debug.breakpoint.setAria", line)}
         aria-haspopup="menu"
         aria-expanded={menuPosition !== null}
-        title={`${markerTitle}；左键${breakpoint ? "清除" : "添加普通断点"}，右键编辑特殊断点`}
+        title={t(breakpoint ? "debug.breakpoint.clearHint" : "debug.breakpoint.addHint", markerTitle)}
         disabled={disabled}
         onClick={() => onChange(
           path,

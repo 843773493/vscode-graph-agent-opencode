@@ -10,6 +10,9 @@ import { HttpRequestError } from "../../api/http";
 import type { GatewayRuntimeGroupRequest, GatewayWorkspace, SessionForkRequest, SessionForkResult, SessionForkSourcePoint } from "../../types/backend";
 import SessionContextForkDialog from "../../components/overlays/SessionContextForkDialog";
 import { useSessionCatalogActions } from "./useSessionCatalogActions";
+import { setLocaleResources } from "../../../../shared/core/i18n/index.js";
+import english from "../../../../shared/core/i18n/messages/en.json";
+import chinese from "../../../../shared/core/i18n/messages/zh-cn.json";
 
 const workspaceKey = (workspaceId: string) => gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: workspaceId });
 
@@ -41,6 +44,7 @@ afterEach(() => {
   for (const renderer of mountedRenderers.splice(0)) {
     act(() => renderer.unmount());
   }
+  setLocaleResources("zh-cn", chinese);
 });
 
 function workspace(overrides: Partial<GatewayWorkspace>): GatewayWorkspace {
@@ -684,6 +688,58 @@ describe("上下文分支候选与冻结重试", () => {
     expect(mounted.hook().forkDialog!.sourcePoint!.anchor_item_id).toBe("item-source");
     await act(async () => { await mounted.hook().updateForkDialogSelection({ anchorMode: "inclusive" }); });
     expect(mounted.hook().forkDialog!.error).toContain("附件候选回执与冻结的来源");
+  });
+
+  test("英文分支对话框翻译标签并保留用户名称、Thread身份和复制范围协议值", async () => {
+    setLocaleResources("en", english);
+    const priorWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const priorDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { addEventListener() {}, removeEventListener() {} } });
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { body: {} } });
+    const portal = spyOn(ReactDOM, "createPortal").mockImplementation((children) => children as React.ReactPortal);
+    spies.push(portal);
+    const read = spyOn(sessionApi, "getSessionForkSourcePoint").mockImplementation(async (_port, _session, selection) => sourcePointFixture({
+      title: "用户原始名称",
+      resource_mode: selection?.mode ?? "view_prefix_fork",
+      anchor_item_id: selection?.mode === "full_rollout_copy" ? null : "item-source",
+    }));
+    spies.push(read);
+    const submitted: SessionForkRequest[] = [];
+    const mounted = mountHook({ renderForkDialog: true, forkSessionContext: async (_workspace, _source, request) => {
+      submitted.push(request);
+      throw new Error("原始 writer 诊断");
+    } });
+    try {
+      await mounted.mount();
+      await act(async () => {
+        void mounted.hook().forkSession(workspaceKey("ws-source"), "ses-source", { threadId: "tid-source" },
+          { title: "用户来源名称", assertAccess() {} });
+      });
+      const paragraphs = mounted.renderer().root.findAllByType("p").map((paragraph) => paragraph.children
+        .map((child) => typeof child === "string" ? child : child.children.join("")).join(""));
+      expect(paragraphs).toContain("Source session: 用户来源名称 · ses-source");
+      expect(paragraphs).toContain(`Source Thread: ${sourcePointFixture().source_uri}`);
+      expect(paragraphs).toContain("Selected history position: view-source, observed revision 9");
+      const range = () => mounted.renderer().root.findByProps({ "aria-label": "Copy range" });
+      expect(range().props.value).toBe("view_prefix_fork");
+      expect(range().findAllByType("option").find((option) => option.props.value === "full_rollout_copy")!.children)
+        .toEqual(["Full history"]);
+      await act(async () => { range().props.onChange({ target: { value: "full_rollout_copy" } }); });
+      expect(range().props.value).toBe("full_rollout_copy");
+      expect(read.mock.calls[1]![2]).toMatchObject({ threadId: "tid-source", mode: "full_rollout_copy", anchorMode: "inclusive" });
+      await act(async () => { mounted.renderer().root.findByType("form").props.onSubmit({ preventDefault() {} }); });
+      expect(submitted).toHaveLength(1);
+      expect(submitted[0]).toMatchObject({ source_uri: sourcePointFixture().source_uri,
+        source_view_id: "view-source", source_view_revision: 9, anchor_item_id: null,
+        mode: "full_rollout_copy", anchor_mode: "inclusive", creation_kind: "new_child_thread", title: "用户原始名称" });
+      expect(mounted.renderer().root.findByProps({ role: "alert" }).children).toEqual(["原始 writer 诊断"]);
+    } finally {
+      act(() => mounted.renderer().unmount());
+      mountedRenderers.splice(mountedRenderers.indexOf(mounted.renderer()), 1);
+      portal.mockRestore();
+      if (priorWindow) Object.defineProperty(globalThis, "window", priorWindow); else Reflect.deleteProperty(globalThis, "window");
+      if (priorDocument) Object.defineProperty(globalThis, "document", priorDocument); else Reflect.deleteProperty(globalThis, "document");
+    }
   });
 
   test("真实分支对话框默认不关联，显选发送typed身份，部分失败打开目标并冻结原请求", async () => {

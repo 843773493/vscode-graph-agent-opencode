@@ -1,3 +1,5 @@
+import { formatNumber, t } from '../../../shared/core/i18n/index.js';
+import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 import { Limiter } from '../../upstream/src/vs/base/common/async.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
@@ -71,7 +73,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     @ICommandService private readonly commands: ICommandService,
     @IEditorService private readonly editors: IEditorService,
   ) { super(ResourceQuickAccess.PREFIX, { canAcceptInBackground: true,
-    noResultsPick: { id: 'no-sources', label: '所选工作区没有匹配的来源' } }); }
+    noResultsPick: { id: 'no-sources', label: t('quickAccess.sources.noResults') } }); }
 
   override provide(picker: SourceRun['picker'], token: CancellationToken, options: ResourceAccessOptions = {}) {
     const lifetime = new DisposableStore(), access = new CancellationTokenSource(token), controller = new AbortController();
@@ -90,15 +92,15 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       run.invalidated = true;
       access.cancel();
       picker.activeItems = picker.selectedItems = [];
-      picker.items = [{ id: 'source-access-invalidated', label: 'Gateway 或访问凭据已改变，请重新查找来源' }];
+      picker.items = [{ id: 'source-access-invalidated', label: t('quickAccess.sources.identityChanged') }];
       picker.busy = false;
     };
     lifetime.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
     lifetime.add(toDisposable(workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidate(); })));
-    const scope = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择来源所属工作区' };
+    const scope = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: t('quickAccess.sources.chooseWorkspace') };
     const back = run.referencesOnly && options.resourceReferenceBack ? this.quick.backButton : undefined;
     picker.buttons = [...picker.buttons, ...(back ? [back] : run.referencesOnly ? [] : [scope])];
-    picker.placeholder = run.referencesOnly ? '选择来源资源 URI · 不读取正文或打开资源' : '查找来源、终端、浏览器和 MCP · 浏览不读取正文或操作资源';
+    picker.placeholder = run.referencesOnly ? t('quickAccess.sources.referencesPlaceholder') : t('quickAccess.sources.placeholder');
     lifetime.add(picker.onDidTriggerButton(button => {
       if (back && button === back) {
         this.assertAccess(run);
@@ -114,7 +116,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
         try {
           picker.hide();
           const owners = await chooseSearchOwners(this.quick, run.owners);
-          if (invalidated) throw new Error('访问凭据已改变，请重新选择来源所属工作区');
+          if (invalidated) throw new Error(t('quickAccess.sources.workspaceCredentialsChanged'));
           this.assertAccess(run);
           const providerOptions: ResourceAccessOptions = { ...options, searchOwners: owners ?? run.owners, resourceGroup: run.group, resourceThread: run.thread, resourceRecipient: run.recipient };
           this.quick.quickAccess.show(value, { providerOptions });
@@ -131,7 +133,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
 
   protected override _getPicks(filter: string, _disposables: DisposableStore, token: CancellationToken): SourcePick[] | null {
     const run = this.run!;
-    if (run.invalidated) return [{ id: 'source-access-invalidated', label: 'Gateway 或访问凭据已改变，请重新查找来源' }];
+    if (run.invalidated) return [{ id: 'source-access-invalidated', label: t('quickAccess.sources.identityChanged') }];
     if (token.isCancellationRequested || run.signal.aborted) return null;
     run.refresh = () => {
       if (token.isCancellationRequested || run.signal.aborted || run.invalidated || this.run !== run) return;
@@ -158,8 +160,8 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       const highlights = matchesFuzzy(filter, item.filterLabel);
       return filter && !highlights && !item.resourceId?.includes(filter) ? [] : [{ ...candidate, highlights: { label: highlights ?? undefined } }];
     });
-    if (run.loading) picks.push({ id: 'source-pending', label: '正在读取其余来源…', disabled: true });
-    return picks.length ? picks : [{ id: 'no-sources', label: '所选工作区没有匹配的来源' }];
+    if (run.loading) picks.push({ id: 'source-pending', label: t('quickAccess.sources.loading'), disabled: true });
+    return picks.length ? picks : [{ id: 'no-sources', label: t('quickAccess.sources.noResults') }];
   }
 
   private async discover(run: SourceRun): Promise<void> {
@@ -173,23 +175,31 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       if (picks.length) run.refresh?.();
     };
     if (!run.owners.length) {
-      run.picks = [[{ id: 'source-owner-required', label: run.ownerError ?? '请先明确选择来源所属工作区',
-        detail: '使用“选择来源所属工作区”按钮；不会自动启动或激活目标' }]];
+      run.picks = [[{ id: 'source-owner-required', label: run.ownerError ?? t('quickAccess.sources.workspaceRequired'),
+        detail: t('quickAccess.sources.workspaceHint') }]];
       return;
     }
     const limiter = new Limiter<SourcePick[]>(3);
-    const failed = (owner: WorkspaceOwner, kind: string, cause: unknown): SourcePick[] => [{
-      id: `${gatewayWorkspaceKey(owner)}/${kind}/failed`, label: `${kind}来源不可用：${cause instanceof Error ? cause.message : String(cause)}`,
+    // kind 同时属于已有候选身份；只翻译展示标签，不改变稳定 id。
+    const sourceKindLabels = {
+      '': '', 'AGENTS ': 'AGENTS ', 'Skill ': 'Skill ', 'Gateway Skill ': 'Gateway Skill ', 'MCP ': 'MCP ',
+      'Gateway 配置 ': t('quickAccess.sources.gatewayConfigurationKind'), '配置 ': t('quickAccess.sources.configurationKind'),
+      '附件 ': t('quickAccess.sources.attachmentKind'), '工具结果 ': t('quickAccess.sources.toolKind'),
+      '变更 ': t('quickAccess.sources.changesKind'), '本地 Skill ': t('quickAccess.sources.localSkillKind'),
+      '终端': t('quickAccess.sources.terminalKind'), '浏览器': t('quickAccess.sources.browserKind'),
+    };
+    const failed = (owner: WorkspaceOwner, kind: keyof typeof sourceKindLabels, cause: unknown): SourcePick[] => [{
+      id: `${gatewayWorkspaceKey(owner)}/${kind}/failed`, label: t('quickAccess.sources.unavailable', sourceKindLabels[kind], cause instanceof Error ? cause.message : String(cause)),
       detail: cause instanceof HttpRequestError && cause.requestId ? `request_id: ${cause.requestId}` : gatewayWorkspaceKey(owner),
     }];
     const pick = (owner: WorkspaceOwner, uri: string, label: string, description: string, available = true, errorCode?: string): SourcePick => {
-      const item: SourcePick = { id: `${gatewayWorkspaceKey(owner)}/${uri}`, label: available ? label : `${label}（来源不可用）`,
+      const item: SourcePick = { id: `${gatewayWorkspaceKey(owner)}/${uri}`, label: available ? label : t('quickAccess.sources.unavailableLabel', label),
         filterLabel: label, description, detail: `${owner.gatewayId} · ${owner.workspaceId} · ${uri}${errorCode ? ` · ${errorCode}` : ''}` };
       if (available) {
         item.resource = sourceDocumentUri(owner, uri);
         item.resourceOwner = { ...owner };
-        item.buttons = [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' },
-          { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: '将资源 URI 加入聊天草稿' }];
+        item.buttons = [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('quickAccess.copyUri') },
+          { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: t('quickAccess.sources.attachUri') }];
         item.trigger = index => {
           this.assertAccess(run);
           this.report(this.commands.executeCommand(index === 0 ? COPY_RESOURCE_URI : ATTACH_RESOURCE_URI, item.resource, { ...owner }, run.recipient));
@@ -231,7 +241,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       this.report((async () => {
         this.assertAccess(run);
         const source = this.groups.getGroup(run.group), thread = run.thread!;
-        if (!source) throw new Error('发起打开的编辑器组已关闭');
+        if (!source) throw new Error(t('quickAccess.resource.invokingGroupClosed'));
         const pinned = this.configuration.getValue<boolean>('workbench.editor.enablePreviewFromQuickOpen') === false
           || this.configuration.getValue<boolean>('workbench.editor.enablePreview') === false;
         const direction = preferredSideBySideGroupDirection(this.configuration);
@@ -252,12 +262,12 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
         if (!source.source_key) return [];
         const label = source.source_key + '.jsonc';
         return [{ id: JSON.stringify([target.gateway_id, target.workspace_id, 'configuration', source.source_key]),
-          label, filterLabel: label, description: `配置来源 · ${name} · ${source.layer} · ${source.presence}`,
+          label, filterLabel: label, description: t('quickAccess.sources.configuration', name, source.layer, source.presence),
           detail: `${target.gateway_id}${target.workspace_id ? ` · ${target.workspace_id}` : ' · Gateway'}${source.uri ? ` · ${source.uri}` : ''}`,
           ...(source.uri ? {
             resource: URI.parse(source.uri), resourceOwner: { gatewayId: target.gateway_id, workspaceId: target.workspace_id },
-            buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' },
-              { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: '将资源 URI 加入聊天草稿' }],
+            buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('quickAccess.copyUri') },
+              { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: t('quickAccess.sources.attachUri') }],
             trigger: (index: number) => {
               this.assertAccess(run);
               this.report(this.commands.executeCommand(index === 0 ? COPY_RESOURCE_URI : ATTACH_RESOURCE_URI, URI.parse(source.uri!), {
@@ -291,7 +301,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
         try {
           run.signal.throwIfAborted();
           const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
-          if (target.status !== 'ready') throw new Error(`${target.name} 当前不可用（${target.status}），请明确启动或连接`);
+          if (target.status !== 'ready') throw new Error(t('quickAccess.sources.workspaceUnavailable', target.name, target.status));
           const key = gatewayWorkspaceKey(target);
           const configuration = limiter.queue(() => configurationPicks({ gateway_id: target.gateway_id, workspace_id: target.workspace_id }, target.name))
             .catch(cause => failed(owner, '配置 ', cause));
@@ -301,18 +311,18 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
             const result = await gateway.request<ThreadAttachmentListDTO>(
               `/api/v1/sessions/${encodeURIComponent(thread.session_id)}/threads/${encodeURIComponent(thread.thread_id)}/attachments?${new URLSearchParams({ limit: '100', after })}`,
               { signal: run.signal }, key);
-            if (result.session_id !== thread.session_id || result.thread_id !== thread.thread_id) throw new Error('附件目录响应不属于发起 Thread');
+            if (result.session_id !== thread.session_id || result.thread_id !== thread.thread_id) throw new Error(t('quickAccess.sources.attachmentOwnerMismatch'));
             const picks: SourcePick[] = result.items.map(attachment => {
               const label = attachment.name ?? attachment.file_id, frozen = { ...attachment };
               return { id: JSON.stringify([owner.gatewayId, owner.workspaceId, thread.session_id, thread.thread_id, 'attachment', attachment.file_id]),
-                label: attachment.availability === 'unavailable' ? `${label}（来源不可用）` : label, filterLabel: label, resourceId: attachment.file_id,
-                description: `附件 · ${target.name} · ${attachment.content_type ?? 'application/octet-stream'}`,
+                label: attachment.availability === 'unavailable' ? t('quickAccess.sources.unavailableLabel', label) : label, filterLabel: label, resourceId: attachment.file_id,
+                description: t('quickAccess.sources.attachment', target.name, attachment.content_type ?? 'application/octet-stream'),
                 ...(attachment.availability === 'unavailable' ? {} : { resource: URI.parse(attachment.file_id), resourceOwner: { ...owner } }),
                 detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${thread.thread_id} · ${attachment.file_id}`,
                 accept: attachment.availability === 'unavailable' ? undefined : threadResourceAccept(owner, { resourceTab: 'files', selectedAttachment: frozen }),
                 buttons: attachment.availability === 'unavailable' ? undefined
-                  : [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' },
-                    { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: '将资源 URI 加入聊天草稿' }],
+                  : [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('quickAccess.copyUri') },
+                    { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: t('quickAccess.sources.attachUri') }],
                 trigger: index => {
                   this.assertAccess(run);
                   this.report(this.commands.executeCommand(index === 0 ? COPY_RESOURCE_URI : ATTACH_RESOURCE_URI,
@@ -321,8 +331,8 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
                 },
               };
             });
-            if (result.next_after) picks.push(continuePage(`${key}/attachments/after/${result.next_after}`, '更多附件…',
-              '当前列表只包含已返回页；继续读取同一 Thread 的元数据', () => attachmentPicks(result.next_after!)));
+            if (result.next_after) picks.push(continuePage(`${key}/attachments/after/${result.next_after}`, t('quickAccess.sources.moreAttachments'),
+              t('quickAccess.sources.moreAttachmentsHint'), () => attachmentPicks(result.next_after!)));
             return picks;
           };
           const attachments = run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
@@ -333,23 +343,23 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
             const query = new URLSearchParams({ limit: '100' });
             if (page?.next_after != null) {
               query.set('after', String(page.next_after));
-              if (!page.source_view_id) throw new Error('工具结果续页缺少原历史视图');
+              if (!page.source_view_id) throw new Error(t('quickAccess.sources.toolViewMissing'));
               query.set('view_id', page.source_view_id);
               query.set('view_revision', String(page.source_view_revision));
             }
             const result = await gateway.request<ThreadToolResultListDTO>(
               `/api/v1/sessions/${encodeURIComponent(thread.session_id)}/threads/${encodeURIComponent(thread.thread_id)}/tool-results?${query}`,
               { signal: run.signal }, key);
-            if (result.session_id !== thread.session_id || result.thread_id !== thread.thread_id) throw new Error('工具结果目录响应不属于发起 Thread');
+            if (result.session_id !== thread.session_id || result.thread_id !== thread.thread_id) throw new Error(t('quickAccess.sources.toolOwnerMismatch'));
             const picks: SourcePick[] = result.items.map(tool => ({
               id: JSON.stringify([owner.gatewayId, owner.workspaceId, thread.session_id, thread.thread_id, 'tool-result', tool.item_id]),
               label: tool.tool_name, filterLabel: tool.tool_name, resourceId: tool.item_id,
-              description: `工具结果 · ${target.name} · ${tool.status}`,
+              description: t('quickAccess.sources.tool', target.name, tool.status),
               detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${thread.thread_id} · ${tool.turn_id} · ${tool.tool_call_id}`,
               accept: threadResourceAccept(owner, {}, { ...tool }),
             }));
             if (result.next_after != null) picks.push(continuePage(`${key}/tool-results/after/${result.next_after}`,
-              '更多工具结果…', '继续读取同一历史视图的元数据', () => toolPicks(result)));
+              t('quickAccess.sources.moreTools'), t('quickAccess.sources.moreToolsHint'), () => toolPicks(result)));
             return picks;
           };
           const tools = !run.referencesOnly && run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
@@ -360,11 +370,11 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               run.signal.throwIfAborted();
               const result = await gateway.request<SessionChangesetListDTO>(`/api/v1/sessions/${encodeURIComponent(thread.session_id)}/changesets`,
                 { signal: run.signal }, key);
-              if (result.session_id !== thread.session_id) throw new Error('变更目录响应不属于发起会话');
+              if (result.session_id !== thread.session_id) throw new Error(t('quickAccess.sources.changesOwnerMismatch'));
               return result.items.map(changeset => ({
                 id: JSON.stringify([owner.gatewayId, owner.workspaceId, thread.session_id, 'changeset', changeset.changeset_id]),
                 label: changeset.label, filterLabel: changeset.label, resourceId: changeset.changeset_id,
-                description: `会话变更 · ${target.name} · ${changeset.summary?.files ?? 0} 个文件`,
+                description: t('quickAccess.sources.changes', target.name, formatNumber(changeset.summary?.files ?? 0)),
                 detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${changeset.changeset_id}`,
                 accept: threadResourceAccept(owner, { resourceTab: 'changes', selectedChangesetId: changeset.changeset_id }),
               } satisfies SourcePick));
@@ -373,14 +383,14 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
             run.signal.throwIfAborted();
             const result = await gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/agent-spec', { signal: run.signal }, key);
             const node = result.node;
-            if (!node || node.resource_shape !== 'file' || !node.operations.includes('read')) throw new Error('AGENTS 来源未公布文件读取能力');
-            return [pick(owner, node.uri, 'AGENTS.md', `工作区根来源 · ${target.name}`)];
+            if (!node || node.resource_shape !== 'file' || !node.operations.includes('read')) throw new Error(t('quickAccess.sources.agentReadUnavailable'));
+            return [pick(owner, node.uri, 'AGENTS.md', t('quickAccess.sources.workspaceRoot', target.name))];
           }).catch(cause => failed(owner, 'AGENTS ', cause));
           const skills = limiter.queue(async () => {
             run.signal.throwIfAborted();
             const result = await gateway.request<SkillSourcesMetadataDTO>('/api/v1/resources/skill-sources', { signal: run.signal }, key);
-            if (result.workspace_id !== owner.workspaceId) throw new Error('Skill 来源响应与工作区归属不匹配');
-            return result.entries.map(entry => pick(owner, entry.display_uri, entry.name, `配置 Skill · ${target.name} · 优先级 ${entry.priority}`,
+            if (result.workspace_id !== owner.workspaceId) throw new Error(t('quickAccess.sources.skillOwnerMismatch'));
+            return result.entries.map(entry => pick(owner, entry.display_uri, entry.name, t('quickAccess.sources.configuredSkill', target.name, formatNumber(entry.priority)),
               entry.available, entry.error_code));
           }).catch(cause => failed(owner, 'Skill ', cause));
           const gatewaySkills = limiter.queue(async () => {
@@ -389,38 +399,38 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               '/api/v1/resources/gateway-skills',
               { signal: run.signal }, key);
             if (result.gateway_id !== owner.gatewayId || result.workspace_id !== owner.workspaceId) {
-              throw new Error('Gateway Skill 来源响应与原生 Gateway／工作区归属不匹配');
+              throw new Error(t('quickAccess.sources.gatewaySkillOwnerMismatch'));
             }
             const entries = result.entries.map(entry => pick(owner, entry.display_uri, entry.name,
-              `${entry.plugin ? `插件 Skill · ${entry.plugin.package_id}/${entry.plugin.plugin_id}@${entry.plugin.package_version}` : 'Gateway Skill'} · ${target.name} · 优先级 ${entry.priority}`,
+              t('quickAccess.sources.skill', entry.plugin ? t('quickAccess.sources.pluginSkill', entry.plugin.package_id, entry.plugin.plugin_id, entry.plugin.package_version) : 'Gateway Skill', target.name, formatNumber(entry.priority)),
               entry.available, entry.error_code));
             return result.available ? entries : [...entries, ...failed(owner, 'Gateway Skill ', new Error(result.error_code ?? 'source-unavailable'))];
           }).catch(cause => failed(owner, 'Gateway Skill ', cause));
           const localSkills = limiter.queue(async () => {
             run.signal.throwIfAborted();
             const result = await gateway.request<LocalSkillsMetadataDTO>('/api/v1/resources/local-skills?limit=1000', { signal: run.signal }, key);
-            if (result.workspace_id !== owner.workspaceId) throw new Error('本地 Skill 来源响应与工作区归属不匹配');
+            if (result.workspace_id !== owner.workspaceId) throw new Error(t('quickAccess.sources.localSkillOwnerMismatch'));
             return result.entries.map(entry => {
-              if (entry.node?.resource_shape !== 'file' || !entry.node.operations.includes('read')) throw new Error('本地 Skill 来源未公布文件读取能力');
-              return pick(owner, entry.node.uri, entry.name, `本地 Skill · ${target.name}`);
+              if (entry.node?.resource_shape !== 'file' || !entry.node.operations.includes('read')) throw new Error(t('quickAccess.sources.localSkillReadUnavailable'));
+              return pick(owner, entry.node.uri, entry.name, t('quickAccess.sources.localSkill', target.name));
             });
           }).catch(cause => failed(owner, '本地 Skill ', cause));
           const runtime = (run.referencesOnly ? [] : ['terminal', 'browser'] as const).map(kind => limiter.queue(async () => {
             run.signal.throwIfAborted();
             const result = await listWorkspaceResources(0, key, kind, run.signal);
             if (result.workspace_id !== owner.workspaceId || result.items.some(item => item.workspace_id !== owner.workspaceId || item.kind !== kind)) {
-              throw new Error('运行资源响应与工作区或资源种类不匹配');
+              throw new Error(t('quickAccess.sources.runtimeOwnerMismatch'));
             }
             return result.items.map(resource => {
               const frozen = structuredClone(resource), label = workspaceResourceName(resource);
               return { id: `${key}/${kind}/${resource.resource_id}`, label, filterLabel: label, resourceId: resource.resource_id,
-                description: `${kind === 'terminal' ? '终端' : '浏览器'} · ${resource.status} · ${target.name}`,
+                description: `${kind === 'terminal' ? t('resources.kind.terminal') : t('resources.kind.browser')} · ${resource.status} · ${target.name}`,
                 detail: `${owner.gatewayId} · ${owner.workspaceId} · ${resource.resource_id} · revision ${resource.owner_revision}`,
                 accept: () => {
                   this.assertAccess(run);
                   this.report(this.commands.executeCommand(resourceFocusCommand, { owner: { ...owner }, resource: frozen }));
                 },
-                buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.gear), tooltip: '更多资源动作' }],
+                buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.gear), tooltip: t('quickAccess.sources.moreActions') }],
                 trigger: () => { this.report(this.chooseRuntimeAction(run, { ...owner }, frozen)); return TriggerAction.CLOSE_PICKER; },
               };
             });
@@ -439,7 +449,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
                   this.assertAccess(run);
                   this.report(this.commands.executeCommand(openWorkspaceMcpServerCommand, commandTarget));
                 },
-                buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.gear), tooltip: '更多 MCP 动作' }],
+                buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.gear), tooltip: t('quickAccess.sources.moreMcpActions') }],
                 trigger: () => {
                   this.assertAccess(run);
                   this.report(this.commands.executeCommand(openWorkspaceMcpServerCommand, { ...commandTarget, showOptions: true }));
@@ -454,11 +464,11 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       await Promise.all([...results, ...gatewayConfigurations.map(collect)]);
     } catch (cause) {
       if (run.signal.aborted || run.invalidated) return;
-      run.picks.push([{ id: 'source-read-failed', label: `来源读取失败：${cause instanceof Error ? cause.message : String(cause)}` }]);
+      run.picks.push([{ id: 'source-read-failed', label: t('quickAccess.sources.failed', cause instanceof Error ? cause.message : String(cause)) }]);
     } finally { limiter.dispose(); }
   }
   private assertAccess(run: SourceRun): void {
-    if (run.invalidated || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新查找来源');
+    if (run.invalidated || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error(t('quickAccess.sources.identityChanged'));
   }
   private async chooseRuntimeAction(run: SourceRun, owner: WorkspaceOwner, resource: WorkspaceResourceDTO): Promise<void> {
     const value = run.picker.value;
@@ -467,10 +477,10 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     try {
       this.assertAccess(run);
       const actions = (Object.keys(resourceActionLabels) as ResourceAction[]).filter(action => resource.available_actions.includes(action));
-      if (!actions.length) throw new Error('资源当前没有可用的管理动作');
+      if (!actions.length) throw new Error(t('quickAccess.sources.noActions'));
       const selected = await this.quick.pick(actions.map(action => ({ action, label: resourceActionLabels[action] })),
-        { title: `资源动作 · ${workspaceResourceName(resource)}`, placeHolder: `${owner.gatewayId} · ${owner.workspaceId} · revision ${resource.owner_revision}` });
-      if (invalidated) throw new Error('访问凭据已改变，请重新选择资源');
+        { title: t('quickAccess.sources.actionsTitle', workspaceResourceName(resource)), placeHolder: `${owner.gatewayId} · ${owner.workspaceId} · revision ${resource.owner_revision}` });
+      if (invalidated) throw new Error(t('quickAccess.sources.credentialsChanged'));
       this.assertAccess(run);
       if (!selected) {
         const providerOptions: ResourceAccessOptions = { searchOwners: run.owners, resourceGroup: run.group, resourceThread: run.thread };
@@ -486,11 +496,11 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
 }
 
 Registry.as<IQuickAccessRegistry>(Extensions.Quickaccess).registerQuickAccessProvider({
-  ctor: ResourceQuickAccess, prefix: ResourceQuickAccess.PREFIX, placeholder: '查找已接入的来源资源',
-  helpEntries: [{ description: '查找来源、终端、浏览器和 MCP', commandId: 'boxteam.quickAccess.resources', commandCenterOrder: 44 }],
+  ctor: ResourceQuickAccess, prefix: ResourceQuickAccess.PREFIX, placeholder: t('quickAccess.sources.registeredPlaceholder'),
+  helpEntries: [{ description: t('quickAccess.sources.help'), commandId: 'boxteam.quickAccess.resources', commandCenterOrder: 44 }],
 });
 registerAction2(class extends Action2 {
-  constructor() { super({ id: 'boxteam.quickAccess.resources', title: { value: '查找来源资源', original: 'Find Source Resources' }, f1: true }); }
+  constructor() { super({ id: 'boxteam.quickAccess.resources', title: { value: t('quickAccess.sources.actionTitle'), original: actionTitles['quickAccess.sources.actionTitle'] }, f1: true }); }
   run(accessor: ServicesAccessor, owner?: WorkspaceOwner): void {
     const providerOptions: SearchInvocationOptions | undefined = owner ? { searchOwner: owner } : undefined;
     accessor.get(IQuickInputService).quickAccess.show(ResourceQuickAccess.PREFIX, { providerOptions });

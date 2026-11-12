@@ -1,3 +1,4 @@
+import '../../../../harness/js/workbench-locale.ts';
 import '../../../../../src/clients/workbench/src/composerActions.js';
 import { Event } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CommandsRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';

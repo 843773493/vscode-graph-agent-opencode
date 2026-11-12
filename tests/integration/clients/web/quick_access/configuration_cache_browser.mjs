@@ -1,7 +1,7 @@
 // Integration：原版 Profile／FolderConfiguration；故障变体只延迟原 IDB provider 的一个实际写入。
 import { createHash } from 'node:crypto';
 import { cp, readFile, writeFile } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
@@ -12,16 +12,16 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 
 async function prepareAssets(original, destination, artifacts) {
   const { default: ts } = await import('../../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js');
-  const metadata = JSON.parse(await readFile(join(original, 'build-meta.json'), 'utf8'));
-  const outputs = Object.entries(metadata.outputs).filter(([, output]) => Object.keys(output.inputs)
-    .some(input => input.endsWith('/indexedDBFileSystemProvider.ts')));
-  check(outputs.length === 1, '正式产物必须只有一个 IDB provider 输出');
-  const input = resolve('src/clients/workbench', outputs[0][0]);
-  const file = relative(original, input);
-  check(file && !file.startsWith('..'), 'IDB provider 输出不在正式资产内');
-  const source = await readFile(input, 'utf8');
   // 正式主包很大；唯一构造器锚点定位原 provider，只完整解析包含它的类。
   const marker = 'this.writeManyThrottler=new';
+  const assets = JSON.parse(await readFile(join(original, 'immutable-assets.json'), 'utf8'));
+  const outputs = [];
+  for (const file of new Set(['out/main.js', ...assets.filter(file => file.startsWith('out/chunks/') && file.endsWith('.js'))])) {
+    const source = await readFile(join(original, file), 'utf8');
+    if (source.includes(marker)) outputs.push({ file, source });
+  }
+  check(outputs.length === 1, '正式产物必须只有一个 IDB provider 输出');
+  const [{ file, source }] = outputs;
   check(source.split(marker).length === 2, '原 IDB provider 构造器锚点必须唯一');
   const markerOffset = source.indexOf(marker), classStart = source.lastIndexOf('=class ', markerOffset) + 1;
   check(classStart > 0, '原 IDB provider class 起点不匹配');

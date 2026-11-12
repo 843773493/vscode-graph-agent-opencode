@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import {
   extractSessionIdFromClipboardText,
@@ -56,7 +57,7 @@ function extractFolderIdFromClipboardText(text: string): string {
     /(?:^|[^A-Za-z0-9_-])(ses_[0-9a-f]{32})(?:$|[^A-Za-z0-9_-])/,
   );
   if (!match || !isSessionId(match[1])) {
-    throw new Error("剪贴板中没有有效的会话文件夹 ID；请先右键目标文件夹并复制 ID");
+    throw new Error(t('navigation.clipboard.folderIdRequired'));
   }
   return match[1];
 }
@@ -126,11 +127,11 @@ export default function SessionResourceOverlays({
               mode: "create",
               nodeId: null,
               parentNodeId: target.nodeId,
-              value: "新建文件夹",
+              value: t('navigation.folder.newName'),
             });
           }}>
             <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">{workspaceFolderMenu.nodeId ? "新建子文件夹" : "新建工作区文件夹"}</span>
+            <span className="agent-sessions-menu-item-label">{workspaceFolderMenu.nodeId ? t('navigation.folder.newChild') : t('navigation.workspace.newFolder')}</span>
           </button>
           {workspaceFolderMenu.nodeId ? (
             <>
@@ -145,17 +146,17 @@ export default function SessionResourceOverlays({
                 });
               }}>
                 <span className="codicon codicon-edit agent-sessions-menu-item-icon" aria-hidden="true" />
-                <span className="agent-sessions-menu-item-label">重命名</span>
+                <span className="agent-sessions-menu-item-label">{t('navigation.rename')}</span>
               </button>
               <button type="button" role="menuitem" onClick={() => {
                 const target = workspaceFolderMenu;
                 setWorkspaceFolderMenu(null);
                 void copyTextToClipboard(target.nodeId as string)
-                  .then(() => onStatusChange(`已复制工作区文件夹 ID: ${target.nodeId}`))
-                  .catch((error) => handleError("复制工作区文件夹 ID 失败", error));
+                  .then(() => onStatusChange(t('navigation.clipboard.workspaceFolderIdCopied', target.nodeId)))
+                  .catch((error) => handleError(t('navigation.clipboard.workspaceFolderIdFailed'), error));
               }}>
                 <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
-                <span className="agent-sessions-menu-item-label">复制文件夹 ID</span>
+                <span className="agent-sessions-menu-item-label">{t('navigation.clipboard.copyFolderId')}</span>
               </button>
               {workspaceFolderMenu.parentNodeId ? (
                 <button type="button" role="menuitem" onClick={() => {
@@ -166,11 +167,11 @@ export default function SessionResourceOverlays({
                     null,
                     "last",
                   )
-                    .then(() => onStatusChange(`已将 ${target.name} 移动到工作区导航根`))
-                    .catch((error) => handleError("移动工作区文件夹失败", error));
+                    .then(() => onStatusChange(t('navigation.workspace.folderMovedToRoot', target.name)))
+                    .catch((error) => handleError(t('navigation.workspace.moveFolderFailed'), error));
                 }}>
                   <span className="codicon codicon-root-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-                  <span className="agent-sessions-menu-item-label">移动到导航根</span>
+                  <span className="agent-sessions-menu-item-label">{t('navigation.workspace.moveToNavigationRoot')}</span>
                 </button>
               ) : null}
               <button type="button" role="menuitem" className="danger agent-sessions-menu-item-separated" onClick={() => {
@@ -183,7 +184,7 @@ export default function SessionResourceOverlays({
                 });
               }}>
                 <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
-                <span className="agent-sessions-menu-item-label">删除文件夹</span>
+                <span className="agent-sessions-menu-item-label">{t('navigation.folder.delete')}</span>
               </button>
             </>
           ) : null}
@@ -208,11 +209,11 @@ export default function SessionResourceOverlays({
             setFolderMenu(null);
             void onCreateSessionInFolder(target.workspaceId, target.folderId)
               .then(() => explorer.loadBranch(target.workspaceId, target.folderId))
-              .then(() => onStatusChange(`已在 ${target.name} 中创建会话`))
-              .catch((error) => handleError("创建会话失败", error));
+              .then(() => onStatusChange(t('navigation.sessions.createdInFolder', target.name)))
+              .catch((error) => handleError(t('navigation.sessions.createFailed'), error));
           }}>
             <span className="codicon codicon-comment-add agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">新建会话</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.sessions.new')}</span>
           </button> : null}
           <button type="button" role="menuitem" onClick={() => {
             const target = folderMenu;
@@ -226,19 +227,19 @@ export default function SessionResourceOverlays({
             });
           }}>
             <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">新建子文件夹</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.folder.newChild')}</span>
           </button>
           {canonicalFolderMenu ? <button type="button" role="menuitem" onClick={() => {
             const target = canonicalFolderMenu;
             setFolderMenu(null);
             void copyTextToClipboard(target.folderId)
-              .then(() => onStatusChange(`已复制会话文件夹 ID: ${target.folderId}`))
-              .catch((error) => handleError("复制文件夹 ID 失败", error));
+              .then(() => onStatusChange(t('navigation.clipboard.sessionFolderIdCopied', target.folderId)))
+              .catch((error) => handleError(t('navigation.clipboard.folderIdFailed'), error));
           }}>
             <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">复制文件夹 ID</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.clipboard.copyFolderId')}</span>
           </button> : null}
-          <button type="button" role="menuitem" title="先复制会话 ID 或会话信息，再在目标文件夹执行此操作" onClick={() => {
+          <button type="button" role="menuitem" title={t('navigation.clipboard.moveSessionHint')} onClick={() => {
             const target = folderMenu;
             setFolderMenu(null);
             void readTextFromClipboard()
@@ -248,14 +249,14 @@ export default function SessionResourceOverlays({
                 sessionId,
                 target.nodeId,
               ).then(() => sessionId))
-              .then((sessionId) => onStatusChange(`会话 ${sessionId} 移入 ${target.name} 的变更已保存本地，等待提交`))
-              .catch((error) => handleError("移动剪贴板会话失败", error));
+              .then((sessionId) => onStatusChange(t('navigation.clipboard.sessionMovePending', sessionId, target.name)))
+              .catch((error) => handleError(t('navigation.clipboard.moveSessionFailed'), error));
           }}>
             <span className="codicon codicon-move agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">将剪贴板会话移动到此处</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.clipboard.moveSessionHere')}</span>
           </button>
           {canonicalFolderMenu ? <>
-          <button type="button" role="menuitem" title="先复制目标文件夹 ID，再在当前文件夹执行此操作" onClick={() => {
+          <button type="button" role="menuitem" title={t('navigation.clipboard.moveFolderHint')} onClick={() => {
             const target = canonicalFolderMenu;
             setFolderMenu(null);
             void readTextFromClipboard()
@@ -266,11 +267,11 @@ export default function SessionResourceOverlays({
                 targetFolderId,
                 target.parentNodeId,
               ))
-              .then(() => onStatusChange(`文件夹 ${target.name} 的移动变更已保存本地，等待提交`))
-              .catch((error) => handleError("移动文件夹失败", error));
+              .then(() => onStatusChange(t('navigation.folder.movePending', target.name)))
+              .catch((error) => handleError(t('navigation.folder.moveFailed'), error));
           }}>
             <span className="codicon codicon-folder-opened agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">移动到剪贴板文件夹</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.clipboard.moveToFolder')}</span>
           </button>
           {canonicalFolderMenu.parentNodeId ? (
             <button type="button" role="menuitem" onClick={() => {
@@ -282,11 +283,11 @@ export default function SessionResourceOverlays({
                 null,
                 target.parentNodeId,
               )
-                .then(() => onStatusChange(`文件夹 ${target.name} 移至工作区根目录的变更已保存本地，等待提交`))
-                .catch((error) => handleError("移动文件夹失败", error));
+                .then(() => onStatusChange(t('navigation.folder.moveToRootPending', target.name)))
+                .catch((error) => handleError(t('navigation.folder.moveFailed'), error));
             }}>
               <span className="codicon codicon-root-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-              <span className="agent-sessions-menu-item-label">移动到工作区根目录</span>
+              <span className="agent-sessions-menu-item-label">{t('navigation.folder.moveToRoot')}</span>
             </button>
           ) : null}
           <button type="button" role="menuitem" onClick={() => {
@@ -301,7 +302,7 @@ export default function SessionResourceOverlays({
             });
           }}>
             <span className="codicon codicon-edit agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">重命名</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.rename')}</span>
           </button>
           <button type="button" role="menuitem" className="danger agent-sessions-menu-item-separated" onClick={() => {
             const target = canonicalFolderMenu;
@@ -315,46 +316,46 @@ export default function SessionResourceOverlays({
             });
           }}>
             <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">删除文件夹及内容</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.folder.deleteContents')}</span>
           </button>
-          </> : <div role="status">文件夹尚在同步，可创建子文件夹或移入已有会话</div>}
+          </> : <div role="status">{t('navigation.folder.syncingHint')}</div>}
         </div>
       </AnchoredOverlay>
     ) : null}
     <WarmActionDialog
       open={resourceDialog !== null}
       title={resourceDialog?.kind === "create_session_folder"
-        ? "新建子文件夹"
+        ? t('navigation.folder.newChild')
         : resourceDialog?.kind === "rename_session_folder"
-          ? "重命名会话文件夹"
+          ? t('navigation.folder.renameSessionFolder')
           : resourceDialog?.kind === "delete_workspace_folder"
-            ? "删除工作区文件夹"
-            : "永久删除会话文件夹"}
+            ? t('navigation.workspace.deleteFolder')
+            : t('navigation.folder.permanentlyDelete')}
       description={resourceDialog?.kind === "delete_workspace_folder"
-        ? `删除虚拟文件夹“${resourceDialog.name}”及其中的子文件夹。内部工作区会移动到上一级，不会删除工作区或会话文件。`
+        ? t('navigation.workspace.deleteFolderDescription', resourceDialog.name)
         : resourceDialog?.kind === "delete_session_folder"
-          ? `永久删除文件夹“${resourceDialog.name}”及其中全部子文件夹和会话。\n该操作会删除消息、检查点、日志、附件、工具结果和运行资源，无法撤销。`
+          ? t('navigation.folder.deleteDescription', resourceDialog.name)
           : resourceDialog?.kind === "create_session_folder"
-            ? `创建位置：${resourceDialog.name}`
+            ? t('navigation.folder.createLocation', resourceDialog.name)
             : undefined}
       inputLabel={resourceDialog && (
         resourceDialog.kind === "create_session_folder"
         || resourceDialog.kind === "rename_session_folder"
-      ) ? "文件夹名称" : undefined}
+      ) ? t('navigation.folder.name') : undefined}
       initialValue={resourceDialog?.kind === "rename_session_folder"
         ? resourceDialog.name
-        : "新建文件夹"}
-      confirmText={resourceDialog?.kind.startsWith("delete_") ? "删除" : "保存"}
+        : t('navigation.folder.newName')}
+      confirmText={resourceDialog?.kind.startsWith("delete_") ? t('navigation.delete') : t('navigation.save')}
       danger={resourceDialog?.kind.startsWith("delete_") ?? false}
       onClose={() => setResourceDialog(null)}
       onConfirm={async (value) => {
         if (!resourceDialog) {
-          throw new Error("会话资源操作目标已失效");
+          throw new Error(t('navigation.catalog.actionTargetExpired'));
         }
         onClearError();
         if (resourceDialog.kind === "delete_workspace_folder") {
           await explorer.deleteWorkspaceFolder(resourceDialog.nodeId);
-          onStatusChange(`已删除工作区文件夹 ${resourceDialog.name}`);
+          onStatusChange(t('navigation.workspace.folderDeleted', resourceDialog.name));
           return;
         }
         if (resourceDialog.kind === "create_session_folder") {
@@ -363,7 +364,7 @@ export default function SessionResourceOverlays({
             value,
             resourceDialog.folderId,
           );
-          onStatusChange(`文件夹 ${value} 已保存本地待同步变更，等待提交`);
+          onStatusChange(t('navigation.folder.createPending', value));
           return;
         }
         if (resourceDialog.kind === "rename_session_folder") {
@@ -373,7 +374,7 @@ export default function SessionResourceOverlays({
             value,
             resourceDialog.parentNodeId,
           );
-          onStatusChange(`文件夹重命名为 ${value} 已保存本地待同步变更，等待提交`);
+          onStatusChange(t('navigation.folder.renamePending', value));
           return;
         }
         const { operationId, completion } = await explorer.deleteSessionFolder(
@@ -382,11 +383,11 @@ export default function SessionResourceOverlays({
           resourceDialog.parentNodeId,
         );
         const { workspaceId, name } = resourceDialog;
-        onStatusChange(`文件夹 ${name} 的删除操作 ${operationId} 已保存本地，等待提交和排空`);
+        onStatusChange(t('navigation.folder.deletePending', name, operationId));
         void completion.then(async (deletedCurrentSession) => {
           await onSessionFolderDeleted(workspaceId, deletedCurrentSession);
-          onStatusChange(`已递归删除文件夹 ${name}`);
-        }).catch((error: unknown) => handleError("递归删除未完成", error));
+          onStatusChange(t('navigation.folder.recursivelyDeleted', name));
+        }).catch((error: unknown) => handleError(t('navigation.folder.recursiveDeleteIncomplete'), error));
       }}
     />
     </>

@@ -40,7 +40,7 @@ import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
 import { captureSearchOwner, createSearchRootLoader, type loadSearchRoots, type SearchInvocationOptions } from './target.js';
 import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourcePick } from './quickAccessPicks.js';
-import type { NameSearchCategory, ContentSearchCategory, SearchCategory } from './quickAccessQuery.js';
+import { searchCategoryLabel, type NameSearchCategory, type ContentSearchCategory, type SearchCategory } from './quickAccessQuery.js';
 import { queryFederatedSearchBranches } from './quickAccessFederation.js';
 import { chooseSearchOwners, searchOwnerKey } from './quickAccessScope.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
@@ -51,14 +51,15 @@ import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/p
 import { WorkspaceSymbolsQuickAccess } from './symbolsQuickAccess.js';
 import { COPY_RESOURCE_URI, supportsResourceReference } from '../resourceActions.js';
 import { sessionActionCommands, type SessionAction } from './sessionActions.js';
+import { t } from '../../../shared/core/i18n/index.js';
 
-const contentChoices: readonly { id: string; label: ContentSearchCategory; description: string }[] = [
-  { id: 'content-category-message', label: '会话消息', description: '用户输入和助手正文 · main / child' },
-  { id: 'content-category-tool', label: '工具结果', description: 'canonical 结果及不可变完整输出 · 不重放工具' },
-  { id: 'content-category-request', label: 'LLM 请求记录', description: 'Session 级原请求／响应 · 精确记录定位' },
-  { id: 'content-category-trace', label: 'Trace', description: '工作区原事件 · 精确 Thread／记录定位' },
-  { id: 'content-category-runtime-logs', label: '运行日志', description: '所选工作区关联的受管进程 · 共享来源会明确标示' },
-  { id: 'content-category-gateway-logs', label: 'Gateway 日志', description: '明确查询所选 Gateway 自有来源 · 不含工作区进程' },
+const contentChoices: readonly { id: string; category: ContentSearchCategory; descriptionKey: string }[] = [
+  { id: 'content-category-message', category: '会话消息', descriptionKey: 'quickAccess.content.messages' },
+  { id: 'content-category-tool', category: '工具结果', descriptionKey: 'quickAccess.content.tools' },
+  { id: 'content-category-request', category: 'LLM 请求记录', descriptionKey: 'quickAccess.content.requests' },
+  { id: 'content-category-trace', category: 'Trace', descriptionKey: 'quickAccess.content.traces' },
+  { id: 'content-category-runtime-logs', category: '运行日志', descriptionKey: 'quickAccess.content.runtimeLogs' },
+  { id: 'content-category-gateway-logs', category: 'Gateway 日志', descriptionKey: 'quickAccess.content.gatewayLogs' },
 ];
 
 interface AccessRun {
@@ -108,7 +109,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     @INotificationService private readonly notifications: INotificationService,
     @IQuickChatService private readonly quickChat: IQuickChatService,
     @IViewsService private readonly views: IViewsService,
-  ) { super(new.target.PREFIX, { canAcceptInBackground: true, shouldSkipTrimPickFilter: new.target.PREFIX === 'content ', noResultsPick: { id: 'empty', label: '没有匹配的资源' } }); }
+  ) { super(new.target.PREFIX, { canAcceptInBackground: true, shouldSkipTrimPickFilter: new.target.PREFIX === 'content ', noResultsPick: { id: 'empty', label: t('quickAccess.noResults') } }); }
 
   get defaultFilterValue() {
     return this.configuration.getValue<boolean>('workbench.quickOpen.preserveInput') ? DefaultQuickAccessFilterValue.LAST : undefined;
@@ -144,18 +145,20 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       access.cancel();
       run.globalPicks = undefined;
       picker.activeItems = picker.selectedItems = [];
-      picker.items = [{ id: 'identity-invalidated', label: 'Gateway 或访问凭据已改变，请重新打开快速访问' }];
+      picker.items = [{ id: 'identity-invalidated', label: t('quickAccess.identityChangedReopen') }];
       picker.busy = false;
     };
     this.watchIdentity(lifetime, invalidate);
-    picker.placeholder = options.placeholder ?? (this.contentMode ? `搜索正文 · ${options.contentCategories?.join('、') || '请选择类别'} · ${run.owners.map(owner => owner.workspaceId).join('、')}` : options.filesOnly ? '查找文件' : `查找${this.category ?? '会话、Thread 和文件'} · ${run.owners.map(owner => owner.workspaceId).join('、') || '请选择工作区'}`);
+    picker.placeholder = options.placeholder ?? (this.contentMode
+      ? t('quickAccess.contentPlaceholder', options.contentCategories?.map(searchCategoryLabel).join(t('quickAccess.listSeparator')) || t('quickAccess.chooseCategories'), run.owners.map(owner => owner.workspaceId).join(t('quickAccess.listSeparator')))
+      : options.filesOnly ? t('quickAccess.findFiles') : t('quickAccess.findPlaceholder', this.category ? searchCategoryLabel(this.category) : t('quickAccess.defaultCategories'), run.owners.map(owner => owner.workspaceId).join(t('quickAccess.listSeparator')) || t('quickAccess.chooseWorkspace')));
     if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !options.sessionSelection && !picker.quickNavigate) {
-      const button = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择搜索范围' };
+      const button = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: t('quickAccess.chooseScope') };
       picker.buttons = [...picker.buttons, button];
       lifetime.add(picker.onDidTriggerButton(selected => { if (selected === button) this.report(this.chooseScope(run)); }));
       lifetime.add(toDisposable(() => { picker.buttons = picker.buttons.filter(item => item !== button); }));
       if (this.contentMode) {
-        const categories = { iconClass: ThemeIcon.asClassName(Codicon.listSelection), tooltip: '选择正文类别' };
+        const categories = { iconClass: ThemeIcon.asClassName(Codicon.listSelection), tooltip: t('quickAccess.chooseContentCategories') };
         picker.buttons = [...picker.buttons, categories];
         lifetime.add(picker.onDidTriggerButton(selected => { if (selected === categories) this.report(this.chooseContentCategories(run)); }));
         lifetime.add(toDisposable(() => { picker.buttons = picker.buttons.filter(item => item !== categories); }));
@@ -186,7 +189,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   protected override _getPicks(original: string, disposables: DisposableStore, token: CancellationToken) {
     const run = this.run!;
-    if (run.invalidated) return [{ id: 'identity-invalidated', label: 'Gateway 或访问凭据已改变，请重新打开快速访问' }];
+    if (run.invalidated) return [{ id: 'identity-invalidated', label: t('quickAccess.identityChangedReopen') }];
     if (run.options.searchRestore?.query !== run.picker.value) run.restoreId = undefined;
     const previousFilter = run.normalized;
     const openLink = !this.contentMode && !this.category && !run.options.filesOnly && !run.options.fileSearchDelegate
@@ -214,7 +217,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       && (!(global.label.includes('@') || global.description?.includes('@')) || symbolSegments.length > 2)) {
       run.symbolMode = true;
       return this.symbolPicks(run, global, symbolSegments.at(-1)!.trim(), disposables, token).then(accepted)
-        .catch(error => token.isCancellationRequested ? [] : [this.failure('文件符号', error)]);
+        .catch(error => token.isCancellationRequested ? [] : [this.failure('文件符号', t('quickAccess.fileSymbols'), error)]);
     }
     // 沿原 AnythingQuickAccess：退出文件符号时恢复原列表和活动项，不重新查询名称。
     if (run.symbolMode) {
@@ -231,10 +234,10 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       ? [pick] : rankResourcePicks([{ ...pick, id: `addition-${index}` }], filter, run.cache));
     const recent = this.contentMode ? [] : this.recent(run, filter);
     const fast = accepted([...extras, ...(!filter && run.options.includeHelp ? this.help(run) : []),
-      ...(recent.length ? [{ type: 'separator' as const, label: '最近打开' }, ...recent] : [])]);
+      ...(recent.length ? [{ type: 'separator' as const, label: t('quickAccess.recent') }, ...recent] : [])]);
     if (!filter && !run.options.filesOnly && !run.options.fileSearchDelegate && !this.contentMode) return fast;
     if (openLink) {
-      return accepted([{ id: 'link:' + filter, label: '打开链接', description: filter,
+      return accepted([{ id: 'link:' + filter, label: t('quickAccess.openLink'), description: filter,
         accept: (mods, event) => {
           this.assertAccess(run);
           const options: ResourceOpenOptions = { fromUserGesture: true, allowContributedOpeners: true,
@@ -251,12 +254,12 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         const picks = result.results.map(item => this.resourcePick(run, item.resource,
           run.options.fileSearchDelegate?.getItemDescription?.(item.resource)));
         this.publish(run, accepted([...fast, ...rankResourcePicks(picks, filter, run.cache)]));
-      }).catch(error => { if (alive()) this.publish(run, [...fast, this.failure('文件', error)]); })
+      }).catch(error => { if (alive()) this.publish(run, [...fast, this.failure('文件', searchCategoryLabel('文件'), error)]); })
         .finally(() => { if (alive()) run.picker.busy = false; });
       return fast;
     }
-    if (this.contentMode && !filter) return [{ id: 'content-query-empty', label: '输入要搜索的正文（区分大小写的字面量）' }];
-    if (!run.owners.length) return [...fast, { id: 'scope-error', label: run.error ?? '请先选择明确工作区' }];
+    if (this.contentMode && !filter) return [{ id: 'content-query-empty', label: t('quickAccess.enterContent') }];
+    if (!run.owners.length) return [...fast, { id: 'scope-error', label: run.error ?? t('quickAccess.requireWorkspace') }];
 
     const categories: readonly SearchCategory[] = this.contentMode ? run.options.contentCategories! : this.category ? [this.category]
       : run.options.filesOnly || run.options.handleAccept ? ['文件'] : ['会话', 'Thread', '文件'];
@@ -280,12 +283,12 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       updateBusy();
       const items = [...fast];
       for (const category of categories) {
-        items.push({ type: 'separator', label: category });
+        items.push({ type: 'separator', label: searchCategoryLabel(category) });
         for (const branch of branches.filter(branch => branch.category === category)) {
           items.push(...branch.picks.filter(pick => !seen.has(pick.id)), branch.status);
         }
       }
-      if (includeSymbols && !run.range) items.push({ type: 'separator', label: '工作区符号' }, ...symbolPicks);
+      if (includeSymbols && !run.range) items.push({ type: 'separator', label: t('quickAccess.workspaceSymbols') }, ...symbolPicks);
       if (run.symbolMode) {
         if (run.globalPicks) run.globalPicks.items = accepted(items);
       } else this.publish(run, accepted(items));
@@ -298,14 +301,15 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     query.publish = () => { updates.cancel(); publish(); };
     const search = () => {
       branches = queryFederatedSearchBranches(run.owners, categories, filter, queryDisposables, queryCancellation.token, run.cache,
-        (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message, item.trace)
-          : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail, item.requestLog)
+        (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message, item.trace, { uri: item.uri, owner })
+          : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.uri, item.title, item.description, item.detail, item.requestLog)
             : item.kind === 'log' ? this.logPick(run, item.location, item.title, item.description, item.detail)
             : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
         current => { branches = current; refresh(); },
         value => { branchesBusy = value; updateBusy(); },
         label => { if (queryAlive() && !run.symbolMode) run.picker.placeholder = run.options.placeholder
-          ?? `${this.contentMode ? '搜索正文 · ' + run.options.contentCategories!.join('、') : '查找' + (run.options.filesOnly ? '文件' : this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation, run.loadRoots);
+          ?? (this.contentMode ? t('quickAccess.contentPlaceholder', run.options.contentCategories!.map(searchCategoryLabel).join(t('quickAccess.listSeparator')), label)
+            : t('quickAccess.findPlaceholder', run.options.filesOnly ? searchCategoryLabel('文件') : this.category ? searchCategoryLabel(this.category) : t('quickAccess.defaultCategories'), label)); }, this.instantiation, run.loadRoots);
       if (includeSymbols) {
         const provider = queryDisposables.add(this.instantiation.createInstance(WorkspaceSymbolsQuickAccess));
         void provider.getScopedSymbolPicks(filter, { searchOwners: run.owners }, queryCancellation.token, (picks, busy) => {
@@ -321,14 +325,15 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (this.contentMode) search();
     else queryDisposables.add(new RunOnceScheduler(search, 200)).schedule();
     updateBusy();
-    return accepted([...fast, { id: 'search-pending', label: '正在查询' }]);
+    return accepted([...fast, { id: 'search-pending', label: t('quickAccess.querying') }]);
   }
 
   private contentCategories(run: AccessRun, filter: string): ResourcePick[] {
-    const categories = contentChoices.map(choice => ({ ...choice, accept: () => this.report(this.chooseContentCategories(run, [choice.label])) }));
+    const categories = contentChoices.map(choice => ({ id: choice.id, label: searchCategoryLabel(choice.category), description: t(choice.descriptionKey),
+      accept: () => this.report(this.chooseContentCategories(run, [choice.category])) }));
     return [
       ...categories.slice(0, 2),
-      { id: 'content-category-file', label: '文件', description: '转到 % 文件内容搜索，保留所选工作区', accept: () => {
+      { id: 'content-category-file', label: searchCategoryLabel('文件'), description: t('quickAccess.content.files'), accept: () => {
         this.assertAccess(run);
         run.picker.hide();
         const providerOptions: AccessOptions = {
@@ -347,13 +352,14 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     this.watchIdentity(lifetime, () => { run.invalidated = true; cancellation.cancel(); });
     let selected: ContentSearchCategory[] | undefined;
     try {
-      const result = await this.quickInput.pick(contentChoices.map(choice => ({ ...choice, picked: initial.includes(choice.label) })), {
-        canPickMany: true, title: '选择正文类别', placeHolder: '确认后仅查询所选类别；文件内容使用 % 独立搜索',
+      const result = await this.quickInput.pick(contentChoices.map(choice => ({ id: choice.id, category: choice.category,
+        label: searchCategoryLabel(choice.category), description: t(choice.descriptionKey), picked: initial.includes(choice.category) })), {
+        canPickMany: true, title: t('quickAccess.chooseContentCategories'), placeHolder: t('quickAccess.contentSelectionHint'),
       }, cancellation.token);
       this.assertAccess(run);
       if (result) {
-        if (!result.length) throw new Error('正文搜索至少需要一个类别');
-        selected = result.map(choice => choice.label);
+        if (!result.length) throw new Error(t('quickAccess.requireContentCategory'));
+        selected = result.map(choice => choice.category);
       }
     } finally {
       lifetime.dispose(); cancellation.dispose();
@@ -367,8 +373,8 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     }
   }
 
-  private failure(category: string, error: unknown): ResourcePick {
-    return { id: `error-${category}`, label: `${category}查询失败：${error instanceof Error ? error.message : String(error)}` };
+  private failure(category: string, label: string, error: unknown): ResourcePick {
+    return { id: `error-${category}`, label: t('quickAccess.categoryQueryFailed', label, error instanceof Error ? error.message : String(error)) };
   }
 
   private async symbolPicks(run: AccessRun, active: ResourcePick, filter: string, disposables: DisposableStore, token: CancellationToken): Promise<Pick<ResourcePick>[]> {
@@ -424,22 +430,26 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private resourcePick(run: AccessRun, resource: URI, description?: string, title = basename(resource), detail?: string,
-    editor?: EditorInput | IResourceEditorInput, message?: TurnMessageMatchDTO, trace?: TraceMatchDTO): ResourcePick {
+    editor?: EditorInput | IResourceEditorInput, message?: TurnMessageMatchDTO, trace?: TraceMatchDTO, reference?: { uri: string; owner: WorkspaceOwner }): ResourcePick {
     const side = run.options.includeOpenToSideButton !== false;
     const dirty = editor && isEditorInput(editor) && editor.isDirty() && !editor.isSaving();
     const copyReference = !run.options.fileSearchDelegate && !run.options.handleAccept && supportsResourceReference(resource);
     const forkThread = copyReference && resource.scheme === 'boxteam-thread' && !message && !trace;
-    const input = editor ?? { resource, label: title, options: message ? { boxteamMessage: message } as ThreadEditorOptions : trace ? { boxteamTrace: trace } as ThreadEditorOptions : undefined };
+    const location: ThreadEditorOptions | undefined = message ? { boxteamMessage: message } : trace ? { boxteamTrace: trace } : undefined;
+    const input = editor ?? { resource, label: title, options: location };
+    const open = (mods: IKeyMods, background: boolean, side = false) => reference
+      ? this.openResource(run, reference.uri, reference.owner, title, mods, background, side, resource.scheme === 'boxteam-file' ? { selection: run.range } : location)
+      : this.open(run, input, mods, background, side);
     return { id: message ? `${resource.toString()}#${message.reference!.item_id}/${message.reference!.start_codepoint}`
       : trace ? `${resource.toString()}#trace/${trace.reference!.event_id}/${trace.reference!.start_codepoint}` : resource.toString(), resource, editor, label: title, description, detail,
-      ariaLabel: `${title} ${description ?? ''}${dirty ? '，未保存' : ''}`,
+      ariaLabel: `${title} ${description ?? ''}${dirty ? t('quickAccess.unsavedSuffix') : ''}`,
       iconClass: ThemeIcon.asClassName(resource.scheme === 'boxteam-thread' ? Codicon.commentDiscussion : Codicon.file),
-      buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }] : []),
-        ...(editor ? [{ iconClass: ThemeIcon.asClassName(dirty ? Codicon.circleFilled : Codicon.close), tooltip: '从最近打开中移除', alwaysVisible: !!dirty }] : []),
-        ...(copyReference ? [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }] : []),
-        ...(forkThread ? [{ iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: '创建上下文分支' }] : [])],
+      buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: t('quickAccess.openToSide') }] : []),
+        ...(editor ? [{ iconClass: ThemeIcon.asClassName(dirty ? Codicon.circleFilled : Codicon.close), tooltip: t('quickAccess.removeRecent'), alwaysVisible: !!dirty }] : []),
+        ...(copyReference ? [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('quickAccess.copyUri') }] : []),
+        ...(forkThread ? [{ iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: t('quickAccess.forkContext') }] : [])],
       trigger: (index, mods) => {
-        if (side && index === 0) { this.report(this.open(run, input, mods, false, true)); return TriggerAction.CLOSE_PICKER; }
+        if (side && index === 0) { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; }
         if (editor && index === Number(side)) { this.history.removeFromHistory(editor); return TriggerAction.REMOVE_ITEM; }
         if (copyReference && index === Number(side) + Number(!!editor)) {
           this.assertAccess(run);
@@ -455,11 +465,11 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         }
         return TriggerAction.NO_ACTION;
       },
-      accept: (mods, event) => this.report(this.open(run, input, mods, event.inBackground)),
+      accept: (mods, event) => this.report(open(mods, event.inBackground)),
     };
   }
 
-  private sessionPick(run: AccessRun, owner: WorkspaceOwner, sessionId: string, title: string, description: string, detail: string, requestLog?: LLMRequestLogMatchDTO): ResourcePick {
+  private sessionPick(run: AccessRun, owner: WorkspaceOwner, sessionId: string, uri: string, title: string, description: string, detail: string, requestLog?: LLMRequestLogMatchDTO): ResourcePick {
     const target = { owner: { ...owner }, sessionId };
     const selection = run.options.sessionSelection;
     const side = !selection && run.options.includeOpenToSideButton !== false;
@@ -468,19 +478,14 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       this.assertAccess(run);
       this.report(this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(sessionActionCommands[kind], target)));
     };
-    const open = async (mods: IKeyMods, background: boolean, side = false) => {
-      this.assertAccess(run);
-      const group = this.targetGroup(run, mods, side);
-      const workspaceKey = await gateway.resolveWorkspace(owner);
-      const main = await gateway.mainThread(workspaceKey, sessionId);
-      await this.open(run, new ThreadInput({ ...owner, workspaceKey, sessionId, threadId: main.thread_id, title }), mods, background, false, group, undefined, requestLog);
-    };
+    const open = (mods: IKeyMods, background: boolean, side = false) => this.openResource(run, uri, owner, title, mods, background, side,
+      requestLog ? { boxteamRequestLog: requestLog } : undefined);
     return { id: requestLog ? `request:${searchOwnerKey(owner)}/${sessionId}/${requestLog.reference!.file_name}/${requestLog.reference!.start_codepoint}` : `session:${searchOwnerKey(owner)}/${sessionId}`, sessionTarget: target, label: title, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.commentDiscussion),
-      buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }] : []),
-        ...(manage ? [{ iconClass: ThemeIcon.asClassName(Codicon.edit), tooltip: '重命名会话' },
-          { iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: '创建上下文分支' },
-          { iconClass: ThemeIcon.asClassName(Codicon.trash), tooltip: '永久删除会话' }] : [])],
+      buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: t('quickAccess.openToSide') }] : []),
+        ...(manage ? [{ iconClass: ThemeIcon.asClassName(Codicon.edit), tooltip: t('quickAccess.renameSession') },
+          { iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: t('quickAccess.forkContext') },
+          { iconClass: ThemeIcon.asClassName(Codicon.trash), tooltip: t('quickAccess.deleteSession') }] : [])],
       trigger: (index, mods) => {
         if (side && index === 0) { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; }
         if (manage) { action((['rename', 'fork', 'delete'] as const)[index - Number(side)]); return TriggerAction.CLOSE_PICKER; }
@@ -498,7 +503,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         const target = await gateway.resolveWorkspaceTarget(owner);
         this.assertAccess(run);
         const view = await this.views.openView<SessionNavigation>('boxteam.sessions', !event.inBackground);
-        if (!view) throw new Error('会话导航视图不可用');
+        if (!view) throw new Error(t('quickAccess.sessionNavigationUnavailable'));
         await view.revealFolder(target, nodeId, !event.inBackground);
       })()) };
   }
@@ -511,7 +516,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         this.assertAccess(run);
         const view = await this.views.openView<SessionNavigation>('boxteam.sessions', !event.inBackground);
         this.assertAccess(run);
-        if (!view) throw new Error('Gateway 诊断视图不可用');
+        if (!view) throw new Error(t('quickAccess.gatewayDiagnosticsUnavailable'));
         view.revealDiagnosticLog(location);
       })()) };
   }
@@ -532,7 +537,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   private targetGroup(run: AccessRun, mods: IKeyMods, side = false): number {
     const group = this.groups.getGroup(run.group);
-    if (!group) throw new Error('发起快速访问的编辑器组已关闭');
+    if (!group) throw new Error(t('quickAccess.invokingGroupClosed'));
     const pinned = this.openPinned();
     if (!(side || mods.alt || pinned && mods.ctrlCmd)) return group.id;
     const direction = this.configuration.getValue<string>('workbench.editor.openSideBySideDirection') === 'down' ? GroupDirection.DOWN : GroupDirection.RIGHT;
@@ -554,14 +559,23 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private assertAccess(run: AccessRun): void {
-    if (run.invalidated) throw new Error('Gateway 或访问凭据已改变，请重新选择目标');
+    if (run.invalidated) throw new Error(t('quickAccess.identityChangedSelect'));
   }
 
-  private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, group = this.targetGroup(run, mods, side), selection?: IRange, requestLog?: LLMRequestLogMatchDTO): Promise<void> {
+  private async openResource(run: AccessRun, uri: string, owner: WorkspaceOwner, title: string, mods: IKeyMods, background: boolean, side: boolean, location?: ResourceOpenOptions['editorOptions']): Promise<void> {
+    this.assertAccess(run);
+    // 搜索只交原 owner 的公开地址与独立位置；解析、路由及精确 Thread 归原 Opener。
+    const options: ResourceOpenOptions = { fromUserGesture: true, boxteamResourceOwner: owner, boxteamResourceLabel: title, boxteamTargetGroup: run.group,
+      openToSide: side || mods.alt || this.openPinned() && mods.ctrlCmd,
+      editorOptions: { ...location, pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background } };
+    await this.opener.open(uri, options);
+  }
+
+  private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, group = this.targetGroup(run, mods, side), selection?: IRange): Promise<void> {
     this.assertAccess(run);
     const options = { pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background,
       selection: editor.resource?.scheme === 'boxteam-thread' ? undefined : selection ?? run.range };
-    if (isEditorInput(editor)) await this.editors.openEditor(editor, requestLog ? { ...options, boxteamRequestLog: requestLog } as ThreadEditorOptions : options, group);
+    if (isEditorInput(editor)) await this.editors.openEditor(editor, options, group);
     else await this.editors.openEditor({ ...editor, options: { ...editor.options, ...options } }, group);
   }
 
@@ -578,7 +592,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
             includeHelp: provider.prefix ? run.options.includeHelp : false };
           this.quickInput.quickAccess.show(provider.prefix, { preserveValue: true, providerOptions });
         } }));
-    if (this.quickChat.enabled) picks.push({ id: 'quick-chat', label: '打开快速聊天', order: 30,
+    if (this.quickChat.enabled) picks.push({ id: 'quick-chat', label: t('quickAccess.openQuickChat'), order: 30,
       keybinding: this.keybindings.lookupKeybinding(ASK_QUICK_QUESTION_ACTION_ID), accept: () => this.quickChat.toggle() });
     return picks.sort((left, right) => left.order - right.order);
   }
@@ -587,5 +601,5 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 }
 
 export function selectDefaultSearchDescriptor(descriptor: IQuickAccessProviderDescriptor): IQuickAccessProviderDescriptor {
-  return { ...descriptor, ctor: WorkspaceQuickAccess, placeholder: '查找会话、Thread 和文件，或粘贴链接' };
+  return { ...descriptor, ctor: WorkspaceQuickAccess, placeholder: t('quickAccess.defaultPlaceholder') };
 }

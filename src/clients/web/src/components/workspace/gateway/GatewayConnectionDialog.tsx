@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { OverlayRootContext } from "../../overlays/OverlayRootContext";
 import {
   createGatewayDeviceConnection,
@@ -62,7 +63,7 @@ export function buildSelectedSshConnectionRequest(
       remote_gateway_port: 8014,
     };
   }
-  throw new Error(`远程连接 ${connection.label} 缺少可用的 SSH 配置`);
+  throw new Error(t("gateway.connection.missingSshConfiguration", connection.label));
 }
 
 export function buildManualSshConnectionRequest(
@@ -71,16 +72,16 @@ export function buildManualSshConnectionRequest(
   const host = form.host.trim();
   const username = form.username.trim();
   const privateKeyPath = form.privateKeyPath.trim();
-  if (!host) throw new Error("SSH 主机不能为空");
-  if (!username) throw new Error("SSH 用户名不能为空");
-  if (!privateKeyPath) throw new Error("SSH 私钥路径不能为空");
+  if (!host) throw new Error(t("gateway.connection.hostRequired"));
+  if (!username) throw new Error(t("gateway.connection.usernameRequired"));
+  if (!privateKeyPath) throw new Error(t("gateway.connection.privateKeyPathRequired"));
   return {
     name: form.name.trim() || null,
     host,
-    port: parsePortLiteral(form.port, "SSH 端口"),
+    port: parsePortLiteral(form.port, t("gateway.connection.sshPort")),
     username,
     private_key_path: privateKeyPath,
-    remote_gateway_port: parsePortLiteral(form.remoteGatewayPort, "远程 Gateway 端口"),
+    remote_gateway_port: parsePortLiteral(form.remoteGatewayPort, t("gateway.connection.remoteGatewayPort")),
   };
 }
 
@@ -112,7 +113,7 @@ export default function GatewayConnectionDialog({
   const [connections, setConnections] = useState<SshConnectionOption[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [manualForm, setManualForm] = useState<ManualSshForm>(INITIAL_MANUAL_SSH_FORM);
-  const [deviceName, setDeviceName] = useState("我的手机");
+  const [deviceName, setDeviceName] = useState(() => t("gateway.connection.defaultDeviceName"));
   const [gatewayUrl, setGatewayUrl] = useState("");
   const [accessAddresses, setAccessAddresses] = useState<GatewayDeviceAccessAddress[]>([]);
   const [manualAddress, setManualAddress] = useState(false);
@@ -135,7 +136,7 @@ export default function GatewayConnectionDialog({
       setConnections([]);
       setSelectedConnectionId(null);
       setError(
-        `读取 ~/.ssh/config 失败：${errorMessage(loadError)}`,
+        t("gateway.connection.readSshConfigFailed", errorMessage(loadError)),
       );
     } finally {
       setLoading(false);
@@ -167,7 +168,7 @@ export default function GatewayConnectionDialog({
     setPage(initialPage);
     setSelectedConnectionId(null);
     setManualForm(INITIAL_MANUAL_SSH_FORM);
-    setDeviceName("我的手机");
+    setDeviceName(t("gateway.connection.defaultDeviceName"));
     setGatewayUrl("");
     setAccessAddresses([]);
     setManualAddress(false);
@@ -201,7 +202,7 @@ export default function GatewayConnectionDialog({
       (connection) => connection.connection_id === selectedConnectionId,
     );
     if (!selected) {
-      setError("请选择一个 SSH 连接");
+      setError(t("gateway.connection.selectSshConnection"));
       return;
     }
     setSubmitting(true);
@@ -239,7 +240,7 @@ export default function GatewayConnectionDialog({
   const createDevice = async () => {
     const normalizedName = deviceName.trim();
     if (!normalizedName) {
-      setError("请输入设备名称");
+      setError(t("gateway.connection.deviceNameRequired"));
       return;
     }
     setSubmitting(true);
@@ -286,19 +287,19 @@ export default function GatewayConnectionDialog({
   );
 
   const title = page === "ssh-select"
-    ? "添加 SSH 连接"
+    ? t("gateway.connection.addSshTitle")
     : page === "ssh-manual"
-      ? "手动添加 SSH 连接"
+      ? t("gateway.connection.manualSshTitle")
       : page === "external-device"
-        ? "连接外部设备"
-        : "设备连接信息";
+        ? t("gateway.connection.externalDeviceTitle")
+        : t("gateway.connection.deviceInfoTitle");
 
   return createPortal(
     <div className="gateway-connection-overlay" role="presentation">
       <button
         type="button"
         className="gateway-connection-backdrop"
-        aria-label={`关闭${title}`}
+        aria-label={t("gateway.connection.closeDialog", title)}
         onClick={onClose}
       />
       <section
@@ -315,7 +316,7 @@ export default function GatewayConnectionDialog({
       >
         <header>
           {page === "ssh-manual" || page === "device-info" ? (
-            <button type="button" aria-label="返回" onClick={closeOrBack} disabled={submitting}>
+            <button type="button" aria-label={t("gateway.connection.back")} onClick={closeOrBack} disabled={submitting}>
               <span className="codicon codicon-arrow-left" aria-hidden="true" />
             </button>
           ) : (
@@ -325,15 +326,15 @@ export default function GatewayConnectionDialog({
             <h2 id="gateway-connection-dialog-title">{title}</h2>
             <p>
               {page === "ssh-select"
-                ? "自动读取当前用户 ~/.ssh/config，也可以手动填写连接信息。"
+                ? t("gateway.connection.sshSelectDescription")
                 : page === "ssh-manual"
-                  ? "填写一台运行 BoxTeam Gateway 的 SSH 主机。"
+                  ? t("gateway.connection.sshManualDescription")
                   : page === "external-device"
-                    ? "生成一份 30 天有效的设备凭据，并发送到手机或其他设备。"
-                    : "凭据只显示这一次，请复制后发送到目标设备。"}
+                    ? t("gateway.connection.externalDeviceDescription")
+                    : t("gateway.connection.deviceInfoDescription")}
             </p>
           </div>
-          <button type="button" aria-label="关闭" onClick={onClose} disabled={submitting}>
+          <button type="button" aria-label={t("gateway.connection.close")} onClick={onClose} disabled={submitting}>
             <span className="codicon codicon-close" aria-hidden="true" />
           </button>
         </header>
@@ -343,18 +344,18 @@ export default function GatewayConnectionDialog({
         <div className="gateway-connection-dialog-content" aria-busy={loading || submitting}>
           {page === "ssh-select" ? (
             <div className="gateway-ssh-picker">
-              <div className="gateway-ssh-host-list" role="radiogroup" aria-label="SSH 连接">
+              <div className="gateway-ssh-host-list" role="radiogroup" aria-label={t("gateway.connection.sshConnections")}>
                 {loading ? (
                   <div className="gateway-connection-state">
                     <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
-                    正在读取 ~/.ssh/config…
+                    {t("gateway.connection.readingSshConfig")}
                   </div>
                 ) : null}
                 {!loading && connections.length === 0 ? (
                   <div className="gateway-connection-state">
                     <span className="codicon codicon-remote" aria-hidden="true" />
-                    <strong>没有发现 SSH 主机</strong>
-                    <small>请检查 ~/.ssh/config，或使用手动添加。</small>
+                    <strong>{t("gateway.connection.noSshHosts")}</strong>
+                    <small>{t("gateway.connection.checkSshConfigOrAddManually")}</small>
                   </div>
                 ) : null}
                 {!loading && connections.map((connection) => {
@@ -386,11 +387,11 @@ export default function GatewayConnectionDialog({
                 <div>
                   <button type="button" disabled={loading || submitting} onClick={() => void loadSshConnections()}>
                     <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
-                    刷新
+                    {t("gateway.connection.refresh")}
                   </button>
                   <button type="button" disabled={submitting} onClick={() => { setPage("ssh-manual"); setError(null); }}>
                     <span className="codicon codicon-edit" aria-hidden="true" />
-                    手动添加
+                    {t("gateway.connection.addManually")}
                   </button>
                 </div>
                 <button
@@ -399,7 +400,7 @@ export default function GatewayConnectionDialog({
                   disabled={loading || submitting || selectedConnectionId === null}
                   onClick={() => void addSelectedConnection()}
                 >
-                  {submitting ? "添加中…" : "添加"}
+                  {submitting ? t("gateway.connection.adding") : t("gateway.connection.add")}
                 </button>
               </footer>
             </div>
@@ -407,15 +408,15 @@ export default function GatewayConnectionDialog({
 
           {page === "ssh-manual" ? (
             <form className="gateway-manual-ssh-form" onSubmit={(event) => { event.preventDefault(); void addManualConnection(); }}>
-              <label className="wide"><span>连接名称</span><input autoFocus value={manualForm.name} onChange={(event) => updateManualForm("name", event.target.value)} placeholder="可留空" disabled={submitting} /></label>
-              <label className="wide"><span>SSH 主机</span><input value={manualForm.host} onChange={(event) => updateManualForm("host", event.target.value)} placeholder="例如 192.168.1.20" disabled={submitting} /></label>
-              <label><span>SSH 端口</span><input value={manualForm.port} onChange={(event) => updateManualForm("port", event.target.value)} inputMode="numeric" disabled={submitting} /></label>
-              <label><span>用户名</span><input value={manualForm.username} onChange={(event) => updateManualForm("username", event.target.value)} autoComplete="username" disabled={submitting} /></label>
-              <label className="wide"><span>私钥路径</span><input value={manualForm.privateKeyPath} onChange={(event) => updateManualForm("privateKeyPath", event.target.value)} placeholder="~/.ssh/id_ed25519" disabled={submitting} /></label>
-              <label className="wide"><span>远程 Gateway 端口</span><input value={manualForm.remoteGatewayPort} onChange={(event) => updateManualForm("remoteGatewayPort", event.target.value)} inputMode="numeric" disabled={submitting} /></label>
+              <label className="wide"><span>{t("gateway.connection.connectionName")}</span><input autoFocus value={manualForm.name} onChange={(event) => updateManualForm("name", event.target.value)} placeholder={t("gateway.connection.optional")} disabled={submitting} /></label>
+              <label className="wide"><span>{t("gateway.connection.sshHost")}</span><input value={manualForm.host} onChange={(event) => updateManualForm("host", event.target.value)} placeholder={t("gateway.connection.hostExample")} disabled={submitting} /></label>
+              <label><span>{t("gateway.connection.sshPort")}</span><input value={manualForm.port} onChange={(event) => updateManualForm("port", event.target.value)} inputMode="numeric" disabled={submitting} /></label>
+              <label><span>{t("gateway.connection.username")}</span><input value={manualForm.username} onChange={(event) => updateManualForm("username", event.target.value)} autoComplete="username" disabled={submitting} /></label>
+              <label className="wide"><span>{t("gateway.connection.privateKeyPath")}</span><input value={manualForm.privateKeyPath} onChange={(event) => updateManualForm("privateKeyPath", event.target.value)} placeholder="~/.ssh/id_ed25519" disabled={submitting} /></label>
+              <label className="wide"><span>{t("gateway.connection.remoteGatewayPort")}</span><input value={manualForm.remoteGatewayPort} onChange={(event) => updateManualForm("remoteGatewayPort", event.target.value)} inputMode="numeric" disabled={submitting} /></label>
               <footer>
-                <button type="button" onClick={closeOrBack} disabled={submitting}>取消</button>
-                <button type="submit" className="primary" disabled={submitting}>{submitting ? "添加中…" : "添加"}</button>
+                <button type="button" onClick={closeOrBack} disabled={submitting}>{t("gateway.connection.cancel")}</button>
+                <button type="submit" className="primary" disabled={submitting}>{submitting ? t("gateway.connection.adding") : t("gateway.connection.add")}</button>
               </footer>
             </form>
           ) : null}
@@ -423,11 +424,11 @@ export default function GatewayConnectionDialog({
           {page === "external-device" ? (
             <div className="gateway-device-form">
               <label>
-                <span>设备名称</span>
+                <span>{t("gateway.connection.deviceName")}</span>
                 <input autoFocus value={deviceName} onChange={(event) => setDeviceName(event.target.value)} disabled={submitting} />
               </label>
               <fieldset className="gateway-device-addresses">
-                <legend>设备访问地址</legend>
+                <legend>{t("gateway.connection.deviceAccessAddresses")}</legend>
                 {accessAddresses.map((address) => (
                   <button
                     key={address.url}
@@ -437,32 +438,32 @@ export default function GatewayConnectionDialog({
                     disabled={submitting}
                   >
                     <span className={`codicon codicon-${address.is_loopback ? "device-desktop" : "radio-tower"}`} aria-hidden="true" />
-                    <span><strong>{address.label}</strong><small>{address.url}{address.is_loopback ? " · 仅本机可用" : " · 请确保设备与电脑网络互通"}</small></span>
+                    <span><strong>{address.label}</strong><small>{address.url}{address.is_loopback ? ` · ${t("gateway.connection.localOnly")}` : ` · ${t("gateway.connection.ensureNetworkReachable")}`}</small></span>
                     <span className={`codicon codicon-${!manualAddress && gatewayUrl === address.url ? "pass-filled" : "circle-large-outline"}`} aria-hidden="true" />
                   </button>
                 ))}
                 <button type="button" className={manualAddress ? "selected" : undefined} onClick={() => setManualAddress(true)} disabled={submitting}>
                   <span className="codicon codicon-edit" aria-hidden="true" />
-                  <span><strong>手动地址</strong><small>仅在以上候选地址无法访问时使用</small></span>
+                  <span><strong>{t("gateway.connection.manualAddress")}</strong><small>{t("gateway.connection.manualAddressHint")}</small></span>
                   <span className={`codicon codicon-${manualAddress ? "pass-filled" : "circle-large-outline"}`} aria-hidden="true" />
                 </button>
               </fieldset>
               {manualAddress ? (
-                <label><span>手动输入访问地址</span><input value={gatewayUrl} onChange={(event) => setGatewayUrl(event.target.value)} disabled={submitting} placeholder="例如 http://192.168.1.20:8011" /></label>
+                <label><span>{t("gateway.connection.enterAccessAddress")}</span><input value={gatewayUrl} onChange={(event) => setGatewayUrl(event.target.value)} disabled={submitting} placeholder={t("gateway.connection.addressExample")} /></label>
               ) : null}
               {isLoopbackAddress ? (
-                <div className="gateway-device-address-warning" role="status"><span className="codicon codicon-warning" aria-hidden="true" />外部设备无法访问 localhost。请选择局域网地址或手动输入可访问地址。</div>
+                <div className="gateway-device-address-warning" role="status"><span className="codicon codicon-warning" aria-hidden="true" />{t("gateway.connection.loopbackWarning")}</div>
               ) : null}
-              <div className="gateway-device-permission-note"><span className="codicon codicon-shield" aria-hidden="true" /><p><strong>访问范围</strong><small>该设备可读取本 Gateway 直接管理的工作区并通过 Gateway 转发请求；可随时在连接列表撤销。</small></p></div>
-              <button type="button" className="primary" disabled={loading || submitting || !deviceName.trim() || !gatewayUrl.trim()} onClick={() => void createDevice()}>{submitting ? "正在生成…" : "生成连接信息"}</button>
+              <div className="gateway-device-permission-note"><span className="codicon codicon-shield" aria-hidden="true" /><p><strong>{t("gateway.connection.accessScope")}</strong><small>{t("gateway.connection.accessScopeDetail")}</small></p></div>
+              <button type="button" className="primary" disabled={loading || submitting || !deviceName.trim() || !gatewayUrl.trim()} onClick={() => void createDevice()}>{submitting ? t("gateway.connection.generating") : t("gateway.connection.generateConnectionInfo")}</button>
             </div>
           ) : null}
 
           {page === "device-info" && createdDevice ? (
             <div className="gateway-device-info">
-              <div className="gateway-device-created"><span className="codicon codicon-pass-filled" aria-hidden="true" /><p><strong>{createdDevice.connection.device_name} 已授权</strong><small>凭据有效至 {formatLocalDateTime(createdDevice.connection.credential_expires_at)}</small></p></div>
+              <div className="gateway-device-created"><span className="codicon codicon-pass-filled" aria-hidden="true" /><p><strong>{t("gateway.connection.deviceAuthorized", createdDevice.connection.device_name)}</strong><small>{t("gateway.connection.credentialExpiresAt", formatLocalDateTime(createdDevice.connection.credential_expires_at))}</small></p></div>
               <pre>{connectionInfoText(createdDevice)}</pre>
-              <button type="button" className="primary" onClick={() => void copyConnectionInfo()}><span className={`codicon codicon-${copied ? "pass" : "copy"}`} aria-hidden="true" />{copied ? "已复制" : "复制连接信息"}</button>
+              <button type="button" className="primary" onClick={() => void copyConnectionInfo()}><span className={`codicon codicon-${copied ? "pass" : "copy"}`} aria-hidden="true" />{copied ? t("gateway.connection.copied") : t("gateway.connection.copyConnectionInfo")}</button>
             </div>
           ) : null}
         </div>

@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import { MessageSearchLocationContext } from "../messageSearchLocation";
 import type { ConversationView } from "../../../types/frontend";
@@ -22,8 +23,8 @@ export function ForkItemButtons({ item, onForkItem }: {
   return itemIds.map((itemId, index) => (
     <button key={itemId} type="button" className="chat-user-action-menu-item"
       data-fork-item-id={itemId}
-      title={itemIds.length > 1 ? `从第 ${index + 1} 条消息创建分支` : "从此消息创建分支"}
-      aria-label={itemIds.length > 1 ? `从第 ${index + 1} 条消息创建分支` : "从此消息创建分支"}
+      title={itemIds.length > 1 ? t("chat.activity.forkNumber", index + 1) : t("chat.turn.fork")}
+      aria-label={itemIds.length > 1 ? t("chat.activity.forkNumber", index + 1) : t("chat.turn.fork")}
       onClick={() => onForkItem(itemId)}>
       <span className="codicon codicon-git-pull-request" aria-hidden="true" />
     </button>
@@ -31,26 +32,26 @@ export function ForkItemButtons({ item, onForkItem }: {
 }
 
 export function formatActivityDuration(durationMs: number | null | undefined): string {
-  if (durationMs === null || durationMs === undefined) return "耗时 —";
-  if (durationMs < 1000) return `耗时 ${durationMs}ms`;
-  return `耗时 ${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)}s`;
+  if (durationMs === null || durationMs === undefined) return t("chat.activity.durationUnknown");
+  if (durationMs < 1000) return t("chat.activity.ms", durationMs);
+  return t("chat.activity.seconds", (durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1));
 }
 
 export function activityStatsPreview(
   stats: ConversationView["activityStats"],
 ): string {
-  if (!stats) return "耗时 — · Item 计数同步中";
+  if (!stats) return t("chat.activity.statsPending");
   const values = [formatActivityDuration(stats.duration_ms)];
-  values.push(`Item ${stats.item_count} 项`);
+  values.push(t("chat.activity.items", stats.item_count));
   return values.join(" · ");
 }
 
 export function workItemStatusPreview(item: ToolTimelineItem): string {
-  if (item.active) return `正在运行 ${item.toolName}`;
-  if (item.incomplete) return `${item.toolName} 调用未完成`;
-  if (item.outcomeUnknown) return `${item.toolName} 结果未知`;
-  if (item.failed) return `${item.toolName} 执行失败`;
-  return `已运行 ${item.toolName}`;
+  if (item.active) return t("chat.tool.running", item.toolName);
+  if (item.incomplete) return t("chat.tool.incomplete", item.toolName);
+  if (item.outcomeUnknown) return t("chat.tool.unknown", item.toolName);
+  if (item.failed) return t("chat.tool.failed", item.toolName);
+  return t("chat.tool.completed", item.toolName);
 }
 
 export function activityPreviewForItems(
@@ -103,7 +104,7 @@ export function ConversationWorkSummary({
       <div
         className="chat-thinking-toggle is-static"
         role="status"
-        aria-label={`Turn 中间消息：${preview}`}
+        aria-label={t("chat.activity.preview", preview)}
       >
         <span className="codicon codicon-check" aria-hidden="true" />
         <span className="chat-thinking-preview">{preview}</span>
@@ -124,7 +125,7 @@ export function ActivityDetails({
   onForkItem?: (itemId: string) => void;
 }): React.ReactNode {
   if (items.length === 0) {
-    return <div className="chat-thinking-empty">没有可展开的中间消息</div>;
+    return <div className="chat-thinking-empty">{t("chat.activity.empty")}</div>;
   }
   const hasRedactedThinking = items.some(
     (item) => item.kind === "aggregated_text" && item.redacted === true,
@@ -134,7 +135,7 @@ export function ActivityDetails({
       {hasRedactedThinking ? (
         <div className="chat-thinking-notice" role="status">
           <span className="codicon codicon-lock" aria-hidden="true" />
-          <span>部分思考内容已隐藏</span>
+          <span>{t("chat.thinking.redacted")}</span>
         </div>
       ) : null}
       {items.map((item) => <div key={item.id} className="chat-activity-item">{item.kind === "aggregated_tool" ? (
@@ -230,7 +231,7 @@ export function TurnActivitySummary({
           <div
             className="chat-thinking-toggle is-static"
             role="status"
-            aria-label={`Turn 中间消息：${displayPreview}`}
+            aria-label={t("chat.activity.preview", displayPreview)}
           >
             <span
               className={`codicon ${boundaryStatus?.icon ?? "codicon-check"}`}
@@ -246,7 +247,7 @@ export function TurnActivitySummary({
             type="button"
             className="chat-thinking-toggle"
             aria-expanded={open}
-            aria-label={`${open ? "收起" : "展开"} Turn 中间消息：${displayPreview}`}
+            aria-label={t(open ? "chat.thinking.collapse" : "chat.thinking.expand", displayPreview)}
             onClick={() => void toggle()}
           >
             <span
@@ -256,7 +257,7 @@ export function TurnActivitySummary({
             <span className="chat-thinking-preview">
               {displayPreview}
             </span>
-            {loading ? <span className="chat-working-detail" role="status">正在加载中间消息…</span> : null}
+            {loading ? <span className="chat-working-detail" role="status">{t("chat.activity.loading")}</span> : null}
             {boundaryStatus?.detail ? (
               <span className="chat-working-detail">{boundaryStatus.detail}</span>
             ) : null}

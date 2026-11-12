@@ -206,7 +206,7 @@ describe("EventQueuePanel 超大 payload 兜底", () => {
     );
 
     expect(html).toContain(
-      `${"X".repeat(LARGE_STRING_DISPLAY_LIMIT)}…（已截断展示，原文 ${totalLength} 字符）`,
+      `${"X".repeat(LARGE_STRING_DISPLAY_LIMIT)}…（已截断展示，原文 ${new Intl.NumberFormat('zh-CN').format(totalLength)} 字符）`,
     );
     expect(html).not.toContain(firstText);
     expect(html).not.toContain("<pre>");

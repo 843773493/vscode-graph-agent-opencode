@@ -1,16 +1,28 @@
+import { t } from "../../../shared/core/i18n/index.js";
 import type { ChildThreadStatus, InternalExecutionHistory, TurnHistoryPage } from "../types/protocol";
 import { compareInternalResponseParts } from "./timeline/responseParts";
 
 const STATUS_LABELS: Record<ChildThreadStatus, string> = {
-  idle: "等待新消息",
-  pending: "等待启动",
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败",
+  idle: t("child.idle"),
+  pending: t("child.pending"),
+  running: t("child.running"),
+  completed: t("child.completed"),
+  failed: t("child.failed"),
 };
 
 export function childThreadStatusLabel(status: ChildThreadStatus): string {
   return STATUS_LABELS[status];
+}
+
+/** 执行和回合状态仅在展示时翻译，未识别的新状态保留原值。 */
+export function childExecutionStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    completed: t('child.status.completed'), completed_empty: t('child.status.completed_empty'),
+    failed: t('child.status.failed'), interrupted: t('child.status.interrupted'),
+    cancelled: t('child.status.cancelled'), execution_lost: t('child.status.execution_lost'),
+    unknown: t('child.status.unknown'), pending: t('child.status.pending'), running: t('child.status.running'),
+  };
+  return labels[status] ?? status;
 }
 
 /** 状态徽标的配色类名；与 styles/session/childThreadPanel.css 中的状态变量对应。 */

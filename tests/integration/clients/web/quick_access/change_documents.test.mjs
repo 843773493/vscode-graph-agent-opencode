@@ -10,9 +10,13 @@ const run = await TestRunContext.fromTestFile('tests/integration/clients/web/qui
 const root = resolve('src/clients/workbench'), bundle = join(run.artifactsDir, 'change-documents.fixture.mjs');
 const upstream = './src/clients/workbench/upstream/src/vs/';
 await build({ stdin: { contents: `
+import './tests/harness/js/workbench-locale.ts';
 export { ChangeDocuments } from './src/clients/workbench/src/changeFiles.js';
 export { changeFileUri, changeFileSource, normalizeReadonlyInput, ReadonlyDocumentSerializer, UnavailableReadonlyDocumentInput } from './src/clients/workbench/src/readonlyDocuments.js';
-export { ThreadInput, ThreadSerializer } from './src/clients/workbench/src/threadInput.js';
+export { ThreadInput, ThreadSerializer, UnavailableThreadInput } from './src/clients/workbench/src/threadInput.js';
+export { setLocaleResources } from './src/clients/shared/core/i18n/index.js';
+export { default as english } from './src/clients/shared/core/i18n/messages/en.json';
+export { default as chinese } from './src/clients/shared/core/i18n/messages/zh-cn.json';
 export { TextResourceEditorInput } from '${upstream}workbench/common/editor/textResourceEditorInput.js';
 export { EditorGroupModel } from '${upstream}workbench/common/editor/editorGroupModel.js';
 export { EditorExtensions, EditorsOrder } from '${upstream}workbench/common/editor.js';
@@ -35,6 +39,7 @@ export { Event, Emitter } from '${upstream}base/common/event.js';
   plugins: [buildSourcePlugin(root, sourceTransform(root, { commit: pinnedUpstreamCommit }, []))],
   tsconfig: join(root, 'tsconfig.jsonc'), logLevel: 'silent' });
 const m = await import(pathToFileURL(bundle).href);
+m.setLocaleResources('zh-cn', m.chinese);
 const owner = { gatewayId: 'gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', workspaceId: '019a0000-0000-7000-8000-000000000001', sessionId: 'session-change' };
 const otherGateway = 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', otherWorkspace = '019a0000-0000-7000-8000-000000000002';
 const ownerKey = `${owner.gatewayId}/${owner.workspaceId}`;
@@ -195,6 +200,71 @@ test('原编辑器组保留坏记录及相邻Thread，移除一条后其余顺�
     for (const registration of registrations) registration.dispose();
     instantiation.dispose();
   }
+});
+
+test('Thread 双语恢复错误保留原件和诊断参数，已存原因与用户标题不随语言重写', () => {
+  const serializer = new m.ThreadSerializer();
+  const title = '用户标题 /home/alice/{0}', reason = '原始原因 C:\\work\\{0}';
+  const original = { version: 9, title, message: '用户正文 /tmp/{0}' };
+  const badJson = '{"title":"/home/alice/{0}",';
+  try {
+    for (const [locale, catalog, expectedTitle, expectedError] of [
+      ['zh-cn', m.chinese, '无法恢复的 Thread', 'Thread 编辑器恢复 JSON 损坏：'],
+      ['en', m.english, 'Unrestorable Thread', 'The Thread editor recovery JSON is corrupt: '],
+    ]) {
+      m.setLocaleResources(locale, catalog);
+      const invalid = serializer.deserialize({}, badJson);
+      expect(invalid).toBeInstanceOf(m.UnavailableThreadInput);
+      expect(invalid.stored).toBe(badJson);
+      expect(invalid.getName()).toBe(expectedTitle);
+      expect(invalid.reason).toStartWith(expectedError);
+      let syntaxMessage;
+      try { JSON.parse(badJson); } catch (error) { syntaxMessage = error.message; }
+      expect(invalid.reason.slice(expectedError.length)).toBe(syntaxMessage);
+      const future = serializer.deserialize({}, JSON.stringify(original));
+      expect(future.stored).toEqual(original);
+      expect(future.getName()).toBe(title);
+      expect(future.reason).toBe(locale === 'en'
+        ? 'Unsupported Thread editor recovery version: 9' : '不支持的 Thread 编辑器恢复版本：9');
+      const stored = serializer.deserialize({}, JSON.stringify({ version: 2, unavailable: original, title, reason }));
+      const restored = serializer.deserialize({}, serializer.serialize(stored));
+      expect(restored.stored).toEqual(original);
+      expect(restored.reason).toBe(reason);
+      expect(restored.getName()).toBe(title);
+      expect(restored.resource).toBeUndefined();
+    }
+  } finally { m.setLocaleResources('zh-cn', m.chinese); }
+  receipt.checks.push('真实ThreadSerializer双语错误／原JSON参数保留；用户标题和已存原因不翻译、不建立新恢复状态');
+});
+
+test('Thread 切换启动语言不改变精确身份、分屏展示态或有效序列化结构', () => {
+  const serializer = new m.ThreadSerializer();
+  const source = new m.ThreadInput({ ...owner, workspaceKey: 'native-route', threadId: 'child-exact', title: '标题 /tmp/{0}' });
+  source.restoreViewState({ resourcesVisible: true, resourceTab: 'changes', resourceRatio: 0.35,
+    selectedChangesetId: 'turn:stable', filePreviewLayout: {}, fileTreeExpandedPaths: ['/tmp/{0}'] });
+  const serialized = serializer.serialize(source);
+  const restored = [];
+  try {
+    for (const [locale, catalog] of [['zh-cn', m.chinese], ['en', m.english]]) {
+      m.setLocaleResources(locale, catalog);
+      const input = serializer.deserialize({}, serialized);
+      const split = input.copy();
+      restored.push(input, split);
+      expect(input).toBeInstanceOf(m.ThreadInput);
+      expect(input.resource.toString()).toBe(source.resource.toString());
+      expect(input.owner).toEqual({ ...source.owner, workspaceKey: '' });
+      expect(serializer.serialize(input)).toBe(serialized);
+      split.fileTreeExpandedPaths.push('/another');
+      expect(input.fileTreeExpandedPaths).toEqual(['/tmp/{0}']);
+      expect(split.owner).toEqual(input.owner);
+      expect(split.getName()).toBe('标题 /tmp/{0}');
+    }
+  } finally {
+    m.setLocaleResources('zh-cn', m.chinese);
+    source.dispose();
+    for (const input of restored) input.dispose();
+  }
+  receipt.checks.push('真实ThreadInput／serializer在两语保持同一稳定URI和JSON；copy独立展示态，用户内容不变');
 });
 
 test('有效来源恢复只交原工厂，工厂本身失败保留原错误而不转为坏记录', () => {
@@ -368,6 +438,27 @@ test('停止目标不读取，错误Session响应不创建模型，原原因继�
     expect(f.texts.size).toBe(0);
     receipt.checks.push('停止目标零读取；错误Session不产生模型／fallback');
   });
+});
+
+test('英文只读恢复与更改失败使用产品摘要，服务原错和记录原件保持', async () => {
+  m.setLocaleResources('en', m.english);
+  try {
+    await fixture(async f => {
+      f.state.latest = 'edit-2';
+      await expect(f.read(uri())).rejects.toThrow('This change version has changed; reopen it from the session changes list');
+      expect(f.texts.size).toBe(0);
+      f.state.fail = true;
+      await expect(f.read(uri())).rejects.toThrow('原更改读取失败');
+      expect(f.calls).toHaveLength(2);
+    });
+    const stored = { version: 99, name: '用户来源 {0}', resource: uri().toJSON() };
+    const unavailable = new m.ReadonlyDocumentSerializer().deserialize({}, JSON.stringify(stored));
+    expect(unavailable.reason).toBe('Unsupported read-only document restore version: 99');
+    expect(unavailable.getName()).toBe('用户来源 {0}');
+    expect(unavailable.stored).toEqual(stored);
+    unavailable.dispose();
+    receipt.checks.push('英文产品摘要；未知服务原错、用户标题和坏记录原件保留，零错误模型');
+  } finally { m.setLocaleResources('zh-cn', m.chinese); }
 });
 
 afterAll(async () => { await writeFile(join(run.artifactsDir, 'change-documents.json'), JSON.stringify(receipt, null, 2) + '\n'); });

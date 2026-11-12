@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type {
   ToolCatalogItem,
@@ -15,12 +16,12 @@ export interface ToolGroup {
 function runMetric(run: ToolTestRun): string {
   const completed = run.providers.reduce((sum, item) => sum + item.completed, 0);
   const passed = run.providers.reduce((sum, item) => sum + item.passed, 0);
-  if (run.status === "queued") return "等待测试";
+  if (run.status === "queued") return t("composer.tools.testQueued");
   if (run.status === "running") {
-    return `进度 ${run.progress}% · ${passed}/${completed} 通过`;
+    return t("composer.tools.progress", run.progress, passed, completed);
   }
-  if (completed === 0) return run.status === "failed" ? "测试失败" : "暂无结果";
-  return `成功率 ${Math.round((passed / completed) * 100)}% · ${passed}/${completed} 通过`;
+  if (completed === 0) return run.status === "failed" ? t("composer.tools.testFailed") : t("composer.tools.noResults");
+  return t("composer.tools.successRate", Math.round((passed / completed) * 100), passed, completed);
 }
 
 function capabilityState(
@@ -84,8 +85,8 @@ export default function ComposerToolTree({
               <button
                 type="button"
                 className="composer-tool-disclosure"
-                title={collapsed ? "展开工具组" : "折叠工具组"}
-                aria-label={collapsed ? `展开 ${group.name}` : `折叠 ${group.name}`}
+                title={collapsed ? t("composer.tools.expandGroup") : t("composer.tools.collapseGroup")}
+                aria-label={collapsed ? t("composer.tools.expandNamedGroup", group.name) : t("composer.tools.collapseNamedGroup", group.name)}
                 aria-expanded={!collapsed}
                 onClick={() => onToggleCollapsed(group.id)}
               >
@@ -106,8 +107,8 @@ export default function ComposerToolTree({
                     className="composer-tool-capability-button"
                     data-state={executionState}
                     aria-pressed={ariaPressed(executionState)}
-                    aria-label={`${group.name}：${executionState === "on" ? "关闭" : "开启"}工具能力`}
-                    title={`${executionState === "on" ? "关闭" : "开启"}工具能力：允许 Agent 调用此组工具`}
+                    aria-label={t(executionState === "on" ? "composer.tools.disableExecution" : "composer.tools.enableExecution", group.name)}
+                    title={t(executionState === "on" ? "composer.tools.disableGroupHint" : "composer.tools.enableGroupHint")}
                     disabled={groupSaving}
                     onClick={() => onToggleGroupCapability(group, "execution")}
                   >
@@ -118,8 +119,8 @@ export default function ComposerToolTree({
                     className="composer-tool-capability-button"
                     data-state={modelState}
                     aria-pressed={ariaPressed(modelState)}
-                    aria-label={`${group.name}：${modelState === "on" ? "隐藏" : "显示"}工具说明`}
-                    title={`${modelState === "on" ? "隐藏" : "显示"}工具说明：控制模型是否看到工具定义`}
+                    aria-label={t(modelState === "on" ? "composer.tools.hideDefinition" : "composer.tools.showDefinition", group.name)}
+                    title={t(modelState === "on" ? "composer.tools.hideDefinitionHint" : "composer.tools.showDefinitionHint")}
                     disabled={groupSaving || executionState === "off"}
                     onClick={() => onToggleGroupCapability(group, "model")}
                   >
@@ -143,8 +144,8 @@ export default function ComposerToolTree({
                             className="composer-tool-capability-button"
                             data-state={tool.execution_enabled ? "on" : "off"}
                             aria-pressed={tool.execution_enabled}
-                            aria-label={`${tool.name}：${tool.execution_enabled ? "关闭" : "开启"}工具能力`}
-                            title={`${tool.execution_enabled ? "关闭" : "开启"}工具能力：允许 Agent 调用此工具`}
+                            aria-label={t(tool.execution_enabled ? "composer.tools.disableExecution" : "composer.tools.enableExecution", tool.name)}
+                            title={t(tool.execution_enabled ? "composer.tools.disableHint" : "composer.tools.enableHint")}
                             disabled={saving}
                             onClick={() => onToggleToolExecution(tool.tool_id)}
                           >
@@ -155,8 +156,8 @@ export default function ComposerToolTree({
                             className="composer-tool-capability-button"
                             data-state={tool.model_visible ? "on" : "off"}
                             aria-pressed={tool.model_visible}
-                            aria-label={`${tool.name}：${tool.model_visible ? "隐藏" : "显示"}工具说明`}
-                            title={`${tool.model_visible ? "隐藏" : "显示"}工具说明：控制模型是否看到工具定义`}
+                            aria-label={t(tool.model_visible ? "composer.tools.hideDefinition" : "composer.tools.showDefinition", tool.name)}
+                            title={t(tool.model_visible ? "composer.tools.hideDefinitionHint" : "composer.tools.showDefinitionHint")}
                             disabled={saving || !tool.execution_enabled}
                             onClick={() => onToggleToolModelVisibility(tool.tool_id)}
                           >
@@ -168,8 +169,8 @@ export default function ComposerToolTree({
                             <strong>{tool.name}</strong>
                             <span
                               className="composer-tool-save-status"
-                              title={saving ? `正在保存 ${tool.name}` : undefined}
-                              aria-label={saving ? `正在保存 ${tool.name}` : undefined}
+                              title={saving ? t("composer.tools.saving", tool.name) : undefined}
+                              aria-label={saving ? t("composer.tools.saving", tool.name) : undefined}
                             >
                               {saving ? (
                                 <span
@@ -179,7 +180,7 @@ export default function ComposerToolTree({
                               ) : null}
                             </span>
                           </span>
-                          <span>{tool.description || "后端工具"}</span>
+                          <span>{tool.description || t("composer.tools.backendTool")}</span>
                         </span>
                       </div>
                       <div className="composer-tool-test-summary">
@@ -194,8 +195,8 @@ export default function ComposerToolTree({
                           disabled={!tool.test_supported || running}
                           title={
                             tool.test_supported
-                              ? `测试 ${tool.name}`
-                              : "该工具暂未提供测试用例"
+                              ? t("composer.tools.testNamed", tool.name)
+                              : t("composer.tools.noTests")
                           }
                           onClick={() => onRunTest(tool)}
                         >
@@ -203,7 +204,7 @@ export default function ComposerToolTree({
                             className={`codicon codicon-${running ? "loading codicon-modifier-spin" : "beaker"}`}
                             aria-hidden="true"
                           />
-                          <span>测试</span>
+                          <span>{t("composer.tools.test")}</span>
                         </button>
                       </div>
                       {run && run.providers.length > 0 ? (
@@ -212,19 +213,16 @@ export default function ComposerToolTree({
                             <span
                               key={provider.provider_id}
                               title={
-                                `${provider.passed} 通过，${provider.failed} 失败；` +
-                                `实际请求模型 ${provider.model_calls} 次，` +
-                                `其中 ${provider.reasoning_only_calls} 次只返回 reasoning，` +
-                                `${provider.transient_retries} 次瞬态故障重试`
+                                t("composer.tools.providerSummary", provider.passed, provider.failed, provider.model_calls, provider.reasoning_only_calls, provider.transient_retries)
                               }
                             >
                               {provider.provider_id} · {provider.model} · {provider.success_rate}%
-                              {` · ${provider.model_calls} 次模型请求`}
+                              {t("composer.tools.modelCalls", provider.model_calls)}
                               {provider.reasoning_only_calls > 0
-                                ? ` · ${provider.reasoning_only_calls} 次纯 reasoning`
+                                ? t("composer.tools.reasoningCalls", provider.reasoning_only_calls)
                                 : null}
                               {provider.transient_retries > 0
-                                ? ` · ${provider.transient_retries} 次网络/服务器重试`
+                                ? t("composer.tools.retries", provider.transient_retries)
                                 : null}
                             </span>
                           ))}
@@ -232,7 +230,7 @@ export default function ComposerToolTree({
                       ) : null}
                       {failedAttempts.length > 0 ? (
                         <details className="composer-tool-attempt-errors">
-                          <summary>{failedAttempts.length} 条失败详情</summary>
+                          <summary>{t("composer.tools.failedDetails", failedAttempts.length)}</summary>
                           <ul>
                             {failedAttempts.map((attempt) => (
                               <li key={attempt.attempt_id}>
@@ -251,7 +249,7 @@ export default function ComposerToolTree({
         );
       })}
       {!loading && groups.length === 0 ? (
-        <div className="composer-tool-empty">后端没有返回可用工具</div>
+        <div className="composer-tool-empty">{t("composer.tools.empty")}</div>
       ) : null}
     </div>
   );

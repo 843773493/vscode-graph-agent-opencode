@@ -1,1 +1,1 @@
-import '../workbench/src/main.js';
+import '../workbench/src/bootstrap.js';

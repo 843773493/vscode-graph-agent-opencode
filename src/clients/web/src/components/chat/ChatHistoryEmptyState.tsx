@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { TurnProjectionState } from "../../state/session/turnTimeline";
 import type { SessionChangesSummary } from "../../types/backend";
@@ -23,35 +24,35 @@ export default function ChatHistoryEmptyState({
     <div className="chat-stream-empty-history" role="status">
       {historyError ? (
         <>
-          <div className="chat-stream-empty-title">无法加载会话历史</div>
+          <div className="chat-stream-empty-title">{t("chat.history.failed")}</div>
           <div className="chat-stream-empty-detail" role="alert">{historyError}</div>
           <button
             type="button"
             className="chat-stream-empty-action"
             onClick={onRetryHistory}
           >
-            重试加载
+            {t("chat.history.retry")}
           </button>
         </>
       ) : historyLoading ? (
         <>
-          <div className="chat-stream-empty-title">正在加载最新 Turn</div>
+          <div className="chat-stream-empty-title">{t("chat.history.latest")}</div>
           <div className="chat-stream-empty-detail">
-            Composer 已可使用，历史内容将在这里原位显示。
+            {t("chat.history.usable")}
           </div>
         </>
       ) : projectionState === "partial" ? (
         <>
-          <div className="chat-stream-empty-title">旧 Turn 正在迁移</div>
+          <div className="chat-stream-empty-title">{t("chat.history.migrating")}</div>
           <div className="chat-stream-empty-detail">
-            Composer 已可使用，迁移完成后会自动显示历史内容。
+            {t("chat.history.migratingDetail")}
           </div>
         </>
       ) : (
         <>
-          <div className="chat-stream-empty-title">该会话暂无历史消息</div>
+          <div className="chat-stream-empty-title">{t("chat.history.empty")}</div>
           <div className="chat-stream-empty-detail">
-            在下方输入任务，Assistant 的回复会显示在这里。
+            {t("chat.history.emptyDetail")}
           </div>
         </>
       )}
@@ -61,10 +62,10 @@ export default function ChatHistoryEmptyState({
           className="chat-stream-empty-action"
           onClick={onOpenChanges}
         >
-          本会话有 {sessionChangeSummary.files} 个文件变更待审查
+          {t("chat.history.changes", formatNumber(sessionChangeSummary.files))}
         </button>
       ) : sessionChangesLoading ? (
-        <div className="chat-stream-empty-detail">正在检查会话文件变更...</div>
+        <div className="chat-stream-empty-detail">{t("chat.history.changesLoading")}</div>
       ) : null}
     </div>
   );

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { OverlayRootContext } from "../../overlays/OverlayRootContext";
+import { t } from "../../../../../shared/core/i18n/index.js";
 
 import type { WorkspaceAddDialogProps } from "../WorkspaceAddDialog";
 import { browseGatewayLocalDirectories } from "../../../gatewayApi";
@@ -248,7 +249,7 @@ export default function WorkspaceAddDialogContent({
               <button
                 type="button"
                 className="workspace-add-icon-button workspace-add-back-button"
-                aria-label="返回选择设备"
+                aria-label={t("gateway.workspaceAdd.backToDevices")}
                 disabled={submitting}
                 onClick={() => {
                   directoryRequestRef.current += 1;
@@ -259,23 +260,23 @@ export default function WorkspaceAddDialogContent({
                 }}
               >
                 <span className="codicon codicon-arrow-left" aria-hidden="true" />
-                <span>设备</span>
+                <span>{t("gateway.workspaceAdd.device")}</span>
               </button>
             ) : null}
             <div>
               <h2 id="workspace-add-title">
-                {selectedGateway ? "选择工作区文件夹" : "选择工作区所在设备"}
+                {selectedGateway ? t("gateway.workspaceAdd.selectFolder") : t("gateway.workspaceAdd.selectDevice")}
               </h2>
               <p>
                 {selectedGateway
-                  ? `在“${selectedGateway.name}”上选择一个文件夹作为工作区。`
-                  : "选择包含目标文件夹的当前电脑或远程 SSH 主机。"}
+                  ? t("gateway.workspaceAdd.selectFolderOnDevice", selectedGateway.name)
+                  : t("gateway.workspaceAdd.selectDeviceDescription")}
               </p>
             </div>
             <button
               type="button"
               className="workspace-add-icon-button workspace-add-close-button"
-              aria-label="关闭"
+              aria-label={t("gateway.workspaceAdd.close")}
               disabled={submitting}
               onClick={onClose}
             >
@@ -291,8 +292,8 @@ export default function WorkspaceAddDialogContent({
                 type="search"
                 value={gatewayQuery}
                 onChange={(event) => setGatewayQuery(event.target.value)}
-                placeholder="搜索电脑或远程主机"
-                aria-label="搜索电脑或远程主机"
+                placeholder={t("gateway.workspaceAdd.searchDevices")}
+                aria-label={t("gateway.workspaceAdd.searchDevices")}
               />
             </label>
           ) : selectedGateway ? (
@@ -300,8 +301,8 @@ export default function WorkspaceAddDialogContent({
               <button
                 type="button"
                 className="workspace-add-icon-button"
-                aria-label="返回上级目录"
-                title="返回上级目录"
+                aria-label={t("gateway.workspaceAdd.parentDirectory")}
+                title={t("gateway.workspaceAdd.parentDirectory")}
                 disabled={
                   loading || submitting || !listing?.parent_path
                 }
@@ -327,8 +328,8 @@ export default function WorkspaceAddDialogContent({
                       confirmPathInput();
                     }
                   }}
-                  placeholder="正在加载目录..."
-                  aria-label="目录地址"
+                  placeholder={t("gateway.workspaceAdd.directoryLoading")}
+                  aria-label={t("gateway.workspaceAdd.directoryAddress")}
                   aria-describedby="workspace-add-path-hint"
                 />
               </label>
@@ -341,13 +342,13 @@ export default function WorkspaceAddDialogContent({
                     setShowHiddenDirectories(event.target.checked)
                   }
                 />
-                显示隐藏目录
+                {t("gateway.workspaceAdd.showHiddenDirectories")}
               </label>
             </div>
           ) : null}
           {selectedGateway ? (
             <small id="workspace-add-path-hint" className="workspace-add-path-hint">
-              输入路径或目录名后按 Enter；单击目录进行选择，点击右侧箭头进入目录。
+              {t("gateway.workspaceAdd.pathHint")}
             </small>
           ) : null}
         </header>
@@ -381,7 +382,7 @@ export default function WorkspaceAddDialogContent({
                     <strong>{gateway.name}</strong>
                     <small title={gateway.error ?? undefined}>
                       <i className={`workspace-add-status-dot ${gateway.status}`} />
-                      {gateway.kind === "local" ? "本机" : gateway.detail} · {gateway.statusLabel}
+                      {gateway.kind === "local" ? t("gateway.workspaceAdd.localDevice") : gateway.detail} · {gateway.statusLabel}
                     </small>
                     {gateway.error ? (
                       <small className="workspace-add-gateway-error" title={gateway.error}>
@@ -390,18 +391,18 @@ export default function WorkspaceAddDialogContent({
                     ) : null}
                   </span>
                   <span className="workspace-add-gateway-count">
-                    已管理 {gateway.workspaceCount} 个工作区
+                    {t("gateway.workspaceAdd.managedWorkspaceCount", gateway.workspaceCount)}
                   </span>
                   <span className="codicon codicon-chevron-right" aria-hidden="true" />
                 </button>
               ))
             ) : choices.length === 0 ? (
-              <div className="workspace-add-state">暂无可用设备</div>
+              <div className="workspace-add-state">{t("gateway.workspaceAdd.noDevices")}</div>
             ) : (
-              <div className="workspace-add-state">没有匹配的电脑或远程主机</div>
+              <div className="workspace-add-state">{t("gateway.workspaceAdd.noMatchingDevices")}</div>
             )
           ) : loading && !listing ? (
-            <div className="workspace-add-state">正在加载目录...</div>
+            <div className="workspace-add-state">{t("gateway.workspaceAdd.directoryLoading")}</div>
           ) : (
             <>
               {filteredDirectories.map((entry) => {
@@ -433,8 +434,8 @@ export default function WorkspaceAddDialogContent({
                       type="button"
                       className="workspace-add-directory-enter"
                       disabled={loading || submitting}
-                      aria-label={`进入目录 ${entry.name}`}
-                      title="进入目录"
+                      aria-label={t("gateway.workspaceAdd.enterDirectory", entry.name)}
+                      title={t("gateway.workspaceAdd.enterDirectoryTitle")}
                       onClick={() => browsePath(entry.path)}
                     >
                       <span className="codicon codicon-chevron-right" aria-hidden="true" />
@@ -443,10 +444,10 @@ export default function WorkspaceAddDialogContent({
                 );
               })}
               {!loading && !error && filteredDirectories.length === 0 ? (
-                <div className="workspace-add-state">当前目录下没有子目录</div>
+                <div className="workspace-add-state">{t("gateway.workspaceAdd.noSubdirectories")}</div>
               ) : null}
               {loading && listing ? (
-                <div className="workspace-add-state">正在加载目录...</div>
+                <div className="workspace-add-state">{t("gateway.workspaceAdd.directoryLoading")}</div>
               ) : null}
             </>
           )}
@@ -455,14 +456,14 @@ export default function WorkspaceAddDialogContent({
         {selectedGateway ? (
           <footer className="workspace-add-actions">
             <div className="workspace-add-selection-summary" aria-live="polite">
-              <span>将添加</span>
+              <span>{t("gateway.workspaceAdd.willAdd")}</span>
               <strong title={selectedPath || undefined}>
-                {selectedPath === currentPath ? listing?.name : listing?.entries.find((entry) => entry.path === selectedPath)?.name || "尚未选择文件夹"}
+                {selectedPath === currentPath ? listing?.name : listing?.entries.find((entry) => entry.path === selectedPath)?.name || t("gateway.workspaceAdd.noFolderSelected")}
               </strong>
             </div>
             <div className="workspace-add-action-buttons">
               <button type="button" disabled={submitting} onClick={onClose}>
-                取消
+                {t("gateway.workspaceAdd.cancel")}
               </button>
               <button
                 type="button"
@@ -478,13 +479,13 @@ export default function WorkspaceAddDialogContent({
                     aria-hidden="true"
                   />
                 ) : null}
-                添加工作区
+                {t("gateway.workspaceAdd.addWorkspace")}
               </button>
             </div>
           </footer>
         ) : (
           <footer className="workspace-add-connection-actions">
-            <span>目标设备不在列表中？</span>
+            <span>{t("gateway.workspaceAdd.deviceNotListed")}</span>
             <button
               type="button"
               onClick={() => {
@@ -493,7 +494,7 @@ export default function WorkspaceAddDialogContent({
               }}
             >
               <span className="codicon codicon-plug" aria-hidden="true" />
-              连接新的远程主机…
+              {t("gateway.workspaceAdd.connectRemoteHost")}
             </button>
           </footer>
         )}

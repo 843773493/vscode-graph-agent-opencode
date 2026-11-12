@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { append, $, clearNode } from '../../upstream/src/vs/base/browser/dom.js';
 import { ViewPane, type IViewPaneOptions } from '../../upstream/src/vs/workbench/browser/parts/views/viewPane.js';
 import { IKeybindingService } from '../../upstream/src/vs/platform/keybinding/common/keybinding.js';
@@ -30,11 +31,23 @@ import { manageConfig, setPluginBindings, readPluginBindings, choosePluginWorksp
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const activePluginInstallations = new Map<string, Promise<void>>();
-const pluginGatewayLabel = (target: PluginTarget) => `原生 Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}`;
+const pluginGatewayLabel = (target: PluginTarget) => t('plugins.nativeGateway', target.gateway_id, target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : '');
+
+function pluginStateLabel(state: string): string {
+  switch (state) {
+    case 'stopped': return t('plugins.state.stopped');
+    case 'starting': return t('plugins.state.starting');
+    case 'ready': return t('plugins.state.ready');
+    case 'stopping': return t('plugins.state.stopping');
+    case 'failed': return t('plugins.state.failed');
+    case 'waiting': return t('plugins.state.waiting');
+    default: return state;
+  }
+}
 
 function requireInstallationOwner(target: PluginTarget, operationId: string, operation: PluginInstallOperationDTO): PluginInstallOperationDTO {
   if (operation.gateway_id !== target.gateway_id || operation.operation_id !== operationId) {
-    throw new Error(`插件安装操作回执不属于原 Gateway 或 operation_id：${operationId}`);
+    throw new Error(t('plugins.installationOwnerMismatch', operationId));
   }
   return operation;
 }
@@ -83,16 +96,20 @@ export class ServicePluginPackagesView extends ViewPane {
     container.classList.add('service-plugin-packages-view');
     this.searchInput = append(container, $('input')) as HTMLInputElement;
     this.searchInput.type = 'search';
-    this.searchInput.setAttribute('aria-label', '搜索已安装插件包');
-    this.searchInput.placeholder = '搜索已安装插件包';
+    this.searchInput.setAttribute('aria-label', t('plugins.searchInstalled'));
+    this.searchInput.placeholder = t('plugins.searchInstalled');
     this.searchInput.value = this.query;
     this.searchInput.addEventListener('input', () => void this.commands.executeCommand('workbench.extensions.search', this.searchInput!.value)
       .catch(error => this.notifications.error(errorsText(error))));
     this.controls = append(container, $('div'));
     const selector = append(this.controls, $('select')) as HTMLSelectElement;
-    selector.setAttribute('aria-label', '插件管理范围');
-    selector.innerHTML = '<option value="gateway">当前 Gateway</option><option value="workspace">当前工作区</option><option value="defaults">以后新建工作区</option>';
-    append(this.controls, $('p')).textContent = '“以后新建工作区”只影响之后创建的新工作区，不会启用当前或已有工作区插件。';
+    selector.setAttribute('aria-label', t('plugins.managementScope'));
+    for (const [value, key] of [['gateway', 'plugins.scopeGateway'], ['workspace', 'plugins.scopeWorkspace'], ['defaults', 'plugins.scopeDefaults']] as const) {
+      const option = append(selector, $('option')) as HTMLOptionElement;
+      option.value = value;
+      option.textContent = t(key);
+    }
+    append(this.controls, $('p')).textContent = t('plugins.defaultsExplanation');
     selector.addEventListener('change', () => {
       if (selector.value === 'gateway' || selector.value === 'workspace' || selector.value === 'defaults') this.scope = selector.value;
       this.workspaceTarget = undefined;
@@ -101,7 +118,7 @@ export class ServicePluginPackagesView extends ViewPane {
       void this.refresh();
     });
     const install = append(this.controls, $('button'));
-    install.textContent = '安装插件包';
+    install.textContent = t('plugins.installPackage');
     install.addEventListener('click', () => void this.commands.executeCommand('boxteam.plugins.installPackage')
       .catch(error => this.notifications.error(errorsText(error))));
     this.content = append(container, $('.service-plugin-packages-content'));
@@ -114,7 +131,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const checkTarget = () => {
       const current = managementGateway('extensions');
       if (current.gateway_id !== target.gateway_id || current.gateway_connection_id !== target.gateway_connection_id) {
-        throw new Error('插件管理目标已改变，请从原目标重新查找插件');
+        throw new Error(t('plugins.managementTargetChanged'));
       }
     };
     checkTarget();
@@ -126,7 +143,7 @@ export class ServicePluginPackagesView extends ViewPane {
     await this.refresh();
     checkTarget();
     if (scope === 'workspace' && !this.workspaceTarget) return;
-    if (!this.content?.querySelector('.service-plugin-details')) throw new Error(`所选插件版本已不可用：${packageId}/${pluginId}@${version}`);
+    if (!this.content?.querySelector('.service-plugin-details')) throw new Error(t('plugins.versionUnavailable', packageId, pluginId, version));
   }
 
   search(query: string): void {
@@ -161,7 +178,7 @@ export class ServicePluginPackagesView extends ViewPane {
     this.configuredBindings = undefined;
     this.updateDetailsStatus = undefined;
     clearNode(container);
-    append(container, $('p')).textContent = '正在读取目标插件…';
+    append(container, $('p')).textContent = t('plugins.loading');
     try {
       await this.renderPackages(container, revision, scope);
     } catch (error) {
@@ -171,7 +188,7 @@ export class ServicePluginPackagesView extends ViewPane {
       clearNode(container);
       append(container, $('p')).textContent = errorsText(error);
       const retry = append(container, $('button'));
-      retry.textContent = '重试';
+      retry.textContent = t('plugins.retry');
       retry.addEventListener('click', () => void this.refresh());
       this.notifications.error(errorsText(error));
     }
@@ -187,7 +204,7 @@ export class ServicePluginPackagesView extends ViewPane {
   private async runTargetOperation(operation: (lifecycle: ReturnType<typeof createManagementTargetLifecycle>) => Promise<void>,
     expectedEntryGatewayId?: string): Promise<void> {
     await this.runOperation(async () => {
-      const lifecycle = createManagementTargetLifecycle('原 Gateway 或访问凭据已改变，未开始新的插件管理操作', expectedEntryGatewayId);
+      const lifecycle = createManagementTargetLifecycle(t('plugins.operationTargetChanged'), expectedEntryGatewayId);
       try { lifecycle.check(); await operation(lifecycle); }
       finally { lifecycle.dispose(); }
     });
@@ -232,7 +249,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const snapshot = await raceTimeout(first.p, DEFAULT_API_REQUEST_TIMEOUT_MS);
     if (!snapshot) {
       controller.abort();
-      throw new Error('等待插件运行状态首个快照超时，请重新打开管理视图');
+      throw new Error(t('plugins.runtimeSnapshotTimeout'));
     }
     return snapshot;
   }
@@ -265,7 +282,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const workspace = container.querySelector<HTMLElement>('[data-plugin-workspace-handoff]');
     if (workspace) {
       const state = this.runtimeStatus.workspace_configurations.find(item => item.workspace_id === workspace.dataset.workspaceId);
-      workspace.textContent = `工作区 ${workspace.dataset.workspaceId} 配置交接：${state?.state ?? '尚未收到'}${state?.error ? ` · ${state.error}` : ''}`;
+      workspace.textContent = t('plugins.workspaceHandoff', workspace.dataset.workspaceId, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
     }
     const details = container.querySelector<HTMLElement>('.service-plugin-details');
     const packageId = details?.dataset.packageId;
@@ -279,14 +296,14 @@ export class ServicePluginPackagesView extends ViewPane {
           details.dataset.runtime === 'true');
       const versions = details.querySelector<HTMLElement>('[data-plugin-runtime-version]');
       if (versions && details.dataset.scope !== 'defaults') {
-        versions.textContent = `配置：${this.runtimeConfigurationLabel(packageId, pluginId,
-          details.dataset.workspaceId || undefined)} · `
+        versions.textContent = t('plugins.configurationPrefix', this.runtimeConfigurationLabel(packageId, pluginId,
+          details.dataset.workspaceId || undefined))
           + this.runtimeActualLabel(status, details.dataset.runtime === 'true');
       }
       const handoff = details.querySelector<HTMLElement>('[data-plugin-workspace-handoff]');
       if (handoff) {
         const state = this.runtimeStatus.workspace_configurations.find(item => item.workspace_id === handoff.dataset.workspaceId);
-        handoff.textContent = `工作区 ${handoff.dataset.workspaceId} 配置交接：${state?.state ?? '尚未收到'}${state?.error ? ` · ${state.error}` : ''}`;
+        handoff.textContent = t('plugins.workspaceHandoff', handoff.dataset.workspaceId, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
       }
       const failure = details.querySelector<HTMLElement>('[data-plugin-runtime-error]');
       if (failure) {
@@ -305,7 +322,7 @@ export class ServicePluginPackagesView extends ViewPane {
 
   private runtimeConfigurationLabel(packageId: string, pluginId: string, workspaceId: string | undefined): string {
     const binding = this.configuredBinding(packageId, pluginId, workspaceId);
-    return binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定';
+    return binding ? `${binding.enabled ? t('plugins.enabled') : t('plugins.disabled')} @${binding.package_version}` : t('plugins.unbound');
   }
 
   private runtimeLabel(packageId: string, pluginId: string, workspaceId: string | undefined,
@@ -315,20 +332,20 @@ export class ServicePluginPackagesView extends ViewPane {
 
   private runtimeActualLabel(status: PluginRuntimeStatusDTO['plugins'][number] | undefined, runtime: boolean): string {
     return status?.instance
-      ? `实际：${status.state} @${status.instance.package_version}`
-      : runtime ? `实际：${status?.state ?? '未运行'} · 尚无 ready 实例回执` : '声明式，无运行实例';
+      ? t('plugins.actualVersion', pluginStateLabel(status.state), status.instance.package_version)
+      : runtime ? t('plugins.actualNotReady', status ? pluginStateLabel(status.state) : t('plugins.notRunning')) : t('plugins.declarative');
   }
 
   private async renderPackages(container: HTMLElement, revision: number, scope: Scope): Promise<void> {
     await workspaceContext.ensureReady();
     if (revision !== this.refreshRevision) return;
     const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
-    if (!entryGatewayId) throw new Error('Gateway 身份尚未完成初始化，无法读取插件管理目标');
+    if (!entryGatewayId) throw new Error(t('plugins.gatewayNotReady'));
     const target = managementGateway('extensions');
     const workspace = scope === 'workspace' ? (this.workspaceTarget ?? await choosePluginWorkspace(target, this.quickInput)) : undefined;
     if (revision !== this.refreshRevision) return;
     this.workspaceTarget = workspace;
-    if (scope === 'workspace' && !workspace) { clearNode(container); append(container, $('p')).textContent = '请选择目标工作区后查看插件。'; return; }
+    if (scope === 'workspace' && !workspace) { clearNode(container); append(container, $('p')).textContent = t('plugins.chooseWorkspaceFirst'); return; }
     const pluginTarget: PluginTarget = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id };
     const [inventory, runtime, scopeBindings] = await Promise.all([
       gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory', { method: 'POST', body: JSON.stringify(pluginTarget) }),
@@ -338,14 +355,14 @@ export class ServicePluginPackagesView extends ViewPane {
     if (this.content !== container || revision !== this.refreshRevision) return;
     this.configuredBindings = scopeBindings;
     clearNode(container);
-    append(container, $('p')).textContent = inventory.sources?.message ?? '插件源尚未配置';
+    append(container, $('p')).textContent = inventory.sources?.message ?? t('plugins.sourcesNotConfigured');
     if (workspace) {
       const handoff = runtime!.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
       const summary = append(container, $('p'));
-      summary.setAttribute('aria-label', '工作区插件配置交接');
+      summary.setAttribute('aria-label', t('plugins.workspaceHandoffAria'));
       summary.dataset.pluginWorkspaceHandoff = 'true';
       summary.dataset.workspaceId = workspace.workspace_id;
-      summary.textContent = `工作区 ${workspace.workspace_id} 配置交接：${handoff?.state ?? '尚未收到'}${handoff?.error ? ` · ${handoff.error}` : ''}`;
+      summary.textContent = t('plugins.workspaceHandoff', workspace.workspace_id, handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'), handoff?.error ? ` · ${handoff.error}` : '');
     }
     const pluginScope = scope === 'gateway' ? 'gateway' : 'workspace';
     const bindings = scopeBindings.filter(item => scope === 'workspace'
@@ -358,11 +375,11 @@ export class ServicePluginPackagesView extends ViewPane {
       packageSection.dataset.search = `${manifest.package_id} ${manifest.name} ${manifest.description ?? ''} ${manifest.plugins.map(plugin => `${plugin.id} ${plugin.name}`).join(' ')}`.toLocaleLowerCase();
       append(packageSection, $('h3')).textContent = `${manifest.name} · ${manifest.package_id}@${manifest.version}`;
       append(packageSection, $('p')).textContent = manifest.description ?? '';
-      if (!matching.length) append(packageSection, $('p')).textContent = `此包没有适用于当前范围的插件。包含：${manifest.plugins.map(plugin => `${plugin.id}（${plugin.instance_scope}）`).join('、')}。请切换管理范围以配置插件；整包更新和卸载仍在此处操作。`;
+      if (!matching.length) append(packageSection, $('p')).textContent = t('plugins.noMatchingScope', manifest.plugins.map(plugin => t('plugins.scopeEntry', plugin.id, plugin.instance_scope)).join(t('plugins.listSeparator')));
       const packageActions = append(packageSection, $('.service-plugin-package-actions'));
       const batchButtons = matching.length ? [true, false].map(enabled => {
         const button = append(packageActions, $('button')) as HTMLButtonElement;
-        button.textContent = enabled ? '全部启用此范围' : '全部停用此范围';
+        button.textContent = enabled ? t('plugins.enableAll') : t('plugins.disableAll');
         button.addEventListener('click', () => void this.runTargetOperation(async lifecycle => {
           batchButtons.forEach(item => { item.disabled = true; });
           try {
@@ -370,11 +387,11 @@ export class ServicePluginPackagesView extends ViewPane {
               package_version: this.configuredBinding(manifest.package_id, plugin.id, workspace?.workspace_id)?.package_version
                 ?? manifest.version, enabled }));
             const excluded = manifest.plugins.filter(plugin => plugin.instance_scope !== pluginScope);
-            const owner = `Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''} · ${scope}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''}`;
-            const confirmation = await this.dialogs.confirm({ message: `${enabled ? '启用' : '停用'} ${manifest.package_id} 的当前范围插件？`,
-              detail: `${owner}\n纳入：${matching.map(plugin => plugin.id).join('、')}\n绑定版本：${batchBindings.map(binding => `${binding.plugin_id}@${binding.package_version}`).join('、')}\n保留已有绑定版本；未绑定项采用所选版本，切版请单独操作。\n排除（固定范围不匹配）：${excluded.map(plugin => `${plugin.id}（${plugin.instance_scope}）`).join('、') || '无'}\n`
-                + (scope === 'defaults' ? '仅修改以后新建工作区的默认值，不操作当前实例。' : '每个插件独立提交，失败不回滚已完成的操作。'),
-              primaryButton: enabled ? '全部启用此范围' : '全部停用此范围' });
+            const owner = `Gateway ${target.gateway_id}${target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : ''} · ${scope}${workspace ? t('plugins.workspaceSuffix', workspace.workspace_id) : ''}`;
+            const confirmation = await this.dialogs.confirm({ message: t('plugins.confirmBatch', enabled ? t('plugins.enableAction') : t('plugins.disableAction'), manifest.package_id),
+              detail: t('plugins.batchDetail', owner, matching.map(plugin => plugin.id).join(t('plugins.listSeparator')), batchBindings.map(binding => `${binding.plugin_id}@${binding.package_version}`).join(t('plugins.listSeparator')), excluded.map(plugin => t('plugins.scopeEntry', plugin.id, plugin.instance_scope)).join(t('plugins.listSeparator')) || t('plugins.none'))
+                + (scope === 'defaults' ? t('plugins.defaultsOnly') : t('plugins.independentCommits')),
+              primaryButton: enabled ? t('plugins.enableAll') : t('plugins.disableAll') });
             if (!confirmation.confirmed) return;
             lifecycle.check();
             const results = await setPluginBindings(scope, target, workspace, this.quickInput,
@@ -395,22 +412,22 @@ export class ServicePluginPackagesView extends ViewPane {
               const actual = current?.plugins.find(slot => slot.gateway_id === target.gateway_id && slot.binding?.package_id === item.package_id
                 && slot.binding.plugin_id === item.plugin_id && slot.binding.package_version === item.package_version
                 && (scope === 'workspace' ? slot.binding.workspace_id === workspace?.workspace_id : slot.binding.workspace_id == null));
-              const state = scope === 'defaults' ? '仅修改新建默认值，未操作当前实例' : readError ? `运行状态读取失败：${readError}`
-                : actual ? `${actual.binding?.enabled ? '启用' : '停用'} · ${actual.declarative ? '声明式，无运行实例' : actual.state}${actual.error ? ` · ${actual.error}` : ''}${actual.instance ? ` · 实例 ${actual.instance.instance_id}` : ''}` : '未发布运行状态';
-              return `${owner} · ${item.package_id}/${item.plugin_id}@${item.package_version}\n配置：${configuration}\n实际：${state}`;
+              const state = scope === 'defaults' ? t('plugins.defaultsChanged') : readError ? t('plugins.runtimeReadFailed', readError)
+                : actual ? `${actual.binding?.enabled ? t('plugins.enabled') : t('plugins.disabled')} · ${actual.declarative ? t('plugins.declarative') : pluginStateLabel(actual.state)}${actual.error ? ` · ${actual.error}` : ''}${actual.instance ? t('plugins.instanceSuffix', actual.instance.instance_id) : ''}` : t('plugins.runtimeUnpublished');
+              return t('plugins.batchResult', owner, item.package_id, item.plugin_id, item.package_version, configuration, state);
             });
-            await this.dialogs.info('插件批量操作结果', lines.join('\n\n'));
+            await this.dialogs.info(t('plugins.batchResultsTitle'), lines.join('\n\n'));
           } finally { batchButtons.forEach(item => { item.disabled = false; }); }
         }, entryGatewayId));
         return button;
       }) : [];
       const installInput = append(packageActions, $('button'));
-      installInput.textContent = '重新安装/更新';
+      installInput.textContent = t('plugins.reinstall');
       installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(
         this.quickInput, this.notifications, this.progress, pluginTarget, entryGatewayId)));
       const uninstall = append(packageActions, $('button')) as HTMLButtonElement;
-      uninstall.textContent = '卸载整个包';
-      uninstall.title = '由目标 Gateway 检查在用引用；有引用时显示具体原因';
+      uninstall.textContent = t('plugins.uninstallWholePackage');
+      uninstall.title = t('plugins.uninstallReferences');
       uninstall.addEventListener('click', () => {
         uninstall.disabled = true;
         void this.runTargetOperation(lifecycle => uninstallPackageFromView(this.quickInput, this.notifications,
@@ -429,7 +446,7 @@ export class ServicePluginPackagesView extends ViewPane {
         row.dataset.scope = scope;
         row.dataset.runtime = String(Boolean(plugin.runtime));
         const initialRuntimeValue = scope === 'defaults'
-          ? `${binding?.enabled ? '新建时启用' : binding ? '新建时停用' : '未加入默认值'}${binding ? ` @${binding.package_version}` : ''} · 不代表已运行`
+          ? t('plugins.defaultRuntimeValue', binding?.enabled ? t('plugins.enabledOnCreate') : binding ? t('plugins.disabledOnCreate') : t('plugins.notInDefaults'), binding ? ` @${binding.package_version}` : '')
           : this.runtimeLabel(manifest.package_id, plugin.id, scope === 'workspace' ? workspace?.workspace_id : undefined,
             status, Boolean(plugin.runtime));
         row.dataset.initialRuntimeValue = initialRuntimeValue;
@@ -452,10 +469,10 @@ export class ServicePluginPackagesView extends ViewPane {
       if (installed) continue;
       const section = append(container, $('section.service-plugin-package'));
       section.dataset.search = `${binding.package_id} ${binding.plugin_id} ${binding.package_version}`.toLocaleLowerCase();
-      section.setAttribute('aria-label', '安装声明不可用的插件绑定');
+      section.setAttribute('aria-label', t('plugins.missingManifestAria'));
       append(section, $('h3')).textContent = `${binding.package_id}/${binding.plugin_id}@${binding.package_version}`;
-      append(section, $('p')).textContent = `${pluginGatewayLabel(target)} · ${scope}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''}`;
-      append(section, $('p')).textContent = '绑定的确切包版本或插件声明不可用。请补装原版本，或解除绑定；缺少原声明时不能编辑参数表单。';
+      append(section, $('p')).textContent = `${pluginGatewayLabel(target)} · ${scope}${workspace ? t('plugins.workspaceSuffix', workspace.workspace_id) : ''}`;
+      append(section, $('p')).textContent = t('plugins.missingManifest');
       const row = append(section, $('article'));
       row.dataset.pluginRuntimeRow = 'true';
       row.dataset.packageId = binding.package_id;
@@ -464,7 +481,7 @@ export class ServicePluginPackagesView extends ViewPane {
       row.dataset.scope = scope;
       // 未取得原声明时不能将插件误报为纯声明插件。
       row.dataset.runtime = 'true';
-      row.dataset.initialRuntimeValue = `${binding.enabled ? '新建时启用' : '新建时停用'} @${binding.package_version} · 不代表已运行`;
+      row.dataset.initialRuntimeValue = t('plugins.defaultRuntimeVersion', binding.enabled ? t('plugins.enabledOnCreate') : t('plugins.disabledOnCreate'), binding.package_version);
       const status = this.runtimeSlot(binding.package_id, binding.plugin_id, workspace?.workspace_id);
       const state = append(row, $('p'));
       state.dataset.pluginRuntimeValue = 'true';
@@ -476,11 +493,11 @@ export class ServicePluginPackagesView extends ViewPane {
       failure.textContent = status?.error ?? '';
       this.renderInstanceLog(row, target, status?.log_id);
       const install = append(section, $('button'));
-      install.textContent = '补装插件包';
+      install.textContent = t('plugins.installMissing');
       install.addEventListener('click', () => void this.runOperation(() => installPackageFromView(
         this.quickInput, this.notifications, this.progress, pluginTarget, entryGatewayId)));
       const unbind = append(section, $('button')) as HTMLButtonElement;
-      unbind.textContent = scope === 'defaults' ? '从新建默认值移除' : '解除此范围绑定';
+      unbind.textContent = scope === 'defaults' ? t('plugins.removeFromDefaults') : t('plugins.unbindScope');
       unbind.addEventListener('click', () => {
         unbind.disabled = true;
         void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace, this.quickInput, this.notifications,
@@ -489,15 +506,15 @@ export class ServicePluginPackagesView extends ViewPane {
     }
     this.search(this.query);
     this.updateRuntimeStatusPresentation();
-    if (!inventory.packages.length && !bindings.length) append(container, $('p')).textContent = `尚无插件包。${inventory.sources?.message ?? ''}`;
+    if (!inventory.packages.length && !bindings.length) append(container, $('p')).textContent = t('plugins.noPackages', inventory.sources?.message ?? '');
   }
 
   private renderInstanceLog(container: HTMLElement, target: PluginTarget, logId: string | undefined): void {
     if (!logId) return;
     const logs = append(container, $('button')) as HTMLButtonElement;
-    logs.textContent = '查看实例日志';
+    logs.textContent = t('plugins.viewInstanceLog');
     const output = append(container, $('pre'));
-    output.setAttribute('aria-label', '插件实例日志');
+    output.setAttribute('aria-label', t('plugins.instanceLogAria'));
     logs.addEventListener('click', () => {
       logs.disabled = true;
       void readPluginInstanceLog(target, logId).then(text => { output.textContent = text; })
@@ -522,7 +539,7 @@ export class ServicePluginPackagesView extends ViewPane {
     details.dataset.scope = scope;
     details.dataset.runtime = String(Boolean(plugin.runtime));
     details.dataset.initialRuntimeValue = scope === 'defaults'
-      ? `${plugin.instance_scope} · 新建工作区默认值，不会在此 Gateway 启动插件`
+      ? t('plugins.defaultNoGatewayRuntime', plugin.instance_scope)
       : this.runtimeLabel(manifest.package_id, plugin.id, scope === 'workspace' ? workspace?.workspace_id : undefined,
           status, Boolean(plugin.runtime));
     append(details, $('h3')).textContent = `${manifest.package_id}/${plugin.id}`;
@@ -530,24 +547,24 @@ export class ServicePluginPackagesView extends ViewPane {
     detailsState.dataset.pluginRuntimeValue = 'true';
     detailsState.textContent = details.dataset.initialRuntimeValue;
     const identity = append(details, $('p'));
-    const ownerLabel = `Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}${workspace ? ` · 工作区 ${workspace.workspace_id}` : ''} · ${manifest.version}`;
-    identity.textContent = `${ownerLabel}${status?.instance ? ` · 实例 ${status.instance.instance_id}` : ''}`;
+    const ownerLabel = `Gateway ${target.gateway_id}${target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : ''}${workspace ? t('plugins.workspaceSuffix', workspace.workspace_id) : ''} · ${manifest.version}`;
+    identity.textContent = `${ownerLabel}${status?.instance ? t('plugins.instanceSuffix', status.instance.instance_id) : ''}`;
     if (workspace) {
       const handoff = append(details, $('p'));
-      handoff.setAttribute('aria-label', '工作区插件配置交接');
+      handoff.setAttribute('aria-label', t('plugins.workspaceHandoffAria'));
       handoff.dataset.pluginWorkspaceHandoff = 'true';
       handoff.dataset.workspaceId = workspace.workspace_id;
       const state = this.runtimeStatus?.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
-      handoff.textContent = `工作区 ${workspace.workspace_id} 配置交接：${state?.state ?? '尚未收到'}${state?.error ? ` · ${state.error}` : ''}`;
+      handoff.textContent = t('plugins.workspaceHandoff', workspace.workspace_id, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
     }
     const versions = append(details, $('p'));
-    versions.setAttribute('aria-label', '插件配置与运行版本');
+    versions.setAttribute('aria-label', t('plugins.versionsAria'));
     versions.dataset.pluginRuntimeVersion = 'true';
-    versions.textContent = `配置：${binding ? `${binding.enabled ? '启用' : '停用'} @${binding.package_version}` : '未绑定'} · `
-      + (scope === 'defaults' ? '仅新建默认值，未操作当前实例'
+    versions.textContent = t('plugins.configurationPrefix', binding ? `${binding.enabled ? t('plugins.enabled') : t('plugins.disabled')} @${binding.package_version}` : t('plugins.unbound'))
+      + (scope === 'defaults' ? t('plugins.defaultsNoRuntime')
         : this.runtimeActualLabel(status, Boolean(plugin.runtime)));
     const failure = append(details, $('p'));
-    failure.setAttribute('aria-label', '插件运行失败原因');
+    failure.setAttribute('aria-label', t('plugins.runtimeFailureAria'));
     failure.dataset.pluginRuntimeError = 'true';
     failure.hidden = !status?.error;
     failure.textContent = status?.error ?? '';
@@ -560,7 +577,7 @@ export class ServicePluginPackagesView extends ViewPane {
       const otherVersion = binding && binding.package_version !== manifest.version;
       if (otherVersion) {
         const switchVersion = append(actions, $('button')) as HTMLButtonElement;
-        switchVersion.textContent = '切换到此版本（保留开关）';
+        switchVersion.textContent = t('plugins.switchVersion');
         switchVersion.addEventListener('click', () => {
           switchVersion.disabled = true;
           void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace, this.quickInput, this.notifications,
@@ -569,32 +586,32 @@ export class ServicePluginPackagesView extends ViewPane {
       } else {
         const toggle = append(actions, $('button'));
         toggle.textContent = scope === 'defaults'
-          ? binding?.enabled ? '设为新建时停用' : '设为新建时启用'
-          : binding?.enabled ? '停用此范围' : '启用此范围';
+          ? binding?.enabled ? t('plugins.disableOnCreate') : t('plugins.enableOnCreate')
+          : binding?.enabled ? t('plugins.disableScope') : t('plugins.enableScope');
         toggle.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
           this.quickInput, this.notifications, bindingValue, !binding?.enabled, false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
       }
       if (binding && !otherVersion) {
         const unbind = append(actions, $('button'));
-        unbind.textContent = scope === 'defaults' ? '从新建默认值移除' : '解除此范围绑定';
+        unbind.textContent = scope === 'defaults' ? t('plugins.removeFromDefaults') : t('plugins.unbindScope');
         unbind.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
           this.quickInput, this.notifications, bindingValue, null, false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
       }
       if (scope !== 'defaults') {
         append(actions, $('p')).textContent = binding
-          ? `当前绑定 ${manifest.package_id}/${plugin.id}@${binding.package_version}；保存与实际运行分别报告。`
-          : '插件未绑定，参数仅留在原来源且未生效；绑定时按确切版本完整校验。';
-        if (otherVersion) append(actions, $('p')).textContent = '切换绑定后才能按此版本编辑参数；安装新版本不会自动切换。';
+          ? t('plugins.currentBinding', manifest.package_id, plugin.id, binding.package_version)
+          : t('plugins.unboundParameters');
+        if (otherVersion) append(actions, $('p')).textContent = t('plugins.switchBeforeParameters');
         else {
           const parameters = append(actions, $('button'));
-          parameters.textContent = '编辑参数 JSON';
+          parameters.textContent = t('plugins.editParametersJson');
           parameters.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
             this.quickInput, this.notifications, bindingValue, null, true, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
         }
         const privateFields = otherVersion ? [] : writeOnlyFields(plugin.contributes?.configuration);
         for (const field of privateFields) {
           const secret = append(actions, $('button')) as HTMLButtonElement;
-          secret.textContent = field.pointer ? `管理秘密参数 ${field.pointer}` : '按位置管理秘密参数';
+          secret.textContent = field.pointer ? t('plugins.manageSecret', field.pointer) : t('plugins.manageSecretLocation');
           secret.addEventListener('click', () => {
             secret.disabled = true;
             void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
@@ -604,7 +621,7 @@ export class ServicePluginPackagesView extends ViewPane {
       }
       if (status?.revision && plugin.runtime && binding?.enabled && !otherVersion && status.binding?.package_version === manifest.version) {
         const restart = append(actions, $('button')) as HTMLButtonElement;
-        restart.textContent = '重启实例';
+        restart.textContent = t('plugins.restartInstance');
         restart.addEventListener('click', () => {
           restart.disabled = true;
           void this.runTargetOperation(async lifecycle => {
@@ -620,7 +637,7 @@ export class ServicePluginPackagesView extends ViewPane {
       if (scope === 'defaults') return;
       const nextBinding = this.configuredBinding(manifest.package_id, plugin.id, workspace?.workspace_id);
       const nextStatus = this.runtimeSlot(manifest.package_id, plugin.id, workspace?.workspace_id);
-      identity.textContent = `${ownerLabel}${nextStatus?.instance ? ` · 实例 ${nextStatus.instance.instance_id}` : ''}`;
+      identity.textContent = `${ownerLabel}${nextStatus?.instance ? t('plugins.instanceSuffix', nextStatus.instance.instance_id) : ''}`;
       if (status?.log_id !== nextStatus?.log_id) {
         clearNode(instanceLog);
         this.renderInstanceLog(instanceLog, target, nextStatus?.log_id);
@@ -634,7 +651,7 @@ export class ServicePluginPackagesView extends ViewPane {
     renderActions(binding, status);
     if (scope !== 'defaults' && plugin.contributes?.configuration) {
       const schema = append(details, $('pre'));
-      schema.setAttribute('aria-label', '此安装版本的参数 schema');
+      schema.setAttribute('aria-label', t('plugins.parameterSchemaAria'));
       schema.textContent = JSON.stringify(plugin.contributes.configuration, null, 2);
     }
   }
@@ -646,28 +663,28 @@ async function readPluginInstanceLog(target: PluginTarget, logId: string): Promi
   const diagnostics = await gateway.request<GatewayDiagnosticsDTO>(`/api/gateway/diagnostics?${query}`, {
     headers: { 'X-BoxTeam-Target-Gateway-Id': target.gateway_id },
   });
-  if (diagnostics.gateway_id !== target.gateway_id || diagnostics.selected_log_id !== logId) throw new Error('实例日志回执不属于原 Gateway 或日志');
+  if (diagnostics.gateway_id !== target.gateway_id || diagnostics.selected_log_id !== logId) throw new Error(t('plugins.logOwnerMismatch'));
   const log = diagnostics.logs.find(item => item.log_id === logId);
-  if (!log) throw new Error('原实例日志不在目标诊断回执中');
-  if (log.status === 'empty') return '当前实例日志为空。';
-  if (log.status !== 'available') throw new Error(log.error ?? '原实例日志当前不可读');
-  return `${log.truncated ? '仅显示最近的日志尾部。\n' : ''}${log.tail}`;
+  if (!log) throw new Error(t('plugins.logMissing'));
+  if (log.status === 'empty') return t('plugins.logEmpty');
+  if (log.status !== 'available') throw new Error(log.error ?? t('plugins.logUnreadable'));
+  return `${log.truncated ? t('plugins.logTruncated') : ''}${log.tail}`;
 }
 
 async function installPackageFromView(quickInput: IQuickInputService, notifications: INotificationService,
   progress: IProgressService, target: PluginTarget, expectedEntryGatewayId?: string): Promise<void> {
   target = { ...target };
-  const lifecycle = createManagementTargetLifecycle('原 Gateway 或访问凭据已改变，请重新打开插件安装', expectedEntryGatewayId);
+  const lifecycle = createManagementTargetLifecycle(t('plugins.installationTargetChanged'), expectedEntryGatewayId);
   const { check, signal, token } = lifecycle;
   try {
     const type = await quickInput.pick([...(target.gateway_id === lifecycle.entryGatewayId
-      ? [{ label: 'ZIP 文件', kind: 'zip' }, { label: '开发目录', kind: 'directory' }] : []),
-      { label: '自有来源', kind: 'source' }, { label: '查询安装操作', kind: 'query' }],
-      { title: `插件安装 · ${pluginGatewayLabel(target)}`, canPickMany: false }, token);
+      ? [{ label: t('plugins.zipFile'), kind: 'zip' }, { label: t('plugins.developmentDirectory'), kind: 'directory' }] : []),
+      { label: t('plugins.customSource'), kind: 'source' }, { label: t('plugins.queryInstallation'), kind: 'query' }],
+      { title: t('plugins.installationTitle', pluginGatewayLabel(target)), canPickMany: false }, token);
     check();
     if (!type) return;
     if (type.kind === 'query') {
-      const operationId = await quickInput.input({ title: '输入原安装操作 ID', prompt: target.gateway_id }, token);
+      const operationId = await quickInput.input({ title: t('plugins.operationIdPrompt'), prompt: target.gateway_id }, token);
       check();
       if (operationId) await observeInstallation(progress, notifications, target, operationId);
       return;
@@ -678,12 +695,12 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
         { method: 'POST', body: JSON.stringify(target), signal });
       check();
       const sources = inventory.sources?.entries.filter(source => source.enabled) ?? [];
-      if (!sources.length) { notifications.info(inventory.sources?.message ?? '插件源尚未配置'); return; }
+      if (!sources.length) { notifications.info(inventory.sources?.message ?? t('plugins.sourcesNotConfigured')); return; }
       const source = await quickInput.pick(sources.map(source => ({ label: source.source_id, source })),
-        { title: '选择自有来源', canPickMany: false }, token);
+        { title: t('plugins.chooseSource'), canPickMany: false }, token);
       check();
       if (!source) return;
-      const query = await quickInput.input({ title: '搜索自有插件包', prompt: source.source.source_id }, token);
+      const query = await quickInput.input({ title: t('plugins.searchPackages'), prompt: source.source.source_id }, token);
       check();
       if (query === undefined) return;
       let cursor: string | undefined, selected: PluginSourceCatalogDTO['items'][number] | undefined, revision: string | undefined;
@@ -692,28 +709,28 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
           { method: 'POST', body: JSON.stringify({ ...target, source_id: source.source.source_id, query, cursor }), signal });
         check();
         if (page.gateway_id !== target.gateway_id || page.source_id !== source.source.source_id) {
-          throw new Error('插件来源目录回执不属于原 Gateway 或 source_id');
+          throw new Error(t('plugins.catalogOwnerMismatch'));
         }
         if (revision !== undefined && page.catalog_revision !== revision) {
-          throw new Error(`插件目录分页期间版本已变化：${revision} → ${page.catalog_revision}；请重新查询`);
+          throw new Error(t('plugins.catalogRevisionChanged', revision, page.catalog_revision));
         }
         revision = page.catalog_revision;
         const items = page.items.map(artifact => ({ label: `${artifact.package_id}@${artifact.package_version}`,
-          description: artifact.target ? `${artifact.target.os}/${artifact.target.architecture} · ${artifact.target.system_baseline}` : '纯声明插件包', artifact }));
-        const choice = await quickInput.pick([...items, ...(page.next_cursor ? [{ label: '下一页', description: '', artifact: undefined }] : [])],
-          { title: items.length ? '选择确切版本与目标制品' : '此页无匹配插件包', canPickMany: false }, token);
+          description: artifact.target ? `${artifact.target.os}/${artifact.target.architecture} · ${artifact.target.system_baseline}` : t('plugins.declarativePackage'), artifact }));
+        const choice = await quickInput.pick([...items, ...(page.next_cursor ? [{ label: t('plugins.nextPage'), description: '', artifact: undefined }] : [])],
+          { title: items.length ? t('plugins.chooseArtifact') : t('plugins.noMatchingPackages'), canPickMany: false }, token);
         check();
         if (!choice) return;
         if (choice.artifact) selected = choice.artifact;
         else cursor = page.next_cursor;
       }
-      if (!revision) throw new Error('插件来源目录缺少 catalog_revision');
+      if (!revision) throw new Error(t('plugins.catalogRevisionMissing'));
       acquisition = { source_id: source.source.source_id, catalog_revision: revision, artifact: selected,
         development_directory: false, path: '' };
     } else {
-      const path = await quickInput.input({ title: '输入目标 Gateway 上的原生绝对路径', prompt: pluginGatewayLabel(target),
+      const path = await quickInput.input({ title: t('plugins.nativePathPrompt'), prompt: pluginGatewayLabel(target),
         placeHolder: type.kind === 'directory' ? '/path/to/plugin-directory' : '/path/to/plugin.zip', validateInput: async value =>
-          value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? '请输入目标机器原生绝对路径' : null }, token);
+          value.trim() && !value.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(value) && !/^\\\\/.test(value) ? t('plugins.nativePathRequired') : null }, token);
       check();
       if (!path) return;
       acquisition = { path, development_directory: type.kind === 'directory', artifact: undefined };
@@ -733,7 +750,7 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
         // 明确拒绝保留原原因；响应未确认时仅查询原操作，不能另发安装。
         try { operation = await readInstallation(target, operationId); }
         catch (queryError) {
-          throw new Error(`安装响应未确认：${errorsText(error)}。原操作查询失败：${errorsText(queryError)}。请查询原操作 ${operationId}（Gateway ${target.gateway_id}）。`);
+          throw new Error(t('plugins.installationResponseUnknown', errorsText(error), errorsText(queryError), operationId, target.gateway_id));
         }
       }
       await observeInstallation(progress, notifications, target, operationId, operation);
@@ -761,7 +778,7 @@ async function runPluginInstallation(target: PluginTarget,
     pending = Promise.resolve().then(submit);
     activePluginInstallations.set(key, pending);
   } else {
-    notifications.info('相同插件制品的原安装操作仍在进行，正在等待该操作');
+    notifications.info(t('plugins.installationAlreadyPending'));
   }
   try { await pending; }
   finally {
@@ -777,13 +794,13 @@ async function readInstallation(target: PluginTarget, operationId: string): Prom
 
 function installationFailureText(target: PluginTarget, operation: PluginInstallOperationDTO): string {
   const artifact = operation.artifact;
-  const status = operation.status === 'cancelled' ? '已取消'
-    : operation.status === 'unknown' ? '结果未知' : '失败';
+  const status = operation.status === 'cancelled' ? t('plugins.cancelled')
+    : operation.status === 'unknown' ? t('plugins.unknown') : t('plugins.failed');
   if (!artifact) {
-    return `插件安装${status}，但 Gateway 回执缺少必需制品详情（artifact）`
-      + `\n目标原生 Gateway：${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}`
-      + `\n原操作：${operation.operation_id}\nGateway 返回错误或环境详情：${operation.error?.trim() || 'Gateway 未返回详情。'}`
-      + '\n请重新查询原操作；若仍缺少制品详情，检查目标 Gateway 的安装操作记录。';
+    return t('plugins.failureMissingArtifact', status)
+      + t('plugins.targetGatewayLine', target.gateway_id, target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : '')
+      + t('plugins.operationErrorLines', operation.operation_id, operation.error?.trim() || t('plugins.noGatewayDetails'))
+      + t('plugins.queryMissingArtifact');
   }
   const packageIdentity = `${artifact.package_id}@${artifact.package_version}`;
   const runtimeTarget = artifact.target;
@@ -791,39 +808,39 @@ function installationFailureText(target: PluginTarget, operation: PluginInstallO
     ? `${runtimeTarget.os}/${runtimeTarget.architecture} · ${runtimeTarget.system_baseline}`
       + (runtimeTarget.node ? ` · Node ${runtimeTarget.node.version}/ABI ${runtimeTarget.node.abi}` : '')
       + (runtimeTarget.python ? ` · Python ${runtimeTarget.python.version}/ABI ${runtimeTarget.python.abi}` : '')
-    : '未声明代码运行环境';
+    : t('plugins.noRuntimeDeclared');
   const error = operation.error?.trim();
   const nextStep = operation.status === 'unknown'
-    ? '先检查目标 Gateway 当前插件包，再查询此原操作；确认发布状态前不要重新安装，不会自动重放。'
+    ? t('plugins.unknownInstallationNext')
     : operation.status === 'cancelled'
-      ? '确认目标 Gateway 未发布此版本后，可以重新安装。'
-      : '请根据 Gateway 错误修复问题后，再对该包版本重新安装。';
-  return `插件安装${status}：${packageIdentity}\n目标原生 Gateway：${target.gateway_id}`
-    + `${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}`
-    + `\n原操作：${operation.operation_id}\n所需运行环境：${requiredEnvironment}`
-    + `\nGateway 返回错误或环境详情：${error || 'Gateway 未返回详情。'}\n${nextStep}`;
+      ? t('plugins.cancelledInstallationNext')
+      : t('plugins.failedInstallationNext');
+  return t('plugins.installationFailure', status, packageIdentity, target.gateway_id)
+    + `${target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : ''}`
+    + t('plugins.operationRuntimeLines', operation.operation_id, requiredEnvironment)
+    + t('plugins.errorNextLines', error || t('plugins.noGatewayDetails'), nextStep);
 }
 
 async function observeInstallation(progress: IProgressService, notifications: INotificationService,
   target: PluginTarget, operationId: string, initial?: PluginInstallOperationDTO): Promise<void> {
   await progress.withProgress({ location: ProgressLocation.Notification,
-    title: `安装插件包 · ${pluginGatewayLabel(target)} · ${operationId}`, cancellable: true }, async reporter => {
+    title: t('plugins.installProgressTitle', pluginGatewayLabel(target), operationId), cancellable: true }, async reporter => {
     const deadline = performance.now() + DEFAULT_API_REQUEST_TIMEOUT_MS;
     let operation = initial ?? await readInstallation(target, operationId);
     while (operation.status === 'pending' || operation.status === 'running') {
-      reporter.report({ message: operation.cancel_requested ? '正在结清取消请求…' : '正在安装…' });
-      if (performance.now() >= deadline) throw new Error(`等待安装结果超时，请查询原操作 ${operationId}；不会重新安装。`);
+      reporter.report({ message: operation.cancel_requested ? t('plugins.settlingCancellation') : t('plugins.installing') });
+      if (performance.now() >= deadline) throw new Error(t('plugins.installationTimeout', operationId));
       await timeout(300);
       operation = await readInstallation(target, operationId);
     }
     if (operation.status !== 'succeeded') throw new Error(installationFailureText(target, operation));
     if (!operation.artifact?.package_id || !operation.artifact.package_version) {
-      throw new Error(`安装成功回执缺少制品身份，无法确认目标包版本：${pluginGatewayLabel(target)} · ${operationId}`);
+      throw new Error(t('plugins.successArtifactMissing', pluginGatewayLabel(target), operationId));
     }
-    notifications.info(`已在 ${pluginGatewayLabel(target)} 安装 ${operation.artifact.package_id}@${operation.artifact.package_version}`);
+    notifications.info(t('plugins.installationSucceeded', pluginGatewayLabel(target), operation.artifact.package_id, operation.artifact.package_version));
   }, () => { void gateway.request('/api/gateway/service-plugins/cancel-install',
     { method: 'POST', body: JSON.stringify({ ...target, operation_id: operationId }) })
-    .catch(error => notifications.error(`取消未确认，请查询原操作 ${operationId}：${errorsText(error)}`)); });
+    .catch(error => notifications.error(t('plugins.cancellationUnknown', operationId, errorsText(error)))); });
 }
 
 export async function installServicePluginPackage(accessor: ServicesAccessor, explicitTarget?: PluginTarget): Promise<void> {
@@ -840,16 +857,16 @@ async function uninstallPackageFromView(quickInput: IQuickInputService, notifica
   packageId: string, version: string, lifecycle: ReturnType<typeof createManagementTargetLifecycle>): Promise<void> {
   target = { ...target };
   lifecycle.check();
-  const confirm = await quickInput.pick([{ label: '取消', accept: false }, { label: '卸载整包', accept: true,
-    description: `${packageId}@${version} · ${pluginGatewayLabel(target)} · 有原 owner 引用时会拒绝并显示引用` }],
-  { title: `卸载插件包 · ${pluginGatewayLabel(target)}`, canPickMany: false }, lifecycle.token);
+  const confirm = await quickInput.pick([{ label: t('plugins.cancel'), accept: false }, { label: t('plugins.uninstallPackage'), accept: true,
+    description: t('plugins.uninstallConfirmationDetail', packageId, version, pluginGatewayLabel(target)) }],
+  { title: t('plugins.uninstallTitle', pluginGatewayLabel(target)), canPickMany: false }, lifecycle.token);
   lifecycle.check();
   if (!confirm?.accept) return;
   const result = await gateway.request<PluginUninstallResultDTO>('/api/gateway/service-plugins/uninstall', {
     method: 'POST', body: JSON.stringify({ ...target, package_id: packageId, package_version: version }),
   });
   if (!result.uninstalled || result.package_id !== packageId || result.package_version !== version) {
-    throw new Error(`卸载回执未确认所选包版本：${pluginGatewayLabel(target)} · ${packageId}@${version}`);
+    throw new Error(t('plugins.uninstallReceiptMismatch', pluginGatewayLabel(target), packageId, version));
   }
-  notifications.info(`已从 ${pluginGatewayLabel(target)} 卸载 ${packageId}@${version}`);
+  notifications.info(t('plugins.uninstalled', pluginGatewayLabel(target), packageId, version));
 }

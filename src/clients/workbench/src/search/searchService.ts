@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { raceCancellationError } from '../../upstream/src/vs/base/common/async.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
@@ -40,7 +41,7 @@ export class WorkspaceSearchService extends RemoteSearchService {
   }
 
   override aiTextSearch(query: IAITextQuery, token?: CancellationToken, onProgress?: (item: ISearchProgressItem) => void): Promise<ISearchComplete> {
-    if (businessQuery(query)) return Promise.reject(new Error('当前业务范围未启用 AI／语义搜索'));
+    if (businessQuery(query)) return Promise.reject(new Error(t('quickAccess.search.aiUnavailable')));
     return super.aiTextSearch(query, token, onProgress);
   }
 
@@ -70,7 +71,7 @@ export class WorkspaceSearchService extends RemoteSearchService {
     const identity = this.businessIdentity.extUri;
     query = validateTextQuery(query, identity);
     if (token.isCancellationRequested) throw new CancellationError();
-    if (this._store.isDisposed) throw new Error('文件搜索服务已释放');
+    if (this._store.isDisposed) throw new Error(t('quickAccess.files.disposed'));
     const key = (resource: URI) => identity.getComparisonKey(resource);
     const open = new ResourceSet(openResources(this.businessEditors, query, identity), key);
     const covered = new ResourceSet(key), results: FileMatch[] = [];

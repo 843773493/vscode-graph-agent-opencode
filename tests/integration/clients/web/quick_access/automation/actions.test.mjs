@@ -70,7 +70,7 @@ test('冲突不覆盖revision重试，保留原错误并回读', async () => {
 for (const mode of ['owner-cancel', 'action-cancel', 'terminate-cancel', 'identity']) test(`${mode}在未接受步骤零写入`, async () => {
   const result = await exercise(mode); expect(writes(result)).toEqual([]);
   if (mode === 'owner-cancel') expect(result.requests).toEqual([]);
-  if (mode === 'identity') expect(result.errors.join('')).toContain('身份');
+  if (mode === 'identity') expect(result.errors).toEqual(['Error: 访问凭据已改变，请重新查找任务']);
 });
 for (const mode of ['accepted-close', 'accepted-terminate-close']) test(`${mode}关闭浮层和切换A/B不撤销、改投或重放已受理动作`, async () => {
   const result = await exercise(mode); expect(result.result).toBe(true);

@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type {
   AttachmentRef,
@@ -13,8 +14,8 @@ function internalMessageLabel(
   metadata: Record<string, unknown> | undefined,
 ): string | null {
   switch (metadata?.internal_display_kind) {
-    case "delegated_task": return "委派任务";
-    case "generated_session_result": return "会话生成";
+    case "delegated_task": return t("chat.internal.delegation");
+    case "generated_session_result": return t("chat.generatedSession");
     default: return null;
   }
 }

@@ -1,4 +1,5 @@
 import type { GatewayWorkspace } from "../../../types/backend";
+import { t } from "../../../../../shared/core/i18n/index.js";
 
 export interface WorkspaceAddGatewayChoice {
   key: string;
@@ -42,18 +43,18 @@ export function buildWorkspaceAddGatewayChoices(
       key: "local",
       connectionId: null,
       kind: "local",
-      name: "当前电脑",
-      detail: "当前电脑",
+      name: t("gateway.workspaceAdd.currentComputer"),
+      detail: t("gateway.workspaceAdd.currentComputer"),
       workspaceCount: localWorkspaceCount,
       status: "ready",
-      statusLabel: "可用",
+      statusLabel: t("gateway.workspaceAdd.available"),
       error: null,
     },
   ];
   for (const [connectionId, group] of remoteGroups) {
     const remote = group.remote;
     if (!remote) {
-      throw new Error(`远程 Gateway ${connectionId} 缺少连接摘要`);
+      throw new Error(t("gateway.workspaceAdd.gatewayConnectionSummaryMissing", connectionId));
     }
     const sshAlias = remote.ssh_config_host?.trim() ?? "";
     const customName = remote.name.trim();
@@ -70,7 +71,7 @@ export function buildWorkspaceAddGatewayChoices(
       detail: address,
       workspaceCount: group.workspaceCount,
       status: group.hasReadyWorkspace ? "ready" : "offline",
-      statusLabel: group.hasReadyWorkspace ? "SSH 已连接" : "SSH 连接异常",
+      statusLabel: group.hasReadyWorkspace ? t("gateway.workspaceAdd.sshConnected") : t("gateway.workspaceAdd.sshConnectionError"),
       error: group.connectionError,
     });
   }

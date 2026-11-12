@@ -1,15 +1,19 @@
+import '../../../../harness/js/workbench-locale.ts';
+import { setLocaleResources } from '../../../../../src/clients/shared/core/i18n/index.js';
+import englishMessages from '../../../../../src/clients/shared/core/i18n/messages/en.json';
 import { Emitter, Event } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { CommandsRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
 import { IQuickInputService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickInput.js';
-import { ManagePluginQuickAccessProvider, InstallPluginQuickAccessProvider } from '../../../../../src/clients/workbench/src/extensions/quickAccess.js';
 import { selectExtensionManagementTargetCommand } from '../../../../../src/clients/workbench/src/managementTarget.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
 
 /** 真实 Provider 和目标选择，只有库存 HTTP 与原管理视图接缝使用显式替身。 */
-export async function pluginManagementContract(mode) {
+export async function pluginManagementContract(mode, locale = 'zh-cn') {
+  if (locale === 'en') setLocaleResources('en', englishMessages);
+  const { ManagePluginQuickAccessProvider, InstallPluginQuickAccessProvider } = await import('../../../../../src/clients/workbench/src/extensions/quickAccess.js');
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), cancellation = new CancellationTokenSource();
   const initial = { ...previous, gatewayId: 'entry-gateway', loading: false, error: null };
   workspaceContext.publish(initial);
@@ -69,7 +73,7 @@ export async function pluginManagementContract(mode) {
       }
     }
     return { requests, opened, commands, errors, aborted, placeholder: picker.placeholder,
-      items: picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail, actionable: !!item.accept })) };
+      items: picker.items.map(item => ({ id: item.id, label: item.label, description: item.description, detail: item.detail, actionable: !!item.accept })) };
   } finally {
     lifetime.dispose(); cancellation.dispose(true); provider.dispose(); changes.dispose(); accepts.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(previous);

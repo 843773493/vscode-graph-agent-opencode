@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useRef } from "react";
 import { errorMessage } from "../../utils/errorMessage";
 
@@ -118,13 +119,13 @@ export function useNodeDebugController({
       }
       setState(nextState);
       publishStateChange();
-      onStatusChange(`源码调试：${command.action}`);
+      onStatusChange(t("debug.controller.action", command.action));
       return nextState;
     } catch (cause: unknown) {
       const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
-        onStatusChange(`源码调试动作失败: ${message}`);
+        onStatusChange(t("debug.controller.actionFailed", message));
       }
       await refreshAfterMutationFailure(message, mutation);
       return null;
@@ -163,13 +164,13 @@ export function useNodeDebugController({
       }
       setState(nextState);
       publishStateChange();
-      onStatusChange(`已启动源码调试: ${path}`);
+      onStatusChange(t("debug.controller.started", path));
       return nextState;
     } catch (cause: unknown) {
       const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
-        onStatusChange(`启动源码调试失败: ${message}`);
+        onStatusChange(t("debug.controller.startFailed", message));
       }
       await refreshAfterMutationFailure(message, mutation);
       return null;
@@ -209,13 +210,13 @@ export function useNodeDebugController({
       }
       setState(nextState);
       publishStateChange();
-      onStatusChange(`已创建调试方案: ${input.name}`);
+      onStatusChange(t("debug.controller.created", input.name));
       return nextState;
     } catch (cause: unknown) {
       const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
-        onStatusChange(`创建调试方案失败: ${message}`);
+        onStatusChange(t("debug.controller.createFailed", message));
       }
       await refreshAfterMutationFailure(message, mutation);
       return null;
@@ -241,13 +242,13 @@ export function useNodeDebugController({
       }
       setState(nextState);
       publishStateChange();
-      onStatusChange(`已切换调试方案: ${nextState.active_configuration_name ?? configurationId}`);
+      onStatusChange(t("debug.controller.activated", nextState.active_configuration_name ?? configurationId));
       return nextState;
     } catch (cause: unknown) {
       const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
-        onStatusChange(`切换调试方案失败: ${message}`);
+        onStatusChange(t("debug.controller.activateFailed", message));
       }
       await refreshAfterMutationFailure(message, mutation);
       return null;
@@ -297,13 +298,13 @@ export function useNodeDebugController({
       }
       setState(nextState);
       publishStateChange();
-      onStatusChange(`已保存调试方案: ${input.name}`);
+      onStatusChange(t("debug.controller.saved", input.name));
       return nextState;
     } catch (cause: unknown) {
       const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
-        onStatusChange(`保存调试方案失败: ${message}`);
+        onStatusChange(t("debug.controller.saveFailed", message));
       }
       await refreshAfterMutationFailure(message, mutation);
       return null;
@@ -330,13 +331,13 @@ export function useNodeDebugController({
       }
       setState(nextState);
       publishStateChange();
-      onStatusChange("已删除调试方案");
+      onStatusChange(t("debug.controller.deleted"));
       return nextState;
     } catch (cause: unknown) {
       const message = errorMessage(cause);
       if (isCurrentMutation(mutation)) {
         setError(message);
-        onStatusChange(`删除调试方案失败: ${message}`);
+        onStatusChange(t("debug.controller.deleteFailed", message));
       }
       await refreshAfterMutationFailure(message, mutation);
       return null;

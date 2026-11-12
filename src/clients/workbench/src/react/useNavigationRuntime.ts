@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { browserGatewayId, getBrowserUiSettings } from "../../../web/src/hooks/settings/browserUiSettings.js";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -70,7 +71,7 @@ export function useNavigationRuntime(
     return workspaceKey;
   }, [queue]);
   useEffect(() => {
-    void refreshSessions().catch(cause => reportError(`导航初始化失败：${String(cause)}`));
+    void refreshSessions().catch(cause => reportError(t('navigation.initializationError', String(cause))));
     return invalidateWorkspaceRefreshes;
   }, [refreshSessions, invalidateWorkspaceRefreshes, reportError]);
   const refreshGatewayWorkspaceStatuses = useCallback(async () => { await refreshSessions(); }, [refreshSessions]);

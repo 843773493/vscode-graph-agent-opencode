@@ -37,7 +37,7 @@ export async function verifyFileWatch({ page, command, result, workspace, resour
     await expect(editor.locator('.view-lines')).toContainText('watch dirty must survive');
     await writeFile(join(workspace, 'watch-contract.txt'), 'watch newer external body\n');
     await command('workbench.action.files.save');
-    await expect(page.locator('.notifications-toasts')).toContainText(/newer|后端文件已变化/);
+    await expect(page.locator('.notifications-toasts')).toContainText('无法保存"watch-contract.txt": 文件的内容较新。请将您的版本与文件内容进行比较，或用您的更改覆盖文件内容。');
     await expect(editor.locator('.view-lines')).toContainText('watch dirty must survive');
     expect(await readFile(join(workspace, 'watch-contract.txt'), 'utf8')).toBe('watch newer external body\n');
     expect(saves.every(receipt => receipt.route === owner.workspaceId && receipt.status === 409)).toBe(true);

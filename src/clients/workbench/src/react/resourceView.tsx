@@ -1,4 +1,5 @@
 import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
+import { t } from '../../../shared/core/i18n/index.js';
 import { useCallback, useEffect, useState } from 'react';
 import WorkspaceEditorHeader from '../../../web/src/components/workspace/WorkspaceEditorHeader.js';
 import WorkspaceAuxiliaryPanel, { type WorkspaceAuxiliaryTab } from '../../../web/src/components/workspace/WorkspaceAuxiliaryPanel.js';
@@ -69,7 +70,7 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
   const { selectThreadForOwner } = childConversation;
   useEffect(() => {
     if (!reportRequest) return;
-    if (reportRequest.source_session_id !== owner.sessionId || !reportRequest.source_thread_id || !reportRequest.source_execution_id) throw new Error('报告请求与会话资源归属不一致');
+    if (reportRequest.source_session_id !== owner.sessionId || !reportRequest.source_thread_id || !reportRequest.source_execution_id) throw new Error(t('thread.resources.reportOwnerMismatch'));
     selectThreadForOwner({ workspaceId: owner.workspaceKey, sessionId: owner.sessionId }, reportRequest.source_thread_id, 'report', reportRequest.source_execution_id);
   }, [reportRequest, owner.workspaceKey, owner.sessionId, selectThreadForOwner]);
   useEffect(() => {
@@ -91,7 +92,7 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
   const openDebugThread = (threadId: string) => {
     void editors.openEditor(new ThreadInput({ ...owner, threadId, title: threadId }), {
       pinned: true, viewState: { resourcesVisible: true, resourceTab: 'debug' },
-    }).catch((cause: unknown) => onError(`打开调试 Thread 失败：${String(cause)}`));
+    }).catch((cause: unknown) => onError(t('thread.resources.openDebugFailed', String(cause))));
   };
   return <div className="native-thread-resources" hidden={!input.resourcesVisible} style={{ flexGrow: ratio }}>
     <WorkspaceEditorHeader auxiliaryTab={tab} tabOrder={order} onReorderAuxiliaryTabs={setOrder} onSelectAuxiliaryTab={value => {
@@ -125,8 +126,8 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
       onReviewSessionChangeFile={content.reviewSessionChangeFile}
       onOpenSessionChangeFile={file => {
         const id = state.selectedChangesetId;
-        if (!id) { onError('无法打开更改审阅：更改范围尚未加载'); return; }
-        void editors.openEditor({ original: { resource: changeFileUri(owner, id, file, 'before') }, modified: { resource: changeFileUri(owner, id, file, 'after') }, label: file.file_path, options: { pinned: true } }).catch((cause: unknown) => onError(`打开更改审阅失败：${String(cause)}`));
+        if (!id) { onError(t('thread.resources.changesNotLoaded')); return; }
+        void editors.openEditor({ original: { resource: changeFileUri(owner, id, file, 'before') }, modified: { resource: changeFileUri(owner, id, file, 'after') }, label: file.file_path, options: { pinned: true } }).catch((cause: unknown) => onError(t('thread.resources.openChangesFailed', String(cause))));
       }}
       onOpenFile={filePreview.openWorkspaceFilePreview} onFileOpenMenu={onFileOpenMenu} onStatusChange={reportResourceStatus}
       attachmentPreview={attachment ? <WorkspaceAttachmentPreview attachment={attachment} apiPort={0} workspaceId={owner.workspaceKey} sessionId={owner.sessionId}
@@ -140,7 +141,7 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
         onOpenWorkspacePath={async path => {
           const file = await revealWorkspaceFileEntry(0, path, owner.workspaceKey);
           const root = resourceFileRootUri(file.path);
-          if (!root) throw new Error('调试源码定位响应缺少后端文件根 URI');
+          if (!root) throw new Error(t('thread.resources.debugRootMissing'));
           await editors.openEditor({ resource: workspaceFileUri(owner, file.path, root) });
         }} onStatusChange={reportResourceStatus} />}
       resourcePanel={<><ResourcePanel inlinePreview resources={resourceItems} loading={state.sessionResourcesLoading} error={state.sessionResourcesError}
@@ -151,17 +152,17 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
         onOwnerControl={async (id, action, target) => {
           const revision = resourceItems.find(item => item.resource_id === id)?.metadata.owner_revision;
           try {
-            if (typeof revision !== 'number') throw new Error('会话资源缺少权威版本，请刷新后重新选择操作');
+            if (typeof revision !== 'number') throw new Error(t('thread.resources.revisionMissing'));
             await commands.executeCommand(resourceActionCommand(action), { owner: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId },
               resource: { resource_id: id, owner_revision: revision }, thread: target ?? thread });
           }
           finally { await content.refreshSessionResources(owner.sessionId, { force: true }); }
         }}
         onCreateConnection={async (kind, target) => {
-          if (target.session_id !== owner.sessionId || target.thread_id !== owner.threadId) throw new Error('新建连接的 Thread 归属不一致');
+          if (target.session_id !== owner.sessionId || target.thread_id !== owner.threadId) throw new Error(t('thread.resources.connectionOwnerMismatch'));
           const created = await createSessionConnection(0, owner.workspaceKey, target, kind);
           const result = await content.refreshSessionResources(owner.sessionId, { force: true });
-          if (result !== 'loaded') throw new Error('连接已创建，但资源重读未完成');
+          if (result !== 'loaded') throw new Error(t('thread.resources.connectionRefreshIncomplete'));
           openRuntime(created.kind, created.resourceId);
         }} />
         <ChildThreadPanel {...children} sessionId={owner.sessionId} ownerLabel={state.currentSession?.title ?? owner.title}
@@ -169,7 +170,7 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
           onRefresh={() => { void children.refresh(); }} conversation={childConversation}
           onForkFromThread={onForkThread}
           onOpenThread={child => { void editors.openEditor(new ThreadInput({ ...owner, threadId: child.thread_id,
-            title: child.title ?? child.thread_id }), { pinned: true }).catch((cause: unknown) => onError(`打开子 Thread 失败：${String(cause)}`)); }}
+            title: child.title ?? child.thread_id }), { pinned: true }).catch((cause: unknown) => onError(t('thread.resources.openChildFailed', String(cause)))); }}
           onSelectThread={openDebugThread} />
       </>} />
     </div>

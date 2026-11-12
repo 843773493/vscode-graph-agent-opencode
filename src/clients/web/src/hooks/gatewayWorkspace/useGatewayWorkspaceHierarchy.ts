@@ -7,6 +7,7 @@ import {
 import type { RunGatewayWorkspaceListTask, SetAppState } from "../contentViewLoaderTypes";
 import { withFreshGatewayWorkspaceList } from "../../state/gatewayWorkspaceState";
 import { errorMessage } from "../../utils/errorMessage";
+import { t } from "../../../../shared/core/i18n/index.js";
 import { activeGatewayWorkspaceFields } from "./activeGatewayWorkspaceFields";
 
 export function useGatewayWorkspaceHierarchy(
@@ -35,7 +36,7 @@ export function useGatewayWorkspaceHierarchy(
             (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
           );
           if (!updatedWorkspace) {
-            throw new Error(`Gateway 更新响应缺少工作区: ${workspaceId}`);
+            throw new Error(t("gateway.workspace.updatedWorkspaceMissing", workspaceId));
           }
           setState((previous) => ({
             ...withFreshGatewayWorkspaceList(previous, workspaceList.items),
@@ -44,8 +45,8 @@ export function useGatewayWorkspaceHierarchy(
               gatewayError: null,
               error: null,
               status: parentWorkspaceId
-                ? `工作区「${updatedWorkspace.name}」已移入父工作区`
-                : `工作区「${updatedWorkspace.name}」已移出父工作区`,
+                ? t("gateway.workspace.movedIntoParent", updatedWorkspace.name)
+                : t("gateway.workspace.movedOutOfParent", updatedWorkspace.name),
             } : {}),
           }));
         } catch (error) {
@@ -60,7 +61,7 @@ export function useGatewayWorkspaceHierarchy(
             }));
           } catch (reconciliationError) {
             const reconciliationMessage = errorMessage(reconciliationError);
-            message = `${operationMessage}；重新读取工作区列表也失败: ${reconciliationMessage}`;
+            message = t("gateway.workspace.operationAndReadbackFailed", operationMessage, reconciliationMessage);
             gatewayWorkspacesStale = true;
           }
           setState((previous) => ({
@@ -68,7 +69,7 @@ export function useGatewayWorkspaceHierarchy(
             ...(gatewayWorkspacesStale ? { gatewayWorkspacesStale: true } : {}),
             ...(selectionIntent === selectionIntentRef.current ? {
               gatewayError: message,
-              status: `更新工作区父子关系失败: ${message}`,
+              status: t("gateway.workspace.updateHierarchyFailed", message),
             } : {}),
           }));
           throw error;

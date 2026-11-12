@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
 import { Limiter } from '../../upstream/src/vs/base/common/async.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../upstream/src/vs/workbench/common/editor.js';
@@ -67,18 +68,18 @@ export function captureSearchOwner(editors: IEditorService, input: IEditorServic
   }
   const snapshot = workspaceContext.getSnapshot();
   const target = snapshot.workspaces.find(workspace => gatewayWorkspaceKey(workspace) === snapshot.activeId);
-  if (snapshot.error || snapshot.loading || !target || !snapshot.gatewayId) throw new Error(snapshot.error ?? '没有明确搜索工作区，请先选择工作区');
+  if (snapshot.error || snapshot.loading || !target || !snapshot.gatewayId) throw new Error(snapshot.error ?? t('quickAccess.search.workspaceMissing'));
   return gatewayWorkspaceOwner(target);
 }
 
 export async function loadSearchRoots(owners: readonly WorkspaceOwner[], signal: AbortSignal): Promise<PromiseSettledResult<SearchScope['workspaces'][number]>[]> {
-  if (!owners.length) throw new Error('请先选择明确搜索工作区');
+  if (!owners.length) throw new Error(t('quickAccess.search.workspaceRequired'));
   const routes = await gateway.workspaces(false, signal), limiter = new Limiter<SearchScope['workspaces'][number]>(3);
   try {
     return await Promise.allSettled(owners.map(owner => limiter.queue(async () => {
       signal.throwIfAborted();
       const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
-      if (target.status !== 'ready') throw new Error(`工作区 ${target.name} 当前不可查询（${target.status}），请明确启动或连接后再搜索`);
+      if (target.status !== 'ready') throw new Error(t('quickAccess.search.workspaceUnavailable', target.name, target.status));
       const roots = await gateway.request<WorkspaceFileRootsDTO>('/api/v1/workspace/files/roots',
         { signal, headers: gatewayWorkspaceRequestHeaders(target) }, gatewayWorkspaceKey(target));
       return { ...owner, rootUri: roots.workspace_uri, label: target.name };

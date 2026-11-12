@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { catalogOutboxParentCreation } from "../../state/session/sessionCatalogOutbox";
@@ -129,8 +130,8 @@ export function useSessionCatalogActions({
       ?? activeGatewayWorkspaceId
       ?? nullableGatewayWorkspaceKey(gatewayWorkspaces.find((workspace) => workspace.system_default));
     if (!targetWorkspaceId) {
-      const error = new Error("未找到默认 home 工作区，无法创建会话");
-      setStatus(`创建会话失败: ${error.message}`);
+      const error = new Error(t('navigation.sessions.defaultWorkspaceMissing'));
+      setStatus(t('navigation.sessions.createError', error.message));
       throw error;
     }
     try {
@@ -140,7 +141,7 @@ export function useSessionCatalogActions({
       await createSession(DEFAULT_SESSION_TITLE, targetWorkspaceId);
       invalidateSessionCatalog(targetWorkspaceId);
     } catch (error) {
-      setStatus(`创建会话失败: ${errorMessage(error)}`);
+      setStatus(t('navigation.sessions.createError', errorMessage(error)));
       throw error;
     }
   };
@@ -161,7 +162,7 @@ export function useSessionCatalogActions({
   ) => {
     const runtime = sessionCatalogOutboxRuntime;
     if (!runtime) {
-      throw new Error("Gateway 认证状态尚未就绪，不能新建会话文件夹");
+      throw new Error(t('navigation.catalog.authNotReadyCreateFolder'));
     }
     const workspaceTarget = requireGatewayWorkspaceRequestTarget(gatewayWorkspaces, workspaceId);
     const handle = await runtime.openWorkspace(
@@ -175,14 +176,14 @@ export function useSessionCatalogActions({
         parentCreatedByOperationId: parent?.createdBy },
       { baseCatalogRevision: catalog.catalog_revision },
     );
-    setStatus("会话文件夹已保存本地待同步变更，等待提交");
+    setStatus(t('navigation.folder.savedPending'));
     invalidateSessionCatalog(workspaceId);
     void runtime.waitForTerminal(handle, submitted.operationId)
       .then(() => invalidateSessionCatalog(workspaceId))
       .catch((error: unknown) => {
         invalidateSessionCatalog(workspaceId);
         if (!isErrorReported(error)) runtime.reportError(
-          `新建会话文件夹失败: ${errorMessage(error)}`,
+          t('navigation.folder.createFailed', errorMessage(error)),
         );
       });
   };
@@ -210,12 +211,12 @@ export function useSessionCatalogActions({
       if (displayed?.managed && displayed.connection_kind === "local") {
         const snapshot = await listGatewayWorkspaces(apiPort);
         const target = snapshot.items.find((item) => gatewayWorkspaceKey(item) === workspaceId);
-        if (!target?.managed) throw new Error("工作区已变化，请刷新后重新删除");
+        if (!target?.managed) throw new Error(t('navigation.workspace.changedBeforeDelete'));
         if (target.backend_generation) {
           const members = target.affected_workspace_ids;
           if (!members.length || !members.includes(target.workspace_id)
             || new Set(members).size !== members.length) {
-            throw new Error("Backend 完整成员合同缺失");
+            throw new Error(t('navigation.workspace.backendMembersMissing'));
           }
           groupRequest = {
             expected_backend_generation: target.backend_generation,
@@ -224,18 +225,18 @@ export function useSessionCatalogActions({
           };
           const names = members.map((id) => {
             const member = snapshot.items.find((item) => item.gateway_id === target.gateway_id && item.workspace_id === id);
-            if (!member) throw new Error(`Backend 成员未登记：${id}`);
+            if (!member) throw new Error(t('navigation.workspace.backendMemberMissing', id));
             return `• ${member.name}（${id}）`;
           });
-          impact = `\n\n以下完整组将先排空：\n${names.join("\n")}\n${members.length === 1
-            ? "最后成员退出后将关闭 Backend。"
-            : "其余成员将一起重启，删除目标会退出 Backend。"}`;
+          impact = t('navigation.workspace.deleteGroupImpact', names.join("\n"), members.length === 1
+            ? t('navigation.workspace.deleteLastMember')
+            : t('navigation.workspace.deleteOtherMembers'));
         }
       }
       const confirmed = await confirm({
-        title: "删除工作区",
-        message: `从 Web Gateway 列表移除工作区“${workspaceName || workspaceId}”。会话文件不会被删除。${impact}`,
-        confirmText: "删除",
+        title: t('navigation.workspace.delete'),
+        message: t('navigation.workspace.deleteDescription', workspaceName || workspaceId, impact),
+        confirmText: t('navigation.delete'),
         danger: true,
       });
       if (!confirmed) return;
@@ -262,19 +263,19 @@ export function useSessionCatalogActions({
           || affectedWorkspaceIds.length !== groupRequest.expected_workspace_ids.length
           || new Set(affectedWorkspaceIds).size !== groupRequest.expected_workspace_ids.length
           || groupRequest.expected_workspace_ids.some((id) => !affectedWorkspaceIds.includes(id))) {
-          throw new Error("删除阻塞回执与已确认的 Backend 完整合同不匹配");
+          throw new Error(t('navigation.workspace.deleteContractMismatch'));
         }
         const blockers = error.detail.blockers.map((blocker: unknown) => {
           if (typeof blocker !== "object" || blocker === null
             || !("workspace_id" in blocker) || typeof blocker.workspace_id !== "string"
             || !("resource_id" in blocker) || typeof blocker.resource_id !== "string"
-            || !("detail" in blocker)) throw new Error("删除阻塞回执缺少完整 blocker 身份");
+            || !("detail" in blocker)) throw new Error(t('navigation.workspace.deleteBlockerMissing'));
           return `${blocker.workspace_id}：${typeof blocker.detail === "string" ? blocker.detail : blocker.resource_id}`;
         });
         const forceConfirmed = await confirm({
-          title: "强制删除工作区",
-          message: `当前删除被阻塞：\n${blockers.join("\n")}\n\n确认后，原完整组内的活动任务将先记录为 interrupted，再关闭或重启 Backend 并删除目标。${impact}`,
-          confirmText: "中断任务并删除",
+          title: t('navigation.workspace.forceDelete'),
+          message: t('navigation.workspace.forceDeleteDescription', blockers.join("\n"), impact),
+          confirmText: t('navigation.workspace.forceDeleteConfirm'),
           danger: true,
         });
         if (forceConfirmed) {
@@ -288,8 +289,8 @@ export function useSessionCatalogActions({
       }
     })().catch((error: unknown) => {
       if (error !== delegatedRemovalError) {
-        setStatus(`删除工作区失败: ${errorMessage(error)}`);
-        onError(`删除工作区失败 (${workspaceId}): ${errorMessage(error)}`);
+        setStatus(t('navigation.workspace.deleteError', errorMessage(error)));
+        onError(t('navigation.workspace.deleteOwnerError', workspaceId, errorMessage(error)));
       }
     });
   };
@@ -299,14 +300,14 @@ export function useSessionCatalogActions({
     workspaceId: string,
     assertAccess?: () => void,
   ): Promise<void> => {
-    if (nameDialogSubmitting) return Promise.reject(new Error("会话重命名正在提交，请等待原操作结算"));
+    if (nameDialogSubmitting) return Promise.reject(new Error(t('navigation.sessions.renameSubmitting')));
     assertAccess?.();
     nameDialogAction.current?.complete();
     const closed = new Promise<void>((complete) => { nameDialogAction.current = { assertAccess, complete }; });
     setNameDialog({
       sessionId,
       workspaceId,
-      initialTitle: currentTitle || "新会话",
+      initialTitle: currentTitle || t('navigation.sessions.newDefaultTitle'),
     });
     setNameDialogError(null);
     return closed;
@@ -321,9 +322,9 @@ export function useSessionCatalogActions({
     try {
       assertAccess?.();
       const confirmed = await confirm({
-        title: "永久删除会话",
-        message: `永久删除会话“${label}”。如果它包含子会话，将级联删除整棵子会话树及其消息、检查点、日志、附件和运行资源。此操作无法撤销。`,
-        confirmText: "删除",
+        title: t('navigation.sessions.permanentlyDelete'),
+        message: t('navigation.sessions.deleteDescription', label),
+        confirmText: t('navigation.delete'),
         danger: true,
       });
       if (!confirmed) {
@@ -334,8 +335,8 @@ export function useSessionCatalogActions({
       // 生命周期动作已刷新并对账被删会话的真实父分支；会话集合变化再驱动
       // sessionCatalogSyncKeys 刷新其余已展开分支。
     } catch (error) {
-      setStatus(`删除会话失败: ${errorMessage(error)}`);
-      if (!isErrorReported(error)) onError(`删除会话失败 (${workspaceId}/${sessionId}): ${errorMessage(error)}`);
+      setStatus(t('navigation.sessions.deleteError', errorMessage(error)));
+      if (!isErrorReported(error)) onError(t('navigation.sessions.deleteOwnerError', workspaceId, sessionId, errorMessage(error)));
     }
   };
   const changeSessionParent = async (

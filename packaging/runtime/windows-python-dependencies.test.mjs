@@ -141,7 +141,7 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   process.env.BOXTEAM_PROJECT_ROOT = projectRoot;
   fs.writeFileSync(path.join(projectRoot, "package.json"), '{"version":"fixture"}\n');
   fs.writeFileSync(path.join(projectRoot, "pyproject.toml"), "fixture");
-  for (const relative of ["app", "configs", "resources", "src/shared", "src/clients/web", "src/clients/workbench",
+  for (const relative of ["app", "configs", "resources", "src/shared", "src/clients/shared", "src/clients/web", "src/clients/workbench",
     "src/workspace-services/protocol",
     "src/workspace-services/terminal/protocol",
     "src/workspace-services/terminal/shared", "src/workspace-services/terminal/client",

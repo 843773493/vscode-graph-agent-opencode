@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { Emitter } from '../../upstream/src/vs/base/common/event.js';
 import { DisposableStore, IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { isEqual, isEqualOrParent } from '../../upstream/src/vs/base/common/resources.js';
@@ -33,7 +34,7 @@ export class SearchWorkspaceContext implements IWorkspaceContextService {
   }
 
   private project(scope: SearchScope): Workspace {
-    if (scope.version !== 1) throw new Error('搜索范围版本不受支持');
+    if (scope.version !== 1) throw new Error(t('quickAccess.search.unsupportedScopeVersion'));
     const folders = scope.workspaces.map((target, index) => {
       const uri = workspaceFileUri(target, target.rootUri, target.rootUri);
       return new WorkspaceFolder({ uri, name: target.label, index }, { name: target.label, path: uri.path });
@@ -77,7 +78,7 @@ export function scopeQueryOptions<T extends { extraFileResources?: URI[]; change
   context: IWorkspaceContextService, folders: (IWorkspaceFolderData | URI)[], options: T,
 ): T {
   if (!(context instanceof SearchWorkspaceContext)) return options;
-  if (!context.scope.workspaces.length) throw new Error('请先选择明确搜索工作区');
+  if (!context.scope.workspaces.length) throw new Error(t('quickAccess.search.workspaceRequired'));
   assertSearchFolders(context, folders.map(folder => ({ folder: URI.isUri(folder) ? folder : folder.uri })));
   return { ...options,
     extraFileResources: options.extraFileResources?.filter(resource => context.isInsideWorkspace(resource)),
@@ -88,7 +89,7 @@ export function scopeQueryOptions<T extends { extraFileResources?: URI[]; change
 export function assertSearchFolders(context: IWorkspaceContextService, folders: readonly IFolderQuery[]): void {
   if (!(context instanceof SearchWorkspaceContext)) return;
   if (folders.some(folder => !context.scope.workspaces.some(target => isEqualOrParent(folder.folder,
-    workspaceFileUri(target, target.rootUri, target.rootUri))))) throw new Error('查询目录超出本次明确搜索范围');
+    workspaceFileUri(target, target.rootUri, target.rootUri))))) throw new Error(t('quickAccess.search.folderOutsideScope'));
 }
 
 export function scopedSearch(context: IWorkspaceContextService): boolean { return context instanceof SearchWorkspaceContext; }
@@ -99,7 +100,7 @@ export function transferSearchContext(context: IWorkspaceContextService, model: 
 }
 
 export function scopeFromQuery(query: { folderQueries: readonly IFolderQuery[] } | null): SearchScope {
-  if (!query?.folderQueries.length) throw new Error('搜索结果缺少明确目录范围');
+  if (!query?.folderQueries.length) throw new Error(t('quickAccess.search.resultScopeMissing'));
   const targets = new Map<string, SearchScope['workspaces'][number]>();
   for (const folder of query.folderQueries) {
     const source = workspaceFileSource(folder.folder);

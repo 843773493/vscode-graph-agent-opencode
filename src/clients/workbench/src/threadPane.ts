@@ -1,4 +1,5 @@
 import { EditorPane } from '../upstream/src/vs/workbench/browser/parts/editor/editorPane.js';
+import { t } from '../../shared/core/i18n/index.js';
 import { IEditorGroup, IEditorGroupsService } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IContextMenuService } from '../upstream/src/vs/platform/contextview/browser/contextView.js';
 import { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
@@ -59,9 +60,9 @@ export class ThreadPane extends EditorPane {
     await super.setInput(input, options, context, token);
     if (token.isCancellationRequested || this.input !== input) return;
     if (input instanceof UnavailableThreadInput) throw createEditorOpenError(input.reason, [toAction({
-      id: 'boxteam.thread.removeUnavailableRecord', label: '移除此展示记录', run: () => this.group.closeEditor(input),
+      id: 'boxteam.thread.removeUnavailableRecord', label: t('thread.restore.removeRecord'), run: () => this.group.closeEditor(input),
     })], { forceMessage: true });
-    if (!(input instanceof ThreadInput)) throw new Error('ThreadPane 只接受 ThreadInput');
+    if (!(input instanceof ThreadInput)) throw new Error(t('thread.restore.invalidInput'));
     try { await input.resolveOwner(); }
     catch (error) { throw createEditorOpenError(error instanceof Error ? error : String(error), [], { forceMessage: true }); }
     if (token.isCancellationRequested || this.input !== input) return;

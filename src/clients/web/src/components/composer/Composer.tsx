@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import { useComposerState } from "../../hooks/app/appContext";
@@ -175,10 +176,10 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   const composerHint = useMemo(() => {
     if (showInterrupt) {
       return queuedCount > 0
-        ? `正在生成，另有 ${queuedCount} 条消息排队`
-        : "正在生成，可继续发送下一条或点击停止";
+        ? t("composer.queued", queuedCount)
+        : t("composer.generating");
     }
-    return "Enter 发送 · Ctrl+Enter 换行";
+    return t("composer.sendHint");
   }, [queuedCount, showInterrupt]);
 
   useEffect(() => {
@@ -225,8 +226,8 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
       const lastSelection = selectionBundle.elements[selectionBundle.elements.length - 1];
       setComposerNotice(
         selectionBundle.mode === "rich"
-          ? `已选择页面元素 <${lastSelection.tag}>（完整元素上下文）`
-          : `已选择页面元素 <${lastSelection.tag}>`,
+          ? t("composer.richElementSelected", lastSelection.tag)
+          : t("composer.elementSelected", lastSelection.tag),
       );
       textareaRef.current?.focus();
     };
@@ -247,7 +248,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   const renameCurrentSession = (inlineTitle: string) => {
     const session = state.currentSession;
     if (!session) {
-      setAttachmentError("当前没有可命名的会话");
+      setAttachmentError(t("composer.noSessionToName"));
       return;
     }
 
@@ -260,11 +261,11 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
 
     void renameSession(session.session_id, title)
       .then(() => {
-        setComposerNotice(`已命名为 ${title}`);
+        setComposerNotice(t("composer.renamed", title));
       })
       .catch((error: unknown) => {
         setAttachmentError(
-          `命名失败：${errorMessage(error)}`,
+          t("composer.renameFailed", errorMessage(error)),
         );
       });
   };
@@ -272,7 +273,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   const submitRenameDialog = (title: string) => {
     const session = state.currentSession;
     if (!session) {
-      setRenameDialogError("当前没有可命名的会话");
+      setRenameDialogError(t("composer.noSessionToName"));
       return;
     }
 
@@ -281,7 +282,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     void renameSession(session.session_id, title)
       .then(() => {
         setRenameDialogOpen(false);
-        setComposerNotice(`已命名为 ${title}`);
+        setComposerNotice(t("composer.renamed", title));
       })
       .catch((error: unknown) => {
         setRenameDialogError(
@@ -312,7 +313,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
       setStatus(successMessage);
     } catch (error) {
       const message = errorMessage(error);
-      setAttachmentError(`Goal 操作失败：${message}`);
+      setAttachmentError(t("composer.goalFailed", message));
       throw error;
     }
   };
@@ -320,13 +321,13 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   const createGoal = async (objective: string) => {
     if (visibleGoal && goalNeedsReplacementConfirmation(visibleGoal.status)) {
       const confirmed = await confirm({
-        title: "替换当前 Goal？",
-        message: `当前 Goal“${visibleGoal.objective}”尚未完成。替换后将以新目标继续。`,
-        confirmText: "替换 Goal",
+        title: t("composer.replaceGoal"),
+        message: t("composer.replaceGoalDetail", visibleGoal.objective),
+        confirmText: t("composer.replaceGoalConfirm"),
         danger: true,
       });
       if (!confirmed) {
-        setComposerNotice("已保留当前 Goal");
+        setComposerNotice(t("composer.goalKept"));
         return;
       }
     }
@@ -343,40 +344,40 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
         { objective, status: "active", replace: true },
         { sessionId: targetSession.session_id, threadId: targetThreadId, workspaceId: targetWorkspaceId },
       ),
-      "Goal 已开始",
+      t("composer.goalStarted"),
     );
   };
 
   const pauseGoal = async () => {
     if (!visibleGoal || visibleGoal.status !== "active") {
-      throw new Error("只有进行中的 Goal 可以暂停");
+      throw new Error(t("composer.goalPauseInvalid"));
     }
-    await runGoalMutation(() => updateGoal({ status: "paused" }), "Goal 已暂停");
+    await runGoalMutation(() => updateGoal({ status: "paused" }), t("composer.goalPaused"));
   };
 
   const resumeGoal = async () => {
     if (!visibleGoal || !goalCanResume(visibleGoal.status)) {
-      throw new Error("当前 Goal 不可恢复");
+      throw new Error(t("composer.goalResumeInvalid"));
     }
-    await runGoalMutation(() => updateGoal({ status: "active" }), "Goal 已恢复");
+    await runGoalMutation(() => updateGoal({ status: "active" }), t("composer.goalResumed"));
   };
 
   const clearCurrentGoal = async (requireConfirmation: boolean) => {
     if (!visibleGoal) {
-      throw new Error("当前会话没有 Goal");
+      throw new Error(t("composer.goalMissing"));
     }
     if (requireConfirmation) {
       const confirmed = await confirm({
-        title: "清除当前 Goal？",
-        message: `将清除“${visibleGoal.objective}”的 Goal 状态。`,
-        confirmText: "清除 Goal",
+        title: t("composer.clearGoal"),
+        message: t("composer.clearGoalDetail", visibleGoal.objective),
+        confirmText: t("composer.clearGoalConfirm"),
         danger: true,
       });
       if (!confirmed) {
         return;
       }
     }
-    await runGoalMutation(clearGoal, "Goal 已清除");
+    await runGoalMutation(clearGoal, t("composer.goalCleared"));
   };
 
   const runGoalCommand = (args: string) => {
@@ -385,18 +386,18 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
       switch (action.kind) {
         case "show": {
           if (!state.currentSession) {
-            setComposerNotice("当前新会话还没有 Goal；输入 /goal <目标> 开始");
+            setComposerNotice(t("composer.newGoalHint"));
             return;
           }
           const goal = await refreshGoal();
           setComposerNotice(goal
-            ? `Goal：${GOAL_STATUS_LABELS[goal.status]} · ${goal.objective}`
-            : "当前会话没有 Goal；输入 /goal <目标> 开始");
+            ? t("composer.goalSummary", GOAL_STATUS_LABELS[goal.status], goal.objective)
+            : t("composer.goalHint"));
           return;
         }
         case "edit":
           if (!visibleGoal) {
-            throw new Error("当前会话没有可编辑的 Goal");
+            throw new Error(t("composer.goalNotEditable"));
           }
           setGoalEditOpen(true);
           return;
@@ -415,7 +416,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     };
     void command().catch((error: unknown) => {
       setAttachmentError(
-        `Goal 操作失败：${errorMessage(error)}`,
+        t("composer.goalCommandFailed", errorMessage(error)),
       );
     });
   };
@@ -522,7 +523,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
           currentSelections.length > 0 ? currentSelections : sentBrowserElementSelections
         ));
         setAttachmentError(
-          `发送失败：${errorMessage(error)}`,
+          t("composer.sendFailed", errorMessage(error)),
         );
         return;
       }
@@ -533,7 +534,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
         void Promise.all([
           writeComposerDraft(submission.draftScopeKey, typedContent),
           writeComposerAttachments(submission.draftScopeKey, sentAttachments),
-        ]).catch(cause => setStatus(`恢复草稿失败：${errorMessage(cause)}`));
+        ]).catch(cause => setStatus(t("composer.draftRestoreFailed", errorMessage(cause))));
       }
     }).then(() => {
       if (inFlightSubmissionRef.current === submission) {
@@ -616,7 +617,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     setAttachmentError("");
     const scopeKey = currentSessionCacheKey;
     void interruptSession().catch((error: unknown) => {
-      if (currentScopeKeyRef.current === scopeKey) setAttachmentError(`中断生成失败：${errorMessage(error)}`);
+      if (currentScopeKeyRef.current === scopeKey) setAttachmentError(t("composer.interruptFailed", errorMessage(error)));
     });
   };
 
@@ -632,7 +633,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
       // 切换失败必须让用户看得见：写进 Composer 本地错误区，同时 AppProvider
       // 已把同一条失败写进 AppState.status，状态栏也会显示。
       setAttachmentError(
-        `Agent 切换失败：${errorMessage(error)}`,
+        t("composer.agentFailed", errorMessage(error)),
       );
     });
   };
@@ -641,7 +642,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     setAttachmentError("");
     void setWorkspaceDefaultAgent(agentId).catch((error: unknown) => {
       setAttachmentError(
-        `设置工作区默认 Agent 失败：${errorMessage(error)}`,
+        t("composer.agentDefaultFailed", errorMessage(error)),
       );
     });
   };
@@ -651,7 +652,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     setAttachmentError("");
     void switchModel(providerId).catch((error: unknown) => {
       setAttachmentError(
-        `模型切换失败：${errorMessage(error)}`,
+        t("composer.modelFailed", errorMessage(error)),
       );
     });
   };
@@ -663,7 +664,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
       return;
     }
     void refreshAgents(currentWorkspaceId).catch((error: unknown) => {
-      setAttachmentError(`刷新模型列表失败: ${errorMessage(error)}`);
+      setAttachmentError(t("composer.refreshModelsFailed", errorMessage(error)));
     });
   };
 
@@ -671,7 +672,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     setAttachmentError("");
     void setWorkspaceDefaultProvider(currentAgent, providerId).catch((error: unknown) => {
       setAttachmentError(
-        `设置工作区默认模型失败：${errorMessage(error)}`,
+        t("composer.modelDefaultFailed", errorMessage(error)),
       );
     });
   };
@@ -771,7 +772,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                 ref={textareaRef}
                 id="input"
                 data-testid="composer-input"
-                placeholder="你的路线图下一步是什么？"
+                placeholder={t("composer.placeholder")}
                 value={input}
                 onChange={(e) => {
                   setInput(e.target.value);
@@ -792,7 +793,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                 <div
                   className="composer-goal-status"
                   role="status"
-                  aria-label={`当前 Goal：${GOAL_STATUS_LABELS[visibleGoal.status]} · ${visibleGoal.objective}`}
+                  aria-label={t("composer.currentGoal", GOAL_STATUS_LABELS[visibleGoal.status], visibleGoal.objective)}
                   title={visibleGoal.objective}
                   data-testid="composer-current-goal"
                 >
@@ -806,16 +807,16 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                 </div>
               ) : state.goalLoading && currentSessionId ? (
                 <div className="composer-goal-status" role="status">
-                  正在读取当前会话 Goal…
+                  {t("composer.loadingGoal")}
                 </div>
               ) : null}
               {state.goalError && currentSessionId ? (
                 <div className="composer-attachment-error" role="alert">
-                  Goal 同步失败：{state.goalError}
+                  {t("composer.syncGoalFailed", state.goalError)}
                 </div>
               ) : null}
               {selectedBrowserElements.length > 0 ? (
-                <div className="composer-browser-elements" aria-label="已选择的浏览器元素">
+                <div className="composer-browser-elements" aria-label={t("composer.selectedElements")}>
                   {selectedBrowserElements.map((element) => (
                     <div className="composer-browser-element" key={`${element.browserId}:${element.ref}`}>
                       <span className="codicon codicon-symbol-interface" aria-hidden="true" />
@@ -825,7 +826,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                       <button
                         type="button"
                         className="composer-attachment-remove"
-                        aria-label={`移除页面元素 ${element.text || element.ref}`}
+                        aria-label={t("composer.removeElement", element.text || element.ref)}
                         onClick={() => setSelectedBrowserElements((currentSelections) =>
                           currentSelections.filter((selection) =>
                             selection.browserId !== element.browserId || selection.ref !== element.ref
@@ -854,8 +855,8 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                   type="button"
                   className="composer-icon-button sessions-chat-attach-button"
                   onClick={handleAttachClick}
-                  title="添加附件"
-                  aria-label="添加附件"
+                  title={t("composer.attach")}
+                  aria-label={t("composer.attach")}
                 >
                   +
                 </button>
@@ -918,7 +919,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                         },
                       }).catch((error: unknown) => {
                         setAttachmentError(
-                          `保存默认发送方式失败: ${errorMessage(error)}`,
+                          t("composer.saveDeliveryFailed", errorMessage(error)),
                         );
                       });
                     }}
@@ -931,10 +932,10 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
       </footer>
       <SessionNameDialog
         open={renameDialogOpen}
-        title="命名当前会话"
-        label="会话名称"
-        initialValue={state.currentSession?.title || "新会话"}
-        confirmText="保存名称"
+        title={t("composer.nameSession")}
+        label={t("composer.sessionName")}
+        initialValue={state.currentSession?.title || t("composer.newSession")}
+        confirmText={t("composer.saveName")}
         submitting={renameDialogSubmitting}
         error={renameDialogError}
         onCancel={closeRenameDialog}
@@ -942,24 +943,24 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
       />
       <WarmActionDialog
         open={goalEditOpen && visibleGoal !== null}
-        title="编辑 Goal"
-        description="编辑已完成的 Goal 会重新激活；预算仍不足时会继续保持受限，其他状态保持不变。"
-        inputLabel="目标"
+        title={t("composer.editGoal")}
+        description={t("composer.editGoalDescription")}
+        inputLabel={t("composer.objective")}
         initialValue={visibleGoal?.objective ?? ""}
         inputMaxLength={4000}
         inputMultiline
-        confirmText="保存 Goal"
+        confirmText={t("composer.saveGoal")}
         onClose={() => setGoalEditOpen(false)}
         onConfirm={async (objective) => {
           if (!visibleGoal) {
-            throw new Error("当前 Goal 已不存在");
+            throw new Error(t("composer.goalGone"));
           }
           await runGoalMutation(
             () => updateGoal({
               objective,
               status: goalEditStatus(visibleGoal.status),
             }),
-            "Goal 已更新",
+            t("composer.goalUpdated"),
           );
         }}
       />

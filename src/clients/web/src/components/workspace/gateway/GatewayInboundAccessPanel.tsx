@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import {
   listGatewayDeviceConnections,
   listGatewayInboundAccess,
@@ -60,9 +61,9 @@ export default function GatewayInboundAccessPanel({
 
   const revoke = async (device: GatewayDeviceConnection) => {
     const accepted = await confirm({
-      title: "撤销外部设备连接",
-      message: `撤销“${device.device_name}”的 Gateway 访问权限？\n\n撤销后，该设备持有的 Federation 凭据会立即失效。`,
-      confirmText: "撤销连接",
+      title: t("gateway.inbound.revokeTitle"),
+      message: t("gateway.inbound.revokeDetail", device.device_name),
+      confirmText: t("gateway.inbound.revoke"),
       danger: true,
     });
     if (!accepted) return;
@@ -83,37 +84,37 @@ export default function GatewayInboundAccessPanel({
     <section className="gateway-device-section" aria-labelledby="gateway-external-device-title">
       <div className="gateway-connection-section-heading">
         <div>
-          <h2 id="gateway-external-device-title">手机与外部设备</h2>
-          <p>通过可撤销的 Federation 凭据访问本 Gateway。状态表示授权有效性，不代表设备当前在线。</p>
+          <h2 id="gateway-external-device-title">{t("gateway.inbound.title")}</h2>
+          <p>{t("gateway.inbound.description")}</p>
         </div>
         <div className="gateway-section-actions">
           <button type="button" className="gateway-compact-button" onClick={onAddDevice}>
             <span className="codicon codicon-add" aria-hidden="true" />
-            添加设备
+            {t("gateway.inbound.addDevice")}
           </button>
           <button type="button" className="gateway-compact-button" disabled={loading} onClick={() => void load()}>
             <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
-            刷新
+            {t("gateway.common.refresh")}
           </button>
         </div>
       </div>
 
-      {error ? <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>读取外部设备失败</strong><span>{error}</span></div></div> : null}
+      {error ? <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>{t("gateway.inbound.readFailed")}</strong><span>{error}</span></div></div> : null}
 
       {loading ? (
-        <div className="gateway-connection-state"><span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />正在读取授权连接…</div>
+        <div className="gateway-connection-state"><span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />{t("gateway.inbound.loading")}</div>
       ) : devices.length > 0 ? (
         <div className="gateway-device-list">
           {devices.map((device) => (
             <article key={device.connection_id}>
               <span className="gateway-device-icon"><span className="codicon codicon-device-mobile" aria-hidden="true" /></span>
               <div className="gateway-device-copy">
-                <div><strong>{device.device_name}</strong><span className={`gateway-authorization-status ${device.status}`}>{device.status === "authorized" ? "已授权" : "已过期"}</span></div>
-                <small>凭据有效至 {formatLocalDateTime(device.credential_expires_at)}</small>
+                <div><strong>{device.device_name}</strong><span className={`gateway-authorization-status ${device.status}`}>{device.status === "authorized" ? t("gateway.inbound.authorized") : t("gateway.inbound.expired")}</span></div>
+                <small>{t("gateway.inbound.credentialExpiresAt", formatLocalDateTime(device.credential_expires_at))}</small>
                 <code title={device.connection_id}>{device.connection_id}</code>
               </div>
               <button type="button" className="danger" disabled={revokingId === device.connection_id} onClick={() => void revoke(device)}>
-                {revokingId === device.connection_id ? "正在撤销…" : "撤销"}
+                {revokingId === device.connection_id ? t("gateway.inbound.revoking") : t("gateway.inbound.revoke")}
               </button>
             </article>
           ))}
@@ -121,19 +122,19 @@ export default function GatewayInboundAccessPanel({
       ) : (
         <div className="gateway-connection-empty">
           <span className="codicon codicon-device-mobile" aria-hidden="true" />
-          <strong>尚未授权外部设备</strong>
-          <p>点击“添加设备”生成可撤销的连接信息。</p>
+          <strong>{t("gateway.inbound.noDevices")}</strong>
+          <p>{t("gateway.inbound.noDevicesDetail")}</p>
         </div>
       )}
 
       {gatewayPeers.length > 0 ? (
         <div className="gateway-federation-peers">
-          <h3>接入本机的其他 Gateway</h3>
+          <h3>{t("gateway.inbound.peerGateways")}</h3>
           {gatewayPeers.map((peer) => (
             <article key={peer.connection_id}>
               <span className="codicon codicon-remote" aria-hidden="true" />
-              <div><strong>{peer.peer_gateway_id}</strong><small>授权有效至 {formatLocalDateTime(peer.credential_expires_at)}</small></div>
-              <span className="gateway-authorization-status authorized">已授权</span>
+              <div><strong>{peer.peer_gateway_id}</strong><small>{t("gateway.inbound.credentialExpiresAt", formatLocalDateTime(peer.credential_expires_at))}</small></div>
+              <span className="gateway-authorization-status authorized">{t("gateway.inbound.authorized")}</span>
             </article>
           ))}
         </div>

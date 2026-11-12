@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable, type IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { Emitter, type Event } from '../../upstream/src/vs/base/common/event.js';
 import { observableValue } from '../../upstream/src/vs/base/common/observable.js';
@@ -24,7 +25,7 @@ import { managementGateway, onDidChangeMcpManagementTarget } from '../management
 import { WorkspaceMcpCatalog, mcpCatalogKey, pendingMcpOperation, type McpWorkspaceRequestTarget } from './catalog.js';
 import { WorkspaceMcpServer } from './server.js';
 
-export const unavailableWorkspaceMcpWrite = () => new Error('此目标的 MCP 工作区配置与凭据写入、Node host 尚未接入；已有动态命令不表示已安装制品');
+export const unavailableWorkspaceMcpWrite = () => new Error(t('workbench.mcp.writeUnavailable'));
 const unavailable = unavailableWorkspaceMcpWrite;
 
 /** 原 IMcpService 的唯一实现：查询／操作 Gateway 后的项目 owner，不启动浏览器 MCP client。 */
@@ -64,7 +65,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     this._register(onDidChangeMcpManagementTarget(() => this.synchronizeTargets()));
     this._register(toDisposable(onGatewayTokenInvalidated(0, () => {
       for (const { catalog } of this.scopes.values()) catalog.dispose();
-      this.authorizationController.abort(new Error('原 MCP 授权入口的访问凭据已失效，请重新打开原对象'));
+      this.authorizationController.abort(new Error(t('workbench.mcp.authorizationCredentialsExpired')));
       this.authorizationCatalog = undefined;
       this.scopes.clear(); this.selected.clear(); this.publish(); this.resets.fire();
     })));
@@ -97,7 +98,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     if (snapshot.loading || snapshot.error || !snapshot.gatewayId) return;
     if (this.entryGatewayId !== snapshot.gatewayId) {
       if (this.entryGatewayId) {
-        this.authorizationController.abort(new Error('页面 Gateway 已改变，请重新打开原 MCP 授权对象'));
+        this.authorizationController.abort(new Error(t('workbench.mcp.authorizationGatewayChanged')));
         this.authorizationCatalog = undefined;
       }
       for (const { catalog } of this.scopes.values()) catalog.dispose();
@@ -107,7 +108,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
       if (!snapshot.workspaces.some(workspace => workspace.gateway_id === scope.catalog.target.gateway_id
         && workspace.workspace_id === scope.catalog.target.workspace_id && workspace.backend_id === scope.catalog.target.backend_id)) {
         scope.catalog.dispose();
-        scope.catalog.snapshot = { ...scope.catalog.snapshot, error: '此工作区已从 Gateway 移除' };
+        scope.catalog.snapshot = { ...scope.catalog.snapshot, error: t('workbench.mcp.gatewayWorkspaceRemoved') };
         for (const model of scope.models.values()) if (model.changed()) this.updates.fire(model);
         this.scopes.delete(key);
       }
@@ -156,12 +157,12 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     if (workspace.gateway_id !== snapshot.gatewayId) {
       const directory = await gateway.request<GatewayManagementDirectoryDTO>('/api/gateway/management/gateways', { signal });
       signal.throwIfAborted();
-      if (directory.local_gateway_id !== snapshot.gatewayId || workspaceContext.getSnapshot().gatewayId !== snapshot.gatewayId) throw new Error('MCP 授权入口不再属于原页面 Gateway');
+      if (directory.local_gateway_id !== snapshot.gatewayId || workspaceContext.getSnapshot().gatewayId !== snapshot.gatewayId) throw new Error(t('workbench.mcp.authorizationOwnerChanged'));
       const matches = directory.items.filter(item => item.gateway_id === workspace.gateway_id
         && item.connection_kind === 'remote_gateway' && (!explicit || item.gateway_connection_id === explicit));
-      if (matches.length !== 1 || !matches[0].gateway_connection_id) throw new Error('MCP 授权工作区存在多个或缺失的 Gateway 连接，请使用精确连接重新打开原对象');
+      if (matches.length !== 1 || !matches[0].gateway_connection_id) throw new Error(t('workbench.mcp.authorizationConnectionAmbiguous'));
       connection = matches[0].gateway_connection_id;
-    } else if (explicit) throw new Error('本地 MCP 授权对象不能携带远端 Gateway 连接');
+    } else if (explicit) throw new Error(t('workbench.mcp.localAuthorizationConnection'));
     const target = { gateway_id: workspace.gateway_id, workspace_id: workspace.workspace_id,
       backend_id: workspace.backend_id, gateway_connection_id: connection };
     const key = mcpCatalogKey(target);
@@ -188,11 +189,11 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
         .filter(item => item.server !== undefined);
       if (!candidates.length) {
         this.authorizationCatalog = undefined;
-        throw new Error('原工作区没有待继续的 MCP 连接操作，请查看实际工作区状态');
+        throw new Error(t('workbench.mcp.authorizationNoPending'));
       }
       const selected = candidates.length === 1 ? candidates[0] : (await this.quickInput.pick(candidates.map(item => ({
         label: item.server!.name, description: item.operation.operation_id, item,
-      })), { title: '选择原工作区的 MCP 连接操作', placeHolder: `${catalog.label} · ${catalog.target.gateway_id}` }, cancellation.token))?.item;
+      })), { title: t('workbench.mcp.chooseOperation'), placeHolder: `${catalog.label} · ${catalog.target.gateway_id}` }, cancellation.token))?.item;
       this.authorizationController.signal.throwIfAborted();
       if (selected?.server) await this.open(selected.server);
       this.authorizationCatalog = undefined;
@@ -229,7 +230,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     const snapshot = workspaceContext.getSnapshot();
     if (snapshot.error) throw new Error(snapshot.error);
     if (this.selectionError) throw this.selectionError;
-    if (!snapshot.gatewayId) throw new Error('Gateway 身份尚未完成初始化，无法读取 MCP 服务');
+    if (!snapshot.gatewayId) throw new Error(t('workbench.mcp.gatewayNotReady'));
     const catalogs = [...this.selected];
     await Promise.all(catalogs.map(catalog => catalog.refresh(options)));
     if (catalogs.length !== this.selected.size || catalogs.some(catalog => !this.selected.has(catalog))) throw new CancellationError();
@@ -240,10 +241,10 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   async queryWorkspace(target: McpWorkspaceRequestTarget): Promise<WorkspaceMcpServer[]> {
     this.synchronizeTargets();
     const snapshot = workspaceContext.getSnapshot();
-    if (snapshot.loading || snapshot.error || !snapshot.gatewayId) throw new Error(snapshot.error ?? 'Gateway 归属尚未完成初始化，请重新查找 MCP 服务');
+    if (snapshot.loading || snapshot.error || !snapshot.gatewayId) throw new Error(snapshot.error ?? t('workbench.mcp.gatewayOwnerNotReady'));
     const workspace = requireGatewayWorkspaceRequestTarget(snapshot.workspaces,
       { gatewayId: target.gateway_id, workspaceId: target.workspace_id });
-    if (workspace.status !== 'ready' || workspace.backend_id !== target.backend_id) throw new Error('原 MCP 工作区已停止或 Backend 身份已改变，请重新查找');
+    if (workspace.status !== 'ready' || workspace.backend_id !== target.backend_id) throw new Error(t('workbench.mcp.backendChanged'));
     const key = mcpCatalogKey(target);
     let scope = this.scopes.get(key);
     if (!scope) {
@@ -275,14 +276,14 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
 
   async open(server: IWorkbenchMcpServer | string, options?: IMcpServerEditorOptions): Promise<void> {
     const model = typeof server === 'string' ? this.servers.get().find(item => item.id === server) : server;
-    if (!(model instanceof WorkspaceMcpServer)) throw new Error('MCP 详情必须属于精确 Gateway／工作区的项目目录');
+    if (!(model instanceof WorkspaceMcpServer)) throw new Error(t('workbench.mcp.detailsOwnerRequired'));
     await this.editors.openEditor(new McpServerEditorInput(model), options);
   }
   async activateCollections(): Promise<void> { await this.queryLocal(); }
   resetCaches(): void { void this.queryLocal({ refresh: true }).catch(error => this.notifications.error(error)); }
-  resetTrust(): void { throw new Error('MCP 授权归目标工作区 owner，Workbench 不维护第二套 trust 状态'); }
-  autostart(): ReturnType<IMcpService['autostart']> { throw new Error('Workbench 不自动启动项目 MCP 服务，请对明确目标发起连接'); }
-  cancelAutostart(): void { throw new Error('Workbench 没有自动启动的 MCP 操作，请取消原目标连接操作'); }
+  resetTrust(): void { throw new Error(t('workbench.mcp.trustOwnedByWorkspace')); }
+  autostart(): ReturnType<IMcpService['autostart']> { throw new Error(t('workbench.mcp.noAutostart')); }
+  cancelAutostart(): void { throw new Error(t('workbench.mcp.noAutostartToCancel')); }
 }
 
 /** 管理服务只提供原 UI 的查询／打开 seam，业务镜像仍全部归同一个 IMcpService 实例。 */
@@ -294,7 +295,7 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
     @IMcpService service: IMcpService,
     @INotificationService notifications: INotificationService,
   ) {
-    if (!(service instanceof WorkspaceMcpService)) throw new Error('Workbench MCP 管理与连接服务必须使用同一个项目 owner');
+    if (!(service instanceof WorkspaceMcpService)) throw new Error(t('workbench.mcp.sharedOwnerRequired'));
     this.owner = service;
     this.whenInitialLocalMcpServersLoaded = this.owner.queryLocal().then(() => {}, error => { notifications.error(error); });
   }
@@ -305,7 +306,7 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   observe(): IDisposable { return this.owner.observe(); }
   queryLocal(): Promise<WorkspaceMcpServer[]> { return this.owner.queryLocal(); }
   getEnabledLocalMcpServers(): IWorkbenchLocalMcpServer[] { throw unavailable(); }
-  canInstall(_server: IWorkbenchMcpServer): MarkdownString { return new MarkdownString().appendText('MCP 服务由目标插件包管理器安装和启用'); }
+  canInstall(_server: IWorkbenchMcpServer): MarkdownString { return new MarkdownString().appendText(t('workbench.mcp.installManagedByPlugins')); }
   async install(_server: IWorkbenchMcpServer): Promise<never> { throw unavailable(); }
   async uninstall(): Promise<never> { throw unavailable(); }
   async resolveEditableMcpServerConfiguration(): Promise<never> { throw unavailable(); }
@@ -317,7 +318,7 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
 
 /** 原视图只在可见期间观察当前工作区；隐藏列表不维持永久轮询。 */
 export function observeWorkspaceMcpView(view: { readonly onDidChangeBodyVisibility: Event<boolean>; isBodyVisible(): boolean }, service: IMcpWorkbenchService): IDisposable {
-  if (!(service instanceof WorkspaceMcpWorkbenchService)) throw new Error('MCP 视图未接入项目管理服务');
+  if (!(service instanceof WorkspaceMcpWorkbenchService)) throw new Error(t('workbench.mcp.viewOwnerMissing'));
   const store = new DisposableStore();
   const observation = store.add(new MutableDisposable());
   const update = (visible: boolean) => { observation.value = visible ? service.observe() : undefined; };

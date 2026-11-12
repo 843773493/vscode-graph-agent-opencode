@@ -1,4 +1,5 @@
 import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { useMemo, useState } from "react";
 import type { GatewayRuntimeGroupRequest, GatewayWorkspace } from "../../../types/backend";
 import { errorMessage } from "../../../utils/errorMessage";
@@ -70,7 +71,7 @@ export default function GatewayBackendRuntimePanel({
     catch (failure) { setActionError(errorMessage(failure)); }
     finally { setActionBusy(false); }
   };
-  return <section aria-label="Backend 运行时">
+  return <section aria-label={t("gateway.runtime.section")}>
     {actionError ? <div className="gateway-console-alert" role="alert">{actionError}</div> : null}
     {runtimeGroups.map((runtimeGroup) => {
       const {
@@ -93,23 +94,23 @@ export default function GatewayBackendRuntimePanel({
         desired_workspace_ids: desiredWorkspaceIds,
       } : undefined;
       return <article className="gateway-connection-section" key={groupKey}>
-        <h2>{memberWorkspaces.map((workspace, index) => workspace?.name ?? memberWorkspaceIds[index]).join("、")}</h2>
-        <p>{allMembersReady ? "运行中" : "离线或异常"} · {memberWorkspaceIds.length} 个工作区共用一个 Backend</p>
+        <h2>{memberWorkspaces.map((workspace, index) => workspace?.name ?? memberWorkspaceIds[index]).join(t("gateway.runtime.memberSeparator"))}</h2>
+        <p>{allMembersReady ? t("gateway.runtime.running") : t("gateway.runtime.offlineOrError")} · {t("gateway.runtime.sharedWorkspaceCount", memberWorkspaceIds.length)}</p>
         <div className="gateway-control-actions">
-          <button type="button" disabled={actionBusy || allMembersReady} onClick={() => void runRuntimeAction(() => onStart(gatewayWorkspaceKey(groupTarget)))}>启动完整组</button>
-          <button type="button" disabled={actionBusy || !allMembersReady || hasProtectedMember} onClick={() => void runRuntimeAction(() => onStop(gatewayWorkspaceKey(groupTarget)))}>关闭完整组</button>
-          <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onSafeRestart(gatewayWorkspaceKey(groupTarget)))}>安全重启</button>
-          <button type="button" className="danger-soft" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onForceRestart(gatewayWorkspaceKey(groupTarget)))}>强制重启</button>
+          <button type="button" disabled={actionBusy || allMembersReady} onClick={() => void runRuntimeAction(() => onStart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.startGroup")}</button>
+          <button type="button" disabled={actionBusy || !allMembersReady || hasProtectedMember} onClick={() => void runRuntimeAction(() => onStop(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.stopGroup")}</button>
+          <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onSafeRestart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.safeRestart")}</button>
+          <button type="button" className="danger-soft" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => void runRuntimeAction(() => onForceRestart(gatewayWorkspaceKey(groupTarget)))}>{t("gateway.runtime.forceRestart")}</button>
           <button type="button" disabled={actionBusy || !groupTarget.backend_generation} onClick={() => setMemberSelection(
             isMemberSelectionOpen ? null : {
               backendGeneration: groupTarget.backend_generation!,
               targetWorkspaceId: gatewayWorkspaceKey(groupTarget),
               desiredWorkspaceIds: memberWorkspaceIds,
             },
-          )}>调整成员</button>
+          )}>{t("gateway.runtime.adjustMembers")}</button>
         </div>
         {isMemberSelectionOpen ? <fieldset disabled={actionBusy}>
-          <legend>重启后的完整成员</legend>
+          <legend>{t("gateway.runtime.membersAfterRestart")}</legend>
           {candidateWorkspaces.map((workspace) => <label key={gatewayWorkspaceKey(workspace)} style={{ display: "block" }}>
             <input type="checkbox" checked={desiredWorkspaceIds.includes(workspace.workspace_id)}
               disabled={workspace.system_default || !workspace.removable}
@@ -119,15 +120,15 @@ export default function GatewayBackendRuntimePanel({
                 desiredWorkspaceIds: event.target.checked
                   ? [...desiredWorkspaceIds, workspace.workspace_id]
                   : desiredWorkspaceIds.filter((workspaceId) => workspaceId !== workspace.workspace_id),
-              })} /> {workspace.name}{workspace.system_default ? "（默认工作区）" : ""}
+              })} /> {workspace.name}{workspace.system_default ? t("gateway.runtime.defaultWorkspaceSuffix") : ""}
           </label>)}
-          <p>加入前请先关闭另一个 singleton；移出全部成员将关闭 Backend，其余变更会一起受控重启。</p>
-          <button type="button" onClick={() => void runRuntimeAction(() => onSafeRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? "确认成员并安全重启" : "排空并退出全部成员"}</button>
-          <button type="button" className="danger-soft" onClick={() => void runRuntimeAction(() => onForceRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? "确认成员并强制重启" : "中断任务并退出全部成员"}</button>
+          <p>{t("gateway.runtime.memberChangeDetail")}</p>
+          <button type="button" onClick={() => void runRuntimeAction(() => onSafeRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? t("gateway.runtime.confirmMembersSafeRestart") : t("gateway.runtime.drainAndExitAll")}</button>
+          <button type="button" className="danger-soft" onClick={() => void runRuntimeAction(() => onForceRestart(gatewayWorkspaceKey(groupTarget), groupRestartRequest))}>{desiredWorkspaceIds.length ? t("gateway.runtime.confirmMembersForceRestart") : t("gateway.runtime.interruptAndExitAll")}</button>
         </fieldset> : null}
       </article>;
     })}
-    {managedWorkspaces.length === 0 ? <p>当前 Gateway 没有托管工作区。</p> : null}
-    {actionBusy ? <p role="status">正在操作完整组，请等待所有工作区就绪…</p> : null}
+    {managedWorkspaces.length === 0 ? <p>{t("gateway.runtime.noManagedWorkspaces")}</p> : null}
+    {actionBusy ? <p role="status">{t("gateway.runtime.waitForGroup")}</p> : null}
   </section>;
 }

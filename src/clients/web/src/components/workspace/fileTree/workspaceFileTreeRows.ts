@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import type {
   FileTreeShortcut,
   WorkspaceFileNode,
@@ -185,7 +186,7 @@ export function buildVisibleFileTreeRows({
         status: "loading",
         directoryPath,
         depth,
-        text: "正在读取...",
+        text: t("fileTree.row.loading"),
       });
       return;
     }
@@ -210,7 +211,7 @@ export function buildVisibleFileTreeRows({
         status: directory.items.length === 0 ? "empty" : "no-match",
         directoryPath,
         depth,
-        text: directory.items.length === 0 ? "空目录" : "无匹配文件",
+        text: directory.items.length === 0 ? t("fileTree.row.empty") : t("fileTree.row.noMatches"),
       });
       return;
     }
@@ -235,8 +236,8 @@ export function buildVisibleFileTreeRows({
         directoryPath,
         depth,
         text: directory.loading
-          ? "正在加载下一页..."
-          : `加载更多（当前 ${directory.items.length} 项）`,
+          ? t("fileTree.row.loadingNextPage")
+          : t("fileTree.row.loadMore", directory.items.length),
       });
     } else if (directory.truncated) {
       rows.push({
@@ -245,7 +246,7 @@ export function buildVisibleFileTreeRows({
         status: "truncated",
         directoryPath,
         depth,
-        text: "目录仍有未加载项目，请刷新后重试",
+        text: t("fileTree.row.truncated"),
       });
     }
   };

@@ -76,7 +76,7 @@ export function transformExtensionManagement(root, path, source, replaceOnce) {
     let contents = `import { ServicePluginPackagesView } from ${JSON.stringify(join(root, 'src/extensions/servicePluginManagement.js'))};\n` + source;
     contents = replaceMembers(path, contents, 'ExtensionsViewletViewsContribution', new Map([['registerViews', `
   private registerViews(): void {
-    const viewDescriptors: IViewDescriptor[] = [{ id: 'boxteam.views.extensionPackages', name: localize2('servicePluginPackages', "插件包"),
+    const viewDescriptors: IViewDescriptor[] = [{ id: 'boxteam.views.extensionPackages', name: localize2('workbench.plugins.servicePluginPackages', "Plugin Packages"),
       ctorDescriptor: new SyncDescriptor(ServicePluginPackagesView), order: 1 }];
     Registry.as<IViewsRegistry>(Extensions.ViewsRegistry).registerViews(viewDescriptors, this.container);
   }`], ['constructor', `
@@ -235,9 +235,9 @@ function pluginGettingStarted(path, source) {
       if (value === 'extensionsWebWeb' || value === 'extensions') {
         edits.push({ start: node.getStart(parsed), end: node.end, text: `{
           id: '${value}',
-          title: localize('gettingStarted.pluginPackages.title', '管理插件包'),
-          description: localize('gettingStarted.pluginPackages.description', '安装本地插件包，并分别管理当前 Gateway、当前工作区及以后新建工作区的插件。\\n{0}',
-            Button(localize('managePluginPackages', '管理插件包'), 'command:workbench.extensions.action.installedExtensions')),
+          title: localize('workbench.plugins.gettingStartedTitle', 'Manage Plugin Packages'),
+          description: localize('workbench.plugins.gettingStartedDescription', 'Install local plugin packages and manage plugins for the current Gateway, current workspace, and new workspaces.\\n{0}',
+            Button(localize('workbench.plugins.managePluginPackages', 'Manage Plugin Packages'), 'command:workbench.extensions.action.installedExtensions')),
           ${node.properties.find(property => ts.isPropertyAssignment(property) && property.name.getText(parsed) === 'when').getText(parsed)},
           media: { type: 'markdown', path: 'empty' },
         }` });
@@ -320,7 +320,7 @@ for (const [id, title] of [
 });
 
 registerAction2(class extends Action2 {
-  constructor() { super({ id: 'workbench.extensions.action.refreshExtension', title: localize2('refreshPluginPackages', '刷新插件包'), f1: true,
+  constructor() { super({ id: 'workbench.extensions.action.refreshExtension', title: localize2('workbench.plugins.refreshPluginPackages', 'Refresh Plugin Packages'), f1: true,
     icon: refreshIcon, menu: { id: MenuId.ViewContainerTitle,
       when: ContextKeyExpr.equals('viewContainer', VIEWLET_ID), group: 'navigation', order: 2 } }); }
   async run(accessor: ServicesAccessor): Promise<void> {
@@ -330,7 +330,7 @@ registerAction2(class extends Action2 {
 });
 
 registerAction2(class extends Action2 {
-  constructor() { super({ id: 'boxteam.plugins.installPackage', title: localize2('installPluginPackage', '安装插件包'), f1: true }); }
+  constructor() { super({ id: 'boxteam.plugins.installPackage', title: localize2('workbench.plugins.installPluginPackage', 'Install Plugin Package'), f1: true }); }
   async run(accessor: ServicesAccessor, target?: PluginTarget): Promise<void> {
     const viewsService = accessor.get(IViewsService);
     const container = viewsService.getActiveViewPaneContainerWithId(VIEWLET_ID) as IExtensionsViewPaneContainer | undefined;
@@ -549,6 +549,13 @@ export function pruneUnusedImportsAndConstants(path, source) {
       edits.push({ start: statement.getStart(parsed), end: statement.end, text: '' });
     }
   }
-  for (const edit of edits.sort((a, b) => b.start - a.start)) source = source.slice(0, edit.start) + edit.text + source.slice(edit.end);
-  return source;
+  if (!edits.length) return source;
+  const output = [];
+  let cursor = 0;
+  for (const edit of edits.sort((a, b) => a.start - b.start)) {
+    output.push(source.slice(cursor, edit.start), edit.text);
+    cursor = edit.end;
+  }
+  output.push(source.slice(cursor));
+  return output.join('');
 }

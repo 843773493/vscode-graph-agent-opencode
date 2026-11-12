@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import {
   getWorkspace,
   getWorkspaceFileRoots,
@@ -55,7 +56,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
   const pumpController = useRef<AbortController | null>(null);
 
   const open = useCallback(async (): Promise<Driver> => {
-    if (!workspaceId) throw new Error("文件操作需要固定的 Gateway 工作区身份");
+    if (!workspaceId) throw new Error(t("fileTree.operation.requiresWorkspace"));
     if (!driver.current) {
       driver.current = (async () => {
         const [backendWorkspace, fileRoots, store] = await Promise.all([
@@ -64,7 +65,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
         ]);
         const owner = workspaceOwnerFromKey(workspaceId);
         if (backendWorkspace.workspace_id !== owner.workspaceId || !fileRoots.workspace_uri) {
-          throw new Error("缺少固定 Gateway/工作区身份，拒绝受理文件操作");
+          throw new Error(t("fileTree.operation.missingOwner"));
         }
         return { store, scope: { ...owner, workspaceRoot: fileRoots.workspace_uri, actor: "local" } };
       })();
@@ -87,13 +88,13 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
           && (record.scope.gatewayId !== target.scope.gatewayId
             || record.scope.workspaceId !== target.scope.workspaceId
             || record.scope.workspaceRoot !== target.scope.workspaceRoot));
-      if (oldOwners.length > 0) callbacks.current.onError("存在原 Gateway/工作区的未确认文件操作，保留原目标等待恢复");
+      if (oldOwners.length > 0) callbacks.current.onError(t("fileTree.operation.pendingOldOwner"));
       if (records.length === 0) { setPendingCreations([]); return; }
       // 查询与重试前重新核固定 route，Gateway 或工作区重连不能改投原 intent。
       const backendWorkspace = await getWorkspace(port, gatewayWorkspaceKey(target.scope));
       if (!current()) return;
       if (backendWorkspace.workspace_id !== target.scope.workspaceId) {
-        throw new Error("文件意图原 Gateway/工作区已变化，保留原请求等待原目标恢复");
+        throw new Error(t("fileTree.operation.ownerChanged"));
       }
       const updatePending = (values: StoredFileIntent[]) => {
         if (!current()) return;
@@ -141,11 +142,11 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
           await target.store.remove(record);
           if (receipt.state === "committed") {
             callbacks.current.onCommitted(record.directoryPath);
-            callbacks.current.onStatusChange("文件操作已完成");
+            callbacks.current.onStatusChange(t("fileTree.operation.completed"));
           }
-          else callbacks.current.onError(`文件操作失败（效果: ${receipt.effect}）: ${receipt.error_detail ?? receipt.state}`);
+          else callbacks.current.onError(t("fileTree.operation.failed", receipt.effect, receipt.error_detail ?? receipt.state));
         } else {
-          callbacks.current.onStatusChange(`文件操作已受理: ${receipt.state === "queued" ? "排队中" : "执行中"}`);
+          callbacks.current.onStatusChange(t("fileTree.operation.accepted", receipt.state === "queued" ? t("fileTree.operation.queued") : t("fileTree.operation.running")));
         }
         } catch (error) {
           blocked.add(record.intent.client_operation_id);
@@ -193,11 +194,11 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
       const original = (await target.store.load(target.scope))
         .find((value) => value.intent.client_operation_id === createdByOperationId);
       if (!original || original.command.kind !== "create" || original.command.entryKind !== "directory") {
-        throw new Error("原待创建目录不存在，请从后端文件树重新选择目标");
+        throw new Error(t("fileTree.operation.pendingParentMissing"));
       }
       const accepted = original.receipt ?? (await getWorkspaceFileOperations(port, [createdByOperationId], gatewayWorkspaceKey(target.scope), target.scope.workspaceId)).operations[0];
       if (!accepted || accepted.operation_id !== createdByOperationId || !accepted.created_path) {
-        throw new Error("原目录尚未受理，请等待受理后再创建后继");
+        throw new Error(t("fileTree.operation.pendingParentNotAccepted"));
       }
       directoryKey = { ...original.intent.directory_key, path: accepted.created_path };
     } else {
@@ -220,7 +221,7 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
     await target.store.insert({ scope: target.scope, directoryPath: directoryKey.path, directoryKey,
       directoryRevision: revision, command, createdByOperationId });
     if (epoch !== generation.current) return;
-    callbacks.current.onStatusChange("文件操作已保存，等待受理");
+    callbacks.current.onStatusChange(t("fileTree.operation.savedWaitingAcceptance"));
     await run();
   }, [open, port, run]);
 

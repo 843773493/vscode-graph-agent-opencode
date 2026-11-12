@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { locateGatewayDiagnosticLog } from "../../../gatewayApi";
 import type { GatewayWorkspace } from "../../../types/backend";
 import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
@@ -23,13 +24,13 @@ export default function GatewayDiagnosticLogLocation({ apiPort, request, workspa
   const text = data ? Array.from(data.text) : [];
   const linkedWorkspaces = data?.source?.workspace_ids.map(id => workspaces.find(workspace =>
     workspace.gateway_id === reference?.gateway_id && workspace.workspace_id === id)?.name ?? id);
-  return <section className="gateway-diagnostics-viewer" aria-label="运行日志原行定位">
-    <header><strong>{data?.source?.label ?? "运行日志原行"}</strong><button type="button" onClick={onClose}>关闭定位</button></header>
-    <p>{request.reference?.gateway_id} · {request.scope?.source === "gateway" ? "Gateway 自有来源" : `受管进程 · ${linkedWorkspaces?.join("、") ?? "读取关联工作区…"}${(linkedWorkspaces?.length ?? 0) > 1 ? "（共享来源）" : ""}`}</p>
-    {current?.error ? <p role="alert">日志定位失败：{current.error}</p> : !data ? <p role="status">正在核验原日志行…</p> : reference ? <>
-      <p>原行字节区间 {reference.line_start}–{reference.line_end} · 正文码点 {reference.start_codepoint}–{reference.end_codepoint}</p>
+  return <section className="gateway-diagnostics-viewer" aria-label={t("gateway.diagnostics.locationPanel")}>
+    <header><strong>{data?.source?.label ?? t("gateway.diagnostics.originalLogLine")}</strong><button type="button" onClick={onClose}>{t("gateway.diagnostics.closeLocation")}</button></header>
+    <p>{request.reference?.gateway_id} · {request.scope?.source === "gateway" ? t("gateway.diagnostics.gatewaySource") : t("gateway.diagnostics.managedProcessSource", linkedWorkspaces?.join(t("gateway.diagnostics.workspaceListSeparator")) ?? t("gateway.diagnostics.loadingRelatedWorkspaces"), (linkedWorkspaces?.length ?? 0) > 1 ? t("gateway.diagnostics.sharedSourceSuffix") : "")}</p>
+    {current?.error ? <p role="alert">{t("gateway.diagnostics.locationFailed", current.error)}</p> : !data ? <p role="status">{t("gateway.diagnostics.verifyingOriginalLine")}</p> : reference ? <>
+      <p>{t("gateway.diagnostics.originalLineRanges", reference.line_start, reference.line_end, reference.start_codepoint, reference.end_codepoint)}</p>
       <pre data-testid="gateway-diagnostic-log-location">{text.slice(0, reference.start_codepoint).join("")}<mark ref={mark}
         data-start-codepoint={reference.start_codepoint} data-end-codepoint={reference.end_codepoint}>{text.slice(reference.start_codepoint, reference.end_codepoint).join("")}</mark>{text.slice(reference.end_codepoint).join("")}</pre>
-    </> : <p role="alert">日志定位响应缺少原记录引用</p>}
+    </> : <p role="alert">{t("gateway.diagnostics.locationMissingReference")}</p>}
   </section>;
 }

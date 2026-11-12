@@ -169,13 +169,13 @@ try {
   await expect(quick).toContainText('dirtyword');
   await expect.poll(() => result.searches.some(request => request.query === 'dirtyword')).toBe(true);
   await quick.locator('input').fill('%diskword');
-  await expect(quick).toContainText('No matching results');
+  await expect(quick).toContainText('没有匹配的结果');
   result.dirtyModelSearch = true;
   await quick.locator('input').fill('%dirtyword');
   await expect(quick).toContainText('dirtyword');
 
   result.phase = 'transfer-and-rerun-original-search-view';
-  await quick.locator('.quick-input-header').getByRole('button', { name: 'Open in Search View', exact: true }).click();
+  await quick.locator('.quick-input-header').getByRole('button', { name: '在搜索视图中打开', exact: true }).click();
   await expect(quick).not.toBeVisible();
   const searchView = page.locator('.search-view');
   await expect(searchView).toBeVisible();
@@ -183,17 +183,17 @@ try {
   const rerunRequests = result.searches.length;
   await command('workbench.action.findInFiles', { query: 'quickscope', triggerSearch: true, useExcludeSettingsAndIgnoreFiles: false });
   await expect.poll(() => result.searches.slice(rerunRequests).some(request => request.query === 'quickscope')).toBe(true);
-  await expect(searchView.getByRole('tree')).toHaveAttribute('aria-label', /Search: quickscope/);
+  await expect(searchView.getByRole('tree')).toHaveAttribute('aria-label', /搜索: quickscope/);
   await expect(searchView).toContainText('dirtyword quickscope');
   result.viewTransferAndRerun = true;
   const onlyOpenRequests = result.searches.length;
   await command('workbench.action.findInFiles', { query: '🧪', onlyOpenEditors: true, triggerSearch: true, useExcludeSettingsAndIgnoreFiles: false });
-  await expect(searchView.getByRole('tree')).toHaveAttribute('aria-label', /Search: 🧪/);
+  await expect(searchView.getByRole('tree')).toHaveAttribute('aria-label', /搜索: 🧪/);
   await expect(searchView).toContainText('dirtyword quickscope');
   await expect(searchView).not.toContainText('foreign-buffer');
   await expect(searchView).not.toContainText('virtual-buffer');
   // A 的唯一已打开文件由本地模型完成；B 与 IndexedDB 不应触发额外精确文件查询。
-  await expect(searchView).toContainText('searching only in open files');
+  await expect(searchView).toContainText('仅在打开的文件中搜索');
   expect(result.searches.slice(onlyOpenRequests)).toEqual([]);
   result.onlyOpenIsolation = true;
   result.phase = 'move-original-search-view';
@@ -202,7 +202,7 @@ try {
   const beforeMoveQuery = result.searches.length;
   await command('workbench.action.findInFiles', { query: 'dirtyword', onlyOpenEditors: false, triggerSearch: true, useExcludeSettingsAndIgnoreFiles: false });
   await expect.poll(() => result.searches.slice(beforeMoveQuery).some(request => request.query === 'dirtyword')).toBe(true);
-  await expect(page.locator('.part.panel .search-view').getByRole('tree')).toHaveAttribute('aria-label', /Search: dirtyword/);
+  await expect(page.locator('.part.panel .search-view').getByRole('tree')).toHaveAttribute('aria-label', /搜索: dirtyword/);
   await expect(page.locator('.part.panel .search-view')).toContainText('dirtyword');
   result.movedViewRerun = true;
   // 新增的 A+B 查询由范围场景独立核验；原 A 单范围断言仍覆盖其全部原有请求。

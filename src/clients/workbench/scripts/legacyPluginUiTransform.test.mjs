@@ -61,6 +61,7 @@ test('停用独立插件浏览视图并从管理区隐藏插件 section', async 
   expect(mcp).toContain('getMcpEntrySource');
   expect(mcp).toContain('label: plugin.name');
   expect(mcp).toContain("localize('fromPlugin'");
+  expect(mcp).toContain("localize('workbench.mcp.serverProvidedBy', \"MCP server provided by {0}\"");
 
   const toolsPath = 'src/vs/workbench/contrib/chat/browser/aiCustomization/toolsListWidget.ts';
   const tools = transformLegacyCustomizationPlugins(root, join(upstream, toolsPath), await source(toolsPath), (input, marker, replacement) => {

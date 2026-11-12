@@ -3,6 +3,7 @@ import {
   type ErrorInfo,
   type ReactNode,
 } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 
 interface AppErrorBoundaryProps {
   children: ReactNode;
@@ -34,11 +35,11 @@ export default class AppErrorBoundary extends Component<
     return (
       <main className="app-fatal-error" role="alert">
         <div className="app-fatal-error-card">
-          <h1>页面加载失败</h1>
-          <p>前端组件发生异常，当前页面没有继续渲染。</p>
+          <h1>{t("shell.renderFailed")}</h1>
+          <p>{t("shell.renderFailedDetail")}</p>
           <pre>{this.state.error.message}</pre>
           <button type="button" onClick={() => window.location.reload()}>
-            刷新页面
+            {t("shell.reload")}
           </button>
         </div>
       </main>

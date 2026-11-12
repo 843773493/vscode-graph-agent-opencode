@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { errorMessage } from "../utils/errorMessage";
 
 export const BACKGROUND_SETTING = "boxteam.appearance.background";
@@ -17,16 +18,16 @@ export const DEFAULT_BACKGROUND: AppearanceBackground = {
 };
 
 export function readAppearanceBackground(value: unknown): AppearanceBackground {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${BACKGROUND_SETTING} 必须是对象`);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(t('appearance.objectRequired', BACKGROUND_SETTING));
   const background = { ...DEFAULT_BACKGROUND, ...value };
   for (const key of Object.keys(background)) {
     if (!Object.hasOwn(DEFAULT_BACKGROUND, key) || typeof background[key as keyof AppearanceBackground] !== "string") {
-      throw new Error(`${BACKGROUND_SETTING}.${key} 必须是已声明的字符串设置`);
+      throw new Error(t('appearance.propertyInvalid', BACKGROUND_SETTING, key));
     }
   }
   if (background.image) {
     const url = new URL(background.image);
-    if (!["http:", "https:"].includes(url.protocol)) throw new Error("背景图片必须使用带明确目标地址的 HTTP(S) URL");
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error(t('appearance.httpImageRequired'));
   }
   return background;
 }
@@ -39,7 +40,7 @@ export function preloadThemeBackground(
   return new Promise((resolve, reject) => {
     const image = createImage();
     image.onload = () => resolve();
-    image.onerror = () => reject(new Error(`背景图片加载失败: ${url}`));
+    image.onerror = () => reject(new Error(t('appearance.imageLoadFailed', url)));
     image.src = url;
   });
 }
@@ -63,7 +64,7 @@ export async function loadAndApplyBackground(
   } catch (error) {
     options.signal?.throwIfAborted();
     applyBackground({ ...background, image: "" }, options.root);
-    return { backgroundWarning: `背景图加载失败，已清除展示图片，配置仍保留：${errorMessage(error)}` };
+    return { backgroundWarning: t('appearance.imageWarning', errorMessage(error)) };
   }
   options.signal?.throwIfAborted();
   applyBackground(background, options.root);

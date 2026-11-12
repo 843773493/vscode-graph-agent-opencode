@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import { nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { searchCatalogView, type CatalogSearchView } from "../../api/gateway/catalogSearch";
@@ -277,7 +278,7 @@ export function useSessionResourceExplorer({
     navigationRequestRef.current += 1;
     currentSessionRevealRequestRef.current += 1;
     for (const controller of workspaceReadControllersRef.current.values()) {
-      controller.abort(new CatalogReadSupersededError("会话目录读取 owner 已释放"));
+      controller.abort(new CatalogReadSupersededError(t('navigation.catalog.readOwnerReleased')));
     }
     branchRequestRefs.current.clear();
     branchInFlightRequestsRef.current.clear();
@@ -291,7 +292,7 @@ export function useSessionResourceExplorer({
       .map(([owner]) => owner);
     for (const owner of retired) {
       workspaceReadControllersRef.current.get(owner)!.abort(
-        new CatalogReadSupersededError(`会话目录登记 owner 已移除: ${owner}`),
+        new CatalogReadSupersededError(t('navigation.catalog.registeredOwnerRemoved', owner)),
       );
       workspaceReadControllersRef.current.delete(owner);
       for (const requests of [branchRequestRefs.current, branchInFlightRequestsRef.current]) {
@@ -321,7 +322,7 @@ export function useSessionResourceExplorer({
 
   const openCatalogOutbox = useCallback(async (workspaceId: string) => {
     if (!sessionCatalogOutboxRuntime) {
-      throw new Error("Gateway 认证状态尚未就绪，不能编辑会话目录");
+      throw new Error(t('navigation.catalog.authNotReadyEdit'));
     }
     return await sessionCatalogOutboxRuntime.openWorkspace(
       workspaceRequestTarget(workspaceId),
@@ -355,11 +356,11 @@ export function useSessionResourceExplorer({
       .flatMap(([, branch]) => branch.items)
       .filter((node) => node.node_id === nodeId);
     if (matches.length === 0) {
-      throw new Error(`会话目录节点尚未在 confirmed 分支加载: ${workspaceId}/${nodeId}`);
+      throw new Error(t('navigation.catalog.confirmedNodeMissing', workspaceId, nodeId));
     }
     const node = matches[0];
     if (matches.some((item) => item.node_revision !== node.node_revision)) {
-      throw new Error(`会话目录节点 revision 在已加载分支间冲突: ${nodeId}`);
+      throw new Error(t('navigation.catalog.nodeRevisionConflict', nodeId));
     }
     return node;
   }, []);
@@ -370,7 +371,7 @@ export function useSessionResourceExplorer({
     options: { expectedRevision?: number | null },
   ) => {
     if (!sessionCatalogOutboxRuntime) {
-      throw new Error("Gateway 认证状态尚未就绪，不能编辑会话目录");
+      throw new Error(t('navigation.catalog.authNotReadyEdit'));
     }
     await openCatalogOutbox(workspaceId);
     const baseCatalogRevision = await catalogRevisionFor(workspaceId);
@@ -414,7 +415,7 @@ export function useSessionResourceExplorer({
     if (sessionCatalogOutboxRuntime) {
       void openCatalogOutbox(workspaceId).catch((error: unknown) => {
         sessionCatalogOutboxRuntime.reportError(
-          `恢复会话目录 outbox 失败 (${workspaceId}): ${errorMessage(error)}`,
+          t('navigation.catalog.restoreOutboxFailed', workspaceId, errorMessage(error)),
         );
       });
     }
@@ -484,24 +485,24 @@ export function useSessionResourceExplorer({
               await catalogRetryDelay(attempt);
             }
           }
-          if (confirmedRead.signal?.aborted) throw new Error("会话目录权威分支刷新已取消");
+          if (confirmedRead.signal?.aborted) throw new Error(t('navigation.catalog.refreshCancelled'));
           if (branchRequestRefs.current.get(key) !== requestId) return undefined;
           const minimumRevision = Math.max(
             confirmedRead.minimumCatalogRevision ?? 0,
             branchesRef.current.get(key)?.catalog_revision ?? 0,
           );
           if (!Number.isSafeInteger(page.catalog_revision) || page.catalog_revision < minimumRevision) {
-            throw new Error(`会话目录权威分支 revision 落后: ${workspaceId}/${parentNodeId ?? "root"}, actual=${page.catalog_revision}, minimum=${minimumRevision}`);
+            throw new Error(t('navigation.catalog.branchRevisionBehind', workspaceId, parentNodeId ?? "root", page.catalog_revision, minimumRevision));
           }
           if (revision !== undefined && revision !== page.catalog_revision) {
-            throw new Error(`目录续页的 catalog revision 不一致: ${workspaceId}/${parentNodeId ?? "root"}`);
+            throw new Error(t('navigation.catalog.pageRevisionMismatch', workspaceId, parentNodeId ?? "root"));
           }
           revision = page.catalog_revision;
           items.push(...page.items);
           // 整批对账保留已加载的分页深度，展开下一层不能丢掉父分支刚定位的节点。
           if (append || !page.cursor || items.length >= (current?.items.length ?? 0)) break;
           if (visitedCursors.has(page.cursor)) {
-            throw new Error(`目录分页 cursor 循环: workspace=${workspaceId}, cursor=${page.cursor}`);
+            throw new Error(t('navigation.catalog.cursorCycle', workspaceId, page.cursor));
           }
           visitedCursors.add(page.cursor);
           cursor = page.cursor;
@@ -509,7 +510,7 @@ export function useSessionResourceExplorer({
         return { ...page, items };
       } catch (error) {
         if (branchRequestRefs.current.get(key) !== requestId) {
-          throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}/${parentNodeId ?? "root"}`);
+          throw new CatalogReadSupersededError(t('navigation.catalog.branchRefreshSuperseded', workspaceId, parentNodeId ?? "root"));
         }
         const message = errorMessage(error);
         updateBranches((previous) => {
@@ -538,7 +539,7 @@ export function useSessionResourceExplorer({
     ));
     const minimumRevision = Math.min(...pages.map((page) => {
       if (!Number.isSafeInteger(page.catalog_revision) || page.catalog_revision < 0) {
-        throw new Error(`目录分支缺少有效 catalog revision: ${handle.gatewayWorkspaceId}`);
+        throw new Error(t('navigation.catalog.branchRevisionMissing', handle.gatewayWorkspaceId));
       }
       return page.catalog_revision;
     }));
@@ -605,7 +606,7 @@ export function useSessionResourceExplorer({
         const requestId = branchRequestRefs.current.get(key);
         try {
           const page = await request;
-          if (!page) throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}/${parentNodeId ?? "root"}`);
+          if (!page) throw new CatalogReadSupersededError(t('navigation.catalog.branchRefreshSuperseded', workspaceId, parentNodeId ?? "root"));
           return { key, requestId, parentNodeId, page, error: null };
         } catch (error) {
           return { key, requestId, parentNodeId, page: null, error };
@@ -615,25 +616,25 @@ export function useSessionResourceExplorer({
       let superseded = results.some((result) => result.error instanceof CatalogReadSupersededError);
       let failed = results.some((result) => result.error !== null && !(result.error instanceof CatalogReadSupersededError));
       if (confirmedRead.signal?.aborted) {
-        errors.push("权威分支刷新已取消");
+        errors.push(t('navigation.catalog.authoritativeRefreshCancelled'));
         failed = true;
       }
       for (const result of results) {
         if (branchRequestRefs.current.get(result.key) !== result.requestId) {
-          errors.push(`${result.parentNodeId ?? "root"}: 分支刷新已被更新请求取代`);
+          errors.push(t('navigation.catalog.parentRefreshSuperseded', result.parentNodeId ?? "root"));
           superseded = true;
         }
       }
       for (const [key, requestId] of removed) {
         if (branchRequestRefs.current.get(key) !== requestId) {
-          errors.push(`${key}: 分支撤销已被更新请求取代`);
+          errors.push(t('navigation.catalog.parentRemovalSuperseded', key));
           superseded = true;
         }
       }
       const pages = results.flatMap((result) => result.page === null ? [] : [result.page]);
       if (pages.some((page) => !Number.isSafeInteger(page.catalog_revision)
         || page.catalog_revision < (confirmedRead.minimumCatalogRevision ?? 0))) {
-        errors.push("权威分支的 catalog revision 落后，保留原 confirmed 等待重新对账");
+        errors.push(t('navigation.catalog.authoritativeRevisionBehind'));
         failed = true;
       }
       const missingParents = results.filter(({ parentNodeId, error }) => parentNodeId !== null
@@ -653,20 +654,20 @@ export function useSessionResourceExplorer({
               nodeIds: parentNodeIds.filter((nodeId): nodeId is string => nodeId !== null),
             });
           } catch (error) {
-            errors.push(`确认目录是否推进失败: ${errorMessage(error)}`);
+            errors.push(t('navigation.catalog.confirmAdvanceFailed', errorMessage(error)));
             failed = true;
           }
           if (latest) {
             if (!Number.isSafeInteger(latest.catalog_revision) || latest.catalog_revision < maximumRevision) {
-              errors.push(`会话目录完整节点集 revision 落后: actual=${latest.catalog_revision}, minimum=${maximumRevision}`);
+              errors.push(t('navigation.catalog.fullRevisionBehind', latest.catalog_revision, maximumRevision));
               failed = true;
             } else if (latest.catalog_revision > (confirmedRead.minimumCatalogRevision ?? 0)
               && missingParents.every(result => !latest.items.some(node => node.node_id === result.parentNodeId))) {
-              if (confirmedRead.signal?.aborted) throw new Error("会话目录权威分支刷新已取消");
+              if (confirmedRead.signal?.aborted) throw new Error(t('navigation.catalog.refreshCancelled'));
               // 确认推进期间发布权仍可能被下一批读取接管；旧批次不得重新抢占分支。
               if (results.some(result => branchRequestRefs.current.get(result.key) !== result.requestId)
                 || [...removed].some(([key, requestId]) => branchRequestRefs.current.get(key) !== requestId)) {
-                throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}`);
+                throw new CatalogReadSupersededError(t('navigation.catalog.workspaceRefreshSuperseded', workspaceId));
               }
               // 新快照须同时确认推进及全部 404 父节点已撤销；旧页整批作废，不提前 prune。
               confirmedRead = { ...confirmedRead, minimumCatalogRevision: latest.catalog_revision,
@@ -675,15 +676,15 @@ export function useSessionResourceExplorer({
             }
           }
         }
-        if (mixedRevisions) errors.push(`权威分支的 catalog revision 不一致 (${results.filter(result => result.page)
-          .map(result => `${result.parentNodeId ?? "root"}=${result.page!.catalog_revision}`).join(", ")})，保留原 confirmed 等待重新对账`);
+        if (mixedRevisions) errors.push(t('navigation.catalog.authoritativeRevisionMismatch', results.filter(result => result.page)
+          .map(result => `${result.parentNodeId ?? "root"}=${result.page!.catalog_revision}`).join(", ")));
         failed = true;
       }
       if (confirmedRead.signal?.reason instanceof CatalogReadSupersededError) {
         confirmedRead.signal.throwIfAborted();
       }
       if (errors.length > 0) {
-        const message = `重新读取会话目录失败: ${errors.join("；")}`;
+        const message = t('navigation.catalog.rereadFailed', errors.join(t('navigation.errorSeparator')));
         updateBranches((previous) => {
           const next = new Map(previous);
           for (const result of results) {
@@ -728,7 +729,7 @@ export function useSessionResourceExplorer({
     const target = workspaceRequestTarget(workspaceId);
     const lifetime = workspaceReadControllersRef.current.get(workspaceId);
     if (!lifetime || lifetime.signal.aborted) {
-      throw new CatalogReadSupersededError(`会话目录读取 owner 已释放: ${workspaceId}`);
+      throw new CatalogReadSupersededError(t('navigation.catalog.workspaceReadOwnerReleased', workspaceId));
     }
     const signal = options.signal
       ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal;
@@ -827,7 +828,7 @@ export function useSessionResourceExplorer({
           .filter(([key]) => key.startsWith(`${workspaceId}:`))
           .map(([, branch]) => branch.catalog_revision ?? 0));
         if (!Number.isSafeInteger(catalog.catalog_revision) || catalog.catalog_revision < floor) {
-          throw new Error(`会话目录完整节点集 revision 落后: actual=${catalog.catalog_revision}, minimum=${floor}`);
+          throw new Error(t('navigation.catalog.fullRevisionBehind', catalog.catalog_revision, floor));
         }
         minimumCatalogRevision = catalog.catalog_revision;
         visibleParentIds = new Set(catalog.items.map((node) => node.node_id));
@@ -892,15 +893,15 @@ export function useSessionResourceExplorer({
       .map(([, branch]) => branch.catalog_revision ?? 0);
     const floor = Math.max(minimumCatalogRevision, ...confirmedRevisions);
     const catalog = await fetchSessionCatalogSnapshot(apiPort, workspaceTarget, { signal });
-    if (signal.aborted) throw new Error("会话目录失败对账已取消");
+    if (signal.aborted) throw new Error(t('navigation.catalog.failureReconcileCancelled'));
     if (catalog.catalog_revision < floor) {
-      throw new Error(`会话目录权威 snapshot 落后: actual=${catalog.catalog_revision}, minimum=${floor}`);
+      throw new Error(t('navigation.catalog.snapshotBehind', catalog.catalog_revision, floor));
     }
     await refreshCatalogWorkspace(workspaceId, {
       outbox, operationIds: [], forceRoot: true,
       minimumCatalogRevision: catalog.catalog_revision, signal,
     });
-    if (signal.aborted) throw new Error("会话目录 confirmed 刷新已取消");
+    if (signal.aborted) throw new Error(t('navigation.catalog.confirmedRefreshCancelled'));
     // 目录事件也使原 breadcrumb 和搜索视图失效，业务结果仍由原 API 提供。
     currentSessionRevealKeyRef.current = null;
     currentSessionRevealRequestRef.current += 1;
@@ -913,7 +914,7 @@ export function useSessionResourceExplorer({
     let active = true;
     const owner: SessionCatalogFailureOwner = {
       async refresh(...args) {
-        if (!active || !failureRefreshRef.current) throw new Error("会话目录 confirmed owner 已离开");
+        if (!active || !failureRefreshRef.current) throw new Error(t('navigation.catalog.confirmedOwnerLeft'));
         const controller = new AbortController();
         controllers.add(controller);
         const signal = args[3];
@@ -937,7 +938,7 @@ export function useSessionResourceExplorer({
           };
           const check = () => {
             if (!active || signal.aborted) {
-              finish(new Error("会话目录 confirmed 投影等待已取消"));
+              finish(new Error(t('navigation.catalog.projectionWaitCancelled')));
               return;
             }
             const commit = projectionCommitRef.current;
@@ -963,7 +964,7 @@ export function useSessionResourceExplorer({
     if (activeWorkspaceId && sessionCatalogOutboxRuntime) {
       void openCatalogOutbox(activeWorkspaceId).catch((error: unknown) => {
         sessionCatalogOutboxRuntime.reportError(
-          `恢复会话目录 outbox 失败 (${activeWorkspaceId}): ${errorMessage(error)}`,
+          t('navigation.catalog.restoreOutboxFailed', activeWorkspaceId, errorMessage(error)),
         );
       });
     }
@@ -1018,17 +1019,17 @@ export function useSessionResourceExplorer({
       : loaded;
     if (effectiveLoaded && !effectiveLoaded.cursor) {
       throw new Error(
-        `目录分支已加载但未找到定位节点: workspace=${workspaceId}, node=${targetNodeId}`,
+        t('navigation.catalog.revealNodeMissing', workspaceId, targetNodeId),
       );
     }
     const visitedCursors = new Set<string>();
     let page = effectiveLoaded ?? await loadBranch(workspaceId, parentNodeId);
     while (page && !page.items.some((item) => item.node_id === targetNodeId)) {
       if (!page.cursor) {
-        throw new Error(`目录分页结束但未找到定位节点: workspace=${workspaceId}, node=${targetNodeId}`);
+        throw new Error(t('navigation.catalog.revealNodeMissingAtEnd', workspaceId, targetNodeId));
       }
       if (visitedCursors.has(page.cursor)) {
-        throw new Error(`目录分页 cursor 循环: workspace=${workspaceId}, cursor=${page.cursor}`);
+        throw new Error(t('navigation.catalog.cursorCycle', workspaceId, page.cursor));
       }
       visitedCursors.add(page.cursor);
       page = await loadBranch(workspaceId, parentNodeId, true);
@@ -1147,17 +1148,17 @@ export function useSessionResourceExplorer({
       if (terminalError || refreshError) {
         const status = committed
           ? refreshError
-            ? "已提交但目录分支刷新失败"
-            : "已提交但终态确认过程失败"
+            ? t('navigation.catalog.committedRefreshFailed')
+            : t('navigation.catalog.committedConfirmationFailed')
           : refreshError
-            ? "未提交或终态未确认，且目录分支刷新失败"
-            : "未提交或终态未确认";
+            ? t('navigation.catalog.unconfirmedRefreshFailed')
+            : t('navigation.catalog.unconfirmed');
         const details = [terminalError, refreshError]
           .filter((error): error is unknown => error !== null)
           .map(errorMessage)
-          .join("；");
+          .join(t('navigation.errorSeparator'));
         sessionCatalogOutboxRuntime.reportError(
-          `会话目录操作 ${operationId}${status}: ${details}`,
+          t('navigation.catalog.operationError', operationId, status, details),
         );
       }
       trackedOutboxOperationKeysRef.current.delete(trackedKey);
@@ -1213,7 +1214,7 @@ export function useSessionResourceExplorer({
         await refreshNavigation();
       } catch (reconciliationError) {
         throw new Error(
-          `${errorMessage(operationError)}；重新读取工作区导航也失败: ${errorMessage(reconciliationError)}`,
+          t('navigation.workspace.reconcileFailed', errorMessage(operationError), errorMessage(reconciliationError)),
         );
       }
       throw operationError;
@@ -1277,7 +1278,7 @@ export function useSessionResourceExplorer({
     let deletedCurrentSession = false;
     const outboxRuntime = sessionCatalogOutboxRuntime;
     if (!outboxRuntime) {
-      throw new Error("Gateway 会话目录 outbox runtime 尚未初始化");
+      throw new Error(t('navigation.catalog.outboxNotReady'));
     }
     const handle = await openCatalogOutbox(workspaceId);
     const node = confirmedNodeFor(workspaceId, folderId);
@@ -1326,19 +1327,19 @@ export function useSessionResourceExplorer({
       if (terminalError || refreshError) {
         const status = committed
           ? currentOperation.settlement === "repair_required"
-            ? `删除已提交但排空失败，需修复${refreshError ? "，且目录分支刷新失败" : ""}`
+            ? t('navigation.catalog.deleteRepairStatus', refreshError ? t('navigation.catalog.alsoRefreshFailed') : "")
             : refreshError
-              ? "已提交但目录分支刷新失败"
-              : "已提交但终态确认过程失败"
+              ? t('navigation.catalog.committedRefreshFailed')
+              : t('navigation.catalog.committedConfirmationFailed')
           : refreshError
-            ? "未提交或终态未确认，且目录分支刷新失败"
-            : "未提交或终态未确认";
+            ? t('navigation.catalog.unconfirmedRefreshFailed')
+            : t('navigation.catalog.unconfirmed');
         const details = [terminalError, refreshError]
           .filter((error): error is unknown => error !== null)
           .map(errorMessage)
-          .join("；");
+          .join(t('navigation.errorSeparator'));
         outboxRuntime.reportError(
-          `会话目录操作 ${result.operationId}${status}: ${details}`,
+          t('navigation.catalog.operationError', result.operationId, status, details),
         );
         if (terminalError && refreshError) {
           throw new Error(`${errorMessage(terminalError)}；${errorMessage(refreshError)}`);
@@ -1422,7 +1423,7 @@ export function useSessionResourceExplorer({
         const previous = nodes.get(node.node_id);
         if (previous && (previous.node_revision !== node.node_revision
           || previous.parent_node_id !== node.parent_node_id)) {
-          throw new Error(`已加载目录分页包含互相冲突的 node revision: ${workspaceId}/${node.node_id}`);
+          throw new Error(t('navigation.catalog.loadedRevisionConflict', workspaceId, node.node_id));
         }
         nodes.set(node.node_id, node);
       }
@@ -1562,13 +1563,10 @@ export function useSessionResourceExplorer({
             const repairDetails = terminalOperations
               .filter((operation) => operation.settlement === "repair_required")
               .map((operation) =>
-                `会话目录操作 ${operation.client_operation_id} 删除已提交但排空失败，需修复: `
-                + `${operation.error_detail ?? operation.error_code}`,
+                t('navigation.catalog.operationRepair', operation.client_operation_id, operation.error_detail ?? operation.error_code),
               );
             sessionCatalogOutboxRuntime?.reportError(
-              `${repairDetails.length > 0 ? `${repairDetails.join("；")}；` : ""}`
-              + `会话目录终态分支刷新失败 (${entry.gatewayWorkspaceId}, `
-              + `${operationIds.join(", ")}): ${errorMessage(error)}`,
+              [...repairDetails, t('navigation.catalog.terminalRefreshFailed', entry.gatewayWorkspaceId, operationIds.join(", "), errorMessage(error))].join(t('navigation.errorSeparator')),
             );
           });
       }
@@ -1672,7 +1670,7 @@ export function useSessionResourceExplorer({
       .catch((error: unknown) => {
         if (currentSessionRevealRequestRef.current === requestId) {
           currentSessionRevealKeyRef.current = null;
-          setRevealError(`定位当前会话失败: ${errorMessage(error)}`);
+          setRevealError(t('navigation.sessions.revealCurrentError', errorMessage(error)));
         }
       });
   }, [

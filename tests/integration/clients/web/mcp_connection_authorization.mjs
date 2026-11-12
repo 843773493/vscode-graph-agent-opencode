@@ -175,22 +175,22 @@ try {
     }
     async function authorize() {
       const opened = page.waitForEvent("popup");
-      await secure.getByRole("button", { name: "Authorize", exact: true }).click();
+      await secure.getByRole("button", { name: "授权", exact: true }).click();
       const popup = await opened;
       if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 30000 });
     }
-    await submit("Start Server");
+    await submit("启动服务器");
     await authorize();
     await expect(page.locator(".notifications-toasts")).toContainText("授权已拒绝");
     assert.doesNotMatch(await details.innerText(), /连接可用/);
     assert.equal(callbackPosts.length, 0);
     assert.equal(callbacks.length, 1);
     assert.equal(callbacks[0].searchParams.get("error"), "access_denied");
-    await secure.getByRole("button", { name: "Cancel Connection Operation", exact: true }).click();
+    await secure.getByRole("button", { name: "取消连接操作", exact: true }).click();
     await expect(details).toContainText("已取消");
 
     // 使用真实产品300秒期限，不改时钟或持久记录；页面通过原owner轮询取得过期事实。
-    const expiring = await submit("Start Server");
+    const expiring = await submit("启动服务器");
     assert(Math.abs(expiring.deadline - expiring.created_at - 300) < 1);
     await expect(details).toContainText("deadline_exceeded", { timeout: 330000 });
     const expiryObservedAt = Date.now() / 1000;
@@ -198,14 +198,14 @@ try {
     await expect(details).toContainText("已过期");
     assert.doesNotMatch(await details.innerText(), /连接可用/);
 
-    await submit("Start Server");
+    await submit("启动服务器");
     await authorize();
     await expect(details).toContainText("连接可用", { timeout: 30000 });
-    await submit("Stop Server");
+    await submit("停止服务器");
     await expect(details).toContainText("操作已完成");
     assert.doesNotMatch(await details.innerText(), /连接可用/);
-    await expect(secure.getByRole("button", { name: "Stop Server", exact: true })).toHaveCount(0);
-    await expect(secure.getByRole("button", { name: "Start Server", exact: true })).toBeEnabled();
+    await expect(secure.getByRole("button", { name: "停止服务器", exact: true })).toHaveCount(0);
+    await expect(secure.getByRole("button", { name: "启动服务器", exact: true })).toBeEnabled();
     await expect(sibling).toContainText("连接可用");
     assert.equal(callbacks.length, 2);
     assert.equal(callbackPosts.length, 1);
@@ -239,10 +239,10 @@ try {
     }
     stage = "authorize-from-original-details";
     const details = detailsBody(management);
-    await secure.getByRole("button", { name: "Authorize", exact: true }).waitFor({ timeout: 30000 });
+    await secure.getByRole("button", { name: "授权", exact: true }).waitFor({ timeout: 30000 });
     await expect(details).toContainText("等待用户授权");
     const popupPromise = management.waitForEvent("popup");
-    await secure.getByRole("button", { name: "Authorize", exact: true }).click();
+    await secure.getByRole("button", { name: "授权", exact: true }).click();
     const popup = await popupPromise;
     if (!popup.isClosed()) await popup.waitForEvent("close", { timeout: 30000 });
     await expect(details).toContainText("连接可用", { timeout: 30000 });
@@ -256,8 +256,8 @@ try {
     await expect(quick).toBeVisible();
     await expect(quick).toContainText(initialization.owner.gateway_id);
     await quick.locator(".monaco-list-row").filter({ has: page.getByText("secure", { exact: true }) }).click();
-    await expect(quick.getByText("Stop Server", { exact: true })).toBeVisible();
-    await expect(quick.getByText("Show Details", { exact: true })).toBeVisible();
+    await expect(quick.getByText("停止服务", { exact: true })).toBeVisible();
+    await expect(quick.getByText("显示详情", { exact: true })).toBeVisible();
     await quick.locator("input").press("Escape");
     await expect(quick).not.toBeVisible();
     const unavailableCommands = await page.evaluate(async () => {

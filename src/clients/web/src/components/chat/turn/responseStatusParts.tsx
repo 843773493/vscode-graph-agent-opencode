@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { ConversationView } from "../../../types/frontend";
 import type { MessageStreamActivity } from "../../../state/messageStream/index";
@@ -13,7 +14,7 @@ export function ErrorPart({ item }: { item: Extract<TimelineItem, { kind: "trace
   return (
     <div className="chat-inline-error" role="alert">
       <span className="codicon codicon-error" aria-hidden="true" />
-      <span>{message ?? "运行失败"}</span>
+      <span>{message ?? t("chat.status.failed")}</span>
     </div>
   );
 }
@@ -28,7 +29,7 @@ export function CancelledPart({
   return (
     <div className="chat-inline-cancelled" role="status">
       <span className="codicon codicon-debug-stop" aria-hidden="true" />
-      <span>{label ?? (userInitiated ? "已由用户中断" : "任务已取消")}</span>
+      <span>{label ?? (userInitiated ? t("chat.status.interrupted") : t("chat.status.cancelled"))}</span>
     </div>
   );
 }
@@ -43,15 +44,15 @@ export function RewindStatusPart({ conversation }: { conversation: ConversationV
     return null;
   }
   const label = action === "edit_and_continue"
-    ? "已回退上下文，从编辑后的消息继续"
+    ? t("chat.status.editRewind")
     : action === "regenerate"
-      ? "已回退上下文，正在重新生成回复"
-      : "已回退上下文，正在重试失败轮次";
+      ? t("chat.status.regenerateRewind")
+      : t("chat.status.retryRewind");
   return (
     <div className="chat-inline-rewind" role="status" data-status-kind="rewind">
       <span className="codicon codicon-history" aria-hidden="true" />
       <span>{label}</span>
-      <span className="chat-working-detail">工作区文件修改不会被撤销</span>
+      <span className="chat-working-detail">{t("chat.status.filesKept")}</span>
     </div>
   );
 }
@@ -68,7 +69,7 @@ function activityRole(status: string): "status" | "alert" {
 }
 
 function ProtocolErrorDetail({ message }: { message?: string | null }): React.ReactNode {
-  return message ? <span className="chat-working-detail">诊断：{message}</span> : null;
+  return message ? <span className="chat-working-detail">{t("chat.status.diagnostic", message)}</span> : null;
 }
 
 export function ActivityStatusPart({
@@ -100,7 +101,7 @@ export function ActivityHistory({
   );
   if (visibleActivities.length === 0) return null;
   return (
-    <div className="chat-activity-history" aria-label="消息流 Activity 状态">
+    <div className="chat-activity-history" aria-label={t("chat.status.activity")}>
       {visibleActivities.map((activity) => (
         <ActivityStatusPart key={activity.activity_id} activity={activity} />
       ))}
@@ -134,7 +135,7 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
       return (
         <div className="chat-working" role="status">
           <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
-          <span>正在连接实时消息流</span>
+          <span>{t("chat.status.connecting")}</span>
         </div>
       );
     }
@@ -157,8 +158,8 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
         {activityHistory}
         <div className="chat-working" role="status" data-status-kind="interrupting">
           <span className="codicon codicon-debug-stop" aria-hidden="true" />
-          <span>正在中断本轮任务</span>
-          <span className="chat-working-detail">正在等待模型、工具和 Activity 完成停止确认</span>
+          <span>{t("chat.status.interrupting")}</span>
+          <span className="chat-working-detail">{t("chat.status.stopWait")}</span>
         </div>
       </>
     );
@@ -175,19 +176,19 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
           {activityHistory}
           <div className="chat-inline-error" role="alert">
             <span className="codicon codicon-watch" aria-hidden="true" />
-            <span>本轮执行超时</span>
+            <span>{t("chat.status.timedOut")}</span>
             <span>{stream.failure.message}</span>
           </div>
         </>
       );
     }
     const failureTitle = stream.failure.code === "execution_lost"
-      ? "执行丢失"
+      ? t("chat.status.lost")
       : stream.failure.code === "tool_dispatch_timeout"
-        ? "工具分派超时"
+        ? t("chat.status.dispatchTimeout")
         : stream.failure.code === "execution_cancelled"
-          ? "内部执行取消"
-          : "运行失败";
+          ? t("chat.status.internalCancel")
+          : t("chat.status.failed");
     return (
       <>
         {activityHistory}
@@ -205,7 +206,7 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
         {activityHistory}
         <div className="chat-inline-error" role="alert">
           <span className="codicon codicon-error" aria-hidden="true" />
-          <span>消息流失败，但后端没有提供失败详情</span>
+          <span>{t("chat.status.noFailureDetail")}</span>
         </div>
       </>
     );
@@ -219,7 +220,7 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
     return (
       <div className="chat-inline-error" role="alert" data-status-kind="retry-exhausted">
         <span className="codicon codicon-cloud-offline" aria-hidden="true" />
-        <span>实时消息流连续重连失败，已停止自动重连；请重新发送消息或刷新页面后重试</span>
+        <span>{t("chat.status.reconnectExhausted")}</span>
         <ProtocolErrorDetail message={stream.protocolError} />
       </div>
     );
@@ -228,8 +229,8 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
     return (
       <div className="chat-working" role="status">
         <span className="codicon codicon-cloud-offline" aria-hidden="true" />
-        <span>实时消息流已断开，正在重连</span>
-        <span className="chat-working-detail">已提交的内容仍保留，重连后将从 event_seq {stream.lastEventSeq} 继续</span>
+        <span>{t("chat.status.reconnecting")}</span>
+        <span className="chat-working-detail">{t("chat.status.reconnectFrom", stream.lastEventSeq)}</span>
         <ProtocolErrorDetail message={stream.protocolError} />
       </div>
     );
@@ -238,7 +239,7 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
     return (
       <div className="chat-inline-error" role="alert">
         <span className="codicon codicon-warning" aria-hidden="true" />
-        <span>实时消息流出现缺口，正在读取权威快照补齐</span>
+        <span>{t("chat.status.gap")}</span>
         <ProtocolErrorDetail message={stream.protocolError} />
       </div>
     );
@@ -253,9 +254,9 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
         {activityHistory}
         <div className="chat-working" role="status" data-status-kind="activity">
           <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
-          <span>正在处理 Activity</span>
+          <span>{t("chat.status.processingActivity")}</span>
           <span className="chat-working-detail">
-            {activityKind ? `${activityKind} 的详细状态暂不可用` : "Activity 的详细状态暂不可用"}
+            {activityKind ? t("chat.status.activityUnavailableNamed", activityKind) : t("chat.status.activityUnavailable")}
           </span>
         </div>
       </>
@@ -304,11 +305,11 @@ export function ExecutionLostRecoveryPart({
     <div
       className="chat-turn-action-confirmation chat-execution-recovery"
       role="group"
-      aria-label="恢复执行丢失的轮次"
+      aria-label={t("chat.status.recoverLost")}
       data-status-kind="execution-lost-recovery"
     >
       <div className="chat-turn-action-warning">
-        原 AgentLoop 已安全终止，不能续接；已保留已生成内容和工作区修改。
+        {t("chat.status.stoppedLoop")}
       </div>
       <div className="chat-request-edit-actions">
         <button
@@ -316,7 +317,7 @@ export function ExecutionLostRecoveryPart({
           disabled={actions.actionRunning}
           onClick={() => actions.setConfirmAction("retry_failed")}
         >
-          重试本轮
+          {t("chat.status.retryTurn")}
         </button>
       </div>
     </div>
@@ -341,7 +342,7 @@ export function ResponsePart({
   if (item.kind === "aggregated_text" && item.partKind === "compaction") {
     return (
       <details className="chat-compaction-summary" data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
-        <summary>上下文压缩摘要</summary>
+        <summary>{t("chat.status.compactionSummary")}</summary>
         {/* 摘要包含模型协议标签，按原文展示以免被 Markdown 当作 HTML 隐去正文。 */}
         <MarkdownContent value={item.text} renderMode="plain" />
       </details>

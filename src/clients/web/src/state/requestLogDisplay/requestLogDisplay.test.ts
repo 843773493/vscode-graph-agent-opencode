@@ -311,7 +311,7 @@ const toolCallPhase = buildRequestLogDisplay(
   }),
 );
 assert(
-  toolCallPhase.phaseLabel === "工具调用请求",
+  toolCallPhase.phase === "tool_call",
   "响应含 tool_calls 时相位必须显示工具调用请求",
 );
 assert(
@@ -334,7 +334,7 @@ const naturalLanguagePhase = buildRequestLogDisplay(
   }),
 );
 assert(
-  naturalLanguagePhase.phaseLabel === "自然语言回复",
+  naturalLanguagePhase.phase === "text",
   "响应有自然语言正文时相位必须显示自然语言回复",
 );
 assert(
@@ -346,7 +346,7 @@ const intermediatePhase = buildRequestLogDisplay(
   requestLogRecordFixture({ request: { messages: [] }, response: { result: [] } }),
 );
 assert(
-  intermediatePhase.phaseLabel === "中间请求",
+  intermediatePhase.phase === "intermediate",
   "既无工具调用也无正文时相位必须显示中间请求",
 );
 assert(

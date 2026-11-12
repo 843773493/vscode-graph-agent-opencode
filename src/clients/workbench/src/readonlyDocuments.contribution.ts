@@ -1,3 +1,4 @@
+import { t } from '../../shared/core/i18n/index.js';
 import { Registry } from '../upstream/src/vs/platform/registry/common/platform.js';
 import { SyncDescriptor } from '../upstream/src/vs/platform/instantiation/common/descriptors.js';
 import { ITelemetryService } from '../upstream/src/vs/platform/telemetry/common/telemetry.js';
@@ -18,13 +19,13 @@ class UnavailableReadonlyDocumentPane extends EditorPlaceholder {
     super(UnavailableReadonlyDocumentPane.ID, group, telemetry, themes, storage);
   }
   protected override async getContents(input: EditorInput): Promise<IEditorPlaceholderContents> {
-    if (!(input instanceof UnavailableReadonlyDocumentInput)) throw new Error('只读文档恢复占位只接受无法恢复的记录');
+    if (!(input instanceof UnavailableReadonlyDocumentInput)) throw new Error(t('workbench.readonly.placeholderInputRequired'));
     return { icon: '$(error)', label: input.reason,
-      actions: [{ label: '移除此展示记录', run: () => this.group.closeEditor(input) }] };
+      actions: [{ label: t('workbench.readonly.removeRecord'), run: () => this.group.closeEditor(input) }] };
   }
 }
 
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
-  EditorPaneDescriptor.create(UnavailableReadonlyDocumentPane, UnavailableReadonlyDocumentPane.ID, '无法恢复的只读文档'),
+  EditorPaneDescriptor.create(UnavailableReadonlyDocumentPane, UnavailableReadonlyDocumentPane.ID, t('workbench.readonly.unavailableTitle')),
   [new SyncDescriptor(UnavailableReadonlyDocumentInput)],
 );

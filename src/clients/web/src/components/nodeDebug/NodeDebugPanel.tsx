@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { NodeDebugController } from "../../hooks/nodeDebug/useNodeDebugController";
@@ -36,10 +37,10 @@ const DEBUG_VIEWS: ReadonlyArray<{
   label: string;
   icon: string;
 }> = [
-  { id: "source", label: "源码", icon: "codicon-code" },
-  { id: "context", label: "上下文", icon: "codicon-list-tree" },
-  { id: "console", label: "控制台", icon: "codicon-terminal" },
-  { id: "configuration", label: "配置", icon: "codicon-settings-gear" },
+  { id: "source", label: t("debug.panel.source"), icon: "codicon-code" },
+  { id: "context", label: t("debug.panel.context"), icon: "codicon-list-tree" },
+  { id: "console", label: t("debug.panel.console"), icon: "codicon-terminal" },
+  { id: "configuration", label: t("debug.panel.configuration"), icon: "codicon-settings-gear" },
 ];
 
 export default function NodeDebugPanel({
@@ -190,7 +191,7 @@ export default function NodeDebugPanel({
     setLocalNotice(null);
     const path = scriptPath.trim();
     if (!path) {
-      const message = "请先在配置页选择或填写 JavaScript 文件，再启动源码调试";
+      const message = t("debug.panel.selectFile");
       setLocalNotice(message);
       onStatusChange(message);
       setView("configuration");
@@ -198,13 +199,13 @@ export default function NodeDebugPanel({
       return;
     }
     if (activeProfile && !activeProfile.supported) {
-      const message = `启动源码调试失败：当前版本不支持 ${activeProfile.adapter}`;
+      const message = t("debug.panel.unsupported", activeProfile.adapter);
       setLocalNotice(message);
       onStatusChange(message);
       return;
     }
     if (hasUnsavedConfigurationChanges) {
-      const message = "当前方案有未保存修改，请先保存方案再启动";
+      const message = t("debug.panel.unsaved");
       setLocalNotice(message);
       onStatusChange(message);
       setView("configuration");
@@ -264,7 +265,7 @@ export default function NodeDebugPanel({
     const line = Number(breakpointLine);
     const path = (sourcePath ?? scriptPath).trim();
     if (!path || !Number.isSafeInteger(line) || line < 1) {
-      onStatusChange("设置源码断点失败：需要有效文件和正整数行号");
+      onStatusChange(t("debug.panel.invalidBreakpoint"));
       return;
     }
     void runAction({
@@ -289,52 +290,53 @@ export default function NodeDebugPanel({
   return (
     <section
       className={`node-debug-panel${compact ? " compact" : ""}${extensionWindow ? " extension-window" : ""}`}
-      aria-label="Node 源码调试"
+      aria-label={t("debug.panel.aria")}
     >
       <header className="node-debug-header">
         <div>
-          <strong>源码调试</strong>
+          <strong>{t("debug.panel.title")}</strong>
           <span className={`node-debug-status ${status}`}>{nodeDebugStatusLabel(status)}</span>
           {state?.active_configuration_name ? <small>{state.active_configuration_name}</small> : null}
           {state?.paused_reason ? <small>{nodeDebugPauseReasonLabel(state.paused_reason)}</small> : null}
         </div>
         <div className="node-debug-header-actions">
           {!extensionWindow && onOpenExtensionWindow ? (
-            <button type="button" onClick={onOpenExtensionWindow} title="在扩展窗口打开完整调试工作台">
+            <button type="button" onClick={onOpenExtensionWindow} title={t("debug.panel.extensionHint")}>
               <span className="codicon codicon-open-preview" aria-hidden="true" />
-              扩展窗口
+
+              {t("debug.panel.extension")}
             </button>
           ) : null}
-          <button type="button" onClick={() => void refresh()} disabled={!sessionId} title="刷新调试状态">
+          <button type="button" onClick={() => void refresh()} disabled={!sessionId} title={t("debug.panel.refresh")}>
             <span className="codicon codicon-refresh" aria-hidden="true" />
           </button>
         </div>
       </header>
 
-      <div className="node-debug-controls" aria-label="源码调试控制">
+      <div className="node-debug-controls" aria-label={t("debug.panel.controls")}>
         {status === "idle" || status === "exited" || status === "failed" ? (
           <button type="button" className="primary" onClick={startDebugging} disabled={!sessionId || loading || actionBusy || capabilities?.enabled === false}>
             <span className="codicon codicon-debug-start" aria-hidden="true" />
-            {loading ? "启动中" : "启动"}
+            {loading ? t("debug.status.starting") : t("debug.panel.start")}
           </button>
         ) : (
-          <button type="button" onClick={() => void runAction({ action: "continue" })} disabled={actionBusy || status !== "paused"} title="继续">
+          <button type="button" onClick={() => void runAction({ action: "continue" })} disabled={actionBusy || status !== "paused"} title={t("debug.panel.continue")}>
             <span className="codicon codicon-debug-continue" aria-hidden="true" />
           </button>
         )}
-        <button type="button" onClick={() => void runAction({ action: "pause" })} disabled={actionBusy || status !== "running"} title="暂停">
+        <button type="button" onClick={() => void runAction({ action: "pause" })} disabled={actionBusy || status !== "running"} title={t("debug.panel.pause")}>
           <span className="codicon codicon-debug-pause" aria-hidden="true" />
         </button>
-        <button type="button" onClick={() => void runAction({ action: "step_over" })} disabled={actionBusy || status !== "paused"} title="单步跳过">
+        <button type="button" onClick={() => void runAction({ action: "step_over" })} disabled={actionBusy || status !== "paused"} title={t("debug.panel.stepOver")}>
           <span className="codicon codicon-debug-step-over" aria-hidden="true" />
         </button>
-        <button type="button" onClick={() => void runAction({ action: "step_into" })} disabled={actionBusy || status !== "paused"} title="单步进入">
+        <button type="button" onClick={() => void runAction({ action: "step_into" })} disabled={actionBusy || status !== "paused"} title={t("debug.panel.stepInto")}>
           <span className="codicon codicon-debug-step-into" aria-hidden="true" />
         </button>
-        <button type="button" onClick={() => void runAction({ action: "step_out" })} disabled={actionBusy || status !== "paused"} title="单步跳出">
+        <button type="button" onClick={() => void runAction({ action: "step_out" })} disabled={actionBusy || status !== "paused"} title={t("debug.panel.stepOut")}>
           <span className="codicon codicon-debug-step-out" aria-hidden="true" />
         </button>
-        <button type="button" onClick={() => void runAction({ action: "stop" })} disabled={actionBusy || !processCanStop} title="停止">
+        <button type="button" onClick={() => void runAction({ action: "stop" })} disabled={actionBusy || !processCanStop} title={t("debug.panel.stop")}>
           <span className="codicon codicon-debug-stop" aria-hidden="true" />
         </button>
       </div>
@@ -344,7 +346,7 @@ export default function NodeDebugPanel({
         ) : null}
       </div>
 
-      <nav className="node-debug-view-tabs" role="tablist" aria-label="源码调试二级菜单">
+      <nav className="node-debug-view-tabs" role="tablist" aria-label={t("debug.panel.tabs")}>
         {DEBUG_VIEWS.map((item) => (
           <button
             type="button"
@@ -461,7 +463,7 @@ export default function NodeDebugPanel({
       {state?.error_message ? <div className="debug-error" role="alert">{state.error_message}</div> : null}
       {state?.requires_restart ? (
         <div className="debug-warning" role="status">
-            源码已变化，相关断点已失效；当前进程仍可继续。需要运行新源码时再重启并重新设置断点：{(state.source_changed_paths ?? []).join("、")}
+            {t("debug.panel.sourceChanged", (state.source_changed_paths ?? []).join(", "))}
         </div>
       ) : null}
       {error ? <div className="debug-error" role="alert">{error}</div> : null}

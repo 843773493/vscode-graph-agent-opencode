@@ -21,6 +21,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     body: JSON.stringify({ title: `quickdiscover ${owner === ownerA ? 'A' : 'B'} 会话` }) })).data;
   const sessionA = await create(ownerA), sessionB = await create(ownerB);
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
+  const symbolsUnavailable = '工作区符号不可用：Error: 文件编辑器资源缺少稳定身份，或包含旧临时路由；请从原文件入口重新打开';
   await searchFault(page, 'quickdiscover', 'delay', ['thread']);
   try {
     await command('_workbench.open', await fileUri(ownerA), [undefined, { pinned: true }]);
@@ -41,7 +42,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await expect(quick).toContainText('Thread · 本次查询完成');
     await expectLastSearchStatus({ page, quick, label: '文件 · 本次查询完成' });
     await expect(quick).toContainText('quickdiscover-file.txt');
-    await expect(quick).toContainText('工作区符号未启用');
+    await expectLastSearchStatus({ page, quick, label: symbolsUnavailable });
     const first = requests.filter(request => request.query === 'quickdiscover' || request.body?.query === 'quickdiscover');
     expect(first.length).toBeGreaterThanOrEqual(2);
     expect(first.every(request => belongs(request, ownerA))).toBe(true);
@@ -60,7 +61,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await page.keyboard.press('Enter');
     await expect(quick).not.toBeVisible();
     await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines')).toContainText('discover A line one');
-    await expect(page.locator('[id="status.editor.selection"]')).toContainText('Ln 2, Col 3');
+    await expect(page.locator('[id="status.editor.selection"]')).toContainText('行 2，列 3');
     await command('workbench.action.quickOpen', 'quickdiscover-dir/deep-file');
     const nested = quick.getByRole('option', { name: /^deep-file\.txt / });
     await expect(nested).toHaveCount(1);
@@ -120,14 +121,14 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     const beforeSymbols = requests.length;
     await command('workbench.action.quickOpen', '#quickdiscover');
     await expect(input).toHaveAttribute('placeholder', `工作区符号 · ${ownerB.workspaceId}`);
-    await expect(quick).toContainText('工作区符号未启用');
+    await expect(quick).toContainText(symbolsUnavailable);
     expect(requests.length).toBe(beforeSymbols);
     await page.keyboard.press('Escape');
     result.workspaceSymbolsUnavailable = true;
     const beforeHelp = requests.length;
     await command('workbench.action.quickOpenWithModes');
     await expect(quick).toBeVisible();
-    await expect(quick).toContainText(/Go to File|转到文件/);
+    await expect(quick).toContainText('转到文件');
     expect(requests.length).toBe(beforeHelp);
     await page.keyboard.press('Escape');
 
@@ -152,7 +153,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await expect(quick).toContainText('最近打开');
     await expect(quick).toContainText(ownerA.workspaceId);
     await expect(quick).not.toContainText(ownerB.workspaceId);
-    await expect(quick).not.toContainText(/Go to File|转到文件/);
+    await expect(quick).not.toContainText('转到文件');
     await page.keyboard.press('Escape');
 
     // 项目合同要求关闭历史同时隐藏空输入记录，不以枚举业务资源补空。
@@ -162,7 +163,7 @@ export async function verifyDefaultAccess({ page, command, api, result, fileUri,
     await expect(history).toBeChecked();
     await history.click();
     await expect(history).not.toBeChecked();
-    await page.locator('.settings-editor').getByRole('textbox', { name: /Search settings/ }).focus();
+    await page.locator('.settings-editor').getByRole('textbox', { name: /^搜索设置/ }).focus();
     // Modified 标记由原配置模型重绘，不能把点击后的乐观 checkbox 当作设置已发布。
     await expect(setting).toHaveClass(/is-configured/);
     await command('workbench.action.closeActiveEditor');

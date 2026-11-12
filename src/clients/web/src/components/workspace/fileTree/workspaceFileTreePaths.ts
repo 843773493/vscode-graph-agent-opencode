@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { resourceFileRootUri } from "../../../utils/workspaceFileReferences";
 
 // 这里只操作后端已通过 grammar 的 URI；不解析原生目标机器路径。
@@ -9,7 +10,7 @@ export function parentFileTreePath(uri: string): string {
 }
 
 export function changedPathToTreePath(uri: string): string {
-  if (!uri.startsWith("boxteam://")) throw new Error("文件变更事件缺少资源 URI");
+  if (!uri.startsWith("boxteam://")) throw new Error(t("fileTree.errors.changeMissingUri"));
   return uri;
 }
 
@@ -18,11 +19,11 @@ export function isTreePathInside(candidate: string, ancestor: string): boolean {
 }
 
 export function shortWorkspaceLabel(_workspaceRoot: string | null, workspaceName: string | null): string {
-  return workspaceName || "workspace";
+  return workspaceName || t("fileTree.workspaceFallback");
 }
 
 export function referenceForTreePath(uri: string): string {
-  if (!uri.startsWith("boxteam://")) throw new Error("文件树尚未取得资源 URI");
+  if (!uri.startsWith("boxteam://")) throw new Error(t("fileTree.errors.resourceUriUnavailable"));
   return uri;
 }
 
@@ -32,17 +33,17 @@ export function parseClipboardFilePaths(text: string): [string, ...string[]] {
     try {
       url = new URL(raw);
     } catch (error) {
-      throw new Error(`剪贴板中的 file 地址无法解析: ${raw}`, { cause: error });
+      throw new Error(t("fileTree.clipboard.fileUriUnparseable", raw), { cause: error });
     }
     let decodedPath: string;
     try {
       decodedPath = decodeURIComponent(url.pathname);
     } catch (error) {
-      throw new Error(`剪贴板中的 file 地址包含非法百分号转义: ${raw}`, { cause: error });
+      throw new Error(t("fileTree.clipboard.fileUriInvalidEscape", raw), { cause: error });
     }
     // 空字符会让下游后端路径解析与文件系统调用只看到截断后的前缀，必须在入口拒绝。
     if (decodedPath.includes("\0")) {
-      throw new Error(`剪贴板中的文件路径包含空字符: ${raw}`);
+      throw new Error(t("fileTree.clipboard.pathContainsNull", raw));
     }
     if (url.hostname) {
       return `//${url.hostname}${decodedPath}`;
@@ -71,10 +72,10 @@ export function parseClipboardFilePaths(text: string): [string, ...string[]] {
       if (unquoted.startsWith("/") || /^[A-Za-z]:[\\/]/.test(unquoted)) {
         return unquoted;
       }
-      throw new Error(`剪贴板内容不是绝对文件路径: ${unquoted}`);
+      throw new Error(t("fileTree.clipboard.notAbsolutePath", unquoted));
     });
   if (paths.length === 0) {
-    throw new Error("剪贴板中没有可粘贴的文件路径");
+    throw new Error(t("fileTree.clipboard.noPaths"));
   }
   return [...new Set(paths)] as [string, ...string[]];
 }

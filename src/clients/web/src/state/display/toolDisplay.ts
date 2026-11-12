@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import type { TimelineItem } from "../timeline/timelineTypes";
 import { isRecord } from "../../utils/jsonDisplay";
 
@@ -77,12 +78,12 @@ function toolFieldLines(rows: Array<[label: string, value: string]>): string {
 
 function commandStatusLabel(status: string): string {
   const labels: Record<string, string> = {
-    completed: "命令已完成",
-    background: "命令仍在后台运行",
-    running: "命令运行中",
-    terminated: "命令已终止",
-    deleted: "命令记录已删除",
-    failed: "命令失败",
+    completed: t("chat.tool.commandCompleted"),
+    background: t("chat.tool.commandBackground"),
+    running: t("chat.tool.commandRunning"),
+    terminated: t("chat.tool.commandTerminated"),
+    deleted: t("chat.tool.commandDeleted"),
+    failed: t("chat.tool.commandFailed"),
   };
   return labels[status] ?? status;
 }
@@ -114,33 +115,33 @@ function formatTerminalToolContent(
   const output = fieldText(resultRecord, "output");
 
   const sections = [
-    "**输入参数**",
+    t("chat.tool.inputHeading"),
     toolFieldLines([
-      ["命令", fieldText(inputRecord, "cmd")],
+      [t("chat.tool.command"), fieldText(inputRecord, "cmd")],
       ["Session ID", fieldText(inputRecord, "session_id")],
-      ["写入字符", fieldText(inputRecord, "chars")],
-      ["前台等待", fieldText(inputRecord, "yield_time_ms")],
-      ["输出上限", fieldText(inputRecord, "max_output_tokens")],
-      ["工作目录", fieldText(inputRecord, "workdir")],
+      [t("chat.tool.characters"), fieldText(inputRecord, "chars")],
+      [t("chat.tool.wait"), fieldText(inputRecord, "yield_time_ms")],
+      [t("chat.tool.outputLimit"), fieldText(inputRecord, "max_output_tokens")],
+      [t("chat.tool.cwd"), fieldText(inputRecord, "workdir")],
       ["Shell", fieldText(inputRecord, "shell")],
       ["PTY", fieldText(inputRecord, "tty")],
       ["Login shell", fieldText(inputRecord, "login")],
     ]),
     "",
-    "**执行结果**",
+    t("chat.tool.resultHeading"),
     toolFieldLines([
-      ["命令状态", status ? commandStatusLabel(status) : ""],
+      [t("chat.tool.commandStatus"), status ? commandStatusLabel(status) : ""],
       ["Session ID", runningSessionId ? markdownCode(runningSessionId) : ""],
-      ["终端 UUID", terminalId ? markdownCode(terminalId) : ""],
-      ["退出码", exitCode],
+      [t("chat.tool.terminalId"), terminalId ? markdownCode(terminalId) : ""],
+      [t("chat.tool.exitCode"), exitCode],
       ["Chunk ID", fieldText(resultRecord, "chunk_id")],
-      ["原始 token 数", fieldText(resultRecord, "original_token_count")],
-      ["耗时（秒）", fieldText(resultRecord, "wall_time_seconds")],
+      [t("chat.tool.originalTokens"), fieldText(resultRecord, "original_token_count")],
+      [t("chat.tool.duration"), fieldText(resultRecord, "wall_time_seconds")],
     ]),
     terminalId
-      ? "说明：命令完成不代表终端关闭；可从后台连接面板重新打开终端。"
+      ? t("chat.tool.terminalHint")
       : "",
-    output ? `\n输出：\n\`\`\`text\n${output}\n\`\`\`` : "",
+    output ? t("chat.tool.outputContent", output) : "",
   ].filter((part) => part.trim().length > 0);
 
   return sections.join("\n\n");
@@ -152,13 +153,13 @@ function terminalToolCollapsedText(
 ): string {
   if (fieldText(resultRecord, "session_id")) {
     return item.toolName === "write_stdin"
-      ? "已写入，命令仍在运行"
-      : "命令仍在运行，终端可 attach";
+      ? t("chat.tool.writtenRunning")
+      : t("chat.tool.runningAttach");
   }
   if (Object.prototype.hasOwnProperty.call(resultRecord, "exit_code")) {
-    return "命令已完成，终端仍可打开";
+    return t("chat.tool.completedOpen");
   }
-  return "命令工具已返回，终端仍可打开";
+  return t("chat.tool.returnedOpen");
 }
 
 function skillNames(item: AggregatedToolItem): string[] {
@@ -192,12 +193,12 @@ function formatCustomToolSkillContent(item: AggregatedToolItem): string | null {
   const input = item.inputText.trim();
   const invocation = invocationToolName(item);
   return [
-    `**Skill**\n由 ${names.map(markdownCode).join("、")} 记录的扩展工具调用。`,
+    t("chat.tool.skillContent", names.map(markdownCode).join(t("chat.nameSeparator"))),
     invocation
-      ? `**调用入口**\n${markdownCode(invocation)} -> ${markdownCode(item.toolName)}`
+      ? t("chat.tool.invocationContent", markdownCode(invocation), markdownCode(item.toolName))
       : "",
-    input ? `**输入参数**\n\`\`\`\n${input}\n\`\`\`` : "",
-    result ? `**执行结果**\n\`\`\`\n${result}\n\`\`\`` : "",
+    input ? t("chat.tool.inputContent", input) : "",
+    result ? t("chat.tool.resultContent", result) : "",
   ].filter((part) => part.trim().length > 0).join("\n\n");
 }
 
@@ -209,9 +210,9 @@ function formatCustomInvocationToolContent(item: AggregatedToolItem): string | n
   const result = item.resultText.trim();
   const input = item.inputText.trim();
   return [
-    `**调用入口**\n${markdownCode(invocation)} -> ${markdownCode(item.toolName)}`,
-    input ? `**输入参数**\n\`\`\`\n${input}\n\`\`\`` : "",
-    result ? `**执行结果**\n\`\`\`\n${result}\n\`\`\`` : "",
+    t("chat.tool.invocationContent", markdownCode(invocation), markdownCode(item.toolName)),
+    input ? t("chat.tool.inputContent", input) : "",
+    result ? t("chat.tool.resultContent", result) : "",
   ].filter((part) => part.trim().length > 0).join("\n\n");
 }
 
@@ -240,7 +241,7 @@ export function deriveToolRowDisplay(
   }
   if (item.outcomeUnknown) {
     return {
-      previewText: "未确认返回结果",
+      previewText: t("chat.tool.unconfirmed"),
       detailsContent: includeExpandedContent
         ? formatCustomToolCardContent(item)
         : null,
@@ -252,7 +253,7 @@ export function deriveToolRowDisplay(
   const path = fieldText(inputRecord, "file_path") || fieldText(inputRecord, "path");
   const names = skillNames(item);
   const prefix = names.length > 0
-    ? `${names.join("、")} 记录的 ${invocationLabel(item)}`
+    ? t("chat.tool.recorded", names.join(t("chat.nameSeparator")), invocationLabel(item))
     : invocationLabel(item);
   const result =
     fieldText(resultRecord, "stdout") ||
@@ -261,10 +262,10 @@ export function deriveToolRowDisplay(
     item.resultText;
   return {
     previewText: result.trim()
-      ? `${prefix} 返回：${compactInline(result, 80)}`
+      ? t("chat.tool.returned", prefix, compactInline(result, 80))
       : path.trim()
-        ? `${prefix} 处理：${compactInline(path, 80)}`
-        : `${prefix} 执行完成`,
+        ? t("chat.tool.processing", prefix, compactInline(path, 80))
+        : t("chat.tool.done", prefix),
     detailsContent: includeExpandedContent
       ? formatCustomToolCardContent(item)
       : null,

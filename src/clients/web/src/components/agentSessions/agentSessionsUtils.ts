@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import type { GatewayWorkspace, Session, SessionCatalogNode } from '../../types/backend';
 import { formatDateTime, formatTime } from '../../utils/format';
@@ -53,14 +54,14 @@ export function sessionCatalogTimePresentation(
 export function workspaceHoverTitle(workspace: GatewayWorkspace): string {
   const lines = [workspace.name];
   if (workspace.connection_kind === 'remote_gateway') {
-    lines.push(...workspace.remote_gateways.map(remote => `hostname: ${remote.host}`));
+    lines.push(...workspace.remote_gateways.map(remote => t('navigation.workspace.hostname', remote.host)));
   }
   return lines.join('\n');
 }
 
 /** 远程 Gateway 展示名的唯一实现：优先 SSH 配置主机名。 */
 export function remoteGatewayName(workspace: GatewayWorkspace): string {
-  return workspace.remote_gateways.map(remote => remote.ssh_config_host ?? remote.name ?? remote.host).join('、') || '远程 Gateway';
+  return workspace.remote_gateways.map(remote => remote.ssh_config_host ?? remote.name ?? remote.host).join(t('navigation.listSeparator')) || t('navigation.workspace.remoteGateway');
 }
 
 export function workspaceFailurePresentation(
@@ -69,14 +70,14 @@ export function workspaceFailurePresentation(
 ): WorkspaceFailurePresentation {
   if (workspace?.connection_kind === 'remote_gateway') {
     return {
-      title: '无法读取远程工作区',
-      message: `远程 Gateway“${remoteGatewayName(workspace)}”当前未连接或暂时不可用。`,
+      title: t('navigation.workspace.remoteReadFailed'),
+      message: t('navigation.workspace.remoteUnavailable', remoteGatewayName(workspace)),
       technicalDetail: error,
     };
   }
   return {
-    title: '无法读取工作区目录',
-    message: '该工作区的会话目录暂时不可用。',
+    title: t('navigation.workspace.catalogReadFailed'),
+    message: t('navigation.workspace.catalogUnavailable'),
     technicalDetail: error,
   };
 }
@@ -88,31 +89,31 @@ export function workspaceStatusPresentation(
   // 不能回落成一行可点击的幽灵节点，必须显式说明它为何不可用。
   if (!workspace) {
     return {
-      label: '已不可用',
-      title: '该工作区已不在 Gateway 列表中，可能已被移除或尚未从 Gateway 同步。',
+      label: t('navigation.workspace.noLongerAvailable'),
+      title: t('navigation.workspace.noLongerRegistered'),
     };
   }
   if (workspace.status !== 'offline') return null;
   if (workspace.connection_kind === 'remote_gateway') {
-    const summary = `远程 Gateway“${remoteGatewayName(workspace)}”当前未连接。`;
+    const summary = t('navigation.workspace.remoteDisconnected', remoteGatewayName(workspace));
     return {
-      label: '连接失败',
+      label: t('navigation.workspace.connectionFailed'),
       title: workspace.connection_error
-        ? `${summary}\n技术详情：${workspace.connection_error}`
+        ? t('navigation.workspace.technicalDetails', summary, workspace.connection_error)
         : summary,
     };
   }
   if (workspace.managed) {
     return {
-      label: '已停止',
+      label: t('navigation.workspace.stopped'),
       title: workspace.connection_error
-        ? `工作区后端未运行。\n技术详情：${workspace.connection_error}`
-        : '工作区后端未运行，可通过右键菜单重新启动。',
+        ? t('navigation.workspace.backendStoppedDetails', workspace.connection_error)
+        : t('navigation.workspace.backendStopped'),
     };
   }
   return {
-    label: '不可用',
-    title: workspace.connection_error ?? '工作区当前不可用。',
+    label: t('navigation.workspace.unavailable'),
+    title: workspace.connection_error ?? t('navigation.workspace.currentlyUnavailable'),
   };
 }
 
@@ -188,7 +189,7 @@ export function buildTimeSections(sessions: Session[], sortMode: SessionSortMode
   if (recent.length > 0) {
     sections.push({
       id: 'time:recent',
-      label: '最近',
+      label: t('navigation.sessions.recent'),
       sessions: recent,
       totalCount: recent.length,
       showMoreCount: 0,
@@ -197,7 +198,7 @@ export function buildTimeSections(sessions: Session[], sortMode: SessionSortMode
   if (older.length > 0) {
     sections.push({
       id: 'time:older',
-      label: '更早',
+      label: t('navigation.sessions.older'),
       sessions: older,
       totalCount: older.length,
       showMoreCount: 0,
@@ -238,7 +239,7 @@ export function buildVisibleWorkspaceTree(
   ) => {
     if (visited.has(gatewayWorkspaceKey(workspace))) {
       throw new Error(
-        `工作区父子关系形成循环: ${gatewayWorkspaceKey(workspace)}`,
+        t('navigation.workspace.parentCycle', gatewayWorkspaceKey(workspace)),
       );
     }
     visited.add(gatewayWorkspaceKey(workspace));
@@ -260,7 +261,7 @@ export function buildVisibleWorkspaceTree(
       (workspace) => !visited.has(gatewayWorkspaceKey(workspace)),
     );
     throw new Error(
-      `工作区父子关系无法解析: ${unresolved?.workspace_id ?? "unknown"}`,
+      t('navigation.workspace.parentUnresolved', unresolved?.workspace_id ?? "unknown"),
     );
   }
   return result;

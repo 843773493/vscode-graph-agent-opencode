@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useContext } from "react";
 import { OverlayRootContext } from "./OverlayRootContext";
 import React, { useEffect, useId, useRef, useState } from 'react';
@@ -70,7 +71,7 @@ export default function SessionNameDialog({
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!normalizedDraft) {
-      setLocalError('会话名称不能为空');
+      setLocalError(t("dialogs.sessionNameRequired"));
       return;
     }
     setLocalError('');
@@ -99,7 +100,7 @@ export default function SessionNameDialog({
           <button
             type="button"
             className="session-name-close"
-            aria-label="关闭"
+            aria-label={t("dialogs.close")}
             disabled={submitting}
             onClick={onCancel}
           >
@@ -124,10 +125,10 @@ export default function SessionNameDialog({
         {message ? <div className="session-name-error">{message}</div> : null}
         <div className="session-name-actions">
           <button type="button" disabled={submitting} onClick={onCancel}>
-            取消
+            {t("dialogs.cancel")}
           </button>
           <button type="submit" className="session-name-confirm" disabled={confirmDisabled}>
-            {submitting ? '保存中' : confirmText}
+            {submitting ? t("dialogs.saving") : confirmText}
           </button>
         </div>
       </form>

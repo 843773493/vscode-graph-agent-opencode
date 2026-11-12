@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { Severity, type INotificationHandle, type INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import type { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
@@ -24,51 +25,51 @@ export async function saveMcpWorkspaceConfiguration(route: GatewayWorkspaceReque
   const preflight = await preflightConfigSource(0, route, intent, signal);
   check();
   const confirmation = await quickInput.pick([
-    { label: '取消' }, { label: '确认保存工作区 MCP 配置', save: true, description: summary,
+    { label: t('workbench.mcp.cancel') }, { label: t('workbench.mcp.confirmSave'), save: true, description: summary,
       detail: preflight.changed_paths.join(' · ') },
-  ], { title: '确认 MCP 工作区配置' });
+  ], { title: t('workbench.mcp.confirmConfiguration') });
   check();
   if (!confirmation?.save) return;
   try {
     const saved = await saveConfigSource(0, route, intent, signal);
     check();
-    notifications.info(`${saved.edit?.source_saved ? '来源已保存' : '来源未确认保存'} · ${saved.edit?.state ?? '未知状态'} · ${summary}`);
+    notifications.info(`${saved.edit?.source_saved ? t('workbench.mcp.sourceSaved') : t('workbench.mcp.sourceUnconfirmed')} · ${saved.edit?.state ?? t('workbench.mcp.unknownState')} · ${summary}`);
   } catch (cause) {
     check();
-    let observation = '原来源提交状态尚未查询';
+    let observation = t('workbench.mcp.submissionNotQueried');
     try {
       const queried = await getConfigSourceDocument(0, route, mcpConfigurationSourceKey, { idempotencyKey, signal });
       check();
-      observation = queried.edit ? `source 状态 ${queried.edit.state} · source_saved=${queried.edit.source_saved} · layer_imported=${queried.edit.layer_imported}`
-        : `尚未查到原提交记录 · ${idempotencyKey}`;
+      observation = queried.edit ? t('workbench.mcp.sourceState', queried.edit.state, queried.edit.source_saved, queried.edit.layer_imported)
+        : t('workbench.mcp.submissionNotFound', idempotencyKey);
       if (queried.edit) {
         notifications.info(`${observation} · ${summary}`);
         return;
       }
     } catch (readError) {
       check();
-      observation = `原来源回读失败：${mcpConfigurationErrorMessage(readError)} · ${idempotencyKey}`;
+      observation = t('workbench.mcp.sourceReadFailed', mcpConfigurationErrorMessage(readError), idempotencyKey);
     }
     if (cause instanceof HttpRequestError && cause.status >= 400 && cause.status < 500) {
-      throw new Error(`MCP 配置保存被拒绝：${mcpConfigurationErrorMessage(cause)}；${observation}`, { cause });
+      throw new Error(t('workbench.mcp.saveRejected', mcpConfigurationErrorMessage(cause), observation), { cause });
     }
     if (!await notificationAction(notifications, Severity.Warning,
-      `保存结果未确认，不会自动重发。${mcpConfigurationErrorMessage(cause)}；${observation}`, '查询原来源提交', signal)) return;
+      t('workbench.mcp.saveUnconfirmed', mcpConfigurationErrorMessage(cause), observation), t('workbench.mcp.querySubmission'), signal)) return;
     check();
     for (;;) {
       try {
         const queried = await getConfigSourceDocument(0, route, mcpConfigurationSourceKey, { idempotencyKey, signal });
         check();
         if (queried.edit) {
-          notifications.info(`source 状态 ${queried.edit.state} · source_saved=${queried.edit.source_saved} · layer_imported=${queried.edit.layer_imported} · ${summary}`);
+          notifications.info(t('workbench.mcp.sourceStateSummary', queried.edit.state, queried.edit.source_saved, queried.edit.layer_imported, summary));
           return;
         }
       } catch (readError) {
         check();
-        observation = `原来源提交查询失败：${mcpConfigurationErrorMessage(readError)} · ${idempotencyKey}`;
+        observation = t('workbench.mcp.submissionQueryFailed', mcpConfigurationErrorMessage(readError), idempotencyKey);
       }
       if (!await notificationAction(notifications, Severity.Warning,
-        `仍未查询到本次提交，不会重发。${observation}`, '继续查询原来源提交', signal)) return;
+        t('workbench.mcp.submissionStillMissing', observation), t('workbench.mcp.continueQuery'), signal)) return;
       check();
     }
   }

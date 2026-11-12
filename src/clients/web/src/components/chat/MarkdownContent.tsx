@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 import React, {
   startTransition,
   useEffect,
@@ -250,7 +251,7 @@ function MarkdownContent({
               className="chat-markdown-show-full"
               onClick={() => setFullyRenderedValue(renderedValue)}
             >
-              渲染完整 Markdown（{renderedValue.length.toLocaleString()} 字符）
+              {t("chat.markdown.full", formatNumber(renderedValue.length))}
             </button>
           </>
         ) : markdown

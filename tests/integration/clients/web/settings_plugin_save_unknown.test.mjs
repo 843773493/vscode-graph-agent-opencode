@@ -1,3 +1,4 @@
+import { t } from '../../../../src/clients/shared/core/i18n/index.js';
 import { afterAll, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -5,6 +6,9 @@ import { join } from 'node:path';
 import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
 import { HttpRequestError } from '../../../../src/clients/web/src/api/http.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+
+// 提取的真实声明仍使用产品翻译入口，显式注入同一测试启动语言。
+const localizedFunction = (...parts) => new Function('t', ...parts).bind(undefined, t);
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/settings_plugin_save_unknown.test.mjs').prepare();
 const sourcePath = 'src/clients/workbench/src/settings/pluginConfiguration.ts';
@@ -27,10 +31,10 @@ function declaration(path, text, name) {
 const sourceOwnerCode = ['sourceBaseline', 'sourceStatus', 'sourceFanoutStatus', 'ConfigurationSourceOwner']
   .map(name => declaration(sourceOwnerPath, sourceOwnerSource, name)).join('\n');
 const saveCode = declaration(sourcePath, source, 'saveSourceEdit');
-const sourceOwnerFactory = new Function('gateway',
+const sourceOwnerFactory = localizedFunction('gateway',
   `${sourceOwnerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus };`);
-const saveSourceEdit = new Function(`${saveCode}\nreturn saveSourceEdit;`)();
-const privateParameterStatus = new Function('parse', `${declaration(sourcePath, source, 'privateParameterStatus')}\nreturn privateParameterStatus;`)(JSON.parse);
+const saveSourceEdit = localizedFunction(`${saveCode}\nreturn saveSourceEdit;`)();
+const privateParameterStatus = localizedFunction('parse', `${declaration(sourcePath, source, 'privateParameterStatus')}\nreturn privateParameterStatus;`)(JSON.parse);
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprints.json'), `${JSON.stringify(fingerprints, null, 2)}\n`));
 
 function fixture({ read, saveError = new HttpRequestError(403, 'Forbidden', 'permission denied after commit', '/config/sources', 'request-save') }) {

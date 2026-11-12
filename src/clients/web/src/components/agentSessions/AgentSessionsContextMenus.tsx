@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import { extractSessionIdFromClipboardText } from "../../state/session/sessionInformation";
 import {
   copyTextToClipboard,
@@ -95,12 +96,12 @@ export default function AgentSessionsContextMenus({
     onCloseSessionMenu();
     void copyTextToClipboard(target.sessionId)
       .then(() => {
-        onStatusChange(`已复制会话 ID: ${target.sessionId}`);
+        onStatusChange(t('navigation.clipboard.sessionIdCopied', target.sessionId));
       })
       .catch((error: unknown) => {
         if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onError(`复制会话 ID 失败 (${target.workspaceId}/${target.sessionId}): ${message}`);
+        onError(t('navigation.clipboard.sessionIdFailed', target.workspaceId, target.sessionId, message));
       });
   };
 
@@ -120,12 +121,12 @@ export default function AgentSessionsContextMenus({
         ).then(() => childSessionId);
       })
       .then((childSessionId) => {
-        onStatusChange(`已将 ${childSessionId} 绑定到 ${target.sessionId}`);
+        onStatusChange(t('navigation.sessions.bound', childSessionId, target.sessionId));
       })
       .catch((error: unknown) => {
         if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onError(`绑定剪贴板会话失败 (${target.workspaceId}/${target.sessionId}): ${message}`);
+        onError(t('navigation.clipboard.bindSessionFailed', target.workspaceId, target.sessionId, message));
       });
   };
 
@@ -135,15 +136,15 @@ export default function AgentSessionsContextMenus({
     }
     const target = sessionMenu;
     onCloseSessionMenu();
-    onStatusChange(`正在读取会话信息: ${target.sessionId}`);
+    onStatusChange(t('navigation.clipboard.readingSession', target.sessionId));
     void onCopySessionInformation(target.workspaceId, target.sessionId)
       .then(() => {
-        onStatusChange(`已复制会话信息: ${target.sessionId}`);
+        onStatusChange(t('navigation.clipboard.sessionCopied', target.sessionId));
       })
       .catch((error: unknown) => {
         if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onError(`复制会话信息失败 (${target.workspaceId}/${target.sessionId}): ${message}`);
+        onError(t('navigation.clipboard.sessionFailed', target.workspaceId, target.sessionId, message));
       });
   };
 
@@ -157,7 +158,7 @@ export default function AgentSessionsContextMenus({
       (error: unknown) => {
         if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onError(`从上下文创建分支失败 (${target.workspaceId}/${target.sessionId}): ${message}`);
+        onError(t('navigation.fork.createOwnerFailed', target.workspaceId, target.sessionId, message));
       },
     );
   };
@@ -168,15 +169,15 @@ export default function AgentSessionsContextMenus({
     }
     const target = workspaceMenu;
     onCloseWorkspaceMenu();
-    onStatusChange(`正在读取工作区信息: ${target.workspaceId}`);
+    onStatusChange(t('navigation.clipboard.readingWorkspace', target.workspaceId));
     void onCopyWorkspaceInformation(target.workspaceId)
       .then(() => {
-        onStatusChange(`已复制工作区信息: ${target.workspaceId}`);
+        onStatusChange(t('navigation.clipboard.workspaceCopied', target.workspaceId));
       })
       .catch((error: unknown) => {
         if (isErrorReported(error)) return;
         const message = errorMessage(error);
-        onError(`复制工作区信息失败 (${target.workspaceId}): ${message}`);
+        onError(t('navigation.clipboard.workspaceFailed', target.workspaceId, message));
       });
   };
 
@@ -189,7 +190,7 @@ export default function AgentSessionsContextMenus({
     void onStopWorkspace(target.workspaceId).catch((error: unknown) => {
       if (isErrorReported(error)) return;
       onError(
-        `关闭工作区失败 (${target.workspaceId}): ${errorMessage(error)}`,
+        t('navigation.workspace.stopFailed', target.workspaceId, errorMessage(error)),
       );
     });
   };
@@ -234,33 +235,33 @@ export default function AgentSessionsContextMenus({
             }}
           >
             <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">新建子文件夹</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.folder.newChild')}</span>
           </button>
-          <button type="button" role="menuitem" title="复制当前会话 ID" onClick={handleCopySessionId}>
+          <button type="button" role="menuitem" title={t('navigation.clipboard.copySessionIdHint')} onClick={handleCopySessionId}>
             <span className="codicon codicon-copy agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">复制 ID</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.clipboard.copyId')}</span>
           </button>
           <button
             type="button"
             role="menuitem"
-            title="复制可供 Agent 和软件解析的通用会话信息"
+            title={t('navigation.clipboard.copySessionHint')}
             onClick={handleCopySessionInformation}
           >
             <span className="codicon codicon-info agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">复制会话信息</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.clipboard.copySession')}</span>
           </button>
-          <button type="button" role="menuitem" title="将剪贴板中的会话移动并绑定为当前会话的子会话" onClick={handleBindClipboardSession}>
+          <button type="button" role="menuitem" title={t('navigation.clipboard.bindSessionHint')} onClick={handleBindClipboardSession}>
             <span className="codicon codicon-clippy agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">绑定为子会话</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.sessions.bindChild')}</span>
           </button>
           <button
             type="button"
             role="menuitem"
-            title="选择上下文范围和目标，默认在当前会话中创建空闲子线程"
+            title={t('navigation.fork.createHint')}
             onClick={handleForkSessionContext}
           >
             <span className="codicon codicon-git-branch agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">从上下文创建分支</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.fork.fromContext')}</span>
           </button>
           <button
             type="button"
@@ -272,7 +273,7 @@ export default function AgentSessionsContextMenus({
             }}
           >
             <span className="codicon codicon-edit agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">重命名</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.rename')}</span>
           </button>
           {sessionMenu.parentSessionId ? (
             <button
@@ -285,7 +286,7 @@ export default function AgentSessionsContextMenus({
               }}
             >
               <span className="codicon codicon-debug-disconnect agent-sessions-menu-item-icon" aria-hidden="true" />
-                <span className="agent-sessions-menu-item-label">解除父会话绑定</span>
+                <span className="agent-sessions-menu-item-label">{t('navigation.sessions.unbindParent')}</span>
             </button>
           ) : null}
           <button
@@ -299,7 +300,7 @@ export default function AgentSessionsContextMenus({
             }}
           >
             <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">删除会话</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.sessions.delete')}</span>
           </button>
         </div>
         </AnchoredOverlay>
@@ -328,7 +329,7 @@ export default function AgentSessionsContextMenus({
                 void onStartWorkspace(target.workspaceId).catch((error: unknown) => {
                   if (isErrorReported(error)) return;
                   onError(
-                    `启动工作区失败 (${target.workspaceId}): ${errorMessage(error)}`,
+                    t('navigation.workspace.startFailed', target.workspaceId, errorMessage(error)),
                   );
                 });
               }}
@@ -336,8 +337,8 @@ export default function AgentSessionsContextMenus({
               <span className={`codicon ${startingWorkspaceIds.has(workspaceMenu.workspaceId) ? "codicon-loading codicon-modifier-spin" : "codicon-play"} agent-sessions-menu-item-icon`} aria-hidden="true" />
               <span className="agent-sessions-menu-item-label">
                 {startingWorkspaceIds.has(workspaceMenu.workspaceId)
-                  ? "正在启动"
-                  : "启动工作区"}
+                  ? t('navigation.workspace.startingShort')
+                  : t('navigation.workspace.start')}
               </span>
             </button>
           ) : null}
@@ -355,14 +356,14 @@ export default function AgentSessionsContextMenus({
                 (error: unknown) => {
                   if (isErrorReported(error)) return;
                   onError(
-                    `新建工作区会话失败 (${target.workspaceId}): ${errorMessage(error)}`,
+                    t('navigation.sessions.createInWorkspaceFailed', target.workspaceId, errorMessage(error)),
                   );
                 },
               );
             }}
           >
             <span className="codicon codicon-comment-add agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">新建会话</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.sessions.new')}</span>
           </button>
           <button
             type="button"
@@ -375,7 +376,7 @@ export default function AgentSessionsContextMenus({
             }}
           >
             <span className="codicon codicon-new-folder agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">新建会话文件夹</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.folder.newSessionFolder')}</span>
           </button>
           <button
             type="button"
@@ -387,16 +388,16 @@ export default function AgentSessionsContextMenus({
             }}
           >
             <span className="codicon codicon-edit agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">重命名</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.rename')}</span>
           </button>
           <button
             type="button"
             role="menuitem"
-            title="复制可供 Agent 和软件解析的通用工作区信息"
+            title={t('navigation.clipboard.copyWorkspaceHint')}
             onClick={handleCopyWorkspaceInformation}
           >
             <span className="codicon codicon-info agent-sessions-menu-item-icon" aria-hidden="true" />
-            <span className="agent-sessions-menu-item-label">复制工作区信息</span>
+            <span className="agent-sessions-menu-item-label">{t('navigation.clipboard.copyWorkspace')}</span>
           </button>
           {canStopWorkspace ? (
             <button
@@ -406,7 +407,7 @@ export default function AgentSessionsContextMenus({
               onClick={handleStopWorkspace}
             >
               <span className="codicon codicon-debug-stop agent-sessions-menu-item-icon" aria-hidden="true" />
-              <span className="agent-sessions-menu-item-label">关闭工作区</span>
+              <span className="agent-sessions-menu-item-label">{t('navigation.workspace.stop')}</span>
             </button>
           ) : null}
           {workspaceMenu.removable ? (
@@ -421,11 +422,11 @@ export default function AgentSessionsContextMenus({
               }}
             >
               <span className="codicon codicon-trash agent-sessions-menu-item-icon" aria-hidden="true" />
-              <span className="agent-sessions-menu-item-label">删除工作区</span>
+              <span className="agent-sessions-menu-item-label">{t('navigation.workspace.delete')}</span>
             </button>
           ) : (
             <div className="agent-sessions-menu-disabled-note">
-              默认工作区不能删除
+              {t('navigation.workspace.defaultCannotDelete')}
             </div>
           )}
         </div>

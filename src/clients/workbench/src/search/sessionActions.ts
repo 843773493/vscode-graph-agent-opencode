@@ -14,6 +14,8 @@ import type { ResourcePick } from './quickAccessPicks.js';
 import { captureSearchOwner, type SearchInvocationOptions } from './target.js';
 import { chooseSearchOwners } from './quickAccessScope.js';
 import type { SessionForkSourceSelection } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
+import { t } from '../../../shared/core/i18n/index.js';
+import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 
 export const sessionActionCommands = { rename: 'boxteam.session.rename', fork: 'boxteam.session.fork', delete: 'boxteam.session.delete' } as const;
 export type SessionAction = keyof typeof sessionActionCommands;
@@ -25,7 +27,7 @@ export type SessionActionHandlers = Record<SessionAction,
 async function runSessionAction(accessor: ServicesAccessor, action: SessionAction, supplied?: SessionActionTarget): Promise<void> {
   const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService), views = accessor.get(IViewsService);
   const initial = workspaceContext.getSnapshot(), origin = editors.activeEditor;
-  if (!initial.gatewayId) throw new Error('Gateway 登记身份尚未加载');
+  if (!initial.gatewayId) throw new Error(t('workbench.sessionAction.gatewayPending'));
   let target: SessionActionTarget | undefined = supplied ? { ...supplied, owner: { ...supplied.owner }, source: supplied.source ? { ...supplied.source } : undefined }
     : origin instanceof ThreadInput ? { owner: { gatewayId: origin.owner.gatewayId, workspaceId: origin.owner.workspaceId }, sessionId: origin.owner.sessionId,
       source: { threadId: origin.owner.threadId } } : undefined;
@@ -35,38 +37,42 @@ async function runSessionAction(accessor: ServicesAccessor, action: SessionActio
     if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidated = true;
   });
   const assertAccess = () => {
-    if (invalidated) throw new Error('Gateway 或访问凭据已改变，请重新选择会话');
+    if (invalidated) throw new Error(t('workbench.sessionAction.identityChanged'));
   };
   try {
     if (!target) {
-      if (initial.loading || initial.error) throw new Error(initial.error ?? '工作区登记信息尚未加载');
+      if (initial.loading || initial.error) throw new Error(initial.error ?? t('workbench.sessionAction.registrationPending'));
       const owners = origin || initial.activeId ? [captureSearchOwner(editors)] : await chooseSearchOwners(quick, []);
       if (!owners) return;
       assertAccess();
       const providerOptions: SearchInvocationOptions = { searchOwners: owners, sessionSelection: true };
       const selected = await quick.quickAccess.pick('session ', { preserveValue: true, enabledProviderPrefixes: ['session '],
-        placeholder: '选择会话动作目标 · 不打开 Thread', providerOptions });
+        placeholder: t('workbench.sessionAction.pickPlaceholder'), providerOptions });
       if (!selected?.length) return;
       const picked = (selected[0] as ResourcePick).sessionTarget;
-      if (!picked) throw new Error('请选择明确的会话，目录不能作为会话动作目标');
+      if (!picked) throw new Error(t('workbench.sessionAction.sessionRequired'));
       target = { owner: { ...picked.owner }, sessionId: picked.sessionId };
     }
     assertAccess();
     const registered = await gateway.resolveWorkspaceTarget(target.owner);
     assertAccess();
-    if (registered.status !== 'ready') throw new Error(`会话所属工作区当前不可用（${registered.status}），请明确启动或连接后再操作`);
+    if (registered.status !== 'ready') throw new Error(t('workbench.sessionAction.workspaceUnavailable', registered.status));
     const workspaceKey = gatewayWorkspaceKey(registered);
     const session = await getSession(0, target.sessionId, workspaceKey);
     assertAccess();
-    if (session.session_id !== target.sessionId || session.workspace_id !== target.owner.workspaceId) throw new Error('会话回执与所选归属不一致');
+    if (session.session_id !== target.sessionId || session.workspace_id !== target.owner.workspaceId) throw new Error(t('workbench.sessionAction.receiptMismatch'));
     const view = await views.openView<SessionNavigation>('boxteam.sessions', false);
     assertAccess();
-    if (!view) throw new Error('会话导航不可用');
+    if (!view) throw new Error(t('workbench.sessionAction.navigationUnavailable'));
     await view.runSessionAction(action, target.sessionId, session.title, workspaceKey, assertAccess, action === 'fork' ? target.source : undefined);
   } finally { releaseToken(); releaseGateway(); }
 }
 
-for (const [action, title] of [['rename', '重命名会话…'], ['fork', '创建上下文分支…'], ['delete', '永久删除会话…']] as const) registerAction2(class extends Action2 {
-  constructor() { super({ id: sessionActionCommands[action], title: { value: title, original: title }, f1: true }); }
+for (const [action, titleKey] of [
+  ['rename', 'workbench.sessionAction.rename'],
+  ['fork', 'workbench.sessionAction.fork'],
+  ['delete', 'workbench.sessionAction.delete'],
+] as const) registerAction2(class extends Action2 {
+  constructor() { super({ id: sessionActionCommands[action], title: { value: t(titleKey), original: actionTitles[titleKey] }, f1: true }); }
   run(accessor: ServicesAccessor, target?: SessionActionTarget): Promise<void> { return runSessionAction(accessor, action, target); }
 });

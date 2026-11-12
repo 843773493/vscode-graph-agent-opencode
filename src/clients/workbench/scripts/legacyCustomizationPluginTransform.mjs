@@ -200,7 +200,7 @@ function removeMcpPluginDetailActions(relative, path, source, replaceOnce) {
       "\t\tconst pluginUri = URI.parse(plugin.uri);\n\t\tconst clientPlugin = agentPluginService.plugins.get().find(candidate => isEqual(candidate.uri, pluginUri));\n\t\tif (clientPlugin && openPlugin) {\n\t\t\treturn {\n\t\t\t\tlabel: clientPlugin.label,\n\t\t\t\thover: localize('openPluginDetails', \"Open plugin details for {0}\", clientPlugin.label),\n\t\t\t\tariaLabel: localize('openPluginDetails', \"Open plugin details for {0}\", clientPlugin.label),\n\t\t\t\topen: () => openPlugin(clientPlugin),\n\t\t\t};\n\t\t}\n", '');
     source = replaceOnce(source,
       "\t\t\t\thover: localize('openPluginDetails', \"Open plugin details for {0}\", plugin.label),\n\t\t\t\tariaLabel: localize('openPluginDetails', \"Open plugin details for {0}\", plugin.label),\n\t\t\t\topen: openPlugin ? () => openPlugin(plugin) : undefined,",
-      "\t\t\t\thover: localize('fromPlugin', \"MCP server provided by {0}\", plugin.label),");
+      "\t\t\t\thover: localize('workbench.mcp.serverProvidedBy', \"MCP server provided by {0}\", plugin.label),");
     source = replaceOnce(source,
       'const source = getMcpEntrySource(element, this.labelService, this.agentPluginService, this.extensionsWorkbenchService, this._openPlugin);',
       'const source = getMcpEntrySource(element, this.labelService, this.agentPluginService, this.extensionsWorkbenchService);');

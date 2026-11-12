@@ -18,6 +18,9 @@ import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBr
 import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
 import SessionResourceExplorer from "./SessionResourceExplorer";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+import { setLocaleResources } from "../../../../shared/core/i18n/index.js";
+import english from "../../../../shared/core/i18n/messages/en.json";
+import chinese from "../../../../shared/core/i18n/messages/zh-cn.json";
 
 const WORKSPACE_ID = "00000000-0000-0000-0000-000000000001";
 const OTHER_WORKSPACE_ID = "00000000-0000-0000-0000-000000000002";
@@ -28,7 +31,10 @@ const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspac
 // bun 的 mock.module 是进程级且不可撤销的，会污染同一进程后续所有测试文件看到的
 // 这两个模块。
 
-afterEach(restoreGatewayTestEnvironment);
+afterEach(() => {
+  restoreGatewayTestEnvironment();
+  setLocaleResources("zh-cn", chinese);
+});
 
 
 /** 带可读 detail 的错误信封：HttpRequestError 从顶层 detail/message 取诊断文本。 */
@@ -394,9 +400,23 @@ describe("会话目录更新保持树行稳定", () => {
     await updateOutbox(addCatalogOutboxIntent(base, "op_00000000000000000000000000000001",
       { kind: "move_node", targetNodeId: "child", parentNodeId: null },
       { baseCatalogRevision: 3, expectedRevision: 1 }));
-    expect(tree.root.findByProps({ className: "session-resource-load-more" }).props.children.join("")).toBe("加载更多（0/20）");
+    expect(tree.root.findByProps({ className: "session-resource-load-more" }).children.join("")).toBe("加载更多（0/20）");
     expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
     act(() => tree.unmount());
+  });
+
+  test("分页总数未知时保留空总数，不显示伪造的零", async () => {
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
+      branchResponse: (parent) => apiSuccessResponse({ ...catalogPage(parent, []), cursor: "next-page", total: null }),
+    });
+    try {
+      await expandFirstWorkspace(tree);
+      expect(tree.root.findByProps({ className: "session-resource-load-more" }).children.join("")).toBe("加载更多（0/）");
+    } finally {
+      act(() => tree.unmount());
+    }
   });
 
   test("首次展开未加载分支仍显示加载提示，不能提前显示空态", async () => {
@@ -524,6 +544,54 @@ describe("工作区错误提示合并与恢复", () => {
     expect(attempts).toBe(2);
     expect(tree.root.findAllByProps({ role: "alert" })).toHaveLength(0);
     act(() => tree.unmount());
+  });
+
+  test("英文下重试切换失败保留激活入口，激活成功后目录失败改为只重读目录", async () => {
+    setLocaleResources("en", english);
+    const activations: string[] = [];
+    let catalogReads = 0;
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode(WORKSPACE_ID, "用户保留的工作区名")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
+      onActivateWorkspace: async (workspaceId) => {
+        activations.push(workspaceId);
+        if (activations.length < 3) throw new Error("原始激活诊断");
+      },
+      branchResponse: (parent) => ++catalogReads === 1
+        ? apiErrorResponse("原始目录诊断")
+        : apiSuccessResponse({ revision: "catalog-3", catalog_revision: 3, parent_node_id: parent,
+          items: [], cursor: null, total: 0, consistency_warning: null }),
+    });
+    const press = async (label: string) => {
+      await act(async () => {
+        tree.root.findAllByType("button").find((button) => button.props.children === label)!.props.onClick();
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      });
+    };
+    try {
+      await act(async () => {
+        tree.root.findByProps({ className: "session-resource-label workspace-label" }).props.onClick();
+      });
+      expect(JSON.stringify(tree.toJSON())).toContain("Switching workspace failed");
+      expect(JSON.stringify(tree.toJSON())).toContain("用户保留的工作区名");
+      await press("Retry switch");
+      expect(activations).toEqual([WORKSPACE_KEY, WORKSPACE_KEY]);
+      expect(catalogReads).toBe(0);
+      expect(JSON.stringify(tree.toJSON())).toContain("Retry switch");
+
+      await press("Retry switch");
+      expect(activations).toEqual([WORKSPACE_KEY, WORKSPACE_KEY, WORKSPACE_KEY]);
+      expect(catalogReads).toBe(1);
+      expect(JSON.stringify(tree.toJSON())).toContain("Refreshing the session catalog failed");
+      expect(JSON.stringify(tree.toJSON())).not.toContain("Retry switch");
+
+      await press("Reload catalog");
+      expect(activations).toHaveLength(3);
+      expect(catalogReads).toBe(2);
+      expect(tree.root.findAllByProps({ role: "alert" })).toHaveLength(0);
+    } finally {
+      act(() => tree.unmount());
+    }
   });
 
   test("另一工作区的目录错误仍独立显示，刷新不叠加全局错误横幅", async () => {

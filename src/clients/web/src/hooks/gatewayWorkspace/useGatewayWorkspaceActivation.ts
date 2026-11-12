@@ -7,6 +7,7 @@ import type { AppState } from "../../types/frontend";
 import type { FinishWorkspaceRefresh, RunGatewayWorkspaceListTask, SetAppState } from "../contentViewLoaderTypes";
 import { createLatestSerialTaskQueue } from "../runtime/serialTaskQueue";
 import { errorMessage } from "../../utils/errorMessage";
+import { t } from "../../../../shared/core/i18n/index.js";
 
 type RefreshGatewayWorkspaceStatuses = (
   expectedWorkspaceId?: string | null,
@@ -92,8 +93,8 @@ export function useGatewayWorkspaceActivation({
             && latestStateRef.current.currentSessionWorkspaceId === workspaceId
               ? {
                   ...previous,
-                  gatewayError: "后台加载工作区 Agent 失败: " + message,
-                  status: "后台加载工作区 Agent 失败: " + message,
+                  gatewayError: t("gateway.workspace.backgroundAgentLoadFailed", message),
+                  status: t("gateway.workspace.backgroundAgentLoadFailed", message),
                 }
               : previous
           ));
@@ -122,7 +123,7 @@ export function useGatewayWorkspaceActivation({
             ? {
                 ...previous,
                 gatewayError: message,
-                status: "后台切换工作区失败: " + message,
+                status: t("gateway.workspace.backgroundSwitchFailed", message),
               }
             : previous
         ));
@@ -137,7 +138,7 @@ export function useGatewayWorkspaceActivation({
             : {
                 ...previous,
                 gatewayError: message,
-                status: `后台切换工作区失败: ${message}；重新读取 Gateway 活动工作区也失败: ${refreshMessage}`,
+                status: t("gateway.workspace.backgroundSwitchAndRefreshFailed", message, refreshMessage),
               }
         ));
       });
@@ -167,7 +168,7 @@ export function useGatewayWorkspaceActivation({
         latestFormalActivationSequenceRef.current === formalSequence
         && selectionIntent === selectionIntentRef.current
       );
-      const applyActivationFailure = (message: string, status = "工作区切换失败") => {
+      const applyActivationFailure = (message: string, status = t("gateway.workspace.switchFailed")) => {
         if (!isCurrentFormalActivation()) return;
         setState((prev) => isCurrentFormalActivation()
           ? {
@@ -222,7 +223,7 @@ export function useGatewayWorkspaceActivation({
         }
       });
       return operation.catch(() => undefined).then(async () => {
-        const fail = (message: string, cause: unknown, status = "工作区切换失败") => {
+        const fail = (message: string, cause: unknown, status = t("gateway.workspace.switchFailed")) => {
           // 只有仍是最后一次正式激活意图时才写状态，避免污染新激活正在收敛的状态。
           applyActivationFailure(message, status);
           throw cause;
@@ -240,19 +241,19 @@ export function useGatewayWorkspaceActivation({
           }
           const message = errorMessage(failure);
           const status = hasActivationApiFailure && hasAuthorityRefreshFailure
-            ? `工作区切换失败：${message}；重新读取 Gateway 活动工作区也失败: ${errorMessage(authorityRefreshFailure)}`
-            : "工作区切换失败";
+            ? t("gateway.workspace.switchAndRefreshFailed", message, errorMessage(authorityRefreshFailure))
+            : t("gateway.workspace.switchFailed");
           return fail(message, failure, status);
         }
         if (!started) {
-          return fail(`工作区激活已被更新的激活请求取代，${workspaceId} 未生效`, new Error(
-            `工作区激活已被更新的激活请求取代，${workspaceId} 未生效`,
+          return fail(t("gateway.workspace.activationSuperseded", workspaceId), new Error(
+            t("gateway.workspace.activationSuperseded", workspaceId),
           ));
         }
         if (appliedWorkspaceId === null) {
           return fail(
-            `工作区激活未生效：${workspaceId} 的工作区刷新已被更新的请求作废`,
-            new Error(`工作区激活未生效：${workspaceId} 的工作区刷新已被更新的请求作废`),
+            t("gateway.workspace.activationRefreshSuperseded", workspaceId),
+            new Error(t("gateway.workspace.activationRefreshSuperseded", workspaceId)),
           );
         }
         // 刷新本身生效了，但生效的活动工作区不是请求的那个：自动健康回退
@@ -260,9 +261,9 @@ export function useGatewayWorkspaceActivation({
         // 从未成为活动工作区，绝不能给调用方假成功。
         if (appliedWorkspaceId !== workspaceId) {
           return fail(
-            `工作区激活未生效：${workspaceId} 未成为活动工作区（当前活动工作区为 ${appliedWorkspaceId}）`,
+            t("gateway.workspace.activationDidNotBecomeActive", workspaceId, appliedWorkspaceId),
             new Error(
-              `工作区激活未生效：${workspaceId} 未成为活动工作区（当前活动工作区为 ${appliedWorkspaceId}）`,
+              t("gateway.workspace.activationDidNotBecomeActive", workspaceId, appliedWorkspaceId),
             ),
           );
         }
@@ -286,7 +287,7 @@ export function useGatewayWorkspaceActivation({
       gatewayError: null,
       error: null,
       isBootstrapping: prev.isBootstrapping || Boolean(prev.error),
-      status: "正在刷新 Gateway 状态",
+        status: t("gateway.workspace.refreshingGatewayStatus"),
     }));
     try {
       await finishWorkspaceRefresh(currentSessionId, { selectionIntent });
@@ -296,7 +297,7 @@ export function useGatewayWorkspaceActivation({
         ...prev,
         gatewayError: message,
         error: message,
-        status: `刷新 Gateway 状态失败: ${message}`,
+        status: t("gateway.workspace.refreshGatewayStatusFailed", message),
       }) : prev);
       throw error;
     }

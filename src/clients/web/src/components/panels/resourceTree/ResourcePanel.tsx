@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { useEffect, useRef, useState } from "react";
 import type {
   SessionResource,
@@ -158,7 +159,7 @@ function ResourcePanelForOwner({
     }
     presentNotice(
       openedTerminal.requestId,
-      `终端 ${openedTerminal.resourceId} ${statusLabel(terminal.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
+      t("resources.panel.terminalUnavailable", openedTerminal.resourceId, statusLabel(terminal.status)),
     );
     setOpenedTerminal((current) => current?.requestId === openedTerminal.requestId ? null : current);
   }, [openedTerminal, resources]);
@@ -176,7 +177,7 @@ function ResourcePanelForOwner({
     }
     presentNotice(
       openedBrowser.requestId,
-      `浏览器 ${openedBrowser.resourceId} ${statusLabel(browser.status)}，当前不可连接；历史信息仍可在展开详情中查看。`,
+      t("resources.panel.browserUnavailable", openedBrowser.resourceId, statusLabel(browser.status)),
     );
     setOpenedBrowser((current) => current?.requestId === openedBrowser.requestId ? null : current);
   }, [openedBrowser, resources]);
@@ -190,18 +191,18 @@ function ResourcePanelForOwner({
     const requestId = beginRequest();
     if (action === "delete") {
       const targetLabel = kind === "terminal"
-        ? "终端"
+        ? t("resources.kind.terminal")
         : kind === "browser"
-          ? "浏览器"
-          : "后台任务";
+          ? t("resources.kind.browser")
+          : t("resources.kind.background_task");
       const confirmed = await confirm({
-        title: `删除${targetLabel}`,
+        title: t("resources.panel.delete", targetLabel),
         message: kind === "terminal"
-          ? `确认删除终端 ${resourceId}？删除后当前终端不可再 attach，只保留历史记录。`
+          ? t("resources.panel.deleteTerminal", resourceId)
           : kind === "browser"
-            ? `确认删除浏览器 ${resourceId}？删除后无法恢复该页面，只保留历史记录。`
-            : `确认删除后台任务 ${resourceId}？`,
-        confirmText: "删除",
+            ? t("resources.panel.deleteBrowser", resourceId)
+            : t("resources.panel.deleteTask", resourceId),
+        confirmText: t("resources.action.delete"),
         danger: true,
       });
       if (!confirmed || !isCurrentRequest(requestId)) {
@@ -223,14 +224,14 @@ function ResourcePanelForOwner({
       if (action === "resume" && kind === "browser" && isCurrentRequest(requestId)) {
         handleOpenBrowser(resourceId, requestId);
       }
-      presentNotice(requestId, `已${actionLabelForKind(kind, action)}${kindLabel(kind)}：${resourceId}`);
+      presentNotice(requestId, t(`resources.completed.${action === "cancel" && kind === "terminal" ? "terminate" : action === "cancel" && kind === "browser" ? "close" : action === "resume" && kind === "browser" ? "reopen" : action}`, kindLabel(kind), resourceId));
     } catch (controlError: unknown) {
       const technicalDetails = errorMessage(controlError);
       presentNotice(
         requestId,
         kind === "browser" && action === "resume"
-          ? "重新打开失败：恢复检查点不可用或浏览器服务未就绪。你可以重试，或新建替代浏览器；原记录仍保留。"
-          : `未能${actionLabelForKind(kind, action)}。请重试；问题持续时可查看技术详情。`,
+          ? t("resources.panel.reopenFailed")
+          : t("resources.panel.controlFailed", actionLabelForKind(kind, action)),
         technicalDetails,
       );
     } finally {
@@ -247,10 +248,10 @@ function ResourcePanelForOwner({
     // 下兼容复制也失败时，必须在同一处给出可见原因，不能把失败静默吞掉。
     void copyTextToClipboard(resourceId)
       .then(() => {
-        presentNotice(requestId, `已复制 UUID: ${resourceId}`);
+        presentNotice(requestId, t("resources.panel.copied", resourceId));
       })
       .catch((copyError: unknown) => {
-        presentNotice(requestId, "复制失败：可展开技术详情查看原因，或选中 ID 手动复制。", errorMessage(copyError));
+        presentNotice(requestId, t("resources.panel.copyFailed"), errorMessage(copyError));
       });
   };
 
@@ -262,9 +263,9 @@ function ResourcePanelForOwner({
     setNoticeTechnicalDetails("");
     try {
       await onOwnerControl(resourceId, action, thread);
-      presentNotice(requestId, action === "promote" ? "资源已保留到当前工作区" : "已更新资源与线程的关联");
+      presentNotice(requestId, action === "promote" ? t("resources.panel.promoted") : t("resources.panel.associationsUpdated"));
     } catch (cause) {
-      presentNotice(requestId, "资源管理失败，请查看错误详情后重试。", errorMessage(cause));
+      presentNotice(requestId, t("resources.panel.manageFailed"), errorMessage(cause));
     } finally {
       if (mountedRef.current) {
         setBusyOperation((current) => current?.requestId === requestId ? null : current);
@@ -276,23 +277,23 @@ function ResourcePanelForOwner({
     if (!mountedRef.current) return;
     const requestId = beginRequest();
     if (!workspaceId) {
-      presentNotice(requestId, "打开终端失败：当前会话缺少 Gateway workspace_id");
+      presentNotice(requestId, t("resources.panel.terminalOwnerMissing"));
       return;
     }
     setOpenedTerminal({ requestId, resourceId });
     onOpenTerminalPreview(resourceId);
-    presentNotice(requestId, inlinePreview ? "已在当前会话标签内打开终端" : "已在主窗口底部面板打开终端；连接管理请在运行与连接中查看");
+    presentNotice(requestId, inlinePreview ? t("resources.panel.terminalInline") : t("resources.panel.terminalBottom"));
   };
   const handleOpenBrowser = (resourceId: string, existingRequestId?: number) => {
     if (!mountedRef.current) return;
     const requestId = existingRequestId ?? beginRequest();
     if (!workspaceId) {
-      presentNotice(requestId, "打开浏览器失败：当前会话缺少 Gateway workspace_id");
+      presentNotice(requestId, t("resources.panel.browserOwnerMissing"));
       return;
     }
     setOpenedBrowser({ requestId, resourceId });
     onOpenBrowserPreview(resourceId);
-    presentNotice(requestId, inlinePreview ? "已在当前会话标签内打开浏览器预览" : "已在扩展窗口打开浏览器预览；连接状态请在当前运行与连接界面查看");
+    presentNotice(requestId, inlinePreview ? t("resources.panel.browserInline") : t("resources.panel.browserExtension"));
   };
   const createThread = mainThread?.session_id === sessionId && mainThread.thread_id
     ? mainThread
@@ -302,7 +303,7 @@ function ResourcePanelForOwner({
     const requestId = beginRequest();
     setCreateMenuOpen(false);
     if (!createThread) {
-      presentNotice(requestId, "新建连接失败：当前会话主线程尚未解析");
+      presentNotice(requestId, t("resources.panel.threadMissing"));
       return;
     }
     setCreatingOperation({ requestId, kind });
@@ -310,14 +311,11 @@ function ResourcePanelForOwner({
     setNoticeTechnicalDetails("");
     void onCreateConnection(kind, createThread)
       .then(() => {
-        const option = CREATABLE_SESSION_CONNECTION_OPTIONS.find(
-          (candidate) => candidate.kind === kind,
-        );
         presentNotice(
           requestId,
-          inlinePreview ? `${option?.label ?? "新建连接"}成功，已在当前会话标签内打开` : kind === "terminal"
-            ? "终端创建成功，已在主窗口底部面板打开"
-            : `${option?.label ?? "新建连接"}成功；连接管理请在运行与连接中查看`,
+          inlinePreview ? t("resources.panel.createdInline", kindLabel(kind)) : kind === "terminal"
+            ? t("resources.panel.createdTerminal")
+            : t("resources.panel.created", kindLabel(kind)),
         );
       })
       .catch((createError: unknown) => {
@@ -345,7 +343,7 @@ function ResourcePanelForOwner({
     ?.resources.length ?? 0;
   const historyCount = resourceGroups.find((group) => group.key === "history")
     ?.resources.length ?? 0;
-  const waitingForFirstMessage = !sessionId || error === "当前没有会话可读取资源";
+  const waitingForFirstMessage = !sessionId;
 
   return (
     <section
@@ -355,22 +353,22 @@ function ResourcePanelForOwner({
       <div className="panel-header">
         <div
           className="panel-title"
-          title={`${sessionId || "无会话"}${loadedAt ? ` · 最近读取 ${loadedAt}` : ""}`}
+          title={`${sessionId || t("resources.panel.noSession")}${loadedAt ? t("resources.panel.readAt", loadedAt) : ""}`}
         >
-          连接总数 <span className="resource-total-count">{connectionResources.length}</span>
+          {t("resources.panel.total")} <span className="resource-total-count">{formatNumber(connectionResources.length)}</span>
         </div>
         <div className="panel-header-meta">
-          <span>{activeCount} 个正在使用</span>
-          {historyCount > 0 ? <span>{historyCount} 个历史</span> : null}
-          {attentionCount > 0 ? <span className="resource-attention-count">{attentionCount} 个需要处理</span> : null}
+          <span>{t("resources.panel.activeCount", formatNumber(activeCount))}</span>
+          {historyCount > 0 ? <span>{t("resources.panel.historyCount", formatNumber(historyCount))}</span> : null}
+          {attentionCount > 0 ? <span className="resource-attention-count">{t("resources.panel.attentionCount", formatNumber(attentionCount))}</span> : null}
         </div>
         <button
           type="button"
           className="resource-icon-button"
           onClick={handleRefresh}
           disabled={loading || !sessionId}
-          title="刷新后台连接"
-          aria-label="刷新后台连接"
+          title={t("resources.panel.refresh")}
+          aria-label={t("resources.panel.refresh")}
         >
           <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
         </button>
@@ -380,11 +378,11 @@ function ResourcePanelForOwner({
             className="resource-refresh-button resource-create-button"
             onClick={() => setCreateMenuOpen((open) => !open)}
             disabled={creatingKind !== null || !createThread}
-            title={!createThread ? "等待解析当前会话主线程" : undefined}
+            title={!createThread ? t("resources.panel.waitingThread") : undefined}
             aria-haspopup="menu"
             aria-expanded={createMenuOpen}
           >
-            {creatingKind ? "创建中" : "新建连接"}
+            {creatingKind ? t("resources.panel.creating") : t("resources.panel.create")}
             <span className="codicon codicon-chevron-down" aria-hidden="true" />
           </button>
           <AnchoredOverlay
@@ -421,23 +419,23 @@ function ResourcePanelForOwner({
             <span>{notice}</span>
             {noticeTechnicalDetails ? (
               <details>
-                <summary>技术详情</summary>
+                <summary>{t("resources.panel.details")}</summary>
                 <code>{noticeTechnicalDetails}</code>
               </details>
             ) : null}
           </div>
         </div>
       ) : null}
-      {loading ? <div className="empty-state">正在读取后台连接...</div> : null}
+      {loading ? <div className="empty-state">{t("resources.panel.loading")}</div> : null}
       {error && !waitingForFirstMessage ? (
-        <div className="empty-state">后台连接加载失败：{error}</div>
+        <div className="empty-state">{t("resources.panel.loadFailed", error)}</div>
       ) : null}
       {waitingForFirstMessage && !loading ? (
-        <div className="empty-state">发送第一条消息后，这里会显示当前会话创建的可连接后台对象。</div>
+        <div className="empty-state">{t("resources.panel.firstMessage")}</div>
       ) : null}
 
       {!loading && !error && resourceGroups.length > 0 ? (
-        <div className="resource-tree" role="tree" aria-label="后台连接">
+        <div className="resource-tree" role="tree" aria-label={t("resources.panel.connections")}>
           {resourceGroups.map((group) => {
             const isOpen = openGroups[group.key];
             const resourcesByKind = (["browser", "terminal", "background_task"] as const)
@@ -461,7 +459,7 @@ function ResourcePanelForOwner({
                 >
                   <span className={`codicon codicon-chevron-${isOpen ? "down" : "right"}`} aria-hidden="true" />
                   <strong>{group.label}</strong>
-                  <span>{group.resources.length}</span>
+                  <span>{formatNumber(group.resources.length)}</span>
                   <small>{group.description}</small>
                 </button>
                 {isOpen ? (
@@ -472,7 +470,7 @@ function ResourcePanelForOwner({
                           <div className="resource-tree-kind-heading">
                             <span className={`codicon ${resourceKindIcon(kindGroup.kind)}`} aria-hidden="true" />
                             <span>{kindLabel(kindGroup.kind)}</span>
-                            <span>{kindGroup.resources.length}</span>
+                            <span>{formatNumber(kindGroup.resources.length)}</span>
                           </div>
                         ) : null}
                         <div className={showKindGroups ? "resource-tree-kind-children" : undefined}>
@@ -505,7 +503,7 @@ function ResourcePanelForOwner({
       ) : null}
 
       {!loading && !error && connectionResources.length === 0 && !waitingForFirstMessage ? (
-        <div className="empty-state">当前会话还没有后台连接</div>
+        <div className="empty-state">{t("resources.panel.empty")}</div>
       ) : null}
     </section>
   );

@@ -146,7 +146,7 @@ try {
   await command('workbench.action.gotoLine');
   await expect(quick.locator('input')).toHaveValue(/^:/);
   await quick.locator('input').fill(':1201'); await page.keyboard.press('Enter');
-  await expect(page.locator('[id="status.editor.selection"]')).toHaveText('Ln 1201, Col 1');
+  await expect(page.locator('[id="status.editor.selection"]')).toHaveText('行 1201，列 1');
   await expect(text(1).locator('.view-lines')).toContainText('BOXTEAM_MIDDLE_SECRET_7F3A9C');
   await expect(text(1).getByRole('textbox')).toHaveAttribute('aria-autocomplete', 'none');
   await text(1).getByRole('textbox').focus(); await page.keyboard.insertText('UNEXPECTED TOOL MUTATION');
@@ -192,11 +192,15 @@ try {
   result.unsupportedSourceRejected = true;
   result.phase = 'copy-file-candidate';
   await command('workbench.action.quickOpen', 'AGENTS.md');
+  await expect(quick).toContainText('文件 · 本次查询完成');
   const candidate = quick.locator('[data-quick-input-id^="boxteam-file:"]').filter({ hasText: 'AGENTS.md' });
   await expect(candidate).toHaveCount(1);
+  result.fileCandidateId = await candidate.getAttribute('data-quick-input-id');
+  await candidate.hover();
+  const copyCandidate = candidate.getByRole('button', { name: '复制资源 URI', exact: true });
   const [copied] = await Promise.all([
     page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/resource-addresses/parse'),
-    candidate.getByRole('button', { name: '复制资源 URI', exact: true }).click(),
+    copyCandidate.click(),
   ]);
   const copiedBody = await copied.json();
   expect(copied.status()).toBe(200);

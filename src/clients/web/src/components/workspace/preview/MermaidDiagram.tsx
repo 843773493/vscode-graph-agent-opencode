@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { loadMermaid } from "../../../runtime/mermaid";
 import { errorMessage } from "../../../utils/errorMessage";
 
@@ -32,13 +33,13 @@ export default function MermaidDiagram({ source }: { source: string }) {
   if (error) {
     return (
       <div className="workspace-markdown-mermaid-error" role="alert">
-        <strong>Mermaid 渲染失败</strong>
+        <strong>{t("workspace.markdown.mermaid.renderFailed")}</strong>
         <pre>{error}</pre>
       </div>
     );
   }
   if (!svg) {
-    return <div className="workspace-markdown-mermaid-loading">正在渲染 Mermaid 图表…</div>;
+    return <div className="workspace-markdown-mermaid-loading">{t("workspace.markdown.mermaid.rendering")}</div>;
   }
   return (
     <div

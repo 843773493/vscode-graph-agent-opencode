@@ -6,6 +6,7 @@ import React, {
   useMemo,
   useRef,
 } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 import {
   HttpRequestError,
   getWorkspaceFileContent,
@@ -150,7 +151,7 @@ export function WorkspaceFileReferenceProvider({
 
   const resolve = useCallback(
     async (target: string): Promise<WorkspaceFileReferenceResolution> => {
-      if (!workspaceId) return { status: "error", message: "文件引用缺少工作区身份" };
+      if (!workspaceId) return { status: "error", message: t("workspace.fileReference.missingWorkspace") };
       let reference: WorkspaceFileReference | null;
       try {
         reference = parseWorkspaceFileReference(target);
@@ -179,7 +180,7 @@ export function WorkspaceFileReferenceProvider({
             const lookup = await findUniqueWorkspaceFilePath(apiPort, workspaceId, reference.path);
             if (lookup.status === "missing") return { status: "missing" };
             if (lookup.status === "ambiguous") {
-              return { status: "error", message: `文件名不唯一，无法确定工作区中的 ${reference.path}` };
+              return { status: "error", message: t("workspace.fileReference.ambiguousName", reference.path) };
             }
             return { status: "resolved", content: await getWorkspaceFileContent(apiPort, lookup.path, workspaceId) };
           } catch (error: unknown) {

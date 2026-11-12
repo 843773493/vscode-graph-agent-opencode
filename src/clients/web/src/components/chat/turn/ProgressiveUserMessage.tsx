@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 
 export const LARGE_USER_MESSAGE_RENDER_LIMIT = 20_000;
@@ -28,7 +29,7 @@ function ProgressiveUserMessage({
           className="chat-user-show-full"
           onClick={() => setExpanded(true)}
         >
-          显示完整输入（{content.length.toLocaleString()} 字符）
+          {t("chat.user.full", formatNumber(content.length))}
         </button>
       ) : null}
     </div>

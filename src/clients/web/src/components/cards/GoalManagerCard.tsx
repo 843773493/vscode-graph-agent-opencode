@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 import { useEffect, useState } from "react";
 import type {
   SessionGoal,
@@ -13,24 +14,18 @@ import WarmActionDialog from "../overlays/WarmActionDialog";
 import { useWarmConfirm } from "../shell/WarmConfirmProvider";
 import { errorMessage } from "../../utils/errorMessage";
 
-const TOKEN_COUNT_FORMATTER = new Intl.NumberFormat("zh-CN");
-
-function formatTokenCount(tokens: number): string {
-  return TOKEN_COUNT_FORMATTER.format(tokens);
-}
-
 function formatDuration(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const remainder = seconds % 60;
   if (hours > 0) {
-    return `${hours} 小时 ${minutes} 分`;
+    return t("goal.duration.hours", formatNumber(hours), formatNumber(minutes));
   }
   if (minutes > 0) {
-    return `${minutes} 分 ${remainder} 秒`;
+    return t("goal.duration.minutes", formatNumber(minutes), formatNumber(remainder));
   }
-  return `${remainder} 秒`;
+  return t("goal.duration.seconds", formatNumber(remainder));
 }
 
 type GoalEditorMode = "create" | "edit" | null;
@@ -77,12 +72,12 @@ export default function GoalManagerCard({
 
   const deleteGoal = async () => {
     if (!goal) {
-      throw new Error("当前会话没有 Goal");
+      throw new Error(t("goal.manager.missing"));
     }
     const confirmed = await confirm({
-      title: "删除当前 Goal？",
-      message: `将删除“${goal.objective}”并停止后续自动续跑。会话消息保留，已经开始的轮次不会被中断。`,
-      confirmText: "删除 Goal",
+      title: t("goal.manager.deleteTitle"),
+      message: t("goal.manager.deleteDetail", goal.objective),
+      confirmText: t("goal.manager.delete"),
       danger: true,
     });
     if (confirmed) {
@@ -92,11 +87,11 @@ export default function GoalManagerCard({
 
   const canManage = Boolean(sessionId) && !loading && !error;
   return (
-    <section className="goal-manager" aria-label="当前 Goal">
+    <section className="goal-manager" aria-label={t("goal.manager.current")}>
       <div className="goal-manager-heading">
         <div className="goal-manager-title-row">
           <span className="codicon codicon-target" aria-hidden="true" />
-          <strong>当前 Goal</strong>
+          <strong>{t("goal.manager.current")}</strong>
           {goal ? (
             <span className={`goal-manager-status goal-manager-status-${goal.status}`}>
               {GOAL_STATUS_LABELS[goal.status]}
@@ -107,8 +102,8 @@ export default function GoalManagerCard({
           type="button"
           className="resource-icon-button"
           disabled={!sessionId || loading}
-          title="刷新 Goal"
-          aria-label="刷新 Goal"
+          title={t("goal.manager.refresh")}
+          aria-label={t("goal.manager.refresh")}
           onClick={() => run(onRefresh)}
         >
           <span
@@ -122,12 +117,12 @@ export default function GoalManagerCard({
         <>
           <p className="goal-manager-objective">{goal.objective}</p>
           <div className="goal-manager-metrics">
-            <span>耗时 {formatDuration(goal.time_used_seconds)}</span>
+            <span>{t("goal.manager.duration", formatDuration(goal.time_used_seconds))}</span>
             <span>
-              Token {formatTokenCount(goal.tokens_used)}
+              Token {formatNumber(goal.tokens_used)}
               {goal.token_budget === null
                 ? ""
-                : ` / ${formatTokenCount(goal.token_budget)}`}
+                : ` / ${formatNumber(goal.token_budget)}`}
             </span>
           </div>
           <div className="goal-manager-actions">
@@ -135,28 +130,28 @@ export default function GoalManagerCard({
               <button
                 type="button"
                 disabled={!canManage}
-                title="停止后续自动续跑，保留目标和累计用量；不会中断当前轮次"
+                title={t("goal.manager.pauseHint")}
                 onClick={() => run(() => onUpdate({ status: "paused" }))}
               >
-                暂停
+                {t("goal.manager.pause")}
               </button>
             ) : goalCanResume(goal.status) ? (
               <button
                 type="button"
                 disabled={!canManage}
-                title="继续执行此目标，保留累计用量"
+                title={t("goal.manager.resumeHint")}
                 onClick={() => run(() => onUpdate({ status: "active" }))}
               >
-                继续
+                {t("goal.manager.resume")}
               </button>
             ) : goal.status === "complete" ? (
               <button
                 type="button"
                 disabled={!canManage}
-                title="以相同目标和预算创建新 Goal，重新累计用量"
+                title={t("goal.manager.restartHint")}
                 onClick={() => run(() => onUpdate(restartCompletedGoalPayload(goal)))}
               >
-                重新开始
+                {t("goal.manager.restart")}
               </button>
             ) : null}
             <button
@@ -164,44 +159,44 @@ export default function GoalManagerCard({
               disabled={!canManage}
               onClick={() => openEditor("edit")}
             >
-              {goal.status === "complete" ? "修改后继续" : "编辑"}
+              {goal.status === "complete" ? t("goal.manager.editContinue") : t("goal.manager.edit")}
             </button>
             <button
               type="button"
               disabled={!canManage}
               onClick={() => run(deleteGoal)}
             >
-              删除 Goal
+              {t("goal.manager.delete")}
             </button>
           </div>
           {goal.status === "budget_limited" ? (
-            <p>预算已用尽；可编辑提高预算后继续，或删除后新建 Goal。</p>
+            <p>{t("goal.manager.budgetLimited")}</p>
           ) : null}
         </>
       ) : !sessionId ? (
-        <div className="goal-manager-empty">请先选择会话，再管理该会话的 Goal。</div>
+        <div className="goal-manager-empty">{t("goal.manager.selectSession")}</div>
       ) : loading ? (
-        <div className="goal-manager-empty">正在读取 Goal...</div>
+        <div className="goal-manager-empty">{t("goal.manager.loading")}</div>
       ) : !error ? (
         <div className="goal-manager-empty">
-          <span>当前会话没有 Goal</span>
+          <span>{t("goal.manager.missing")}</span>
           <button
             type="button"
             disabled={!canManage}
             onClick={() => openEditor("create")}
           >
-            新建 Goal
+            {t("goal.manager.create")}
           </button>
         </div>
       ) : null}
 
       {operationError ? (
         <div className="goal-manager-error" role="alert">
-          Goal 操作失败：{operationError}
+          {t("goal.manager.failed", operationError)}
         </div>
       ) : error ? (
         <div className="goal-manager-error" role="alert">
-          Goal 同步失败：{error}
+          {t("goal.manager.syncFailed", error)}
         </div>
       ) : null}
 
@@ -210,38 +205,38 @@ export default function GoalManagerCard({
         title={
           editorMode === "edit"
             ? goal?.status === "complete"
-              ? "修改后继续 Goal"
-              : "编辑 Goal"
-            : "新建 Goal"
+              ? t("goal.manager.editContinueTitle")
+              : t("goal.manager.editTitle")
+            : t("goal.manager.create")
         }
         description={
           editorMode === "edit"
             ? goal?.status === "complete"
-              ? "保存后重新激活原 Goal，并保留已经累计的耗时与 Token 用量。"
-              : "预算仍不足时会继续保持受限，其他状态保持不变。"
-            : "开始后会围绕目标自动续跑，可随时暂停或删除。"
+              ? t("goal.manager.editCompleteDetail")
+              : t("goal.manager.editDetail")
+            : t("goal.manager.createDetail")
         }
-        inputLabel="目标"
+        inputLabel={t("goal.manager.objective")}
         initialValue={editorMode === "edit" ? goal?.objective ?? "" : ""}
         inputMaxLength={4000}
         inputMultiline
         confirmText={
           editorMode === "edit" && goal?.status === "complete"
-            ? "保存并继续"
+            ? t("goal.manager.saveContinue")
             : editorMode === "edit"
-              ? "保存 Goal"
-              : "开始 Goal"
+              ? t("goal.manager.save")
+              : t("goal.manager.start")
         }
         onClose={() => setEditorMode(null)}
         onConfirm={async (objective) => {
           setOperationError(null);
           const budget = tokenBudget.trim() ? Number(tokenBudget) : null;
           if (budget !== null && (!Number.isSafeInteger(budget) || budget <= 0)) {
-            throw new Error("Token 预算必须是正整数，留空表示不限制");
+            throw new Error(t("goal.manager.invalidBudget"));
           }
           if (editorMode === "edit") {
             if (!goal) {
-              throw new Error("当前 Goal 已不存在");
+              throw new Error(t("goal.manager.gone"));
             }
             await onUpdate({
               objective,
@@ -258,8 +253,8 @@ export default function GoalManagerCard({
           });
         }}
       >
-        <label className="workspace-dialog-wide"><span>Token 预算（留空不限制）</span>
-          <input aria-label="Goal Token 预算" type="number" min={1} step={1} value={tokenBudget} onChange={(event) => setTokenBudget(event.target.value)} />
+        <label className="workspace-dialog-wide"><span>{t("goal.manager.budget")}</span>
+          <input aria-label={t("goal.manager.budgetAria")} type="number" min={1} step={1} value={tokenBudget} onChange={(event) => setTokenBudget(event.target.value)} />
         </label>
       </WarmActionDialog>
     </section>

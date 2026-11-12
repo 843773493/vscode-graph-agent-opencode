@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { lazy, Suspense } from "react";
 import type { NodeDebugController } from "../../hooks/nodeDebug/useNodeDebugController";
 import type { Session } from "../../types/backend";
@@ -36,22 +37,22 @@ export default function NodeDebugWorkbench({
   onStatusChange,
 }: NodeDebugWorkbenchProps) {
   return (
-    <aside className="debug-panel" aria-label="目标程序调试工作台">
+    <aside className="debug-panel" aria-label={t("debug.workbench.aria")}>
       <header className="debug-workbench-header">
         <div>
-          <strong>{compact ? "调试" : "目标程序调试"}</strong>
-          <span>{sessionId ? (threadId ? `调试 owner: ${threadId}` : "正在解析会话主线程") : "未选择会话"}</span>
+          <strong>{compact ? t("debug.workbench.compact") : t("debug.workbench.title")}</strong>
+          <span>{sessionId ? (threadId ? t("debug.workbench.owner", threadId) : t("debug.workbench.resolving")) : t("debug.workbench.noSession")}</span>
         </div>
         {sessionId && threadId && mainThreadId && threadId !== mainThreadId ? (
-          <button type="button" onClick={() => onSelectThread(mainThreadId)}>切回主线程</button>
+          <button type="button" onClick={() => onSelectThread(mainThreadId)}>{t("debug.workbench.mainThread")}</button>
         ) : null}
       </header>
       <Suspense fallback={threadId ? (
         <section
           className={`node-debug-panel${compact ? " compact" : " extension-window"}`}
           role="status"
-          aria-label="Node 源码调试"
-        >正在加载调试面板…</section>
+          aria-label={t("debug.panel.aria")}
+        >{t("debug.panel.loading")}</section>
       ) : null}>
         {threadId ? <NodeDebugPanel
           apiPort={apiPort}

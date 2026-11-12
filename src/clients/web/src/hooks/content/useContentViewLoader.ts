@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback } from "react";
 import type { Session } from "../../types/backend";
 import type { ConversationContentView } from "../../types/frontend";
@@ -78,7 +79,7 @@ export function useContentViewLoader({
           sessionChangesError: null,
           sessionResourcesLoading: false,
           sessionResourcesError: null,
-          status: "默认视图",
+          status: t("content.default"),
         }));
         return;
       }
@@ -98,7 +99,7 @@ export function useContentViewLoader({
           sessionChangesError: null,
           sessionResourcesLoading: false,
           sessionResourcesError: null,
-          status: "事件视图",
+          status: t("content.events"),
         }));
         return;
       }
@@ -114,8 +115,8 @@ export function useContentViewLoader({
             llmRequestLogs: [],
             llmRequestLogsLoadedAt: new Date().toISOString(),
             llmRequestLogsLoading: false,
-            llmRequestLogsError: "当前没有会话可读取 LLM 请求响应日志",
-            status: "没有会话可读取 LLM 请求响应日志",
+            llmRequestLogsError: t("content.noRequests"),
+            status: t("content.noRequestsStatus"),
           }));
           return;
         }
@@ -124,7 +125,7 @@ export function useContentViewLoader({
           contentView: "requests",
           llmRequestLogsLoading: true,
           llmRequestLogsError: null,
-          status: "正在读取 LLM 请求响应日志...",
+          status: t("content.loadingRequests"),
         }));
         return;
       }
@@ -141,8 +142,8 @@ export function useContentViewLoader({
             activeChangeset: null,
             sessionChangesLoadedAt: new Date().toISOString(),
             sessionChangesLoading: false,
-            sessionChangesError: "当前没有会话可读取文件变更",
-            status: "没有会话可读取文件变更",
+            sessionChangesError: t("content.noChanges"),
+            status: t("content.noChangesStatus"),
           }));
           return;
         }
@@ -151,7 +152,7 @@ export function useContentViewLoader({
           contentView: "changes",
           sessionChangesLoading: true,
           sessionChangesError: null,
-          status: "正在读取会话文件变更...",
+          status: t("content.loadingChanges"),
         }));
         return;
       }
@@ -166,8 +167,8 @@ export function useContentViewLoader({
             sessionResources: [],
             sessionResourcesLoadedAt: new Date().toISOString(),
             sessionResourcesLoading: false,
-            sessionResourcesError: "当前没有会话可读取资源",
-            status: "没有会话可读取资源",
+            sessionResourcesError: null,
+            status: t("content.noResourcesStatus"),
           }));
           return;
         }
@@ -176,7 +177,7 @@ export function useContentViewLoader({
           contentView: "resources",
           sessionResourcesLoading: true,
           sessionResourcesError: null,
-          status: "正在读取后台连接...",
+          status: t("content.loadingResources"),
         }));
         return;
       }
@@ -186,10 +187,10 @@ export function useContentViewLoader({
         setState((prev) => ({
           ...resetAgentStateFields(prev, {
             loadedAt: new Date().toISOString(),
-            error: "当前没有会话可读取上下文状态",
+            error: t("content.noContext"),
           }),
           contentView: "agent",
-          status: "没有会话可读取上下文状态",
+          status: t("content.noContextStatus"),
         }));
         return;
       }

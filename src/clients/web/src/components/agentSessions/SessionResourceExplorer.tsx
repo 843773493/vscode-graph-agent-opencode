@@ -1,3 +1,4 @@
+import { formatNumber, t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { resolveCatalogSearchTarget } from "../../api/gateway/catalogSearch";
 import { useState, type ReactNode } from "react";
@@ -172,7 +173,7 @@ export default function SessionResourceExplorer({
     scope: { workspaceId?: string; retryActivation?: boolean } = {},
   ) => {
     setActionError({ title, detail: errorMessage(error), ...scope });
-    onStatusChange(`${title}，可通过“查看日志”打开诊断详情`);
+    onStatusChange(t('navigation.diagnostic.openHint', title));
   };
   const openDiagnostic = (title: string, detail: string, workspaceId?: string) => {
     const workspace = workspaceId ? workspacesById.get(workspaceId) : null;
@@ -184,7 +185,7 @@ export default function SessionResourceExplorer({
     try {
       await onActivateWorkspace(workspaceId);
     } catch (error) {
-      handleError("切换工作区失败", error, { workspaceId, retryActivation: true });
+      handleError(t('navigation.workspace.switchFailed'), error, { workspaceId, retryActivation: true });
     }
   };
 
@@ -226,7 +227,7 @@ export default function SessionResourceExplorer({
   const refreshResourceTreeInBackground = () => {
     void explorer.refreshResourceTree().catch(() => {
       // 导航与目录请求各自保存失败状态，由对应节点提供重试与诊断入口。
-      onStatusChange("目录刷新失败，请查看对应节点的提示");
+      onStatusChange(t('navigation.catalog.refreshNodesFailed'));
     });
   };
 
@@ -254,7 +255,7 @@ export default function SessionResourceExplorer({
   const submitWorkspaceFolderEditor = (editor: WorkspaceFolderEditor) => {
     const name = editor.value.trim();
     if (!name) {
-      handleError("保存工作区文件夹失败", new Error("名称不能为空"));
+      handleError(t('navigation.workspace.saveFolderFailed'), new Error(t('navigation.name.required')));
       return;
     }
     setWorkspaceFolderEditor(null);
@@ -262,10 +263,10 @@ export default function SessionResourceExplorer({
       ? explorer.createWorkspaceFolder(name, editor.parentNodeId)
       : explorer.renameWorkspaceFolder(editor.nodeId as string, name);
     void operation
-      .then(() => onStatusChange(editor.mode === "create" ? `已创建工作区文件夹 ${name}` : `已重命名工作区文件夹为 ${name}`))
+      .then(() => onStatusChange(editor.mode === "create" ? t('navigation.workspace.folderCreated', name) : t('navigation.workspace.folderRenamed', name)))
       .catch((error) => {
         setWorkspaceFolderEditor(editor);
-        handleError("保存工作区文件夹失败", error);
+        handleError(t('navigation.workspace.saveFolderFailed'), error);
       });
   };
 
@@ -280,7 +281,7 @@ export default function SessionResourceExplorer({
         <input
           autoFocus
           className="session-resource-inline-editor"
-          aria-label={editor.mode === "create" ? "新工作区文件夹名称" : "工作区文件夹新名称"}
+          aria-label={editor.mode === "create" ? t('navigation.workspace.newFolderName') : t('navigation.workspace.renameFolderName')}
           value={workspaceFolderEditor?.value ?? editor.value}
           onChange={(event) => setWorkspaceFolderEditor({ ...editor, value: event.target.value })}
           onKeyDown={(event) => {
@@ -311,12 +312,13 @@ export default function SessionResourceExplorer({
     const workspaceActionError = parentNodeId === null && actionError?.workspaceId === workspaceId
       ? actionError : null;
     if (!branch && !workspaceActionError) {
-      return <div className="session-resource-state">等待加载…</div>;
+      return <div className="session-resource-state">{t('navigation.catalog.waiting')}</div>;
     }
     const workspace = workspacesById.get(workspaceId);
     const recoverWorkspace = async () => {
       setRecoveringWorkspaceIds((previous) => new Set(previous).add(workspaceId));
-      let title = workspaceActionError?.retryActivation ? "切换工作区失败" : "恢复工作区失败";
+      let retryActivation = workspaceActionError?.retryActivation === true;
+      let title = retryActivation ? t('navigation.workspace.switchFailed') : t('navigation.workspace.recoverFailed');
       try {
         if (workspaceActionError?.retryActivation) {
           await onActivateWorkspace(workspaceId);
@@ -325,13 +327,14 @@ export default function SessionResourceExplorer({
         } else if (workspace?.status === "offline" && workspace.managed) {
           await onStartWorkspace(workspaceId);
         }
-        title = "刷新会话目录失败";
+        retryActivation = false;
+        title = t('navigation.catalog.refreshFailed');
         await explorer.loadBranch(workspaceId, parentNodeId);
         setActionError((previous) => previous === workspaceActionError ? null : previous);
       } catch (recoveryError) {
         handleError(title, recoveryError, {
           workspaceId,
-          retryActivation: title === "切换工作区失败",
+          retryActivation,
         });
       } finally {
         setRecoveringWorkspaceIds((previous) => {
@@ -353,7 +356,7 @@ export default function SessionResourceExplorer({
     const failure = workspaceActionError
       ? {
           title: workspaceActionError.title,
-          message: branchFailure?.message ?? "请检查连接后重试。",
+          message: branchFailure?.message ?? t('navigation.workspace.checkConnection'),
           technicalDetail: [
             `${workspaceActionError.title}: ${workspaceActionError.detail}`,
             ...(branchFailure ? [`${branchFailure.title}: ${branchFailure.technicalDetail}`] : []),
@@ -363,16 +366,16 @@ export default function SessionResourceExplorer({
     return (
       <ul className="session-resource-list" role="group" aria-busy={branch?.loading || undefined}>
         {showContents && branch?.items.map((node) => renderCatalogNode(workspaceId, node, depth))}
-        {showContents && branch?.loading && !hasSnapshot ? <li className="session-resource-state">正在加载…</li> : null}
+        {showContents && branch?.loading && !hasSnapshot ? <li className="session-resource-state">{t('navigation.catalog.loading')}</li> : null}
         {showContents && branch?.consistency_warning ? (
           <li className="session-resource-error-card" role="status">
-            <strong>会话目录存在物理树异常</strong>
-            <span>当前仍按权威索引显示，未登记的物理目录未被自动吸收或删除。</span>
+            <strong>{t('navigation.catalog.physicalTreeInvalid')}</strong>
+            <span>{t('navigation.catalog.physicalTreeExplanation')}</span>
             <button type="button" onClick={refreshResourceTreeInBackground}>
-              重新校验目录
+              {t('navigation.catalog.revalidate')}
             </button>
             <div className="session-resource-error-actions">
-              <button type="button" onClick={() => openDiagnostic("会话目录存在物理树异常", branch.consistency_warning!, workspaceId)}>查看日志</button>
+              <button type="button" onClick={() => openDiagnostic(t('navigation.catalog.physicalTreeInvalid'), branch.consistency_warning!, workspaceId)}>{t('navigation.diagnostic.viewLogs')}</button>
             </div>
           </li>
         ) : null}
@@ -383,20 +386,20 @@ export default function SessionResourceExplorer({
             <div className="session-resource-error-actions">
               <button type="button" disabled={recovering} onClick={() => void recoverWorkspace()}>
                 {recovering
-                  ? "正在恢复…"
+                  ? t('navigation.workspace.recovering')
                   : workspaceActionError?.retryActivation
-                    ? "重试切换"
+                    ? t('navigation.workspace.retrySwitch')
                   : workspace?.connection_kind === "remote_gateway"
-                    ? "重新连接 Gateway"
+                    ? t('navigation.workspace.reconnectGateway')
                     : workspace?.status === "offline" && workspace.managed
-                      ? "启动工作区"
-                      : "重新加载目录"}
+                      ? t('navigation.workspace.start')
+                      : t('navigation.catalog.reload')}
               </button>
               {workspace?.connection_kind === "remote_gateway" ? (
-                <button type="button" onClick={onOpenConnectionManager}>连接管理</button>
+                <button type="button" onClick={onOpenConnectionManager}>{t('navigation.workspace.connections')}</button>
               ) : null}
-              <button type="button" onClick={() => openDiagnostic(failure.title, failure.technicalDetail, workspaceId)}>查看日志</button>
-              {workspaceActionError ? <button type="button" onClick={() => setActionError(null)}>关闭</button> : null}
+              <button type="button" onClick={() => openDiagnostic(failure.title, failure.technicalDetail, workspaceId)}>{t('navigation.diagnostic.viewLogs')}</button>
+              {workspaceActionError ? <button type="button" onClick={() => setActionError(null)}>{t('navigation.close')}</button> : null}
             </div>
           </li>
         ) : null}
@@ -404,7 +407,7 @@ export default function SessionResourceExplorer({
         {showContents && hasSnapshot && !failure && parentNode?.kind !== "session"
           && branch?.total === 0 && branch.cursor === null && branch.items.length === 0
           && branch.locally_removed_node_ids.length === 0 ? (
-          <li className="session-resource-state">暂无会话或会话文件夹</li>
+          <li className="session-resource-state">{t('navigation.catalog.empty')}</li>
         ) : null}
         {showContents && branch?.cursor ? (
           <li>
@@ -415,7 +418,7 @@ export default function SessionResourceExplorer({
                 // 追加页加载失败同样由当前分支展示。
               })}
             >
-              加载更多（{branch.items.length}/{branch.total}）
+              {t('navigation.catalog.loadMore', formatNumber(branch.items.length), branch.total === null ? '' : formatNumber(branch.total))}
             </button>
           </li>
         ) : null}
@@ -448,7 +451,7 @@ export default function SessionResourceExplorer({
       return;
     }
     if (!node.session_id || !sessionCacheKey) {
-      throw new Error(`会话目录节点缺少会话 ID: ${node.node_id}`);
+      throw new Error(t('navigation.catalog.sessionIdMissing', node.node_id));
     }
     openSessionNode(workspaceId, node.session_id, sessionCacheKey);
   };
@@ -519,15 +522,15 @@ export default function SessionResourceExplorer({
               // 文件夹节点缺 folder_id 属于权威索引契约被破坏。旧实现直接
               // return，右键完全无反应，用户无法判断是节点损坏还是点空了。
               handleError(
-                "打开会话菜单失败",
-                new Error(`会话目录文件夹节点缺少 folder_id: ${node.node_id}`),
+                t('navigation.sessions.openMenuFailed'),
+                new Error(t('navigation.catalog.folderIdMissing', node.node_id)),
               );
               return;
             }
             if (!node.session_id) {
               handleError(
-                "打开会话菜单失败",
-                new Error(`会话目录节点缺少会话 ID: ${node.node_id}`),
+                t('navigation.sessions.openMenuFailed'),
+                new Error(t('navigation.catalog.sessionIdMissing', node.node_id)),
               );
               return;
             }
@@ -535,16 +538,16 @@ export default function SessionResourceExplorer({
             const session = node.session;
             if (!session) {
               handleError(
-                "打开会话菜单失败",
-                new Error(`会话目录节点缺少会话元数据: ${node.node_id}`),
+                t('navigation.sessions.openMenuFailed'),
+                new Error(t('navigation.catalog.sessionMetadataMissing', node.node_id)),
               );
               return;
             }
             if (session.session_id !== node.session_id) {
               handleError(
-                "打开会话菜单失败",
+                t('navigation.sessions.openMenuFailed'),
                 new Error(
-                  `会话目录节点与会话元数据 ID 不一致: node_id=${node.node_id}, session_id=${session.session_id}`,
+                  t('navigation.catalog.sessionMetadataMismatch', node.node_id, session.session_id),
                 ),
               );
               return;
@@ -556,7 +559,9 @@ export default function SessionResourceExplorer({
             <button
               type="button"
               className="session-resource-chevron"
-              aria-label={`${expanded ? "折叠" : "展开"}${isFolder ? "文件夹" : "会话"} ${node.name}`}
+              aria-label={t(isFolder
+                ? expanded ? 'navigation.catalog.collapseFolder' : 'navigation.catalog.expandFolder'
+                : expanded ? 'navigation.catalog.collapseSession' : 'navigation.catalog.expandSession', node.name)}
               onClick={() => explorer.toggleExpanded(expansionId, workspaceId, node.node_id)}
             >
               <Chevron expanded={expanded} />
@@ -582,16 +587,16 @@ export default function SessionResourceExplorer({
                 data-pending-state={node.pending_state}
                 data-catalog-state={node.state ?? undefined}
                 data-deletion-settlement={node.settlement ?? undefined}
-                title={node.settlement_error ?? `目录变更状态：${node.settlement === "pending" ? "删除已提交，正在排空" : node.pending_state === "accepted" ? "已持久受理，等待提交" : node.pending_state ?? node.state}`}
+                title={node.settlement_error ?? t('navigation.catalog.changeStatus', node.settlement === "pending" ? t('navigation.catalog.deleteDraining') : node.pending_state === "accepted" ? t('navigation.catalog.acceptedPending') : node.pending_state ?? node.state)}
               >
-                {node.settlement_error ? "删除已提交，需修复" : node.settlement === "pending" ? "删除已提交，正在排空" : node.settlement === "settled" ? "删除已完成，正在刷新目录" : node.state === "deleting" ? "删除中" : node.pending_state === "committed" ? "已提交" : node.pending_state === "accepted" ? "等待提交" : "同步中"}
+                {node.settlement_error ? t('navigation.catalog.deleteRepair') : node.settlement === "pending" ? t('navigation.catalog.deleteDraining') : node.settlement === "settled" ? t('navigation.catalog.deleteRefreshing') : node.state === "deleting" ? t('navigation.catalog.deleting') : node.pending_state === "committed" ? t('navigation.catalog.committed') : node.pending_state === "accepted" ? t('navigation.catalog.waitingToCommit') : t('navigation.catalog.syncing')}
               </span>
             ) : null}
             {timePresentation ? (
               <time
                 className="session-resource-time"
                 dateTime={node.updated_at ?? node.created_at ?? undefined}
-                title={`更新时间：${timePresentation.title}`}
+                title={t('navigation.catalog.updatedAt', timePresentation.title)}
               >
                 {timePresentation.label}
               </time>
@@ -600,7 +605,7 @@ export default function SessionResourceExplorer({
               <span
                 className="codicon codicon-loading codicon-modifier-spin session-resource-opening-icon"
                 role="img"
-                aria-label="正在打开会话"
+                aria-label={t('navigation.sessions.opening')}
               />
             ) : null}
             {!isFolder && sessionCacheKey && !opening ? (
@@ -680,7 +685,7 @@ export default function SessionResourceExplorer({
           <button
             type="button"
             className="session-resource-chevron"
-            aria-label={`${expanded ? "折叠" : "展开"}工作区 ${node.name}`}
+              aria-label={t(expanded ? 'navigation.workspace.collapse' : 'navigation.workspace.expand', node.name)}
             disabled={starting || removing}
             onClick={() => explorer.toggleExpanded(`workspace:${workspaceId}`, workspaceId, null)}
           >
@@ -700,24 +705,24 @@ export default function SessionResourceExplorer({
             <span
               className="session-resource-workspace-status removing"
               role="status"
-              aria-label="工作区正在删除"
-              title="工作区正在删除"
+              aria-label={t('navigation.workspace.deleting')}
+              title={t('navigation.workspace.deleting')}
             >
               <i aria-hidden="true" />
-              正在删除
-            </span>
+              {t('navigation.workspace.deletingLabel')}
+              </span>
           ) : starting ? (
             <span
               className="codicon codicon-loading codicon-modifier-spin session-resource-starting-icon"
               role="img"
-              aria-label="工作区正在启动"
-              title="正在启动工作区"
+              aria-label={t('navigation.workspace.startingAria')}
+              title={t('navigation.workspace.starting')}
             />
           ) : statusPresentation ? (
             <span
               className="session-resource-workspace-status offline"
               role="status"
-              aria-label={`工作区状态：${statusPresentation.label}`}
+              aria-label={t('navigation.workspace.status', statusPresentation.label)}
               title={statusPresentation.title}
             >
               <i aria-hidden="true" />
@@ -793,7 +798,7 @@ export default function SessionResourceExplorer({
             refreshWorkspaceNavigationInBackground();
           }}
         >
-          <button type="button" className="session-resource-chevron" aria-label={`${expanded ? "折叠" : "展开"}工作区文件夹 ${node.name}`} onClick={() => explorer.toggleExpanded(expansionId)}>
+          <button type="button" className="session-resource-chevron" aria-label={t(expanded ? 'navigation.workspace.collapseFolder' : 'navigation.workspace.expandFolder', node.name)} onClick={() => explorer.toggleExpanded(expansionId)}>
             <Chevron expanded={expanded} />
           </button>
           <span className="codicon codicon-folder" aria-hidden="true" />
@@ -801,7 +806,7 @@ export default function SessionResourceExplorer({
             <input
               autoFocus
               className="session-resource-inline-editor"
-              aria-label="工作区文件夹新名称"
+              aria-label={t('navigation.workspace.renameFolderName')}
               value={activeEditor.value}
               onChange={(event) => setWorkspaceFolderEditor({ ...activeEditor, value: event.target.value })}
               onKeyDown={(event) => {
@@ -835,26 +840,26 @@ export default function SessionResourceExplorer({
     <div className="session-resource-error-card global session-resource-error" role="alert">
       <strong>{actionError.title}</strong>
       <div className="session-resource-error-actions">
-        <button type="button" onClick={() => openDiagnostic(actionError.title, actionError.detail)}>查看日志</button>
-        <button type="button" onClick={() => setActionError(null)}>关闭</button>
+        <button type="button" onClick={() => openDiagnostic(actionError.title, actionError.detail)}>{t('navigation.diagnostic.viewLogs')}</button>
+        <button type="button" onClick={() => setActionError(null)}>{t('navigation.close')}</button>
       </div>
     </div>
   ) : null;
 
   if (searchOpen && searchQuery.trim()) {
     return (
-      <section className="session-resource-search-results" aria-label="跨工作区搜索结果" aria-busy={explorer.searching}>
-        {explorer.searching ? <div className="session-resource-state">正在搜索所有工作区…</div> : null}
+      <section className="session-resource-search-results" aria-label={t('navigation.search.results')} aria-busy={explorer.searching}>
+        {explorer.searching ? <div className="session-resource-state">{t('navigation.search.searchingAll')}</div> : null}
         {actionErrorCard}
         {explorer.searchError ? (
           <div className="session-resource-error-card global" role="alert">
-            <strong>搜索工作区失败</strong>
+            <strong>{t('navigation.search.failed')}</strong>
             <div className="session-resource-error-actions">
-              <button type="button" onClick={() => openDiagnostic("搜索工作区失败", explorer.searchError!)}>查看日志</button>
+              <button type="button" onClick={() => openDiagnostic(t('navigation.search.failed'), explorer.searchError!)}>{t('navigation.diagnostic.viewLogs')}</button>
             </div>
           </div>
         ) : null}
-        {!explorer.searching && !explorer.searchError && explorer.searchResults.items.length === 0 ? <div className="session-resource-state">没有匹配结果</div> : null}
+        {!explorer.searching && !explorer.searchError && explorer.searchResults.items.length === 0 ? <div className="session-resource-state">{t('navigation.search.empty')}</div> : null}
         {explorer.searchResults.items.map((item) => (
           <button
             type="button"
@@ -863,10 +868,10 @@ export default function SessionResourceExplorer({
             onClick={() => {
               if (item.node_kind === "workspace_folder") {
                 explorer.revealWorkspaceFolder(item.breadcrumb_node_ids);
-                onStatusChange(`已定位工作区文件夹 ${item.relative_path}`);
+                onStatusChange(t('navigation.search.workspaceFolderRevealed', item.relative_path));
                 return;
               }
-              if (!item.owner) throw new Error("目录结果缺少稳定 owner");
+              if (!item.owner) throw new Error(t('navigation.search.ownerMissing'));
               const nodeKind = item.node_kind;
               void resolveCatalogSearchTarget(apiPort, item.owner).then(async (route) => {
                 if (nodeKind === "workspace") {
@@ -875,7 +880,7 @@ export default function SessionResourceExplorer({
                   await explorer.revealSearchResult(route, item.breadcrumb_node_ids, nodeKind);
                   if (item.session_id) await onSelectSession(route, item.session_id);
                 }
-              }).catch((error) => handleError("定位搜索结果失败", error));
+              }).catch((error) => handleError(t('navigation.search.revealFailed'), error));
             }}
           >
             <strong>{item.name}</strong>
@@ -892,11 +897,11 @@ export default function SessionResourceExplorer({
             ) : null}
           </button>
         ))}
-        {explorer.searchResults.limited ? <div className="session-resource-state">搜索达到结果上限，请缩小查询范围。</div> : null}
+        {explorer.searchResults.limited ? <div className="session-resource-state">{t('navigation.search.limitReached')}</div> : null}
         {explorer.searchResults.workspaces.some((workspace) => workspace.status === "stale" || workspace.status === "unavailable") ? (
           <details className="session-resource-offline-summary">
-            <summary>部分工作区结果来自缓存或不可用</summary>
-            {explorer.searchResults.workspaces.filter((workspace) => workspace.status === "stale" || workspace.status === "unavailable").map((workspace) => <div key={workspace.workspace_id}>{workspace.workspace_name}（{workspace.status === "stale" ? "缓存结果" : "不可搜索"}）: {workspace.error}{workspace.source?.updated_at ? `；目录镜像更新于 ${workspace.source.updated_at}` : ""}</div>)}
+            <summary>{t('navigation.search.offlineSummary')}</summary>
+            {explorer.searchResults.workspaces.filter((workspace) => workspace.status === "stale" || workspace.status === "unavailable").map((workspace) => <div key={workspace.workspace_id}>{t('navigation.search.workspaceStatus', workspace.workspace_name, t(workspace.status === "stale" ? 'navigation.search.cached' : 'navigation.search.unsearchable'), workspace.error)}{workspace.source?.updated_at ? t('navigation.search.catalogUpdated', workspace.source.updated_at) : ""}</div>)}
           </details>
         ) : null}
       </section>
@@ -905,14 +910,14 @@ export default function SessionResourceExplorer({
 
   return (
     <>
-    <section className="session-resource-explorer" aria-label="工作区和会话资源管理器">
+    <section className="session-resource-explorer" aria-label={t('navigation.explorer.title')}>
       <div className="session-resource-toolbar">
         <div
           className={`session-resource-root-drop-target${dropTargetClass("navigation_root")}`}
           role="heading"
           aria-level={2}
           tabIndex={0}
-          title="右击管理工作区文件夹；也可将工作区或工作区文件夹拖到此处移回根级"
+          title={t('navigation.workspace.folderRootHint')}
           data-testid="workspace-navigation-root-drop-target"
           onContextMenu={(event) => {
             event.preventDefault();
@@ -920,7 +925,7 @@ export default function SessionResourceExplorer({
             setWorkspaceFolderMenu({
               nodeId: null,
               parentNodeId: null,
-              name: "工作区文件夹",
+              name: t('navigation.workspace.folder'),
               x: event.clientX,
               y: event.clientY,
             });
@@ -935,7 +940,7 @@ export default function SessionResourceExplorer({
             setWorkspaceFolderMenu({
               nodeId: null,
               parentNodeId: null,
-              name: "工作区文件夹",
+              name: t('navigation.workspace.folder'),
               x: rect.left,
               y: rect.bottom,
             });
@@ -950,41 +955,40 @@ export default function SessionResourceExplorer({
           }}
           onDrop={(event) => handleDrop(event, { kind: "navigation_root" })}
         >
-          <span className="codicon codicon-folder" aria-hidden="true" /> 工作区文件夹
-        </div>
-        <button type="button" title="重新加载并校验会话目录索引" aria-label="刷新资源树" onClick={refreshResourceTreeInBackground}>
+          <span className="codicon codicon-folder" aria-hidden="true" /> {t('navigation.workspace.folder')}</div>
+        <button type="button" title={t('navigation.catalog.refreshHint')} aria-label={t('navigation.catalog.refresh')} onClick={refreshResourceTreeInBackground}>
           <span className="codicon codicon-refresh" aria-hidden="true" />
         </button>
-        <button type="button" title="添加工作区" aria-label="添加工作区" onClick={onRequestAddWorkspace}>
+        <button type="button" title={t('navigation.workspace.add')} aria-label={t('navigation.workspace.add')} onClick={onRequestAddWorkspace}>
           <span className="codicon codicon-add" aria-hidden="true" />
         </button>
       </div>
       {actionErrorCard}
       {explorer.navigationError ? (
         <div className="session-resource-error-card global" role="alert">
-          <strong>无法加载工作区列表</strong>
-          <span>工作区导航暂时不可用。</span>
+          <strong>{t('navigation.workspace.listFailed')}</strong>
+          <span>{t('navigation.workspace.navigationUnavailable')}</span>
           <div className="session-resource-error-actions">
             <button type="button" onClick={() => void explorer.refreshNavigation().catch(() => undefined)}>
-              重新加载工作区列表
+              {t('navigation.workspace.reloadList')}
             </button>
-            <button type="button" onClick={() => openDiagnostic("无法加载工作区列表", explorer.navigationError!)}>查看日志</button>
+            <button type="button" onClick={() => openDiagnostic(t('navigation.workspace.listFailed'), explorer.navigationError!)}>{t('navigation.diagnostic.viewLogs')}</button>
           </div>
         </div>
       ) : null}
       {explorer.revealError ? (
         <div className="session-resource-error-card" role="alert">
-          <strong>无法定位当前会话</strong>
-          <span>当前会话未能在资源树中自动展开，工作区列表仍可使用。</span>
+          <strong>{t('navigation.sessions.revealCurrentFailed')}</strong>
+          <span>{t('navigation.sessions.revealCurrentExplanation')}</span>
           <div className="session-resource-error-actions">
-            <button type="button" onClick={() => openDiagnostic("无法定位当前会话", explorer.revealError!, activeWorkspaceId ?? undefined)}>查看日志</button>
+            <button type="button" onClick={() => openDiagnostic(t('navigation.sessions.revealCurrentFailed'), explorer.revealError!, activeWorkspaceId ?? undefined)}>{t('navigation.diagnostic.viewLogs')}</button>
           </div>
         </div>
       ) : null}
-      {!explorer.navigation && !explorer.navigationError ? <div className="session-resource-state">正在加载工作区目录…</div> : null}
+      {!explorer.navigation && !explorer.navigationError ? <div className="session-resource-state">{t('navigation.workspace.loadingCatalog')}</div> : null}
       {navigationEmpty ? (
         <div className="session-resource-state">
-          还没有工作区。可通过工具栏的「添加工作区」接入一个工作区，或先在连接管理中恢复已有连接。
+          {t('navigation.workspace.empty')}
         </div>
       ) : null}
       <ul
@@ -1002,7 +1006,7 @@ export default function SessionResourceExplorer({
           setWorkspaceFolderMenu({
             nodeId: null,
             parentNodeId: null,
-            name: "工作区根",
+            name: t('navigation.workspace.root'),
             x: event.clientX,
             y: event.clientY,
           });

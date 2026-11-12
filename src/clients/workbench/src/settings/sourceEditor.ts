@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { VSBuffer } from '../../upstream/src/vs/base/common/buffer.js';
 import { Event } from '../../upstream/src/vs/base/common/event.js';
 import { CancellationError, getErrorMessage } from '../../upstream/src/vs/base/common/errors.js';
@@ -28,7 +29,7 @@ export function sourceLocation(resource: URI): { target: SourceTarget; sourceKey
   const parts = resource.path.slice(1).split('/').map(decodeURIComponent);
   if (resource.scheme !== configSourceScheme || !resource.authority || resource.query || resource.fragment || parts.length !== 3
     || !['gateway', 'workspace'].includes(parts[0]) || !parts[1] || !parts[2].endsWith('.jsonc') || parts[2] === '.jsonc'
-    || parts[0] === 'gateway' && parts[1] !== '-') throw new Error('配置编辑器缺少完整目标或来源身份');
+    || parts[0] === 'gateway' && parts[1] !== '-') throw new Error(t('settings.editor.editorIdentityMissing'));
   return { target: { gateway_id: resource.authority, ...(parts[0] === 'workspace' ? { workspace_id: parts[1] } : {}) }, sourceKey: parts[2].slice(0, -6) };
 }
 
@@ -80,7 +81,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
   }
   currentDocument(resource: URI): SourceDocument {
     const document = this.edit(resource).document;
-    if (!document) throw new Error('配置来源尚未读取');
+    if (!document) throw new Error(t('settings.editor.sourceNotRead'));
     return document;
   }
   observeConfigurationSchemas(resource: URI, owner: ConfigurationSourceOwner, observer: SchemaObserver): IDisposable {
@@ -163,7 +164,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     const schema = this.schemaDocument(resource);
     if (schema) return VSBuffer.fromString(JSON.stringify(schema.json_schema)).buffer;
     const edit = this.edit(resource), owner = edit.owner;
-    if (edit.submissionKey) throw new Error('保存结果待核实，请先查询原来源提交；不能丢弃其身份后重新保存');
+    if (edit.submissionKey) throw new Error(t('settings.editor.savePendingVerification'));
     const document = edit.initial ?? await owner.read(edit.sourceKey);
     edit.initial = undefined;
     this.update(resource, edit, document);
@@ -175,20 +176,20 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     return edit.owner.read(edit.sourceKey, edit.submissionKey);
   }
   async writeFile(resource: URI, content: Uint8Array, options: IFileWriteOptions): Promise<void> {
-    if (this.schemaDocument(resource)) throw createFileSystemProviderError('配置 schema 只读', FileSystemProviderErrorCode.NoPermissions);
-    if (options.append || options.atomic) throw new Error('配置来源不支持追加或通用原子文件替换，请使用原来源保存');
+    if (this.schemaDocument(resource)) throw createFileSystemProviderError(t('settings.editor.schemaReadOnly'), FileSystemProviderErrorCode.NoPermissions);
+    if (options.append || options.atomic) throw new Error(t('settings.editor.appendUnsupported'));
     // 每次操作捕获原路由；显式重选连接只影响后续操作，资源目标始终来自 URI。
     const edit = this.edit(resource), owner = edit.owner, jsonc = VSBuffer.wrap(content).toString();
     if (edit.submissionKey) {
       const original = await owner.read(edit.sourceKey, edit.submissionKey);
       this.update(resource, edit, original);
-      if (!original.edit) throw new Error(`原保存结果仍未知，仅可查询提交 ${edit.submissionKey}，未重发写入`);
+      if (!original.edit) throw new Error(t('settings.editor.originalSaveUnknown', edit.submissionKey));
       edit.submissionKey = undefined;
       if (original.edit.source_saved) {
         edit.baseline = sourceBaseline(original);
         this.notifications.info(sourceStatus(original));
         if (original.jsonc === jsonc) return;
-        throw new Error('原提交已保存；当前草稿与回读正文不同，已保留，请检查后显式再次保存');
+        throw new Error(t('settings.editor.savedDraftDifferent'));
       }
     }
     let document = edit.document;
@@ -196,19 +197,19 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
       document = await owner.read(edit.sourceKey);
       edit.document = document;
     }
-    if (!document.writable) throw createFileSystemProviderError('所选配置来源只读', FileSystemProviderErrorCode.NoPermissions);
-    if (!edit.baseline) throw new Error('恢复草稿没有原保存基线，请先使用“重新预检当前设置来源草稿”核对最新来源');
+    if (!document.writable) throw createFileSystemProviderError(t('settings.editor.selectedReadOnly'), FileSystemProviderErrorCode.NoPermissions);
+    if (!edit.baseline) throw new Error(t('settings.editor.restoredBaselineMissing'));
     const intent = owner.intent(edit.sourceKey, jsonc, edit.baseline);
     let saving = false;
     try {
       const preflight = await owner.preflight(intent);
-      const accepted = await this.dialogs.confirm({ type: 'question', message: '保存目标配置来源？', primaryButton: '保存来源',
-        detail: `${owner.target.gateway_id}${owner.target.workspace_id ? ' · 工作区 ' + owner.target.workspace_id : ' · Gateway'} · ${edit.sourceKey}\n当前工作区变更：${preflight.changed_paths.join('、') || '来源格式或被遮蔽的覆盖'}\n保存与运行生效分别报告。${sourceFanoutStatus(preflight.document!)}` });
+      const accepted = await this.dialogs.confirm({ type: 'question', message: t('settings.editor.confirmSourceSave'), primaryButton: t('settings.editor.saveSource'),
+        detail: t('settings.editor.sourceSaveDetail', owner.target.gateway_id, owner.target.workspace_id ? t('settings.editor.workspaceSuffix') + owner.target.workspace_id : ' · Gateway', edit.sourceKey, preflight.changed_paths.join(t('plugins.listSeparator')) || t('settings.editor.formatOrShadowed'), sourceFanoutStatus(preflight.document!)) });
       if (!accepted.confirmed) throw new CancellationError();
       saving = true; edit.submissionKey = intent.idempotency_key;
       const saved = await owner.save(intent);
       this.update(resource, edit, saved); edit.submissionKey = undefined;
-      if (!saved.edit?.source_saved) throw new Error(`来源未保存：${sourceStatus(saved)}`);
+      if (!saved.edit?.source_saved) throw new Error(t('settings.editor.sourceNotSaved', sourceStatus(saved)));
       edit.baseline = sourceBaseline(saved);
       if (!saved.edit.layer_imported) this.notifications.error(sourceStatus(saved));
       else this.notifications.info(sourceStatus(saved));
@@ -219,44 +220,44 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
       const uncertain = saving && !(error instanceof HttpRequestError && error.status >= 400 && error.status < 500);
       if (!uncertain) edit.submissionKey = undefined;
       const latest = await owner.read(edit.sourceKey, saving ? intent.idempotency_key : undefined).catch(readError => {
-        throw new AggregateError([error, readError], uncertain ? `保存结果未知，保留原提交 ${intent.idempotency_key}；来源回读也失败` : '配置修改失败，草稿已保留；来源回读也失败');
+        throw new AggregateError([error, readError], uncertain ? t('settings.editor.unknownAndReadFailed', intent.idempotency_key) : t('settings.editor.changeAndReadFailed'));
       });
       this.update(resource, edit, latest);
       if (uncertain) {
-        if (!latest.edit) throw new Error(`保存结果未知，保留提交 ${intent.idempotency_key}，未重发：${getErrorMessage(error)}`);
+        if (!latest.edit) throw new Error(t('settings.editor.unknownNotResubmitted', intent.idempotency_key, getErrorMessage(error)));
         edit.submissionKey = undefined;
         if (latest.edit.source_saved) {
           if (latest.jsonc !== jsonc) {
             edit.baseline = sourceBaseline(latest);
-            throw new Error('原提交已保存，但来源已被后续修改；当前草稿仍保留，请检查后显式重新预检');
+            throw new Error(t('settings.editor.savedThenChanged'));
           }
           edit.baseline = sourceBaseline(latest); this.notifications.info(sourceStatus(latest)); return;
         }
       }
-      throw new Error(`配置修改失败，草稿已保留。${getErrorMessage(error)}。如需按最新来源提交，请显式运行“重新预检当前设置来源草稿”`);
+      throw new Error(t('settings.editor.changeFailedDraftPreserved', getErrorMessage(error)));
     }
   }
   async rebase(resource: URI): Promise<void> {
     const edit = this.edit(resource);
-    if (edit.submissionKey) throw new Error('原保存结果待核实，只能先查询原提交；不能重新预检或重发');
+    if (edit.submissionKey) throw new Error(t('settings.editor.unresolvedNoPreflight'));
     const owner = edit.owner;
     const latest = await owner.read(edit.sourceKey);
-    const accepted = await this.dialogs.confirm({ type: 'warning', message: '以最新来源重新预检当前草稿？', primaryButton: '使用最新基线',
-      detail: `${sourceStatus(latest)}\n保留编辑器中的完整草稿；再次保存将按最新来源预检。请先核对并发修改，避免用旧草稿覆盖它们。` });
+    const accepted = await this.dialogs.confirm({ type: 'warning', message: t('settings.editor.confirmRebase'), primaryButton: t('settings.editor.useLatestBaseline'),
+      detail: t('settings.editor.rebaseDetail', sourceStatus(latest)) });
     if (!accepted.confirmed) return;
     edit.baseline = sourceBaseline(latest); this.update(resource, edit, latest);
-    this.notifications.info('已保留草稿并更新保存基线；尚未写入，请检查后显式保存');
+    this.notifications.info(t('settings.editor.rebaseCompleted'));
   }
   watch(): IDisposable { return Disposable.None; }
-  async mkdir(): Promise<void> { throw new Error('配置来源不提供目录创建'); }
-  async readdir(): Promise<[string, FileType][]> { throw new Error('请从正式设置来源目录选择配置'); }
-  async delete(): Promise<void> { throw new Error('请在来源 JSONC 中删除覆盖后保存，不能删除配置来源'); }
-  async rename(): Promise<void> { throw new Error('配置来源不能重命名或另存为其它目标'); }
+  async mkdir(): Promise<void> { throw new Error(t('settings.editor.mkdirUnsupported')); }
+  async readdir(): Promise<[string, FileType][]> { throw new Error(t('settings.editor.chooseSourceDirectory')); }
+  async delete(): Promise<void> { throw new Error(t('settings.editor.deleteSourceUnsupported')); }
+  async rename(): Promise<void> { throw new Error(t('settings.editor.renameUnsupported')); }
 }
 
 export function configSourceFiles(files: IFileService): ConfigurationSourceFiles {
   const provider = files.getProvider(configSourceScheme);
-  if (!(provider instanceof ConfigurationSourceFiles)) throw new Error('正式配置来源编辑器尚未初始化');
+  if (!(provider instanceof ConfigurationSourceFiles)) throw new Error(t('settings.editor.editorNotReady'));
   return provider;
 }
 export function configSourceBackup(files: IFileService, resource: URI): ConfigSourceBackup | undefined {

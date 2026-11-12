@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import {
   useCallback,
   useEffect,
@@ -88,7 +89,7 @@ export function useNodeDebugStateSync({
 
   const loadState = useCallback((force = false): Promise<NodeDebugState> => {
     if (!sessionId) {
-      return Promise.reject(new Error("当前没有可读取调试状态的会话"));
+      return Promise.reject(new Error(t("debug.sync.noSession")));
     }
     const requestKey = `${apiPort}:${workspaceId ?? ""}:${sessionId}:${threadId}`;
     if (!force) {
@@ -146,7 +147,7 @@ export function useNodeDebugStateSync({
     } catch (refreshCause: unknown) {
       const refreshMessage = errorMessage(refreshCause);
       if (mutationGate.isCurrentMutation(mutation)) {
-        setError(`${message}；重新获取调试状态失败: ${refreshMessage}`);
+        setError(t("debug.sync.refreshFailed", message, refreshMessage));
       }
     }
   }, [loadState, mutationGate]);

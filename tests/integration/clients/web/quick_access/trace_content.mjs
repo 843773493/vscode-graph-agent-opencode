@@ -5,15 +5,17 @@ import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
 import { confirmContentCategories } from './default_interactions.mjs';
+import { searchReceipt } from '../../../../support/workbench/search-observation.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH, query = process.env.BOXTEAM_TRACE_SEARCH_QUERY;
 if (!base || !output || !screenshot || !query) throw new Error('Trace 验收缺少隔离目标或产物路径');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_trace_content.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], locations: [], fullTraces: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], searches: [], searchReceipts: [], resourceParses: [], locations: [], fullTraces: [],
   boundary: '真实 Gateway／正式 Workbench；消息执行及 fork 创建关键状态；model_stream 复用回放，不预写事件或归属索引' };
 let page;
 const failures = [];
+const observed = new WeakMap(), responseReads = [];
 try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
     headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
@@ -23,8 +25,24 @@ try {
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (path === '/api/gateway/search' || path === '/api/v1/search' || path === '/api/v1/sessions/history/search') result.searches.push({ path, body: request.postDataJSON() });
+    if (path === '/api/gateway/search') observed.set(request, 'search');
+    if (path === '/api/gateway/resource-addresses/parse') {
+      const parse = { body: request.postDataJSON() }; result.resourceParses.push(parse); observed.set(request, parse);
+    }
     if (path.endsWith('/traces/locate')) result.locations.push({ path, body: request.postDataJSON() });
     if (path.endsWith('/traces')) result.fullTraces.push(path);
+  });
+  page.on('requestfinished', request => {
+    const entry = observed.get(request);
+    if (!entry) return;
+    responseReads.push((async () => {
+      if (entry === 'search') result.searchReceipts.push(await searchReceipt(request));
+      else {
+        const response = await request.response(), payload = await response.json();
+        expect(response.status()).toBe(200); expect(payload.request_id).toBe(response.headers()['x-request-id']);
+        Object.assign(entry, { response: payload.data, requestId: payload.request_id });
+      }
+    })().catch(error => failures.push(error)));
   });
   const api = (path, body) => page.evaluate(async ({ path, body }) => {
     const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
@@ -81,6 +99,13 @@ try {
   await openSearch();
   const rows = quick.locator('.monaco-list-row').filter({ has: page.locator(`[data-quick-input-id*="/${child}#trace/"]`) }).filter({ hasText: 'Trace agent_end' });
   await expect(rows).toHaveCount(2);
+  await expect.poll(() => result.searchReceipts.length).toBe(1);
+  await Promise.all(responseReads);
+  expect(result.resourceParses).toHaveLength(0);
+  const wireHits = result.searchReceipts.flatMap(receipt => receipt.pages.flatMap(event => event.page.traces.items))
+    .filter(hit => hit.match.reference.thread_id === child && hit.match.event_type === 'agent_end');
+  expect(wireHits).toHaveLength(2);
+  expect(new Set(wireHits.map(hit => hit.session_uri)).size).toBe(1);
   result.phase = 'open-unloaded-child';
   await rows.first().locator('[data-quick-input-id]').click();
   const pane = page.locator(`section.boxteam-thread[data-session-id="${session.session_id}"][data-thread-id="${child}"]`);
@@ -93,6 +118,9 @@ try {
   });
   await expect.poll(visibleMark).toBe(true);
   expect(result.locations).toHaveLength(1);
+  await Promise.all(responseReads);
+  expect(result.resourceParses).toHaveLength(1);
+  expect(result.resourceParses[0].body).toMatchObject({ uri: wireHits[0].session_uri, resource_gateway_id: health.gateway_id });
   const first = result.locations[0].body;
   expect(first.thread_id).toBe(child);
   result.unopenedChildLocated = true;
@@ -102,6 +130,9 @@ try {
   await expect(mark).toHaveText(query); await expect.poll(visibleMark).toBe(true);
   expect(result.locations[1].body.event_id).toBe(first.event_id);
   expect(result.locations[1].body.start_codepoint).toBeGreaterThan(first.start_codepoint);
+  expect(result.resourceParses).toHaveLength(2);
+  expect(result.resourceParses[1].body.uri).toBe(wireHits[0].session_uri);
+  result.canonicalUriAndLocations = true;
   expect(await pane.count()).toBe(1);
   result.samePaneNewLocation = true;
   await pane.getByRole('button', { name: '关闭 Trace 定位', exact: true }).click();
@@ -153,6 +184,7 @@ try {
   expect(result.fullTraces).toHaveLength(0);
   result.deletedRecordRejected = true;
   result.owner = { ...owner, session_id: session.session_id, main, child };
+  await Promise.all(responseReads);
   result.phase = 'complete';
 } catch (error) {
   failures.push(error); result.error = String(error?.stack ?? error);

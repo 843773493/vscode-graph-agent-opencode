@@ -1,13 +1,16 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import * as api from "../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { errorMessage } from "../../utils/errorMessage";
 
-export const taskActionLabels = {
-  details: "查看任务详情", history: "查看运行历史", edit: "编辑任务",
-  pause: "暂停任务", resume: "恢复任务", check: "立即检查", checkOnly: "检查试运行",
-  terminate: "终止任务", update: "保存任务",
+export const taskActionMessageKeys = {
+  details: "tasks.action.details", history: "tasks.action.history", edit: "tasks.action.edit",
+  pause: "tasks.action.pause", resume: "tasks.action.resume", check: "tasks.action.check", checkOnly: "tasks.action.checkOnly",
+  terminate: "tasks.action.terminate", update: "tasks.action.update",
 } as const;
-export type PersistentTaskAction = keyof typeof taskActionLabels;
+export type PersistentTaskAction = keyof typeof taskActionMessageKeys;
+export const taskActionLabels = Object.fromEntries(Object.entries(taskActionMessageKeys)
+  .map(([action, key]) => [action, t(key)])) as Record<PersistentTaskAction, string>;
 export type TaskMutation = Exclude<PersistentTaskAction, "details" | "history" | "edit">;
 
 /** 句柄属于发起组件与任务快照，命令不能转投到后来获得焦点的任务。 */
@@ -29,9 +32,9 @@ export function availableTaskActions(task: api.PersistentTaskDTO): PersistentTas
 export function requestTaskMutation(port: number, target: GatewayWorkspaceRequestTarget, task: api.PersistentTaskDTO,
   action: TaskMutation, signal: AbortSignal, configuration?: api.PersistentTaskConfigurationDTO): Promise<api.PersistentTaskDTO | null> {
   const required = action === "update" ? "edit" : action;
-  if (!availableTaskActions(task).includes(required)) throw new Error(`任务当前状态不支持${taskActionLabels[action]}：${task.lifecycle}`);
+  if (!availableTaskActions(task).includes(required)) throw new Error(t("tasks.action.unavailable", taskActionLabels[action], task.lifecycle));
   if (action === "update") {
-    if (!configuration) throw new Error("保存任务缺少完整定义");
+    if (!configuration) throw new Error(t("tasks.action.missingDefinition"));
     return api.updatePersistentTask(port, target, task, configuration, signal);
   }
   if (action === "check" || action === "checkOnly") {
@@ -54,7 +57,7 @@ export async function settleTaskOperation(port: number, target: GatewayWorkspace
   } catch (cause) { error = errorMessage(cause); }
   if (!signal.aborted) {
     try { snapshot = await api.listPersistentTasks(port, target, signal, sessionId); }
-    catch (cause) { error = [error, `刷新失败：${errorMessage(cause)}`].filter(Boolean).join("；"); }
+    catch (cause) { error = error ? t("tasks.action.combinedError", error, t("tasks.action.refreshFailed", errorMessage(cause))) : t("tasks.action.refreshFailed", errorMessage(cause)); }
   }
   return { succeeded, error, snapshot };
 }

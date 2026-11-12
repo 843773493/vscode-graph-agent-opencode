@@ -1,3 +1,4 @@
+import '../../../../../harness/js/workbench-locale.ts';
 import '../../../../../../src/clients/workbench/src/composerActions.js';
 import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';

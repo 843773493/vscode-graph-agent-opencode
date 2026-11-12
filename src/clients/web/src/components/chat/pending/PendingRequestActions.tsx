@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 
 import type { DeliveryPolicy } from "../../../types/backend";
@@ -21,7 +22,7 @@ export default function PendingRequestActions({
     <div
       className="chat-pending-actions"
       role="toolbar"
-      aria-label="待处理消息投递策略"
+      aria-label={t("chat.pending.policy")}
     >
       <span className="chat-pending-kind">{DELIVERY_POLICY_LABELS[deliveryPolicy]}</span>
       {DELIVERY_POLICIES.map((policy) => (
@@ -41,8 +42,8 @@ export default function PendingRequestActions({
         type="button"
         disabled={disabled}
         onClick={onRemove}
-        title="从 FIFO 队列撤回"
-        aria-label="从 FIFO 队列撤回"
+        title={t("chat.pending.removeFifo")}
+        aria-label={t("chat.pending.removeFifo")}
       >
         <span className="codicon codicon-close" aria-hidden="true" />
       </button>

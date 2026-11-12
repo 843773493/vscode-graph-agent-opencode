@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   readSessionContext,
@@ -47,13 +48,13 @@ export function useContextInspection({ port, gatewayWorkspaceId, session: curren
     setCatalogLoading(true);
     setCatalogError(null);
     try {
-      if (!session) throw new Error("上下文检查缺少当前 Session API 响应");
+      if (!session) throw new Error(t("inspection.context.missingSession"));
       const page = await readSessionContext(port, gatewayWorkspaceId, session, "assemblies", {
         signal: controller.signal, cursor: previousPage.nextCursor, revision: previousPage.revision,
       });
       if (controller.signal.aborted) return;
       if (page.items.some((item) => item.kind !== "assembly" || !item.assembly_ref)) {
-        throw new Error("封存 assembly 列表项缺少 assembly_ref");
+        throw new Error(t("inspection.context.missingAssemblyRef"));
       }
       const next = appendInspectionPage(previousPage, page, session);
       catalogRef.current = next;
@@ -80,13 +81,13 @@ export function useContextInspection({ port, gatewayWorkspaceId, session: curren
     setProjectionError(null);
     if (!item) { setProjectionLoading(false); return; }
     if (item.kind !== "assembly" || !selectedAssemblyId || !selectedAssemblyRef) {
-      setProjectionError("封存 assembly 响应缺少 assembly_id 或 assembly_ref");
+      setProjectionError(t("inspection.context.invalidAssembly"));
       setProjectionLoading(false);
       return;
     }
     setProjectionLoading(true);
     try {
-      if (!session) throw new Error("上下文检查缺少当前 Session API 响应");
+      if (!session) throw new Error(t("inspection.context.missingSession"));
       if (controller.signal.aborted) return;
       const page = await readSessionContext(port, gatewayWorkspaceId, session, "assembly", {
         signal: controller.signal, cursor: previousPage.nextCursor, revision: previousPage.revision,

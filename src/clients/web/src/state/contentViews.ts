@@ -1,3 +1,4 @@
+import { t } from "../../../shared/core/i18n/index.js";
 import type { ConversationContentView } from "../types/frontend";
 
 export type ViewOption = {
@@ -9,28 +10,28 @@ export type ViewOption = {
 export const VIEW_OPTIONS: ViewOption[] = [
   {
     id: "default",
-    label: "默认视图",
-    description: "显示用户消息和最终回复，内部细节请切换事件、请求或上下文状态视图",
+    label: t("views.default"),
+    description: t("views.defaultDescription"),
   },
   {
     id: "events",
-    label: "事件视图",
-    description: "按需查看当前会话的历史与实时 Trace 事件",
+    label: t("views.events"),
+    description: t("views.eventsDescription"),
   },
   {
     id: "requests",
-    label: "请求视图",
-    description: "查看当前会话历史 LLM 请求记录",
+    label: t("views.requests"),
+    description: t("views.requestsDescription"),
   },
   {
     id: "changes",
-    label: "变更",
-    description: "在右侧更改栏和文件预览区查看本会话可审查变更",
+    label: t("views.changes"),
+    description: t("views.changesDescription"),
   },
   {
     id: "agent",
-    label: "上下文状态",
-    description: "按卡片查看 Agent 当前内部消息、工具调用和元数据",
+    label: t("views.agent"),
+    description: t("views.agentDescription"),
   },
   // TODO: 后续添加更多视图时，在这里扩展菜单项并接入对应面板。
 ];

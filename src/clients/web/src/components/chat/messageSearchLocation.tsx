@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { TurnMessageLocationDTO, TurnToolResultDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
@@ -34,9 +35,9 @@ export function MessageSearchLocation({ turnId, itemId }: { turnId?: string; ite
   const { reference, content } = message;
   if (!reference) throw new Error("消息原文缺少已核验的位置引用");
   const [start, end] = messageRangeOffsets(content, reference.start_codepoint, reference.end_codepoint);
-  return <section className="chat-message-location" aria-label={message.role === "tool" ? "工具结果原文定位" : "消息原文定位"}>
-    <header>命中原文 · {message.role === "tool" ? `工具结果 ${message.tool_name}` : message.role === "user" ? "用户消息" : "助手消息"}
-      <button type="button" onClick={close}>关闭定位原文</button>
+  return <section className="chat-message-location" aria-label={message.role === "tool" ? t("chat.location.tool") : t("chat.location.message")}>
+    <header>{t("chat.location.header", message.role === "tool" ? t("chat.location.toolResult", message.tool_name) : message.role === "user" ? t("chat.location.user") : t("chat.location.assistant"))}
+      <button type="button" onClick={close}>{t("chat.location.close")}</button>
     </header>
     <pre>{content.slice(0, start)}<mark ref={markRef} data-message-item-id={reference.item_id}>{content.slice(start, end)}</mark>{content.slice(end)}</pre>
   </section>;

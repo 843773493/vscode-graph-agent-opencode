@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { workspaceOwnerFromKey } from "../../../api/workspaceIdentity";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -7,12 +8,11 @@ import { diagnosticLogUnavailableHint } from "../gatewayLogPresentation";
 import { errorMessage } from "../../../utils/errorMessage";
 
 function serviceLabel(log: GatewayDiagnosticLog): string {
-  const labels: Record<string, string> = {
-    browser: "浏览器服务",
-    terminal: "终端服务",
-    terminal_manager: "终端服务",
-  };
-  return labels[log.service] ?? log.service.replaceAll("_", " ");
+  if (log.service === "browser") return t("bottom.gatewayLog.browserService");
+  if (log.service === "terminal" || log.service === "terminal_manager") {
+    return t("bottom.gatewayLog.terminalService");
+  }
+  return log.service.replaceAll("_", " ");
 }
 
 function getWorkspaceLogs(
@@ -100,7 +100,7 @@ export function GatewayLogContent({ apiPort, workspaceId, active, renderToolbar 
         requestRevisionRef.current += 1;
         setDiagnostics(null);
         setSelectedLogId(null);
-        setError("当前会话没有绑定工作区");
+        setError(t("bottom.gatewayLog.noWorkspace"));
         return;
       }
       const requestKey = `${apiPort}:${workspaceId}:${logId ?? ""}`;
@@ -177,26 +177,26 @@ export function GatewayLogContent({ apiPort, workspaceId, active, renderToolbar 
       {renderToolbar(<>
         <div className="gateway-log-panel-toolbar">
           <label className="gateway-log-panel-filter">
-            <span className="visually-hidden">筛选当前输出</span>
+            <span className="visually-hidden">{t("bottom.gatewayLog.filterOutput")}</span>
             <input
               type="search"
               value={filterText}
-              placeholder="筛选器（例如 text、!excludeText）"
-              aria-label="筛选当前输出"
+              placeholder={t("bottom.gatewayLog.filterPlaceholder")}
+              aria-label={t("bottom.gatewayLog.filterOutput")}
               onChange={(event) => setFilterText(event.target.value)}
             />
           </label>
           <label className="gateway-log-panel-channel">
-            <span className="visually-hidden">选择输出通道</span>
+            <span className="visually-hidden">{t("bottom.gatewayLog.selectChannel")}</span>
             <select
               value={selectedLog?.log_id ?? ""}
-              aria-label="选择输出通道"
+              aria-label={t("bottom.gatewayLog.selectChannel")}
               disabled={workspaceLogs.length === 0}
               onChange={(event) => {
                 void loadDiagnostics(event.target.value || null);
               }}
             >
-              {workspaceLogs.length === 0 ? <option value="">工作区服务日志</option> : null}
+              {workspaceLogs.length === 0 ? <option value="">{t("bottom.gatewayLog.workspaceServiceLogs")}</option> : null}
               {workspaceLogs.map((log) => (
                 <option key={log.log_id} value={log.log_id}>
                   {serviceLabel(log)}
@@ -208,8 +208,8 @@ export function GatewayLogContent({ apiPort, workspaceId, active, renderToolbar 
           <button
             type="button"
             className="workbench-bottom-panel-icon-button"
-            title={loading ? "正在刷新工作区输出" : "刷新工作区输出"}
-            aria-label={loading ? "正在刷新工作区输出" : "刷新工作区输出"}
+            title={loading ? t("bottom.gatewayLog.refreshingOutput") : t("bottom.gatewayLog.refreshOutput")}
+            aria-label={loading ? t("bottom.gatewayLog.refreshingOutput") : t("bottom.gatewayLog.refreshOutput")}
             disabled={loading}
             onClick={() => void loadDiagnostics(selectedLogId)}
           >
@@ -220,32 +220,32 @@ export function GatewayLogContent({ apiPort, workspaceId, active, renderToolbar 
       {error ? (
         <div className="gateway-log-panel-alert" role="alert">
           <span className="codicon codicon-error" aria-hidden="true" />
-          <span>工作区输出读取失败：{error}</span>
+          <span>{t("bottom.gatewayLog.readFailed", error)}</span>
         </div>
       ) : null}
 
       <div className="gateway-log-panel-content">
-        <article className="gateway-log-panel-viewer" aria-label="当前工作区日志内容">
+        <article className="gateway-log-panel-viewer" aria-label={t("bottom.gatewayLog.currentContent")}>
           {selectedLog ? (
             <>
               {selectedLog.status === "unavailable" ? (
                 <div className="gateway-log-panel-viewer-empty">
-                  <strong>诊断日志暂不可用</strong>
+                  <strong>{t("bottom.gatewayLog.unavailable")}</strong>
                   <span>{diagnosticLogUnavailableHint(selectedLog)}</span>
                 </div>
               ) : selectedLog.status === "empty" ? (
                 <div className="gateway-log-panel-viewer-empty">
-                  <strong>日志文件为空</strong>
-                  <span>服务尚未输出内容，稍后会自动刷新。</span>
+                  <strong>{t("bottom.gatewayLog.emptyFile")}</strong>
+                  <span>{t("bottom.gatewayLog.emptyFileDetail")}</span>
                 </div>
               ) : (
-                <pre>{filteredLogTail || (filterText.trim() ? "没有匹配的输出" : "暂无日志内容")}</pre>
+                <pre>{filteredLogTail || (filterText.trim() ? t("bottom.gatewayLog.noMatches") : t("bottom.gatewayLog.noLogContent"))}</pre>
               )}
             </>
           ) : (
             <div className="gateway-log-panel-viewer-empty">
-              <strong>{error ? "无法显示工作区输出" : "暂无工作区输出"}</strong>
-              <span>{error ? "请刷新后重试。" : "当前工作区的运行日志会显示在这里。"}</span>
+              <strong>{error ? t("bottom.gatewayLog.cannotShowOutput") : t("bottom.gatewayLog.noWorkspaceOutput")}</strong>
+              <span>{error ? t("bottom.gatewayLog.retryRefresh") : t("bottom.gatewayLog.outputDescription")}</span>
             </div>
           )}
         </article>

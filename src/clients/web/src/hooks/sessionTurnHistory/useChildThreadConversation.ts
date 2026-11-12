@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadSessionHistory } from "../../api/session/sessionTurnHistory";
 import { sendUserMessage } from "../../api/session/sessionMessages";
@@ -133,10 +134,10 @@ export function useChildThreadConversation({
       if (controller.signal.aborted || readRef.current !== controller || selectionTokenRef.current !== selectionToken) return;
       // page 属于请求的真实容器；继承的历史成员保留其原 Session/Thread scope。
       if (page.thread_id !== threadId) {
-        throw new Error("子线程历史响应的 owner 与请求不一致");
+        throw new Error(t("child.historyOwnerMismatch"));
       }
       if (view === "report" && !(page.internal_executions ?? []).some((execution) => execution.execution_id === reportExecutionId)) {
-        throw new Error("该报告尚未提交或已不在当前历史视图中");
+        throw new Error(t("child.reportMissing"));
       }
       const current = latestRef.current;
       if (
@@ -188,7 +189,7 @@ export function useChildThreadConversation({
     update(key, (prior) => ({ ...prior, sending: true, error: null }));
     try {
       const accepted = await sendUserMessage(apiPort, sessionId, content, "default", [], workspaceId, "after_turn", threadId);
-      if (accepted.thread_id !== threadId) throw new Error("子线程消息响应的 owner 与请求不一致");
+      if (accepted.thread_id !== threadId) throw new Error(t("child.messageOwnerMismatch"));
       update(key, (prior) => ({ ...prior, accepted, draft: prior.draft.trim() === content ? "" : prior.draft }));
     } catch (error) {
       failure = errorMessage(error);
@@ -200,7 +201,7 @@ export function useChildThreadConversation({
     }
     if (activeKeyRef.current !== key) return;
     await read("history");
-    if (failure !== null) update(key, (prior) => ({ ...prior, error: prior.error ? `${failure}；重新读取失败：${prior.error}` : failure }));
+    if (failure !== null) update(key, (prior) => ({ ...prior, error: prior.error ? t("child.refreshFailed", failure, prior.error) : failure }));
   }, [apiPort, key, read, sessionId, threadId, update, workspaceId]);
 
   const selectThreadForOwner = useCallback((

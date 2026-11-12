@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { AttachmentRef, DeliveryPolicy } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
@@ -69,8 +70,8 @@ export function ChatTurnUserSection({
     && (canEditUserMessage || canInspectRawMessage || (conversation.displayMode === "history" && conversation.turnId && onForkConversation)),
   );
   const rawMessageAriaLabel = userMessage?.content.trim()
-    ? "内部用户消息，右键展开原始消息"
-    : "空用户消息，右键展开原始消息";
+    ? t("chat.turn.internalHint")
+    : t("chat.turn.emptyHint");
   const toggleRawMessageDetails = React.useCallback(async () => {
     if (!userMessage || !canInspectRawMessage || rawMessageLoading) return;
     if (rawMessageContent !== null) {
@@ -124,7 +125,7 @@ export function ChatTurnUserSection({
         className={`chat-user-bubble${actions.editing ? " is-editing" : ""}${actions.isInternalDisplayMessage ? " is-internal" : ""}${canInspectRawMessage ? " is-inspectable" : ""}`}
         role={canInspectRawMessage ? "group" : undefined}
         aria-label={canInspectRawMessage ? rawMessageAriaLabel : undefined}
-        title={canInspectRawMessage ? "右键展开或收起原始消息详情" : undefined}
+        title={canInspectRawMessage ? t("chat.turn.rawHint") : undefined}
         onContextMenu={handleRawMessageContextMenu}
       >
         {canShowActionMenu ? (
@@ -132,8 +133,8 @@ export function ChatTurnUserSection({
             <button
               type="button"
               className="chat-user-action-menu-trigger"
-              title="消息操作"
-              aria-label="消息操作"
+              title={t("chat.turn.actions")}
+              aria-label={t("chat.turn.actions")}
               aria-haspopup="menu"
               aria-expanded={actionMenuOpen}
               onClick={() => setActionMenuOpen((open) => !open)}
@@ -147,10 +148,10 @@ export function ChatTurnUserSection({
               offset={4}
               onClose={() => setActionMenuOpen(false)}
             >
-              <div className="chat-user-action-menu" role="menu" aria-label="用户消息操作">
+              <div className="chat-user-action-menu" role="menu" aria-label={t("chat.turn.userActions")}>
                 {conversation.displayMode === "history" && conversation.turnId && onForkConversation ? (
                   <button type="button" role="menuitem" className="chat-user-action-menu-item"
-                    title="从此消息创建分支" aria-label="从此消息创建分支"
+                    title={t("chat.turn.fork")} aria-label={t("chat.turn.fork")}
                     onClick={() => {
                       if (!workspaceId || !conversation.threadId || !conversation.sourceViewId || conversation.sourceViewRevision === undefined) {
                         throw new Error("历史消息缺少实际读取的来源快照");
@@ -170,8 +171,8 @@ export function ChatTurnUserSection({
                     type="button"
                     role="menuitem"
                     className="chat-user-action-menu-item"
-                    title="编辑并从此处继续"
-                    aria-label="编辑并从此处继续"
+                    title={t("chat.turn.continue")}
+                    aria-label={t("chat.turn.continue")}
                     disabled={sessionBusy}
                     onClick={handleEditAction}
                   >
@@ -183,8 +184,8 @@ export function ChatTurnUserSection({
                     type="button"
                     role="menuitem"
                     className="chat-user-action-menu-item"
-                    title={rawMessageContent !== null ? "收起隐藏内容" : "展示隐藏内容"}
-                    aria-label={rawMessageContent !== null ? "收起隐藏内容" : "展示隐藏内容"}
+                    title={rawMessageContent !== null ? t("chat.turn.hideRaw") : t("chat.turn.showRaw")}
+                    aria-label={rawMessageContent !== null ? t("chat.turn.hideRaw") : t("chat.turn.showRaw")}
                     onClick={handleRawDetailsAction}
                   >
                     <span className="codicon codicon-eye" aria-hidden="true" />
@@ -205,7 +206,7 @@ export function ChatTurnUserSection({
             <textarea
               className="chat-request-edit-input"
               value={actions.editContent}
-              aria-label="编辑用户消息"
+              aria-label={t("chat.turn.edit")}
               autoFocus
               disabled={actions.actionRunning}
               onChange={(event) => actions.setEditContent(event.target.value)}
@@ -221,7 +222,7 @@ export function ChatTurnUserSection({
                     <button
                       type="button"
                       disabled={actions.actionRunning}
-                      aria-label={`移除附件 ${attachment.name ?? attachment.file_id}`}
+                      aria-label={t("chat.turn.removeAttachment", attachment.name ?? attachment.file_id)}
                       onClick={() => actions.setEditAttachments((current) =>
                         current.filter((item) => item.file_id !== attachment.file_id)
                       )}
@@ -261,13 +262,13 @@ export function ChatTurnUserSection({
                   onClick={() => editAttachmentInputRef.current?.click()}
                 >
                   <span className="codicon codicon-attach" aria-hidden="true" />
-                  添加附件
+                  {t("chat.turn.attach")}
                 </button>
               </>
             ) : null}
             {!summaryOnly && !conversation.pending && !actions.isInternalDisplayMessage ? (
               <div className="chat-turn-action-warning">
-                将移除此消息之后的会话上下文，但不会撤销已产生的文件修改。
+                {t("chat.turn.rewindWarning")}
               </div>
             ) : null}
             <div className="chat-request-edit-actions">
@@ -276,7 +277,7 @@ export function ChatTurnUserSection({
                 disabled={actions.actionRunning}
                 onClick={actions.cancelEditing}
               >
-                取消
+                {t("chat.cancel")}
               </button>
               <button
                 type="submit"
@@ -287,8 +288,8 @@ export function ChatTurnUserSection({
                 }
               >
                 {actions.actionRunning
-                  ? "正在保存..."
-                  : "编辑并从此处继续"}
+                  ? t("chat.turn.saving")
+                  : t("chat.turn.continue")}
               </button>
             </div>
           </form>
@@ -314,16 +315,16 @@ export function ChatTurnUserSection({
           </>
         )}
         {canInspectRawMessage && rawMessageLoading ? (
-          <div className="chat-user-raw-status" role="status">正在读取原始消息…</div>
+          <div className="chat-user-raw-status" role="status">{t("chat.turn.loadingRaw")}</div>
         ) : null}
         {canInspectRawMessage && rawMessageError ? (
           <div className="chat-user-raw-error" role="alert">{rawMessageError}</div>
         ) : null}
         {canInspectRawMessage && rawMessageContent !== null ? (
           <div className="chat-user-raw-details">
-            <div className="chat-user-raw-details-title">原始消息详情（标记文本）</div>
+            <div className="chat-user-raw-details-title">{t("chat.turn.rawDetails")}</div>
             <pre className="chat-user-raw-content">
-              {rawMessageContent || "（原始消息为空）"}
+              {rawMessageContent || t("chat.turn.rawEmpty")}
             </pre>
           </div>
         ) : null}

@@ -1,3 +1,4 @@
+import { t } from '../../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
@@ -63,16 +64,16 @@ const defaultApi: WorkspacePortForwardApi = {
 };
 
 const STATUS_LABELS: Record<GatewayPortForward["status"], string> = {
-  starting: "正在连接",
-  active: "已转发",
-  error: "连接失败",
-  stopped: "已停止",
+  starting: t('ports.status.starting'),
+  active: t('ports.status.active'),
+  error: t('ports.status.error'),
+  stopped: t('ports.status.stopped'),
 };
 
 // 端口只接受十进制整数字面量：`Number()` 会把 "1e3"、"12.0"、" 80 "、"0x50"
 // 静默收敛成数字，导致非法输入被当成合法端口提交。解析与合法性判定共用同一
 // 份实现，避免「按钮判定」与「提交解析」两套口径漂移。
-const PORT_INPUT_HINT = "端口必须是 1–65535 之间的十进制整数，不接受科学计数法、小数、十六进制或空白字符。";
+const PORT_INPUT_HINT = t('ports.portHint');
 
 function portLabel(forward: GatewayPortForward): string {
   return forward.label
@@ -149,7 +150,7 @@ export default function WorkspacePortForwardPanel({
       }
     } catch (loadError) {
       if (requestRevisionRef.current === revision && currentWorkspaceIdRef.current === workspaceId) {
-        setError(`刷新端口转发失败：${errorMessage(loadError)}`);
+        setError(t('ports.refreshFailed', errorMessage(loadError)));
       }
     } finally {
       if (requestRevisionRef.current === revision) setLoading(false);
@@ -201,7 +202,7 @@ export default function WorkspacePortForwardPanel({
       if (currentWorkspaceIdRef.current === workspaceId) setForwards(recovered);
     } catch (recoverError) {
       if (currentWorkspaceIdRef.current === workspaceId) {
-        setError(`${message}；重新读取状态也失败：${errorMessage(recoverError)}`);
+        setError(t('ports.recoveryFailed', message, errorMessage(recoverError)));
       }
     }
   };
@@ -212,8 +213,8 @@ export default function WorkspacePortForwardPanel({
     let payload: CreateGatewayPortForwardRequest;
     try {
       payload = {
-        remote_port: parsePortLiteral(remotePort, "远端端口"),
-        local_port: localPort ? parsePortLiteral(localPort, "本地端口") : null,
+        remote_port: parsePortLiteral(remotePort, t('ports.remotePort')),
+        local_port: localPort ? parsePortLiteral(localPort, t('ports.localPort')) : null,
         protocol,
         label: label.trim() || null,
       };
@@ -236,7 +237,7 @@ export default function WorkspacePortForwardPanel({
       }
     } catch (createError) {
       if (currentWorkspaceIdRef.current === workspaceId) {
-        await recoverAfterFailure(workspaceId, `创建端口转发失败：${errorMessage(createError)}`);
+        await recoverAfterFailure(workspaceId, t('ports.createFailed', errorMessage(createError)));
       }
     } finally {
       if (currentWorkspaceIdRef.current === workspaceId) setSubmitting(false);
@@ -248,9 +249,9 @@ export default function WorkspacePortForwardPanel({
     const accepted = confirmStop
       ? await confirmStop(forward)
       : await confirm({
-          title: "停止端口转发",
-          message: `停止 ${forward.label || `远端端口 ${forward.remote_port}`}？本机 ${forward.local_host}:${forward.local_port} 将立即不可访问。`,
-          confirmText: "停止转发",
+          title: t('ports.stopTitle'),
+          message: t('ports.stopMessage', forward.label || t('ports.remotePortNumber', forward.remote_port), forward.local_host, forward.local_port),
+          confirmText: t('ports.stop'),
           danger: true,
         });
     if (!accepted) return;
@@ -263,7 +264,7 @@ export default function WorkspacePortForwardPanel({
       if (currentWorkspaceIdRef.current === workspaceId) setForwards(result);
     } catch (stopError) {
       if (currentWorkspaceIdRef.current === workspaceId) {
-        await recoverAfterFailure(workspaceId, `停止端口转发失败：${errorMessage(stopError)}`);
+        await recoverAfterFailure(workspaceId, t('ports.stopFailed', errorMessage(stopError)));
       }
     } finally {
       if (currentWorkspaceIdRef.current === workspaceId) setStoppingId(null);
@@ -283,7 +284,7 @@ export default function WorkspacePortForwardPanel({
       }, 1400);
     } catch (copyError) {
       setCopyRetryId(forward.forward_id);
-      setError(`复制本地地址失败：${errorMessage(copyError)}；可直接选中转发地址手动复制`);
+      setError(t('ports.copyFailed', errorMessage(copyError)));
     }
   };
 
@@ -291,7 +292,7 @@ export default function WorkspacePortForwardPanel({
     if (!forward.local_url) return;
     const target = mode === "preview" ? "boxteam-port-preview" : "_blank";
     const opened = window.open(forward.local_url, target, "noopener,noreferrer");
-    if (!opened) setError("无法打开端口页面：浏览器阻止了弹出窗口");
+    if (!opened) setError(t('ports.popupBlocked'));
   };
 
   const handleReconnect = async (forward: GatewayPortForward) => {
@@ -305,7 +306,7 @@ export default function WorkspacePortForwardPanel({
       if (currentWorkspaceIdRef.current === workspaceId) setForwards(result);
     } catch (reconnectError) {
       if (currentWorkspaceIdRef.current === workspaceId) {
-        await recoverAfterFailure(workspaceId, `重新连接失败：${errorMessage(reconnectError)}`);
+        await recoverAfterFailure(workspaceId, t('ports.reconnectFailed', errorMessage(reconnectError)));
       }
     } finally {
       if (currentWorkspaceIdRef.current === workspaceId) setReconnectingId(null);
@@ -317,7 +318,7 @@ export default function WorkspacePortForwardPanel({
     if (!workspace) return;
     let payload: ChangeGatewayPortForwardLocalPortRequest;
     try {
-      payload = { local_port: parsePortLiteral(editingLocalPort, "本地端口") };
+      payload = { local_port: parsePortLiteral(editingLocalPort, t('ports.localPort')) };
     } catch (validationError) {
       setError(errorMessage(validationError));
       return;
@@ -335,7 +336,7 @@ export default function WorkspacePortForwardPanel({
       }
     } catch (changeError) {
       if (currentWorkspaceIdRef.current === workspaceId) {
-        await recoverAfterFailure(workspaceId, `更改本地端口失败：${errorMessage(changeError)}`);
+        await recoverAfterFailure(workspaceId, t('ports.changeLocalPortFailed', errorMessage(changeError)));
       }
     } finally {
       if (currentWorkspaceIdRef.current === workspaceId) setChangingLocalPortId(null);
@@ -366,7 +367,7 @@ export default function WorkspacePortForwardPanel({
       }
     } catch (changeError) {
       if (currentWorkspaceIdRef.current === workspaceId) {
-        await recoverAfterFailure(workspaceId, `更改端口标签失败：${errorMessage(changeError)}`);
+        await recoverAfterFailure(workspaceId, t('ports.changeLabelFailed', errorMessage(changeError)));
       }
     } finally {
       if (currentWorkspaceIdRef.current === workspaceId) setChangingLabelId(null);
@@ -391,15 +392,15 @@ export default function WorkspacePortForwardPanel({
   if (!workspace) {
     return (
       <section className="port-forward-panel port-forward-panel-empty">
-        <p>打开一个工作区会话后，可在这里管理该工作区的开发服务端口。</p>
+        <p>{t('ports.noWorkspace')}</p>
       </section>
     );
   }
 
   if (workspace.connection_kind !== "remote_gateway") {
     return (
-      <section className="port-forward-panel port-forward-panel-empty" aria-label="工作区端口">
-        <p className="port-forward-local-empty">当前是本地工作区，开发服务可直接通过本机端口访问，无需 SSH 转发。</p>
+      <section className="port-forward-panel port-forward-panel-empty" aria-label={t('ports.workspacePorts')}>
+        <p className="port-forward-local-empty">{t('ports.localWorkspace')}</p>
       </section>
     );
   }
@@ -427,18 +428,18 @@ export default function WorkspacePortForwardPanel({
     beforeAction: () => void,
   ) => (
     <>
-      <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleCopyAddress(forward); }} disabled={!forward.local_url}>复制本地地址</button>
-      <button type="button" role="menuitem" onClick={() => { beforeAction(); handleOpen(forward, "browser"); }} disabled={!canOpen}>在浏览器中打开</button>
-      <button type="button" role="menuitem" onClick={() => { beforeAction(); handleOpen(forward, "preview"); }} disabled={!canOpen}>在编辑器中预览</button>
-      <button type="button" role="menuitem" onClick={() => { beforeAction(); beginLabelEdit(forward); }}>编辑端口标签</button>
-      {forward.local_port ? <button type="button" role="menuitem" onClick={() => { beforeAction(); setEditingLocalPortId(forward.forward_id); setEditingLocalPort(String(forward.local_port)); setError(null); }}>更改本地端口</button> : null}
-      {forward.status === "error" || forward.status === "stopped" ? <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleReconnect(forward); }} disabled={reconnectingId === forward.forward_id}>{reconnectingId === forward.forward_id ? "正在重连…" : "重新连接"}</button> : null}
-      {forward.status !== "stopped" ? <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleStop(forward); }} disabled={stoppingId === forward.forward_id}>停止转发</button> : null}
+      <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleCopyAddress(forward); }} disabled={!forward.local_url}>{t('ports.copyAddress')}</button>
+      <button type="button" role="menuitem" onClick={() => { beforeAction(); handleOpen(forward, "browser"); }} disabled={!canOpen}>{t('ports.openBrowser')}</button>
+      <button type="button" role="menuitem" onClick={() => { beforeAction(); handleOpen(forward, "preview"); }} disabled={!canOpen}>{t('ports.openPreview')}</button>
+      <button type="button" role="menuitem" onClick={() => { beforeAction(); beginLabelEdit(forward); }}>{t('ports.editLabel')}</button>
+      {forward.local_port ? <button type="button" role="menuitem" onClick={() => { beforeAction(); setEditingLocalPortId(forward.forward_id); setEditingLocalPort(String(forward.local_port)); setError(null); }}>{t('ports.changeLocalPort')}</button> : null}
+      {forward.status === "error" || forward.status === "stopped" ? <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleReconnect(forward); }} disabled={reconnectingId === forward.forward_id}>{reconnectingId === forward.forward_id ? t('ports.reconnecting') : t('ports.reconnect')}</button> : null}
+      {forward.status !== "stopped" ? <button type="button" role="menuitem" onClick={() => { beforeAction(); void handleStop(forward); }} disabled={stoppingId === forward.forward_id}>{t('ports.stop')}</button> : null}
     </>
   );
 
   return (
-    <section className="port-forward-panel" aria-label="工作区 SSH 端口转发">
+    <section className="port-forward-panel" aria-label={t('ports.panel')}>
       <div className="port-forward-feedback-slot">
         {error ? (
           <div className="port-forward-error" role="alert" title={error}>
@@ -452,20 +453,20 @@ export default function WorkspacePortForwardPanel({
                 }}
                 disabled={loading}
               >
-                重试复制
+                {t('ports.retryCopy')}
               </button>
             ) : (
-              <button type="button" onClick={() => void refresh()} disabled={loading}>重试刷新</button>
+              <button type="button" onClick={() => void refresh()} disabled={loading}>{t('ports.retryRefresh')}</button>
             )}
           </div>
         ) : null}
       </div>
 
       <div className="port-forward-list" aria-live="polite">
-        {loading && !forwards ? <p className="port-forward-empty">正在读取端口…</p> : null}
+        {loading && !forwards ? <p className="port-forward-empty">{t('ports.loading')}</p> : null}
         {!loading && forwards?.items.length === 0 ? (
           <p className="port-forward-empty">
-            暂无转发。
+            {t('ports.empty')}
             <button
               type="button"
               className="port-forward-empty-action"
@@ -474,33 +475,33 @@ export default function WorkspacePortForwardPanel({
               onClick={() => setIsCreateOpen((open) => !open)}
               disabled={submitting}
             >
-              {isCreateOpen ? "取消" : "新增端口"}
+              {isCreateOpen ? t('ports.cancel') : t('ports.add')}
             </button>
           </p>
         ) : null}
-        {!loading && forwards && forwards.items.length > 0 && filteredForwards.length === 0 ? <p className="port-forward-empty">没有匹配的端口。</p> : null}
+        {!loading && forwards && forwards.items.length > 0 && filteredForwards.length === 0 ? <p className="port-forward-empty">{t('ports.noResults')}</p> : null}
         {isFilterOpen ? (
-          <label className="port-forward-inline-filter" aria-label="筛选端口">
+          <label className="port-forward-inline-filter" aria-label={t('ports.filter')}>
             <span className="codicon codicon-search" aria-hidden="true" />
             <input
               ref={filterInputRef}
               type="search"
-              placeholder="筛选端口..."
+              placeholder={t('ports.filterHint')}
               value={filterText}
               onChange={(event) => setFilterText(event.target.value)}
             />
-            <button type="button" aria-label="关闭端口筛选" onClick={() => { setIsFilterOpen(false); setFilterText(""); }}>
+            <button type="button" aria-label={t('ports.closeFilter')} onClick={() => { setIsFilterOpen(false); setFilterText(""); }}>
               <span className="codicon codicon-close" aria-hidden="true" />
             </button>
           </label>
         ) : null}
         {filteredForwards.length > 0 ? (
           <>
-            <p className="port-forward-narrow-hint">左右滚动查看所有列和操作</p>
+            <p className="port-forward-narrow-hint">{t('ports.horizontalScrollHint')}</p>
             <div
               className="port-forward-table ports-view"
               role="table"
-              aria-label="端口转发表"
+              aria-label={t('ports.table')}
               onContextMenu={(event) => {
                 event.preventDefault();
                 setContextMenuId(null);
@@ -508,23 +509,23 @@ export default function WorkspacePortForwardPanel({
               }}
             >
             <div className="port-forward-table-header" role="row">
-              <span role="columnheader" aria-label="端口状态" />
-              <span role="columnheader">端口</span>
-              <span role="columnheader">转发地址</span>
-              <span role="columnheader">正在运行的进程</span>
-              <span role="columnheader">源</span>
+              <span role="columnheader" aria-label={t('ports.portStatus')} />
+              <span role="columnheader">{t('ports.port')}</span>
+              <span role="columnheader">{t('ports.address')}</span>
+              <span role="columnheader">{t('ports.process')}</span>
+              <span role="columnheader">{t('ports.source')}</span>
             </div>
             {filteredForwards.map((forward) => {
               const canOpen = forward.status === "active" && forward.protocol !== "tcp" && Boolean(forward.local_url);
               const isFocused = focusedId === forward.forward_id;
-              const processDescription = forward.status === "error" ? "流程信息不可用" : "";
+              const processDescription = forward.status === "error" ? t('ports.processUnavailable') : "";
               return (
                 <article
                   className={`port-forward-row is-${forward.status}${isFocused ? " is-focused" : ""}`}
                   key={forward.forward_id}
                   role="row"
                   tabIndex={0}
-                  aria-label={`${portLabel(forward)}，状态${STATUS_LABELS[forward.status]}`}
+                  aria-label={t('ports.row', portLabel(forward), STATUS_LABELS[forward.status])}
                   onFocus={() => setFocusedId(forward.forward_id)}
                   onContextMenu={(event) => {
                     event.preventDefault();
@@ -554,13 +555,13 @@ export default function WorkspacePortForwardPanel({
                   <div
                     className="port-forward-cell port-forward-port-cell"
                     role="cell"
-                    title={`远端端口 ${forward.remote_host}:${forward.remote_port}`}
+                    title={t('ports.remoteAddress', forward.remote_host, forward.remote_port)}
                     onDoubleClick={() => beginLabelEdit(forward)}
                   >
                     {editingLabelId === forward.forward_id ? (
                       <form className="port-forward-inline-edit" onSubmit={(event) => void handleChangeLabel(event, forward)}>
                         <input
-                          aria-label="端口标签"
+                          aria-label={t('ports.label')}
                           autoFocus
                           maxLength={120}
                           value={editingLabel}
@@ -580,8 +581,8 @@ export default function WorkspacePortForwardPanel({
                     <button
                       type="button"
                       className="port-forward-inline-action port-forward-label-action"
-                      aria-label={`编辑端口标签：${portLabel(forward)}`}
-                      title="编辑端口标签"
+                      aria-label={t('ports.editLabelFor', portLabel(forward))}
+                      title={t('ports.editLabel')}
                       onClick={() => beginLabelEdit(forward)}
                     >
                       <span className="codicon codicon-tag" aria-hidden="true" />
@@ -590,8 +591,8 @@ export default function WorkspacePortForwardPanel({
                       <button
                         type="button"
                         className="port-forward-inline-action port-forward-stop-action"
-                        aria-label={`停止转发：${portLabel(forward)}`}
-                        title="停止转发"
+                        aria-label={t('ports.stopFor', portLabel(forward))}
+                        title={t('ports.stop')}
                         onClick={() => void handleStop(forward)}
                         disabled={stoppingId === forward.forward_id}
                       >
@@ -602,26 +603,26 @@ export default function WorkspacePortForwardPanel({
                   <div className="port-forward-cell port-forward-address-cell" role="cell">
                     <div className="port-forward-address-line">
                       {canOpen ? (
-                        <a href={forward.local_url!} target="_blank" rel="noreferrer" title="跟随链接打开">
+                        <a href={forward.local_url!} target="_blank" rel="noreferrer" title={t('ports.followLink')}>
                           {localAddress(forward)}
                         </a>
                       ) : <span>{localAddress(forward)}</span>}
-                      <div className="port-forward-actionbar" aria-label="端口操作">
-                        <button type="button" className="port-forward-inline-action" aria-label="复制本地地址" title={copiedId === forward.forward_id ? "已复制本地地址" : "复制本地地址"} onClick={() => void handleCopyAddress(forward)} disabled={!forward.local_url}>
+                      <div className="port-forward-actionbar" aria-label={t('ports.actions')}>
+                        <button type="button" className="port-forward-inline-action" aria-label={t('ports.copyAddress')} title={copiedId === forward.forward_id ? t('ports.addressCopied') : t('ports.copyAddress')} onClick={() => void handleCopyAddress(forward)} disabled={!forward.local_url}>
                           <span className={`codicon ${copiedId === forward.forward_id ? "codicon-check" : "codicon-clippy"}`} aria-hidden="true" />
                         </button>
-                        <button type="button" className="port-forward-inline-action" aria-label="在浏览器中打开" title="在浏览器中打开" onClick={() => handleOpen(forward, "browser")} disabled={!canOpen}>
+                        <button type="button" className="port-forward-inline-action" aria-label={t('ports.openBrowser')} title={t('ports.openBrowser')} onClick={() => handleOpen(forward, "browser")} disabled={!canOpen}>
                           <span className="codicon codicon-globe" aria-hidden="true" />
                         </button>
-                        <button type="button" className="port-forward-inline-action" aria-label="在编辑器中预览" title="在编辑器中预览" onClick={() => handleOpen(forward, "preview")} disabled={!canOpen}>
+                        <button type="button" className="port-forward-inline-action" aria-label={t('ports.openPreview')} title={t('ports.openPreview')} onClick={() => handleOpen(forward, "preview")} disabled={!canOpen}>
                           <span className="codicon codicon-open-preview" aria-hidden="true" />
                         </button>
                         {forward.status === "error" || forward.status === "stopped" ? (
                           <button
                             type="button"
                             className="port-forward-inline-action"
-                            aria-label="重新连接端口"
-                            title={reconnectingId === forward.forward_id ? "正在重连" : "重新连接"}
+                            aria-label={t('ports.reconnectPort')}
+                            title={reconnectingId === forward.forward_id ? t('ports.reconnectingShort') : t('ports.reconnect')}
                             onClick={() => void handleReconnect(forward)}
                             disabled={reconnectingId === forward.forward_id}
                           >
@@ -629,7 +630,7 @@ export default function WorkspacePortForwardPanel({
                           </button>
                         ) : null}
                         <details className="port-forward-more">
-                          <summary aria-label={`更多端口操作：${portLabel(forward)}`} title="更多端口操作">
+                          <summary aria-label={t('ports.moreActionsFor', portLabel(forward))} title={t('ports.moreActions')}>
                             <span className="codicon codicon-ellipsis" aria-hidden="true" />
                           </summary>
                           <div role="menu">
@@ -642,19 +643,19 @@ export default function WorkspacePortForwardPanel({
                       <div className="port-forward-item-error" role="alert">
                         <span className="port-forward-error-summary" title={forward.error}>{errorSummary(forward.error)}</span>
                         <details className="port-forward-error-details">
-                          <summary>查看完整错误</summary>
+                          <summary>{t('ports.fullError')}</summary>
                           <pre>{forward.error}</pre>
                         </details>
                       </div>
                     ) : null}
                   </div>
                   <div className="port-forward-cell port-forward-process-cell" role="cell" title={processDescription || undefined}>{processDescription}</div>
-                  <div className="port-forward-cell port-forward-origin-cell" role="cell">用户转发</div>
+                  <div className="port-forward-cell port-forward-origin-cell" role="cell">{t('ports.userForwarded')}</div>
                   {editingLocalPortId === forward.forward_id ? (
                     <form className="port-forward-edit-form" onSubmit={(event) => void handleChangeLocalPort(event, forward)}>
-                      <label><span>本地端口</span><input type="number" min="1" max="65535" inputMode="numeric" value={editingLocalPort} onChange={(event) => setEditingLocalPort(event.target.value)} disabled={changingLocalPortId === forward.forward_id} autoFocus /></label>
-                      <button type="submit" disabled={changingLocalPortId === forward.forward_id || !isValidPortLiteral(editingLocalPort)}>{changingLocalPortId === forward.forward_id ? "保存中…" : "保存"}</button>
-                      <button type="button" onClick={() => { setEditingLocalPortId(null); setEditingLocalPort(""); }} disabled={changingLocalPortId === forward.forward_id}>取消</button>
+                      <label><span>{t('ports.localPort')}</span><input type="number" min="1" max="65535" inputMode="numeric" value={editingLocalPort} onChange={(event) => setEditingLocalPort(event.target.value)} disabled={changingLocalPortId === forward.forward_id} autoFocus /></label>
+                      <button type="submit" disabled={changingLocalPortId === forward.forward_id || !isValidPortLiteral(editingLocalPort)}>{changingLocalPortId === forward.forward_id ? t('ports.saving') : t('ports.save')}</button>
+                      <button type="button" onClick={() => { setEditingLocalPortId(null); setEditingLocalPort(""); }} disabled={changingLocalPortId === forward.forward_id}>{t('ports.cancel')}</button>
                       {!isValidPortLiteral(editingLocalPort) ? (
                         <p className="port-forward-port-hint" role="alert">{PORT_INPUT_HINT}</p>
                       ) : null}
@@ -664,7 +665,7 @@ export default function WorkspacePortForwardPanel({
                     <div
                       className="port-forward-context-menu"
                       role="menu"
-                      aria-label={`端口上下文菜单：${portLabel(forward)}`}
+                      aria-label={t('ports.contextMenu', portLabel(forward))}
                       onPointerDown={(event) => event.stopPropagation()}
                     >
                       {renderPortActionItems(forward, canOpen, () => setContextMenuId(null))}
@@ -677,12 +678,12 @@ export default function WorkspacePortForwardPanel({
               <div
                 className="port-forward-context-menu port-forward-table-context-menu"
                 role="menu"
-                aria-label="端口列表操作"
+                aria-label={t('ports.listActions')}
                 onPointerDown={(event) => event.stopPropagation()}
               >
-                <button type="button" role="menuitem" onClick={() => { setIsTableMenuOpen(false); setIsFilterOpen(true); }}>筛选端口</button>
-                <button type="button" role="menuitem" aria-expanded={isCreateOpen} aria-controls="workspace-port-forward-form" onClick={() => { setIsTableMenuOpen(false); setIsCreateOpen((open) => !open); }} disabled={submitting}>{isCreateOpen ? "取消新增端口" : "新增端口"}</button>
-                <button type="button" role="menuitem" onClick={() => { setIsTableMenuOpen(false); void refresh(); }} disabled={loading || submitting}>刷新端口</button>
+                <button type="button" role="menuitem" onClick={() => { setIsTableMenuOpen(false); setIsFilterOpen(true); }}>{t('ports.filter')}</button>
+                <button type="button" role="menuitem" aria-expanded={isCreateOpen} aria-controls="workspace-port-forward-form" onClick={() => { setIsTableMenuOpen(false); setIsCreateOpen((open) => !open); }} disabled={submitting}>{isCreateOpen ? t('ports.cancelAdd') : t('ports.add')}</button>
+                <button type="button" role="menuitem" onClick={() => { setIsTableMenuOpen(false); void refresh(); }} disabled={loading || submitting}>{t('ports.refresh')}</button>
               </div>
             ) : null}
             </div>
@@ -694,15 +695,15 @@ export default function WorkspacePortForwardPanel({
         <div className="port-forward-create-region">
           <form id="workspace-port-forward-form" className="port-forward-form" onSubmit={(event) => void handleCreate(event)}>
             <label className="port-forward-field port-forward-field-primary">
-              <span>远端端口</span>
-              <input type="number" min="1" max="65535" required inputMode="numeric" placeholder="例如 5173" value={remotePort} onChange={(event) => setRemotePort(event.target.value)} disabled={submitting} aria-invalid={remotePortInvalid} />
+              <span>{t('ports.remotePort')}</span>
+              <input type="number" min="1" max="65535" required inputMode="numeric" placeholder={t('ports.remotePortExample')} value={remotePort} onChange={(event) => setRemotePort(event.target.value)} disabled={submitting} aria-invalid={remotePortInvalid} />
             </label>
             <label className="port-forward-field">
-              <span>本地端口（可选）</span>
-              <input type="number" min="1" max="65535" inputMode="numeric" placeholder="自动分配" value={localPort} onChange={(event) => setLocalPort(event.target.value)} disabled={submitting} aria-invalid={localPortInvalid} />
+              <span>{t('ports.optionalLocalPort')}</span>
+              <input type="number" min="1" max="65535" inputMode="numeric" placeholder={t('ports.automaticPort')} value={localPort} onChange={(event) => setLocalPort(event.target.value)} disabled={submitting} aria-invalid={localPortInvalid} />
             </label>
             <label className="port-forward-field">
-              <span>协议</span>
+              <span>{t('ports.protocol')}</span>
               <select value={protocol} onChange={(event) => setProtocol(event.target.value as GatewayPortForwardProtocol)} disabled={submitting}>
                 <option value="http">HTTP</option>
                 <option value="https">HTTPS</option>
@@ -710,11 +711,11 @@ export default function WorkspacePortForwardPanel({
               </select>
             </label>
             <label className="port-forward-field">
-              <span>名称（可选）</span>
-              <input type="text" maxLength={120} placeholder="例如 Vite 开发服务器" value={label} onChange={(event) => setLabel(event.target.value)} disabled={submitting} />
+              <span>{t('ports.optionalName')}</span>
+              <input type="text" maxLength={120} placeholder={t('ports.nameExample')} value={label} onChange={(event) => setLabel(event.target.value)} disabled={submitting} />
             </label>
-            <button className="port-forward-create" type="submit" disabled={createDisabled}>{submitting ? "正在创建…" : "创建转发"}</button>
-            <button className="port-forward-create-cancel" type="button" onClick={() => setIsCreateOpen(false)} disabled={submitting}>取消</button>
+            <button className="port-forward-create" type="submit" disabled={createDisabled}>{submitting ? t('ports.creating') : t('ports.create')}</button>
+            <button className="port-forward-create-cancel" type="button" onClick={() => setIsCreateOpen(false)} disabled={submitting}>{t('ports.cancel')}</button>
           </form>
           {remotePortInvalid || localPortInvalid ? (
             <p className="port-forward-port-hint" role="alert">

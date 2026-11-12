@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { useCallback, useEffect, useState } from 'react';
 import { getSessionCatalogBreadcrumb } from '../../api/session/sessionCatalog';
@@ -30,7 +31,7 @@ export function useCatalogReveal(apiPort: number, request: CatalogRevealRequest 
         if (!active) return;
         request.signal.throwIfAborted();
         if (breadcrumb.items.at(-1)?.node_id !== request.nodeId || breadcrumb.items.at(-1)?.kind !== 'folder') {
-          throw new Error(`文件夹命中已失效：${request.nodeId}`);
+          throw new Error(t('navigation.catalog.folderHitExpired', request.nodeId));
         }
         await revealSearchResult(gatewayWorkspaceKey(request.target), breadcrumb.items.map(item => item.node_id), 'folder');
         if (active && !request.signal.aborted) setMountedRequest(request);
@@ -41,7 +42,7 @@ export function useCatalogReveal(apiPort: number, request: CatalogRevealRequest 
 
   const reveal = useCallback((element: HTMLButtonElement | null) => {
     if (!element || !request || mountedRequest !== request || request.signal.aborted) return;
-    if (element.disabled) { request.fail(new Error(`文件夹正在删除：${request.nodeId}`)); return; }
+    if (element.disabled) { request.fail(new Error(t('navigation.catalog.folderDeleting', request.nodeId))); return; }
     element.scrollIntoView({ block: 'nearest' });
     if (request.focus) element.focus({ preventScroll: true });
     request.complete();

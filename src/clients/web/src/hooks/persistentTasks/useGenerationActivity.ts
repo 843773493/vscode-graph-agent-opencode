@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listPersistentTaskRuns, type PersistentTaskDTO } from "../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
@@ -35,7 +36,7 @@ export function useGenerationActivity(port: number, target: GatewayWorkspaceRequ
             const terminal = isTerminal(run.phase) && !isTerminal(before?.phase ?? "");
             const started = output && !before?.sessionId;
             const open = (started && policy.on_run_started === "open_generated") || (terminal && (policy.on_run_completed === "open_generated" || (policy.on_run_completed === "open_on_failure" && run.phase === "failed")));
-            if (terminal && policy.on_run_completed === "notify") actions.current.onStatusChange(`${task.configuration!.name}：${result?.error ?? run.error ?? (run.phase === "delivered" ? "已完成" : status)}`);
+            if (terminal && policy.on_run_completed === "notify") actions.current.onStatusChange(t("tasks.generation.notification", task.configuration!.name, result?.error ?? run.error ?? (run.phase === "delivered" ? t("tasks.state.complete") : status)));
             if (open && output) await actions.current.onOpenSession(output.session_id);
             if (controller.signal.aborted) return;
           }
@@ -44,7 +45,7 @@ export function useGenerationActivity(port: number, target: GatewayWorkspaceRequ
         if (!controller.signal.aborted) setError((previous) => previous.seen === seen && previous.text === null ? previous : { seen, text: null });
       } catch (cause) {
         if (!controller.signal.aborted) {
-          const text = `读取会话动作状态失败：${errorMessage(cause)}`;
+          const text = t("tasks.generation.readFailed", errorMessage(cause));
           setError((previous) => previous.seen === seen && previous.text === text ? previous : { seen, text });
         }
       }

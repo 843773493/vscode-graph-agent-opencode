@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { Emitter } from '../../upstream/src/vs/base/common/event.js';
@@ -43,7 +44,7 @@ export function parseSettingsLocation(value: unknown): TargetSettingsLocation {
   const location = object(value);
   if (location.version !== 2 || !['gateway_id', 'source_key', 'name'].every(key => typeof location[key] === 'string' && location[key])
     || location.workspace_id !== undefined && (typeof location.workspace_id !== 'string' || !location.workspace_id)
-    || location.gateway_connection_id !== undefined && typeof location.gateway_connection_id !== 'string') throw new Error('设置历史缺少正式来源和目标，请重新选择设置来源');
+    || location.gateway_connection_id !== undefined && typeof location.gateway_connection_id !== 'string') throw new Error(t('settings.editor.historyMissingTarget'));
   return { version: 2, gateway_id: location.gateway_id as string, source_key: location.source_key as string, name: location.name as string,
     workspace_id: location.workspace_id as string | undefined, gateway_connection_id: location.gateway_connection_id as string | undefined };
 }
@@ -55,7 +56,7 @@ Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefin
   const frozen = { ...target };
   const controller = new AbortController(), cancellation = new CancellationTokenSource(token);
   const cancelled = cancellation.token.onCancellationRequested(() => controller.abort(new CancellationError()));
-  const invalidate = () => { controller.abort(new Error('Gateway 或访问凭据已改变，请重新打开设置来源')); cancellation.cancel(); };
+  const invalidate = () => { controller.abort(new Error(t('settings.editor.sourceTargetChanged'))); cancellation.cancel(); };
   const release = onGatewayTokenInvalidated(0, invalidate);
   const initial = workspaceContext.getSnapshot();
   const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate(); });
@@ -65,20 +66,20 @@ Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefin
     controller.signal.throwIfAborted();
     const refreshed = workspaceContext.getSnapshot();
     if (refreshed.error) throw new Error(refreshed.error);
-    if (refreshed.loading || !refreshed.gatewayId) throw new Error('Gateway 工作区目标尚未完成刷新');
+    if (refreshed.loading || !refreshed.gatewayId) throw new Error(t('settings.editor.targetsNotRefreshed'));
     const workspaces = refreshed.workspaces;
-    const scope = await quick.pick([{ label: 'Gateway 配置', description: frozen.name, detail: frozen.gateway_id, workspaceId: undefined as string | undefined },
+    const scope = await quick.pick([{ label: t('settings.editor.gatewayConfiguration'), description: frozen.name, detail: frozen.gateway_id, workspaceId: undefined as string | undefined },
       ...workspaces.filter(workspace => workspace.gateway_id === frozen.gateway_id).map(workspace => ({ label: workspace.name,
-        description: '工作区 · ' + workspace.status, detail: workspace.workspace_id, workspaceId: workspace.workspace_id }))],
-    { title: '选择设置来源的所属目标', prompt: `Gateway ${frozen.gateway_id}`, placeHolder: '读取来源不启动 Backend 或插件；离线来源由原 owner 明确报错' }, cancellation.token);
+        description: t('settings.editor.workspacePrefix') + workspace.status, detail: workspace.workspace_id, workspaceId: workspace.workspace_id }))],
+    { title: t('settings.editor.chooseTarget'), prompt: `Gateway ${frozen.gateway_id}`, placeHolder: t('settings.editor.readSourceBoundary') }, cancellation.token);
     controller.signal.throwIfAborted();
     if (!scope) return;
     const owner = new ConfigurationSourceOwner({ gateway_id: frozen.gateway_id, gateway_connection_id: frozen.gateway_connection_id, workspace_id: scope.workspaceId });
     const listed = await owner.list(controller.signal);
     controller.signal.throwIfAborted();
     const selected = await quick.pick(listed.sources.filter(source => source.source_key).map(source => ({ label: source.source_key!,
-      description: `${source.layer} · ${source.presence} · 优先级 ${source.precedence}`, detail: source.uri ?? undefined })),
-    { title: '选择正式配置来源', prompt: `${frozen.gateway_id} · ${scope.label}`, placeHolder: '内置与只读来源仍可查看；保存仅经原预检与 CAS' }, cancellation.token);
+      description: t('settings.editor.layerPresencePriority', source.layer, source.presence, source.precedence), detail: source.uri ?? undefined })),
+    { title: t('settings.editor.chooseFormalSource'), prompt: `${frozen.gateway_id} · ${scope.label}`, placeHolder: t('settings.editor.sourceAccessBoundary') }, cancellation.token);
     controller.signal.throwIfAborted();
     if (!selected) return;
     const document = await owner.read(selected.label, undefined, controller.signal);
@@ -90,7 +91,7 @@ Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefin
 /** 原 Settings2EditorModel 的目标局部 schema 投影；不注册全局业务配置。 */
 class SourceDefaults extends DefaultSettings {
   constructor(private readonly source: SourceSettings, ...args: ConstructorParameters<typeof DefaultSettings>) { super(...args); }
-  override getSettingsGroups(): ISettingsGroup[] { return [{ id: 'mostCommonlyUsed', title: '常用', sections: [], range: nullRange, titleRange: nullRange }, ...this.source.groups]; }
+  override getSettingsGroups(): ISettingsGroup[] { return [{ id: 'mostCommonlyUsed', title: t('settings.editor.commonlyUsed'), sections: [], range: nullRange, titleRange: nullRange }, ...this.source.groups]; }
   override getRegisteredGroups(): ISettingsGroup[] { return this.source.groups; }
 }
 
@@ -146,7 +147,7 @@ export class SourceSettings extends Disposable {
     const field = this.fields.get(key);
     if (!field || language) return {};
     const errors: ParseError[] = [], payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);
-    if (errors.length) throw new Error('来源草稿 JSONC 无效，请打开来源修正后继续编辑表单');
+    if (errors.length) throw new Error(t('settings.editor.invalidDraftForForm'));
     const local = at(payload, field.path), effective = at(this.document.source_effective, field.path);
     const selected = this.document.layers.find(layer => layer.source_key === this.location.source_key);
     let inherited = field.schema.default;
@@ -158,14 +159,14 @@ export class SourceSettings extends Disposable {
       value: local !== undefined ? local : effective, default: { value: inherited } };
   }
   edit(key: string, value: unknown, language?: string): void {
-    if (language) throw new Error('业务配置不支持语言覆盖，请清除 @lang 过滤');
+    if (language) throw new Error(t('settings.editor.noLanguageOverride'));
     const field = this.fields.get(key);
-    if (!field) throw new Error('设置不属于当前来源 schema');
-    if (!this.document.writable) throw new Error('当前配置来源只读');
-    if (field.schema.writeOnly === true) throw new Error('秘密参数请使用受保护的插件参数入口');
+    if (!field) throw new Error(t('settings.editor.fieldOutsideSchema'));
+    if (!this.document.writable) throw new Error(t('settings.editor.currentSourceReadOnly'));
+    if (field.schema.writeOnly === true) throw new Error(t('settings.editor.useProtectedSecretInput'));
     const text = this.model.textEditorModel!, source = text.getValue(), errors: ParseError[] = [];
     parse(source, errors);
-    if (errors.length) throw new Error('来源草稿 JSONC 无效，未修改正文');
+    if (errors.length) throw new Error(t('settings.editor.invalidDraftUnchanged'));
     const edits = setProperty(source, field.path, value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
     text.pushEditOperations(null, [{ range: text.getFullModelRange(), text: applyEdits(source, edits) }], () => null);
   }
@@ -173,7 +174,7 @@ export class SourceSettings extends Disposable {
     this.fields.clear();
     this.groups.length = 0;
     const root = this.document.json_schema;
-    if (!root) throw new Error('配置 owner 没有返回来源 schema');
+    if (!root) throw new Error(t('settings.editor.schemaMissing'));
     const visit = (schema: Schema, path: string[], fields: ISetting[], schemaRoot: Schema) => {
       if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#/')) schema = object(at(schemaRoot, schema.$ref.slice(2).split('/').map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))));
       const properties = object(schema.properties);
@@ -185,7 +186,7 @@ export class SourceSettings extends Disposable {
       // 点分键只作原设置树身份；保留真实 JSON 路径，避免包 ID 中的点与层级碰撞。
       const key = path.map(part => encodeURIComponent(part).replaceAll('.', '%2E')).join('.'), secret = schema.writeOnly === true;
       const setting: ISetting = { key, title: typeof schema.title === 'string' ? schema.title : path.at(-1), value: schema.default,
-        description: [typeof schema.description === 'string' ? schema.description : '', ...(secret ? ['秘密值不回显；请使用“编辑目标插件参数”管理秘密。'] : [])],
+        description: [typeof schema.description === 'string' ? schema.description : '', ...(secret ? [t('settings.editor.secretInputDescription')] : [])],
         descriptionRanges: [], range: nullRange, keyRange: nullRange, valueRange: nullRange, overrides: [], scope: ConfigurationScope.MACHINE,
         type: secret ? undefined : schema.type as string | string[] | undefined, enum: schema.enum as string[] | undefined,
         arrayItemType: typeof object(schema.items).type === 'string' ? object(schema.items).type as string : undefined };
@@ -199,7 +200,7 @@ export class SourceSettings extends Disposable {
     const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
     for (const plugin of this.schemas?.plugins ?? []) {
       if (!Array.isArray(bindings) || !bindings.some(binding => binding?.package_id === plugin.package_id && binding?.plugin_id === plugin.plugin_id && binding?.package_version === plugin.package_version)) continue;
-      if (!plugin.configuration_schema) throw new Error('安装清单缺少配置 schema');
+      if (!plugin.configuration_schema) throw new Error(t('settings.editor.manifestSchemaMissing'));
       const settings: ISetting[] = [];
       visit(plugin.configuration_schema, ['plugins', 'configuration', 'values', plugin.package_id, plugin.plugin_id], settings, plugin.configuration_schema);
       for (const setting of settings) setting.extensionInfo = { id: `${plugin.package_id}/${plugin.plugin_id}`, displayName: plugin.name };
@@ -228,7 +229,7 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
     controller.signal.throwIfAborted();
     const textFiles = parent.invokeFunction(accessor => accessor.get(ITextFileService)).files;
     const model = textFiles.get(resource);
-    if (!model) throw new Error('设置来源没有原文本文件模型');
+    if (!model) throw new Error(t('settings.editor.textModelMissing'));
     const notifications = parent.invokeFunction(accessor => accessor.get(INotificationService));
     const initial = Promise.withResolvers<void>();
     let source: SourceSettings | undefined, schemas: PluginConfigurationSchemasDTO | undefined;

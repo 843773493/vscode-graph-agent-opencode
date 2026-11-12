@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -65,7 +66,7 @@ export default function WorkspaceMarkdownRenderer({
             </a>
           );
         },
-        img: ({ src, alt = "图片", title }) => src ? (
+        img: ({ src, alt = t("workspace.markdown.image"), title }) => src ? (
           <WorkspaceMarkdownImage
             apiPort={apiPort}
             workspaceId={workspaceId}
@@ -74,7 +75,7 @@ export default function WorkspaceMarkdownRenderer({
             alt={alt}
             title={title ?? undefined}
           />
-        ) : <span className="workspace-markdown-image-error">{alt}: 缺少图片地址</span>,
+        ) : <span className="workspace-markdown-image-error">{t("workspace.markdown.imageMissingSource", alt)}</span>,
         code: ({ className, children }) => {
           const source = String(children).replace(/\n$/, "");
           if (className === "language-mermaid") {

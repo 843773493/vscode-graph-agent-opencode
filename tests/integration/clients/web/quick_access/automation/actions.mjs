@@ -82,7 +82,7 @@ try {
       await expect(quick).toContainText('选择快速访问搜索范围');
       await quick.locator('.monaco-list-row').filter({ hasText: a.workspace_id }).getByRole('checkbox').uncheck();
       await quick.locator('.monaco-list-row').filter({ hasText: owner.workspace_id }).getByRole('checkbox').check();
-      await quick.getByRole('button', { name: 'OK', exact: true }).click();
+      await quick.getByRole('button', { name: '确定', exact: true }).click();
       await expect(input).toHaveValue('automation Needle');
     }
     await expect(quick.locator('.monaco-list-row').filter({ hasText: owner?.workspace_id ?? a.workspace_id }).filter({ hasText: 'Needle 自动化' })).toBeVisible();

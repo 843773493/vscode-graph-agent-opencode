@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import React, { useMemo, useState } from "react";
 import { formatDateTime } from "../../../utils/format";
 import { isRecord, prettyJson } from "../../../utils/jsonDisplay";
@@ -16,9 +17,9 @@ import type { LLMRequestLogRecord } from "../../../types/backend";
 
 function compactCount(value: number): string {
   if (value < 1000) {
-    return String(value);
+    return formatNumber(value);
   }
-  return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}k`;
+  return `${formatNumber(value / 1000, { minimumFractionDigits: value < 10_000 ? 1 : 0, maximumFractionDigits: value < 10_000 ? 1 : 0 })}k`;
 }
 
 function RequestCalledToolSummary({ toolNames }: { toolNames: string[] }) {
@@ -33,8 +34,8 @@ function RequestCalledToolSummary({ toolNames }: { toolNames: string[] }) {
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span>本次调用工具</span>
-        <span>{toolNames.length} 个</span>
+        <span>{t("inspection.request.calledTools")}</span>
+        <span>{t("inspection.request.count", formatNumber(toolNames.length))}</span>
       </button>
       {open ? (
         toolNames.length > 0 ? (
@@ -46,7 +47,7 @@ function RequestCalledToolSummary({ toolNames }: { toolNames: string[] }) {
             ))}
           </div>
         ) : (
-          <div className="request-log-tool-empty">本次没有调用工具</div>
+          <div className="request-log-tool-empty">{t("inspection.request.noCalledTools")}</div>
         )
       ) : null}
     </section>
@@ -71,9 +72,9 @@ function PromptComponentCard({
       >
         <span className="request-replay-component-title">{component.label}</span>
         <span>{component.source}</span>
-        <span>{component.operation === "replace" ? "替换快照" : "追加"}</span>
-        <span>{component.blockCount} 块</span>
-        <span>{compactCount(component.charCount)} 字符</span>
+        <span>{component.operation === "replace" ? t("inspection.request.replaceSnapshot") : t("inspection.request.append")}</span>
+        <span>{t("inspection.request.blocks", formatNumber(component.blockCount))}</span>
+        <span>{t("inspection.request.characters", compactCount(component.charCount))}</span>
       </button>
       {open ? <pre>{requestPromptComponentText(component)}</pre> : null}
     </section>
@@ -93,8 +94,8 @@ function ToolDefinitionCard({ tool }: { tool: RequestToolDefinitionDisplay }) {
         onClick={() => setOpen((current) => !current)}
       >
         <code>{tool.name}</code>
-        <span>{tool.schemaFieldCount} 个 schema 顶层字段</span>
-        {tool.description ? <span>{tool.description.length} 字符说明</span> : null}
+        <span>{t("inspection.request.schemaFields", formatNumber(tool.schemaFieldCount))}</span>
+        {tool.description ? <span>{t("inspection.request.descriptionCharacters", formatNumber(tool.description.length))}</span> : null}
       </button>
       {open ? <pre>{prettyJson(tool.definition)}</pre> : null}
     </section>
@@ -114,8 +115,8 @@ function ReplayToolsCard({ replay }: { replay: RequestReplayDisplay }) {
         onClick={() => setOpen((current) => !current)}
       >
         <span className="request-replay-component-title">Tools</span>
-        <span>{replay.tools.length} 个</span>
-        <span>{compactCount(replay.toolSchemaCharCount)} schema 字符</span>
+        <span>{t("inspection.request.count", formatNumber(replay.tools.length))}</span>
+        <span>{t("inspection.request.schemaCharacters", compactCount(replay.toolSchemaCharCount))}</span>
       </button>
       {open ? (
         <div className="request-replay-tool-list">
@@ -140,11 +141,11 @@ function RequestReplayCard({ replay }: { replay: RequestReplayDisplay }) {
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className="request-log-summary-title">请求组成</span>
-        <span>{replay.promptComponents.length} 个 Prompt 组成</span>
-        <span>{replay.tools.length} 个 Tools</span>
-        <span>{compactCount(replay.systemPromptCharCount)} Prompt 字符</span>
-        {replay.legacy ? <span className="request-log-legacy">旧日志：来源未记录</span> : null}
+        <span className="request-log-summary-title">{t("inspection.request.composition")}</span>
+        <span>{t("inspection.request.promptComponents", formatNumber(replay.promptComponents.length))}</span>
+        <span>{t("inspection.request.tools", formatNumber(replay.tools.length))}</span>
+        <span>{t("inspection.request.promptCharacters", compactCount(replay.systemPromptCharCount))}</span>
+        {replay.legacy ? <span className="request-log-legacy">{t("inspection.request.legacySource")}</span> : null}
       </button>
       {open ? (
         <div className="request-replay-list">
@@ -177,7 +178,8 @@ function LazyFullLogJson({ log }: { log: LLMRequestLogRecord }) {
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        完整日志 JSON（连续文本增量合并展示）
+
+        {t("inspection.request.fullJson")}
       </button>
       {open ? <pre>{text}</pre> : null}
     </section>
@@ -200,26 +202,26 @@ function UpstreamAttemptCard({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className="request-replay-component-title">上游尝试 {index + 1}</span>
+        <span className="request-replay-component-title">{t("inspection.request.attempt", formatNumber(index + 1))}</span>
         <span>{attempt.callType}</span>
         <span>{attempt.provider}</span>
         <code>{attempt.model}</code>
-        {attempt.error ? <span className="request-log-upstream-error">失败</span> : null}
+        {attempt.error ? <span className="request-log-upstream-error">{t("inspection.request.failed")}</span> : null}
       </button>
       {open ? (
         <div className="request-log-upstream-payloads">
           {attempt.apiBase ? <div className="panel-meta">endpoint: {attempt.apiBase}</div> : null}
           <section>
-            <strong>最终上游请求（认证信息已脱敏）</strong>
+            <strong>{t("inspection.request.upstreamRequest")}</strong>
             <pre>{prettyJson(attempt.request)}</pre>
           </section>
           <section>
-            <strong>上游原始响应</strong>
+            <strong>{t("inspection.request.upstreamResponse")}</strong>
             <pre>{prettyJson(attempt.response)}</pre>
           </section>
           {attempt.error ? (
             <section className="request-log-upstream-error">
-              <strong>上游错误</strong>
+              <strong>{t("inspection.request.upstreamError")}</strong>
               <pre>{prettyJson(attempt.error)}</pre>
             </section>
           ) : null}
@@ -251,9 +253,9 @@ function UpstreamExchangeCard({ log }: { log: LLMRequestLogRecord }) {
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span className="request-log-summary-title">上游实际请求 / 响应</span>
-        <span>{attemptCount} 次尝试</span>
-        {attemptCount === 0 ? <span className="request-log-legacy">旧日志未采集</span> : null}
+        <span className="request-log-summary-title">{t("inspection.request.upstream")}</span>
+        <span>{t("inspection.request.attempts", formatNumber(attemptCount))}</span>
+        {attemptCount === 0 ? <span className="request-log-legacy">{t("inspection.request.legacyUpstream")}</span> : null}
       </button>
       {open ? (
         <div className="request-log-upstream-list">
@@ -297,16 +299,16 @@ const RequestLogCard = React.memo(function RequestLogCard({
         onClick={() => { if (open && onClose) onClose(); else setOpen(!open); }}
       >
         <span className="request-log-card-heading">
-          <span className="panel-index">{chronologicalIndex === undefined ? log.file_name : `第 ${chronologicalIndex + 1} 次`}</span>
+          <span className="panel-index">{chronologicalIndex === undefined ? log.file_name : t("inspection.request.ordinal", formatNumber(chronologicalIndex + 1))}</span>
           <span className="panel-type">{display.model}</span>
           {timestamp ? <span>{timestamp}</span> : null}
         </span>
         <span className="request-log-card-stats">
-          <span>{display.phaseLabel}</span>
-          <span>{replay.messageCount} 条消息</span>
-          <span>{replay.promptComponents.length} 段 Prompt</span>
-          <span>{display.toolNames.length} 个 Tools</span>
-          <span>{display.calledToolNames.length} 次调用</span>
+          <span>{t(`inspection.request.phase.${display.phase}`)}</span>
+          <span>{t("inspection.request.messages", formatNumber(replay.messageCount))}</span>
+          <span>{t("inspection.request.promptSegments", formatNumber(replay.promptComponents.length))}</span>
+          <span>{t("inspection.request.tools", formatNumber(display.toolNames.length))}</span>
+          <span>{t("inspection.request.calls", formatNumber(display.calledToolNames.length))}</span>
         </span>
       </button>
 
@@ -315,20 +317,20 @@ const RequestLogCard = React.memo(function RequestLogCard({
           <div className="panel-meta">
             {log.job_id ? <span>job: {log.job_id}</span> : null}
             <span>file: {log.file_name}</span>
-            <span>响应消息: {display.responseMessageCount}</span>
+            <span>{t("inspection.request.responseMessages", formatNumber(display.responseMessageCount))}</span>
           </div>
 
           <div className="request-log-summary">
-            <div className="request-log-summary-label">响应预览</div>
+            <div className="request-log-summary-label">{t("inspection.request.preview")}</div>
             <div
               aria-label={
-                display.responseText ? `响应预览：${display.responseText}` : undefined
+                display.responseText ? t("inspection.request.previewAria", display.responseText) : undefined
               }
             >
               {display.responseText ||
-                (display.phaseLabel === "工具调用请求"
-                  ? "模型在本次请求中选择调用工具，因此没有自然语言正文。"
-                  : "本次是链路中的中间请求，没有可读自然语言正文。")}
+                (display.phase === "tool_call"
+                  ? t("inspection.request.toolCallEmpty")
+                  : t("inspection.request.intermediateEmpty"))}
             </div>
           </div>
 

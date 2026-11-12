@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { normalizeDisplayText } from "../../utils/displayText";
 import { isRecord, redactLargeData } from "../../utils/jsonDisplay";
 import {
@@ -91,7 +92,7 @@ export function parseAgentStateJsonlLines(jsonl: string): AgentStateJsonlLine[] 
 export function agentStateInvalidLineNote(
   line: Extract<AgentStateJsonlLine, { ok: false }>,
 ): string {
-  return `[[第 ${line.lineNumber} 行解析失败：${line.message}；原文片段：${line.raw}]]`;
+  return t("inspection.state.invalidLine", line.lineNumber, line.message, line.raw);
 }
 
 function formatAgentStateLineForDisplay(line: AgentStateJsonlLine): string {

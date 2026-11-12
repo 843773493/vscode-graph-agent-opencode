@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import type { TraceEvent } from "../../types/backend";
 import type { ConversationView } from "../../types/frontend";
 import {
@@ -435,10 +436,10 @@ export function buildPendingStatusItem(
     return {
       kind: "status",
       id: `${conv.conversationId}-model-output`,
-      title: activeState.phase === "reasoning" ? "正在思考" : "正在生成回复",
+      title: activeState.phase === "reasoning" ? t("chat.thinking.active") : t("chat.pending.generating"),
       detail: activeState.phase === "reasoning"
-        ? "模型正在生成思考内容。"
-        : "模型正在生成最终回复。",
+        ? t("chat.pending.reasoningDetail")
+        : t("chat.pending.generatingDetail"),
       timestamp,
     };
   }
@@ -447,8 +448,8 @@ export function buildPendingStatusItem(
     return {
       kind: "status",
       id: `${conv.conversationId}-tool-call`,
-      title: "正在准备工具调用",
-      detail: "正在接收工具参数，尚未开始执行工具。",
+      title: t("chat.pending.toolCall"),
+      detail: t("chat.pending.toolCallDetail"),
       timestamp,
     };
   }
@@ -457,8 +458,8 @@ export function buildPendingStatusItem(
     return {
       kind: "status",
       id: `${conv.conversationId}-tool-execution`,
-      title: "正在运行工具",
-      detail: "工具执行尚未完成，结果可能仍在返回。",
+      title: t("chat.pending.toolRunning"),
+      detail: t("chat.pending.toolRunningDetail"),
       timestamp,
     };
   }
@@ -467,8 +468,8 @@ export function buildPendingStatusItem(
     return {
       kind: "status",
       id: `${conv.conversationId}-queued`,
-      title: "已排队",
-      detail: "上一轮还在执行，这条消息会自动接着运行。",
+      title: t("chat.pending.queued"),
+      detail: t("chat.pending.queuedDetail"),
       timestamp,
     };
   }
@@ -478,19 +479,19 @@ export function buildPendingStatusItem(
     return {
       kind: "status",
       id: `${conv.conversationId}-llm-request`,
-      title: "模型响应中",
-      detail: model ? `正在请求模型：${model}` : "正在请求模型。",
+      title: t("chat.pending.model"),
+      detail: model ? t("chat.pending.modelRequestNamed", model) : t("chat.pending.modelRequest"),
       timestamp,
     };
   }
 
   if (lastEvent?.type === "tool_call_start") {
-    const toolName = getOptionalString(lastPayload, "tool_name") || "工具";
+    const toolName = getOptionalString(lastPayload, "tool_name") || t("chat.pending.tool");
     return {
       kind: "status",
       id: `${conv.conversationId}-tool-running`,
-      title: "工具执行中",
-      detail: `正在调用 ${toolName}。`,
+      title: t("chat.pending.toolExecuting"),
+      detail: t("chat.pending.toolCalling", toolName),
       timestamp,
     };
   }
@@ -498,8 +499,8 @@ export function buildPendingStatusItem(
   return {
     kind: "status",
     id: `${conv.conversationId}-running`,
-    title: "正在处理",
-    detail: "请求已发送，正在等待事件流返回。",
+    title: t("chat.activity.running"),
+    detail: t("chat.pending.waitingStream"),
     timestamp,
   };
 }

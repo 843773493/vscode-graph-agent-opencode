@@ -1,3 +1,5 @@
+import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
+import { t } from '../../../shared/core/i18n/index.js';
 import { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
 import type { IJSONSchema } from '../../upstream/src/vs/base/common/jsonSchema.js';
 import { Action2, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
@@ -15,11 +17,11 @@ import { PluginDebugAdapter, launchContext, type PluginDebugConfiguration } from
 const adapterFactory: IDebugAdapterFactory = {
   createDebugAdapter: session => new PluginDebugAdapter(session),
   async substituteVariables(_folder, config) { launchContext(config); return config; },
-  async runInTerminal() { throw new Error('当前调试器未声明 runInTerminal 能力'); },
+  async runInTerminal() { throw new Error(t('workbench.debug.terminalUnavailable')); },
 };
 
 registerAction2(class StartPluginDebug extends Action2 {
-  constructor() { super({ id: 'boxteam.debug.start', title: { value: '调试：在 Thread 中启动 Node 脚本…', original: 'Debug: Start Node Script in Thread…' }, f1: true }); }
+  constructor() { super({ id: 'boxteam.debug.start', title: { value: t('workbench.debug.startScript'), original: actionTitles['workbench.debug.startScript'] }, f1: true }); }
 
   async run(accessor: ServicesAccessor): Promise<void> {
     const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService), debug = accessor.get(IDebugService);
@@ -28,28 +30,28 @@ registerAction2(class StartPluginDebug extends Action2 {
     const threads = editors.visibleEditorPanes.filter(pane => pane instanceof ThreadPane)
       .flatMap(pane => { const target = pane.threadTarget; return target ? [{ pane, target, owner: Object.freeze({ ...target.input.owner }) }] : []; });
     const originating = active instanceof ThreadPane ? threads.find(item => item.pane === active) : undefined;
-    if (active instanceof ThreadPane && !originating) throw new Error('发起 Thread 尚未就绪');
-    if (!threads.length) throw new Error('请先打开调试所属的 Thread');
+    if (active instanceof ThreadPane && !originating) throw new Error(t('workbench.debug.originNotReady'));
+    if (!threads.length) throw new Error(t('workbench.debug.openThreadFirst'));
     let invalidated = false;
     const releaseToken = onGatewayTokenInvalidated(0, () => { invalidated = true; });
     try {
       const selected = originating ?? await quick.pick(threads.map(item => ({ ...item, label: item.owner.title,
-        description: `${item.owner.gatewayId} · ${item.owner.workspaceId}`, detail: `${item.owner.sessionId} / ${item.owner.threadId}` })), { title: '选择调试所属的 Thread' });
+        description: `${item.owner.gatewayId} · ${item.owner.workspaceId}`, detail: `${item.owner.sessionId} / ${item.owner.threadId}` })), { title: t('workbench.debug.chooseThread') });
       if (!selected) return;
       const owner: Readonly<ThreadOwner> = selected.owner;
       const assertOwner = () => {
-        if (invalidated || selected.pane.threadTarget?.conversation !== selected.target.conversation) throw new Error('发起 Thread 或 Gateway 凭据已失效，请重新启动调试');
+        if (invalidated || selected.pane.threadTarget?.conversation !== selected.target.conversation) throw new Error(t('workbench.debug.originExpired'));
       };
       assertOwner();
       const published = await gateway.request<NodeDebugDebuggerContributionsDTO>(`/api/v1/debug/node/debugger-contributions?workspace_id=${encodeURIComponent(owner.workspaceId)}`, {}, owner.workspaceKey);
-      if (published.gateway_id !== owner.gatewayId || published.workspace_id !== owner.workspaceId) throw new Error('调试声明响应目标与发起 Thread 不一致');
-      if (!published.debuggers.length) throw new Error('目标工作区没有已就绪的调试插件；请先在目标插件管理中启用');
+      if (published.gateway_id !== owner.gatewayId || published.workspace_id !== owner.workspaceId) throw new Error(t('workbench.debug.declarationOwnerMismatch'));
+      if (!published.debuggers.length) throw new Error(t('workbench.debug.noReadyPlugin'));
       const chosen = published.debuggers.length === 1 ? published.debuggers[0] : (await quick.pick(published.debuggers.map(binding => ({ binding,
-        label: binding.label, description: `${binding.package_id}/${binding.plugin_id} · ${binding.package_version}` })), { title: '选择此目标的调试器' }))?.binding;
+        label: binding.label, description: `${binding.package_id}/${binding.plugin_id} · ${binding.package_version}` })), { title: t('workbench.debug.chooseDebugger') }))?.binding;
       if (!chosen) return;
       // 在异步配置读取、选择或变量解析前冻结完整声明及目标。
       const binding = Object.freeze(structuredClone(chosen));
-      if (binding.gateway_id !== owner.gatewayId || binding.workspace_id !== owner.workspaceId) throw new Error('调试器声明不属于发起 Thread');
+      if (binding.gateway_id !== owner.gatewayId || binding.workspace_id !== owner.workspaceId) throw new Error(t('workbench.debug.debuggerOwnerMismatch'));
       assertOwner();
       const query = new URLSearchParams({ session_id: owner.sessionId, thread_id: owner.threadId });
       const [configurations, roots] = await Promise.all([
@@ -58,11 +60,11 @@ registerAction2(class StartPluginDebug extends Action2 {
       ]);
       const picked = await quick.pick([
         ...configurations.map(configuration => ({ label: configuration.name, description: configuration.script_path, configuration })),
-        { label: '输入目标脚本路径…', description: '由目标工作区解释相对路径、绝对路径或资源 URI', configuration: undefined },
-      ], { title: `${binding.label} · ${owner.title}`, placeHolder: '使用此 Thread 的原调试方案或指定脚本' });
+        { label: t('workbench.debug.enterScript'), description: t('workbench.debug.scriptInputDescription'), configuration: undefined },
+      ], { title: `${binding.label} · ${owner.title}`, placeHolder: t('workbench.debug.configurationHint') });
       if (!picked) return;
       const configuration = picked.configuration;
-      const path = configuration?.script_path ?? await quick.input({ title: '目标 Node 脚本', prompt: `${owner.gatewayId} · ${owner.workspaceId}`, placeHolder: 'main.js / 目标机器绝对路径 / 资源 URI', validateInput: async value => value.trim() ? undefined : '请输入脚本路径' });
+      const path = configuration?.script_path ?? await quick.input({ title: t('workbench.debug.targetScript'), prompt: `${owner.gatewayId} · ${owner.workspaceId}`, placeHolder: t('workbench.debug.scriptPathHint'), validateInput: async value => value.trim() ? undefined : t('workbench.debug.scriptPathRequired') });
       if (!path) return;
       assertOwner();
       const start: NodeDebugStartRequest = { session_id: owner.sessionId, thread_id: owner.threadId, configuration_id: configuration?.configuration_id,

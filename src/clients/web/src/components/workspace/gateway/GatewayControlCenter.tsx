@@ -1,4 +1,5 @@
 import type { AppearanceBackground } from "../../../theme/theme";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   getGatewayHealth,
@@ -94,7 +95,7 @@ export default function GatewayControlCenter({
     try {
       await Promise.all([onRefresh(), loadHealth()]);
       setDeviceRevision((value) => value + 1);
-      setOperationNotice("连接状态已刷新。");
+      setOperationNotice(t("gateway.control.refreshed"));
     } catch (error) {
       setOperationError(errorMessage(error));
     } finally {
@@ -113,20 +114,19 @@ export default function GatewayControlCenter({
         // 服务重启期间连接失败是预期状态；继续等待新 Gateway 就绪。
       }
     }
-    throw new Error("本机开发服务在 120 秒内未恢复，请检查 development-restart.log");
+    throw new Error(t("gateway.control.restartTimedOut", 120));
   };
 
   const handleDevelopmentRestart = async () => {
     const accepted = await confirm({
-      title: "重启本机开发服务",
-      message:
-        "将重启 Web、Gateway、Terminal 前端和工作区运行时。当前页面会短暂断开，正在运行的 Agent 与终端可能被中断。",
-      confirmText: "确认重启",
+      title: t("gateway.control.restartTitle"),
+      message: t("gateway.control.restartDetail"),
+      confirmText: t("gateway.control.restartConfirm"),
     });
     if (!accepted) return;
     setRestartingDevelopment(true);
     setOperationError(null);
-    setOperationNotice("正在重启本机开发服务，恢复后将自动刷新页面…");
+    setOperationNotice(t("gateway.control.restarting"));
     try {
       const result = await restartDevelopmentRuntime(apiPort);
       await waitForRestartedGateway(result.previous_process_id);
@@ -140,9 +140,9 @@ export default function GatewayControlCenter({
 
   const reconnect = async (remote: GatewayRemoteConnectionSummary) => {
     const accepted = await confirm({
-      title: "重新连接远程 Gateway",
-      message: `重新连接“${remote.ssh_config_host ?? remote.host}”？\n\n该 Gateway 下的请求会短暂中断。`,
-      confirmText: "重新连接",
+      title: t("gateway.control.reconnectTitle"),
+      message: t("gateway.control.reconnectDetail", remote.ssh_config_host ?? remote.host),
+      confirmText: t("gateway.control.reconnect"),
     });
     if (!accepted) return;
     setReconnectingId(remote.gateway_connection_id);
@@ -153,7 +153,7 @@ export default function GatewayControlCenter({
       onRemoteGatewayReconnected(remote.gateway_connection_id);
       await onRefresh();
       await loadHealth();
-      setOperationNotice(`远程 Gateway「${remote.ssh_config_host ?? remote.host}」已重新连接。`);
+      setOperationNotice(t("gateway.control.reconnected", remote.ssh_config_host ?? remote.host));
     } catch (error) {
       setOperationError(errorMessage(error));
     } finally {
@@ -169,29 +169,29 @@ export default function GatewayControlCenter({
       <aside className="gateway-control-sidebar" data-bt-surface="chrome">
         <div className="gateway-control-brand">
           <span className="codicon codicon-server-process" aria-hidden="true" />
-          <div><strong>BoxTeam</strong><small>Local Control UI</small></div>
+          <div><strong>BoxTeam</strong><small>{t("gateway.control.brandSubtitle")}</small></div>
         </div>
-        <nav aria-label="Gateway 控制面导航">
+        <nav aria-label={t("gateway.control.navigation")}>
           <section>
-            <p>控制面</p>
+            <p>{t("gateway.control.section")}</p>
             <button type="button" className={activePage === "connections" ? "active" : undefined} aria-current={activePage === "connections" ? "page" : undefined} onClick={() => setActivePage("connections")}>
               <span className="codicon codicon-plug" aria-hidden="true" />
-              连接管理
+              {t("gateway.control.connections")}
               <small>{remoteGatewayGroups.length}</small>
             </button>
           </section>
           <section>
-            <p>系统</p>
-            <button type="button" className={activePage === "theme" ? "active" : undefined} aria-current={activePage === "theme" ? "page" : undefined} onClick={() => setActivePage("theme")}><span className="codicon codicon-color-mode" aria-hidden="true" />主题设置</button>
-            <button type="button" className={activePage === "runtime" ? "active" : undefined} aria-current={activePage === "runtime" ? "page" : undefined} onClick={() => setActivePage("runtime")}><span className="codicon codicon-pulse" aria-hidden="true" />服务运行时</button>
-            <button type="button" disabled><span className="codicon codicon-shield" aria-hidden="true" />连接与凭据</button>
-            <button type="button" className={activePage === "diagnostics" ? "active" : undefined} aria-current={activePage === "diagnostics" ? "page" : undefined} onClick={() => setActivePage("diagnostics")}><span className="codicon codicon-output" aria-hidden="true" />日志与诊断</button>
+            <p>{t("gateway.control.system")}</p>
+            <button type="button" className={activePage === "theme" ? "active" : undefined} aria-current={activePage === "theme" ? "page" : undefined} onClick={() => setActivePage("theme")}><span className="codicon codicon-color-mode" aria-hidden="true" />{t("gateway.control.theme")}</button>
+            <button type="button" className={activePage === "runtime" ? "active" : undefined} aria-current={activePage === "runtime" ? "page" : undefined} onClick={() => setActivePage("runtime")}><span className="codicon codicon-pulse" aria-hidden="true" />{t("gateway.control.runtime")}</button>
+            <button type="button" disabled><span className="codicon codicon-shield" aria-hidden="true" />{t("gateway.control.connectionsAndCredentials")}</button>
+            <button type="button" className={activePage === "diagnostics" ? "active" : undefined} aria-current={activePage === "diagnostics" ? "page" : undefined} onClick={() => setActivePage("diagnostics")}><span className="codicon codicon-output" aria-hidden="true" />{t("gateway.control.diagnostics")}</button>
           </section>
         </nav>
         <div className="gateway-control-sidebar-status">
-          <strong><span className={available ? undefined : "offline"} />{available ? "Gateway 正常" : "Gateway 异常"}</strong>
+          <strong><span className={available ? undefined : "offline"} />{available ? t("gateway.control.gatewayAvailable") : t("gateway.control.gatewayUnavailable")}</strong>
           <code>127.0.0.1:{apiPort}</code>
-          <small>{remoteGatewayGroups.length} 个远程 Gateway 连接</small>
+          <small>{t("gateway.control.remoteConnectionCount", remoteGatewayGroups.length)}</small>
         </div>
       </aside>
 
@@ -199,9 +199,9 @@ export default function GatewayControlCenter({
         <div className="gateway-control-content gateway-connections-content">
           <header className="gateway-control-header">
             <div>
-              <span>本地控制面</span>
-              <h1 id="gateway-control-title">{activePage === "connections" ? "连接管理" : activePage === "theme" ? "主题设置" : activePage === "runtime" ? "服务运行时" : "日志与诊断"}</h1>
-              <p>{activePage === "connections" ? "管理远程 Gateway、手机和其他外部设备的连接与授权。工作区请在会话工作台中管理。" : activePage === "theme" ? "统一切换界面配色并管理网络或本地背景图片。" : activePage === "runtime" ? "管理 Gateway 所拥有的 Backend 完整组，确认所有受影响工作区后操作。" : "从连接的 Gateway 逐层查看控制面和托管工作区的运行日志，定位连接、启动与代理问题。"}</p>
+              <span>{t("gateway.control.localControlPlane")}</span>
+              <h1 id="gateway-control-title">{activePage === "connections" ? t("gateway.control.connections") : activePage === "theme" ? t("gateway.control.theme") : activePage === "runtime" ? t("gateway.control.runtime") : t("gateway.control.diagnostics")}</h1>
+              <p>{activePage === "connections" ? t("gateway.control.connectionsDescription") : activePage === "theme" ? t("gateway.control.themeDescription") : activePage === "runtime" ? t("gateway.control.runtimeDescription") : t("gateway.control.diagnosticsDescription")}</p>
             </div>
             {activePage === "connections" ? <div className="gateway-control-actions">
               {health?.development_restart_available ? (
@@ -215,19 +215,19 @@ export default function GatewayControlCenter({
                     className={`codicon codicon-debug-restart${restartingDevelopment ? " codicon-modifier-spin" : ""}`}
                     aria-hidden="true"
                   />
-                  {restartingDevelopment ? "正在重启…" : "重启本机服务"}
+                  {restartingDevelopment ? t("gateway.control.restartingShort") : t("gateway.control.restartLocal")}
                 </button>
               ) : null}
               <button type="button" className="primary" onClick={() => setConnectionDialogMode("ssh")}>
-                <span className="codicon codicon-add" aria-hidden="true" />添加 SSH 连接
+                <span className="codicon codicon-add" aria-hidden="true" />{t("gateway.connection.addSsh")}
               </button>
-              <button type="button" className="icon-only" aria-label="刷新连接" title="刷新连接" disabled={refreshing} onClick={() => void handleRefresh()}>
+              <button type="button" className="icon-only" aria-label={t("gateway.control.refreshConnections")} title={t("gateway.control.refreshConnections")} disabled={refreshing} onClick={() => void handleRefresh()}>
                 <span className={`codicon codicon-refresh${refreshing ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
               </button>
             </div> : null}
           </header>
 
-          <Suspense fallback={<div role="status" aria-live="polite">正在加载控制面页面…</div>}>
+          <Suspense fallback={<div role="status" aria-live="polite">{t("gateway.control.loadingPage")}</div>}>
             {activePage === "theme" ? (
               <GatewayThemeSettings apiPort={apiPort} background={background} onUpdateBackground={onUpdateBackground} onSelectColorTheme={onSelectColorTheme} />
             ) : activePage === "runtime" ? (
@@ -242,10 +242,10 @@ export default function GatewayControlCenter({
               <div
                 className="gateway-console-feedback error"
                 role="alert"
-                title={`连接操作失败：${feedbackError}`}
+                title={t("gateway.control.operationFailed", feedbackError)}
               >
                 <span className="codicon codicon-error" aria-hidden="true" />
-                <strong>连接操作失败</strong>
+                <strong>{t("gateway.control.operationFailedTitle")}</strong>
                 <span className="gateway-console-feedback-message">{feedbackError}</span>
               </div>
             ) : null}
@@ -261,21 +261,21 @@ export default function GatewayControlCenter({
             ) : null}
           </div>
 
-          <section className="gateway-local-connection-card" aria-label="本机 Gateway 连接">
+          <section className="gateway-local-connection-card" aria-label={t("gateway.control.localGatewayConnection")}>
             <span className="gateway-device-icon"><span className="codicon codicon-device-desktop" aria-hidden="true" /></span>
-            <div><div><strong>本机 Gateway</strong><span className={`gateway-authorization-status ${available ? "authorized" : "expired"}`}>{available ? "可用" : "异常"}</span></div><small>127.0.0.1:{apiPort} · 当前控制面</small></div>
+            <div><div><strong>{t("gateway.control.localGateway")}</strong><span className={`gateway-authorization-status ${available ? "authorized" : "expired"}`}>{available ? t("gateway.control.available") : t("gateway.control.errorStatus")}</span></div><small>{t("gateway.control.localEndpoint", `127.0.0.1:${apiPort}`)}</small></div>
           </section>
 
           <section className="gateway-connection-section" aria-labelledby="remote-gateway-connections-title">
             <div className="gateway-connection-section-heading">
-              <div><h2 id="remote-gateway-connections-title">远程 Gateway</h2><p>通过 SSH 隧道连接其他电脑上的 Gateway。</p></div>
-              <span>{remoteGatewayGroups.length} 个连接</span>
+              <div><h2 id="remote-gateway-connections-title">{t("gateway.control.remoteGateways")}</h2><p>{t("gateway.control.remoteDescription")}</p></div>
+              <span>{t("gateway.control.connectionCount", remoteGatewayGroups.length)}</span>
             </div>
             {remoteGatewayGroups.length > 0 ? (
               <div className="gateway-remote-connection-list">
                 {remoteGatewayGroups.map((group) => {
                   const remote = group.remote;
-                  if (!remote) throw new Error(`远程 Gateway 分组 ${group.key} 缺少连接摘要`);
+                  if (!remote) throw new Error(t("gateway.control.remoteGatewaySummaryMissing", group.key));
                   const connectionError = group.workspaces.find(
                     (item) => item.connection_error,
                   )?.connection_error;
@@ -285,17 +285,17 @@ export default function GatewayControlCenter({
                     <article key={group.key}>
                       <span className="gateway-device-icon"><span className="codicon codicon-remote" aria-hidden="true" /></span>
                       <div className="gateway-device-copy">
-                        <div><strong>{group.title}</strong><span className={`gateway-authorization-status ${ready ? "authorized" : "expired"}`}>{ready ? "已连接" : "连接异常"}</span></div>
+                        <div><strong>{group.title}</strong><span className={`gateway-authorization-status ${ready ? "authorized" : "expired"}`}>{ready ? t("gateway.control.connected") : t("gateway.control.connectionError")}</span></div>
                         <small>{connectionError ?? group.connectionLabel}</small>
                         <code title={remote.gateway_id}>{remote.gateway_id}</code>
                       </div>
-                      <div className="gateway-remote-connection-meta"><span>{group.workspaces.length} 个工作区</span><button type="button" disabled={isReconnecting} onClick={() => void reconnect(remote)}>{isReconnecting ? "连接中…" : "重新连接"}</button></div>
+                      <div className="gateway-remote-connection-meta"><span>{t("gateway.control.workspaceCount", group.workspaces.length)}</span><button type="button" disabled={isReconnecting} onClick={() => void reconnect(remote)}>{isReconnecting ? t("gateway.control.connecting") : t("gateway.control.reconnect")}</button></div>
                     </article>
                   );
                 })}
               </div>
             ) : (
-              <div className="gateway-connection-empty"><span className="codicon codicon-remote" aria-hidden="true" /><strong>尚未连接远程 Gateway</strong><p>点击“添加 SSH 连接”，从 ~/.ssh/config 选择远程主机或手动添加。</p></div>
+              <div className="gateway-connection-empty"><span className="codicon codicon-remote" aria-hidden="true" /><strong>{t("gateway.control.noRemoteConnections")}</strong><p>{t("gateway.control.noRemoteConnectionsDetail")}</p></div>
             )}
           </section>
 
@@ -314,7 +314,7 @@ export default function GatewayControlCenter({
           <div className="gateway-connection-overlay" role="presentation">
             <div className="gateway-connection-backdrop" aria-hidden="true" />
             <div className="gateway-connection-dialog" role="status" aria-live="polite">
-              正在加载连接对话框…
+              {t("gateway.connection.loadingDialog")}
             </div>
           </div>
         )}>

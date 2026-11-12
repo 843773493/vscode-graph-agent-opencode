@@ -1,4 +1,5 @@
 import React from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import {
   addSessionFileTreeShortcut,
   getSessionAttachmentBlob,
@@ -10,7 +11,7 @@ import { errorMessage } from "../../../utils/errorMessage";
 const MAX_TEXT_PREVIEW_CODE_UNITS = 200_000;
 
 function attachmentName(attachment: AttachmentRef): string {
-  return attachment.name || attachment.file_id || "附件";
+  return attachment.name || attachment.file_id || t("workspace.attachment.nameFallback");
 }
 
 function isTextContent(contentType: string): boolean {
@@ -100,7 +101,7 @@ export default function WorkspaceAttachmentPreview({
     setShortcutAdded(false);
     try {
       await addSessionFileTreeShortcut(apiPort, sessionId, {
-        path: attachment.directory_uri, label: `附件：${name}`,
+        path: attachment.directory_uri, label: t("workspace.attachment.directoryShortcutLabel", name),
       }, workspaceId);
       setShortcutAdded(true);
     } catch (reason: unknown) {
@@ -113,7 +114,7 @@ export default function WorkspaceAttachmentPreview({
   };
 
   return (
-    <section className="workspace-attachment-preview" aria-label={`附件预览：${name}`}>
+    <section className="workspace-attachment-preview" aria-label={t("workspace.attachment.preview", name)}>
       <header className="workspace-attachment-preview-header">
         <div>
           <strong title={name}>{name}</strong>
@@ -122,7 +123,7 @@ export default function WorkspaceAttachmentPreview({
         {attachment.directory_uri && onDirectoryShortcutUpdated ? (
           <button type="button" disabled={shortcutBusy}
             onClick={() => void addDirectoryShortcut()}>
-            {shortcutBusy ? "正在添加目录…" : "添加附件目录快捷路径"}
+            {shortcutBusy ? t("workspace.attachment.addingDirectory") : t("workspace.attachment.addDirectoryShortcut")}
           </button>
         ) : null}
         {source ? (
@@ -131,22 +132,22 @@ export default function WorkspaceAttachmentPreview({
             download={name}
             className="workspace-attachment-download"
           >
-            下载原件
+            {t("workspace.attachment.downloadOriginal")}
           </a>
         ) : null}
       </header>
-      {shortcutAdded ? <div role="status">附件目录已添加到当前会话文件树</div> : null}
-      {shortcutError ? <div role="alert">附件目录添加失败：{shortcutError}</div> : null}
-      {loading ? <div className="workspace-attachment-preview-status" role="status">正在读取附件原件…</div> : null}
+      {shortcutAdded ? <div role="status">{t("workspace.attachment.directoryAdded")}</div> : null}
+      {shortcutError ? <div role="alert">{t("workspace.attachment.addDirectoryFailed", shortcutError)}</div> : null}
+      {loading ? <div className="workspace-attachment-preview-status" role="status">{t("workspace.attachment.loadingOriginal")}</div> : null}
       {error ? (
         <div className="workspace-attachment-preview-error" role="alert">
-          附件原件读取失败：{error}
+          {t("workspace.attachment.readOriginalFailed", error)}
         </div>
       ) : null}
       {!loading && !error && text !== null ? (
         <div className="workspace-attachment-text-preview">
           <pre>{text}</pre>
-          {truncated ? <div role="status">文本预览已截断，原件仍可下载。</div> : null}
+          {truncated ? <div role="status">{t("workspace.attachment.textTruncated")}</div> : null}
         </div>
       ) : null}
       {!loading && !error && source && contentType.startsWith("image/") ? (
@@ -158,7 +159,7 @@ export default function WorkspaceAttachmentPreview({
         <iframe
           className="workspace-attachment-document-preview"
           src={source}
-          title={`PDF 附件：${name}`}
+          title={t("workspace.attachment.pdfTitle", name)}
         />
       ) : null}
       {!loading && !error && source
@@ -166,8 +167,8 @@ export default function WorkspaceAttachmentPreview({
         && contentType !== "application/pdf" ? (
         <div className="workspace-attachment-generic-preview">
           <span className="codicon codicon-file" aria-hidden="true" />
-          <span>当前浏览器没有该 MIME 类型的内置预览器，请下载原件后使用现有工具查看。</span>
-          <a href={source} download={name}>下载原件</a>
+          <span>{t("workspace.attachment.unsupportedMime")}</span>
+          <a href={source} download={name}>{t("workspace.attachment.downloadOriginal")}</a>
         </div>
       ) : null}
     </section>

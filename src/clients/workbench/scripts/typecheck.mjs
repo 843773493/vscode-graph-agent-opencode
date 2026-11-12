@@ -4,9 +4,12 @@ import { isAbsolute, join } from 'node:path';
 import { pinnedUpstreamCommit, transformedSourcePaths } from './sourceTransform.mjs';
 import { extensionDependencies } from './dependencies.mjs';
 import { projectTypecheckSources } from './typecheckProjection.mjs';
+import { actionTitleKeys, writeActionTitleProjection, writeBootstrapMessageProjection } from './actionTitles.mjs';
 import { parseArgs } from 'node:util';
 
 const root = process.cwd();
+await writeActionTitleProjection(root, actionTitleKeys);
+await writeBootstrapMessageProjection(root);
 const { values, positionals } = parseArgs({ args: process.argv.slice(2), options: { 'project-root': { type: 'string' }, 'noEmit': { type: 'boolean' } }, allowPositionals: true });
 if (values['project-root'] !== undefined && !isAbsolute(values['project-root'])) throw new Error('--project-root 必须是绝对路径');
 const repository = values['project-root'] ?? execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' }).trim();

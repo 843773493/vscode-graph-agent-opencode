@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type {
   ConversationModelUsage,
@@ -7,9 +8,9 @@ import { copyTextToClipboard } from "../../utils/clipboard";
 
 const RESPONSE_ACTIONS = [
   // TODO: 接入后端反馈接口后，实现点赞状态持久化与撤销。
-  { label: "有帮助", icon: "thumbsup" },
+  { label: t("chat.actions.helpful"), icon: "thumbsup" },
   // TODO: 接入后端反馈接口后，实现点踩原因收集与状态持久化。
-  { label: "没有帮助", icon: "thumbsdown" },
+  { label: t("chat.actions.unhelpful"), icon: "thumbsdown" },
 ] as const;
 
 export default function ResponseActionToolbar({
@@ -54,40 +55,36 @@ export default function ResponseActionToolbar({
   }, [responseText]);
 
   const copyLabel = copyState === "copied"
-    ? "已复制"
+    ? t("chat.actions.copied")
     : copyState === "error"
-      ? "复制失败"
-      : "复制";
+      ? t("chat.actions.copyFailed")
+      : t("chat.actions.copy");
   const copyDisabled = responseText.length === 0;
-  const numberFormatter = React.useMemo(
-    () => new Intl.NumberFormat("zh-CN"),
-    [],
-  );
   const tokenUsageTitle = tokenUsage
     ? [
-        `最后一次模型请求总 token：${numberFormatter.format(tokenUsage.totalTokens)}`,
-        `输入：${numberFormatter.format(tokenUsage.inputTokens)}`,
-        `输出：${numberFormatter.format(tokenUsage.outputTokens)}`,
+        t("chat.actions.total", formatNumber(tokenUsage.totalTokens)),
+        t("chat.actions.input", formatNumber(tokenUsage.inputTokens)),
+        t("chat.actions.output", formatNumber(tokenUsage.outputTokens)),
         tokenUsage.cacheReadInputTokens === null
-          ? "缓存命中：上游未报告"
-          : `缓存命中：${numberFormatter.format(tokenUsage.cacheReadInputTokens)}`,
-        `模型调用：${tokenUsage.reportedModelCalls}/${tokenUsage.modelCalls}`,
-      ].join("；")
+          ? t("chat.actions.noCacheReport")
+          : t("chat.actions.cache", formatNumber(tokenUsage.cacheReadInputTokens)),
+        t("chat.actions.calls", tokenUsage.reportedModelCalls, tokenUsage.modelCalls),
+      ].join(t("chat.listSeparator"))
     : "";
   const modelUsageTitle = modelUsage
-    ? `最后一次请求模型：${modelUsage.finalModelId}`
+    ? t("chat.actions.model", modelUsage.finalModelId)
     : "";
-  const usageTitle = [modelUsageTitle, tokenUsageTitle].filter(Boolean).join("；");
+  const usageTitle = [modelUsageTitle, tokenUsageTitle].filter(Boolean).join(t("chat.listSeparator"));
 
   return (
-    <div className="chat-response-actions" role="toolbar" aria-label="回复操作">
+    <div className="chat-response-actions" role="toolbar" aria-label={t("chat.actions.toolbar")}>
       {forkActions}
       {/* TODO: 后续接入浏览器语音能力，并补齐播放、暂停和朗读进度状态。 */}
       <button
         type="button"
         className="chat-response-action-button"
-        title="朗读（暂未开放）"
-        aria-label="朗读（暂未开放）"
+        title={t("chat.actions.readAloud")}
+        aria-label={t("chat.actions.readAloud")}
         disabled
       >
         <span className="codicon codicon-unmute" aria-hidden="true" />
@@ -95,8 +92,8 @@ export default function ResponseActionToolbar({
       <button
         type="button"
         className={`chat-response-action-button chat-copy-response${copyState === "copied" ? " is-copied" : ""}${copyState === "error" ? " is-error" : ""}`}
-        title={copyDisabled ? "复制（暂无可复制内容）" : copyLabel}
-        aria-label={copyDisabled ? "复制（暂无可复制内容）" : copyLabel}
+        title={copyDisabled ? t("chat.actions.emptyCopy") : copyLabel}
+        aria-label={copyDisabled ? t("chat.actions.emptyCopy") : copyLabel}
         disabled={copyDisabled}
         onClick={() => void copyResponse()}
       >
@@ -110,8 +107,8 @@ export default function ResponseActionToolbar({
           key={action.label}
           type="button"
           className="chat-response-action-button"
-          title={`${action.label}（暂未开放）`}
-          aria-label={`${action.label}（暂未开放）`}
+          title={t("chat.actions.unavailable", action.label)}
+          aria-label={t("chat.actions.unavailable", action.label)}
           disabled
         >
           <span className={`codicon codicon-${action.icon}`} aria-hidden="true" />
@@ -128,18 +125,18 @@ export default function ResponseActionToolbar({
         >
           {modelUsage ? (
             <span className="chat-response-model-id">
-              模型 {modelUsage.finalModelId}
+              {t("chat.actions.modelBadge", modelUsage.finalModelId)}
             </span>
           ) : null}
           {modelUsage && tokenUsage ? <span aria-hidden="true">·</span> : null}
           {tokenUsage ? (
             <>
-              <span>本次 {numberFormatter.format(tokenUsage.totalTokens)}</span>
+              <span>{t("chat.actions.tokensBadge", formatNumber(tokenUsage.totalTokens))}</span>
               <span aria-hidden="true">·</span>
               <span>
-                缓存 {tokenUsage.cacheReadInputTokens === null
+                {t("chat.actions.cacheBadge", tokenUsage.cacheReadInputTokens === null
                   ? "—"
-                  : numberFormatter.format(tokenUsage.cacheReadInputTokens)}
+                  : formatNumber(tokenUsage.cacheReadInputTokens))}
               </span>
             </>
           ) : null}

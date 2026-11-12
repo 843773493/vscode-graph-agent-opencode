@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { Agent } from "../../types/backend";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
@@ -33,8 +34,8 @@ export default function ComposerAgentControl({
         id="agentSelectButton"
         type="button"
         className="composer-agent-button"
-        title={`选择 Agent，当前：${currentAgent}`}
-        aria-label={`选择 Agent，当前：${currentAgent}`}
+        title={t("composer.agent.select", currentAgent)}
+        aria-label={t("composer.agent.select", currentAgent)}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={onToggle}
@@ -80,11 +81,11 @@ export default function ComposerAgentControl({
                   type="button"
                   className="composer-workspace-default-button"
                   title={agent.workspace_default
-                    ? "当前工作区默认 Agent"
-                    : "设为工作区默认 Agent，仅影响新会话"}
+                    ? t("composer.agent.default")
+                    : t("composer.agent.makeDefault")}
                   aria-label={agent.workspace_default
-                    ? `${agent.name} 已是工作区默认 Agent`
-                    : `将 ${agent.name} 设为工作区默认 Agent`}
+                    ? t("composer.agent.isDefault", agent.name)
+                    : t("composer.agent.setDefault", agent.name)}
                   aria-pressed={agent.workspace_default}
                   onClick={() => onSetWorkspaceDefault(agent.agent_id)}
                 >
@@ -94,9 +95,9 @@ export default function ComposerAgentControl({
             ))
           ) : (
             <button type="button" className="composer-agent-menu-item" disabled>
-              <span className="composer-agent-menu-label">暂无 Agent</span>
+              <span className="composer-agent-menu-label">{t("composer.agent.empty")}</span>
               <span className="composer-agent-menu-description">
-                后端未返回可切换的 Agent
+                {t("composer.agent.unavailable")}
               </span>
             </button>
           )}

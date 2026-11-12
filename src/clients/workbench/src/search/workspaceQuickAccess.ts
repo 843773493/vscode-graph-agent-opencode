@@ -1,3 +1,5 @@
+import { t } from '../../../shared/core/i18n/index.js';
+import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
 import { matchesFuzzy } from '../../upstream/src/vs/base/common/filters.js';
@@ -39,7 +41,7 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
     @ICommandService private readonly commands: ICommandService,
     @IConfigurationService private readonly configuration: IConfigurationService,
     @INotificationService private readonly notifications: INotificationService,
-  ) { super(WorkspaceControlQuickAccess.PREFIX, { noResultsPick: { id: 'empty-workspaces', label: '当前 Gateway 没有匹配的已登记工作区' } }); }
+  ) { super(WorkspaceControlQuickAccess.PREFIX, { noResultsPick: { id: 'empty-workspaces', label: t('quickAccess.workspace.noResults') } }); }
 
   get defaultFilterValue() {
     return this.configuration.getValue<boolean>('workbench.quickOpen.preserveInput') ? DefaultQuickAccessFilterValue.LAST : undefined;
@@ -53,16 +55,16 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
     const invalidate = () => {
       run.invalidated = true; access.cancel();
       picker.activeItems = picker.selectedItems = [];
-      picker.items = [{ id: 'workspace-identity-invalidated', label: 'Gateway 或访问凭据已改变，请重新选择工作区' }];
+      picker.items = [{ id: 'workspace-identity-invalidated', label: t('workbench.workspaceAction.identityChanged') }];
       picker.busy = false;
     };
     lifetime.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
     lifetime.add(toDisposable(workspaceContext.subscribe(() => {
       if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidate();
     })));
-    const scope = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择资源搜索范围' };
+    const scope = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: t('quickAccess.workspace.chooseScope') };
     picker.buttons = [...picker.buttons, scope];
-    picker.placeholder = '查找已登记工作区 · 浏览不会启动或切换 · Enter 选择动作';
+    picker.placeholder = t('quickAccess.workspace.placeholder');
     lifetime.add(picker.onDidTriggerButton(button => { if (button === scope) this.report(this.chooseScope(run)); }));
     lifetime.add(toDisposable(() => { picker.buttons = picker.buttons.filter(button => button !== scope); access.dispose(true); picker.busy = false; }));
     lifetime.add(super.provide(picker, access.token, options));
@@ -95,29 +97,29 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
         const page = await discoverGatewayWorkspaces(0, filter, { cursor, signal: controller.signal });
         if (!alive()) return [];
         this.assertAccess(run);
-        if (page.gateway_id !== run.gatewayId) throw new Error('工作区发现返回了其它 Gateway 的控制面');
+        if (page.gateway_id !== run.gatewayId) throw new Error(t('quickAccess.workspace.gatewayMismatch'));
         for (const item of page.items) {
-          if (!item.owner) throw new Error('工作区发现缺少稳定 Gateway／UUID 归属');
+          if (!item.owner) throw new Error(t('quickAccess.workspace.ownerMissing'));
           const owner = gatewayWorkspaceOwner(item.owner), id = gatewayWorkspaceKey(owner);
           if (rows.has(id)) continue;
           const target = workspaceContext.getSnapshot().workspaces.find(workspace => gatewayWorkspaceKey(workspace) === id);
-          const description = `${owner.gatewayId} · ${target?.status ?? '登记状态待刷新'}`;
+          const description = `${owner.gatewayId} · ${target?.status ?? t('quickAccess.workspace.registrationStatusPending')}`;
           rows.set(id, { id, label: item.name, description, detail: `${item.breadcrumb_names.join('/')} · ${owner.workspaceId}`,
             highlights: { label: matchesFuzzy(filter, item.name) ?? undefined, description: matchesFuzzy(filter, description) ?? undefined },
             accept: () => this.report(this.chooseAction(run, owner, item.name)) });
         }
         const items = [...rows.values()];
         if (!page.complete) {
-          if (!page.cursor) throw new Error('工作区发现尚未完成但没有原 cursor');
-          items.push({ id: 'workspace-discovery-more', label: '还有已登记工作区，明确继续发现',
-            buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.more), tooltip: '继续发现工作区' }], trigger: () => publish(page.cursor) });
+          if (!page.cursor) throw new Error(t('quickAccess.workspace.cursorMissing'));
+          items.push({ id: 'workspace-discovery-more', label: t('quickAccess.workspace.more'),
+            buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.more), tooltip: t('quickAccess.workspace.continue') }], trigger: () => publish(page.cursor) });
         }
         return items;
       } catch (error) {
         if (!alive()) return [];
-        return [...rows.values(), { id: 'workspace-discovery-failed', label: `工作区发现失败：${error instanceof Error ? error.message : String(error)}`,
+        return [...rows.values(), { id: 'workspace-discovery-failed', label: t('quickAccess.workspace.failed', error instanceof Error ? error.message : String(error)),
           detail: error instanceof HttpRequestError && error.requestId ? `request_id: ${error.requestId}` : undefined,
-          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: '重试原工作区发现查询' }], trigger: () => publish(cursor) }];
+          buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.refresh), tooltip: t('quickAccess.workspace.retry') }], trigger: () => publish(cursor) }];
       } finally { loading = false; }
     };
     return load().then(items => ({ items, active: run.options.workspaceRestore?.value === run.picker.value
@@ -125,7 +127,7 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
   }
 
   private assertAccess(run: WorkspaceRun): void {
-    if (run.invalidated || !run.gatewayId || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error('Gateway 或访问凭据不可用，请重新选择工作区');
+    if (run.invalidated || !run.gatewayId || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error(t('quickAccess.workspace.accessUnavailable'));
   }
 
   private restore(run: WorkspaceRun, value: string, activeId?: string): void {
@@ -148,7 +150,7 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
     const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
     try {
       const selected = await chooseSearchOwners(this.quickInput, run.owners);
-      if (invalidated) throw new Error('访问凭据已改变，请重新选择搜索范围');
+      if (invalidated) throw new Error(t('quickAccess.workspace.scopeCredentialsChanged'));
       if (selected) this.search(run, selected); else this.restore(run, value, activeId);
     } finally { release(); }
   }
@@ -157,16 +159,16 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
     this.assertAccess(run);
     const value = run.picker.value, target = requireGatewayWorkspaceRequestTarget(workspaceContext.getSnapshot().workspaces, owner);
     const choices: { label: string; description?: string; action: WorkspaceAction | 'search' }[] = [
-      { label: '在此工作区查找资源', description: '只改变搜索范围', action: 'search' },
+      { label: t('quickAccess.workspace.searchHere'), description: t('quickAccess.workspace.searchHereHint'), action: 'search' },
     ];
-    if (target.status === 'ready') choices.push({ label: '切换到此工作区', action: 'activate' });
-    if (target.connection_kind === 'remote_gateway') choices.push({ label: '连接工作区 Gateway', action: 'reconnect' });
-    if (target.managed && target.status !== 'ready') choices.push({ label: '启动工作区 Backend', description: '同一 Backend 的工作区将一起启动', action: 'start' });
+    if (target.status === 'ready') choices.push({ label: t('quickAccess.workspace.switchHere'), action: 'activate' });
+    if (target.connection_kind === 'remote_gateway') choices.push({ label: t('workbench.workspaceAction.reconnect'), action: 'reconnect' });
+    if (target.managed && target.status !== 'ready') choices.push({ label: t('workbench.workspaceAction.start'), description: t('quickAccess.workspace.startHint'), action: 'start' });
     let invalidated = false;
     const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
     try {
-      const selected = await this.quickInput.pick(choices, { title: `工作区动作 · ${name}`, placeHolder: `${owner.gatewayId} · ${owner.workspaceId}` });
-      if (invalidated) throw new Error('访问凭据已改变，请重新选择工作区动作');
+      const selected = await this.quickInput.pick(choices, { title: t('quickAccess.workspace.actionsTitle', name), placeHolder: `${owner.gatewayId} · ${owner.workspaceId}` });
+      if (invalidated) throw new Error(t('quickAccess.workspace.actionCredentialsChanged'));
       this.assertAccess(run);
       if (!selected) { this.restore(run, value, gatewayWorkspaceKey(owner)); return; }
       if (selected.action === 'search') this.search(run, [owner]);
@@ -179,10 +181,10 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
 
 Registry.as<IQuickAccessRegistry>(Extensions.Quickaccess).registerQuickAccessProvider({
   ctor: WorkspaceControlQuickAccess, prefix: WorkspaceControlQuickAccess.PREFIX,
-  placeholder: '查找已登记工作区 · 选择范围或明确执行动作',
-  helpEntries: [{ description: '查找工作区并选择动作', commandId: 'boxteam.quickAccess.workspaces', commandCenterOrder: 44 }],
+  placeholder: t('quickAccess.workspace.registeredPlaceholder'),
+  helpEntries: [{ description: t('quickAccess.workspace.actionTitle'), commandId: 'boxteam.quickAccess.workspaces', commandCenterOrder: 44 }],
 });
 registerAction2(class extends Action2 {
-  constructor() { super({ id: 'boxteam.quickAccess.workspaces', title: { value: '查找工作区并选择动作', original: 'Find Workspaces' }, f1: true }); }
+  constructor() { super({ id: 'boxteam.quickAccess.workspaces', title: { value: t('quickAccess.workspace.actionTitle'), original: actionTitles['quickAccess.workspace.actionTitle'] }, f1: true }); }
   run(accessor: ServicesAccessor): void { accessor.get(IQuickInputService).quickAccess.show(WorkspaceControlQuickAccess.PREFIX); }
 });

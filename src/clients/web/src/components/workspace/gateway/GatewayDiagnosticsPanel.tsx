@@ -1,4 +1,5 @@
 import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayDiagnostics } from "../../../gatewayApi";
 import type {
@@ -6,7 +7,7 @@ import type {
   GatewayWorkspace,
 } from "../../../types/backend";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
-import { formatByteSize } from "../../../utils/format";
+import { formatByteSize, formatLocalTimestamp } from "../../../utils/format";
 import {
   diagnosticLogStatusLabel,
   diagnosticLogUnavailableHint,
@@ -20,15 +21,15 @@ interface GatewayDiagnosticsPanelProps {
 }
 
 function formatTime(value: string | null): string {
-  if (!value) return "暂无时间";
+  if (!value) return t("gateway.diagnostics.noTime");
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : formatLocalTimestamp(value);
 }
 
 function diagnosticsStatusLabel(status: GatewayDiagnostics["status"]): string {
-  if (status === "ready") return "正常";
-  if (status === "degraded") return "部分异常";
-  return "离线";
+  if (status === "ready") return t("gateway.diagnostics.statusReady");
+  if (status === "degraded") return t("gateway.diagnostics.statusDegraded");
+  return t("gateway.diagnostics.statusOffline");
 }
 
 export default function GatewayDiagnosticsPanel({
@@ -149,7 +150,7 @@ export default function GatewayDiagnosticsPanel({
     // 缺失，必须回退兼容复制，不能把「没有 Clipboard API」当 TypeError 暴露给用户。
     try {
       await copyTextToClipboard(selectedLog.tail);
-      setCopyNotice("当前日志尾部已复制。 ");
+      setCopyNotice(t("gateway.diagnostics.logCopied"));
     } catch (copyError) {
       setCopyNotice(errorMessage(copyError));
     }
@@ -157,36 +158,36 @@ export default function GatewayDiagnosticsPanel({
 
   return (
     <div className="gateway-diagnostics-panel" data-testid="gateway-diagnostics-panel">
-      <section className="gateway-diagnostics-toolbar" aria-label="诊断范围">
+      <section className="gateway-diagnostics-toolbar" aria-label={t("gateway.diagnostics.scope")}>
         <label>
-          <span>Gateway 连接</span>
+          <span>{t("gateway.diagnostics.gatewayConnection")}</span>
           <select
             value={gatewayConnectionId ?? ""}
             onChange={(event) => selectGateway(event.target.value)}
           >
             {groups.map((group) => (
               <option key={group.key} value={group.key === "local" ? "" : group.key.slice("remote:".length)}>
-                {group.title} · {group.workspaces.length} 个工作区
+                {group.title} · {t("gateway.diagnostics.workspaceCount", group.workspaces.length)}
               </option>
             ))}
           </select>
         </label>
         <label>
-          <span>工作区</span>
+          <span>{t("gateway.diagnostics.workspace")}</span>
           <select value={workspaceId} onChange={(event) => selectWorkspace(event.target.value)}>
-            <option value="">Gateway 日志 / 全部工作区</option>
+            <option value="">{t("gateway.diagnostics.allWorkspaces")}</option>
             {selectedGroup?.workspaces.map((workspace) => (
               <option key={gatewayWorkspaceKey(workspace)} value={gatewayWorkspaceKey(workspace)}>
-                {workspace.name}{workspace.managed ? " · 托管" : " · 外部"}
+                {workspace.name}{workspace.managed ? t("gateway.diagnostics.managed") : t("gateway.diagnostics.external")}
               </option>
             ))}
           </select>
         </label>
         <div className="gateway-diagnostics-toolbar-actions">
-          <span className="gateway-diagnostics-readonly"><span className="codicon codicon-lock" aria-hidden="true" />只读查看</span>
+          <span className="gateway-diagnostics-readonly"><span className="codicon codicon-lock" aria-hidden="true" />{t("gateway.diagnostics.readOnly")}</span>
           <button type="button" className="gateway-compact-button" disabled={loading} onClick={() => void loadDiagnostics(selectedLogId)}>
             <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
-            {loading ? "读取中…" : "刷新日志"}
+            {loading ? t("gateway.diagnostics.loading") : t("gateway.diagnostics.refreshLogs")}
           </button>
         </div>
       </section>
@@ -196,10 +197,10 @@ export default function GatewayDiagnosticsPanel({
           <div
             className="gateway-console-feedback error"
             role="alert"
-            title={`${diagnostics ? "刷新失败，仍展示上次成功读取的数据" : "日志读取失败"}：${error}`}
+            title={t(diagnostics ? "gateway.diagnostics.refreshFailedWithSnapshot" : "gateway.diagnostics.readFailed", error)}
           >
             <span className="codicon codicon-error" aria-hidden="true" />
-            <strong>{diagnostics ? "刷新失败" : "日志读取失败"}</strong>
+            <strong>{diagnostics ? t("gateway.diagnostics.refreshFailed") : t("gateway.diagnostics.readFailedTitle")}</strong>
             <span className="gateway-console-feedback-message">{error}</span>
           </div>
         ) : null}
@@ -213,27 +214,27 @@ export default function GatewayDiagnosticsPanel({
 
       {diagnostics ? (
         <>
-          <section className="gateway-diagnostics-summary" aria-label="诊断摘要">
+          <section className="gateway-diagnostics-summary" aria-label={t("gateway.diagnostics.summary")}>
             <article>
               <span className="codicon codicon-server-process" aria-hidden="true" />
-              <div><small>Gateway 状态</small><strong>{diagnosticsStatusLabel(diagnostics.status)}</strong><span>{diagnostics.gateway_name}</span></div>
+              <div><small>{t("gateway.diagnostics.gatewayStatus")}</small><strong>{diagnosticsStatusLabel(diagnostics.status)}</strong><span>{diagnostics.gateway_name}</span></div>
             </article>
             <article>
               <span className="codicon codicon-briefcase" aria-hidden="true" />
-              <div><small>工作区</small><strong>{diagnostics.workspaces.length}</strong><span>{offlineWorkspaceCount ? `${offlineWorkspaceCount} 个离线` : "全部可达"}</span></div>
+              <div><small>{t("gateway.diagnostics.workspace")}</small><strong>{diagnostics.workspaces.length}</strong><span>{offlineWorkspaceCount ? t("gateway.diagnostics.offlineCount", offlineWorkspaceCount) : t("gateway.diagnostics.allReachable")}</span></div>
             </article>
             <article>
               <span className="codicon codicon-output" aria-hidden="true" />
-              <div><small>可读日志</small><strong>{availableLogCount}</strong><span>共 {diagnostics.logs.length} 个日志入口</span></div>
+              <div><small>{t("gateway.diagnostics.readableLogs")}</small><strong>{availableLogCount}</strong><span>{t("gateway.diagnostics.logEntryCount", diagnostics.logs.length)}</span></div>
             </article>
             <article>
               <span className="codicon codicon-clock" aria-hidden="true" />
-              <div><small>最近检查</small><strong>{formatTime(diagnostics.checked_at)}</strong><span>不会修改运行时状态</span></div>
+              <div><small>{t("gateway.diagnostics.lastCheck")}</small><strong>{formatTime(diagnostics.checked_at)}</strong><span>{t("gateway.diagnostics.readOnlyRuntime")}</span></div>
             </article>
           </section>
 
-          <section className="gateway-diagnostics-workspace-strip" aria-label="工作区状态">
-            <div><strong>工作区连接状态</strong><span>Gateway 当前直接管理或投影的工作区</span></div>
+          <section className="gateway-diagnostics-workspace-strip" aria-label={t("gateway.diagnostics.workspaceStatus")}>
+            <div><strong>{t("gateway.diagnostics.workspaceConnectionStatus")}</strong><span>{t("gateway.diagnostics.workspaceProjectionDescription")}</span></div>
             <div className="gateway-diagnostics-workspace-pills">
               {selectedGroup?.workspaces.map((workspace) => (
                 <button
@@ -246,32 +247,32 @@ export default function GatewayDiagnosticsPanel({
                   {workspace.name}
                 </button>
               ))}
-              {selectedGroup?.workspaces.length === 0 ? <span className="gateway-diagnostics-muted">当前 Gateway 没有可展示的工作区</span> : null}
+              {selectedGroup?.workspaces.length === 0 ? <span className="gateway-diagnostics-muted">{t("gateway.diagnostics.noWorkspaces")}</span> : null}
             </div>
           </section>
 
           <details className="gateway-diagnostics-runtime" open>
-            <summary>进程日志设置</summary>
+            <summary>{t("gateway.diagnostics.processLogSettings")}</summary>
             {diagnostics.processes.map((process) => (
               <div key={`${process.service}:${process.state?.runtime_instance_id ?? process.workspace_ids.join(",")}`}>
                 <strong>{process.service}</strong>
                 {process.state ? (
                   <>
-                    <p>PID {process.state.pid} · 实例 {process.state.runtime_instance_id}</p>
-                    <p>Revision {process.state.applied_revision ?? "bootstrap"} · {process.state.level.toUpperCase()} · {process.state.pretty ? "易读格式" : "JSON 格式"}</p>
+                    <p>{t("gateway.diagnostics.processInstance", process.state.pid, process.state.runtime_instance_id)}</p>
+                    <p>{t("gateway.diagnostics.processRevisionDetails", process.state.applied_revision ?? "bootstrap", process.state.level.toUpperCase(), process.state.pretty ? t("gateway.diagnostics.prettyFormat") : t("gateway.diagnostics.jsonFormat"))}</p>
                     {process.state.log_sink ? (
-                      <><p>日志入口：{process.state.log_sink.log_id ?? "当前范围未提供日志文件"}</p><p>Owner：{process.state.log_sink.owner_id} · 来源：{process.state.log_sink.source}</p><p>文件身份：{process.state.log_sink.device}:{process.state.log_sink.inode}</p></>
-                    ) : <p>stdout-only：由启动环境接收输出</p>}
+                      <><p>{t("gateway.diagnostics.logEntry")}{process.state.log_sink.log_id ?? t("gateway.diagnostics.noLogForScope")}</p><p>{t("gateway.diagnostics.processLogOwner", process.state.log_sink.owner_id)} · {t("gateway.diagnostics.source")}{process.state.log_sink.source}</p><p>{t("gateway.diagnostics.fileIdentity")}{process.state.log_sink.device}:{process.state.log_sink.inode}</p></>
+                    ) : <p>{t("gateway.diagnostics.stdoutOnly", process.output_mode)}</p>}
                   </>
                 ) : <p role="alert">{process.error}</p>}
-                {process.workspace_ids.length ? <p>挂载工作区：{process.workspace_ids.join(", ")}</p> : null}
+                {process.workspace_ids.length ? <p>{t("gateway.diagnostics.mountedWorkspaces")}{process.workspace_ids.join(", ")}</p> : null}
               </div>
             ))}
           </details>
 
-          <section className="gateway-diagnostics-log-layout" aria-label="日志查看器">
+          <section className="gateway-diagnostics-log-layout" aria-label={t("gateway.diagnostics.logViewer")}>
             <aside className="gateway-diagnostics-log-list">
-              <header><div><strong>日志入口</strong><span>{diagnostics.logs.length} 个</span></div><small>选择一项查看最新尾部</small></header>
+              <header><div><strong>{t("gateway.diagnostics.logEntries")}</strong><span>{t("gateway.diagnostics.logEntryCount", diagnostics.logs.length)}</span></div><small>{t("gateway.diagnostics.selectLogHint")}</small></header>
               <div>
                 {diagnostics.logs.map((log) => (
                   <button
@@ -281,7 +282,7 @@ export default function GatewayDiagnosticsPanel({
                     onClick={() => void loadDiagnostics(log.log_id)}
                   >
                     <span className={`codicon ${log.source === "gateway" ? "codicon-server-process" : "codicon-folder"}`} aria-hidden="true" />
-                    <span className="gateway-diagnostics-log-copy"><strong>{log.label}</strong><small>{log.source === "gateway" ? "Gateway 控制面" : "工作区运行时"}</small></span>
+                    <span className="gateway-diagnostics-log-copy"><strong>{log.label}</strong><small>{log.source === "gateway" ? t("gateway.diagnostics.gatewayControlPlane") : t("gateway.diagnostics.workspaceRuntime")}</small></span>
                     <span className={`gateway-diagnostics-log-status ${log.status}`}>{diagnosticLogStatusLabel(log)}</span>
                   </button>
                 ))}
@@ -291,19 +292,19 @@ export default function GatewayDiagnosticsPanel({
               {selectedLog ? (
                 <>
                   <header>
-                    <div><span>{selectedLog.source === "gateway" ? "Gateway 控制面" : selectedLog.workspace_name ?? "工作区"}</span><h2>{selectedLog.label}</h2><small>{selectedLog.size_bytes ? `${formatByteSize(selectedLog.size_bytes)} · ` : ""}{formatTime(selectedLog.updated_at)}{selectedLog.truncated ? " · 仅显示最新尾部" : ""}</small></div>
-                    <button type="button" className="gateway-compact-button" disabled={!selectedLog.tail} onClick={() => void copySelectedLog()}><span className="codicon codicon-copy" aria-hidden="true" />复制</button>
+                    <div><span>{selectedLog.source === "gateway" ? t("gateway.diagnostics.gatewayControlPlane") : selectedLog.workspace_name ?? t("gateway.diagnostics.workspace")}</span><h2>{selectedLog.label}</h2><small>{selectedLog.size_bytes ? `${formatByteSize(selectedLog.size_bytes)} · ` : ""}{formatTime(selectedLog.updated_at)}{selectedLog.truncated ? ` · ${t("gateway.diagnostics.latestTailOnly")}` : ""}</small></div>
+                    <button type="button" className="gateway-compact-button" disabled={!selectedLog.tail} onClick={() => void copySelectedLog()}><span className="codicon codicon-copy" aria-hidden="true" />{t("gateway.diagnostics.copy")}</button>
                   </header>
                   {selectedLog.status === "unavailable" ? (
-                    <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-warning" aria-hidden="true" /><strong>诊断日志暂不可用</strong><p>{diagnosticLogUnavailableHint(selectedLog)}</p></div>
+                    <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-warning" aria-hidden="true" /><strong>{t("gateway.diagnostics.logUnavailable")}</strong><p>{diagnosticLogUnavailableHint(selectedLog)}</p></div>
                   ) : selectedLog.status === "empty" ? (
-                    <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>日志文件为空</strong><p>服务可能尚未输出内容，刷新后会重新读取。</p></div>
+                    <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>{t("gateway.diagnostics.emptyLog")}</strong><p>{t("gateway.diagnostics.emptyLogDetail")}</p></div>
                   ) : (
-                    <pre>{selectedLog.tail || "暂无日志内容"}</pre>
+                    <pre>{selectedLog.tail || t("gateway.diagnostics.noLogContent")}</pre>
                   )}
                 </>
               ) : (
-                <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>暂无日志入口</strong><p>当前 Gateway 没有返回可查看的日志文件。</p></div>
+                <div className="gateway-diagnostics-viewer-empty"><span className="codicon codicon-output" aria-hidden="true" /><strong>{t("gateway.diagnostics.noLogEntries")}</strong><p>{t("gateway.diagnostics.noLogEntriesDetail")}</p></div>
               )}
             </article>
           </section>
@@ -312,13 +313,13 @@ export default function GatewayDiagnosticsPanel({
         error ? (
           <div className="gateway-diagnostics-viewer-empty" role="status">
             <span className="codicon codicon-warning" aria-hidden="true" />
-            <strong>当前范围没有可用的诊断快照</strong>
-            <p>请点击“刷新日志”重新读取。</p>
+            <strong>{t("gateway.diagnostics.noSnapshot")}</strong>
+            <p>{t("gateway.diagnostics.refreshToRetry")}</p>
           </div>
         ) : (
           <div className="gateway-diagnostics-loading" role="status">
             <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
-            正在读取 Gateway 诊断信息…
+            {t("gateway.diagnostics.loadingDiagnostics")}
           </div>
         )
       )}

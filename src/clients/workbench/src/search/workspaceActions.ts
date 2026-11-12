@@ -10,6 +10,8 @@ import { listGatewayWorkspaces } from '../../../web/src/gatewayApi.js';
 import { workspaceContext } from '../workspaceContext.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
 import { captureSearchOwner } from './target.js';
+import { t } from '../../../shared/core/i18n/index.js';
+import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 
 export const workspaceActionCommands = {
   activate: 'boxteam.workspace.activate', reconnect: 'boxteam.workspace.reconnect', start: 'boxteam.workspace.start',
@@ -22,16 +24,16 @@ async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceA
   // ServiceAccessor 只在同步命令入口有效，异步阶段仅使用已取得的服务句柄。
   const editors = accessor.get(IEditorService), quickInput = accessor.get(IQuickInputService), views = accessor.get(IViewsService);
   const initial = workspaceContext.getSnapshot();
-  if (!initial.gatewayId) throw new Error('Gateway 登记身份尚未加载，请稍后重试');
+  if (!initial.gatewayId) throw new Error(t('workbench.workspaceAction.gatewayPending'));
   let invalidated = false;
   const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新选择工作区');
+    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error(t('workbench.workspaceAction.identityChanged'));
   };
   try {
     let owner = explicit;
     if (!owner) {
-      if (initial.loading || initial.error) throw new Error(initial.error ?? '工作区登记信息尚未加载');
+      if (initial.loading || initial.error) throw new Error(initial.error ?? t('workbench.workspaceAction.registrationPending'));
       const resource = EditorResourceAccessor.getCanonicalUri(editors.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
       if (resource?.scheme.startsWith('boxteam-') || initial.activeId !== null) owner = captureSearchOwner(editors);
       else {
@@ -39,7 +41,7 @@ async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceA
         const selected = await quickInput.pick(initial.workspaces.map(workspace => ({
           label: workspace.name, description: `${workspace.gateway_id} · ${workspace.status}`, detail: workspace.workspace_id,
           owner: gatewayWorkspaceOwner(workspace),
-        })), { title: '选择工作区动作目标', placeHolder: '浏览候选不会连接、启动或激活工作区' });
+        })), { title: t('workbench.workspaceAction.pickTitle'), placeHolder: t('workbench.workspaceAction.pickHint') });
         if (!selected) return;
         owner = selected.owner;
       }
@@ -49,18 +51,20 @@ async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceA
     const latest = await listGatewayWorkspaces(0, { checkHealth: false });
     assertAccess();
     const target = requireGatewayWorkspaceRequestTarget(latest.items, targetOwner);
-    if (action === 'start' && !target.managed) throw new Error('原工作区不是托管目标，不能启动 Backend');
-    if (action === 'reconnect' && target.connection_kind !== 'remote_gateway') throw new Error('原工作区没有远程 Gateway 连接动作');
+    if (action === 'start' && !target.managed) throw new Error(t('workbench.workspaceAction.notManaged'));
+    if (action === 'reconnect' && target.connection_kind !== 'remote_gateway') throw new Error(t('workbench.workspaceAction.notRemote'));
     const view = await views.openView<SessionNavigation>('boxteam.sessions', false);
     assertAccess();
-    if (!view) throw new Error('工作区导航不可用');
+    if (!view) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
     await view.runWorkspaceAction(action, gatewayWorkspaceKey(targetOwner), assertAccess);
   } finally { release(); }
 }
 
-for (const [action, title] of [
-  ['activate', '切换工作区'], ['reconnect', '连接工作区 Gateway'], ['start', '启动工作区 Backend'],
+for (const [action, titleKey] of [
+  ['activate', 'workbench.workspaceAction.activate'],
+  ['reconnect', 'workbench.workspaceAction.reconnect'],
+  ['start', 'workbench.workspaceAction.start'],
 ] as const) registerAction2(class extends Action2 {
-  constructor() { super({ id: workspaceActionCommands[action], title: { value: title, original: title }, f1: true }); }
+  constructor() { super({ id: workspaceActionCommands[action], title: { value: t(titleKey), original: actionTitles[titleKey] }, f1: true }); }
   run(accessor: ServicesAccessor, owner?: WorkspaceOwner): Promise<void> { return runWorkspaceAction(accessor, action, owner); }
 });

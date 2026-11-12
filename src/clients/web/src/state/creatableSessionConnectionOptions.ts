@@ -1,3 +1,4 @@
+import { t } from "../../../shared/core/i18n/index.js";
 import type { CreatableSessionConnectionKind } from "../types/frontend";
 
 export interface CreatableSessionConnectionOption {
@@ -11,14 +12,14 @@ export interface CreatableSessionConnectionOption {
 export const CREATABLE_SESSION_CONNECTION_OPTIONS: CreatableSessionConnectionOption[] = [
   {
     kind: "terminal",
-    label: "新建终端",
-    description: "创建持久终端并立即连接",
+    label: t("resources.create.terminal"),
+    description: t("resources.create.terminalDescription"),
     icon: "codicon-terminal",
   },
   {
     kind: "browser",
-    label: "新建浏览器",
-    description: "创建空白浏览器页面并立即连接",
+    label: t("resources.create.browser"),
+    description: t("resources.create.browserDescription"),
     icon: "codicon-globe",
   },
 ];

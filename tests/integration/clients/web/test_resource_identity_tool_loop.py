@@ -23,7 +23,10 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 复用正式工作台构建。
 )
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
-    browser_backend as browser_backend,  # noqa: PLC0414 - request 指向本文件，资源独立隔离。
+    chat_backend as chat_backend,  # noqa: PLC0414 - request 指向本文件，资源独立隔离。
+)
+from tests.integration.clients.web.test_basic_chat_tool_loop import (
+    chat_backend_boxteam_home as chat_backend_boxteam_home,  # noqa: PLC0414
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
@@ -37,16 +40,18 @@ from tests.support.processes.gateway import (
 
 async def test_rejected_identity_and_correction_survive_workbench_refresh(
     request: pytest.FixtureRequest,
-    browser_backend: tuple[str, Path, ModelStreamReplay],
+    chat_backend: tuple[str, Path, ModelStreamReplay],
+    chat_backend_boxteam_home: Path,
     web_workbench_assets: Path,
 ) -> None:
-    backend_url, workspace, replay = browser_backend
+    backend_url, workspace, replay = chat_backend
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium") or shutil.which("google-chrome")
     assert chromium, "Workbench 工具拒绝验收需要 Chromium"
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=backend_url, port=ports.port(20),
+        boxteam_home=chat_backend_boxteam_home,
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
     )
     try:

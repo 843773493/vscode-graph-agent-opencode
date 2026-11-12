@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { TurnProjectionState } from "../../state/session/turnTimeline";
 
@@ -17,18 +18,18 @@ export default function ChatHistoryPageHeader({
   return (
     <div className="chat-history-page-header">
       {projectionState === "partial" ? (
-        <span role="status">旧 Turn 正在迁移，完成后可继续向上加载</span>
+        <span role="status">{t("chat.history.migratingOlder")}</span>
       ) : hasOlderMessages ? (
         <span role="status">
-          {loadingOlderMessages ? "正在加载更早消息…" : "继续向上滚动加载更早消息"}
+          {loadingOlderMessages ? t("chat.history.loadingOlder") : t("chat.history.scrollOlder")}
         </span>
       ) : (
-        <span>已到达会话起点</span>
+        <span>{t("chat.history.start")}</span>
       )}
       {error ? (
         <div className="chat-history-page-error" role="alert" title={error}>
           <span className="chat-history-page-error-message">{error}</span>
-          <button type="button" onClick={onRetry}>重试</button>
+          <button type="button" onClick={onRetry}>{t("chat.retry")}</button>
         </div>
       ) : null}
     </div>

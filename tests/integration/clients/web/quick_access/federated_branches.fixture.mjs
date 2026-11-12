@@ -87,17 +87,22 @@ async function federatedBranchContract(mode, category, diagnostic) {
         matches: [], contexts: [], view: 'live', truncated: status === 'limited', next_cursor: cursor } } : content ? { messages: { catalog_revision: 1, cursor, complete: status === 'complete', limited_reason: cursor ? 'result_limit' : null,
         scanned_sessions: 1, scanned_threads: 1, scanned_items: 1, scanned_bytes: 5,
         items: [{ thread: { workspace_id: owners[index].workspaceId, session_id: 'session', thread_id: 'thread',
-          thread_uri: 'boxteam://session/session', kind: 'child', title: '同名 Thread', session_title: '同名 Session', created_at: '2026-11-03T00:00:00Z' },
+          thread_uri: `boxteam://${owners[index].gatewayId}/workspace/${owners[index].workspaceId}/resources/session/session/threads/thread`, kind: 'child', title: '同名 Thread', session_title: '同名 Session', created_at: '2026-11-03T00:00:00Z' },
           match: { turn_id: 'turn', message_id: 'same-message', role: 'user', preview: '相同😀命中', preview_start_codepoint: 0,
             reference: { item_id: 'same-item', content_hash: 'same-hash', start_codepoint: start, end_codepoint: start + 2, category: 'message' } } }] } }
         : category === '会话' ? { catalog: { revision: 'r1', catalog_revision: 1, cursor, total: 2, items: [
           { node: { node_id: 'same-session', kind: 'session', name: `needle Session ${start}`, session_id: 'same-session',
-            has_children: false, node_revision: 1, state: 'active' }, breadcrumb: [], relative_path: 'needle Session' },
+            has_children: false, node_revision: 1, state: 'active', session: {
+              created_at: '2026-11-03T00:00:00Z', updated_at: '2026-11-03T00:00:00Z',
+              session_id: 'same-session', workspace_id: owners[index].workspaceId, current_agent_id: 'test-agent',
+              resource_identity: 'resource-session-test', uri: `boxteam://workspace/${owners[index].workspaceId}/resources/session/same-session`,
+              scope: 'workspace', title: `needle Session ${start}`,
+            } }, breadcrumb: [], relative_path: 'needle Session' },
           { node: { node_id: 'same-folder', kind: 'folder', name: `needle Folder ${start}`, folder_id: 'same-folder',
             has_children: true, node_revision: 1, state: 'active' }, breadcrumb: [], relative_path: 'needle Folder' },
         ] } } : { threads: { catalog_revision: 1, cursor, complete: status === 'complete', limited_reason: cursor ? 'result_limit' : null,
           scanned_sessions: 1, scanned_threads: 1, items: [{ workspace_id: owners[index].workspaceId,
-            session_id: 'same-session', thread_id: `same-child-${start}`, thread_uri: 'boxteam://session/same-session',
+            session_id: 'same-session', thread_id: `same-child-${start}`, thread_uri: `boxteam://${owners[index].gatewayId}/workspace/${owners[index].workspaceId}/resources/session/same-session/threads/same-child-${start}`,
             kind: 'child', title: `needle Child ${start}`, session_title: 'needle Session', created_at: '2026-11-03T00:00:00Z' }] } }),
     } });
     send(connection, 'branch', { branch: state(index, status) });

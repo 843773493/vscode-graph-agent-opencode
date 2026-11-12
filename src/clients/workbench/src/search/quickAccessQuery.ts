@@ -11,12 +11,20 @@ import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/p
 import { workspaceFileSource } from '../workspaceFiles.js';
 import { fileOptions, validateQuery } from './query.js';
 import { SearchWorkspaceContext, type SearchScope } from './scope.js';
+import { t } from '../../../shared/core/i18n/index.js';
 
 export type NameSearchCategory = '会话' | 'Thread' | '文件';
 export type ContentSearchCategory = '会话消息' | '工具结果' | 'LLM 请求记录' | 'Trace' | '运行日志' | 'Gateway 日志';
 export type SearchCategory = NameSearchCategory | ContentSearchCategory;
+const categoryMessageKeys: Record<SearchCategory, string> = {
+  '会话': 'quickAccess.category.sessions', 'Thread': 'quickAccess.category.threads', '文件': 'quickAccess.category.files',
+  '会话消息': 'quickAccess.category.messages', '工具结果': 'quickAccess.category.tools', 'LLM 请求记录': 'quickAccess.category.requests',
+  'Trace': 'quickAccess.category.traces', '运行日志': 'quickAccess.category.runtimeLogs', 'Gateway 日志': 'quickAccess.category.gatewayLogs',
+};
+export function searchCategoryLabel(category: SearchCategory): string { return t(categoryMessageKeys[category]); }
+
 export type ResourceSearchItem = { title: string; description: string; detail: string } & (
-  { kind: 'resource'; resource: URI; message?: TurnMessageMatchDTO; trace?: TraceMatchDTO } | { kind: 'session'; sessionId: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string } | { kind: 'log'; location: GatewayDiagnosticLogLocateRequest }
+  { kind: 'resource'; resource: URI; uri: string; message?: TurnMessageMatchDTO; trace?: TraceMatchDTO } | { kind: 'session'; sessionId: string; uri: string; requestLog?: LLMRequestLogMatchDTO } | { kind: 'folder'; nodeId: string } | { kind: 'log'; location: GatewayDiagnosticLogLocateRequest }
 );
 
 /** 原 QueryBuilder 继续解释配置；只构建根局部条件，远端分发统一交 Gateway。 */

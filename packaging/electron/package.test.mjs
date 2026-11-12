@@ -20,7 +20,7 @@ function fixture(scenario) {
     writeFileSync(file, JSON.stringify(value));
   };
   json(path.relative(workspace, path.join(output, 'app/package.json')), { version: '1.2.3' });
-  json(path.relative(workspace, path.join(output, 'app/build.json')), { sourceFingerprint: 'fixture-source' });
+  json(path.relative(workspace, path.join(output, 'app/build.json')), { version: '1.2.3', workbench: { commit: 'fixture' } });
   json('src/clients/electron/package.json', { devDependencies: { electron: '39.0.0' } });
   json('src/clients/electron/node_modules/electron/checksums.json', {});
   const driver = path.join(artifacts, 'packager-driver.mjs');
@@ -63,7 +63,7 @@ test('没有外部 tar 时仍生成可迁移归档，保留正文、执行位、
   const result = probe.package();
   expect(result.status).toBe(0);
   const manifest = JSON.parse(readFileSync(path.join(probe.output, 'release.json'), 'utf8'));
-  expect(manifest.sourceFingerprint).toBe('fixture-source');
+  expect(manifest.workbench).toEqual({ commit: 'fixture' });
   expect(manifest.platform).toBe(process.platform);
   expect(manifest.arch).toBe(process.arch);
   expect(manifest.archives).toHaveLength(1);

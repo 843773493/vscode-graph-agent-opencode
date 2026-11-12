@@ -1,3 +1,4 @@
+import { t } from '../../../../../shared/core/i18n/index.js';
 import { useCallback } from "react";
 import {
   getSession as apiGetSession,
@@ -42,7 +43,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
     expectedRevision?: number,
   ) => {
     if (!sessionCatalogOutboxRuntime) {
-      throw new Error("Gateway 认证状态尚未就绪，不能修改会话目录");
+      throw new Error(t('navigation.catalog.authNotReadyMutate'));
     }
     const { handle, operationId } = await sessionCatalogOutboxRuntime.submit(
       workspaceRequestTarget(workspaceId),
@@ -52,7 +53,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         ...(expectedRevision === undefined ? {} : { expectedRevision }),
       },
     );
-    setState((prev) => ({ ...prev, status: "会话目录操作已保存本地待同步变更，等待提交" }));
+    setState((prev) => ({ ...prev, status: t('navigation.catalog.savedPending') }));
     return { handle, operationId };
   }, [sessionCatalogOutboxRuntime, setState, workspaceRequestTarget]);
 
@@ -63,7 +64,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
     expectedRevision?: number,
   ) => {
     if (!sessionCatalogOutboxRuntime) {
-      throw new Error("Gateway 会话目录 outbox runtime 尚未初始化");
+      throw new Error(t('navigation.catalog.outboxNotReady'));
     }
     const submitted = await submitCatalogMutation(
       workspaceId,
@@ -89,7 +90,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
       try {
         const normalizedTitle = normalizeSessionTitle(title);
         if (!workspaceIdForRequest) {
-          throw new Error("重命名会话缺少 Gateway workspace route ID");
+          throw new Error(t('navigation.sessions.renameRouteMissing'));
         }
         const breadcrumb = await getSessionCatalogBreadcrumb(
           apiPort,
@@ -98,7 +99,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         );
         const node = breadcrumb.items.find((item) => item.node_id === sessionId);
         if (!node || node.kind !== "session" || node.session_id !== sessionId) {
-          throw new Error(`会话目录中找不到目标会话节点: ${sessionId}`);
+          throw new Error(t('navigation.catalog.sessionNodeNotFound', sessionId));
         }
         await commitCatalogMutation(
           workspaceIdForRequest,
@@ -118,7 +119,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
             workspaceIdForRequest,
           );
           if (currentSessionMatchesOwner(prev, statusOwner)) {
-            next.status = `已命名会话: ${updatedSession.title}`;
+            next.status = t('navigation.sessions.named', updatedSession.title);
           }
           const cacheKey = sessionScopeKey(
             workspaceIdForRequest,
@@ -128,7 +129,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
             next.eventQueuesBySession,
             updatedSession.session_id,
             "session_renamed",
-            "命名会话",
+            t('navigation.sessions.nameAction'),
             {
               session_id: updatedSession.session_id,
               title: updatedSession.title,
@@ -141,7 +142,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
       } catch (error) {
         const message = errorMessage(error);
         setState((prev) => currentSessionMatchesOwner(prev, statusOwner)
-          ? { ...prev, status: `会话命名失败: ${message}` }
+          ? { ...prev, status: t('navigation.sessions.nameError', message) }
           : prev);
         throw error;
       }
@@ -165,7 +166,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
     ) => {
       setState((prev) => ({
         ...prev,
-        status: parentSessionId ? "正在提交子会话关系" : "正在提交父会话解除",
+        status: parentSessionId ? t('navigation.sessions.bindSubmitting') : t('navigation.sessions.unbindSubmitting'),
       }));
 
       try {
@@ -176,7 +177,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         );
         const node = breadcrumb.items.find((item) => item.node_id === sessionId);
         if (!node || node.kind !== "session" || node.session_id !== sessionId) {
-          throw new Error(`会话目录中找不到目标会话节点: ${sessionId}`);
+          throw new Error(t('navigation.catalog.sessionNodeNotFound', sessionId));
         }
         await commitCatalogMutation(
           workspaceId,
@@ -192,13 +193,13 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         setState((prev) => {
           const next = replaceSessionMetadata(prev, updatedSession, workspaceId);
           next.status = parentSessionId
-            ? `已将「${updatedSession.title}」绑定为子会话`
-            : `已解除「${updatedSession.title}」的父会话绑定`;
+            ? t('navigation.sessions.boundTitle', updatedSession.title)
+            : t('navigation.sessions.unboundTitle', updatedSession.title);
           return next;
         });
       } catch (error) {
         const message = errorMessage(error);
-        setState((prev) => ({ ...prev, status: `更新会话树失败: ${message}` }));
+        setState((prev) => ({ ...prev, status: t('navigation.sessions.treeUpdateError', message) }));
         throw error;
       }
     },
@@ -212,9 +213,9 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
       let catalogRefreshFailure: unknown = null;
       try {
         if (!workspaceIdForRequest) {
-          throw new Error("删除会话缺少 Gateway workspace route ID");
+          throw new Error(t('navigation.sessions.deleteRouteMissing'));
         }
-        setState((prev) => ({ ...prev, status: "正在提交会话删除" }));
+        setState((prev) => ({ ...prev, status: t('navigation.sessions.deleteSubmitting') }));
         const breadcrumb = await getSessionCatalogBreadcrumb(
           apiPort,
           workspaceRequestTarget(workspaceIdForRequest),
@@ -223,13 +224,13 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         const nodeIndex = breadcrumb.items.findIndex((item) => item.node_id === sessionId);
         const node = breadcrumb.items[nodeIndex];
         if (!node || node.kind !== "session" || node.session_id !== sessionId) {
-          throw new Error(`会话目录中找不到目标会话节点: ${sessionId}`);
+          throw new Error(t('navigation.catalog.sessionNodeNotFound', sessionId));
         }
         const parentNodeId = nodeIndex > 0
           ? breadcrumb.items[nodeIndex - 1]!.node_id
           : null;
         if (!sessionCatalogOutboxRuntime) {
-          throw new Error("Gateway 会话目录 outbox runtime 尚未初始化");
+          throw new Error(t('navigation.catalog.outboxNotReady'));
         }
         const { handle, operationId } = await submitCatalogMutation(
           workspaceIdForRequest,
@@ -252,7 +253,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         }
         if (!operation || !catalogOutboxOperationIsTerminal(operation)) {
           throw terminalError ?? new Error(
-            `会话目录删除未产生可核对的终态回执: ${operationId}`,
+            t('navigation.catalog.deleteReceiptMissing', operationId),
           );
         }
         try {
@@ -264,14 +265,13 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
           const committedRevision = operation.committed_catalog_revision;
           if (operation.state === "committed" && committedRevision === null) {
             throw new Error(
-              `已提交的会话删除缺少 committed_catalog_revision: ${operation.client_operation_id}`,
+              t('navigation.catalog.deleteCommittedRevisionMissing', operation.client_operation_id),
             );
           }
           if (!Number.isSafeInteger(page.catalog_revision)
             || (committedRevision !== null && page.catalog_revision < committedRevision)) {
             throw new Error(
-              `会话目录分支 revision 尚未追上删除回执 ${operation.client_operation_id}: `
-              + `需要至少 ${committedRevision ?? "有效 revision"}，实际 ${page.catalog_revision}`,
+              t('navigation.catalog.deleteBranchBehind', operation.client_operation_id, committedRevision ?? t('navigation.catalog.validRevision'), page.catalog_revision),
             );
           }
           await handle.driver.prune(
@@ -283,19 +283,17 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         }
         if (operation.state !== "committed") {
           throw terminalError ?? new Error(
-            `会话目录删除被 ${operation.state}: `
-            + `${operation.error_code ?? "unknown"} ${operation.error_detail ?? ""}`.trim(),
+            t('navigation.catalog.deleteRejected', operation.state, `${operation.error_code ?? "unknown"} ${operation.error_detail ?? ""}`.trim()),
           );
         }
         if (operation.settlement !== "settled") {
           throw terminalError ?? new Error(
-            `会话删除已提交但排空未完成 (${operation.settlement ?? "缺少结算回执"}): ${operationId}`,
+            t('navigation.catalog.deleteSettlementIncomplete', operation.settlement ?? t('navigation.catalog.settlementReceiptMissing'), operationId),
           );
         }
         if (terminalError && catalogRefreshFailure === null) {
           sessionCatalogOutboxRuntime.reportError(
-            `会话目录操作 ${operationId} 已提交且分支已刷新，但终态确认异常: `
-            + errorMessage(terminalError),
+            t('navigation.catalog.deleteConfirmationError', operationId, errorMessage(terminalError)),
           );
         }
       } catch (error) {
@@ -303,23 +301,23 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
           ? error
           : new ReportedAggregateError(
             [error, catalogRefreshFailure],
-            `${errorMessage(error)}；目录分支刷新失败: ${errorMessage(catalogRefreshFailure)}`,
+            t('navigation.catalog.alsoRefreshError', errorMessage(error), errorMessage(catalogRefreshFailure)),
           );
         if (catalogRefreshFailure !== null) {
           sessionCatalogOutboxRuntime?.reportError(
-            `删除会话失败 (${workspaceIdForRequest}/${sessionId}): ${errorMessage(failure)}`,
+            t('navigation.sessions.deleteOwnerError', workspaceIdForRequest, sessionId, errorMessage(failure)),
           );
         }
         setState((prev) => ({
           ...prev,
-          status: `删除会话失败: ${errorMessage(failure)}`,
+          status: t('navigation.sessions.deleteError', errorMessage(failure)),
         }));
         throw failure;
       }
 
       if (catalogRefreshFailure !== null) {
         sessionCatalogOutboxRuntime?.reportError(
-          `已删除会话 (${workspaceIdForRequest}/${sessionId})，但目录分支刷新失败: ${errorMessage(catalogRefreshFailure)}`,
+          t('navigation.sessions.deletedRefreshError', workspaceIdForRequest, sessionId, errorMessage(catalogRefreshFailure)),
         );
       }
       const resolvedWorkspaceId = workspaceIdForRequest;
@@ -339,8 +337,8 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
         );
 
         next.status = catalogRefreshFailure !== null
-          ? `已删除会话: ${sessionId}；会话目录分支刷新失败: ${errorMessage(catalogRefreshFailure)}`
-          : `已删除会话: ${sessionId}`;
+          ? t('navigation.sessions.deletedRefreshStatus', sessionId, errorMessage(catalogRefreshFailure))
+          : t('navigation.sessions.deleted', sessionId);
         return next;
       });
     },

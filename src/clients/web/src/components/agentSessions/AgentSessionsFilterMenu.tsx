@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import type {
   SessionFilterMode,
   SessionGroupingMode,
@@ -29,44 +30,44 @@ export default function AgentSessionsFilterMenu({
 }: AgentSessionsFilterMenuProps) {
   return (
     <div className="sessions-filter-menu" role="menu">
-      <div className="sessions-menu-group-title">排序</div>
+      <div className="sessions-menu-group-title">{t('navigation.filter.sort')}</div>
       <button
         type="button"
         className={sortMode === 'created' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={sortMode === 'created'}
-        onClick={() => onApplySortMode('created', '按创建时间')}
+        onClick={() => onApplySortMode('created', t('navigation.filter.byCreated'))}
       >
-        按创建时间
+        {t('navigation.filter.byCreated')}
       </button>
       <button
         type="button"
         className={sortMode === 'updated' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={sortMode === 'updated'}
-        onClick={() => onApplySortMode('updated', '按更新时间')}
+        onClick={() => onApplySortMode('updated', t('navigation.filter.byUpdated'))}
       >
-        按更新时间
+        {t('navigation.filter.byUpdated')}
       </button>
       <div className="sessions-menu-separator" />
-      <div className="sessions-menu-group-title">分组</div>
+      <div className="sessions-menu-group-title">{t('navigation.filter.group')}</div>
       <button
         type="button"
         className={groupingMode === 'workspace' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={groupingMode === 'workspace'}
-        onClick={() => onApplyGroupingMode('workspace', '按工作区')}
+        onClick={() => onApplyGroupingMode('workspace', t('navigation.filter.byWorkspace'))}
       >
-        按工作区
+        {t('navigation.filter.byWorkspace')}
       </button>
       <button
         type="button"
         className={groupingMode === 'time' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={groupingMode === 'time'}
-        onClick={() => onApplyGroupingMode('time', '按时间')}
+        onClick={() => onApplyGroupingMode('time', t('navigation.filter.byTime'))}
       >
-        按时间
+        {t('navigation.filter.byTime')}
       </button>
       {groupingMode === 'workspace' ? (
         <>
@@ -78,7 +79,7 @@ export default function AgentSessionsFilterMenu({
             aria-checked={workspaceGroupCapped}
             onClick={() => onToggleWorkspaceGroupCapping(true)}
           >
-            显示最近会话
+            {t('navigation.filter.showRecent')}
           </button>
           <button
             type="button"
@@ -87,7 +88,7 @@ export default function AgentSessionsFilterMenu({
             aria-checked={!workspaceGroupCapped}
             onClick={() => onToggleWorkspaceGroupCapping(false)}
           >
-            显示全部会话
+            {t('navigation.filter.showAll')}
           </button>
         </>
       ) : null}
@@ -97,54 +98,54 @@ export default function AgentSessionsFilterMenu({
         role="menuitem"
         onClick={onCollapseAllSessionSections}
       >
-        全部折叠
+        {t('navigation.filter.collapseAll')}
       </button>
       <div className="sessions-menu-separator" />
-      <div className="sessions-menu-group-title">筛选</div>
+      <div className="sessions-menu-group-title">{t('navigation.filter.title')}</div>
       <button
         type="button"
         className={filterMode === 'all' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={filterMode === 'all'}
-        onClick={() => onApplyFilterMode('all', '全部会话')}
+        onClick={() => onApplyFilterMode('all', t('navigation.filter.all'))}
       >
-        全部会话
+        {t('navigation.filter.all')}
       </button>
       <button
         type="button"
         className={filterMode === 'current' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={filterMode === 'current'}
-        onClick={() => onApplyFilterMode('current', '当前会话')}
+        onClick={() => onApplyFilterMode('current', t('navigation.filter.current'))}
       >
-        当前会话
+        {t('navigation.filter.current')}
       </button>
       <button
         type="button"
         className={filterMode === 'attachments' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={filterMode === 'attachments'}
-        onClick={() => onApplyFilterMode('attachments', '包含附件')}
+        onClick={() => onApplyFilterMode('attachments', t('navigation.filter.attachments'))}
       >
-        包含附件
+        {t('navigation.filter.attachments')}
       </button>
       <button
         type="button"
         className={filterMode === 'agent' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={filterMode === 'agent'}
-        onClick={() => onApplyFilterMode('agent', '当前 Agent')}
+        onClick={() => onApplyFilterMode('agent', t('navigation.filter.agent'))}
       >
-        当前 Agent
+        {t('navigation.filter.agent')}
       </button>
       <button
         type="button"
         className={filterMode === 'named' ? 'active' : ''}
         role="menuitemradio"
         aria-checked={filterMode === 'named'}
-        onClick={() => onApplyFilterMode('named', '已命名会话')}
+        onClick={() => onApplyFilterMode('named', t('navigation.filter.named'))}
       >
-        已命名会话
+        {t('navigation.filter.named')}
       </button>
     </div>
   );

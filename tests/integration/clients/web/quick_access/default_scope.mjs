@@ -51,7 +51,6 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     await lastStatus('文件 · 本次查询完成');
     // 先由用户键盘明确选择候选，再验证取消范围选择保留同一身份。
     await command('quickInput.first');
-    await command('quickInput.next');
     await expect(quick.locator('.monaco-list-row.focused [data-quick-input-id]')).toHaveAttribute('data-quick-input-id', /^session:/);
     const activeId = await quick.locator('.monaco-list-row.focused [data-quick-input-id]').getAttribute('data-quick-input-id');
     await choose();
@@ -72,7 +71,7 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     const beforeConfirm = requests.length;
     await row(ownerB.workspaceId).getByRole('checkbox').click();
     expect(requests.length).toBe(beforeConfirm);
-    await quick.getByRole('button', { name: 'OK', exact: true }).click();
+    await quick.getByRole('button', { name: '确定', exact: true }).click();
     await expect(quick).toContainText('quickdiscover A 会话');
     await expect(quick).toContainText('quickdiscover B 会话');
     await lastStatus('搜索隔离 B · 文件 · 本次查询完成');
@@ -121,7 +120,7 @@ export async function verifyDefaultScope({ page, command, api, result, fileUri, 
     await choose();
     await row(registered.workspace_id).getByRole('checkbox').click();
     const beforeStopped = requests.length;
-    await quick.getByRole('button', { name: 'OK', exact: true }).click();
+    await quick.getByRole('button', { name: '确定', exact: true }).click();
     await lastStatus('范围隔离 C 当前不可查询');
     await expect(quick).toContainText('quickdiscover A 会话');
     await expect(quick).toContainText('quickdiscover B 会话');

@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useContext, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { errorMessage } from "../../utils/errorMessage";
@@ -67,7 +68,7 @@ export default function WarmActionDialog({
   const normalizedValue = value.trim();
   const submit = async () => {
     if (inputLabel && !normalizedValue) {
-      setError(`${inputLabel}不能为空`);
+      setError(t("dialogs.fieldRequired", inputLabel));
       return;
     }
     setSubmitting(true);
@@ -110,7 +111,7 @@ export default function WarmActionDialog({
           <button
             type="button"
             className="workspace-dialog-icon-button"
-            aria-label="关闭"
+            aria-label={t("dialogs.close")}
             disabled={submitting}
             onClick={onClose}
           >
@@ -152,13 +153,13 @@ export default function WarmActionDialog({
         {children ? <fieldset className="workspace-dialog-grid" disabled={submitting} style={{ border: 0, margin: 0, padding: 0 }}>{children}</fieldset> : null}
         {error ? <div className="workspace-dialog-error" role="alert">{error}</div> : null}
         <footer className="workspace-dialog-actions">
-          <button type="button" disabled={submitting} onClick={onClose}>取消</button>
+          <button type="button" disabled={submitting} onClick={onClose}>{t("dialogs.cancel")}</button>
           <button
             type="submit"
             className={danger ? "workspace-dialog-danger" : "workspace-dialog-primary"}
             disabled={submitting || Boolean(inputLabel && !normalizedValue)}
           >
-            {submitting ? "处理中" : confirmText}
+            {submitting ? t("dialogs.processing") : confirmText}
           </button>
         </footer>
       </form>

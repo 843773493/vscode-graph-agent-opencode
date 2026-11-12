@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { clearSessionGoal, getSessionGoal, updateSessionGoal } from "../../api/session/sessionGoals";
 import type { SessionGoal, SessionGoalUpdateRequest } from "../../types/backend";
@@ -39,7 +40,7 @@ export function useTaskGoal(port: number, workspaceId: string, sessionId: string
       // 成功与失败都读取后端完整对象，清除及并发修改不靠本地拼接。
       try { await refresh(); }
       catch (cause) {
-        if (failure) throw new Error(`${errorMessage(failure)}；重新读取 Goal 失败：${errorMessage(cause)}`);
+        if (failure) throw new Error(t("tasks.goal.reloadFailed", errorMessage(failure), errorMessage(cause)));
         throw cause;
       }
       if (failure) setError(errorMessage(failure));

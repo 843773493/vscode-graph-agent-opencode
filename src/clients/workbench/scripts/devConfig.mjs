@@ -55,7 +55,7 @@ export default async function () {
           vite.httpServer.once('listening', () => {
             const warmup = async () => {
               const client = vite.environments.client;
-              await Promise.all(['/src/main.ts', '/src/agent.contribution.ts'].map(id => client.transformRequest(id)));
+              await Promise.all(['/src/bootstrap.ts', '/src/agent.contribution.ts'].map(id => client.transformRequest(id)));
               await client.waitForRequestsIdle();
               const optimizer = client.depsOptimizer;
               await optimizer.scanProcessing;
@@ -94,7 +94,7 @@ export default async function () {
           order: 'pre',
           handler(html) {
             return html.replace('<link rel="stylesheet" href="/out/main.css">', '')
-              .replace('src="/out/main.js"', 'src="/src/main.ts"');
+              .replace('src="/out/main.js"', 'src="/src/bootstrap.ts"');
           },
         },
         async resolveId(id, importer) {
@@ -122,9 +122,10 @@ export default async function () {
       // CSS 的 url() 使用 Vite 资源解析器，字体路径必须在这里参与解析。
       alias: [dependencies.alias, { find: './codicon.ttf', replacement: join(root, 'node_modules/@vscode/codicons/dist/codicon.ttf') }],
     },
+    define: { __BOXTEAM_NLS_MANIFEST__: JSON.stringify(version.localization.nlsManifest) },
     // 固定上游压缩预构建；业务模块仍由 SWC 按需转换，保留源码热更新。
     optimizeDeps: {
-      entries: ['src/main.ts', 'src/agent.contribution.ts'],
+      entries: ['src/bootstrap.ts', 'src/agent.contribution.ts'],
       include: ['react', 'react-dom/client', 'react/jsx-dev-runtime', ...dependencies.include],
       rolldownOptions: {
         transform: { target: 'es2024', decorator: { legacy: true }, assumptions: { setPublicClassFields: true }, typescript: { removeClassFieldsWithoutInitializer: true } },

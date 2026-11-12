@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import { useEffect, useRef, useState } from "react";
 import { getSessionForkSourcePoint } from "../../api/session/sessions";
 import type {
@@ -63,7 +64,7 @@ export function useSessionForkDialog({
     sourceSelection: SessionForkSourceSelection = {},
     invocation?: { title: string; assertAccess: () => void },
   ) => {
-    if (forkDialog?.submitting) throw new Error("上下文分支正在提交，请等待原操作结算");
+    if (forkDialog?.submitting) throw new Error(t('navigation.fork.submittingWait'));
     invocation?.assertAccess();
     command.current?.complete();
     const closed = new Promise<void>((complete) => { command.current = { assertAccess: invocation?.assertAccess, complete }; });
@@ -82,7 +83,7 @@ export function useSessionForkDialog({
       if (sourceSelection.sourceViewId !== undefined && (
         sourcePoint.source_view_id !== sourceSelection.sourceViewId
         || sourceSelection.itemId !== undefined && sourcePoint.anchor_item_id !== sourceSelection.itemId
-      )) throw new Error("来源回执与实际展示快照不一致");
+      )) throw new Error(t('navigation.fork.sourceReceiptMismatch'));
       setForkDialog((currentDialog) => currentDialog ? {
         ...currentDialog, sourcePoint,
         sourceAnchorItemId: sourcePoint.anchor_item_id ?? null,
@@ -122,7 +123,7 @@ export function useSessionForkDialog({
         || nextDialog.mode === "full_rollout_copy" && sourcePoint.anchor_item_id != null
         || sourcePoint.resource_mode !== nextDialog.mode
         || sourcePoint.resource_anchor_mode !== nextDialog.anchorMode) {
-        throw new Error("附件候选回执与冻结的来源或当前复制范围不一致");
+        throw new Error(t('navigation.fork.attachmentReceiptMismatch'));
       }
       setForkDialog({ ...nextDialog, sourcePoint, loading: false });
     } catch (error) {
@@ -160,8 +161,8 @@ export function useSessionForkDialog({
         resource.owner_reference && resource.action !== "omit" && resource.availability === "unavailable");
       if (unavailableCopiedResources.length > 0) {
         setForkDialog({ ...submittedDialog, frozenRequest, submitting: false,
-          error: `目标已创建（${forkResult.thread_id}），运行资源关联失败或待核实：${unavailableCopiedResources.map((resource) =>
-            `${resource.owner_reference!.resource_id}：${resource.reason ?? "原 owner 尚未核实"}`).join("；")}` });
+          error: t('navigation.fork.createdResourcesUnavailable', forkResult.thread_id, unavailableCopiedResources.map((resource) =>
+            `${resource.owner_reference!.resource_id}：${resource.reason ?? t('navigation.fork.ownerUnverified')}`).join(t('navigation.errorSeparator'))) });
       } else {
         setForkDialog(null);
         command.current?.complete();

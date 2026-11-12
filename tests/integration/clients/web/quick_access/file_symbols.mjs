@@ -17,7 +17,7 @@ export async function verifyFileSymbols({ page, command, result, fileUri, owner,
     await page.keyboard.insertText('unsaved symbol draft');
     await page.keyboard.press('Home');
     const selection = page.locator('[id="status.editor.selection"]');
-    await expect(selection).toHaveText('Ln 2, Col 1');
+    await expect(selection).toHaveText('行 2，列 1');
     const originalSelection = await selection.innerText();
     await searchFault(page, 'symbol-target', 'delay', ['thread']);
     await command('workbench.action.quickOpen', 'symbol-target');
@@ -46,7 +46,8 @@ export async function verifyFileSymbols({ page, command, result, fileUri, owner,
 
     // 从无匹配符号退回名称列表仍须恢复原列表与第二项，不能再查询或默认选第一项。
     await input.fill('symbol-target@no-such-symbol');
-    await expect(quick).toContainText(/No matching editor symbols|没有匹配/);
+    await expect(quick.getByRole('option', { name: '没有匹配的资源', exact: true })).toHaveCount(1);
+    await expect(beta).toHaveCount(0);
     await input.fill('symbol-target');
     await expect(targetRow).toHaveClass(/focused/);
     await expect(quick).toContainText('Thread · 没有匹配的资源');
@@ -74,7 +75,7 @@ export async function verifyFileSymbols({ page, command, result, fileUri, owner,
     await page.keyboard.press('Enter');
     await expect(quick).not.toBeVisible();
     await expect(editor.locator('.view-lines')).toContainText('owner A');
-    await expect(selection).toContainText('Ln 3, Col 3');
+    await expect(selection).toContainText('行 3，列 3');
     await expect(editor.locator('.rangeHighlight')).toHaveCount(0);
     result.fileSymbolAccept = { target, position: '3:3', keyboardAccepted: true };
 
@@ -83,23 +84,23 @@ export async function verifyFileSymbols({ page, command, result, fileUri, owner,
     await command('workbench.action.quickOpen', ':2:4');
     await expect(quick).toBeVisible();
     await page.keyboard.press('Enter');
-    await expect(selection).toHaveText('Ln 2, Col 4');
+    await expect(selection).toHaveText('行 2，列 4');
     await command('workbench.action.quickOpen', '::3');
-    await expect(quick).toContainText(/line 2 at column 1|第 2 行/);
+    await expect(quick).toContainText('按 "Enter" 键转到第 2 行，第 1 列。');
     await page.keyboard.press('Enter');
-    await expect(selection).toHaveText('Ln 2, Col 1');
+    await expect(selection).toHaveText('行 2，列 1');
     await command('workbench.action.quickOpen', '@beta');
     await expect(beta).toHaveCount(1);
     await page.keyboard.press('Enter');
-    await expect(selection).toHaveText('Ln 3, Col 3');
+    await expect(selection).toHaveText('行 3，列 3');
     await command('workbench.action.quickOpen', ':2:4');
     await page.keyboard.press('Enter');
-    await expect(selection).toHaveText('Ln 2, Col 4');
+    await expect(selection).toHaveText('行 2，列 4');
     await command('workbench.action.quickOpen', '@:beta');
     await expect(beta).toHaveCount(1);
     await expect(editor.locator('.rangeHighlight')).not.toHaveCount(0);
     await page.keyboard.press('Escape');
-    await expect(selection).toHaveText('Ln 2, Col 4');
+    await expect(selection).toHaveText('行 2，列 4');
     await expect(editor.locator('.rangeHighlight')).toHaveCount(0);
     expect(requests.length).toBe(beforeNative);
     result.originalTextNavigation = { lineColumn: '2:4', offset: '2:1', symbol: '3:3', categoryCancel: '2:4', zeroSearchRequests: true };

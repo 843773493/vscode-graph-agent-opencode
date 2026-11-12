@@ -1,3 +1,4 @@
+import { t } from "../../../shared/core/i18n/index.js";
 import type {
   SessionGoal,
   SessionGoalStatus,
@@ -84,12 +85,12 @@ export function assertGoalOwner(
 }
 
 export const GOAL_STATUS_LABELS: Record<SessionGoalStatus, string> = {
-  active: "进行中",
-  paused: "已暂停",
-  blocked: "已阻塞",
-  usage_limited: "用量受限",
-  budget_limited: "预算已用尽",
-  complete: "已完成",
+  active: t("goal.status.active"),
+  paused: t("goal.status.paused"),
+  blocked: t("goal.status.blocked"),
+  usage_limited: t("goal.status.usageLimited"),
+  budget_limited: t("goal.status.budgetLimited"),
+  complete: t("goal.status.complete"),
 };
 
 export function parseGoalSlashAction(args: string): GoalSlashAction {

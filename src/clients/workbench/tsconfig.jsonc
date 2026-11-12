@@ -13,6 +13,7 @@
     "skipLibCheck": true,
     "jsx": "react-jsx",
     "allowJs": true,
+    "resolveJsonModule": true,
     "types": ["trusted-types", "@webgpu/types", "vscode-notebook-renderer", "wicg-file-system-access"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "upstream/src/typings/*.d.ts", "upstream/src/vscode-dts/*.d.ts", "upstream/src/vs/monaco.d.ts", "upstream/src/vs/workbench/contrib/debug/common/debugProtocol.d.ts"]

@@ -89,7 +89,7 @@ try {
   await phase('open-B'); await show(a); await quick.getByRole('button', { name: '选择来源所属工作区', exact: true }).click();
   await quick.locator('.monaco-list-row').filter({ hasText: a.workspace_id }).getByRole('checkbox').uncheck();
   await quick.locator('.monaco-list-row').filter({ hasText: b.workspace_id }).getByRole('checkbox').check();
-  await quick.getByRole('button', { name: 'OK', exact: true }).click();
+  await quick.getByRole('button', { name: '确定', exact: true }).click();
   await expect(candidates(b)).toHaveCount(2); result.sameNameSources = true;
   await select(b, 7); await page.keyboard.press('Enter'); await expect(text(0)).toContainText('HTTP-SKILL-B-HIGHER');
   expect(currentReads()).toHaveLength(1); expect(currentReads()[0]).toMatchObject({ workspaceId: b.workspace_id, body: { operation: 'read' } });

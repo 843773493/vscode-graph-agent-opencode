@@ -3,7 +3,7 @@
 export interface RequestLogDisplayModel {
   model: string;
   responseText: string;
-  phaseLabel: string;
+  phase: "tool_call" | "text" | "intermediate";
   toolNames: string[];
   calledToolNames: string[];
   messageCount: number;

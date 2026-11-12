@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
@@ -10,7 +11,7 @@ import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/
 import { SearchWorkspaceContext } from './scope.js';
 import { captureSearchOwner, loadSearchScope, type SearchInvocationOptions } from './target.js';
 
-function searchFailure(error: unknown) { return [{ label: `文件搜索失败：${error instanceof Error ? error.message : String(error)}` }]; }
+function searchFailure(error: unknown) { return [{ label: t('quickAccess.files.failed', error instanceof Error ? error.message : String(error)) }]; }
 
 /** 原版 Provider 负责搜索；业务拒绝留在当前浮层，不把异步失败变成无匹配。 */
 class ScopedTextSearch extends TextSearchQuickAccess {
@@ -64,7 +65,7 @@ export class WorkspaceTextQuickAccess extends Disposable implements IQuickAccess
       const context = operation.add(new SearchWorkspaceContext(scope));
       const child = context.ownChild(this.instantiation.createChild(new ServiceCollection([IWorkspaceContextService, context])));
       const provider = operation.add(child.createInstance(ScopedTextSearch));
-      picker.placeholder = `搜索文件内容 · ${scope.workspaces.map(target => target.label).join('、')}`;
+      picker.placeholder = t('quickAccess.files.placeholder', scope.workspaces.map(target => target.label).join(t('quickAccess.listSeparator')));
       picker.busy = false;
       operation.add(provider.provide(picker, cancellation.token, options));
     }).catch(fail);

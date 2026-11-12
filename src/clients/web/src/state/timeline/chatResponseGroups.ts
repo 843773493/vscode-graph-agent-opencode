@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import type { ConversationView } from "../../types/frontend";
 import type { TimelineItem } from "./timelineTypes";
 import { responsePartsToTimelineItems } from "./responseParts";
@@ -11,8 +12,8 @@ export function historicalBoundaryStatus(conversation: ConversationView): Histor
   if (conversation.displayMode !== "history") return null;
   const responseParts = conversation.responseParts ?? [];
   const userInterrupted = responseParts.some((part) => part.partial === true && part.completion_reason === "user_interrupt");
-  if (userInterrupted) return { kind: "user-interrupted", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: "已由用户中断", detail: "已保留本轮已经生成的内容" };
-  if (conversation.turnStatus === "cancelled") return { kind: "cancelled", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: "任务已取消", detail: "已保留本轮已经生成的内容" };
+  if (userInterrupted) return { kind: "user-interrupted", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: t("chat.status.interrupted"), detail: t("chat.status.contentKept") };
+  if (conversation.turnStatus === "cancelled") return { kind: "cancelled", role: "status", className: "chat-inline-cancelled", icon: "codicon-debug-stop", title: t("chat.status.cancelled"), detail: t("chat.status.contentKept") };
 
   const toolItems = responsePartsToTimelineItems(responseParts, {
     terminalFailure: conversation.turnStatus === "failed" || conversation.turnStatus === "timed_out",
@@ -25,11 +26,11 @@ export function historicalBoundaryStatus(conversation: ConversationView): Histor
     if (item.outcomeUnknown) unknownToolNames.add(item.toolName);
     if (item.failed) failedToolNames.add(item.toolName);
   }
-  if (incompleteToolNames.size > 0) return { kind: "tool-incomplete", role: "status", className: "chat-inline-cancelled chat-inline-tool-status", icon: "codicon-debug-stop", title: "工具调用未完成", detail: [...incompleteToolNames].join("、") + "：调用在完成前结束" };
-  if (unknownToolNames.size > 0) return { kind: "tool-outcome-unknown", role: "alert", className: "chat-inline-error chat-inline-tool-unknown", icon: "codicon-warning", title: "工具执行结果未知", detail: [...unknownToolNames].join("、") + "：后端未返回结果，无法确认是否成功" };
-  if (failedToolNames.size > 0) return { kind: "tool-failed", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-error", title: "工具执行失败", detail: [...failedToolNames].join("、") + "：工具返回了失败结果" };
-  if (conversation.turnStatus === "failed") return { kind: "turn-failed", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-error", title: "本轮执行失败", detail: "后端没有提供可用的失败详情" };
-  if (conversation.turnStatus === "timed_out") return { kind: "turn-timed-out", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-watch", title: "本轮执行超时", detail: "任务超过总执行时间上限，已停止执行" };
+  if (incompleteToolNames.size > 0) return { kind: "tool-incomplete", role: "status", className: "chat-inline-cancelled chat-inline-tool-status", icon: "codicon-debug-stop", title: t("chat.status.toolIncomplete"), detail: t("chat.status.incompleteDetail", [...incompleteToolNames].join(t("chat.nameSeparator"))) };
+  if (unknownToolNames.size > 0) return { kind: "tool-outcome-unknown", role: "alert", className: "chat-inline-error chat-inline-tool-unknown", icon: "codicon-warning", title: t("chat.status.toolUnknown"), detail: t("chat.status.unknownDetail", [...unknownToolNames].join(t("chat.nameSeparator"))) };
+  if (failedToolNames.size > 0) return { kind: "tool-failed", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-error", title: t("chat.status.toolFailed"), detail: t("chat.status.failedDetail", [...failedToolNames].join(t("chat.nameSeparator"))) };
+  if (conversation.turnStatus === "failed") return { kind: "turn-failed", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-error", title: t("chat.status.turnFailed"), detail: t("chat.status.noDetails") };
+  if (conversation.turnStatus === "timed_out") return { kind: "turn-timed-out", role: "alert", className: "chat-inline-error chat-inline-tool-status", icon: "codicon-watch", title: t("chat.status.timedOut"), detail: t("chat.status.timeoutDetail") };
   return null;
 }
 

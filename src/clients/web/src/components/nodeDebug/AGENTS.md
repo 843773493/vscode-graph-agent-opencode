@@ -34,4 +34,5 @@ NodeDebugWorkbench
 - 后端字段统一使用生成协议导出的类型，组件通过 Node Debug controller 执行动作。
 - 调试资源始终以 workspace、session 和 thread 组成的 owner 为边界。
 - 纯状态选择与格式化函数应保持可独立测试。
+- 产品控件和状态提示使用共享 i18n；程序源码、变量、表达式、路径、调试输出及原始服务错误保持原文。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

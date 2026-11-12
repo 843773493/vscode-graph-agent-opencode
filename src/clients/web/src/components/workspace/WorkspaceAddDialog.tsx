@@ -1,5 +1,6 @@
 import { lazy, Suspense, useContext } from "react";
 import { createPortal } from "react-dom";
+import { t } from "../../../../shared/core/i18n/index.js";
 import { OverlayRootContext } from "../overlays/OverlayRootContext";
 
 import type {
@@ -38,13 +39,13 @@ function WorkspaceAddDialogLoading({ onClose }: Pick<WorkspaceAddDialogProps, "o
         <header className="workspace-add-header">
           <div className="workspace-add-dialog-heading">
             <div>
-              <h2 id="workspace-add-title">选择工作区所在设备</h2>
-              <p>正在准备工作区选择器…</p>
+              <h2 id="workspace-add-title">{t("gateway.workspaceAdd.selectDevice")}</h2>
+              <p>{t("gateway.workspaceAdd.preparingSelector")}</p>
             </div>
             <button
               type="button"
               className="workspace-add-icon-button workspace-add-close-button"
-              aria-label="关闭"
+              aria-label={t("gateway.workspaceAdd.close")}
               onClick={onClose}
             >
               <span className="codicon codicon-close" aria-hidden="true" />
@@ -52,7 +53,7 @@ function WorkspaceAddDialogLoading({ onClose }: Pick<WorkspaceAddDialogProps, "o
           </div>
         </header>
         <div className="workspace-add-results" role="status">
-          <div className="workspace-add-state">正在加载设备列表…</div>
+          <div className="workspace-add-state">{t("gateway.workspaceAdd.loadingDevices")}</div>
         </div>
       </section>
     </div>,

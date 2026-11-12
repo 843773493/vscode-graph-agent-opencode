@@ -5,7 +5,7 @@ import { isRecord } from "../../utils/jsonDisplay";
 import {
   compactPreview,
   modelLabel,
-  responsePhaseLabel,
+  responsePhase,
   responsePreview,
 } from "./messages";
 import { requestToolNames, responseCalledToolNames } from "./tools";
@@ -19,7 +19,7 @@ export function buildRequestLogDisplay(log: LLMRequestLogRecord): RequestLogDisp
   return {
     model: modelLabel(log),
     responseText,
-    phaseLabel: responsePhaseLabel(log, fullResponsePreview),
+    phase: responsePhase(log, fullResponsePreview),
     toolNames: requestToolNames(log),
     calledToolNames: responseCalledToolNames(log),
     messageCount: requestMessages.length,

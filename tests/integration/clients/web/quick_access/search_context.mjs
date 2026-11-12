@@ -30,7 +30,7 @@ export async function verifySearchContext({ page, command, result, fileUri, owne
   await command('workbench.action.findInFiles', { query: 'contextbranchonly', triggerSearch: true,
     onlyOpenEditors: false, useExcludeSettingsAndIgnoreFiles: false });
   const view = page.locator('.search-view');
-  await expect(view.getByRole('tree')).toHaveAttribute('aria-label', /Search: contextbranchonly/);
+  await expect(view.getByRole('tree')).toHaveAttribute('aria-label', /搜索: contextbranchonly/);
   await expect(view).toContainText('contextbranchonly');
   const before = result.searches.length;
   await command('search.action.openInEditor');

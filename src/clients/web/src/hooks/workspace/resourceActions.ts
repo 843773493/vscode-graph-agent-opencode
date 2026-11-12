@@ -1,9 +1,13 @@
 import { listWorkspaceResources, type ResourceAction, type ResourceThreadRef, type WorkspaceConnectionKind, type WorkspaceResourceDTO } from "../../api/workspaceResources";
+import { t } from "../../../../shared/core/i18n/index.js";
 import { errorMessage } from "../../utils/errorMessage";
 
-export const resourceActionLabels: Record<ResourceAction, string> = {
-  promote: "保留到工作区", attach: "关联 Thread", detach: "解除关联", stop: "停止资源", delete: "删除资源",
-};
+export const resourceActionMessageKeys = {
+  promote: "resources.keep", attach: "resources.attachThread", detach: "resources.detach",
+  stop: "resources.stopResource", delete: "resources.deleteResource",
+} as const satisfies Record<ResourceAction, string>;
+export const resourceActionLabels = Object.fromEntries(Object.entries(resourceActionMessageKeys)
+  .map(([action, key]) => [action, t(key)])) as Record<ResourceAction, string>;
 
 export function workspaceResourceName(resource: WorkspaceResourceDTO): string {
   const title = resource.metadata?.title;
@@ -30,7 +34,7 @@ export async function settleWorkspaceResourceOperation(apiPort: number, workspac
       const snapshot = await listWorkspaceResources(apiPort, workspaceKey, kind);
       return { succeeded: false as const, cause, error, snapshot };
     } catch (refreshCause) {
-      error += `；刷新失败：${errorMessage(refreshCause)}`;
+      error = t("resources.errors.operationAndRefreshFailed", error, errorMessage(refreshCause));
       return { succeeded: false as const, cause, error, snapshot: null };
     }
   }

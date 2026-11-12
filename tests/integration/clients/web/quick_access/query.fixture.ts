@@ -1,3 +1,4 @@
+import '../../../../harness/js/workbench-locale.ts';
 export { QueryBuilder } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/services/search/common/queryBuilder.js';
 export { SearchWorkspaceContext, scopeFromQuery } from '../../../../../src/clients/workbench/src/search/scope.js';
 export { URI } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';

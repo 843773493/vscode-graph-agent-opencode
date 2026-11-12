@@ -1,3 +1,4 @@
+import { t, formatDate, formatNumber } from '../../../shared/core/i18n/index.js';
 import { CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { MarkdownString } from '../../upstream/src/vs/base/common/htmlContent.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
@@ -13,9 +14,9 @@ import {
 import { WorkspaceMcpCatalog, pendingMcpOperation } from './catalog.js';
 
 const statusLabels: Readonly<Record<string, string>> = {
-  ready: '连接可用', disabled: '配置已禁用', failed: '原连接不可用', authorization_required: '需要授权', unavailable: '原服务不可用',
-  pending: '已排队', waiting_user: '等待用户授权', verifying: '正在验证连接与目录',
-  succeeded: '操作已完成', expired: '已过期', cancelled: '已取消',
+  ready: t('workbench.mcp.status.ready'), disabled: t('workbench.mcp.status.disabled'), failed: t('workbench.mcp.status.failed'), authorization_required: t('workbench.mcp.status.authorizationRequired'), unavailable: t('workbench.mcp.status.unavailable'),
+  pending: t('workbench.mcp.status.pending'), waiting_user: t('workbench.mcp.status.waitingUser'), verifying: t('workbench.mcp.status.verifying'),
+  succeeded: t('workbench.mcp.status.succeeded'), expired: t('workbench.mcp.status.expired'), cancelled: t('workbench.mcp.status.cancelled'),
 };
 
 /** 原列表、详情与生命周期命令共享此对象；全部业务状态从同一后端快照派生。 */
@@ -41,7 +42,7 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   });
   readonly connectionState = derived<McpConnectionState>(this, reader => {
     this.revision.read(reader);
-    if (this.catalog.snapshot.error || !this.data) return { state: McpConnectionState.Kind.Error, message: this.catalog.snapshot.error ?? '此服务已不在目标工作区目录中' };
+    if (this.catalog.snapshot.error || !this.data) return { state: McpConnectionState.Kind.Error, message: this.catalog.snapshot.error ?? t('workbench.mcp.missingService') };
     if (pendingMcpOperation(this.operation)) return { state: McpConnectionState.Kind.Starting };
     if (this.data.status === 'ready') return { state: McpConnectionState.Kind.Running };
     if (this.data.status === 'failed') return { state: McpConnectionState.Kind.Error, message: this.operation?.error_code ?? this.statusLabel };
@@ -65,9 +66,9 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   get statusLabel(): string {
     if (this.catalog.snapshot.error) return this.catalog.snapshot.error;
     const status = this.operation && (pendingMcpOperation(this.operation) || ['cancelled', 'expired', 'failed'].includes(this.operation.status)) ? this.operation.status : this.data?.status;
-    return status ? statusLabels[status] ?? status : '服务已移除';
+    return status ? statusLabels[status] ?? status : t('workbench.mcp.removed');
   }
-  get description(): string { return `${this.catalog.label} · ${this.data?.transport ?? '未知传输'} · ${this.statusLabel} · ${this.data?.tools.length ?? 0} 个已知工具`; }
+  get description(): string { return t('workbench.mcp.description', this.catalog.label, this.data?.transport ?? t('workbench.mcp.unknownTransport'), this.statusLabel, formatNumber(this.data?.tools.length ?? 0)); }
   get runtimeStatus() {
     return { state: this.data?.enabled ? McpServerEnablementState.Enabled : McpServerEnablementState.DisabledWorkspace,
       message: { severity: this.catalog.snapshot.error || this.catalog.snapshot.actionError || this.operation?.error_code ? Severity.Error : Severity.Info,
@@ -86,52 +87,52 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
   readDefinitions(): ReturnType<IMcpServer['readDefinitions']> { return observableValue(this, { server: undefined, collection: undefined }); }
   async start(): Promise<McpConnectionState> {
     if (!this.catalog.snapshot.error && this.data?.enabled && (this.isPending || this.data.status === 'ready')) return this.connectionState.get();
-    if (!this.canConnect) throw new Error('此目标服务当前不可发起连接，请先查看原操作状态');
+    if (!this.canConnect) throw new Error(t('workbench.mcp.cannotConnect'));
     await this.catalog.act(this.name, 'connect');
     return this.connectionState.get();
   }
   async stop(): Promise<void> {
-    if (!this.canStop) throw new Error('此目标服务没有可断开连接或可取消操作');
+    if (!this.canStop) throw new Error(t('workbench.mcp.cannotStop'));
     await this.catalog.act(this.name, pendingMcpOperation(this.operation) ? 'cancel' : 'disconnect');
   }
   authorize(): Promise<void> { return this.catalog.act(this.name, 'authorize'); }
   observe(): IDisposable { return this.watch(); }
   showOutput(): Promise<void> { return this.openDetails(this); }
-  async *resources(): AsyncIterable<IMcpResource[]> { throw new Error('Workbench MCP 资源浏览尚未接入项目 owner'); }
-  async resourceTemplates(): Promise<IMcpResourceTemplate[]> { throw new Error('Workbench MCP 资源模板尚未接入项目 owner'); }
-  async getManifest(): Promise<never> { throw new Error('此工作区连接对象未提供制品 manifest，请使用目标制品管理入口'); }
+  async *resources(): AsyncIterable<IMcpResource[]> { throw new Error(t('workbench.mcp.resourcesUnavailable')); }
+  async resourceTemplates(): Promise<IMcpResourceTemplate[]> { throw new Error(t('workbench.mcp.templatesUnavailable')); }
+  async getManifest(): Promise<never> { throw new Error(t('workbench.mcp.manifestUnavailable')); }
   async getReadme(token: CancellationToken): Promise<string> {
     if (token.isCancellationRequested) throw new CancellationError();
     const document = new MarkdownString();
-    const line = (label: string, value: string) => { document.appendText(`${label}：${value}`); document.appendMarkdown('\n\n'); };
-    document.appendMarkdown('## MCP 服务\n\n');
-    line('服务', this.name);
+    const line = (label: string, value: string) => { document.appendText(t('workbench.mcp.detailLine', label, value)); document.appendMarkdown('\n\n'); };
+    document.appendMarkdown(t('workbench.mcp.detailsHeading'));
+    line(t('workbench.mcp.serviceLabel'), this.name);
     line('Gateway', this.catalog.target.gateway_id);
-    line('工作区', this.catalog.target.workspace_id);
+    line(t('workbench.mcp.workspaceLabel'), this.catalog.target.workspace_id);
     if (this.catalog.target.backend_id) line('Backend', this.catalog.target.backend_id);
-    if (this.catalog.target.gateway_connection_id) line('Gateway 连接', this.catalog.target.gateway_connection_id);
-    line('状态', this.statusLabel);
-    line('传输', this.data?.transport ?? '服务已移除');
+    if (this.catalog.target.gateway_connection_id) line(t('workbench.mcp.gatewayConnectionLabel'), this.catalog.target.gateway_connection_id);
+    line(t('workbench.mcp.statusLabel'), this.statusLabel);
+    line(t('workbench.mcp.transportLabel'), this.data?.transport ?? t('workbench.mcp.removed'));
     const snapshot = this.catalog.snapshot;
-    if (snapshot.actionError) line('管理请求错误', snapshot.actionError);
-    if (snapshot.catalog) { line('目录 revision', snapshot.catalog.catalog_revision); line('目录 generation', String(snapshot.catalog.catalog_generation)); }
-    if (this.data?.connection_ref) line('连接', this.data.connection_ref);
+    if (snapshot.actionError) line(t('workbench.mcp.managementErrorLabel'), snapshot.actionError);
+    if (snapshot.catalog) { line(t('workbench.mcp.catalogRevisionLabel'), snapshot.catalog.catalog_revision); line(t('workbench.mcp.catalogGenerationLabel'), String(snapshot.catalog.catalog_generation)); }
+    if (this.data?.connection_ref) line(t('workbench.mcp.connectionLabel'), this.data.connection_ref);
     if (this.data?.service) {
       const source = this.data.service;
-      line('插件服务', `${source.package_id}@${source.package_version} · ${source.plugin_id} · ${source.service_id}`);
+      line(t('workbench.mcp.pluginServiceLabel'), `${source.package_id}@${source.package_version} · ${source.plugin_id} · ${source.service_id}`);
       line('Gateway', source.gateway_id);
-      line('插件实例范围', source.workspace_id ? `工作区 ${source.workspace_id}` : 'Gateway');
+      line(t('workbench.mcp.pluginScopeLabel'), source.workspace_id ? t('workbench.mcp.workspaceScope', source.workspace_id) : 'Gateway');
     }
-    if (this.data?.unavailable_reason) line('来源不可用', this.data.unavailable_reason);
+    if (this.data?.unavailable_reason) line(t('workbench.mcp.sourceUnavailableLabel'), this.data.unavailable_reason);
     if (this.operation) {
-      line('操作', `${this.operation.action} · ${statusLabels[this.operation.status] ?? this.operation.status} · ${this.operation.stage}`);
-      line('操作 ID', this.operation.operation_id);
-      if (this.operation.error_code) line('错误', this.operation.error_code);
-      if (pendingMcpOperation(this.operation)) line('期限', new Date(this.operation.deadline * 1000).toLocaleString());
+      line(t('workbench.mcp.operationLabel'), `${this.operation.action} · ${statusLabels[this.operation.status] ?? this.operation.status} · ${this.operation.stage}`);
+      line(t('workbench.mcp.operationIdLabel'), this.operation.operation_id);
+      if (this.operation.error_code) line(t('workbench.mcp.errorLabel'), this.operation.error_code);
+      if (pendingMcpOperation(this.operation)) line(t('workbench.mcp.deadlineLabel'), formatDate(this.operation.deadline * 1000, { dateStyle: 'short', timeStyle: 'medium' }));
     }
-    document.appendMarkdown('### 目标工具摘要\n\n');
+    document.appendMarkdown(t('workbench.mcp.toolsHeading'));
     for (const tool of this.data?.tools ?? []) line(tool.remote_name, tool.description);
-    document.appendText('工具执行仍使用此工作区的 Agent MCP owner；新工具在允许的上下文边界生效。插件服务由原安装域管理，连接及工具目录由工作区 owner 管理。');
+    document.appendText(t('workbench.mcp.toolsNote'));
     return document.value;
   }
   dispose(): void { /* 对象只是后端镜像；关闭详情不关闭目标连接。 */ }

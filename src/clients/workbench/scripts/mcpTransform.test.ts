@@ -8,6 +8,7 @@ import { legacyExtensionDetailsSourcePaths } from './extensions/extensionLegacyD
 import { CancellationTokenSource } from '../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError, isCancellationError, getErrorMessage } from '../upstream/src/vs/base/common/errors.js';
 import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
+import { localize } from '../upstream/src/vs/nls.js';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
@@ -126,7 +127,7 @@ test('欢迎页的插件按钮可打开自有包，教程保留内置能力而�
   visit(parsed);
   expect(cards.map(card => card.id).sort()).toEqual(['extensions', 'extensionsWebWeb']);
   for (const card of cards) {
-    expect(card.title).toBe('管理插件包');
+    expect(card.title).toBe('Manage Plugin Packages');
     const command = /\]\(command:([^)]+)\)/.exec(card.description)?.[1];
     expect(command).toBe('workbench.extensions.action.installedExtensions');
     expect(source('extensions.contribution.ts').text).toContain(`'${command}'`);
@@ -629,13 +630,13 @@ test('目录条目即使与工作区连接同 ID，原 Start/Stop/Authorize 也�
   }
   const updateBody = new Bun.Transpiler({ loader: 'ts' }).transformSync(`function update() ${methodBody('mcpServerActions.ts', 'AuthServerAction', 'update')}`);
   const runBody = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function run() ${methodBody('mcpServerActions.ts', 'AuthServerAction', 'run')}`);
-  const { update, run } = new Function('WorkspaceMcpServer', updateBody + runBody + '\nreturn { update, run };')(ProjectServer) as {
+  const { update, run } = new Function('WorkspaceMcpServer', 'localize', updateBody + runBody + '\nreturn { update, run };')(ProjectServer, localize) as {
     update(this: object): void; run(this: object): Promise<void>;
   };
   const action = { mcpServer: gallery as object, enabled: true, class: '' };
   update.call(action);
   expect(action.enabled).toBe(false);
-  await expect(run.call(action)).rejects.toThrow('原 MCP 目标已移除');
+  await expect(run.call(action)).rejects.toThrow('The MCP service is no longer in the original target catalog');
   expect(authorized).toBe(0);
   action.mcpServer = connection;
   update.call(action);
@@ -786,7 +787,7 @@ test('旧扩展详情入口已从用户路径移除并保留其余操作', () =>
   expect(source('issueQuickAccess.ts').text).toContain('workbench.action.openIssueReporter');
   expect(source('keybindingsEditor.ts').text).toContain("$('span.extension-label')");
   expect(source('keybindingsEditor.ts').text).toContain('extension.identifier.value');
-  expect(source('settingsTree.ts').text).toContain("localize('dismiss', \"Dismiss\")");
+  expect(source('settingsTree.ts').text).toContain('localize("vs/workbench/contrib/preferences/browser/settingsTree#dismiss", "Dismiss")');
   expect(source('settingsTree.ts').text).toContain('_onDidDismissExtensionSetting.fire(extensionId)');
   expect(source('settingsTree.ts').text).not.toContain('showExtensionsWithIds');
   expect(source('settingsTreeModels.ts').text).not.toContain('SettingsTreeNewExtensionsElement');

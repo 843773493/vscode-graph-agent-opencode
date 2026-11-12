@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useMemo, type Dispatch, type SetStateAction } from "react";
 import {
   COMPOSER_SLASH_COMMANDS,
@@ -64,8 +65,8 @@ export function useComposerSlashCommands({
       setComposerNotice("");
       switch (command.id) {
         case "quit":
-          setStatus("Web 页面仍在运行，可关闭当前浏览器标签页");
-          setAttachmentError("Web 端不退出本地服务，请直接关闭当前页面");
+          setStatus(t("slash.running"));
+          setAttachmentError(t("slash.closePage"));
           break;
         case "new":
           setAttachments([]);
@@ -74,7 +75,7 @@ export function useComposerSlashCommands({
             // rejection 避免未处理拒绝。AppProvider 也会把同一条失败写进
             // AppState.status，状态栏同样会显示。
             setAttachmentError(
-              `创建会话失败：${errorMessage(error)}`,
+              t("slash.createFailed", errorMessage(error)),
             );
           });
           break;
@@ -82,29 +83,29 @@ export function useComposerSlashCommands({
           renameCurrentSession(args);
           break;
         case "init":
-          setAttachmentError("/init 暂未接入 Web 前端");
+          setAttachmentError(t("slash.unavailable", "/init"));
           break;
         case "clear":
           setAttachments([]);
-          setStatus("已清空输入");
-          setComposerNotice("已清空输入和未发送附件");
+          setStatus(t("slash.inputCleared"));
+          setComposerNotice(t("slash.draftCleared"));
           break;
         case "copy": {
           const latestAssistantContent = getLatestAssistantContent();
           if (!latestAssistantContent) {
-            setAttachmentError("没有可复制的助手回复");
+            setAttachmentError(t("slash.noReply"));
             break;
           }
           // 剪贴板写入只走 utils/clipboard 的唯一实现：Clipboard API 与兼容复制的
           // 取舍、非安全上下文回退都在那里收口，这里不重复造第二套。
           void copyTextToClipboard(latestAssistantContent)
             .then(() => {
-              setStatus("已复制最近助手回复");
-              setComposerNotice("已复制最近助手回复");
+              setStatus(t("slash.replyCopied"));
+              setComposerNotice(t("slash.replyCopied"));
             })
             .catch((error: unknown) => {
               setAttachmentError(
-                `复制失败：${errorMessage(error)}`,
+                t("slash.copyFailed", errorMessage(error)),
               );
             });
           break;
@@ -114,14 +115,14 @@ export function useComposerSlashCommands({
           break;
         case "model":
           setAgentMenuOpen(true);
-          setStatus("已打开 Agent 配置选择");
-          setComposerNotice("当前没有独立模型选择，模型由 Agent 配置决定");
+          setStatus(t("slash.agentOpened"));
+          setComposerNotice(t("slash.agentModel"));
           break;
         case "agent":
           setAgentMenuOpen(true);
           break;
         case "theme":
-          setAttachmentError("/theme 暂未接入 Web 前端");
+          setAttachmentError(t("slash.unavailable", "/theme"));
           break;
         case "view":
           setViewMenuOpen(true);
@@ -149,14 +150,14 @@ export function useComposerSlashCommands({
             void compactSession()
               .then((compactResult) => {
                 setComposerNotice(compactResult.status === "scheduled"
-                  ? "已安排上下文压缩，将在下一条消息发送前执行"
+                  ? t("slash.compactScheduled")
                   : compactResult.status === "compacted"
-                    ? `已压缩上下文：${compactResult.summarized_message_count} 条消息`
-                    : `上下文未压缩：${compactResult.message}`);
+                    ? t("slash.compacted", compactResult.summarized_message_count)
+                    : t("slash.notCompacted", compactResult.message));
               })
               .catch((error: unknown) => {
                 setAttachmentError(
-                  `上下文压缩失败：${errorMessage(error)}`,
+                  t("slash.compactFailed", errorMessage(error)),
                 );
               });
           }
@@ -208,9 +209,9 @@ export function useComposerSlashCommands({
       if (command && !command.disabled) {
         runSlashCommand(command, commandArgs);
       } else if (command?.disabled) {
-        setAttachmentError(`${command.command} 暂未接入 Web 前端`);
+        setAttachmentError(t("slash.unavailable", command.command));
       } else {
-        setAttachmentError(`未知指令：/${slashQuery}`);
+        setAttachmentError(t("slash.unknown", slashQuery));
       }
       return true;
     },

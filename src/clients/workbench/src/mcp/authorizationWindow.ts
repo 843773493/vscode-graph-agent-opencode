@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { completeMcpAuthorization, getMcpAuthorization, type McpConnectionOperationDTO } from "../../../web/src/api/mcpConnections.js";
 import type { GatewayWorkspaceRequestTarget } from "../../../web/src/api/workspaceIdentity.js";
 
@@ -9,14 +10,14 @@ export async function authorizeMcpInWindow(port: number, target: GatewayWorkspac
   target = Object.freeze({ ...target });
   const operationId = operation.operation_id, deadline = operation.deadline;
   const popup = window.open("about:blank", "_blank", "popup,width=720,height=800");
-  if (!popup) throw new Error("浏览器阻止了授权窗口，请允许弹出窗口后重试。");
+  if (!popup) throw new Error(t('workbench.mcp.popupBlocked'));
   try {
     const { authorization_url: authorizationUrl } = await getMcpAuthorization(port, target, operationId, signal);
     const url = new URL(authorizationUrl);
     const redirectUri = url.searchParams.get("redirect_uri");
     const redirect = redirectUri ? new URL(redirectUri) : null;
     if (!redirect || redirect.origin !== window.location.origin || redirect.pathname !== MCP_OAUTH_CALLBACK_PATH || redirect.search || redirect.hash) {
-      throw new Error(`此 Web 入口要求该 Server 的 oauth.redirect_uri 配置为 ${window.location.origin}${MCP_OAUTH_CALLBACK_PATH}，以便将回调交给原工作区。`);
+      throw new Error(t('workbench.mcp.callbackUriRequired', window.location.origin + MCP_OAUTH_CALLBACK_PATH));
     }
     if (signal.aborted) throw signal.reason;
     return await new Promise<McpConnectionOperationDTO>((resolve, reject) => {
@@ -39,16 +40,16 @@ export async function authorizeMcpInWindow(port: number, target: GatewayWorkspac
         if (!data || typeof data !== "object" || !("type" in data) || data.type !== MCP_OAUTH_MESSAGE) return;
         received = true;
         if (!("code" in data) || typeof data.code !== "string" || !("state" in data) || typeof data.state !== "string") {
-          finish(new Error("授权已拒绝或回调缺少 code/state；连接尚未就绪。"));
+          finish(new Error(t('workbench.mcp.authorizationDenied')));
           return;
         }
         void completeMcpAuthorization(port, target, operationId, { code: data.code, state: data.state }, signal)
           .then((value) => finish(undefined, value), (error: unknown) => finish(error));
       };
       const closed = window.setInterval(() => {
-        if (popup.closed && !received) finish(new Error("授权窗口已关闭，连接状态尚未确认；可以重试授权或查看实际状态。"));
+        if (popup.closed && !received) finish(new Error(t('workbench.mcp.authorizationWindowClosed')));
       }, 500);
-      const expiry = window.setTimeout(() => finish(new Error("原授权操作已到期限，请刷新实际状态。")), Math.max(0, deadline * 1000 - Date.now()));
+      const expiry = window.setTimeout(() => finish(new Error(t('workbench.mcp.authorizationExpired'))), Math.max(0, deadline * 1000 - Date.now()));
       window.addEventListener("message", receive);
       signal.addEventListener("abort", abort, { once: true });
       popup.location.href = authorizationUrl;

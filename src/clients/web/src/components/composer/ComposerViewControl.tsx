@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import {
   COMPOSER_VIEW_OPTIONS,
@@ -36,8 +37,8 @@ export default function ComposerViewControl({
         type="button"
         className="composer-icon-button composer-view-button"
         onClick={onToggle}
-        title={`打开视图菜单，当前：${currentView.label}。${currentView.description}`}
-        aria-label={`打开视图菜单，当前：${currentView.label}`}
+        title={t("composer.view.openDetail", currentView.label, currentView.description)}
+        aria-label={t("composer.view.open", currentView.label)}
         aria-haspopup="menu"
         aria-expanded={open}
       >

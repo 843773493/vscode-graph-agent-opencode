@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import type { ReactNode } from "react";
 import type {
   SessionChangeset,
@@ -104,10 +105,10 @@ export default function WorkspaceAuxiliaryPanel({
         hidden={tab !== "changes"}
         data-bt-surface="layout"
       >
-          <div className="auxiliary-scope-context" aria-label="更改范围">
-            <span>变更范围</span>
-            <strong title={workspaceName}>{workspaceName || "当前工作区"}</strong>
-            <span title={sessionTitle}>{sessionTitle || "当前会话"} · 仅会话文件变更</span>
+          <div className="auxiliary-scope-context" aria-label={t("workspace.auxiliary.changesScope")}>
+            <span>{t("workspace.auxiliary.changeScope")}</span>
+            <strong title={workspaceName}>{workspaceName || t("workspace.auxiliary.currentWorkspace")}</strong>
+            <span title={sessionTitle}>{sessionTitle || t("workspace.auxiliary.currentSession")} · {t("workspace.auxiliary.sessionFileChangesOnly")}</span>
           </div>
           <SessionChangesTree
             changesets={sessionChangesets}
@@ -122,17 +123,17 @@ export default function WorkspaceAuxiliaryPanel({
             onReviewFile={onReviewSessionChangeFile}
           />
           <section className="auxiliary-tree-section">
-            <header>工作区更改</header>
+            <header>{t("workspace.auxiliary.workspaceChanges")}</header>
             <div className="auxiliary-empty-row">
               <span className="codicon codicon-git-compare" aria-hidden="true" />
-              <span>工作区未提交更改尚未接入；当前列表只显示本会话产生的文件变更。</span>
+              <span>{t("workspace.auxiliary.uncommittedNotAvailable")}</span>
             </div>
           </section>
           <section className="auxiliary-tree-section">
-            <header>其他文件</header>
+            <header>{t("workspace.auxiliary.otherFiles")}</header>
             <div className="auxiliary-empty-row muted">
               <span className="codicon-lite">◇</span>
-              <span>暂无可展示文件</span>
+              <span>{t("workspace.auxiliary.noDisplayableFiles")}</span>
             </div>
           </section>
       </div>
@@ -143,12 +144,12 @@ export default function WorkspaceAuxiliaryPanel({
         hidden={tab !== "files"}
         data-bt-surface="layout"
       >
-          <div className="auxiliary-files-toolbar" aria-label="文件操作">
+          <div className="auxiliary-files-toolbar" aria-label={t("workspace.auxiliary.fileActions")}>
             <button
               type="button"
               className={`auxiliary-icon-button${searchOpen ? " active" : ""}`}
-              title="搜索文件"
-              aria-label="搜索文件"
+              title={t("workspace.auxiliary.searchFiles")}
+              aria-label={t("workspace.auxiliary.searchFiles")}
               onClick={onToggleSearch}
             >
               <span className="auxiliary-action-icon search" aria-hidden="true" />
@@ -156,8 +157,8 @@ export default function WorkspaceAuxiliaryPanel({
             <button
               type="button"
               className="auxiliary-icon-button"
-              title="全部折叠"
-              aria-label="全部折叠"
+              title={t("workspace.auxiliary.collapseAll")}
+              aria-label={t("workspace.auxiliary.collapseAll")}
               onClick={onCollapseAll}
             >
               <span className="codicon codicon-collapse-all auxiliary-action-icon" aria-hidden="true" />
@@ -198,12 +199,12 @@ export default function WorkspaceAuxiliaryPanel({
         hidden={tab !== "goal"}
         data-bt-surface="layout"
         role="tabpanel"
-        aria-label="任务"
+        aria-label={t("workspace.auxiliary.tasks")}
       >
         {sessionId ? (
-          <div className="auxiliary-scope-context" aria-label="任务范围">
-            <span>当前会话</span>
-            <strong title={sessionTitle}>{sessionTitle} · 关联任务</strong>
+          <div className="auxiliary-scope-context" aria-label={t("workspace.auxiliary.taskScope")}>
+            <span>{t("workspace.auxiliary.currentSession")}</span>
+            <strong title={sessionTitle}>{sessionTitle} · {t("workspace.auxiliary.associatedTasks")}</strong>
           </div>
         ) : null}
         {tab === "goal" ? taskPanel : null}

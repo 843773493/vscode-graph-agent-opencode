@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 import {
   registerWorkspaceObservation,
   useWorkspaceObservationState,
@@ -53,7 +54,7 @@ export function useWorkspaceFileWatch({
       cursor.current.eventId = Math.max(cursor.current.eventId ?? 0, batch.event_id);
       if (batch.overflow) {
         onOverflow(batch.invalidated_roots);
-        onStatusChange("文件变化过快，已重新同步展开目录");
+        onStatusChange(t("fileTree.watch.overflow"));
         return;
       }
       dispatchWorkspaceFileChanges(workspaceId, batch.changes, batch.directories, batch.snapshots);
@@ -71,14 +72,14 @@ export function useWorkspaceFileWatch({
             // 只有真的从断流里接回来才写恢复文案：计数归零之后不再宣称
             // 「正在重连」，否则状态栏会永久停留在一条与事实不符的失败文案上。
             if (reconnectAttempt > 0) {
-              onStatusChange("文件监听流已恢复实时同步");
+              onStatusChange(t("fileTree.watch.recovered"));
             }
             reconnectDelayMs = 500;
             reconnectAttempt = 0;
           },
         });
         if (!controller.signal.aborted) {
-          throw new Error("文件监听流意外结束");
+          throw new Error(t("fileTree.watch.ended"));
         }
       } catch (error) {
         if (controller.signal.aborted) {
@@ -89,13 +90,13 @@ export function useWorkspaceFileWatch({
         // 这里限制的是「连续若干次都没能建立连接」。
         if (reconnectAttempt >= SESSION_STREAM_MAX_RECONNECT_ATTEMPTS) {
           onStatusChange(
-            `文件监听流连续 ${SESSION_STREAM_MAX_RECONNECT_ATTEMPTS} 次重连失败，已停止自动重连；请刷新页面或切换工作区后重试`,
+            t("fileTree.watch.reconnectLimit", SESSION_STREAM_MAX_RECONNECT_ATTEMPTS),
           );
           return;
         }
         reconnectAttempt += 1;
         const message = errorMessage(error);
-        onStatusChange(`${message}；正在重连`);
+        onStatusChange(t("fileTree.watch.reconnecting", message));
         reconnectTimer = window.setTimeout(() => {
           reconnectTimer = null;
           void connect();

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import {
   deleteGatewayUiAsset,
   listGatewayUiAssets,
@@ -59,7 +60,7 @@ export default function GatewayThemeSettings({
     setError(null);
     try {
       await reload();
-      setNotice("已重新读取背景图片。 ");
+      setNotice(t("gateway.theme.reloadAssetsDone"));
     } catch (reloadError) {
       setError(errorMessage(reloadError));
     } finally {
@@ -92,15 +93,15 @@ export default function GatewayThemeSettings({
   const backgroundOptions = { position, size, repeat, overlay };
   const saveRemote = () => runUpdate(
     { image: remoteUrl.trim(), ...backgroundOptions },
-    "网络背景已保存。",
+    t("gateway.theme.remoteSaved"),
   );
   const useAsset = (asset: GatewayUiAsset) => runUpdate(
     { image: new URL(asset.url, window.location.href).href, ...backgroundOptions },
-    "本地背景已保存。",
+    t("gateway.theme.localSaved"),
   );
   const clearBackground = () => runUpdate(
     { image: "", ...backgroundOptions },
-    "已清除背景图片。",
+    t("gateway.theme.backgroundCleared"),
   );
 
   const upload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -113,7 +114,7 @@ export default function GatewayThemeSettings({
     try {
       await uploadGatewayUiAsset(apiPort, file);
       await reload();
-      setNotice("背景图片已导入 Gateway；请选择图片后点击使用。 ");
+      setNotice(t("gateway.theme.assetImported"));
     } catch (uploadError) {
       setError(errorMessage(uploadError));
     } finally {
@@ -126,13 +127,13 @@ export default function GatewayThemeSettings({
     setError(null);
     try {
       setAssets(await deleteGatewayUiAsset(apiPort, assetId));
-      setNotice("背景资源已删除。 ");
+      setNotice(t("gateway.theme.assetDeleted"));
     } catch (deleteError) {
       try {
         await reload();
         setError(errorMessage(deleteError));
       } catch (reloadError) {
-        setError(`删除背景资源失败，且重新读取 Gateway 状态失败：${String(deleteError)}；${String(reloadError)}`);
+        setError(t("gateway.theme.deleteAndReloadFailed", String(deleteError), String(reloadError)));
       }
     } finally {
       setBusy(false);
@@ -143,7 +144,7 @@ export default function GatewayThemeSettings({
     setError(null);
     try {
       await copyTextToClipboard(THEME_CONFIG_EXAMPLE);
-      setNotice("主题配置示例已复制。 ");
+      setNotice(t("gateway.theme.exampleCopied"));
     } catch (copyError) {
       setError(errorMessage(copyError));
     }
@@ -151,44 +152,44 @@ export default function GatewayThemeSettings({
 
   return (
     <div className="gateway-theme-settings">
-      {error ? <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" /><div><strong>主题设置失败</strong><span>{error}</span></div></div> : null}
+      {error ? <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" /><div><strong>{t("gateway.theme.settingsFailed")}</strong><span>{error}</span></div></div> : null}
       {notice ? <div className="gateway-console-notice" role="status"><span className="codicon codicon-pass-filled" />{notice}</div> : null}
 
       <section className="gateway-theme-section">
-        <div className="gateway-theme-section-heading"><div><h2>工作台主题</h2><p>会话与工作台共用主题扩展和当前 profile 的 settings.json，切换立即生效。</p></div>
-          <button type="button" onClick={() => void onSelectColorTheme().catch((cause: unknown) => setError(errorMessage(cause)))}>选择颜色主题</button>
+        <div className="gateway-theme-section-heading"><div><h2>{t("gateway.theme.workbenchTheme")}</h2><p>{t("gateway.theme.workbenchThemeDetail")}</p></div>
+          <button type="button" onClick={() => void onSelectColorTheme().catch((cause: unknown) => setError(errorMessage(cause)))}>{t("gateway.theme.selectColorTheme")}</button>
         </div>
       </section>
 
       <section className="gateway-theme-section">
-        <div className="gateway-theme-section-heading"><div><h2>背景图片</h2><p>背景随当前 Workbench profile 的 settings.json 保存。Gateway 只保存导入的图片；删除图片会影响引用它的其他 profile。</p></div><button type="button" disabled={busy} onClick={() => void clearBackground()}>清除背景图片</button></div>
+        <div className="gateway-theme-section-heading"><div><h2>{t("gateway.theme.backgroundImage")}</h2><p>{t("gateway.theme.backgroundDetail")}</p></div><button type="button" disabled={busy} onClick={() => void clearBackground()}>{t("gateway.theme.clearBackground")}</button></div>
         <div className="gateway-theme-background-options">
-          <label>位置<input value={position} onChange={(event) => setPosition(event.target.value)} /></label>
-          <label>尺寸<input value={size} onChange={(event) => setSize(event.target.value)} /></label>
-          <label>重复<select value={repeat} onChange={(event) => setRepeat(event.target.value as AppearanceBackground["repeat"])}><option value="no-repeat">不重复</option><option value="repeat">重复</option><option value="repeat-x">横向重复</option><option value="repeat-y">纵向重复</option><option value="space">均匀留空</option><option value="round">缩放铺满</option></select></label>
-          <label className="wide">遮罩<input value={overlay} onChange={(event) => setOverlay(event.target.value)} /></label>
+          <label>{t("gateway.theme.position")}<input value={position} onChange={(event) => setPosition(event.target.value)} /></label>
+          <label>{t("gateway.theme.size")}<input value={size} onChange={(event) => setSize(event.target.value)} /></label>
+          <label>{t("gateway.theme.repeat")}<select value={repeat} onChange={(event) => setRepeat(event.target.value as AppearanceBackground["repeat"])}><option value="no-repeat">{t("gateway.theme.noRepeat")}</option><option value="repeat">{t("gateway.theme.repeatAll")}</option><option value="repeat-x">{t("gateway.theme.repeatHorizontal")}</option><option value="repeat-y">{t("gateway.theme.repeatVertical")}</option><option value="space">{t("gateway.theme.spaceEvenly")}</option><option value="round">{t("gateway.theme.scaleToFit")}</option></select></label>
+          <label className="wide">{t("gateway.theme.overlay")}<input value={overlay} onChange={(event) => setOverlay(event.target.value)} /></label>
         </div>
         <div className="gateway-theme-remote-row">
           <input type="url" placeholder="https://example.com/background.webp" value={remoteUrl} onChange={(event) => setRemoteUrl(event.target.value)} />
-          <button type="button" disabled={busy || !remoteUrl.trim()} onClick={() => void saveRemote()}>使用网络背景</button>
-          <label className="gateway-theme-upload"><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy} onChange={(event) => void upload(event)} />导入本地图片</label>
+          <button type="button" disabled={busy || !remoteUrl.trim()} onClick={() => void saveRemote()}>{t("gateway.theme.useRemoteBackground")}</button>
+          <label className="gateway-theme-upload"><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" disabled={busy} onChange={(event) => void upload(event)} />{t("gateway.theme.importLocalImage")}</label>
         </div>
-        <button type="button" disabled={busy} onClick={() => void handleReload()}>重新读取配置</button>
+        <button type="button" disabled={busy} onClick={() => void handleReload()}>{t("gateway.theme.reloadConfig")}</button>
         <div className="gateway-theme-assets">
-          {assets === null ? (error ? null : <p>正在读取背景图片…</p>) : assets.length === 0 ? <p>尚未导入本地背景图片。</p> : assets.map((asset) => (
+          {assets === null ? (error ? null : <p>{t("gateway.theme.loadingAssets")}</p>) : assets.length === 0 ? <p>{t("gateway.theme.noLocalAssets")}</p> : assets.map((asset) => (
             <article key={asset.asset_id}>
               <img src={asset.url} alt="" />
-              <div><strong>{asset.original_filename}</strong><small>{(asset.size / 1024).toFixed(1)} KiB{background.image === new URL(asset.url, window.location.href).href ? " · 当前使用中" : ""}</small></div>
-              <button type="button" disabled={busy} onClick={() => void useAsset(asset)}>使用</button>
-              <button type="button" disabled={busy || background.image === new URL(asset.url, window.location.href).href} onClick={() => void removeAsset(asset.asset_id)}>删除</button>
+              <div><strong>{asset.original_filename}</strong><small>{(asset.size / 1024).toFixed(1)} KiB{background.image === new URL(asset.url, window.location.href).href ? ` · ${t("gateway.theme.inUse")}` : ""}</small></div>
+              <button type="button" disabled={busy} onClick={() => void useAsset(asset)}>{t("gateway.theme.use")}</button>
+              <button type="button" disabled={busy || background.image === new URL(asset.url, window.location.href).href} onClick={() => void removeAsset(asset.asset_id)}>{t("gateway.theme.delete")}</button>
             </article>
           ))}
         </div>
       </section>
 
       <section className="gateway-theme-config-help">
-        <div className="gateway-theme-section-heading"><div><strong>自定义主题</strong></div><button type="button" onClick={() => void copyConfigExample()}>复制配置示例</button></div>
-        <p>在当前 profile 的 <code>settings.json</code> 中使用 <code>workbench.colorTheme</code> 选择已安装主题，以 <code>workbench.colorCustomizations</code> 调整标准颜色或 <code>boxteam.chat.*</code> 聊天颜色；背景使用 <code>boxteam.appearance.background</code>，无需重启 Gateway。</p>
+        <div className="gateway-theme-section-heading"><div><strong>{t("gateway.theme.customTheme")}</strong></div><button type="button" onClick={() => void copyConfigExample()}>{t("gateway.theme.copyExample")}</button></div>
+        <p>{t("gateway.theme.customThemeDetailPrefix")} <code>settings.json</code> {t("gateway.theme.customThemeDetailMiddle")} <code>workbench.colorTheme</code> {t("gateway.theme.customThemeDetailContinue")} <code>workbench.colorCustomizations</code> {t("gateway.theme.customThemeDetailColors")} <code>boxteam.chat.*</code> {t("gateway.theme.customThemeDetailBackground")} <code>boxteam.appearance.background</code>{t("gateway.theme.customThemeDetailEnd")}</p>
       </section>
     </div>
   );

@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
 import { memo, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -40,18 +41,18 @@ const DebugVariableSection = memo(function DebugVariableSection({
 
   return (
     <section className="node-debug-section node-debug-variable-section">
-      <div className="debug-section-title-row"><h3>局部变量</h3><span>{localVariables.length}</span></div>
+      <div className="debug-section-title-row"><h3>{t("debug.context.locals")}</h3><span>{formatNumber(localVariables.length)}</span></div>
       {localVariables.length > 0 ? (
         <DebugVariableRows variables={localVariables} />
       ) : (
-        <span className="debug-muted">当前栈帧没有可展示的局部变量</span>
+        <span className="debug-muted">{t("debug.context.noLocals")}</span>
       )}
       {globalVariables.length > 0 ? (
         <details className="node-debug-variable-group">
-          <summary>全局变量 <span>{globalVariables.length}</span></summary>
+          <summary>{t("debug.context.globals")} <span>{formatNumber(globalVariables.length)}</span></summary>
           <DebugVariableRows variables={globalVariablePreview} />
           {globalVariables.length > GLOBAL_VARIABLE_PREVIEW_LIMIT ? (
-            <small>仅显示前 {GLOBAL_VARIABLE_PREVIEW_LIMIT} 项；可在上方 Watch 中按名称求值。</small>
+            <small>{t("debug.context.globalLimit", formatNumber(GLOBAL_VARIABLE_PREVIEW_LIMIT))}</small>
           ) : null}
         </details>
       ) : null}
@@ -82,7 +83,7 @@ export default function NodeDebugContextView({
   return (
     <div className="node-debug-view node-debug-context-view" role="tabpanel">
       <section className="node-debug-section">
-        <div className="debug-section-title-row"><h3>调用栈</h3><span>{state?.call_stack?.length ?? 0} 帧</span></div>
+        <div className="debug-section-title-row"><h3>{t("debug.context.stack")}</h3><span>{t("debug.context.frames", formatNumber(state?.call_stack?.length ?? 0))}</span></div>
         {(state?.call_stack ?? []).map((frame, index) => (
           <button
             type="button"
@@ -94,13 +95,13 @@ export default function NodeDebugContextView({
             <span>{frame.path ?? frame.url}:{frame.line}</span>
           </button>
         ))}
-        {!activeFrame ? <div className="debug-empty-state compact">命中源码断点后显示调用栈和变量。</div> : null}
+        {!activeFrame ? <div className="debug-empty-state compact">{t("debug.context.noFrame")}</div> : null}
       </section>
       <section className="node-debug-section">
-        <div className="debug-section-title-row"><h3>Watch / 求值</h3><span>{status === "paused" ? "可用" : "需暂停"}</span></div>
+        <div className="debug-section-title-row"><h3>{t("debug.context.watch")}</h3><span>{status === "paused" ? t("debug.console.available") : t("debug.console.pauseRequired")}</span></div>
         <div className="node-debug-evaluate-row">
-          <input value={expression} onChange={(event) => setExpression(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onEvaluate(); }} placeholder="输入表达式" />
-          <button type="button" onClick={onEvaluate} disabled={actionBusy || status !== "paused"}>求值</button>
+          <input value={expression} onChange={(event) => setExpression(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onEvaluate(); }} placeholder={t("debug.context.expression")} />
+          <button type="button" onClick={onEvaluate} disabled={actionBusy || status !== "paused"}>{t("debug.console.evaluate")}</button>
         </div>
         {state?.last_evaluation ? <pre>{state.last_evaluation.error ?? state.last_evaluation.value ?? state.last_evaluation.description ?? "undefined"}</pre> : null}
       </section>

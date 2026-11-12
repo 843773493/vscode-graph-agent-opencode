@@ -23,6 +23,7 @@ import {
 } from "../../state/gatewayWorkspaceState";
 import type { FinishWorkspaceRefresh, RunGatewayWorkspaceListTask, SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
+import { t } from "../../../../shared/core/i18n/index.js";
 import { activeGatewayWorkspaceFields } from "./activeGatewayWorkspaceFields";
 import { pauseWorkspaceObservations } from "../workspace/workspaceObservationLifecycle";
 
@@ -101,20 +102,20 @@ export function useGatewayWorkspaceMutations({
             expectedListRequest = gatewayListRequestRef.current;
             const appliedWorkspaceId = await refresh;
             if (appliedWorkspaceId === null) {
-              refreshError = "刷新工作区列表未生效：本轮刷新已被更新的请求作废";
+              refreshError = t("gateway.workspace.refreshSuperseded");
             } else if (expectedListRequest === listRequest) {
-              refreshError = "刷新工作区列表未生效：未取得新的列表代次";
+              refreshError = t("gateway.workspace.refreshNoNewListGeneration");
             } else if (expectedListRequest !== gatewayListRequestRef.current
               || selectionIntent !== selectionIntentRef.current) {
-              refreshError = "刷新工作区列表结果已被更新的请求取代";
+              refreshError = t("gateway.workspace.refreshResultReplaced");
             } else {
               refreshApplied = true;
             }
           } catch (error) {
-            refreshError = `刷新工作区列表失败: ${errorMessage(error)}`;
+            refreshError = t("gateway.workspace.refreshWorkspaceListFailed", errorMessage(error));
           }
         } else {
-          refreshError = "活动工作区已变化，但刷新工作区列表未执行：当前列表请求或工作区选择已更新";
+          refreshError = t("gateway.workspace.activeWorkspaceChangedButRefreshSkipped");
         }
       }
 
@@ -122,25 +123,25 @@ export function useGatewayWorkspaceMutations({
         const details = [
           errorMessage(postError),
           ...(listReadFailed
-            ? [`读取 Gateway 工作区列表失败: ${errorMessage(listReadError)}`]
+            ? [t("gateway.workspace.readGatewayWorkspaceListFailed", errorMessage(listReadError))]
             : []),
           ...(refreshError ? [refreshError] : []),
         ];
-        const message = details.join("；");
-        const scopedFailure = `工作区 root_path="${payload.root_path}" 添加失败: ${message}`;
+        const message = details.join(t("gateway.workspace.blockerSeparator"));
+        const scopedFailure = t("gateway.workspace.addWorkspacePathFailed", payload.root_path, message);
         setState((prev) => {
           if (expectedListRequest !== gatewayListRequestRef.current
             || selectionIntent !== selectionIntentRef.current) {
             return {
               ...prev,
-              status: prev.status ? `${prev.status}；${scopedFailure}` : scopedFailure,
+              status: prev.status ? `${prev.status}${t("gateway.workspace.blockerSeparator")}${scopedFailure}` : scopedFailure,
             };
           }
           return {
             ...prev,
             workspaceSwitching: false,
             gatewayError: message,
-            status: `添加工作区失败: ${message}`,
+            status: t("gateway.workspace.addWorkspaceFailed", message),
             isBootstrapping: false,
           };
         });
@@ -149,7 +150,7 @@ export function useGatewayWorkspaceMutations({
 
       const reconciliationErrors: string[] = [];
       if (listReadFailed) {
-        reconciliationErrors.push(`读取 Gateway 工作区列表失败: ${errorMessage(listReadError)}`);
+        reconciliationErrors.push(t("gateway.workspace.readGatewayWorkspaceListFailed", errorMessage(listReadError)));
       }
       if (listRequest === gatewayListRequestRef.current
         && selectionIntent === selectionIntentRef.current) {
@@ -159,41 +160,38 @@ export function useGatewayWorkspaceMutations({
           const appliedWorkspaceId = await refresh;
           if (appliedWorkspaceId === null) {
             reconciliationErrors.push(
-              "刷新工作区列表未生效：本轮刷新已被更新的请求作废",
+              t("gateway.workspace.refreshSuperseded"),
             );
           } else if (expectedListRequest === listRequest) {
-            reconciliationErrors.push("刷新工作区列表未生效：未取得新的列表代次");
+            reconciliationErrors.push(t("gateway.workspace.refreshNoNewListGeneration"));
           } else if (expectedListRequest !== gatewayListRequestRef.current
             || selectionIntent !== selectionIntentRef.current) {
-            reconciliationErrors.push("刷新工作区列表结果已被更新的请求取代");
+            reconciliationErrors.push(t("gateway.workspace.refreshResultReplaced"));
           } else {
             refreshApplied = true;
           }
         } catch (error) {
-          reconciliationErrors.push(`刷新工作区列表失败: ${errorMessage(error)}`);
+          reconciliationErrors.push(t("gateway.workspace.refreshWorkspaceListFailed", errorMessage(error)));
         }
       } else if (listReadFailed) {
         reconciliationErrors.push(
-          "刷新工作区列表未执行：当前列表请求或工作区选择已更新",
+          t("gateway.workspace.refreshSkippedAfterSelectionChanged"),
         );
       }
 
       if (listReadFailed && refreshApplied) {
-        reconciliationErrors.splice(
-          reconciliationErrors.findIndex((error) =>
-            error.startsWith("读取 Gateway 工作区列表失败:")),
-          1,
-        );
+        reconciliationErrors.shift();
       }
       if (reconciliationErrors.length > 0) {
-        const message = `工作区已添加，但界面同步失败: ${reconciliationErrors.join("；")}`;
-        const scopedFailure = `工作区 root_path="${payload.root_path}" 已添加，但界面同步失败: ${reconciliationErrors.join("；")}`;
+        const details = reconciliationErrors.join(t("gateway.workspace.blockerSeparator"));
+        const message = t("gateway.workspace.workspaceAddedButSyncFailed", details);
+        const scopedFailure = t("gateway.workspace.workspacePathAddedButSyncFailed", payload.root_path, details);
         setState((prev) => {
           if (expectedListRequest !== gatewayListRequestRef.current
             || selectionIntent !== selectionIntentRef.current) {
             return {
               ...prev,
-              status: prev.status ? `${prev.status}；${scopedFailure}` : scopedFailure,
+              status: prev.status ? `${prev.status}${t("gateway.workspace.blockerSeparator")}${scopedFailure}` : scopedFailure,
             };
           }
           return {
@@ -233,7 +231,7 @@ export function useGatewayWorkspaceMutations({
                 ...activeGatewayWorkspaceFields(workspaces),
               }) : prev);
             } catch (reconciliationError) {
-              message += `；读取 Gateway 工作区列表失败: ${errorMessage(reconciliationError)}`;
+              message += t("gateway.workspace.readGatewayWorkspaceListFailedSuffix", errorMessage(reconciliationError));
               setState((prev) => requestIsCurrent()
                 ? { ...prev, gatewayWorkspacesStale: true }
                 : prev);
@@ -243,7 +241,7 @@ export function useGatewayWorkspaceMutations({
             ...prev,
             workspaceSwitching: false,
             gatewayError: message,
-            status: `连接远程 Gateway 失败: ${message}`,
+            status: t("gateway.workspace.connectRemoteGatewayFailed", message),
             isBootstrapping: false,
           }) : prev);
           throw error;
@@ -258,7 +256,7 @@ export function useGatewayWorkspaceMutations({
         await finishWorkspaceRefresh(undefined, { selectionIntent });
       } catch (error) {
         const detail = errorMessage(error);
-        const message = `远程 Gateway 已连接，但界面同步失败: ${detail}`;
+        const message = t("gateway.workspace.remoteGatewayConnectedButSyncFailed", detail);
         setState((prev) => selectionIntent === selectionIntentRef.current ? ({
           ...prev,
           workspaceSwitching: false,
@@ -281,7 +279,7 @@ export function useGatewayWorkspaceMutations({
       const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
       const removedActiveWorkspace = workspaceId === activeGatewayWorkspaceId;
       let workspaceRemoved = false;
-      let postCommitFailureStage: "删除响应处理" | "本地界面设置清理" | "新活动工作区加载" | null = null;
+      let postCommitFailureStage: string | null = null;
       let activeWorkspaceChanged = false;
       invalidateWorkspaceRefreshes();
       const listRequest = ++gatewayListRequestRef.current;
@@ -299,7 +297,7 @@ export function useGatewayWorkspaceMutations({
         ]),
         gatewayError: null,
         error: null,
-        status: "正在删除工作区",
+        status: t("gateway.workspace.deletingWorkspace"),
       }) : prev);
       try {
         await runGatewayWorkspaceListTask(() => apiRemoveGatewayWorkspace(
@@ -309,7 +307,7 @@ export function useGatewayWorkspaceMutations({
           force,
         ), (workspaceList) => {
         workspaceRemoved = true;
-        postCommitFailureStage = "删除响应处理";
+        postCommitFailureStage = t("gateway.workspace.deleteResponseHandling");
         if (!listRequestIsCurrent()) return;
         activeWorkspaceChanged =
           nullableGatewayWorkspaceKey(workspaceList.active_workspace) !== activeGatewayWorkspaceId;
@@ -346,7 +344,7 @@ export function useGatewayWorkspaceMutations({
           };
         });
         });
-        postCommitFailureStage = "本地界面设置清理";
+        postCommitFailureStage = t("gateway.workspace.localUiSettingsCleanup");
         await updateUiSettings((current) => {
           const expandedPathsByWorkspace = {
             ...current.workspace_file_tree.expanded_paths_by_workspace,
@@ -371,7 +369,7 @@ export function useGatewayWorkspaceMutations({
         postCommitFailureStage = null;
         if (listRequestIsCurrent() && selectionIntent === selectionIntentRef.current
           && (removedActiveWorkspace || activeWorkspaceChanged)) {
-          postCommitFailureStage = "新活动工作区加载";
+          postCommitFailureStage = t("gateway.workspace.newActiveWorkspaceLoading");
           const refresh = finishWorkspaceRefresh(undefined, { selectionIntent });
           // finishWorkspaceRefresh 自己推进刷新代次；后续删除对账只能沿用它取得的代次。
           reconciliationGeneration = gatewayListRequestRef.current;
@@ -380,9 +378,9 @@ export function useGatewayWorkspaceMutations({
         }
       } catch (error) {
         const workspaceFailureMessage = errorMessage(error);
-        const postCommitStage = postCommitFailureStage ?? "删除响应处理";
+        const postCommitStage = postCommitFailureStage ?? t("gateway.workspace.deleteResponseHandling");
         const operationMessage = workspaceRemoved
-          ? `工作区已删除，但${postCommitStage}失败: ${workspaceFailureMessage}`
+          ? t("gateway.workspace.workspaceDeletedButStageFailed", postCommitStage, workspaceFailureMessage)
           : workspaceFailureMessage;
         let reconciliationMessage: string | null = null;
         const reconciliationIsCurrent = () =>
@@ -410,26 +408,32 @@ export function useGatewayWorkspaceMutations({
           }
         }
         const message = reconciliationMessage
-          ? `${operationMessage}；重新读取工作区列表也失败: ${reconciliationMessage}`
+          ? t("gateway.workspace.operationAndListReadFailed", operationMessage, reconciliationMessage)
           : operationMessage;
         const scopedFailure = workspaceRemoved
-          ? `工作区 ${workspaceId} 删除已提交，但${postCommitStage}失败: ${workspaceFailureMessage}${reconciliationMessage
-            ? `；重新读取工作区列表也失败: ${reconciliationMessage}`
-            : ""}`
-          : `工作区 ${workspaceId} 删除失败: ${message}`;
+          ? t(
+            "gateway.workspace.workspaceDeleteCommittedButStageFailed",
+            workspaceId,
+            postCommitStage,
+            workspaceFailureMessage,
+            reconciliationMessage
+              ? t("gateway.workspace.readWorkspaceListAlsoFailedSuffix", reconciliationMessage)
+              : "",
+          )
+          : t("gateway.workspace.deleteWorkspaceFailedForId", workspaceId, message);
         setState((prev) => {
           if (reconciliationIsCurrent() && selectionIntent === selectionIntentRef.current) {
             return {
               ...prev,
               workspaceSwitching: false,
               gatewayError: message,
-              status: workspaceRemoved ? message : `删除工作区失败: ${message}`,
+              status: workspaceRemoved ? message : t("gateway.workspace.deleteWorkspaceFailed", message),
               isBootstrapping: false,
             };
           }
           return {
             ...prev,
-            status: prev.status ? `${prev.status}；${scopedFailure}` : scopedFailure,
+            status: prev.status ? `${prev.status}${t("gateway.workspace.blockerSeparator")}${scopedFailure}` : scopedFailure,
           };
         });
         throw error;
@@ -471,7 +475,7 @@ export function useGatewayWorkspaceMutations({
           setState((prev) => listRequest === gatewayListRequestRef.current ? {
             ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
             ...(selectionIntent === selectionIntentRef.current ? {
-              ...activeGatewayWorkspaceFields(workspaceList), status: "工作区顺序已更新",
+              ...activeGatewayWorkspaceFields(workspaceList), status: t("gateway.workspace.workspaceOrderUpdated"),
             } : {}),
           } : prev);
         } catch (error) {
@@ -481,7 +485,7 @@ export function useGatewayWorkspaceMutations({
           try {
             workspaceList = await apiListGatewayWorkspaces(resolvedApiPort);
           } catch (reconciliationError) {
-            message += `；重新读取工作区列表也失败: ${errorMessage(reconciliationError)}`;
+            message += t("gateway.workspace.readWorkspaceListAlsoFailedSuffix", errorMessage(reconciliationError));
           }
           setState((prev) => {
             if (listRequest !== gatewayListRequestRef.current) return prev;
@@ -492,7 +496,7 @@ export function useGatewayWorkspaceMutations({
               ...reconciled,
               ...(workspaceList ? activeGatewayWorkspaceFields(workspaceList) : {}),
               gatewayError: message,
-              status: `工作区排序失败: ${message}`,
+              status: t("gateway.workspace.reorderWorkspacesFailed", message),
             } : reconciled;
           });
           throw error;
@@ -518,7 +522,7 @@ export function useGatewayWorkspaceMutations({
             (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
           );
           if (!renamedWorkspace) {
-            throw new Error(`Gateway 重命名响应缺少工作区: ${workspaceId}`);
+            throw new Error(t("gateway.workspace.renameResponseMissingWorkspace", workspaceId));
           }
           setState((prev) => {
             if (listRequest !== gatewayListRequestRef.current) return prev;
@@ -526,7 +530,7 @@ export function useGatewayWorkspaceMutations({
               ...withFreshGatewayWorkspaceList(prev, workspaceList.items),
               ...(selectionIntent === selectionIntentRef.current ? {
                 ...activeGatewayWorkspaceFields(workspaceList), gatewayError: null, error: null,
-                status: `工作区已重命名为「${renamedWorkspace.name}」`,
+                status: t("gateway.workspace.workspaceRenamed", renamedWorkspace.name),
               } : {}),
             };
           });
@@ -539,7 +543,7 @@ export function useGatewayWorkspaceMutations({
             workspaceList = await apiListGatewayWorkspaces(resolvedApiPort);
           } catch (reconciliationError) {
             const reconciliationMessage = errorMessage(reconciliationError);
-            message = `${operationMessage}；重新读取工作区列表也失败: ${reconciliationMessage}`;
+            message = t("gateway.workspace.operationAndListReadFailed", operationMessage, reconciliationMessage);
           }
           setState((prev) => {
             if (listRequest !== gatewayListRequestRef.current) return prev;
@@ -551,7 +555,7 @@ export function useGatewayWorkspaceMutations({
                 ...reconciled,
                 ...(workspaceList ? activeGatewayWorkspaceFields(workspaceList) : {}),
                 gatewayError: message,
-                status: `重命名工作区失败: ${message}`,
+                status: t("gateway.workspace.renameWorkspaceFailed", message),
               }
               : reconciled;
           });

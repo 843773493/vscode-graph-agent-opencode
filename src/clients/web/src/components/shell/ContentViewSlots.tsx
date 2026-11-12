@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import type { RequestLogNavigation } from "../../hooks/runtime/useRequestLogNavigation";
 import type { TraceNavigation } from "../../hooks/runtime/useTraceNavigation";
 import type { SessionViewState } from "../../state/sessionViewState";
@@ -112,7 +113,7 @@ function ContentViewSlot({
     <Suspense
       fallback={
         <div className="empty-state" role="status">
-          正在加载面板...
+          {t('shell.bootstrap.panelLoading')}
         </div>
       }
     >
@@ -194,14 +195,14 @@ export default function ContentViewSlots({
   if (error) {
     return (
       <div className="empty-state error-state">
-        <div className="error-title">前端初始化失败</div>
+        <div className="error-title">{t('shell.bootstrap.failed')}</div>
         <div className="error-message">{error}</div>
         <button
           type="button"
           className="error-retry-button"
           onClick={() => void onRetryGatewayState().catch(() => undefined)}
         >
-          重新加载工作区
+          {t('shell.bootstrap.reloadWorkspace')}
         </button>
       </div>
     );

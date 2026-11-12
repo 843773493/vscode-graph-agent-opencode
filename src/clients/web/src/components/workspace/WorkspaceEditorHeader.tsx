@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 
 import type { WorkspaceAuxiliaryTab } from "./WorkspaceAuxiliaryPanel";
 
@@ -17,33 +18,33 @@ const WORKSPACE_COMPONENT_OPTIONS: ReadonlyArray<{
 }> = [
   {
     tab: "files",
-    label: "文件",
-    description: "浏览工作区文件",
+    label: t("workspace.editor.files"),
+    description: t("workspace.editor.filesDescription"),
     icon: "codicon-file-directory",
   },
   {
     tab: "changes",
-    label: "更改",
-    description: "查看会话和工作区文件变更",
+    label: t("workspace.editor.changes"),
+    description: t("workspace.editor.changesDescription"),
     icon: "codicon-diff",
   },
   {
     // 保持用户已保存的布局标识，展示范围为会话关联任务。
     tab: "goal",
-    label: "任务",
-    description: "管理当前会话关联的 Goal、定时与条件任务",
+    label: t("workspace.editor.tasks"),
+    description: t("workspace.editor.tasksDescription"),
     icon: "codicon-checklist",
   },
   {
     tab: "debug",
-    label: "调试",
-    description: "暂停 Agent、管理断点和查看停止快照",
+    label: t("workspace.editor.debug"),
+    description: t("workspace.editor.debugDescription"),
     icon: "codicon-debug-alt",
   },
   {
     tab: "resources",
-    label: "运行与连接",
-    description: "查看终端、浏览器、后台连接和子会话线程",
+    label: t("workspace.editor.runtimeAndConnections"),
+    description: t("workspace.editor.runtimeAndConnectionsDescription"),
     icon: "codicon-server-process",
   },
 ];
@@ -112,8 +113,8 @@ export default function WorkspaceEditorHeader({
   });
 
   return (
-    <header className="workspace-editor-header" aria-label="右侧侧边栏组件">
-      <nav className="workspace-component-tabs" role="tablist" aria-label="右侧侧边栏组件标签">
+    <header className="workspace-editor-header" aria-label={t("workspace.editor.auxiliaryComponents")}>
+      <nav className="workspace-component-tabs" role="tablist" aria-label={t("workspace.editor.auxiliaryComponentTabs")}>
         {orderedOptions.map((option) => (
           <button
             type="button"

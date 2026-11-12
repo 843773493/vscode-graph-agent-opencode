@@ -1,3 +1,4 @@
+import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 
 type Props = {
@@ -42,7 +43,7 @@ export default class ChatTurnErrorBoundary extends React.Component<Props, State>
         <div className="chat-inline-error">
           <span className="codicon codicon-error" aria-hidden="true" />
           <span>
-            此轮消息无法显示：{this.state.error.message}
+            {t("chat.turn.renderFailed", this.state.error.message)}
           </span>
         </div>
       </article>

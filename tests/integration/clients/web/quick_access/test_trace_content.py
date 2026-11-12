@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import cast
 
+import httpx
 import pytest
 
 from app.schemas.search_federation import FederatedSearchRequest
@@ -18,7 +19,10 @@ from app.services.infrastructure.gateway_session_context_client import (
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
-    browser_backend as browser_backend,  # noqa: PLC0414
+    chat_backend as chat_backend,  # noqa: PLC0414
+)
+from tests.integration.clients.web.test_basic_chat_tool_loop import (
+    chat_backend_boxteam_home as chat_backend_boxteam_home,  # noqa: PLC0414
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
@@ -28,20 +32,28 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 
 QUERY = "轨迹定位😀词"
 
 
 async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
-    request: pytest.FixtureRequest, browser_backend: tuple[str, Path, ModelStreamReplay],
+    request: pytest.FixtureRequest, chat_backend: tuple[str, Path, ModelStreamReplay],
+    chat_backend_boxteam_home: Path,
+    prepared_developer_tools_package: Path,
     web_workbench_assets: Path, search_gateway_port: int,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "Trace 正文验收需要 Chromium"
-    backend_url, workspace, replay = browser_backend
+    backend_url, workspace, replay = chat_backend
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, chat_backend_boxteam_home)
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspace,
-        default_backend_url=backend_url, port=search_gateway_port, artifacts_dir=context.artifacts_dir / "gateway",
+        default_backend_url=backend_url, port=search_gateway_port,
+        artifacts_dir=context.artifacts_dir / "gateway", boxteam_home=chat_backend_boxteam_home,
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     model = "browser-chat-tool-loop-stub"
     endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
@@ -54,6 +66,13 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
     result_path = context.artifacts_dir / "trace-content.json"
     command = ["node", "tests/integration/clients/web/quick_access/trace_content.mjs"]
     try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}",
+                                     headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
+            response = await client.get("/api/gateway/workspaces?check_health=false")
+            response.raise_for_status()
+            owner = response.json()["data"]["active_workspace"]
+            await enable_developer_tools_plugins(client, gateway_id=owner["gateway_id"],
+                                                 workspace_id=owner["workspace_id"], plugin_ids=("terminal", "browser"))
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
                 env={**os.environ, **temporary, **replay.environment,
@@ -69,7 +88,7 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": completed.returncode}) + "\n")
         assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{result_path}"
         receipt = json.loads(result_path.read_text())
-        for key in ("unselectedHasNoContentQuery", "unopenedChildLocated", "samePaneNewLocation", "exactRecordAfterAppend",
+        for key in ("unselectedHasNoContentQuery", "unopenedChildLocated", "samePaneNewLocation", "canonicalUriAndLocations", "exactRecordAfterAppend",
                     "staleReferenceRejected", "deletedRecordRejected", "noFullTraceRead", "onlySelectedOwnerAndCategory"):
             assert receipt[key], key
         assert receipt["pageErrors"] == []

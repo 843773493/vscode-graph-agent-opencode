@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import type {
   NodeDebugActionRecord,
   NodeDebugLaunchProfile,
@@ -6,31 +7,31 @@ import type {
 
 export function nodeDebugStatusLabel(status: NodeDebugState["status"]): string {
   return {
-    idle: "未启动",
-    starting: "启动中",
-    running: "运行中",
-    paused: "已暂停",
-    stopping: "停止中",
-    exited: "已退出",
-    failed: "失败",
-    reconcile_required: "需要核实",
+    idle: t("debug.status.idle"),
+    starting: t("debug.status.starting"),
+    running: t("debug.status.running"),
+    paused: t("debug.status.paused"),
+    stopping: t("debug.status.stopping"),
+    exited: t("debug.status.exited"),
+    failed: t("debug.status.failed"),
+    reconcile_required: t("debug.status.reconcile"),
   }[status];
 }
 
 export function nodeDebugActionActor(action: NodeDebugActionRecord): string {
-  return action.actor === "ai" ? "AI" : action.actor === "system" ? "系统" : "用户";
+  return action.actor === "ai" ? "AI" : action.actor === "system" ? t("debug.actor.system") : t("debug.actor.user");
 }
 
 export function nodeDebugProfileLabel(profile: NodeDebugLaunchProfile): string {
-  const support = profile.supported ? "" : " · 当前不支持";
+  const support = profile.supported ? "" : t("debug.profile.unsupported");
   return `${profile.name} · ${profile.runtime}${support}`;
 }
 
 export function nodeDebugPauseReasonLabel(reason: string): string {
   return {
-    other: "断点",
-    exception: "异常",
-    step: "单步",
-    pause: "手动暂停",
+    other: t("debug.pause.breakpoint"),
+    exception: t("debug.pause.exception"),
+    step: t("debug.pause.step"),
+    pause: t("debug.pause.manual"),
   }[reason] ?? reason;
 }

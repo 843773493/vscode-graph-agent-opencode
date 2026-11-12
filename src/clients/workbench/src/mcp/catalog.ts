@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import {
   cancelMcpOperation, getMcpCatalog, listMcpOperations, submitMcpOperation,
   type McpConnectionOperationDTO, type McpServerDTO,
@@ -41,7 +42,7 @@ export class WorkspaceMcpCatalog {
   get isBusy(): boolean { return this.busy; }
 
   refresh({ refresh = false }: { refresh?: boolean } = {}): Promise<void> {
-    if (this.controller.signal.aborted) return Promise.reject(new Error('MCP 工作区目标已移除'));
+    if (this.controller.signal.aborted) return Promise.reject(new Error(t('workbench.mcp.workspaceRemoved')));
     if (this.reading) {
       if (!refresh || this.reading.refresh) return this.reading.promise;
       // 被动读取无论成功与否，显式刷新都要在其后真正访问原 owner；并发刷新由下一次 reading 归并。
@@ -69,9 +70,9 @@ export class WorkspaceMcpCatalog {
   }
 
   async act(serverId: string, action: 'connect' | 'disconnect' | 'authorize' | 'cancel'): Promise<void> {
-    if (this.controller.signal.aborted) throw new Error('MCP 工作区目标已移除');
-    if (this.busy) throw new Error('此工作区的 MCP 管理请求尚未完成，请读取实际状态后重试');
-    if (!this.server(serverId)) throw new Error('此 MCP 服务已不在目标工作区目录中');
+    if (this.controller.signal.aborted) throw new Error(t('workbench.mcp.workspaceRemoved'));
+    if (this.busy) throw new Error(t('workbench.mcp.requestBusy'));
+    if (!this.server(serverId)) throw new Error(t('workbench.mcp.catalogServerRemoved'));
     this.busy = true;
     ++this.generation;
     this.snapshot = { ...this.snapshot, actionError: undefined };
@@ -81,7 +82,7 @@ export class WorkspaceMcpCatalog {
     try {
       let result: McpConnectionOperationDTO;
       if (action === 'authorize' || action === 'cancel') {
-        if (!operation || !pendingMcpOperation(operation)) throw new Error('此服务没有可继续的 MCP 连接操作');
+        if (!operation || !pendingMcpOperation(operation)) throw new Error(t('workbench.mcp.noPendingOperation'));
         result = action === 'authorize'
           ? await authorizeMcpInWindow(0, this.target, operation, this.controller.signal)
           : await cancelMcpOperation(0, this.target, operation.operation_id, this.controller.signal);
@@ -100,9 +101,9 @@ export class WorkspaceMcpCatalog {
     try {
       // 写入前的读取可继续收尾，但不能越过操作代次发布；失败同样重取唯一 owner。
       try { await this.reading?.promise; }
-      catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], 'MCP 操作与并发读取均失败'); }
+      catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], t('workbench.mcp.operationAndReadFailed')); }
       try { await this.refresh(); }
-      catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], 'MCP 操作与状态重读均失败'); }
+      catch (error) { failure = failure === undefined ? error : new AggregateError([failure, error], t('workbench.mcp.operationAndRefreshFailed')); }
     } finally {
       this.busy = false;
       this.changed();
@@ -113,6 +114,6 @@ export class WorkspaceMcpCatalog {
   dispose(): void {
     if (this.controller.signal.aborted) return;
     ++this.generation; this.controller.abort();
-    this.snapshot = { ...this.snapshot, error: 'MCP 工作区目标已移除' }; this.changed();
+    this.snapshot = { ...this.snapshot, error: t('workbench.mcp.workspaceRemoved') }; this.changed();
   }
 }

@@ -130,13 +130,13 @@ try {
   expect(resourceOwnerReads.every(request => request.gatewayId === fixture.gatewayId
     && request.workspaceId === fixture.workspaceId)).toBe(true);
   await lookup.click();
-  await expect(page.locator('.tab').filter({ hasText: 'MCP Server: ui-plugin' })).toBeVisible();
+  await expect(page.locator('.tab').filter({ hasText: 'MCP 服务器: ui-plugin' })).toBeVisible();
   const details = page.locator('.mcp-server-editor').filter({ visible: true });
   await expect(details).toContainText('ui-plugin'); await expect(details).toContainText(workspace.name);
   const optionsLookup = await findMcp();
   await optionsLookup.hover();
   await optionsLookup.getByRole('button', { name: '更多 MCP 动作', exact: true }).click();
-  await expect(quick).toContainText('Show Details'); await quick.locator('input').first().press('Escape');
+  await expect(quick).toContainText('显示详情'); await quick.locator('input').first().press('Escape');
   assert.deepEqual(mcpWrites, [], '发现、详情及取消管理菜单不改变MCP连接');
   assert.equal(result.writes.length, 2);
   result.mcpQuickAccess = true;

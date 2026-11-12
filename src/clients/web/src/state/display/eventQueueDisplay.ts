@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import type { FrontendReceivedEvent } from "../../types/frontend";
 import { isRecord } from "../../utils/jsonDisplay";
 import {
@@ -255,13 +256,13 @@ export function toolEventSummary(
       toolName,
       displayToolName,
       skillNames,
-      summary: compactKeyFlowText(payload.args, 180) || "无参数",
+      summary: compactKeyFlowText(payload.args, 180) || t("inspection.event.noArguments"),
     };
   }
   return {
     toolName,
     displayToolName,
     skillNames,
-    summary: compactKeyFlowText(payload.result, 180) || "无返回内容",
+    summary: compactKeyFlowText(payload.result, 180) || t("inspection.event.noResult"),
   };
 }

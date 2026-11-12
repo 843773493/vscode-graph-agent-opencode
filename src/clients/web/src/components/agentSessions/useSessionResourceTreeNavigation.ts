@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/core/i18n/index.js';
 import { useMemo, useRef, useState, type DragEvent } from "react";
 import type { WorkspaceNavigationNode } from "../../types/backend";
 import type { SessionResourceExplorerController } from "../../hooks/session/useSessionResourceExplorer";
@@ -161,7 +162,7 @@ export function useSessionResourceTreeNavigation({
       await placeWorkspaceNavigation(source.nodeId, source.parentNodeId, rollbackPlacement);
     } catch (rollbackError) {
       throw new Error(
-        `${errorMessage(error)}；恢复工作区导航位置也失败: ${errorMessage(rollbackError)}`,
+        t('navigation.drag.restoreFailed', errorMessage(error), errorMessage(rollbackError)),
       );
     }
     throw error;
@@ -188,7 +189,7 @@ export function useSessionResourceTreeNavigation({
     }
     if (decision.action.kind === "move_workspace_navigation") {
       if (source.kind !== "workspace" && source.kind !== "workspace_folder") {
-        throw new Error("拖放来源不是工作区或工作区文件夹");
+        throw new Error(t('navigation.drag.workspaceOrFolderRequired'));
       }
       const rollbackPlacement = await moveWorkspaceNavigation(
         source,
@@ -204,14 +205,14 @@ export function useSessionResourceTreeNavigation({
       }
       onStatusChange(
         zone === "inside"
-          ? source.kind === "workspace" ? "已移动工作区" : "已移动工作区文件夹"
-          : source.kind === "workspace" ? "已调整工作区顺序" : "已调整工作区文件夹顺序",
+          ? source.kind === "workspace" ? t('navigation.drag.workspaceMoved') : t('navigation.drag.workspaceFolderMoved')
+          : source.kind === "workspace" ? t('navigation.drag.workspaceReordered') : t('navigation.drag.workspaceFolderReordered'),
       );
       return;
     }
     if (decision.action.kind === "set_workspace_parent") {
       if (source.kind !== "workspace") {
-        throw new Error("拖放来源不是工作区");
+        throw new Error(t('navigation.drag.workspaceRequired'));
       }
       const rollbackPlacement = await moveWorkspaceNavigation(
         source,
@@ -225,10 +226,10 @@ export function useSessionResourceTreeNavigation({
           await restoreNavigationPlacement(source, error, rollbackPlacement);
         }
       }
-      onStatusChange(zone === "inside" ? "已设置子工作区" : "已调整子工作区顺序");
+      onStatusChange(zone === "inside" ? t('navigation.drag.childWorkspaceSet') : t('navigation.drag.childWorkspaceReordered'));
       return;
     }
-    throw new Error("拖放来源不是工作区或工作区文件夹");
+    throw new Error(t('navigation.drag.workspaceOrFolderRequired'));
   };
 
   const performSessionDrop = async (
@@ -243,7 +244,7 @@ export function useSessionResourceTreeNavigation({
     // 会话来源的决策只会产出 move_catalog_node；此处守卫同时满足 TS 判别联合收窄，
     // 并在决策契约一旦被改坏时立刻抛出而不是静默什么都不做。
     if (decision.action.kind !== "move_catalog_node") {
-      throw new Error("会话拖放决策没有产出目录移动动作");
+      throw new Error(t('navigation.drag.catalogMoveRequired'));
     }
     await explorer.moveCatalogNode(
       source.workspaceId,
@@ -252,13 +253,13 @@ export function useSessionResourceTreeNavigation({
       source.parentNodeId,
     );
     onStatusChange(source.kind === "session"
-      ? "会话移动已保存本地待同步变更，等待提交"
-      : "会话文件夹移动已保存本地待同步变更，等待提交");
+      ? t('navigation.drag.sessionMovePending')
+      : t('navigation.drag.sessionFolderMovePending'));
     // 本地意图已持久化；这里只回读权威会话列表，实际提交由原 outbox 继续跟踪。
     try {
       await onRefreshWorkspaceSessions(source.workspaceId);
     } catch (error) {
-      handleError("移动后刷新工作区会话列表失败", error);
+      handleError(t('navigation.drag.refreshSessionsFailed'), error);
     }
   };
 
@@ -286,14 +287,14 @@ export function useSessionResourceTreeNavigation({
     const decision = decideSessionResourceDrop(source, target, zone);
     if (!decision.allowed) {
       clearDrag();
-      handleError("无法拖放", new Error(decision.reason));
+      handleError(t('navigation.drag.unavailable'), new Error(decision.reason));
       return;
     }
     event.preventDefault();
     clearDrag();
     dropInFlightRef.current = true;
     void performDrop(source, target, zone)
-      .catch((error) => handleError("拖放失败", error))
+      .catch((error) => handleError(t('navigation.drag.failed'), error))
       .finally(() => {
         dropInFlightRef.current = false;
       });
@@ -311,7 +312,7 @@ export function useSessionResourceTreeNavigation({
     const requestSequence = ++openingSessionRequestSequenceRef.current;
     setOpeningSession({ requestSequence, sessionKey });
     void Promise.resolve(onSelectSession(workspaceId, sessionId))
-      .catch((error) => handleError("打开会话失败", error))
+      .catch((error) => handleError(t('navigation.sessions.openFailed'), error))
       .finally(() => {
         setOpeningSession((current) => (
           current?.requestSequence === requestSequence ? null : current

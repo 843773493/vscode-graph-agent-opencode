@@ -1,3 +1,4 @@
+import { t } from '../../shared/core/i18n/index.js';
 import { isDark } from '../upstream/src/vs/platform/theme/common/theme.js';
 import { registerColor } from '../upstream/src/vs/platform/theme/common/colorRegistry.js';
 import { registerThemingParticipant } from '../upstream/src/vs/platform/theme/common/themeService.js';
@@ -13,27 +14,27 @@ import { BACKGROUND_SETTING, DEFAULT_BACKGROUND, readAppearanceBackground, loadA
 import { errorMessage } from '../../web/src/utils/errorMessage.js';
 
 // 聊天专属颜色仍由原主题扩展和 workbench.colorCustomizations 提供。
-registerColor('boxteam.chat.background', 'editor.background', 'BoxTeam 对话区域的背景颜色。');
-registerColor('boxteam.chat.inputBackground', 'input.background', 'BoxTeam 对话输入框的背景颜色。');
-registerColor('boxteam.chat.requestBackground', 'chat.requestBackground', 'BoxTeam 用户消息的背景颜色。');
+registerColor('boxteam.chat.background', 'editor.background', t('appearance.chatBackground'));
+registerColor('boxteam.chat.inputBackground', 'input.background', t('appearance.inputBackground'));
+registerColor('boxteam.chat.requestBackground', 'chat.requestBackground', t('appearance.requestBackground'));
 
 registerThemingParticipant((theme, collector) => {
   collector.addRule(`.monaco-workbench { --boxteam-color-scheme: ${isDark(theme.type) ? 'dark' : 'light'}; }`);
 });
 
 Registry.as<IConfigurationRegistry>(Extensions.Configuration).registerConfiguration({
-  id: 'boxteam.appearance', title: 'BoxTeam 外观',
+  id: 'boxteam.appearance', title: t('appearance.title'),
   properties: {
     [BACKGROUND_SETTING]: {
       type: 'object', scope: ConfigurationScope.MACHINE, default: DEFAULT_BACKGROUND,
-      description: '当前 Workbench profile 的会话区域背景，随 settings.json 保存。图片只作装饰，不改变主题配色。',
+      description: t('appearance.description'),
       additionalProperties: false,
       properties: {
-        image: { type: 'string', default: '', pattern: '^(https?://.+)?$', description: '图片的完整 HTTP(S) URL；空字符串清除图片。Gateway 图片沿用当前用户的访问权限。' },
-        position: { type: 'string', default: DEFAULT_BACKGROUND.position, description: 'CSS background-position。' },
-        size: { type: 'string', default: DEFAULT_BACKGROUND.size, description: 'CSS background-size。' },
+        image: { type: 'string', default: '', pattern: '^(https?://.+)?$', description: t('appearance.imageDescription') },
+        position: { type: 'string', default: DEFAULT_BACKGROUND.position, description: t('appearance.positionDescription') },
+        size: { type: 'string', default: DEFAULT_BACKGROUND.size, description: t('appearance.sizeDescription') },
         repeat: { type: 'string', enum: ['no-repeat', 'repeat', 'repeat-x', 'repeat-y', 'space', 'round'], default: DEFAULT_BACKGROUND.repeat },
-        overlay: { type: 'string', default: DEFAULT_BACKGROUND.overlay, description: '图片上的 CSS 渐变遮罩；none 表示不加遮罩。' },
+        overlay: { type: 'string', default: DEFAULT_BACKGROUND.overlay, description: t('appearance.overlayDescription') },
       },
     },
   },
@@ -43,7 +44,7 @@ Registry.as<IConfigurationRegistry>(Extensions.Configuration).registerConfigurat
 export function readWorkbenchBackground(value: unknown) {
   const background = readAppearanceBackground(value);
   for (const [key, property] of [['position', 'background-position'], ['size', 'background-size'], ['repeat', 'background-repeat'], ['overlay', 'background-image']] as const) {
-    if (!CSS.supports(property, background[key])) throw new Error(`${BACKGROUND_SETTING}.${key} 的 CSS 值无效：${background[key]}`);
+    if (!CSS.supports(property, background[key])) throw new Error(t('appearance.invalidCss', BACKGROUND_SETTING, key, background[key]));
   }
   return background;
 }

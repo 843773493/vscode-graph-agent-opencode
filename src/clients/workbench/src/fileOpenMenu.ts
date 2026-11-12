@@ -1,4 +1,5 @@
 import { Action, Separator } from '../upstream/src/vs/base/common/actions.js';
+import { t } from '../../shared/core/i18n/index.js';
 import type { IContextMenuService } from '../upstream/src/vs/platform/contextview/browser/contextView.js';
 import type { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { IEditorService, SIDE_GROUP } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
@@ -15,25 +16,25 @@ export function showFileOpenMenu(path: string, anchor: { x: number; y: number },
   menus: IContextMenuService, editors: IEditorService, groups: IEditorGroupsService,
   instantiation: IInstantiationService, group: IEditorGroup): void {
   const root = resourceFileRootUri(path);
-  if (!root) throw new Error('文件缺少后端资源根 URI');
+  if (!root) throw new Error(t('workbench.fileMenu.rootMissing'));
   const resource = workspaceFileUri(owner, path, root);
   const actions = [
-    new Action('boxteam.file.open', '在编辑器中打开', '', true,
+    new Action('boxteam.file.open', t('workbench.fileMenu.open'), '', true,
       () => editors.openEditor({ resource, options: { pinned: true } }, group.id)),
-    new Action('boxteam.file.preview', '在编辑器中预览', '', true,
+    new Action('boxteam.file.preview', t('workbench.fileMenu.preview'), '', true,
       () => editors.openEditor({ resource, options: { pinned: false } }, group.id)),
-    new Action('boxteam.file.openSide', '在侧边打开', '', true,
+    new Action('boxteam.file.openSide', t('workbench.fileMenu.openSide'), '', true,
       () => editors.openEditor({ resource, options: { pinned: true } }, SIDE_GROUP)),
-    new Action('boxteam.file.openBelow', '在下方打开', '', true, () => {
+    new Action('boxteam.file.openBelow', t('workbench.fileMenu.openBelow'), '', true, () => {
       const target = groups.findGroup({ direction: GroupDirection.DOWN }, group) ?? groups.addGroup(group, GroupDirection.DOWN);
       return editors.openEditor({ resource, options: { pinned: true } }, target.id);
     }),
     new Separator(),
-    new Action(COPY_RESOURCE_URI, '复制资源 URI', '', true,
+    new Action(COPY_RESOURCE_URI, t('workbench.resource.copyUri'), '', true,
       () => instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(COPY_RESOURCE_URI, resource))),
-    new Action(ATTACH_RESOURCE_URI, '将资源 URI 加入聊天草稿…', '', true,
+    new Action(ATTACH_RESOURCE_URI, t('workbench.resource.attachToChat'), '', true,
       () => instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(ATTACH_RESOURCE_URI, resource))),
-    new Action('boxteam.file.openWith', '打开方式…', '', true, async () => {
+    new Action('boxteam.file.openWith', t('workbench.fileMenu.openWith'), '', true, async () => {
       const options = await instantiation.createInstance(OpenWithEditorPicker).pick({ resource });
       if (options) await editors.openEditor({ resource, options: { ...options, pinned: true } }, group.id);
     }),

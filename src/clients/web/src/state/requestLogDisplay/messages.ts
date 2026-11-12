@@ -91,10 +91,10 @@ export function responsePreview(log: LLMRequestLogRecord): string {
   return messagePreview(log.response.result, { includeReasoning: false }).trim();
 }
 
-export function responsePhaseLabel(
+export function responsePhase(
   log: LLMRequestLogRecord,
   responsePreviewText?: string,
-): string {
+): "tool_call" | "text" | "intermediate" {
   const responseItems = Array.isArray(log.response.result) ? log.response.result : [];
   const hasToolCall = responseItems.some((item) => {
     if (!isRecord(item)) {
@@ -104,12 +104,12 @@ export function responsePhaseLabel(
     return Array.isArray(calls) && calls.length > 0;
   });
   if (hasToolCall) {
-    return "工具调用请求";
+    return "tool_call";
   }
   const preview = responsePreviewText === undefined
     ? responsePreview(log)
     : responsePreviewText;
-  return preview ? "自然语言回复" : "中间请求";
+  return preview ? "text" : "intermediate";
 }
 
 export function compactPreview(text: string, maxLength = 240): string {

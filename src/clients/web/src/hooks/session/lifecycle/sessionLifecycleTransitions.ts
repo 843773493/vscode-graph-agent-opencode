@@ -1,3 +1,4 @@
+import { t } from '../../../../../shared/core/i18n/index.js';
 import type { Session } from "../../../types/backend";
 import type { AppState } from "../../../types/frontend";
 import { cloneMaps } from "../../../state/appStateMaps";
@@ -9,7 +10,7 @@ import { resetSessionScopedFields } from "../sessionScopedState";
 export function normalizeSessionTitle(title: string): string {
   const trimmed = title.trim();
   if (!trimmed) {
-    throw new Error("会话名称不能为空");
+    throw new Error(t('navigation.sessions.nameRequired'));
   }
   return trimmed;
 }
@@ -48,13 +49,13 @@ export function applySessionSelectionTransition(
   next.sessionResourcesError = null;
   next.pendingConversations.delete(cacheKey);
   next.contentView = previous.contentView === "agent" ? "default" : previous.contentView;
-  next.status = "正在加载会话历史";
+  next.status = t('navigation.sessions.loadingHistory');
   Object.assign(next, resetAgentStateFields(next));
   appendFrontendEvent(
     next.eventQueuesBySession,
     selected.session_id,
     "session_selected",
-    "切换会话",
+    t('navigation.sessions.switchAction'),
     eventPayload,
     selected.title,
     cacheKey,

@@ -19,12 +19,12 @@ let browser;
 beforeAll(async () => { browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? Bun.which('chromium'),
   headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] }); run.addCleanup('Chromium', () => browser.close()); });
 afterAll(() => run.close());
-async function exercise(mode) {
+async function exercise(mode, locale = 'zh-cn') {
   const page = await browser.newPage(), errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   try {
     await page.goto(server.url.href);
-    const result = await page.evaluate(mode => import('/plugin-management.mjs').then(module => module.pluginManagementContract(mode)), mode);
+    const result = await page.evaluate(({ mode, locale }) => import('/plugin-management.mjs').then(module => module.pluginManagementContract(mode, locale)), { mode, locale });
     expect(errors).toEqual([]); return result;
   } finally { await page.close(); }
 }
@@ -63,4 +63,25 @@ for (const mode of ['pending-close', 'pending-identity']) test(`${mode}释放库
 test('库存失败明确展示原原因，不能变成可执行空结果', async () => {
   const result = await exercise('failed');
   expect(result.items).toHaveLength(1); expect(result.items[0].label).toContain('原安装域不可达'); expect(result.items[0].actionable).toBe(false);
+});
+
+test('英文首次创建插件候选翻译产品说明，保留包名、版本与目标身份', async () => {
+  const result = await exercise('filter', 'en');
+  expect(result.placeholder).toBe('Find Installed Plugins · 远端目标 · target-gateway');
+  expect(result.items).toEqual([{ id: 'proof.same-package/same-plugin@2.0.0',
+    label: 'Needle 同名插件 · proof.same-package/same-plugin@2.0.0', description: 'Workspace · Declarative',
+    detail: 'target-gateway · Connection connection-target', actionable: true }]);
+  expect(inventoryRequests(result)).toHaveLength(1);
+  expect(result.opened).toEqual([]); expect(result.commands).toEqual([]);
+});
+
+test('英文插件安装候选保持原命令及冻结目标，错误详情不翻译', async () => {
+  const installed = await exercise('install', 'en');
+  expect(installed.items[0].label).toBe('Install Custom Plugin Package…');
+  expect(installed.items[0].detail).toBe('target-gateway · ZIP, development directory, or configured custom source');
+  expect(installed.commands).toEqual([['boxteam.plugins.installPackage', { gateway_id: 'target-gateway', gateway_connection_id: 'connection-target' }]]);
+  const failed = await exercise('failed', 'en');
+  expect(failed.items[0].label).toContain('Plugin inventory is unavailable:');
+  expect(failed.items[0].label).toContain('原安装域不可达');
+  expect(failed.items[0].actionable).toBe(false);
 });

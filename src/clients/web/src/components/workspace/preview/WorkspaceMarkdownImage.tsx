@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import { getWorkspaceRawFileBlob } from "../../../api";
 import { onGatewayTokenInvalidated } from "../../../api/http";
 import {
@@ -63,7 +64,7 @@ function WorkspaceFileMarkdownImage({
       controller.abort();
       releaseObjectUrl();
       setResolvedSrc(null);
-      setError("Gateway 或访问凭据已改变，请重新打开图片");
+      setError(t("workspace.markdown.image.identityChanged"));
     });
     void getWorkspaceRawFileBlob(
       apiPort,
@@ -93,7 +94,7 @@ function WorkspaceFileMarkdownImage({
   if (!resolvedSrc) {
     return (
       <span ref={placeholderRef} className="workspace-markdown-image-loading">
-        图片进入视口附近时加载：{alt}
+        {t("workspace.markdown.image.loadingNearViewport", alt)}
       </span>
     );
   }
@@ -119,7 +120,7 @@ export default function WorkspaceMarkdownImage({
     return <img src={target.href} alt={alt} title={title} loading="lazy" />;
   }
   if (target.kind === "anchor") {
-    return <span className="workspace-markdown-image-error" role="alert">{alt}: 图片地址不能只包含页内锚点: {src}</span>;
+    return <span className="workspace-markdown-image-error" role="alert">{t("workspace.markdown.image.anchorOnly", alt, src)}</span>;
   }
 
   return (

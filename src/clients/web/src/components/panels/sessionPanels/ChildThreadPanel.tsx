@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { useCallback, useRef, useState } from "react";
 import type { ChildThreadList, ChildThreadSummary } from "../../../types/backend";
 import { copyTextToClipboard } from "../../../utils/clipboard";
@@ -69,37 +70,36 @@ export default function ChildThreadPanel({
     void copyTextToClipboard(threadId)
       .then(() => {
         setNoticeError(false);
-        setNotice(`已复制 child thread ID: ${threadId}`);
+        setNotice(t("child.copied", threadId));
       })
       .catch((copyError: unknown) => {
         setNoticeError(true);
         setNotice(
-          `复制失败: ${
-            errorMessage(copyError)
-          }`,
+          t("child.copyFailed", errorMessage(copyError)),
         );
       });
   };
 
   return (
-    <section className="panel-view child-thread-panel" aria-label="子会话线程">
+    <section className="panel-view child-thread-panel" aria-label={t("child.panel")}>
       <div className="panel-header">
         <div
           className="panel-title"
-          title={`${sessionId || "无会话"}${loadedAt ? ` · 最近读取 ${loadedAt}` : ""}`}
+          title={`${sessionId || t("child.noSession")}${loadedAt ? t("child.readAt", loadedAt) : ""}`}
         >
-          子会话线程 <span className="resource-total-count">{threads.length}</span>
+
+          {t("child.panel")} <span className="resource-total-count">{formatNumber(threads.length)}</span>
         </div>
         <div className="panel-header-meta">
-          {total > threads.length ? <span>后端共 {total} 条</span> : null}
+          {total > threads.length ? <span>{t("child.total", formatNumber(total))}</span> : null}
         </div>
         <button
           type="button"
           className="resource-icon-button"
           onClick={onRefresh}
           disabled={loading || !sessionId}
-          title="刷新子会话线程"
-          aria-label="刷新子会话线程"
+          title={t("child.refresh")}
+          aria-label={t("child.refresh")}
         >
           <span
             className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`}
@@ -123,7 +123,7 @@ export default function ChildThreadPanel({
             <button
               type="button"
               className="child-thread-notice-close"
-              aria-label="关闭提示"
+              aria-label={t("child.dismiss")}
               onClick={() => setNotice("")}
             >
               <span className="codicon codicon-close" aria-hidden="true" />
@@ -132,34 +132,35 @@ export default function ChildThreadPanel({
         ) : null}
       </div>
 
-      {loading ? <div className="empty-state">正在读取子会话线程...</div> : null}
+      {loading ? <div className="empty-state">{t("child.loading")}</div> : null}
       {!loading && error ? (
-        <div className="empty-state">子会话线程加载失败：{error}</div>
+        <div className="empty-state">{t("child.loadFailed", error)}</div>
       ) : null}
       {!loading && !error && threads.length === 0 && teams.length === 0 && sessionId ? (
         <div className="empty-state">
-          当前会话还没有委托子会话；Agent 委派 subagent 后，这里会显示对应的子会话线程。
+
+          {t("child.empty")}
         </div>
       ) : null}
       {!loading && !error && threads.length === 0 && !sessionId ? (
-        <div className="empty-state">选择会话后查看其子会话线程。</div>
+        <div className="empty-state">{t("child.selectSession")}</div>
       ) : null}
 
       {!loading && !error && (threads.length > 0 || Boolean(sessionId)) ? (
         <div className="child-thread-list" role="list">
           {teams.map((team) => (
             <article key={team.team_id} className="child-thread-item" role="listitem" data-team-id={team.team_id} data-team-version={team.version}>
-              <div className="child-thread-copy"><strong>{team.name}</strong><small>团队版本 {team.version}</small></div>
-              <div className="child-thread-job-status">协调线程：{team.coordinator_thread_id}</div>
+              <div className="child-thread-copy"><strong>{team.name}</strong><small>{t("child.teamVersion", formatNumber(team.version))}</small></div>
+              <div className="child-thread-job-status">{t("child.coordinator", team.coordinator_thread_id)}</div>
               {team.members.map((member) => (
                 <div key={member.thread_id} className="child-thread-runtime" data-team-member-thread-id={member.thread_id}>
-                  {member.role} · {member.work_mode === "read_only" ? "只读" : "可写"} · {member.thread_id}
+                  {member.role} · {member.work_mode === "read_only" ? t("child.readOnly") : t("child.writable")} · {member.thread_id}
                 </div>
               ))}
               {team.tasks.map((task) => (
                 <div key={task.task_id} className="child-thread-runtime" data-team-task-id={task.task_id} data-team-task-status={task.status}>
-                  <strong>{task.title}</strong> · {{ queued: "等待执行", in_progress: "进行中", blocked: "受阻", completed: "已完成", failed: "失败", cancelled: "已取消" }[task.status as "queued" | "in_progress" | "blocked" | "completed" | "failed" | "cancelled"]}
-                  <div>执行线程：{task.assignee_thread_id} · {task.phase} · 第 {task.cycle} 轮</div>
+                  <strong>{task.title}</strong> · {{ queued: t("child.queued"), in_progress: t("child.inProgress"), blocked: t("child.blocked"), completed: t("child.completed"), failed: t("child.failed"), cancelled: t("child.cancelled") }[task.status as "queued" | "in_progress" | "blocked" | "completed" | "failed" | "cancelled"]}
+                  <div>{t("child.execution", task.assignee_thread_id, task.phase, formatNumber(task.cycle))}</div>
                   {task.summary ? <div>{task.summary}</div> : null}
                   {task.error ? <div role="alert">{task.error}</div> : null}
                 </div>
@@ -180,21 +181,21 @@ export default function ChildThreadPanel({
                     if (mainThreadId) onSelectThread?.(mainThreadId);
                   }}
                   disabled={!mainThreadId || !onSelectThread}
-                  title="切换调试 owner：主线程"
-                  aria-label="切换到主线程调试"
+                  title={t("child.mainSwitch")}
+                  aria-label={t("child.mainSwitchAria")}
                 >
                   <span
                     className="child-thread-icon codicon codicon-home"
                     aria-hidden="true"
                   />
                   <span className="child-thread-copy">
-                    <strong>主线程</strong>
-                    <small>main · 当前会话默认调试 owner</small>
+                    <strong>{t("child.main")}</strong>
+                    <small>{t("child.mainDescription")}</small>
                   </span>
                   <span className="child-thread-status child-thread-status-running">
                     {mainThreadId !== null && mainThreadId === activeThreadId
-                      ? "当前调试"
-                      : "主线程"}
+                      ? t("child.currentDebug")
+                      : t("child.main")}
                   </span>
                 </button>
               </div>
@@ -215,7 +216,7 @@ export default function ChildThreadPanel({
                     type="button"
                     className="child-thread-main"
                     onClick={() => onOpenThread ? onOpenThread(thread) : conversation.selectThread(thread.thread_id)}
-                    title={`打开子线程对话：${thread.title ?? thread.thread_id}`}
+                    title={t("child.openConversation", thread.title ?? thread.thread_id)}
                   >
                     <span
                       className={`child-thread-icon codicon ${CHILD_THREAD_ICON}`}
@@ -233,39 +234,39 @@ export default function ChildThreadPanel({
                       {childThreadStatusLabel(thread.status)}
                     </span>
                   </button>
-                  {onSelectThread ? <button type="button" className="child-thread-copy-id" onClick={() => onSelectThread(thread.thread_id)} aria-label={`调试子线程：${thread.thread_id}`} title={isCurrent ? "当前调试 owner" : "调试此子线程"}>
+                  {onSelectThread ? <button type="button" className="child-thread-copy-id" onClick={() => onSelectThread(thread.thread_id)} aria-label={t("child.debugAria", thread.thread_id)} title={isCurrent ? t("child.currentOwner") : t("child.debug")}>
                     <span className="codicon codicon-debug" aria-hidden="true" />
                   </button> : null}
-                  {onForkFromThread ? <button type="button" className="child-thread-copy-id" onClick={() => onForkFromThread(thread.thread_id, {})} aria-label="从此线程创建分支" title="从此线程创建分支">
+                  {onForkFromThread ? <button type="button" className="child-thread-copy-id" onClick={() => onForkFromThread(thread.thread_id, {})} aria-label={t("child.fork")} title={t("child.fork")}>
                     <span className="codicon codicon-git-branch" aria-hidden="true" />
                   </button> : null}
                   <button
                     type="button"
                     className="child-thread-copy-id"
                     onClick={() => handleCopyThreadId(thread.thread_id)}
-                    title={`复制 child thread ID: ${thread.thread_id}`}
-                    aria-label={`复制 child thread ID: ${thread.thread_id}`}
+                    title={t("child.copyId", thread.thread_id)}
+                    aria-label={t("child.copyId", thread.thread_id)}
                   >
                     <span className="codicon codicon-copy" aria-hidden="true" />
                   </button>
                 </div>
                 {thread.runtime ? (
                   <div className="child-thread-runtime">
-                    {{ cold: "运行时已释放", loading: "正在装载运行时", resident: "运行时驻留", unloading: "正在释放运行时" }[thread.runtime.residency]}
-                    {thread.runtime.cold_eligible ? " · 可释放" : ""}
-                    {thread.runtime.last_activity_at ? ` · 最近活动 ${formatDateTime(thread.runtime.last_activity_at)}` : ""}
-                    {thread.runtime.idle_deadline ? ` · 空闲释放时间 ${formatDateTime(thread.runtime.idle_deadline)}` : ""}
+                    {{ cold: t("child.runtime.cold"), loading: t("child.runtime.loading"), resident: t("child.runtime.resident"), unloading: t("child.runtime.unloading") }[thread.runtime.residency]}
+                    {thread.runtime.cold_eligible ? t("child.runtime.eligible") : ""}
+                    {thread.runtime.last_activity_at ? t("child.lastActivity", formatDateTime(thread.runtime.last_activity_at)) : ""}
+                    {thread.runtime.idle_deadline ? t("child.idleDeadline", formatDateTime(thread.runtime.idle_deadline)) : ""}
                     {thread.runtime.blockers.map((blocker) => <div key={blocker.kind}>{blocker.reason}</div>)}
                   </div>
                 ) : null}
                 {thread.report_execution_id && thread.report_status && thread.report_status !== "unknown" ? (
                   <button type="button" className="child-thread-report-link" onClick={() => conversation.selectThread(thread.thread_id, "report")}>
-                    {conversation.isUnread(thread) ? "新报告 · " : ""}查看子线程报告
+                    {t(conversation.isUnread(thread) ? "child.newReport" : "child.report")}
                   </button>
                 ) : null}
                 {thread.admission_state || thread.collaboration_state ? (
                   <div className="child-thread-job-status">
-                    admission: {thread.admission_state ?? "未知"} · collaboration: {thread.collaboration_state ?? "未知"}
+                    {t("child.admission", thread.admission_state ?? t("child.unknown"), thread.collaboration_state ?? t("child.unknown"))}
                   </div>
                 ) : null}
               </article>
@@ -274,7 +275,7 @@ export default function ChildThreadPanel({
         </div>
       ) : null}
       {!loading && !error && loadedAt && conversation.selectionIntent && !conversation.selectedThread
-        ? <p role="alert">所选子线程已不可用，无法读取其历史或报告。</p> : null}
+        ? <p role="alert">{t("child.unavailable")}</p> : null}
       {conversation.selectedThread ? <ChildThreadConversation thread={conversation.selectedThread} conversation={conversation}
         onFork={onForkFromThread ? forkSelectedThread : undefined} /> : null}
     </section>

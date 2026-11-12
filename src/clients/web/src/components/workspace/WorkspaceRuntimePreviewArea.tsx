@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 import type { WorkspacePreviewTab } from "./WorkspaceFilePreviewArea";
 
 export type WorkspaceRuntimePreviewTab = Extract<
@@ -33,7 +34,7 @@ export default function WorkspaceRuntimePreviewArea({
   return (
     <section
       className={`workspace-runtime-preview${expanded ? " expanded" : " collapsed"}`}
-      aria-label={extensionWindow ? "扩展窗口" : "运行时预览"}
+      aria-label={extensionWindow ? t("workspace.runtime.extensionWindow") : t("workspace.runtime.preview")}
       data-extension-region={extensionWindow ? "primary" : undefined}
     >
       {!extensionWindow ? <header className="workspace-runtime-preview-header">
@@ -41,8 +42,8 @@ export default function WorkspaceRuntimePreviewArea({
           <button
             type="button"
             className="workspace-runtime-preview-close"
-            title="返回标准窗口"
-            aria-label="返回标准窗口"
+            title={t("workspace.runtime.returnToStandardWindow")}
+            aria-label={t("workspace.runtime.returnToStandardWindow")}
             onClick={onExitExtensionWindow}
           >
             <span className="codicon codicon-chevron-left" aria-hidden="true" />
@@ -59,10 +60,10 @@ export default function WorkspaceRuntimePreviewArea({
             aria-hidden="true"
           />
           <span className="workspace-runtime-preview-copy">
-          <strong>{extensionWindow ? "扩展窗口" : isBrowser ? "浏览器" : "终端"}</strong>
+          <strong>{extensionWindow ? t("workspace.runtime.extensionWindow") : isBrowser ? t("workspace.runtime.browser") : t("workspace.runtime.terminal")}</strong>
           <span title={tab.scopeLabel ?? tab.path}>
             {extensionWindow
-              ? `${isBrowser ? "浏览器" : "终端"} · ${tab.name}`
+              ? `${isBrowser ? t("workspace.runtime.browser") : t("workspace.runtime.terminal")} · ${tab.name}`
               : tab.name}
           </span>
           {extensionWindow && tab.scopeLabel ? (
@@ -73,8 +74,8 @@ export default function WorkspaceRuntimePreviewArea({
         <button
           type="button"
           className="workspace-runtime-preview-close"
-          title="关闭运行时预览"
-          aria-label="关闭运行时预览"
+          title={t("workspace.runtime.closePreview")}
+          aria-label={t("workspace.runtime.closePreview")}
           onClick={() => void onClose()}
         >
           <span className="codicon codicon-close" aria-hidden="true" />
@@ -84,7 +85,7 @@ export default function WorkspaceRuntimePreviewArea({
         <iframe
           className={`workspace-runtime-preview-frame${isBrowser ? " browser" : " terminal"}`}
           src={tab.attachUrl}
-          title={`${isBrowser ? "浏览器" : "终端"} ${tab.name}`}
+          title={`${isBrowser ? t("workspace.runtime.browser") : t("workspace.runtime.terminal")} ${tab.name}`}
         />
       ) : null}
     </section>

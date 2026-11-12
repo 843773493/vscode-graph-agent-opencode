@@ -52,6 +52,7 @@ function sourceFixture(targetPlatform, scenario) {
     writeFileSync(file, bytes);
   }
   mkdirSync(path.join(root, "src/clients/workbench"), { recursive: true });
+  mkdirSync(path.join(root, "src/clients/shared"), { recursive: true });
   mkdirSync(path.join(root, "scripts/plugins"), { recursive: true });
   return root;
 }
@@ -229,6 +230,16 @@ describe("构建输入指纹的文件读取", () => {
         path.join(projectRoot, "src/shared/sseRuntimeValidators.js"),
         "export const validate = () => false;\n",
       );
+      expect(computeBuildInputFingerprint({ projectRoot, targetPlatform })).not.toBe(initialFingerprint);
+    });
+
+    test(`${targetPlatform}的客户端共享词典变化使发布缓存失效`, () => {
+      const projectRoot = sourceFixture(targetPlatform, "client-catalog-change");
+      const catalog = path.join(projectRoot, "src/clients/shared/core/i18n/messages/en.json");
+      mkdirSync(path.dirname(catalog), { recursive: true });
+      writeFileSync(catalog, '{"greeting":"Hello"}\n');
+      const initialFingerprint = computeBuildInputFingerprint({ projectRoot, targetPlatform });
+      writeFileSync(catalog, '{"greeting":"Welcome"}\n');
       expect(computeBuildInputFingerprint({ projectRoot, targetPlatform })).not.toBe(initialFingerprint);
     });
 

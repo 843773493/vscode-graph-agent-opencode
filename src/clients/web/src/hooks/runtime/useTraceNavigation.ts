@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { useEffect, useState } from "react";
 import { locateTrace, type LocatedTrace } from "../../api/session/sessionMessages";
 import type { TraceMatchDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
@@ -19,7 +20,7 @@ export function useTraceNavigation(apiPort: number, workspaceId: string, session
     const controller = new AbortController();
     const load = async () => {
       if (!match.reference || match.reference.session_id !== sessionId || match.reference.thread_id !== threadId) {
-        throw new Error("Trace 命中与目标 Session／Thread 归属不一致");
+        throw new Error(t("inspection.navigation.traceOwner"));
       }
       const location = await locateTrace(apiPort, match.reference, workspaceId, controller.signal);
       if (!controller.signal.aborted) setState({ match, location });

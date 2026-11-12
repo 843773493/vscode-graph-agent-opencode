@@ -52,6 +52,46 @@ async def test_main_identity_and_scan_budget_continue_without_skips(
 
 
 @pytest.mark.asyncio
+async def test_search_canonical_references_survive_catalog_rename_and_move(
+    catalog: SessionCatalogService,
+) -> None:
+    sessions = catalog._session_service
+    resolver = sessions.path_resolver
+    store = resolver.catalog_store
+    created = await sessions.create(SessionCreateRequest(title="Original Session"))
+    before, = (await catalog.search(query=created.session_id, limit=10, cursor=None)).items
+    before_thread, = (await thread_search.search_session_threads(
+        catalog, sessions, gateway_id=GATEWAY, query=created.session_id, limit=10, cursor=None,
+    )).items
+    assert before.node.session is not None
+    physical = resolver.resolve_session_node(created.session_id)
+    metadata = (physical / "session.json").read_bytes()
+    locator = store.get_node(created.session_id).storage_relative_locator
+    folder = store.create_folder(create_prefixed_id("ses"), sessions.workspace_id, None, "New Folder")
+
+    store.rename_node(created.session_id, "Renamed Session")
+    renamed, = (await catalog.search(query=created.session_id, limit=10, cursor=None)).items
+    store.move_node(created.session_id, folder.node_id)
+    moved, = (await catalog.search(query=created.session_id, limit=10, cursor=None)).items
+    after_thread, = (await thread_search.search_session_threads(
+        catalog, sessions, gateway_id=GATEWAY, query=created.session_id, limit=10, cursor=None,
+    )).items
+
+    for hit in (renamed, moved):
+        assert hit.node.session is not None
+        assert hit.node.session.uri == before.node.session.uri
+        assert hit.node.session.resource_identity == before.node.session.resource_identity
+    assert renamed.relative_path == "Renamed Session"
+    assert moved.relative_path == "New Folder/Renamed Session"
+    assert after_thread.thread_uri == before_thread.thread_uri
+    assert after_thread.thread_id == before_thread.thread_id
+    assert after_thread.title == after_thread.session_title == "Renamed Session"
+    assert store.get_node(created.session_id).storage_relative_locator == locator
+    assert resolver.resolve_session_node(created.session_id) == physical
+    assert (physical / "session.json").read_bytes() == metadata
+
+
+@pytest.mark.asyncio
 async def test_cursor_rejects_query_gateway_and_catalog_changes(
     catalog: SessionCatalogService,
 ) -> None:

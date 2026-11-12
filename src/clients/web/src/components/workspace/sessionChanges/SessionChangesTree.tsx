@@ -1,3 +1,4 @@
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import type {
   SessionChangeset,
   SessionChangesetListItem,
@@ -6,7 +7,7 @@ import type {
 import { formatDateTime } from "../../../utils/format";
 
 function formatSummary(summary: { files: number; additions: number; deletions: number }) {
-  return `${summary.files} 个文件 +${summary.additions} -${summary.deletions}`;
+  return t("changes.summary", formatNumber(summary.files), formatNumber(summary.additions), formatNumber(summary.deletions));
 }
 
 function changeKindIcon(kind: SessionFileChange["kind"]) {
@@ -21,12 +22,12 @@ function changeKindIcon(kind: SessionFileChange["kind"]) {
 
 function changeKindLabel(kind: SessionFileChange["kind"]) {
   if (kind === "create") {
-    return "新增";
+    return t("changes.create");
   }
   if (kind === "delete") {
-    return "删除";
+    return t("changes.delete");
   }
-  return "修改";
+  return t("changes.modify");
 }
 
 export default function SessionChangesTree({
@@ -58,26 +59,27 @@ export default function SessionChangesTree({
     <div className="session-changes-tree">
       <div className="auxiliary-actions-row">
         <button type="button" onClick={onRefresh} disabled={loading}>
-          刷新
+
+          {t("changes.refresh")}
         </button>
         {loadedAt ? (
-          <span className="session-changes-loaded">读取于 {formatDateTime(loadedAt)}</span>
+          <span className="session-changes-loaded">{t("changes.readAt", formatDateTime(loadedAt))}</span>
         ) : null}
       </div>
 
       <div className="auxiliary-change-summary auxiliary-change-summary-hero">
-        <span className="auxiliary-change-stat added">+{summary.additions}</span>
-        <span className="auxiliary-change-stat removed">-{summary.deletions}</span>
+        <span className="auxiliary-change-stat added">+{formatNumber(summary.additions)}</span>
+        <span className="auxiliary-change-stat removed">-{formatNumber(summary.deletions)}</span>
         <span className="auxiliary-change-muted">
-          {summary.files > 0 ? `${summary.files} 个会话变更` : "无会话变更"}
+          {summary.files > 0 ? t("changes.count", formatNumber(summary.files)) : t("changes.none")}
         </span>
       </div>
 
-      {loading ? <div className="auxiliary-empty-row">正在读取会话变更...</div> : null}
+      {loading ? <div className="auxiliary-empty-row">{t("changes.loading")}</div> : null}
       {error ? <div className="auxiliary-empty-row danger">{error}</div> : null}
 
       <section className="auxiliary-tree-section">
-        <header>变更集</header>
+        <header>{t("changes.sets")}</header>
         {changesets.length > 0 ? (
           <div className="session-changeset-list">
             {changesets.map((changeset) => (
@@ -97,12 +99,12 @@ export default function SessionChangesTree({
             ))}
           </div>
         ) : !loading && !error ? (
-          <div className="auxiliary-empty-row muted">当前会话没有文件变更。</div>
+          <div className="auxiliary-empty-row muted">{t("changes.empty")}</div>
         ) : null}
       </section>
 
       <section className="auxiliary-tree-section">
-        <header>会话文件变更</header>
+        <header>{t("changes.files")}</header>
         {activeChangeset && activeChangeset.files.length > 0 ? (
           <div className="session-change-file-list">
             {activeChangeset.files.map((file) => (
@@ -117,15 +119,15 @@ export default function SessionChangesTree({
                   <span className="session-change-file-text">
                     <span>{file.file_path}</span>
                     <span>
-                      {changeKindLabel(file.kind)} · +{file.additions} -{file.deletions}
+                      {changeKindLabel(file.kind)} · +{formatNumber(file.additions)} -{formatNumber(file.deletions)}
                     </span>
                   </span>
                 </button>
                 <button
                   type="button"
                   className={`session-change-review-button ${file.reviewed ? "reviewed" : ""}`}
-                  title={file.reviewed ? "取消已审查" : "标记已审查"}
-                  aria-label={file.reviewed ? "取消已审查" : "标记已审查"}
+                  title={file.reviewed ? t("changes.unreview") : t("changes.review")}
+                  aria-label={file.reviewed ? t("changes.unreview") : t("changes.review")}
                   onClick={() => {
                     void onReviewFile(file, !file.reviewed);
                   }}
@@ -141,7 +143,7 @@ export default function SessionChangesTree({
             ))}
           </div>
         ) : !loading && !error ? (
-          <div className="auxiliary-empty-row muted">没有可展示的会话文件变更。</div>
+          <div className="auxiliary-empty-row muted">{t("changes.noFiles")}</div>
         ) : null}
       </section>
     </div>

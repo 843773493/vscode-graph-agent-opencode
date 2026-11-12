@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { Agent } from "../../types/backend";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
@@ -43,13 +44,13 @@ export default function ComposerModelControl({
         type="button"
         className={`composer-model-pill${currentConfigurationError ? " configuration-error" : ""}`}
         title={disabled
-          ? "当前 Agent 没有可选模型"
+          ? t("composer.model.unavailable")
           : currentConfigurationError
-            ? `当前模型配置错误：${currentConfigurationError}`
-          : `选择模型，当前：${label}（${currentProviderId}）`}
+            ? t("composer.model.currentError", currentConfigurationError)
+          : t("composer.model.selectWithId", label, currentProviderId)}
         aria-label={currentConfigurationError
-          ? `选择模型，当前 ${label} 配置错误：${currentConfigurationError}`
-          : `选择模型，当前：${label}`}
+          ? t("composer.model.selectError", label, currentConfigurationError)
+          : t("composer.model.select", label)}
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
@@ -89,10 +90,10 @@ export default function ComposerModelControl({
                   role="menuitemradio"
                   aria-checked={provider.provider_id === currentProviderId}
                   aria-label={configurationError
-                    ? `${provider.model} 配置错误：${configurationError}`
+                    ? t("composer.model.namedError", provider.model, configurationError)
                     : `${provider.model}，${provider.provider_id} · ${provider.custom_llm_provider}`}
                   title={configurationError
-                    ? `模型配置错误：${configurationError}`
+                    ? t("composer.model.error", configurationError)
                     : undefined}
                   disabled={!available}
                   onClick={() => onSelect(provider.provider_id)}
@@ -104,7 +105,7 @@ export default function ComposerModelControl({
                   {configurationError ? (
                     <span className="composer-model-menu-error" role="alert">
                       <span className="codicon codicon-error" aria-hidden="true" />
-                      配置错误：{configurationError}
+                      {t("composer.model.errorDetail", configurationError)}
                     </span>
                   ) : null}
                 </button>
@@ -112,11 +113,11 @@ export default function ComposerModelControl({
                   type="button"
                   className="composer-workspace-default-button"
                   title={provider.workspace_default
-                    ? "当前工作区默认模型"
-                    : "设为工作区默认模型，仅影响新会话"}
+                    ? t("composer.model.default")
+                    : t("composer.model.makeDefault")}
                   aria-label={provider.workspace_default
-                    ? `${provider.model} 已是工作区默认模型`
-                    : `将 ${provider.model} 设为工作区默认模型`}
+                    ? t("composer.model.isDefault", provider.model)
+                    : t("composer.model.setDefault", provider.model)}
                   aria-pressed={provider.workspace_default}
                   disabled={!available}
                   onClick={() => onSetWorkspaceDefault(provider.provider_id)}

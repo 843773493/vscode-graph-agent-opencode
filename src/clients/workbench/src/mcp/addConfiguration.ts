@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { CancellationTokenSource, type CancellationToken } from '../../upstream/src/vs/base/common/cancellation.js';
 import { parse, type ParseError } from '../../upstream/src/vs/base/common/json.js';
 import { applyEdits, setProperty } from '../../upstream/src/vs/base/common/jsonEdit.js';
@@ -43,9 +44,9 @@ function hasServer(value: unknown, serverId: string): boolean {
 function assertNewServer(document: ConfigSourceDocumentDTO, serverId: string): void {
   const errors: ParseError[] = [];
   const source: unknown = parse(document.jsonc || '{}', errors);
-  if (errors.length) throw new Error('原工作区来源正文无效，无法核对 Server ID');
+  if (errors.length) throw new Error(t('workbench.mcp.sourceInvalid'));
   if ([source, document.source_effective, document.effective].some(value => hasServer(value, serverId))) {
-    throw new Error(`工作区已存在 Server ID ${serverId}，Add 不会覆盖已有配置；请明确编辑原 Server`);
+    throw new Error(t('workbench.mcp.duplicateServer', serverId));
   }
 }
 
@@ -59,25 +60,25 @@ async function entries(context: InputContext): Promise<{ plain: Record<string, s
   const plain: Record<string, string> = Object.create(null), secrets = new Map<string, string>(), names = new Set<string>();
   for (;;) {
     const action = await context.quickInput.pick([
-      { label: '添加普通 HTTP Header', secret: false, done: false },
-      { label: '添加私有 HTTP Header', secret: true, done: false },
-      { label: '完成 HTTP Header', secret: false, done: true },
-    ], { title: '配置 MCP HTTP Header', prompt: context.owner, placeHolder: '私有值只交目标工作区凭据 owner；全部输入完成后才写入' }, context.token);
+      { label: t('workbench.mcp.addHeader'), secret: false, done: false },
+      { label: t('workbench.mcp.addPrivateHeader'), secret: true, done: false },
+      { label: t('workbench.mcp.finishHeaders'), secret: false, done: true },
+    ], { title: t('workbench.mcp.configureHeaders'), prompt: context.owner, placeHolder: t('workbench.mcp.privateHeadersHint') }, context.token);
     context.check();
     if (!action) return;
     if (action.done) return { plain, secrets };
-    const key = await input(context, { title: 'HTTP Header 名称', validateInput: async value => {
-      if (value.length > 256 || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(value)) return 'Header 名称须为不超过 256 字符的 HTTP token';
-      return names.has(value.toLowerCase()) ? 'Header 名称已存在，不能重复添加' : undefined;
+    const key = await input(context, { title: t('workbench.mcp.headerName'), validateInput: async value => {
+      if (value.length > 256 || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(value)) return t('workbench.mcp.headerNameInvalid');
+      return names.has(value.toLowerCase()) ? t('workbench.mcp.headerNameDuplicate') : undefined;
     } });
     if (key === undefined) return;
-    const value = await input(context, { title: `${action.secret ? '私有' : '普通'} HTTP Header 值 · ${key}`, password: action.secret,
-      placeHolder: action.secret ? '输入私有值，不写入普通配置或浏览器存储' : '按原文输入，可明确留空',
+    const value = await input(context, { title: action.secret ? t('workbench.mcp.privateHeaderValue', key) : t('workbench.mcp.plainHeaderValue', key), password: action.secret,
+      placeHolder: action.secret ? t('workbench.mcp.privateValueHint') : t('workbench.mcp.plainValueHint'),
       validateInput: async value => {
-        if (value.includes('\0')) return '值不能包含 NUL 字符';
-        if (action.secret && !value.length) return '私有值不能为空字符串';
+        if (value.includes('\0')) return t('workbench.mcp.valueNul');
+        if (action.secret && !value.length) return t('workbench.mcp.privateValueEmpty');
         if (action.secret && (value.length > 8192 || /[^\x20-\x7e]/.test(value) || value !== value.trim())) {
-          return '私有 Header 必须为不超过 8192 字符、无控制字符及首尾空格的 ASCII 文本';
+          return t('workbench.mcp.privateValueInvalid');
         }
         return undefined;
       } });
@@ -88,13 +89,13 @@ async function entries(context: InputContext): Promise<{ plain: Record<string, s
 }
 
 function requirePrivateEndpoint(endpoint: string): void {
-  if (endpoint.includes('${')) throw new Error('私有 Header 需要精确的 literal endpoint，不能在浏览器解析目标环境表达式');
-  if (!URL.canParse(endpoint)) throw new Error('私有 Header endpoint 必须为有效 HTTP(S) URL');
+  if (endpoint.includes('${')) throw new Error(t('workbench.mcp.literalEndpointRequired'));
+  if (!URL.canParse(endpoint)) throw new Error(t('workbench.mcp.endpointInvalid'));
   const parsed = new URL(endpoint);
   if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || endpoint !== endpoint.trim()
     || parsed.username || parsed.password || endpoint.includes('#')
     || parsed.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)) {
-    throw new Error('私有 Header endpoint 须为无凭据、fragment 或首尾空白的 HTTP(S) URL；仅 loopback 可使用 HTTP');
+    throw new Error(t('workbench.mcp.privateEndpointInvalid'));
   }
 }
 
@@ -105,14 +106,14 @@ async function selectWorkspace(target: ManagementTarget, label: string, quickInp
   const snapshot = workspaceContext.getSnapshot();
   if (snapshot.error) throw new Error(snapshot.error);
   const choices = snapshot.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id && workspace.status === 'ready');
-  if (!choices.length) throw new Error('所选 Gateway 没有已就绪的工作区');
+  if (!choices.length) throw new Error(t('workbench.mcp.noReadyWorkspace'));
   const workspace = workspaceId === undefined ? (await quickInput.pick(choices.map(item => ({
     label: item.name, description: item.status, detail: item.workspace_id, item,
-  })), { title: '选择 MCP 配置工作区', placeHolder: `${label} · 只列出所选 Gateway 的已就绪工作区` }, token))?.item
+  })), { title: t('workbench.mcp.chooseWorkspace'), placeHolder: t('workbench.mcp.workspaceChoicesHint', label) }, token))?.item
     : choices.find(item => item.workspace_id === workspaceId);
   check();
   if (!workspace) {
-    if (workspaceId !== undefined) throw new Error('指定文件夹不属于所选 Gateway 的已就绪工作区');
+    if (workspaceId !== undefined) throw new Error(t('workbench.mcp.folderNotReady'));
     return;
   }
   const route = Object.freeze({ gateway_id: workspace.gateway_id, workspace_id: workspace.workspace_id,
@@ -121,7 +122,7 @@ async function selectWorkspace(target: ManagementTarget, label: string, quickInp
     check();
     const current = workspaceContext.getSnapshot().workspaces.find(item => item.gateway_id === route.gateway_id
       && item.workspace_id === route.workspace_id && item.backend_id === workspace.backend_id);
-    if (current?.status !== 'ready') throw new Error('原目标工作区已不就绪或不属于原 Gateway，请重新选择配置目标');
+    if (current?.status !== 'ready') throw new Error(t('workbench.mcp.targetChanged'));
   };
   assertWorkspace();
   return { ...workspace, gateway_connection_id: route.gateway_connection_id };
@@ -155,7 +156,7 @@ async function pluginService(target: ManagementTarget, workspace: WorkspaceChoic
     label: `${service.pluginName} · ${service.serviceId}`,
     description: `${service.packageId}@${service.version} · ${service.pluginId} · ${service.scope}`,
     service,
-  })), { title: '选择已就绪的 MCP 插件服务', placeHolder: `${workspace.name} · ${target.gateway_id}` }, context.token);
+  })), { title: t('workbench.mcp.choosePluginService'), placeHolder: `${workspace.name} · ${target.gateway_id}` }, context.token);
   context.check();
   if (!selected) return;
   return { transport: 'plugin', service: {
@@ -168,22 +169,22 @@ async function pluginService(target: ManagementTarget, workspace: WorkspaceChoic
 function httpDefinition(context: InputContext): Promise<{ definition: Extract<ManualDefinition, { transport: 'streamable_http' }>;
   secrets: Map<string, string> } | undefined> {
   return (async () => {
-    const url = await input(context, { title: 'MCP Streamable HTTP endpoint', placeHolder: '输入目标 HTTP(S) endpoint；环境表达式由目标 owner 解析',
-      validateInput: async value => value.length && !value.includes('\0') ? undefined : 'endpoint 不能为空或包含 NUL' });
+    const url = await input(context, { title: t('workbench.mcp.httpEndpoint'), placeHolder: t('workbench.mcp.httpEndpointHint'),
+      validateInput: async value => value.length && !value.includes('\0') ? undefined : t('workbench.mcp.httpEndpointInvalid') });
     if (url === undefined) return;
     const collected = await entries(context);
     if (!collected) return;
     if (collected.secrets.size) requirePrivateEndpoint(url);
     const oauth = await context.quickInput.pick([
-      { label: '不使用 OAuth', enabled: false }, { label: '配置 OAuth redirect URI', enabled: true },
-    ], { title: 'MCP OAuth 配置', prompt: context.owner }, context.token);
+      { label: t('workbench.mcp.noOAuth'), enabled: false }, { label: t('workbench.mcp.configureRedirect'), enabled: true },
+    ], { title: t('workbench.mcp.configureOAuth'), prompt: context.owner }, context.token);
     context.check();
     if (!oauth) return;
     let redirectUri: string | undefined;
     if (oauth.enabled) {
-      redirectUri = await input(context, { title: 'OAuth redirect URI', placeHolder: '输入目标工作区可访问的 HTTP(S) redirect URI',
+      redirectUri = await input(context, { title: t('workbench.mcp.redirectTitle'), placeHolder: t('workbench.mcp.redirectHint'),
         validateInput: async value => URL.canParse(value) && ['http:', 'https:'].includes(new URL(value).protocol)
-          && !new URL(value).username && !new URL(value).password && !new URL(value).hash ? undefined : '请输入无凭据或 fragment 的 HTTP(S) URI' });
+          && !new URL(value).username && !new URL(value).password && !new URL(value).hash ? undefined : t('workbench.mcp.redirectInvalid') });
       if (redirectUri === undefined) return;
     }
     return { definition: { transport: 'streamable_http', url, headers: collected.plain,
@@ -203,14 +204,14 @@ export async function addMcpConfiguration(target: ManagementTarget, label: strin
     let folder: ReturnType<typeof workspaceFileSource> | undefined;
     if (configUri !== undefined) {
       const resource = typeof configUri === 'string' ? URI.parse(configUri, true) : configUri;
-      if (!URI.isUri(resource)) throw new Error('显式 MCP 配置目标必须是可核验的工作区根 URI');
+      if (!URI.isUri(resource)) throw new Error(t('workbench.mcp.rootUriRequired'));
       if (/(?:^|[/\\])(?:\.mcp\.json|\.vscode[/\\]mcp\.json)$/.test(resource.path)) {
-        throw new Error('此 Add 入口尚不支持精确写入 .mcp.json／.vscode/mcp.json，不能换成另一配置来源');
+        throw new Error(t('workbench.mcp.unsupportedConfigSource'));
       }
       folder = workspaceFileSource(resource);
     }
     if (folder && (folder.gatewayId !== frozenTarget.gateway_id || folder.path !== folder.root)) {
-      throw new Error('指定文件夹必须是原 Gateway 的精确工作区根，不能换成另一配置目标');
+      throw new Error(t('workbench.mcp.exactRootRequired'));
     }
     const workspace = await selectWorkspace(frozenTarget, label, quickInput, cancellation.token, check, folder?.workspaceId);
     if (!workspace) return;
@@ -220,28 +221,28 @@ export async function addMcpConfiguration(target: ManagementTarget, label: strin
       check();
       const current = workspaceContext.getSnapshot().workspaces.find(item => item.gateway_id === route.gateway_id
         && item.workspace_id === route.workspace_id && item.backend_id === workspace.backend_id);
-      if (current?.status !== 'ready') throw new Error('原工作区已不就绪或不属于所选 Gateway');
+      if (current?.status !== 'ready') throw new Error(t('workbench.mcp.workspaceChanged'));
     };
     if (folder) {
       const roots = unwrapApiData(await requestJson<APIResponse<WorkspaceFileRootsDTO>>(0, '/api/v1/workspace/files/roots', {
         headers: gatewayWorkspaceRequestHeaders(route), signal, cache: 'no-store',
       }));
       checkWorkspace();
-      if (folder.root !== roots.workspace_uri) throw new Error('指定文件夹不是目标 owner 返回的工作区根，不能替换配置目标');
+      if (folder.root !== roots.workspace_uri) throw new Error(t('workbench.mcp.rootMismatch'));
     }
     const context = { quickInput, token: cancellation.token, check: checkWorkspace,
-      owner: `${workspace.name} · ${route.gateway_id} · 工作区 ${route.workspace_id}` };
-    const serverId = await input(context, { title: '添加 MCP Server', placeHolder: '输入新的精确 Server ID',
+      owner: t('workbench.mcp.workspaceOwner', workspace.name, route.gateway_id, route.workspace_id) };
+    const serverId = await input(context, { title: t('workbench.mcp.addServer'), placeHolder: t('workbench.mcp.serverIdHint'),
       validateInput: async value => /^[a-zA-Z][a-zA-Z0-9._-]{1,63}$/.test(value)
-        ? undefined : 'Server ID 须以字母开头，长度 2–64，仅含字母、数字、点、下划线或连字符' });
+        ? undefined : t('workbench.mcp.serverIdInvalid') });
     if (serverId === undefined) return;
     const document = await getConfigSourceDocument(0, route, mcpConfigurationSourceKey, { signal });
     checkWorkspace();
-    if (!document.writable) throw new Error('原工作区配置来源不可写');
+    if (!document.writable) throw new Error(t('workbench.mcp.sourceReadonly'));
     assertNewServer(document, serverId);
     const transport = await quickInput.pick([
-      { label: '已就绪的 MCP 插件服务', transport: 'plugin' }, { label: '外部 Streamable HTTP', transport: 'streamable_http' },
-    ], { title: '选择 MCP 服务来源', prompt: context.owner }, cancellation.token);
+      { label: t('workbench.mcp.readyPluginService'), transport: 'plugin' }, { label: t('workbench.mcp.externalHttp'), transport: 'streamable_http' },
+    ], { title: t('workbench.mcp.chooseSource'), prompt: context.owner }, cancellation.token);
     checkWorkspace();
     if (!transport) return;
     let definition: ManualDefinition;
@@ -249,7 +250,7 @@ export async function addMcpConfiguration(target: ManagementTarget, label: strin
     if (transport.transport === 'plugin') {
       const selected = await pluginService(frozenTarget, workspace, context);
       checkWorkspace();
-      if (!selected) throw new Error('所选 Gateway／工作区没有已就绪且声明 MCP 的插件服务');
+      if (!selected) throw new Error(t('workbench.mcp.noPluginService'));
       definition = selected;
     } else {
       const selected = await httpDefinition(context);
@@ -259,13 +260,13 @@ export async function addMcpConfiguration(target: ManagementTarget, label: strin
     }
     try {
     const enabled = await quickInput.pick([
-      { label: '暂不启用此 Server', enabled: false }, { label: '启用此 Server', enabled: true },
-    ], { title: `选择 ${serverId} 的启用状态`, placeHolder: context.owner }, cancellation.token);
+      { label: t('workbench.mcp.disableServer'), enabled: false }, { label: t('workbench.mcp.enableServer'), enabled: true },
+    ], { title: t('workbench.mcp.chooseEnablement', serverId), placeHolder: context.owner }, cancellation.token);
     checkWorkspace();
     if (!enabled) return;
     try {
       for (const [key, value] of secrets) {
-        if (definition.transport !== 'streamable_http') throw new Error('私有 HTTP Header 只能绑定外部 Streamable HTTP 服务');
+        if (definition.transport !== 'streamable_http') throw new Error(t('workbench.mcp.privateHeaderTransport'));
         const reference = await writeMcpPrivateHeader(0, route, {
           target: { kind: 'workspace', gateway_id: route.gateway_id, workspace_id: route.workspace_id },
           server_id: serverId, header_name: key, endpoint: definition.url, value,
@@ -274,16 +275,16 @@ export async function addMcpConfiguration(target: ManagementTarget, label: strin
         definition.headers[key] = reference;
       }
     } catch (cause) {
-      throw new Error(`私有 HTTP Header 写入未确认，不会自动重试；${context.owner} · Server ${serverId} · ${mcpConfigurationErrorMessage(cause)}`, { cause });
+      throw new Error(t('workbench.mcp.privateHeaderUnconfirmed', context.owner, serverId, mcpConfigurationErrorMessage(cause)), { cause });
     }
     const errors: ParseError[] = [];
     const source: unknown = parse(document.jsonc || '{}', errors);
-    if (errors.length || !source || typeof source !== 'object' || Array.isArray(source)) throw new Error('原工作区配置来源不是有效 JSONC 对象');
+    if (errors.length || !source || typeof source !== 'object' || Array.isArray(source)) throw new Error(t('workbench.mcp.sourceObjectRequired'));
     const server = { enabled: enabled.enabled, ...definition };
     const jsonc = applyEdits(document.jsonc || '{}', setProperty(document.jsonc || '{}', ['mcp', 'servers', serverId], server,
       { insertSpaces: true, tabSize: 2, eol: document.jsonc.includes('\r\n') ? '\r\n' : '\n' }));
     await saveMcpWorkspaceConfiguration(route, document, jsonc, quickInput, notifications, signal, checkWorkspace,
-      `${serverId} · ${definition.transport === 'plugin' ? '插件 MCP 服务' : '外部 Streamable HTTP'}`);
+      `${serverId} · ${definition.transport === 'plugin' ? t('workbench.mcp.pluginService') : t('workbench.mcp.externalHttp')}`);
     } finally { secrets.clear(); }
   } finally { signal.removeEventListener('abort', abortInput); cancellation.dispose(); }
 }

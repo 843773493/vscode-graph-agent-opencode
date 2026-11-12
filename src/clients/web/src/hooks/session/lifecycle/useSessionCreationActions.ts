@@ -1,3 +1,4 @@
+import { t } from '../../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { useCallback } from "react";
 import {
@@ -78,7 +79,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
             next.sessionHistoryReloadNonce = prev.sessionHistoryReloadNonce + 1;
             next.currentSession = session;
             Object.assign(next, resetSessionScopedFields(next));
-            next.status = "已创建会话";
+            next.status = t('navigation.sessions.created');
             next.contentView = "default";
             Object.assign(next, resetAgentStateFields(next));
           }
@@ -86,7 +87,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
             next.eventQueuesBySession,
             session.session_id,
             "session_created",
-            "创建会话",
+            t('navigation.sessions.create'),
             {
               session_id: session.session_id,
               title: session.title,
@@ -103,7 +104,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
       } catch (error) {
         const message = errorMessage(error);
         setState((prev) => selectionIntent === selectionIntentRef.current
-          ? { ...prev, status: `创建会话失败: ${message}` } : prev);
+          ? { ...prev, status: t('navigation.sessions.createError', message) } : prev);
         throw error;
       }
     },
@@ -122,7 +123,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
       const selectionIntent = ++selectionIntentRef.current;
       setState((prev) => ({
         ...prev,
-        status: "正在创建上下文分支",
+        status: t('navigation.fork.creatingStatus'),
       }));
 
       try {
@@ -146,7 +147,7 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
           if (currentSessionMatchesOwner(prev, { sessionId: result.session.session_id, workspaceId: targetWorkspaceId })) {
             next.currentSession = result.session;
           }
-          if (selectionIntent === selectionIntentRef.current) next.status = `已创建上下文分支: ${result.thread_id}`;
+          if (selectionIntent === selectionIntentRef.current) next.status = t('navigation.fork.created', result.thread_id);
           return next;
         });
         return result;
@@ -161,13 +162,13 @@ export function useSessionCreationActions(context: SessionLifecycleContext) {
             if (prev.activeGatewayWorkspaceId === workspaceId) {
               next.sessions = refreshed.items;
             }
-            if (selectionIntent === selectionIntentRef.current) next.status = `创建上下文分支失败: ${message}`;
+            if (selectionIntent === selectionIntentRef.current) next.status = t('navigation.fork.createError', message);
             return next;
           });
         } catch (reconciliationError) {
           const reconciliationMessage = errorMessage(reconciliationError);
           const failure = new AggregateError([error, reconciliationError],
-            `创建上下文分支失败: ${message}；重新读取会话列表也失败: ${reconciliationMessage}`);
+            t('navigation.fork.reconcileFailed', message, reconciliationMessage));
           setState((prev) => selectionIntent === selectionIntentRef.current ? ({
             ...prev,
             status: failure.message,

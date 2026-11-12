@@ -519,7 +519,7 @@ export function transformMcp(root, path, source, replaceOnce) {
     contents = replaceOnce(contents, "import { IAccountQuery, IAuthenticationQueryService } from '../../../services/authentication/common/authenticationQuery.js';", '');
     contents = replaceSection(contents, 'export class AuthServerAction extends McpServerAction {', 'export class ShowServerOutputAction', `export class AuthServerAction extends McpServerAction {
   constructor() {
-    super('mcp.authorize', localize('mcp.authorize', 'Authorize'), 'extension-action label prominent account', false);
+    super('mcp.authorize', localize('workbench.mcp.authorize', 'Authorize'), 'extension-action label prominent account', false);
     this.update();
   }
   update(): void {
@@ -529,7 +529,7 @@ export function transformMcp(root, path, source, replaceOnce) {
   }
   override async run(): Promise<void> {
     const server = this.mcpServer instanceof WorkspaceMcpServer ? this.mcpServer : undefined;
-    if (!(server instanceof WorkspaceMcpServer)) throw new Error('原 MCP 目标已移除');
+    if (!(server instanceof WorkspaceMcpServer)) throw new Error(localize('workbench.mcp.serverRemoved', 'The MCP service is no longer in the original target catalog'));
     await server.authorize();
   }
 }
@@ -545,7 +545,7 @@ export function transformMcp(root, path, source, replaceOnce) {
       action = replaceOnce(action, '\t\tif (!this.mcpServer.local) {\n\t\t\treturn;\n\t\t}\n', '');
       action = replaceOnce(action, 'if (!this.mcpServer) {', 'if (!(this.mcpServer instanceof WorkspaceMcpServer)) {');
       action = replaceOnce(action, `if (${condition}) {`, `if (server instanceof WorkspaceMcpServer ? !server.${name === 'StartServerAction' ? 'canConnect' : 'canStop'} : ${condition}) {`);
-      if (name === 'StopServerAction') action = replaceOnce(action, "this.label = localize('stop', \"Stop Server\");", "this.label = server instanceof WorkspaceMcpServer && server.isPending ? localize('mcp.cancelOperation', 'Cancel Connection Operation') : localize('stop', 'Stop Server');");
+      if (name === 'StopServerAction') action = replaceOnce(action, "this.label = localize('stop', \"Stop Server\");", "this.label = server instanceof WorkspaceMcpServer && server.isPending ? localize('workbench.mcp.cancelConnection', 'Cancel Connection Operation') : localize('stop', 'Stop Server');");
       contents = replaceOnce(contents, contents.slice(begin, end), action);
     }
     contents = serverImport + contents;

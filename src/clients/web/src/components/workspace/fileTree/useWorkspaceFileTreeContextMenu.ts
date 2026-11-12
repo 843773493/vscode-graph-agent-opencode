@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from "react";
+import { t } from "../../../../../shared/core/i18n/index.js";
 import {
   addSessionFileTreeShortcut,
   applyFileTreeShortcutToWorkspace,
@@ -114,7 +115,7 @@ export async function runCurrentAndDefaultShortcutMutation(
     } catch (recoveryError) {
       throw new AggregateError(
         [mutationError, recoveryError],
-        "快捷路径组合操作失败，且重新同步后端状态失败",
+        t("fileTree.shortcut.mutationAndRecoveryFailed"),
       );
     }
     throw mutationError;
@@ -172,7 +173,7 @@ export function useWorkspaceFileTreeContextMenu({
     target: FileTreeContextMenuTarget,
     kind: "file" | "directory",
   ) => {
-    const name = window.prompt(kind === "file" ? "新文件名称" : "新文件夹名称");
+    const name = window.prompt(kind === "file" ? t("fileTree.create.fileName") : t("fileTree.create.directoryName"));
     if (name === null) {
       return;
     }
@@ -195,7 +196,7 @@ export function useWorkspaceFileTreeContextMenu({
         && sourcePaths[0] === copiedEntry.uri
       ) {
         if (copiedEntry.workspaceId !== workspaceId) {
-          throw new Error("暂不支持跨工作区粘贴，请在来源工作区下载后再上传");
+          throw new Error(t("fileTree.paste.crossWorkspaceUnsupported"));
         }
         await operations.submit(directoryPath, { kind: "copy", sourcePath: copiedEntry.location.path,
           sourceScope: copiedEntry.location.scope }, target.createdByOperationId);
@@ -231,12 +232,12 @@ export function useWorkspaceFileTreeContextMenu({
       workspaceId,
     });
     await copyTextToClipboard(target.uri);
-    onStatusChange(`已复制文件: ${target.uri}`);
+    onStatusChange(t("fileTree.status.fileCopied", target.uri));
   };
 
   const copyPathToClipboard = async (target: FileTreeContextMenuTarget) => {
     await copyTextToClipboard(target.uri);
-    onStatusChange(`已复制路径: ${target.uri}`);
+    onStatusChange(t("fileTree.status.pathCopied", target.uri));
   };
 
   const downloadEntry = async (target: FileTreeContextMenuTarget) => {
@@ -247,23 +248,23 @@ export function useWorkspaceFileTreeContextMenu({
       workspaceId,
     );
     await getFileTransferHost().downloadWorkspaceFile(request);
-    onStatusChange(`已开始下载: ${target.label}`);
+    onStatusChange(t("fileTree.status.downloadStarted", target.label));
   };
 
   const revealEntry = async (target: FileTreeContextMenuTarget) => {
     const result = await revealWorkspaceFileEntry(port, target.treePath, workspaceId);
-    onStatusChange(`已请求系统显示: ${result.path}`);
+    onStatusChange(t("fileTree.status.revealRequested", result.path));
   };
 
   const refreshTargetDirectory = async (target: FileTreeContextMenuTarget) => {
     const directoryPath = contextTargetDirectory(target);
     await loadDirectory(directoryPath, true);
-    onStatusChange(`已刷新目录: ${referenceForTreePath(directoryPath)}`);
+    onStatusChange(t("fileTree.status.directoryRefreshed", referenceForTreePath(directoryPath)));
   };
 
   const addShortcut = async (treePath: string, label: string) => {
     if (!sessionId) {
-      throw new Error("添加快捷路径需要当前会话");
+      throw new Error(t("fileTree.shortcut.addRequiresSession"));
     }
     const result = await addSessionFileTreeShortcut(
       port,
@@ -272,19 +273,19 @@ export function useWorkspaceFileTreeContextMenu({
       workspaceId,
     );
     acceptFileTreeSettings(result);
-    onStatusChange(`已添加会话快捷路径: ${label}`);
+    onStatusChange(t("fileTree.shortcut.sessionAdded", label));
   };
 
   const refreshShortcutSettings = async () => {
     if (!sessionId) {
-      throw new Error("刷新快捷路径需要当前会话");
+      throw new Error(t("fileTree.shortcut.refreshRequiresSession"));
     }
     acceptFileTreeSettings(await getSessionFileTreeSettings(port, sessionId, workspaceId));
   };
 
   const addAbsoluteShortcutAndDefault = async (path: string, label: string) => {
     if (!sessionId) {
-      throw new Error("添加当前会话和新会话默认快捷路径需要当前会话");
+      throw new Error(t("fileTree.shortcut.addDefaultRequiresSession"));
     }
     const result = await runCurrentAndDefaultShortcutMutation(
       () => addSessionFileTreeShortcut(port, sessionId, { path, label }, workspaceId),
@@ -292,7 +293,7 @@ export function useWorkspaceFileTreeContextMenu({
       refreshShortcutSettings,
     );
     acceptFileTreeSettings(result);
-    onStatusChange(`已将 ${label} 添加到当前会话，并设为新会话默认快捷路径`);
+    onStatusChange(t("fileTree.shortcut.addedCurrentAndDefault", label));
   };
 
   const addShortcutAndDefault = async (treePath: string, label: string) => {
@@ -301,7 +302,7 @@ export function useWorkspaceFileTreeContextMenu({
 
   const removeShortcutAndDefault = async (shortcut: FileTreeShortcut) => {
     if (!sessionId) {
-      throw new Error("删除当前会话和新会话默认快捷路径需要当前会话");
+      throw new Error(t("fileTree.shortcut.removeDefaultRequiresSession"));
     }
     const result = await runCurrentAndDefaultShortcutMutation(
       () => removeSessionFileTreeShortcut(port, sessionId, shortcut.path, "session", workspaceId),
@@ -309,12 +310,12 @@ export function useWorkspaceFileTreeContextMenu({
       refreshShortcutSettings,
     );
     acceptFileTreeSettings(result);
-    onStatusChange(`已从当前会话和新会话默认快捷路径中删除: ${shortcut.path}`);
+    onStatusChange(t("fileTree.shortcut.removedCurrentAndDefault", shortcut.path));
   };
 
   const removeShortcut = async (path: string) => {
     if (!sessionId) {
-      throw new Error("删除快捷路径需要当前会话");
+      throw new Error(t("fileTree.shortcut.removeRequiresSession"));
     }
     const result = await removeSessionFileTreeShortcut(
       port,
@@ -324,7 +325,7 @@ export function useWorkspaceFileTreeContextMenu({
       workspaceId,
     );
     acceptFileTreeSettings(result);
-    onStatusChange(`已删除会话快捷路径: ${path}`);
+    onStatusChange(t("fileTree.shortcut.sessionRemoved", path));
   };
 
   const toggleDefaultShortcut = async (shortcut: FileTreeShortcut, isDefault: boolean) => {
@@ -347,7 +348,7 @@ export function useWorkspaceFileTreeContextMenu({
       return;
     }
     void uploadEntries(target, files).catch((error: unknown) => {
-      onStatusChange(`上传本地文件失败: ${errorDisplayMessage(error)}`);
+      onStatusChange(t("fileTree.status.uploadFailed", errorDisplayMessage(error)));
     });
   };
 
@@ -362,7 +363,7 @@ export function useWorkspaceFileTreeContextMenu({
       const files = filesFromClipboardData(event.clipboardData);
       if (files.length > 0) {
         void uploadEntries(target, files).catch((error: unknown) => {
-          onStatusChange(`上传本地文件失败: ${errorDisplayMessage(error)}`);
+          onStatusChange(t("fileTree.status.uploadFailed", errorDisplayMessage(error)));
         });
         return;
       }
@@ -370,11 +371,11 @@ export function useWorkspaceFileTreeContextMenu({
       try {
         clipboardText = readFilePathTextFromClipboardData(event.clipboardData);
       } catch (error) {
-        onStatusChange(`粘贴失败: ${errorDisplayMessage(error)}`);
+        onStatusChange(t("fileTree.status.pasteFailed", errorDisplayMessage(error)));
         return;
       }
       void pasteEntries(target, clipboardText).catch((error: unknown) => {
-        onStatusChange(`粘贴失败: ${errorDisplayMessage(error)}`);
+        onStatusChange(t("fileTree.status.pasteFailed", errorDisplayMessage(error)));
       });
     };
     const handleCopyShortcut = (event: KeyboardEvent) => {
@@ -389,7 +390,7 @@ export function useWorkspaceFileTreeContextMenu({
       const target = contextMenu;
       setContextMenu(null);
       void copyEntryToClipboard(target).catch((error: unknown) => {
-        onStatusChange(`复制文件失败: ${errorDisplayMessage(error)}`);
+        onStatusChange(t("fileTree.status.copyFileFailed", errorDisplayMessage(error)));
       });
     };
     window.addEventListener("paste", handlePaste);
@@ -404,7 +405,7 @@ export function useWorkspaceFileTreeContextMenu({
     setContextMenu(null);
     setActionError(null);
     void action().catch((error: unknown) => {
-      const failureMessage = `${failurePrefix}: ${errorDisplayMessage(error)}`;
+      const failureMessage = t("fileTree.status.actionFailed", failurePrefix, errorDisplayMessage(error));
       setActionError(failureMessage);
       onStatusChange(failureMessage);
     });
@@ -412,7 +413,7 @@ export function useWorkspaceFileTreeContextMenu({
 
   const runStatusAction = useCallback((failurePrefix: string, action: () => Promise<unknown>) => {
     void action().catch((error: unknown) => {
-      onStatusChange(`${failurePrefix}: ${errorDisplayMessage(error)}`);
+      onStatusChange(t("fileTree.status.actionFailed", failurePrefix, errorDisplayMessage(error)));
     });
   }, [onStatusChange]);
 

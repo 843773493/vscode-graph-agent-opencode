@@ -1,3 +1,4 @@
+import { t } from '../../../../src/clients/shared/core/i18n/index.js';
 import { afterAll, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -50,6 +51,7 @@ async function source(relative, local = false) {
 }
 
 function evaluate(parsed, names, environment, classMembers) {
+  environment = { t, ...environment };
   const declarations = names.map(name => {
     let node = parsed.statements.find(statement => statement.name?.text === name || ts.isVariableStatement(statement)
       && statement.declarationList.declarations.some(declaration => declaration.name.getText(parsed) === name));

@@ -19,12 +19,15 @@ let browser;
 beforeAll(async () => { browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? Bun.which('chromium'),
   headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] }); run.addCleanup('Chromium', () => browser.close()); });
 afterAll(() => run.close());
-async function exercise(mode, contract = 'configurationSourcesContract') {
+async function exercise(mode, contract = 'configurationSourcesContract', locale = 'zh-cn') {
   const page = await browser.newPage(), errors = [];
   page.on('pageerror', cause => errors.push(String(cause)));
   try {
     await page.goto(server.url.href);
-    const result = await page.evaluate(({ mode, contract }) => import('/configuration-sources.mjs').then(module => module[contract](mode)), { mode, contract });
+    const result = await page.evaluate(({ mode, contract, locale }) => import('/configuration-sources.mjs').then(module => {
+      if (locale === 'en') module.setLocaleResources('en', module.englishMessages);
+      return module[contract](mode);
+    }), { mode, contract, locale });
     expect(errors).toEqual([]); return result;
   } finally { await page.close(); }
 }
@@ -83,6 +86,15 @@ test('配置权限失败独立显示原request_id，其它owner仍可打开', as
   expect(result.rows.filter(item => item.selectable)).toHaveLength(2);
   const failed = result.rows.find(item => item.label.includes('权限已撤销'));
   expect(failed.detail).toContain('source-denied'); expect(failed.selectable).toBe(false); expect(result.commands).toEqual([]);
+});
+test('英文来源失败摘要保留稳定候选身份、原始原因与request_id', async () => {
+  const result = await exercise('failure', 'configurationSourcesContract', 'en');
+  const failed = result.rows.find(item => item.label.includes('配置读取权限已撤销'));
+  expect(failed.id).toBe(JSON.stringify([result.owners[0].gatewayId, result.owners[0].workspaceId]) + '/配置 /failed');
+  expect(failed.label).toBe('Configuration source unavailable: 请求失败 403 : 配置读取权限已撤销');
+  expect(failed.detail).toBe('request_id: source-denied'); expect(failed.selectable).toBe(false);
+  expect(result.rows.filter(item => item.selectable)).toHaveLength(2); expect(result.commands).toEqual([]);
+  expect(result.requests.every(item => item.method === 'GET')).toBe(true);
 });
 for (const mode of ['close', 'identity']) test(`${mode}结束配置发现实际读取，丢弃迟到候选`, async () => {
   const result = await exercise(mode); expect(result.aborted).toBe(true); expect(result.commands).toEqual([]);

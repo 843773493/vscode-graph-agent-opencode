@@ -45,6 +45,7 @@ async function observeBuildDownloads(scriptUrl, mode, overrideRoots, scenario, r
     writeFileSync(file, content);
   }
   mkdirSync(path.join(projectRoot, "scripts/plugins"), { recursive: true });
+  mkdirSync(path.join(projectRoot, "src/clients/shared"), { recursive: true });
   process.env.BOXTEAM_PROJECT_ROOT = projectRoot;
   const target = mode === "linux" ? "linux-x64" : "windows-x64";
   const defaultDownloadRoot = path.join(projectRoot, "out/packaging", target, "downloads");

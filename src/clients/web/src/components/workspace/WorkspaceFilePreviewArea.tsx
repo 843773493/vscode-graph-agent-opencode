@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 import type {
   NodeDebugBreakpoint,
   SessionFileChange,
@@ -261,7 +262,7 @@ export default function WorkspaceFilePreviewArea({
       className={`workspace-preview-panel${visible ? "" : " preserve-mounted-hidden"}`}
       hidden={!visible}
       style={{ flexBasis: 0, flexGrow: flexRatio }}
-      aria-label={context === "changes" ? "更改代码预览区" : "文件代码预览区"}
+      aria-label={context === "changes" ? t("workspace.preview.changesRegion") : t("workspace.preview.fileRegion")}
       data-bt-surface="workspace"
     >
       <div className="workspace-preview-content">
@@ -273,27 +274,27 @@ export default function WorkspaceFilePreviewArea({
               </span>
               <span
                 className="workspace-preview-scope"
-                title={`${workspaceName || "当前工作区"} · ${sessionTitle || "当前会话"}`}
+                title={`${workspaceName || t("workspace.auxiliary.currentWorkspace")} · ${sessionTitle || t("workspace.auxiliary.currentSession")}`}
               >
-                {context === "changes" ? "会话变更" : workspaceName || "当前工作区"} · {sessionTitle || "当前会话"}
+                {context === "changes" ? t("workspace.preview.sessionChanges") : workspaceName || t("workspace.auxiliary.currentWorkspace")} · {sessionTitle || t("workspace.auxiliary.currentSession")}
               </span>
             </div>
-            <div className="workspace-preview-toolbar-actions" aria-label="文件预览操作">
-              {onClose ? <button type="button" className="auxiliary-icon-button" title="关闭文件预览" aria-label="关闭文件预览" onClick={onClose}>
+            <div className="workspace-preview-toolbar-actions" aria-label={t("workspace.preview.fileActions")}>
+              {onClose ? <button type="button" className="auxiliary-icon-button" title={t("workspace.preview.closeFilePreview")} aria-label={t("workspace.preview.closeFilePreview")} onClick={onClose}>
                 <span className="codicon codicon-close" aria-hidden="true" />
               </button> : null}
               <span className="workspace-preview-meta">
                 {activeTab.language} · {formatByteSize(activeTab.size)}
               </span>
               {activeTab.language === "markdown" ? (
-                <div className="workspace-preview-mode-switch" role="group" aria-label="Markdown 查看方式">
+                <div className="workspace-preview-mode-switch" role="group" aria-label={t("workspace.preview.markdown.viewMode")}>
                   <button
                     type="button"
                     className={markdownSourceVisible ? "active" : ""}
                     aria-pressed={markdownSourceVisible}
                     onClick={() => onMarkdownSourceChange(true)}
                   >
-                    源码
+                    {t("workspace.preview.markdown.source")}
                   </button>
                   <button
                     type="button"
@@ -301,27 +302,27 @@ export default function WorkspaceFilePreviewArea({
                     aria-pressed={!markdownSourceVisible}
                     onClick={() => onMarkdownSourceChange(false)}
                   >
-                    预览
+                    {t("workspace.preview.markdown.preview")}
                   </button>
                 </div>
               ) : null}
               {!editingActiveFile ? (
                 <button type="button" onClick={() => onBeginEdit(activeTab.path)}>
                   <span className="codicon codicon-edit" aria-hidden="true" />
-                  编辑文件
+                  {t("workspace.preview.editFile")}
                 </button>
               ) : null}
               {editingActiveFile ? (
                 <>
                   {hasUnsavedEdit ? (
-                    <span className="workspace-preview-dirty-indicator">未保存</span>
+                    <span className="workspace-preview-dirty-indicator">{t("workspace.preview.unsaved")}</span>
                   ) : null}
                   <button
                     type="button"
                     disabled={savingPath === activeTab.path}
                     onClick={onCancelEdit}
                   >
-                    取消
+                    {t("workspace.preview.cancelEdit")}
                   </button>
                   <button
                     type="button"
@@ -337,7 +338,7 @@ export default function WorkspaceFilePreviewArea({
                       }`}
                       aria-hidden="true"
                     />
-                    {savingPath === activeTab.path ? "保存中" : "保存"}
+                    {savingPath === activeTab.path ? t("workspace.preview.saving") : t("workspace.preview.save")}
                   </button>
                 </>
               ) : null}
@@ -406,7 +407,7 @@ export default function WorkspaceFilePreviewArea({
               <textarea
                 ref={editorRef}
                 className="workspace-preview-text-editor"
-                aria-label={`编辑 ${activeTab.path}`}
+                aria-label={t("workspace.preview.editPath", activeTab.path)}
                 value={activeEditorContent}
                 readOnly={!editingActiveFile}
                 spellCheck={false}
@@ -451,28 +452,28 @@ export default function WorkspaceFilePreviewArea({
           <iframe
             className="workspace-preview-terminal-frame"
             src={activeTab.attachUrl}
-            title={`终端 ${activeTab.terminalId}`}
+            title={t("workspace.runtime.frameTitle", t("workspace.runtime.terminal"), activeTab.terminalId)}
           />
         ) : activeTab?.previewType === "browser" ? (
           <iframe
             className="workspace-preview-terminal-frame workspace-preview-browser-frame"
             src={activeTab.attachUrl}
-            title={`浏览器 ${activeTab.browserId}`}
+            title={t("workspace.runtime.frameTitle", t("workspace.runtime.browser"), activeTab.browserId)}
           />
         ) : activeTab?.previewType === "session-diff" ? (
           <div className="workspace-preview-diff-scroll">
               {diffTruncated ? (
                 <div className="workspace-preview-truncation-notice" role="status">
                   <span>
-                    变更共 {activeDiffProjection.lineCount} 行，已只渲染前 {MAX_RENDERED_DIFF_LINES} 行以避免界面卡顿。
+                    {t("workspace.preview.diff.bounded", activeDiffProjection.lineCount, MAX_RENDERED_DIFF_LINES)}
                   </span>
                   <button
                     type="button"
                     onClick={() => setDiffFullyExpanded((value) => !value)}
                   >
                     {diffFullyExpanded
-                      ? `仅显示前 ${MAX_RENDERED_DIFF_LINES} 行`
-                      : `渲染全部 ${activeDiffProjection.lineCount} 行`}
+                      ? t("workspace.preview.diff.collapse", MAX_RENDERED_DIFF_LINES)
+                      : t("workspace.preview.diff.expand", activeDiffProjection.lineCount)}
                   </button>
                 </div>
               ) : null}
@@ -496,12 +497,12 @@ export default function WorkspaceFilePreviewArea({
         ) : (
           <div className="workspace-preview-empty">
             <span className="workspace-preview-empty-icon">▱</span>
-            <span>{showLoadingEmpty ? "正在读取文件..." : "从右侧文件树选择文件预览"}</span>
+            <span>{showLoadingEmpty ? t("workspace.preview.loadingFile") : t("workspace.preview.chooseFile")}</span>
           </div>
         )}
 
         {loadingPath ? (
-          <div className="workspace-preview-status">正在读取 {loadingPath}</div>
+          <div className="workspace-preview-status">{t("workspace.preview.readingFile", loadingPath)}</div>
         ) : null}
         {error ? (
           <div className="workspace-preview-error" role="alert">

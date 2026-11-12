@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { matchesFuzzy } from '../../upstream/src/vs/base/common/filters.js';
 import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
@@ -30,7 +31,7 @@ export class ManagePluginQuickAccessProvider extends PickerQuickAccessProvider<P
   constructor(@ICommandService protected readonly commands: ICommandService,
     @INotificationService protected readonly notifications: INotificationService,
     @IViewsService private readonly views: IViewsService,
-  ) { super(new.target.PREFIX, { noResultsPick: { id: 'no-plugin', label: '目标 Gateway 没有匹配的已安装插件' } }); }
+  ) { super(new.target.PREFIX, { noResultsPick: { id: 'no-plugin', label: t('plugins.noInstalledMatch') } }); }
 
   override provide(picker: IQuickPick<PluginPick, { useSeparators: true }>, token: CancellationToken) {
     const lifetime = new DisposableStore(), access = new CancellationTokenSource(token);
@@ -38,13 +39,13 @@ export class ManagePluginQuickAccessProvider extends PickerQuickAccessProvider<P
     const query: PluginQuery = { target: { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id },
       entryGatewayId: workspaceContext.getSnapshot().gatewayId, controller: new AbortController(), invalidated: false };
     this.query = query;
-    picker.placeholder = `${this instanceof InstallPluginQuickAccessProvider ? '安装自有插件包' : '查找已安装插件'} · ${target.name} · ${target.gateway_id}`;
+    picker.placeholder = `${this instanceof InstallPluginQuickAccessProvider ? t('plugins.installCustomPackage') : t('plugins.findInstalled')} · ${target.name} · ${target.gateway_id}`;
     const invalidate = () => {
       query.invalidated = true;
       access.cancel();
       query.controller.abort();
       picker.activeItems = picker.selectedItems = [];
-      picker.items = [{ id: 'plugin-target-invalidated', label: 'Gateway 或访问凭据已改变，请重新查找插件' }];
+      picker.items = [{ id: 'plugin-target-invalidated', label: t('plugins.findTargetChanged') }];
     };
     lifetime.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
     lifetime.add(toDisposable(workspaceContext.subscribe(() => {
@@ -58,7 +59,7 @@ export class ManagePluginQuickAccessProvider extends PickerQuickAccessProvider<P
 
   protected check(query: PluginQuery): void {
     if (query.invalidated || workspaceContext.getSnapshot().gatewayId !== query.entryGatewayId) {
-      throw new Error('原 Gateway 或访问凭据已改变，请重新查找插件');
+      throw new Error(t('plugins.findOriginalTargetChanged'));
     }
   }
 
@@ -77,26 +78,26 @@ export class ManagePluginQuickAccessProvider extends PickerQuickAccessProvider<P
       return inventory.packages.flatMap(pkg => (pkg.manifest?.plugins ?? []).flatMap(plugin => {
         const manifest = pkg.manifest!;
         const scope = plugin.instance_scope;
-        if (scope !== 'gateway' && scope !== 'workspace') throw new Error(`插件范围无效：${manifest.package_id}/${plugin.id}`);
+        if (scope !== 'gateway' && scope !== 'workspace') throw new Error(t('plugins.invalidScope', manifest.package_id, plugin.id));
         const label = `${plugin.name} · ${manifest.package_id}/${plugin.id}@${manifest.version}`;
         const highlights = matchesFuzzy(filter, label);
         if (filter && !highlights) return [];
         return [{ id: `${manifest.package_id}/${plugin.id}@${manifest.version}`, label,
-          description: `${plugin.instance_scope === 'gateway' ? 'Gateway' : '工作区'} · ${plugin.runtime ?? '纯声明'}`,
-          detail: `${query.target.gateway_id}${query.target.gateway_connection_id ? ` · 连接 ${query.target.gateway_connection_id}` : ''}`,
+          description: `${plugin.instance_scope === 'gateway' ? 'Gateway' : t('plugins.workspace')} · ${plugin.runtime ?? t('plugins.declarativeShort')}`,
+          detail: `${query.target.gateway_id}${query.target.gateway_connection_id ? t('plugins.connectionDetail', query.target.gateway_connection_id) : ''}`,
           highlights: { label: highlights ?? undefined },
           accept: () => this.report((async () => {
             this.check(query);
             const view = await this.views.openView<ServicePluginPackagesView>('boxteam.views.extensionPackages', true);
             this.check(query);
-            if (!view) throw new Error('插件包管理视图当前不可用');
+            if (!view) throw new Error(t('plugins.managementViewUnavailable'));
             await view.openPlugin(query.target, manifest.package_id, manifest.version, plugin.id, scope);
           })()),
         }];
       }));
     } catch (error) {
       if (token.isCancellationRequested || query.controller.signal.aborted) return [];
-      return [{ id: 'plugin-inventory-failed', label: `插件库存不可用：${error instanceof Error ? error.message : String(error)}` }];
+      return [{ id: 'plugin-inventory-failed', label: t('plugins.inventoryUnavailable', error instanceof Error ? error.message : String(error)) }];
     }
   }
 }
@@ -107,7 +108,7 @@ export class InstallPluginQuickAccessProvider extends ManagePluginQuickAccessPro
   protected override async _getPicks(_filter: string, _disposables: DisposableStore, _token: CancellationToken): Promise<PluginPick[]> {
     const query = this.query!;
     this.check(query);
-    return [{ id: 'install-plugin-package', label: '安装自有插件包…', detail: `${query.target.gateway_id} · ZIP、开发目录或已配置的自有来源`,
+    return [{ id: 'install-plugin-package', label: t('plugins.installCustomEllipsis'), detail: t('plugins.installationKinds', query.target.gateway_id),
       accept: () => {
         this.check(query);
         this.report(this.commands.executeCommand('boxteam.plugins.installPackage', { ...query.target }));

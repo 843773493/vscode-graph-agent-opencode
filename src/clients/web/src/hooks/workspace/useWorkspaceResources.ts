@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { t } from "../../../../shared/core/i18n/index.js";
 import { controlWorkspaceResource, createWorkspaceBrowser, createWorkspaceTerminal, listWorkspaceResources } from "../../api/workspaceResources";
 import type { ResourceAction, ResourceThreadRef, WorkspaceConnectionKind, WorkspaceResourceDTO } from "../../api/workspaceResources";
 import { errorMessage } from "../../utils/errorMessage";
@@ -54,8 +55,8 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
     return () => { ++scope.generation; scope.pending = null; window.clearInterval(timer); };
   }, [enabled, refresh, scope, workspaceId]);
   const mutate = useCallback(async (operation: () => Promise<WorkspaceResourceDTO>) => {
-    if (!workspaceId || scopeRef.current !== scope) throw new Error("资源管理缺少当前工作区");
-    if (scope.mutating) throw new Error("当前资源操作尚未完成，请稍后重试");
+    if (!workspaceId || scopeRef.current !== scope) throw new Error(t("resources.errors.missingWorkspace"));
+    if (scope.mutating) throw new Error(t("resources.errors.operationInProgress"));
     // 管理写入开始即作废在途刷新；轮询不能用旧清单覆盖完整 owner 回执。
     ++scope.generation;
     scope.pending = null;
@@ -72,7 +73,7 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
         throw settled.cause;
       }
       const result = settled.resource;
-      if (scopeRef.current !== scope) throw new Error("资源操作已在原工作区完成；当前资源范围已切换");
+      if (scopeRef.current !== scope) throw new Error(t("resources.errors.workspaceChanged"));
       replace(result);
       setOperationError(null);
       return result;
@@ -86,7 +87,7 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
     if (!dispatchControl) return run(action, thread);
     const result = await dispatchControl(action, { workspaceKey: workspaceId!, resource, run }, thread);
     // 原组件只在写入确已执行时消费完整回执；命令取消不伪造资源。
-    if (!result) throw new Error("资源操作已取消");
+    if (!result) throw new Error(t("resources.errors.operationCancelled"));
     return result;
   }, [apiPort, dispatchControl, mutate, workspaceId]);
   const create = useCallback((thread: ResourceThreadRef, retentionScope: "thread" | "workspace") =>

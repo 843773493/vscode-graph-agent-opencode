@@ -1,3 +1,4 @@
+import { t } from '../../../shared/core/i18n/index.js';
 import { Disposable, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { Emitter } from '../../upstream/src/vs/base/common/event.js';
 import { IContextKeyService } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
@@ -136,12 +137,12 @@ class PluginCommands extends Disposable {
     this._register(toDisposable(onGatewayTokenInvalidated(0, () => {
       for (const stream of this.streams.values()) { stream.abort.abort(); this.contributions.remove(stream.target); }
       this.streams.clear();
-      for (const call of this.calls) call.abort(new Error('Gateway 身份已失效，原命令结果未知'));
+      for (const call of this.calls) call.abort(new Error(t('plugins.commandIdentityChanged')));
       update();
     })));
     this._register(toDisposable(() => {
       for (const stream of this.streams.values()) stream.abort.abort(); this.streams.clear();
-      for (const call of this.calls) call.abort(new Error('窗口已关闭，原命令结果未知'));
+      for (const call of this.calls) call.abort(new Error(t('plugins.commandWindowClosed')));
       gatewayKey.reset(); workspaceKey.reset();
       for (const keys of scoped.values()) { keys.gateway.reset(); keys.workspace.reset(); } scoped.clear();
     }));
@@ -151,7 +152,7 @@ class PluginCommands extends Disposable {
   private execute(accessor: ServicesAccessor, source: FrozenPluginCommand, args: unknown[]): Promise<unknown> {
     const progress = accessor.get(IProgressService), notifications = accessor.get(INotificationService);
     const abort = new AbortController(); this.calls.add(abort);
-    const timer = setTimeout(() => abort.abort(new Error('插件命令期限已到，未取得终态则结果未知')), DEFAULT_API_REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => abort.abort(new Error(t('plugins.commandDeadline'))), DEFAULT_API_REQUEST_TIMEOUT_MS);
     let cancel: (() => Promise<void>) | undefined, started = false, cancelled = false;
     const sendCancel = () => { if (started && cancel) void cancel().catch(error => notifications.error(error)); };
     return progress.withProgress({ location: ProgressLocation.Notification, title: source.command.title, cancellable: true }, reporter =>

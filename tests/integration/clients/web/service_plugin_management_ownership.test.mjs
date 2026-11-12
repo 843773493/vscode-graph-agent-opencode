@@ -1,3 +1,4 @@
+import { t } from '../../../../src/clients/shared/core/i18n/index.js';
 import { afterAll, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -7,6 +8,9 @@ import { HttpRequestError as GatewayRequestError } from '../../../../src/clients
 import { CancellationTokenSource } from '../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { DeferredPromise, raceTimeout } from '../../../../src/clients/workbench/upstream/src/vs/base/common/async.js';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+
+// 提取的真实声明仍使用产品翻译入口，显式注入同一测试启动语言。
+const localizedFunction = (...parts) => new Function('t', 'pluginStateLabel', ...parts).bind(undefined, t, pluginStateLabel);
 
 const run = await TestRunContext.fromTestFile('tests/integration/clients/web/service_plugin_management_ownership.test.mjs').prepare();
 const sourcePath = 'src/clients/workbench/src/extensions/servicePluginManagement.ts';
@@ -26,6 +30,14 @@ function declaration(name) {
   const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed).replace(/^export /gm, '');
   return ts.transpile(printed, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
 }
+
+const pluginStateLabel = new Function('t', `${declaration('pluginStateLabel')}\nreturn pluginStateLabel;`)(t);
+
+test('插件已知运行态在展示时翻译，未知服务状态保留原文', () => {
+  expect(['stopped', 'starting', 'ready', 'stopping', 'failed', 'waiting'].map(pluginStateLabel))
+    .toEqual(['已停止', '正在启动', '已就绪', '正在停止', '失败', '等待中']);
+  expect(pluginStateLabel('server-specific-state {0}')).toBe('server-specific-state {0}');
+});
 
 function managementDeclaration(name) {
   const parsed = ts.createSourceFile(managementTargetPath, managementTargetSource, ts.ScriptTarget.Latest, true);
@@ -52,7 +64,7 @@ function managementLifecycleHarness(state) {
     state.auth.add(listener);
     return () => state.auth.delete(listener);
   };
-  const create = new Function('CancellationTokenSource', 'workspaceContext', 'onGatewayTokenInvalidated',
+  const create = localizedFunction('CancellationTokenSource', 'workspaceContext', 'onGatewayTokenInvalidated',
     `${managementDeclaration('createManagementTargetLifecycle')}\nreturn createManagementTargetLifecycle;`)(
     CancellationTokenSource, workspaceContext, onGatewayTokenInvalidated);
   return {
@@ -67,7 +79,7 @@ function managementLifecycleHarness(state) {
 
 function createUninstaller(request, notifications = { info() {} }) {
   const gateway = { request };
-  return new Function('gateway', 'pluginGatewayLabel',
+  return localizedFunction('gateway', 'pluginGatewayLabel',
     `${declaration('uninstallPackageFromView')}\nreturn uninstallPackageFromView;`)(
     gateway, target => `原生 Gateway ${target.gateway_id}${target.gateway_connection_id ? `（连接 ${target.gateway_connection_id}）` : ''}`);
 }
@@ -92,23 +104,23 @@ function classCallback(className, methodName, sourceFragment, bindings = {}) {
   const printed = ts.createPrinter().printNode(ts.EmitHint.Unspecified, functionNode, parsed);
   const javascript = ts.transpile(`const callback = ${printed};`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
   const names = ['errorsText', ...Object.keys(bindings)];
-  return new Function(...names, `${javascript}\nreturn function(...args) { return callback.call(this, ...args); };`)(
+  return localizedFunction(...names, `${javascript}\nreturn function(...args) { return callback.call(this, ...args); };`)(
     error => error instanceof Error ? error.message : String(error), ...Object.values(bindings));
 }
 
 function createInstallCommand(request, picks, inputs, observed, options = {}) {
   const gateway = { async request(path, requestOptions = {}) { return request(path, JSON.parse(requestOptions.body ?? '{}'), requestOptions); } };
-  const requireOwner = new Function(`${declaration('requireInstallationOwner')}\nreturn requireInstallationOwner;`)();
-  const read = new Function('gateway', 'requireInstallationOwner',
+  const requireOwner = localizedFunction(`${declaration('requireInstallationOwner')}\nreturn requireInstallationOwner;`)();
+  const read = localizedFunction('gateway', 'requireInstallationOwner',
     `${declaration('readInstallation')}\nreturn readInstallation;`)(gateway, requireOwner);
   const activePluginInstallations = options.activePluginInstallations ?? new Map();
-  const installationKey = new Function(`${declaration('installationKey')}\nreturn installationKey;`)();
-  const installationFailureText = new Function(`${declaration('installationFailureText')}\nreturn installationFailureText;`)();
-  const runPluginInstallation = new Function('activePluginInstallations', 'installationKey',
+  const installationKey = localizedFunction(`${declaration('installationKey')}\nreturn installationKey;`)();
+  const installationFailureText = localizedFunction(`${declaration('installationFailureText')}\nreturn installationFailureText;`)();
+  const runPluginInstallation = localizedFunction('activePluginInstallations', 'installationKey',
     `${declaration('runPluginInstallation')}\nreturn runPluginInstallation;`)(activePluginInstallations, installationKey);
-  const pluginGatewayLabel = new Function(`${declaration('pluginGatewayLabel')}\nreturn pluginGatewayLabel;`)();
+  const pluginGatewayLabel = localizedFunction(`${declaration('pluginGatewayLabel')}\nreturn pluginGatewayLabel;`)();
   const notifications = options.notifications ?? { info() {}, error() {} };
-  const observe = new Function('gateway', 'timeout', 'ProgressLocation', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'readInstallation', 'errorsText', 'installationFailureText', 'pluginGatewayLabel',
+  const observe = localizedFunction('gateway', 'timeout', 'ProgressLocation', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'readInstallation', 'errorsText', 'installationFailureText', 'pluginGatewayLabel',
     `${declaration('observeInstallation')}\nreturn observeInstallation;`)(gateway, async () => {}, { Notification: 1 }, 120_000, read,
     error => error instanceof Error ? error.message : String(error), installationFailureText, pluginGatewayLabel);
   const observeInstallation = options.observeInstallation
@@ -119,20 +131,20 @@ function createInstallCommand(request, picks, inputs, observed, options = {}) {
   const lifecycle = options.lifecycle ?? { gatewayId: 'entry-gateway', context: new Set(), auth: new Set() };
   const context = { getSnapshot: () => ({ gatewayId: lifecycle.gatewayId }),
     subscribe(listener) { lifecycle.context.add(listener); return () => lifecycle.context.delete(listener); } };
-  const createManagementTargetLifecycle = new Function('CancellationTokenSource', 'workspaceContext', 'onGatewayTokenInvalidated',
+  const createManagementTargetLifecycle = localizedFunction('CancellationTokenSource', 'workspaceContext', 'onGatewayTokenInvalidated',
     `${managementDeclaration('createManagementTargetLifecycle')}\nreturn createManagementTargetLifecycle;`)(
     CancellationTokenSource, context, (_port, listener) => {
       lifecycle.auth.add(listener);
       return () => lifecycle.auth.delete(listener);
     });
-  const install = new Function('GatewayRequestError', 'createManagementTargetLifecycle', 'gateway', 'generateUuid', 'observeInstallation', 'errorsText', 'requireInstallationOwner',
+  const install = localizedFunction('GatewayRequestError', 'createManagementTargetLifecycle', 'gateway', 'generateUuid', 'observeInstallation', 'errorsText', 'requireInstallationOwner',
     'readInstallation', 'installationKey', 'runPluginInstallation', 'installationFailureText', 'pluginGatewayLabel',
     `${declaration('installPackageFromView')}\nreturn installPackageFromView;`)(
     GatewayRequestError, createManagementTargetLifecycle, gateway, options.generateUuid ?? (() => 'operation-original'), observeInstallation,
     error => error instanceof Error ? error.message : String(error), requireOwner, read, installationKey, runPluginInstallation,
     installationFailureText, pluginGatewayLabel);
   const quickInputToken = {}, notificationToken = {}, progressToken = {};
-  const run = new Function('managementGateway', 'IQuickInputService', 'INotificationService', 'IProgressService', 'installPackageFromView', 'workspaceContext',
+  const run = localizedFunction('managementGateway', 'IQuickInputService', 'INotificationService', 'IProgressService', 'installPackageFromView', 'workspaceContext',
     `${declaration('installServicePluginPackage')}\nreturn installServicePluginPackage;`)(
     () => typeof options.target === 'function' ? options.target() : options.target ?? {
       gateway_id: 'gateway-original', gateway_connection_id: 'connection-original',
@@ -565,7 +577,7 @@ test('旧操作结算不刷新用户已切换的范围，当前视图操作完�
   const member = owner.members.find(member => ts.isMethodDeclaration(member) && member.name?.getText(parsed) === 'runOperation');
   const compiled = ts.transpile(`class View { ${ts.createPrinter().printNode(ts.EmitHint.Unspecified, member, parsed)} }`,
     { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
-  const View = new Function('errorsText', `${compiled}\nreturn View;`)(error => error.message);
+  const View = localizedFunction('errorsText', `${compiled}\nreturn View;`)(error => error.message);
   const view = new View(), submitted = Promise.withResolvers(), errors = [];
   let refreshes = 0;
   view.refreshRevision = 1;
@@ -594,7 +606,7 @@ test('打开的详情跟随绑定与实例变化，兄弟状态不重建当前�
   const element = tag => ({ tag, dataset: {}, children: [], textContent: '', listeners: {},
     setAttribute() {}, remove() {}, querySelector() { return undefined; },
     addEventListener(event, listener) { this.listeners[event] = listener; } });
-  const View = new Function('append', '$', 'clearNode', 'writeOnlyFields', 'manageConfig', 'gateway',
+  const View = localizedFunction('append', '$', 'clearNode', 'writeOnlyFields', 'manageConfig', 'gateway',
     `${compiled}\nreturn DetailView;`)((parent, child) => {
       parent.children.push(child); elements.push(child); return child;
     }, element, parent => { parent.children = []; }, () => [], async (...args) => requests.push(args), { request() {} });
@@ -695,7 +707,7 @@ function runtimeStatusView() {
   const printed = members.map(member => ts.createPrinter().printNode(ts.EmitHint.Unspecified, member, parsed)).join('\n');
   const compiled = ts.transpile(`class StatusView { ${printed} }`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
   const streams = [], errors = [], rendered = [];
-  const View = new Function('DeferredPromise', 'raceTimeout', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'watchPluginRuntimeStatus', 'errorsText',
+  const View = localizedFunction('DeferredPromise', 'raceTimeout', 'DEFAULT_API_REQUEST_TIMEOUT_MS', 'watchPluginRuntimeStatus', 'errorsText',
     `${compiled}\nreturn StatusView;`)(DeferredPromise, raceTimeout, 100,
     (target, signal, next) => new Promise((resolve, reject) => {
       streams.push({ target, signal, next, reject });
@@ -888,8 +900,8 @@ test('秘密写入已返回原 owner 回执后，入口失效仍提交该回执�
       source_saved: true, state: 'candidate_validated', idempotency_key: intent.idempotency_key,
     } }; },
   };
-  const saveSourceEdit = new Function(`${configurationDeclaration('saveSourceEdit')}\nreturn saveSourceEdit;`)();
-  const manage = new Function('ConfigurationSourceOwner', 'chooseSource', 'sameBinding', 'bindingsAt', 'sourceBaseline',
+  const saveSourceEdit = localizedFunction(`${configurationDeclaration('saveSourceEdit')}\nreturn saveSourceEdit;`)();
+  const manage = localizedFunction('ConfigurationSourceOwner', 'chooseSource', 'sameBinding', 'bindingsAt', 'sourceBaseline',
     'saveSourceEdit', 'privateParameterLocation', 'privateParameterStatus', 'updateJsonc', 'gateway',
     'gatewayWorkspaceRequestHeaders', 'targetHeader', 'notification',
     `${configurationDeclaration('manageConfig')}\nreturn manageConfig;`)(
@@ -933,7 +945,7 @@ test('实例日志只读取原 Gateway 回执的精确日志，保留限长及�
   const calls = [];
   let receipt = { gateway_id: target.gateway_id, selected_log_id: 'opaque-log-id',
     logs: [{ log_id: 'opaque-log-id', status: 'available', truncated: true, tail: 'probe stdout\nprobe stderr' }] };
-  const read = new Function('gateway', `${declaration('readPluginInstanceLog')}\nreturn readPluginInstanceLog;`)({
+  const read = localizedFunction('gateway', `${declaration('readPluginInstanceLog')}\nreturn readPluginInstanceLog;`)({
     request: async (path, options) => { calls.push({ path, options }); return receipt; },
   });
   expect(await read(target, 'opaque-log-id')).toBe('仅显示最近的日志尾部。\nprobe stdout\nprobe stderr');

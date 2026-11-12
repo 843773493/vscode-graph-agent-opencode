@@ -1,3 +1,6 @@
+import '../../../../../harness/js/workbench-locale.ts';
+export { setLocaleResources } from '../../../../../../src/clients/shared/core/i18n/index.js';
+export { default as englishMessages } from '../../../../../../src/clients/shared/core/i18n/messages/en.json';
 import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { CommandsRegistry } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';

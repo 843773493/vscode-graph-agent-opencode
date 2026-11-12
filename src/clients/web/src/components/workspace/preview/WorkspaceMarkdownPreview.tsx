@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState } from "react";
+import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 
 const WorkspaceMarkdownRenderer = lazy(() => import("./WorkspaceMarkdownRenderer"));
 
@@ -39,22 +40,21 @@ export default function WorkspaceMarkdownPreview({
       {content.length > LARGE_MARKDOWN_PREVIEW_LENGTH ? (
         <div className="workspace-preview-truncation-notice" role="status">
           <span>
-            文档共 {content.length.toLocaleString()} 字符，已只渲染前{" "}
-            {LARGE_MARKDOWN_PREVIEW_LENGTH.toLocaleString()} 字符以避免界面卡顿。
+            {t("preview.markdown.bounded", formatNumber(content.length), formatNumber(LARGE_MARKDOWN_PREVIEW_LENGTH))}
           </span>
           <button
             type="button"
             onClick={() => setRenderFullDocument((value) => !value)}
           >
             {documentBounded
-              ? `渲染完整 Markdown（${content.length.toLocaleString()} 字符）`
-              : `仅显示前 ${LARGE_MARKDOWN_PREVIEW_LENGTH.toLocaleString()} 字符`}
+              ? t("chat.markdown.full", formatNumber(content.length))
+              : t("preview.markdown.collapse", formatNumber(LARGE_MARKDOWN_PREVIEW_LENGTH))}
           </button>
         </div>
       ) : null}
       <Suspense fallback={(
         <div className="workspace-markdown-preview-loading" role="status">
-          正在加载 Markdown 预览…
+          {t("preview.markdown.loading")}
         </div>
       )}>
         <WorkspaceMarkdownRenderer

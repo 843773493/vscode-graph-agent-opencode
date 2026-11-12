@@ -1,3 +1,4 @@
+import { t } from '../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey } from "../../web/src/api/workspaceIdentity.js";
 import { Disposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { basename } from '../upstream/src/vs/base/common/resources.js';
@@ -21,7 +22,7 @@ export function sourceDocumentUri(owner: WorkspaceOwner, uri: string): URI {
 export function sourceDocumentSource(resource: URI): WorkspaceOwner & { uri: string } {
   const [, workspaceId, reference, name, ...extra] = resource.path.split('/');
   if (resource.scheme !== scheme || !resource.authority || !workspaceId || !reference || !name || extra.length || resource.query || resource.fragment) {
-    throw new Error('来源文档缺少完整归属或规范资源引用');
+    throw new Error(t('workbench.source.identityMissing'));
   }
   return { gatewayId: resource.authority, workspaceId, uri: decodeURIComponent(reference) };
 }
@@ -42,15 +43,15 @@ export class SourceDocuments extends Disposable implements ITextModelContentProv
     if (existing) return existing;
     const source = sourceDocumentSource(resource);
     const target = await gateway.resolveWorkspaceTarget(source);
-    if (target.status !== 'ready') throw new Error(`来源工作区当前不可用（${target.status}），请明确启动或连接`);
+    if (target.status !== 'ready') throw new Error(t('workbench.source.workspaceUnavailable', target.status));
     const result = await gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/navigation', {
       method: 'POST', body: JSON.stringify({ uri: source.uri, operation: 'read', read_format: 'auto',
         max_bytes: 33554432, max_response_bytes: 50331648 }),
     }, gatewayWorkspaceKey(target));
-    if (!result.node || result.node.uri !== source.uri || result.node.resource_shape !== 'file') throw new Error('来源响应未对应请求的文件资源');
-    if (result.truncated) throw new Error(`来源文档未完整读取（${result.truncation_reason}），无法作为完整文档打开`);
+    if (!result.node || result.node.uri !== source.uri || result.node.resource_shape !== 'file') throw new Error(t('workbench.source.responseMismatch'));
+    if (result.truncated) throw new Error(t('workbench.source.truncated', result.truncation_reason));
     if (result.media_type !== 'text' || result.content_encoding !== 'utf-8' || result.content == null) {
-      throw new Error('此来源不是文本，请使用对应的资源预览能力');
+      throw new Error(t('workbench.source.textRequired'));
     }
     // resolver 合并同一资源的并发引用；语言只依据展示文件名，不影响业务定位。
     return this.models.createModel(result.content, this.languages.createByFilepathOrFirstLine(resource), resource);

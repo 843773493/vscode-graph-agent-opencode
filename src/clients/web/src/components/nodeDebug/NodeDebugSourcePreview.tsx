@@ -1,3 +1,4 @@
+import { t } from "../../../../shared/core/i18n/index.js";
 import { memo, useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../utils/errorMessage";
 
@@ -85,21 +86,22 @@ const NodeDebugSourcePreview = memo(function NodeDebugSourcePreview({
       <header>
         <span title={path}>{path}</span>
         {content !== null && !error && (
-          <button type="button" onClick={() => void onOpenWorkspacePath(path)} title="在完整编辑器打开">
+          <button type="button" onClick={() => void onOpenWorkspacePath(path)} title={t("debug.preview.openTitle")}>
             <span className="codicon codicon-go-to-file" aria-hidden="true" />
-            打开
+
+            {t("debug.preview.open")}
           </button>
         )}
       </header>
       <div
         className="node-debug-code"
         role={error ? "alert" : content === null ? "status" : "grid"}
-        aria-label={`${path} 源码预览`}
+        aria-label={t("debug.preview.aria", path)}
       >
         {error ? (
           <div className="node-debug-source-state error">{error}</div>
         ) : content === null ? (
-          <div className="node-debug-source-state">正在读取 {path}…</div>
+          <div className="node-debug-source-state">{t("debug.preview.loading", path)}</div>
         ) : visibleLines.map(({ line, lineNumber }) => {
           const breakpoint = breakpointByLine.get(lineNumber) ?? null;
           const current = lineNumber === focusLine;
@@ -124,7 +126,7 @@ const NodeDebugSourcePreview = memo(function NodeDebugSourcePreview({
           );
         })}
       </div>
-      <small>源码会跟随模型或用户的当前暂停位置；左键切换普通断点，右键设置条件、命中次数或日志点。</small>
+      <small>{t("debug.preview.hint")}</small>
     </div>
   );
 });

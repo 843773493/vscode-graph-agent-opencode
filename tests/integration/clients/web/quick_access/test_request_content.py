@@ -21,7 +21,10 @@ from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
-    browser_backend as browser_backend,  # noqa: PLC0414
+    chat_backend as chat_backend,  # noqa: PLC0414
+)
+from tests.integration.clients.web.test_basic_chat_tool_loop import (
+    chat_backend_boxteam_home as chat_backend_boxteam_home,  # noqa: PLC0414
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
@@ -34,15 +37,17 @@ from tests.support.processes.gateway import (
 
 
 async def test_request_content_search_opens_only_the_exact_record(
-    request: pytest.FixtureRequest, browser_backend: tuple[str, Path, ModelStreamReplay], web_workbench_assets: Path,
+    request: pytest.FixtureRequest, chat_backend: tuple[str, Path, ModelStreamReplay],
+    chat_backend_boxteam_home: Path, web_workbench_assets: Path,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "请求日志验收需要 Chromium"
-    backend_url, workspace, replay = browser_backend
+    backend_url, workspace, replay = chat_backend
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     port_block = integration_port_block_for_file(Path(request.node.path))
     gateway = await asyncio.to_thread(start_gateway_process,
         workspace_root=workspace, default_backend_url=backend_url, port=port_block.port(20),
+        boxteam_home=chat_backend_boxteam_home,
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     model = "browser-chat-tool-loop-stub"
     interaction = cast(list[object], build_cassette(asset_id="request-content", model=model,

@@ -1,4 +1,6 @@
 import { Action2, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
+import { t } from '../../../shared/core/i18n/index.js';
+import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
@@ -10,7 +12,7 @@ import { getWorkbenchContribution } from '../../upstream/src/vs/workbench/common
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { controlWorkspaceResource, getWorkspaceResource, listWorkspaceResources, type ResourceAction, type ResourceThreadRef, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
-import { resourceActionLabels, settleWorkspaceResourceOperation, workspaceResourceName, type WorkspaceResourceActionSource } from '../../../web/src/hooks/workspace/resourceActions.js';
+import { resourceActionLabels, resourceActionMessageKeys, settleWorkspaceResourceOperation, workspaceResourceName, type WorkspaceResourceActionSource } from '../../../web/src/hooks/workspace/resourceActions.js';
 import { gateway } from '../agentApi.js';
 import { captureSearchOwner } from '../search/target.js';
 import { ThreadInput } from '../threadInput.js';
@@ -38,11 +40,11 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
     thread: supplied.thread ? { ...supplied.thread } : undefined } : undefined;
   const originThread = origin instanceof ThreadInput ? { owner: { ...origin.owner },
     thread: { session_id: origin.owner.sessionId, thread_id: origin.owner.threadId } } : undefined;
-  if (!initial.gatewayId) throw new Error('Gateway 登记身份尚未加载');
+  if (!initial.gatewayId) throw new Error(t('workbench.resource.gatewayNotLoaded'));
   let invalidated = false;
   const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新选择资源');
+    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error(t('workbench.resource.accessChanged'));
   };
   let pending: ReturnType<INotificationService['status']> | undefined;
   try {
@@ -51,7 +53,7 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
       if (origin || initial.activeId) owner = { ...captureSearchOwner(editors) };
       else owner = (await quick.pick(initial.workspaces.map(item => ({ label: item.name,
         description: `${item.gateway_id} · ${item.workspace_id}`, owner: { gatewayId: item.gateway_id, workspaceId: item.workspace_id } })),
-        { title: '选择资源所属工作区', placeHolder: '浏览不会启动或激活工作区' }))?.owner;
+        { title: t('workbench.resource.chooseWorkspace'), placeHolder: t('workbench.resource.chooseWorkspaceHint') }))?.owner;
     }
     if (!owner) return;
     const workspaceKey = gatewayWorkspaceKey(owner);
@@ -60,7 +62,7 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
       const routes = await gateway.workspaces(false);
       assertAccess();
       const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
-      if (target.status !== 'ready') throw new Error(`资源工作区当前不可用（${target.status}），请明确启动或连接`);
+      if (target.status !== 'ready') throw new Error(t('workbench.resource.workspaceUnavailable', target.status));
     }
     const resource = explicit?.resource ? 'workspace_id' in explicit.resource ? explicit.resource
       : await getWorkspaceResource(0, workspaceKey, explicit.resource.resource_id) : (await quick.pick(
@@ -71,10 +73,10 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
         })), { title: resourceActionLabels[action], placeHolder: `${owner.gatewayId} · ${owner.workspaceId}` }))?.resource;
     if (!resource) return;
     assertAccess();
-    if (explicit && resource.owner_revision !== explicit.resource.owner_revision) throw new Error('资源版本已变化，请刷新后重新选择操作');
-    if (resource.workspace_id !== owner.workspaceId) throw new Error('资源回执不属于明确选择的工作区');
-    if (resource.kind !== 'terminal' && resource.kind !== 'browser') throw new Error('此管理入口只处理终端或浏览器资源');
-    if (!resource.available_actions.includes(action)) throw new Error(`资源当前不支持${resourceActionLabels[action]}`);
+    if (explicit && resource.owner_revision !== explicit.resource.owner_revision) throw new Error(t('workbench.resource.revisionChanged'));
+    if (resource.workspace_id !== owner.workspaceId) throw new Error(t('workbench.resource.ownerMismatch'));
+    if (resource.kind !== 'terminal' && resource.kind !== 'browser') throw new Error(t('workbench.resource.unsupportedKind'));
+    if (!resource.available_actions.includes(action)) throw new Error(t('workbench.resource.actionUnavailable', resourceActionLabels[action]));
     let thread = action === 'attach' || action === 'detach' ? explicit?.thread : undefined;
     if (action === 'attach' && !thread && originThread?.owner.gatewayId === owner.gatewayId && originThread.owner.workspaceId === owner.workspaceId) thread = originThread.thread;
     if ((action === 'attach' || action === 'detach') && !thread) {
@@ -82,30 +84,30 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
         input instanceof ThreadInput && input.owner.gatewayId === owner.gatewayId && input.owner.workspaceId === owner.workspaceId
           ? [{ session_id: input.owner.sessionId, thread_id: input.owner.threadId }] : []);
       const unique = [...new Map(candidates.map(ref => [`${ref.session_id}/${ref.thread_id}`, ref])).values()];
-      if (!unique.length) throw new Error('没有可选择的明确 Thread，请先打开目标 Thread');
+      if (!unique.length) throw new Error(t('workbench.resource.noThread'));
       thread = (await quick.pick(unique.map(ref => ({ label: ref.thread_id, description: ref.session_id, thread: ref })),
-        { title: action === 'detach' ? '选择要解除的 Thread 关联' : '选择要关联的 Thread' }))?.thread;
+        { title: t(action === 'detach' ? 'workbench.resource.chooseDetachThread' : 'workbench.resource.chooseAttachThread') }))?.thread;
       if (!thread) return;
     }
     if (action === 'detach' && !resource.thread_associations.some(ref => ref.session_id === thread!.session_id && ref.thread_id === thread!.thread_id)) {
-      throw new Error('所选 Thread 不属于该资源的现有关联');
+      throw new Error(t('workbench.resource.threadNotAssociated'));
     }
     if (action === 'attach' && resource.retention_scope === 'thread'
       && (resource.source_thread?.session_id !== thread!.session_id || resource.source_thread.thread_id !== thread!.thread_id)) {
-      throw new Error('临时资源只能关联来源 Thread；跨 Thread 使用前请明确保留到工作区');
+      throw new Error(t('workbench.resource.temporaryThreadOnly'));
     }
     if (action === 'delete' && !explicit?.source) {
-      const confirmed = await dialogs.confirm({ type: 'warning', message: `删除${resource.kind === 'terminal' ? '终端' : '浏览器'}？`,
-        detail: workspaceResourceName(resource), primaryButton: '删除资源' });
+      const confirmed = await dialogs.confirm({ type: 'warning', message: t(resource.kind === 'terminal' ? 'workbench.resource.deleteTerminal' : 'workbench.resource.deleteBrowser'),
+        detail: workspaceResourceName(resource), primaryButton: t('resources.deleteResource') });
       if (!confirmed.confirmed) return;
     }
     assertAccess();
-    pending = notifications.status(`正在${resourceActionLabels[action]}：${resource.resource_id}`);
+    pending = notifications.status(t('workbench.resource.actionPending', resourceActionLabels[action], resource.resource_id));
     let result: WorkspaceResourceDTO;
     if (explicit?.source) {
       const source = explicit.source;
       if (source.workspaceKey !== workspaceKey || source.resource.resource_id !== resource.resource_id
-        || source.resource.owner_revision !== resource.owner_revision) throw new Error('资源动作句柄与冻结目标不一致');
+        || source.resource.owner_revision !== resource.owner_revision) throw new Error(t('workbench.resource.sourceMismatch'));
       result = await source.run(action, thread);
     } else {
       const settled = await settleWorkspaceResourceOperation(0, workspaceKey, resource.kind, () => {
@@ -115,13 +117,13 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
       result = settled.resource;
     }
     assertAccess();
-    notifications.info(`${resourceActionLabels[action]}已确认：${result.resource_id}`);
+    notifications.info(t('workbench.resource.actionConfirmed', resourceActionLabels[action], result.resource_id));
     return result;
   } finally { pending?.close(); release(); }
 }
 
 registerAction2(class extends Action2 {
-  constructor() { super({ id: resourceFocusCommand, title: { value: '聚焦工作区资源', original: 'Focus Workspace Resource' }, f1: false }); }
+  constructor() { super({ id: resourceFocusCommand, title: { value: t('workbench.resource.focus'), original: actionTitles['workbench.resource.focus'] }, f1: false }); }
   async run(accessor: ServicesAccessor, supplied: RuntimeResourceCommandTarget & { resource: WorkspaceResourceDTO }): Promise<void> {
     const commands = accessor.get(ICommandService), views = accessor.get(IViewsService);
     const owner = { ...supplied.owner }, resource = structuredClone(supplied.resource);
@@ -129,13 +131,13 @@ registerAction2(class extends Action2 {
     let invalidated = false;
     const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
     const assertAccess = () => {
-      if (invalidated || workspaceContext.getSnapshot().gatewayId !== initialGateway) throw new Error('Gateway 或访问凭据已改变，请重新选择资源');
+      if (invalidated || workspaceContext.getSnapshot().gatewayId !== initialGateway) throw new Error(t('workbench.resource.accessChanged'));
     };
     try {
-      if (!initialGateway) throw new Error('Gateway 登记身份尚未加载');
-      if (resource.workspace_id !== owner.workspaceId) throw new Error('资源回执不属于明确选择的工作区');
-      if (resource.kind !== 'terminal' && resource.kind !== 'browser') throw new Error('此入口只聚焦终端或浏览器资源');
-      if (resource.status === 'deleted') throw new Error('所选资源已删除');
+      if (!initialGateway) throw new Error(t('workbench.resource.gatewayNotLoaded'));
+      if (resource.workspace_id !== owner.workspaceId) throw new Error(t('workbench.resource.ownerMismatch'));
+      if (resource.kind !== 'terminal' && resource.kind !== 'browser') throw new Error(t('workbench.resource.unsupportedFocusKind'));
+      if (resource.status === 'deleted') throw new Error(t('workbench.resource.deleted'));
       const key = gatewayWorkspaceKey(owner);
       if (workspaceContext.getSnapshot().activeId !== key) {
         await commands.executeCommand(workspaceActionCommands.activate, owner);
@@ -145,17 +147,17 @@ registerAction2(class extends Action2 {
       }
       await getWorkbenchContribution<WorkspacePanelState>(WorkspacePanelState.ID).whenRestored(key);
       assertAccess();
-      if (workspaceContext.getSnapshot().activeId !== key) throw new Error('工作区选择已改变，请重新聚焦资源');
+      if (workspaceContext.getSnapshot().activeId !== key) throw new Error(t('workbench.resource.workspaceChanged'));
       const view = await views.openView<WorkspacePanel>(resource.kind === 'terminal' ? 'boxteam.workspace.terminal' : 'boxteam.browser.view', true);
       assertAccess();
-      if (workspaceContext.getSnapshot().activeId !== key) throw new Error('工作区选择已改变，请重新聚焦资源');
-      if (!view) throw new Error('资源所属工作区面板不可用');
+      if (workspaceContext.getSnapshot().activeId !== key) throw new Error(t('workbench.resource.workspaceChanged'));
+      if (!view) throw new Error(t('workbench.resource.panelUnavailable'));
       view.revealResource(owner, resource.resource_id);
     } finally { release(); }
   }
 });
 
 for (const action of Object.keys(resourceActionLabels) as ResourceAction[]) registerAction2(class extends Action2 {
-  constructor() { super({ id: resourceActionCommand(action), title: { value: resourceActionLabels[action], original: resourceActionLabels[action] }, f1: true }); }
+  constructor() { super({ id: resourceActionCommand(action), title: { value: resourceActionLabels[action], original: actionTitles[resourceActionMessageKeys[action]] }, f1: true }); }
   run(accessor: ServicesAccessor, target?: RuntimeResourceCommandTarget) { return runResourceAction(accessor, action, target); }
 });

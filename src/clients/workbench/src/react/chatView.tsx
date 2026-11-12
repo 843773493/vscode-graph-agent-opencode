@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { t } from '../../../shared/core/i18n/index.js';
 import { useTraceNavigation } from '../../../web/src/hooks/runtime/useTraceNavigation.js';
 import { useRequestLogNavigation } from '../../../web/src/hooks/runtime/useRequestLogNavigation.js';
 import type { TurnViewportController } from '../../../web/src/components/chat/useTurnVirtualScroller.js';
@@ -64,7 +65,7 @@ function ThreadConversation({ input, seed, active, editors, commands, onUpdate, 
   const stopResize = useRef<(() => void) | null>(null);
   useEffect(() => () => stopResize.current?.(), []);
   const onSessionCreated = useCallback(async (session: Session, workspaceKey: string | null) => {
-    if (workspaceKey !== owner.workspaceKey || session.workspace_id !== owner.workspaceId || !session.thread_id) throw new Error('新建会话的工作区或主 Thread 归属不一致');
+    if (workspaceKey !== owner.workspaceKey || session.workspace_id !== owner.workspaceId || !session.thread_id) throw new Error(t('thread.host.newSessionOwnerMismatch'));
     await editors.openEditor(new ThreadInput({ ...owner, sessionId: session.session_id, threadId: session.thread_id, title: session.title }), { pinned: true });
   }, [owner, editors]);
   const runtime = useThreadSessionRuntime({ owner, seed, active, onSessionCreated, onError });
@@ -109,16 +110,16 @@ function ThreadConversation({ input, seed, active, editors, commands, onUpdate, 
   return <WarmConfirmProvider><ComposerContext.Provider value={runtime.composerValue}>
     <WorkspaceFileReferenceProvider apiPort={0} workspaceId={owner.workspaceKey} onOpen={(file, reference) => {
       const root = resourceFileRootUri(file.path);
-      if (!root) throw new Error('消息引用文件缺少后端资源根 URI');
+      if (!root) throw new Error(t('thread.host.referenceRootMissing'));
       void editors.openEditor({ resource: workspaceFileUri(owner, file.path, root), options: {
         selection: reference.selection ? { startLineNumber: reference.selection.startLine, startColumn: reference.selection.startColumn ?? 1,
           endLineNumber: reference.selection.endLine, endColumn: 1 } : undefined,
-      } }).catch((cause: unknown) => onError(`打开消息引用文件失败：${String(cause)}`));
+      } }).catch((cause: unknown) => onError(t('thread.host.openReferenceFailed', String(cause))));
     }}>
     <div className="native-thread-layout"><div className="native-thread-conversation" style={{ flexGrow: input.resourcesVisible ? 1 - resourceRatio : 1 }}>
       {toolbar}
       {contentView === 'agent' || contentView === 'requests' ? <div className="native-inspection-scope" role="note">
-        {contentView === 'agent' ? '会话主线程上下文' : '会话级 LLM 请求记录'} · {state.currentSession?.title ?? owner.title}
+        {t(contentView === 'agent' ? 'thread.host.mainContextScope' : 'thread.host.requestScope', state.currentSession?.title ?? owner.title)}
       </div> : null}
       <ContentViewSlots error={null} isBootstrapping={false} onRetryGatewayState={async () => { history.refreshTurnHistory(); }}
         contentView={contentView} apiPort={0} workspaceId={owner.workspaceKey}
@@ -145,11 +146,11 @@ function ThreadConversation({ input, seed, active, editors, commands, onUpdate, 
         onLoadAgentStateMessageRawContent={content.loadAgentStateMessageRawContent}
         onRetryHistory={history.refreshTurnHistory} onReplayTurn={actions.replayTurn} onOpenChanges={openChanges}
         onForkConversation={point => {
-          if (point.workspaceId !== owner.workspaceKey || point.sessionId !== owner.sessionId || point.threadId !== owner.threadId) throw new Error('消息分支来源与当前 Thread 不一致');
+          if (point.workspaceId !== owner.workspaceKey || point.sessionId !== owner.sessionId || point.threadId !== owner.threadId) throw new Error(t('thread.host.forkOwnerMismatch'));
           fork(point);
         }}
         onOpenChildReport={source => {
-          if (source.source_session_id !== owner.sessionId || !source.source_thread_id || !source.source_execution_id) throw new Error('报告来源不属于当前会话的精确子线程执行');
+          if (source.source_session_id !== owner.sessionId || !source.source_thread_id || !source.source_execution_id) throw new Error(t('thread.host.reportOwnerMismatch'));
           setReportRequest(source); input.resourcesVisible = true; input.resourceTab = 'connections'; onUpdate();
         }}
         onOpenAttachment={(_sessionId, value) => {
@@ -161,8 +162,8 @@ function ThreadConversation({ input, seed, active, editors, commands, onUpdate, 
       <PendingQueueBar conversations={runtime.conversations} onClear={actions.clearPendingRequests}
         onRemove={actions.removePendingRequest} onChangePolicy={actions.updatePendingRequestPolicy} />
       <Composer threadId={owner.threadId} onDraftReady={onDraftReady} />
-    </div>{input.resourcesVisible ? <button type="button" className="layout-sash" aria-label="调整会话资源宽度"
-      title="拖拽调整会话资源宽度，双击还原" onDoubleClick={() => { input.resourceRatio = 0.42; setResourceRatio(0.42); }}
+    </div>{input.resourcesVisible ? <button type="button" className="layout-sash" aria-label={t('thread.host.resizeResources')}
+      title={t('thread.host.resizeResourcesHint')} onDoubleClick={() => { input.resourceRatio = 0.42; setResourceRatio(0.42); }}
       onPointerDown={event => {
         event.preventDefault(); stopResize.current?.();
         const layout = event.currentTarget.parentElement!;
@@ -198,7 +199,7 @@ function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, 
       if (!disposed) setCached(timeline);
       return timeline;
     }).catch((cause: unknown) => {
-      if (!disposed) setCacheError(`读取历史缓存失败：${String(cause)}`);
+      if (!disposed) setCacheError(t('thread.host.readCacheFailed', String(cause)));
       return null;
     });
     const initialize = async () => {
@@ -208,7 +209,7 @@ function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, 
         // 会话只需登记归属；显式健康刷新仍由 Gateway 导航入口发起。
         gateway.workspaces(false), getBrowserUiSettings(0), browserGatewayId(0),
       ]);
-      if (session.session_id !== owner.sessionId || session.workspace_id !== owner.workspaceId) throw new Error('会话编辑器初始化归属不一致');
+      if (session.session_id !== owner.sessionId || session.workspace_id !== owner.workspaceId) throw new Error(t('thread.host.initializeOwnerMismatch'));
       const history = await cacheLoad;
       if (!disposed) setSeed({ session, agents, workspaces: workspaces.items, settings, browserViewScope, history });
     };
@@ -218,7 +219,7 @@ function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, 
         await cacheLoad;
         if (!disposed) setCached(null);
         if (cacheOwner) await threadHistoryCache.remove(cacheOwner).catch((failure: unknown) => {
-          if (!disposed) setCacheError(`清除历史缓存失败：${String(failure)}`);
+          if (!disposed) setCacheError(t('thread.host.clearCacheFailed', String(failure)));
         });
       }
       if (!disposed) setError(cause instanceof Error ? cause.message : String(cause));
@@ -226,16 +227,16 @@ function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, 
     return () => { disposed = true; };
   }, [owner, attempt]);
   const retry = () => setAttempt(value => value + 1);
-  const toolbar = <header className="native-thread-toolbar" role="toolbar" aria-label="对话工具栏">
-    <button type="button" title="切换会话资源" aria-label="切换会话资源" aria-expanded={input.resourcesVisible}
+  const toolbar = <header className="native-thread-toolbar" role="toolbar" aria-label={t('thread.host.toolbar')}>
+    <button type="button" title={t('thread.host.toggleResources')} aria-label={t('thread.host.toggleResources')} aria-expanded={input.resourcesVisible}
       onClick={() => { input.resourcesVisible = !input.resourcesVisible; onUpdate(); }}>
       <span className="codicon codicon-layout-sidebar-right" aria-hidden="true" />
     </button>
   </header>;
   return <>{cacheError ? <p role="alert">{cacheError}</p> : null}
     {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} commands={commands} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} toolbar={toolbar} />
-      : <div className="native-thread-conversation">{toolbar}{cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? `会话同步失败：${error}` : null} onRetry={retry} />
-        : error ? <p role="alert">会话初始化失败：{error}</p> : <p role="status">正在恢复会话…</p>}</div>}</>;
+      : <div className="native-thread-conversation">{toolbar}{cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? t('thread.host.syncFailed', error) : null} onRetry={retry} />
+        : error ? <p role="alert">{t('thread.host.initializeFailed', error)}</p> : <p role="status">{t('thread.host.restoring')}</p>}</div>}</>;
 }
 
 export class ChatSurface {
@@ -253,7 +254,7 @@ export class ChatSurface {
     this.active = visible; this.render();
   }
   captureDraft(): ComposerDraftController {
-    if (!this.draft) throw new Error('接收 Thread 的草稿尚未恢复，请稍后重试');
+    if (!this.draft) throw new Error(t('thread.host.draftNotReady'));
     return this.draft;
   }
   update(): void { this.render(); }
@@ -279,7 +280,7 @@ export class ChatSurface {
     return toDisposable(() => { if (generation === this.previewGeneration) this.viewport?.cancel(); });
   }
   private requireViewport(): ThreadViewportController {
-    if (!this.viewport) throw new Error('Thread 历史视口尚未就绪，请稍后重试');
+    if (!this.viewport) throw new Error(t('thread.host.viewportNotReady'));
     return this.viewport;
   }
   private readonly onDraftReady = (controller: ComposerDraftController | undefined) => { this.draft = controller; };
@@ -287,6 +288,6 @@ export class ChatSurface {
   focus(): void { this.surface.focus('textarea'); }
   dispose(): void { this.viewport?.cancel(); this.viewport = undefined; this.draft = undefined; this.surface.dispose(); }
   private readonly onUpdate = () => this.render();
-  private readonly onError = (message: string) => this.notifications.error(`${this.input.owner.title} (${this.input.owner.sessionId}/${this.input.owner.threadId})：${message}`);
+  private readonly onError = (message: string) => this.notifications.error(t('thread.host.ownerError', this.input.owner.title, this.input.owner.sessionId, this.input.owner.threadId, message));
   private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} commands={this.commands} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} />); }
 }

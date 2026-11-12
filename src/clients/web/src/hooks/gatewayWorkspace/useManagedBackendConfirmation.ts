@@ -3,6 +3,7 @@ import { useCallback } from "react";
 import { listGatewayWorkspaces } from "../../gatewayApi";
 import { useWarmConfirm } from "../../components/shell/WarmConfirmProvider";
 import type { GatewayRuntimeGroupRequest, GatewayRuntimeRestartResult } from "../../types/backend";
+import { t } from "../../../../shared/core/i18n/index.js";
 
 type StateAction = (workspaceId: string, request?: GatewayRuntimeGroupRequest) => Promise<void>;
 type RestartAction = (workspaceId: string, request?: GatewayRuntimeGroupRequest) => Promise<GatewayRuntimeRestartResult>;
@@ -25,30 +26,41 @@ export function useManagedBackendConfirmation({
     try {
       const snapshot = await listGatewayWorkspaces(apiPort);
       const target = snapshot.items.find((item) => gatewayWorkspaceKey(item) === workspaceId);
-      if (!target?.managed) throw new Error("工作区未登记为托管目标，请刷新 Gateway");
+      if (!target?.managed) throw new Error(t("gateway.workspace.notManagedTarget"));
       const members = target.backend_generation ? target.affected_workspace_ids : [target.workspace_id];
-      if (!members.length || !members.includes(target.workspace_id)) throw new Error("Backend 完整成员合同缺失");
+      if (!members.length || !members.includes(target.workspace_id)) throw new Error(t("gateway.workspace.backendMemberContractMissing"));
       if (selectedRequest && (
         selectedRequest.expected_backend_generation !== target.backend_generation
         || selectedRequest.expected_workspace_ids.length !== members.length
         || selectedRequest.expected_workspace_ids.some((id) => !members.includes(id))
-      )) throw new Error("Backend 成员或 generation 已变化，请刷新后重新选择");
+      )) throw new Error(t("gateway.workspace.backendMembersChanged"));
       const affected = [...new Set([...members, ...(selectedRequest?.desired_workspace_ids ?? [])])];
       const names = affected.map((id) => {
         const member = snapshot.items.find((item) => item.gateway_id === target.gateway_id && item.workspace_id === id);
-        if (!member) throw new Error(`Backend 成员未登记：${id}`);
-        return `• ${member.name}（${id}）`;
+        if (!member) throw new Error(t("gateway.workspace.backendMemberNotRegistered", id));
+        return t("gateway.workspace.backendMemberBullet", member.name, id);
       });
       const exiting = selectedRequest?.desired_workspace_ids?.length === 0;
-      const label = exiting ? "关闭并退出" : { start: "启动", stop: "关闭", "restart-safe": "安全重启", "restart-force": "强制重启" }[action];
+      const actionLabels = {
+        start: t("gateway.workspace.startAction"),
+        stop: t("gateway.workspace.stopAction"),
+        "restart-safe": t("gateway.workspace.safeRestartAction"),
+        "restart-force": t("gateway.workspace.forceRestartAction"),
+      };
+      const label = exiting ? t("gateway.workspace.closeAndExit") : actionLabels[action];
       if (members.length > 1 || action !== "start" || selectedRequest?.desired_workspace_ids !== undefined) {
+        const detail = action === "restart-force"
+          ? exiting
+            ? t("gateway.workspace.forceRestartAndExitDetail")
+            : t("gateway.workspace.forceRestartDetail")
+          : action === "stop"
+            ? t("gateway.workspace.stopBackendDetail")
+            : exiting
+              ? t("gateway.workspace.drainAndExitDetail")
+              : t("gateway.workspace.startBackendDetail");
         const accepted = await confirm({
-          title: `${label} Backend 完整组`,
-          message: `以下工作区将一起${label}：\n${names.join("\n")}\n\n${action === "restart-force"
-            ? exiting ? "全部成员中的活动任务将先记录为 interrupted，然后关闭 Backend 并退出。" : "全部成员中的活动任务将先记录为 interrupted，然后重启。"
-            : action === "stop" ? "整个组会暂时离线；活动任务需要先排空。"
-            : exiting ? "排空后将关闭 Backend 并释放全部成员；不会启动空 Backend。"
-            : "操作会核对最新成员合同，并等待全部工作区就绪。"}`,
+          title: t("gateway.workspace.confirmActionTitle", label),
+          message: t("gateway.workspace.confirmActionMessage", label, names.join("\n"), detail),
           confirmText: label,
           danger: action === "stop" || action === "restart-force",
         });
@@ -64,7 +76,7 @@ export function useManagedBackendConfirmation({
       else {
         const result = await (action === "restart-force" ? onForceRestart : onSafeRestart)(workspaceId, request);
         if (result.status === "blocked") throw new Error(result.blockers
-          .map((blocker) => `${blocker.workspace_id}：${blocker.detail ?? blocker.resource_id}`).join("；"));
+          .map((blocker) => t("gateway.workspace.runtimeBlocker", blocker.workspace_id, blocker.detail ?? blocker.resource_id)).join(t("gateway.workspace.blockerSeparator")));
       }
     } catch (error) {
       await onRefresh().catch(() => { /* 刷新错误由状态层显式呈现，首个操作错误继续抛出。 */ });
