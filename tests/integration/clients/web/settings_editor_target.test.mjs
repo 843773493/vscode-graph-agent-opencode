@@ -161,7 +161,7 @@ function scenario(name, callback) {
 }
 
 function sourceSelectionFixture() {
-  const auth = new Emitter(), context = new Emitter(), requests = [], picks = [];
+  const auth = new Emitter(), context = new Emitter(), requests = [], picks = [], refreshes = [];
   let snapshot = { gatewayId: 'entry-A', workspaces: [
     { gateway_id: 'gateway-B', workspace_id: 'workspace-B', name: 'B', status: 'ready' },
     { gateway_id: 'gateway-C', workspace_id: 'workspace-C', name: 'C', status: 'ready' },
@@ -185,10 +185,17 @@ function sourceSelectionFixture() {
     managementGateway: () => target,
     workspaceContext: { getSnapshot: () => snapshot, subscribe: listener => {
       const subscription = context.event(listener); return () => subscription.dispose();
+    }, async refresh() {
+      refreshes.push(snapshot.gatewayId);
+      await Promise.resolve();
+      if (snapshot.gatewayId === 'entry-A') snapshot = { ...snapshot, workspaces: [
+        ...snapshot.workspaces,
+        { gateway_id: 'entry-A', workspace_id: 'workspace-new', name: '新登记目标', status: 'ready' },
+      ] };
     } },
     onGatewayTokenInvalidated: (_port, listener) => { const subscription = auth.event(listener); return () => subscription.dispose(); },
   }).captureSettingsLocation;
-  return { target, quick, requests, picks, document, auth, context,
+  return { target, quick, requests, picks, document, auth, context, refreshes,
     capture: token => capture({ invokeFunction: callback => callback({ get: () => quick }) }, token ?? CancellationToken.None),
     changeEntry() { snapshot = { ...snapshot, gatewayId: 'entry-C' }; context.fire(); },
     dispose() { auth.dispose(); context.dispose(); },
@@ -212,7 +219,24 @@ scenario('两种设置入口共用来源选择，目标冻结且不重复读取�
     expect(f.requests.map(item => item.operation)).toEqual(['list', 'read']);
     expect(f.requests.map(item => item.owner)).toEqual(Array(2).fill({ gateway_id: 'gateway-B', gateway_connection_id: 'route-B', workspace_id: 'workspace-B' }));
     expect(f.picks[0].items.map(item => item.label)).toEqual(['Gateway 配置', 'B']);
+    expect(f.refreshes).toEqual(['entry-A']);
     expect(f.requests.every(item => item.signal.aborted)).toBe(true);
+  } finally { f.dispose(); }
+});
+
+scenario('目标来源选择先刷新已登记工作区快照并保留新候选', async () => {
+  const f = sourceSelectionFixture();
+  f.target.gateway_id = 'entry-A';
+  f.target.gateway_connection_id = undefined;
+  f.quick.pick = async (items, options) => options.title === '选择设置来源的所属目标'
+    ? items.find(item => item.workspaceId === 'workspace-new')
+    : items[0];
+  try {
+    const captured = await f.capture();
+    expect(captured.location.workspace_id).toBe('workspace-new');
+    expect(captured.location.gateway_id).toBe('entry-A');
+    expect(f.refreshes).toEqual(['entry-A']);
+    expect(f.requests.map(item => item.operation)).toEqual(['list', 'read']);
   } finally { f.dispose(); }
 });
 

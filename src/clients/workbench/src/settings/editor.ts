@@ -52,16 +52,23 @@ export function parseSettingsLocation(value: unknown): TargetSettingsLocation {
 export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings')):
 Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefined> {
   const quick = parent.invokeFunction(accessor => accessor.get(IQuickInputService));
-  const initial = workspaceContext.getSnapshot(), frozen = { ...target };
+  const frozen = { ...target };
   const controller = new AbortController(), cancellation = new CancellationTokenSource(token);
   const cancelled = cancellation.token.onCancellationRequested(() => controller.abort(new CancellationError()));
   const invalidate = () => { controller.abort(new Error('Gateway 或访问凭据已改变，请重新打开设置来源')); cancellation.cancel(); };
   const release = onGatewayTokenInvalidated(0, invalidate);
+  const initial = workspaceContext.getSnapshot();
   const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate(); });
   try {
     if (token.isCancellationRequested) throw new CancellationError();
+    await workspaceContext.refresh();
+    controller.signal.throwIfAborted();
+    const refreshed = workspaceContext.getSnapshot();
+    if (refreshed.error) throw new Error(refreshed.error);
+    if (refreshed.loading || !refreshed.gatewayId) throw new Error('Gateway 工作区目标尚未完成刷新');
+    const workspaces = refreshed.workspaces;
     const scope = await quick.pick([{ label: 'Gateway 配置', description: frozen.name, detail: frozen.gateway_id, workspaceId: undefined as string | undefined },
-      ...initial.workspaces.filter(workspace => workspace.gateway_id === frozen.gateway_id).map(workspace => ({ label: workspace.name,
+      ...workspaces.filter(workspace => workspace.gateway_id === frozen.gateway_id).map(workspace => ({ label: workspace.name,
         description: '工作区 · ' + workspace.status, detail: workspace.workspace_id, workspaceId: workspace.workspace_id }))],
     { title: '选择设置来源的所属目标', prompt: `Gateway ${frozen.gateway_id}`, placeHolder: '读取来源不启动 Backend 或插件；离线来源由原 owner 明确报错' }, cancellation.token);
     controller.signal.throwIfAborted();

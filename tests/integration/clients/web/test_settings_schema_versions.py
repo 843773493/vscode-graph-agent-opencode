@@ -136,5 +136,6 @@ async def test_saved_bindings_refresh_only_their_settings_schema(
     assert (
         result["unbind_released_only_owner"]
         and result["residue_preserved"]
+        and result["unbound_residue_edit_delete"]
         and result["zero_runtime"]
     )
