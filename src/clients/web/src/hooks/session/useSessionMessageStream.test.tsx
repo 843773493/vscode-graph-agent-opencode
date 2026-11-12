@@ -547,7 +547,8 @@ describe("useSessionMessageStream 首次连接", () => {
         await act(async () => { renderer.update(<Logs workspaceId="gateway_logs_b" />); });
         gate.release([]);
         await oldRead;
-        expect(logSpy).toHaveBeenCalledWith(49_763, sessionId, "gateway_logs_a");
+        expect(logSpy).toHaveBeenCalledWith(49_763, sessionId, "gateway_logs_a", expect.any(AbortSignal));
+        expect(logSpy.mock.calls[0]?.[3]?.aborted).toBe(true);
         expect(mirror.current()).toBe(newOwner);
       } finally {
         act(() => renderer.unmount()); logSpy.mockRestore();

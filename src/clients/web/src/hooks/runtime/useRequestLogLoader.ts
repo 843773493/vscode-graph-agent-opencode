@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { getLLMRequestLogs } from "../../api";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
@@ -12,16 +12,20 @@ export function useRequestLogLoader({
   workspaceId: string | null;
   setState: SetAppState;
 }) {
-  const requestIdRef = useRef(0);
+  const requestRef = useRef<AbortController | null>(null);
 
   const invalidateLLMRequestLogs = useCallback(() => {
-    requestIdRef.current += 1;
+    requestRef.current?.abort();
+    requestRef.current = null;
   }, []);
+
+  useEffect(() => invalidateLLMRequestLogs, [apiPort, workspaceId, invalidateLLMRequestLogs]);
 
   const refreshLLMRequestLogs = useCallback(
     async (sessionId: string) => {
-      const requestId = requestIdRef.current + 1;
-      requestIdRef.current = requestId;
+      invalidateLLMRequestLogs();
+      const controller = new AbortController();
+      requestRef.current = controller;
       setState((prev) => ({
         ...prev,
         contentView: "requests",
@@ -31,10 +35,10 @@ export function useRequestLogLoader({
       }));
 
       try {
-        const records = await getLLMRequestLogs(apiPort, sessionId, workspaceId);
+        const records = await getLLMRequestLogs(apiPort, sessionId, workspaceId, controller.signal);
         setState((prev) => {
           if (
-            requestId !== requestIdRef.current ||
+            controller.signal.aborted ||
             prev.currentSession?.session_id !== sessionId ||
             (prev.currentSessionWorkspaceId ?? prev.activeGatewayWorkspaceId) !== workspaceId ||
             prev.contentView !== "requests"
@@ -55,7 +59,7 @@ export function useRequestLogLoader({
         const message = errorMessage(error);
         setState((prev) => {
           if (
-            requestId !== requestIdRef.current ||
+            controller.signal.aborted ||
             prev.currentSession?.session_id !== sessionId ||
             (prev.currentSessionWorkspaceId ?? prev.activeGatewayWorkspaceId) !== workspaceId ||
             prev.contentView !== "requests"
@@ -72,7 +76,7 @@ export function useRequestLogLoader({
         });
       }
     },
-    [apiPort, workspaceId, setState],
+    [apiPort, workspaceId, setState, invalidateLLMRequestLogs],
   );
 
   return {

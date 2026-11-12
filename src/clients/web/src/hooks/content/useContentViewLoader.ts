@@ -62,9 +62,9 @@ export function useContentViewLoader({
 
   const switchContentView = useCallback(
     async (view: ConversationContentView) => {
+      if (view !== "requests") invalidateLLMRequestLogs();
       if (view === "default") {
         invalidateAgentState();
-        invalidateLLMRequestLogs();
         invalidateSessionChanges();
         invalidateSessionResources();
         setState((prev) => ({
@@ -85,7 +85,6 @@ export function useContentViewLoader({
 
       if (view === "events") {
         invalidateAgentState();
-        invalidateLLMRequestLogs();
         invalidateSessionChanges();
         invalidateSessionResources();
         setState((prev) => ({
@@ -132,7 +131,6 @@ export function useContentViewLoader({
 
       if (view === "changes") {
         invalidateAgentState();
-        invalidateLLMRequestLogs();
         invalidateSessionResources();
         if (!currentSession) {
           setState((prev) => ({
@@ -160,7 +158,6 @@ export function useContentViewLoader({
 
       if (view === "resources") {
         invalidateAgentState();
-        invalidateLLMRequestLogs();
         invalidateSessionChanges();
         if (!currentSession) {
           setState((prev) => ({

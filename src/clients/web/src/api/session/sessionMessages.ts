@@ -217,6 +217,7 @@ export async function getLLMRequestLogs(
   port: number,
   sessionId: string,
   workspaceId?: string | null,
+  signal?: AbortSignal,
 ): Promise<LLMRequestLogRecord[]> {
   const data = await requestJson<APIResponse<LLMRequestLogRecord[]>>(
     port,
@@ -224,6 +225,7 @@ export async function getLLMRequestLogs(
     {
       headers: workspaceHeader(workspaceId),
       timeoutMs: LLM_REQUEST_LOG_TIMEOUT_MS,
+      signal,
     },
   );
   return unwrapApiData(data);
