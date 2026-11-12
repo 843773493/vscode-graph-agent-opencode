@@ -5,7 +5,7 @@ import { ILanguageService } from '../upstream/src/vs/editor/common/languages/lan
 import { IModelService } from '../upstream/src/vs/editor/common/services/model.js';
 import { ITextModelService, type ITextModelContentProvider } from '../upstream/src/vs/editor/common/services/resolverService.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
-import type { SessionChangesetDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { SessionChangesetDTO, SessionFileChangeDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gatewayWorkspaceRequestHeaders } from '../../web/src/api/http.js';
 import { gateway } from './agentApi.js';
 import { changeFileSource, changeFileUri, type ChangeSource } from './readonlyDocuments.js';
@@ -19,7 +19,8 @@ import { EditorResourceAccessor, SideBySideEditor } from '../upstream/src/vs/wor
 const scheme = 'boxteam-change';
 /** 原 resolver 共享并释放不可变模型；只合并在途读取，不保存第二份历史正文。 */
 export class ChangeDocuments extends Disposable implements ITextModelContentProvider {
-  private readonly pending = new Map<string, Promise<SessionChangesetDTO>>();
+  static readonly ID = 'boxteam.changeDocuments';
+  private readonly pending = new Map<string, { promise: Promise<SessionChangesetDTO>; readers: number }>();
   constructor(
     @ITextModelService resolver: ITextModelService,
     @IModelService private readonly models: IModelService,
@@ -29,39 +30,50 @@ export class ChangeDocuments extends Disposable implements ITextModelContentProv
     this._register(resolver.registerTextModelContentProvider(scheme, this));
   }
 
-  private changeset(source: ChangeSource): Promise<SessionChangesetDTO> {
+  async withFile<T>(source: Pick<ChangeSource, 'owner' | 'changesetId' | 'filePath'>, use: (file: SessionFileChangeDTO) => T | Promise<T>): Promise<T> {
     const { owner, changesetId } = source;
     const key = JSON.stringify([owner.gatewayId, owner.workspaceId, owner.sessionId, changesetId]);
     let pending = this.pending.get(key);
     if (!pending) {
-      pending = (async () => {
+      const promise = (async () => {
         const target = await gateway.resolveWorkspaceTarget(owner);
         if (target.status !== 'ready') throw new Error(`更改工作区当前不可用（${target.status}），请明确启动或连接`);
         const data = await gateway.request<SessionChangesetDTO>(`/api/v1/sessions/${encodeURIComponent(owner.sessionId)}/changesets/${encodeURIComponent(changesetId)}`,
           { headers: gatewayWorkspaceRequestHeaders(target) }, gatewayWorkspaceKey(target));
         if (data.session_id !== owner.sessionId || data.changeset_id !== changesetId) throw new Error('更改响应 owner 不匹配');
         return data;
-      })().finally(() => this.pending.delete(key));
+      })();
+      pending = { promise, readers: 0 };
       this.pending.set(key, pending);
     }
-    return pending;
+    pending.readers++;
+    try {
+      const data = await pending.promise;
+      const file = data.files.find(file => file.file_path === source.filePath);
+      if (!file) throw new Error('此文件已不在指定会话变更中');
+      // URI 打开与前后模型在同一次读取作用域内消费；结清即释放，不缓存第二份正文。
+      return await use(file);
+    } finally {
+      pending.readers--;
+      if (pending.readers === 0) this.pending.delete(key);
+    }
   }
 
   async provideTextContent(resource: URI) {
     const existing = this.models.getModel(resource);
     if (existing) return existing;
     const source = changeFileSource(resource);
-    const data = await this.changeset(source);
-    const file = data.files.find(file => file.file_path === source.filePath);
-    if (!file || file.latest_edit_id !== source.editId) throw new Error('此更改版本已变化，请重新从会话更改列表打开');
-    const content = source.phase === 'patch' ? file.diff_text : source.phase === 'before' ? file.before_preview : file.after_preview;
-    const absent = source.phase === 'before' && file.kind === 'create' || source.phase === 'after' && file.kind === 'delete';
-    if (content == null && !absent) throw new Error('后端未提供更改预览');
-    return this.models.createModel(content ?? '', this.languages.createByFilepathOrFirstLine(resource), resource);
+    return this.withFile(source, file => {
+      if (file.latest_edit_id !== source.editId) throw new Error('此更改版本已变化，请重新从会话更改列表打开');
+      const content = source.phase === 'patch' ? file.diff_text : source.phase === 'before' ? file.before_preview : file.after_preview;
+      const absent = source.phase === 'before' && file.kind === 'create' || source.phase === 'after' && file.kind === 'delete';
+      if (content == null && !absent) throw new Error('后端未提供更改预览');
+      return this.models.createModel(content ?? '', this.languages.createByFilepathOrFirstLine(resource), resource);
+    });
   }
 }
 
-registerWorkbenchContribution2('boxteam.changeDocuments', ChangeDocuments, WorkbenchPhase.BlockRestore);
+registerWorkbenchContribution2(ChangeDocuments.ID, ChangeDocuments, WorkbenchPhase.BlockRestore);
 
 // 原生差异编辑器读取前后预览；完整 unified diff 仍由同一后端变更提供。
 registerAction2(class OpenChangePatch extends Action2 {

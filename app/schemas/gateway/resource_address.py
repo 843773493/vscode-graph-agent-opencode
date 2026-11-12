@@ -26,6 +26,16 @@ class GatewayThreadAddressRequest(BaseModel):
     thread_id: CanonicalThreadId
 
 
+class GatewayChangeAddressRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    local_gateway_id: CanonicalGatewayId
+    resource_gateway_id: CanonicalGatewayId
+    workspace_id: CanonicalWorkspaceId
+    session_id: CanonicalSessionId
+    changeset_id: str = Field(min_length=1)
+    file_uri: str = Field(min_length=1)
+
+
 class GatewayResourceAddressDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     uri: str
@@ -37,3 +47,5 @@ class GatewayResourceAddressDTO(BaseModel):
     file_root_uri: str | None = None
     session_id: str | None = None
     thread_id: str | None = None
+    changeset_id: str | None = None
+    change_file_uri: str | None = None

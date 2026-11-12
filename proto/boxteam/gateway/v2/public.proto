@@ -26,6 +26,16 @@ message GatewayThreadAddressRequest {
   string thread_id = 5;
 }
 
+// 会话变更文件的当前逻辑引用；不读取正文，也不新增快照或版本字段。
+message GatewayChangeAddressRequest {
+  string local_gateway_id = 1;
+  string resource_gateway_id = 2;
+  string workspace_id = 3;
+  string session_id = 4;
+  string changeset_id = 5;
+  string file_uri = 6;
+}
+
 message GatewayResourceAddressDTO {
   string uri = 1;
   string gateway_id = 2;
@@ -37,6 +47,8 @@ message GatewayResourceAddressDTO {
   optional string thread_id = 8;
   // 用于复制与跨 Gateway 引用，始终包含所属 Gateway；不表示资源存在或访问授权。
   string reference_uri = 9;
+  optional string changeset_id = 10;
+  optional string change_file_uri = 11;
 }
 // WorkspaceResource 等业务对象通过 Struct 作为 Gateway 快照边界传递。
 

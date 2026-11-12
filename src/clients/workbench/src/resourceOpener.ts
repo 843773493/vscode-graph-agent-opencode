@@ -7,7 +7,8 @@ import { ITextModelService, type IResolvedTextEditorModel } from '../upstream/sr
 import { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
 import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { IOpenerService, type IOpener, type OpenOptions } from '../upstream/src/vs/platform/opener/common/opener.js';
-import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
+import { getWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
+import type { IResourceDiffEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
 import type { IResourceEditorInput } from '../upstream/src/vs/platform/editor/common/editor.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
@@ -17,6 +18,8 @@ import { ThreadInput } from './threadInput.js';
 import { workspaceFileUri } from './workspaceFiles.js';
 import { workspaceContext } from './workspaceContext.js';
 import { sourceDocumentUri } from './sourceDocuments.js';
+import { ChangeDocuments } from './changeFiles.js';
+import { changeFileUri } from './readonlyDocuments.js';
 import { captureSearchOwner } from './search/target.js';
 import { ConfigurationSourceOwner, type SourceTarget } from './settings/sourceOwner.js';
 import { openConfigurationSourceCommand, type ConfigurationSourceOpenRequest } from './settings/commands.js';
@@ -61,7 +64,7 @@ export class ResourceOpener extends Disposable implements IOpener {
         throw new Error('Gateway 或访问凭据已改变，请重新打开资源');
       }
     };
-    let reference: IReference<IResolvedTextEditorModel> | undefined;
+    const references: IReference<IResolvedTextEditorModel>[] = [];
     try {
       let address = await gateway.request<GatewayResourceAddressDTO>('/api/gateway/resource-addresses/parse', {
         method: 'POST', body: JSON.stringify({ uri, local_gateway_id: gatewayId, resource_gateway_id: resourceOwner?.gatewayId }),
@@ -110,8 +113,22 @@ export class ResourceOpener extends Disposable implements IOpener {
       if (resourceOwner && (address.gateway_id !== resourceOwner.gatewayId || owner.workspaceId !== resourceOwner.workspaceId)) {
         throw new Error('资源解析响应与明确的 Gateway／工作区归属不匹配');
       }
-      let input: ThreadInput | IResourceEditorInput;
-      if (address.session_id || address.file_root_uri) {
+      let input: ThreadInput | IResourceEditorInput | IResourceDiffEditorInput;
+      if (address.kind === 'changes') {
+        if (!address.session_id || !address.changeset_id || !address.change_file_uri) throw new Error('更改 URI 解析缺少原会话、变更范围或文件引用');
+        const changeOwner = { ...owner, sessionId: address.session_id };
+        const changesetId = address.changeset_id;
+        input = await getWorkbenchContribution<ChangeDocuments>(ChangeDocuments.ID).withFile({ owner: changeOwner,
+          changesetId, filePath: address.change_file_uri }, async file => {
+          assertAccess();
+          const original = { resource: changeFileUri(changeOwner, changesetId, file, 'before') };
+          const modified = { resource: changeFileUri(changeOwner, changesetId, file, 'after') };
+          references.push(await this.models.createModelReference(original.resource));
+          assertAccess();
+          references.push(await this.models.createModelReference(modified.resource));
+          return { original, modified, label: file.file_path };
+        });
+      } else if (address.session_id || address.file_root_uri) {
         const target = await gateway.resolveWorkspaceTarget(owner);
         assertAccess();
         if (target.status !== 'ready') throw new Error(`目标工作区当前不可用（${target.status}），请明确启动或连接`);
@@ -125,7 +142,7 @@ export class ResourceOpener extends Disposable implements IOpener {
         const sourceUri = address.gateway_id === gatewayId ? address.uri : address.reference_uri;
         input = { resource: sourceDocumentUri(owner, sourceUri), description: `${owner.workspaceId} · ${address.kind}` };
         // 沿原 resolver 先取得引用：一次重解路由及读取即可完成核验，失败时不创建空分屏。
-        reference = await this.models.createModelReference(input.resource);
+        references.push(await this.models.createModelReference(input.resource));
       }
       assertAccess();
       const source = this.groups.getGroup(groupId);
@@ -135,7 +152,7 @@ export class ResourceOpener extends Disposable implements IOpener {
       if (input instanceof ThreadInput) await this.editors.openEditor(input, editorOptions, group.id);
       else await this.editors.openEditor({ ...input, options: editorOptions }, group.id);
       return true;
-    } finally { reference?.dispose(); release(); }
+    } finally { for (const reference of references) reference.dispose(); release(); }
   }
 }
 

@@ -293,6 +293,13 @@ Quick Access SHALL 经同一个 `streamFederatedSearch` 展示有界命中、原
 
 受支持资源的打开 SHALL 遵守原版编辑器组、侧边打开、预览／固定及相应配置，选择与资源能力相符的会话、文本、Diff 或其它视图。不可文本读取的资源 MUST NOT 被伪装成文本。快速访问新增打开方式 MUST NOT 改变既有文件树单击在会话资源内预览的行为。
 
+Session 文件更改的公开 URI SHALL 消费 `virtual-resource-addressing` 登记的 `changes` 模板。复制不读取正文；重开由原变更 owner 查询当前变更集并通过原只读模型显示 Diff，前后侧共用同一次响应，不新增文件快照。已有编辑器恢复仍遵守原 edit_id 合同。只有打开能力而没有上下文读取能力的资源 MUST NOT 因能复制 URI 就自动提供 Composer 引用；既有实际正文粘贴继续可用。
+
+#### Scenario: 复制并重开当前 Diff
+
+- **WHEN** 用户复制 Session 文件更改的 URI，关闭后从 Quick Open 粘贴打开
+- **THEN** 复制零正文读取，打开重新核验明确 Gateway／workspace／Session／changeset／文件，并以一次变更集响应显示前后只读模型；失败不改投其它工作区或创建空分屏
+
 #### Scenario: Thread 在侧边打开
 
 - **WHEN** 用户选择侧边打开一个 Thread

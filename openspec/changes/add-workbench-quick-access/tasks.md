@@ -1077,3 +1077,12 @@ Gateway 地址及路由短验 25 passed、公开结构 96 passed、认证与顺�
 真实消息执行生成 v1／v2，更改面板打开原 Diff；正式 Gateway／Backend／Workbench／Chromium 验证左侧 v1、右侧 v2及完整补丁只追加指定草稿，零新增正文读取／执行，正常刷新保留。原共享只读模型、旧记录迁移、损坏恢复、编辑器组／MRU、dirty 关闭与六类面板断言保留；1 passed／109.33秒，pageErrors=[]。模型为具名 model_stream；原上游关闭生命周期等 console 诊断保留，未宣称 console 零错误。
 
 10项只读模型检查211断言、174份实际转换源码类型及79扩展正式构建通过。结合此前 Composer 双Thread／跨工作区／来源修改页面、来源多选返回／取消及不支持能力合同，关闭12组当前支持资源的引用／粘贴任务；不将已删除的固定版本要求作为遗留。首轮插件准备失败及第二轮更改面板读取被误计入粘贴的原件保留；先等原面板完成加载后保留零读取断言，复用一次准备的不可变包。准确命令、源码指纹、失败归因与最小复审见 `out/tests/temp/2026/11/12/diff_composer_selection/artifacts/verification.json`。Diff公开URI重开、其它未接通类型、Windows／真实远端／Electron仍归2／13／15组未完成项，不由本片证明。仅本地提交，不同步或push。
+
+
+### 2026-11-12：公开 Diff URI 的复制与重开（2.2／2.3 部分）
+
+中央 grammar 登记 `changes` 层级模板，保留明确 Session、all／正常及 replay Turn、原 files／attachments child；认证地址投影只处理地址。原 Opener／ChangeDocuments／resolver 读取当前聚合 Diff，两侧在一次作用域共用同一原响应，最后活跃消费者结清才释放；未新增快照、正文缓存或历史账本。公开 URI 不带 edit_id，已打开模型及恢复继续遵守原变更版本合同。复制零正文读取；缺通用上下文读取 owner 的 Diff 不提供 Composer URI 附加，程序化调用同样拒绝，实际选定正文粘贴继续可用。普通引用只存 URI、读取当前内容，删除 proposal 中相反的额外冻结措辞。
+
+368项最终URI／地址合同、135项公开协议／路由合同、13项模型233断言（含原URI对象与JSON恢复往返）、174份真实转换源码类型、79扩展正式构建、Ruff、协议生成一致性及OpenSpec严格校验通过。正式Gateway／Backend／Workbench完整页1 passed／109.74秒：真实执行生成v1／v2，实际剪贴板复制、关闭并经Quick Open重开只发一次更改集GET，原分屏／只读／草稿／恢复断言保持，pageErrors为空。182条console诊断包括原关闭／fetch及具名损坏恢复故障，不宣称零console错误。
+
+首轮原Thread恢复面板的正常GET被计入打开阶段，先结清该读取后保留原单次断言；第二轮发现把完整源URI编码进单段会被VS Code URI对象展开斜杠，已删除该未提交草案并统一为层级suffix，不留兼容分支。原始结果和最终命令、源码指纹、最小充分复审见 `out/tests/temp/2026/11/12/diff_uri/artifacts/verification.json`；正式页面见 `out/tests/integration/clients/web/quick_access/test_change_documents/runs/run-c94dc84e3bf5/nodes/node-42846a3a06cb/artifacts/change-documents.json`。Python环境无pyright命令，未安装；Ruff与受影响后端合同通过。此片不代替所有媒体URI重开、跨机器／Windows／Electron及宽任务完整矩阵，2.2／2.3继续未勾选。仅本地提交，不同步或push。

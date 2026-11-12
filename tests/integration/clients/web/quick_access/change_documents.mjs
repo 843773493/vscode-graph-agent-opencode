@@ -9,20 +9,21 @@ const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 if (!base || !output || !screenshot) throw new Error('只读模型验收缺少隔离目标或产物目录');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_change_documents.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], consoleErrors: [], reads: [], sources: [], mcpReads: [], changesetLists: [], reviews: [], executions: [], pastes: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], consoleErrors: [], reads: [], sources: [], addresses: [], mcpReads: [], changesetLists: [], reviews: [], executions: [], pastes: [],
   boundary: '真实Gateway／后端／正式Workbench；模型协议采用model_stream；产品创建更改及编辑器状态，仅恢复故障阶段改坏一条真实只读编辑器记录' };
 let page, failure;
 try {
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   run.addCleanup('Chromium', () => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1800, height: 1050 } });
+  const context = await browser.newContext({ viewport: { width: 1800, height: 1050 }, permissions: ['clipboard-read', 'clipboard-write'] });
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push({ phase: result.phase, text: message.text() }); });
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (path.startsWith('/api/gateway/resource-addresses/')) result.addresses.push({ phase: result.phase, path, body: request.postDataJSON() });
     if (path.endsWith('/messages') && request.method() === 'POST') result.executions.push({ phase: result.phase, path });
     if (path.endsWith('/changesets')) result.changesetLists.push({ phase: result.phase, path,
       gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
@@ -125,6 +126,35 @@ try {
   await assertDiff(0);
   expect(result.reads.filter(read => read.phase === 'open-real-diff')).toHaveLength(1);
   result.singleDiffRead = true;
+  result.phase = 'copy-diff-uri';
+  await command('boxteam.resource.copyUri');
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  const canonicalFile = file.file_path.startsWith(`boxteam://${owner.gatewayId}/`) ? file.file_path
+    : file.file_path.replace('boxteam://', `boxteam://${owner.gatewayId}/`);
+  // 预期按公开合同独立构造，不能从地址响应取同一值当作验证。
+  expect(copied).toBe(`boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/changes/${owner.sessionId}/${turns[1]}/${canonicalFile.slice('boxteam://'.length)}`);
+  expect(result.addresses.filter(read => read.phase === result.phase)).toEqual([{ phase: result.phase,
+    path: '/api/gateway/resource-addresses/change', body: { local_gateway_id: owner.gatewayId, resource_gateway_id: owner.gatewayId,
+      workspace_id: owner.workspaceId, session_id: owner.sessionId, changeset_id: changesetId, file_uri: file.file_path } }]);
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  result.diffReference = copied;
+  result.phase = 'close-diff-restore-thread';
+  // 关闭 Diff 后原 Thread 重新激活，会自行重读更改面板；先结清该读取再计量 URI 打开。
+  const [panelRestore] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/sessions/${owner.sessionId}/changesets/${encodeURIComponent(changesetId)}`),
+    command('workbench.action.closeActiveEditor'),
+  ]);
+  expect(panelRestore.status()).toBe(200);
+  await expect(thread.locator('.session-change-file-main')).toBeVisible();
+  await expect(thread.getByText('正在读取会话变更...', { exact: true })).toHaveCount(0);
+  result.phase = 'reopen-diff-uri';
+  await command('workbench.action.quickOpen', copied);
+  await quick.getByText('打开链接', { exact: true }).click();
+  await assertDiff(0);
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([{ phase: result.phase,
+    path: `/api/v1/sessions/${owner.sessionId}/changesets/${encodeURIComponent(changesetId)}`,
+    gatewayId: owner.gatewayId, workspaceId: owner.workspaceId }]);
+  result.diffUriReopened = true;
   result.phase = 'split-original-diff';
   await command('workbench.action.splitEditorRight');
   await expect(groups).toHaveCount(2);
@@ -161,6 +191,23 @@ try {
   await paste(diff(1).locator('.editor.original'), 'history v1 line 01');
   result.phase = 'paste-diff-modified';
   await paste(modified, 'history v2 line 01');
+  result.phase = 'diff-uri-chat-capability';
+  const unavailable = await command('boxteam.resource.attachToChat').then(() => '', error => String(error));
+  expect(unavailable).toContain('此资源尚未提供规范引用能力');
+  const rawAttach = page.evaluate(async ({ reference, owner }) => {
+    try {
+      await globalThis.workbench.commands.executeCommand('boxteam.resource.attachToChat', globalThis.workbench.URI.parse(reference), owner);
+      return '';
+    } catch (error) { return String(error); }
+  }, { reference: copied, owner: workspaceOwner });
+  await expect(quick).toContainText('选择接收草稿的 Thread');
+  await quick.getByRole('option').filter({ hasText: owner.threadId }).click();
+  expect(await rawAttach).toContain('更改 URI 用于打开 Diff');
+  await expect(composer).toHaveValue(pasted);
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.executions).toHaveLength(2);
+  result.diffReferenceNotOfferedAsReadable = true;
   result.phase = 'open-original-patch';
   await command('boxteam.changes.openPatch');
   const text = () => groups.nth(1).locator('.editor-instance .monaco-editor').filter({ visible: true });

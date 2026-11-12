@@ -89,7 +89,7 @@ async function fixture(callback) {
     }, { headers: { 'X-Request-ID': 'changes-' + calls.length } });
   });
   const read = async resource => { const ref = await resolver.createModelReference(resource); refs.push(ref); return ref; };
-  try { await callback({ read, state, calls, texts, created, destroyed, routes }); }
+  try { await callback({ read, state, calls, texts, created, destroyed, routes, documents }); }
   finally {
     state.paused?.resolve();
     for (const ref of refs) ref.dispose();
@@ -109,6 +109,16 @@ test('同一快照不受选择键／标题／Thread改变影响，owner、范围
     uri('before', { ...owner, sessionId: 'session-other' })]) expect(other.toString()).not.toBe(original.toString());
   expect(() => m.changeFileSource(original.with({ query: 'route=old' }))).toThrow('过时路由');
   receipt.checks.push('稳定身份往返；版本／阶段／Gateway／Workspace／Session隔离；旧不完整记录明确失败');
+});
+
+test('公开Diff层级地址经原URI对象往返保留源文件编码，不展开结构斜杠', () => {
+  const prefix = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/changes/ses_${'a'.repeat(32)}/all`;
+  for (const path of ['%E4%B8%AD%E6%96%87%20%25%3A%F0%9F%98%80.txt', '%252e%252e.txt', 'folder/file%3F%23.txt']) {
+    const reference = `${prefix}/${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root/${path}`;
+    expect(m.URI.parse(reference).toString()).toBe(reference);
+    expect(m.URI.revive(m.URI.parse(reference).toJSON()).toString()).toBe(reference);
+  }
+  receipt.checks.push('公开层级URI经过实际上游URI对象及JSON恢复保留中文／空格／字面百分号／保留字符');
 });
 
 test('旧展示引用一次迁为同一模型身份，保留原输入；缺失身份和未知恢复格式保留错误记录', () => {
@@ -267,6 +277,68 @@ test('旧模型保持原快照，新版本和另一owner分别读取；旧引用
     await expect(f.read(uri('after'))).rejects.toThrow('此更改版本已变化');
     expect(f.texts.size).toBe(3);
     receipt.checks.push('保留旧模型；新revision／不同工作区／同UUID不同Gateway不混用；过时重开明确失败');
+  });
+});
+
+test('规范Diff打开作用域顺序解析前后侧仅读一次，结清后重读当前版本', async () => {
+  await fixture(async f => {
+    const source = m.changeFileSource(uri());
+    const open = () => f.documents.withFile(source, async current => {
+      const before = await f.read(uri('before', owner, current.latest_edit_id));
+      const after = await f.read(uri('after', owner, current.latest_edit_id));
+      return { before, after };
+    });
+    const first = await open();
+    expect(first.before.object.textEditorModel.getValue()).toContain('before edit-1');
+    expect(first.after.object.textEditorModel.getValue()).toContain('after edit-1');
+    expect(f.calls).toHaveLength(1);
+    f.state.latest = 'edit-2';
+    const next = await open();
+    expect(next.before.object.textEditorModel.getValue()).toContain('before edit-2');
+    expect(next.after.object.textEditorModel.getValue()).toContain('after edit-2');
+    expect(first.after.object.textEditorModel.getValue()).toContain('after edit-1');
+    expect(f.calls).toHaveLength(2);
+    await expect(f.documents.withFile(source, () => { throw new Error('打开消费者失败'); })).rejects.toThrow('打开消费者失败');
+    await open();
+    expect(f.calls).toHaveLength(4);
+    receipt.checks.push('公开Diff打开作用域顺序建两侧共用1次原响应；下次读当前版本；消费者失败后释放');
+  });
+});
+
+test('并发Diff作用域中首个读取者结束后，跟随者解析第二侧仍复用同一读取', async () => {
+  await fixture(async f => {
+    f.state.paused = Promise.withResolvers();
+    const source = m.changeFileSource(uri());
+    const ownerRelease = Promise.withResolvers();
+    const followerFirstRead = Promise.withResolvers();
+    const followerContinue = Promise.withResolvers();
+    const first = f.documents.withFile(source, async () => {
+      await ownerRelease.promise;
+      return 'first scope closed';
+    });
+    const follower = f.documents.withFile(source, async current => {
+      const before = await f.read(uri('before', owner, current.latest_edit_id));
+      followerFirstRead.resolve();
+      await followerContinue.promise;
+      const after = await f.read(uri('after', owner, current.latest_edit_id));
+      return { before, after };
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(f.calls).toHaveLength(1);
+    f.state.paused.resolve();
+    await followerFirstRead.promise;
+    ownerRelease.resolve();
+    await expect(first).resolves.toBe('first scope closed');
+    expect(f.calls).toHaveLength(1);
+    followerContinue.resolve();
+    const { before, after } = await follower;
+    expect(before.object.textEditorModel.getValue()).toContain('before edit-1');
+    expect(after.object.textEditorModel.getValue()).toContain('after edit-1');
+    expect(f.calls).toHaveLength(1);
+    f.state.latest = 'edit-2';
+    await f.documents.withFile(source, current => current.latest_edit_id);
+    expect(f.calls).toHaveLength(2);
+    receipt.checks.push('固定首个作用域先结清、跟随者再解析第二侧；并发两侧只发1次HTTP，全部结清后重新读取当前revision');
   });
 });
 

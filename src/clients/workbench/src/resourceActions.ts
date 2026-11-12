@@ -6,7 +6,7 @@ import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation
 import { EditorResourceAccessor, SideBySideEditor } from '../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
-import type { GatewayResourceAddressDTO, GatewayThreadAddressRequest } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import type { GatewayChangeAddressRequest, GatewayResourceAddressDTO, GatewayThreadAddressRequest } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { sourceDocumentSource } from './sourceDocuments.js';
 import { workspaceContext } from './workspaceContext.js';
@@ -14,6 +14,7 @@ import { workspaceFileSource } from './workspaceFiles.js';
 import { ThreadInput } from './threadInput.js';
 import { configSourceScheme, sourceLocation } from './settings/sourceEditor.js';
 import { ConfigurationSourceOwner } from './settings/sourceOwner.js';
+import { changeFileSource } from './readonlyDocuments.js';
 
 export const COPY_RESOURCE_URI = 'boxteam.resource.copyUri';
 export const ATTACH_RESOURCE_URI = 'boxteam.resource.attachToChat';
@@ -22,17 +23,22 @@ export const ATTACH_SOURCE_URIS = 'boxteam.resource.selectSourcesForChat';
 export type ResourceReferenceOwner = { gatewayId: string; workspaceId?: string };
 
 export function supportsResourceReference(resource: URI): boolean {
-  return resource.scheme === 'boxteam-file' || resource.scheme === 'boxteam-source' || resource.scheme === 'boxteam-thread' || resource.scheme === configSourceScheme;
+  return resource.scheme === 'boxteam-file' || resource.scheme === 'boxteam-source' || resource.scheme === 'boxteam-thread' || resource.scheme === 'boxteam-change' || resource.scheme === configSourceScheme;
+}
+
+export function supportsChatResourceReference(resource: URI): boolean {
+  return resource.scheme !== 'boxteam-change' && supportsResourceReference(resource);
 }
 
 /** 只反转内部编辑器投影；公开引用由统一寻址 owner 生成，不读取正文或打开资源。 */
-export async function resourceReference(resource: URI, resourceOwner?: ResourceReferenceOwner): Promise<string> {
+export async function resourceReference(resource: URI, resourceOwner?: ResourceReferenceOwner, usage: 'copy' | 'chat' = 'copy'): Promise<string> {
   const configuration = resource.scheme === configSourceScheme ? sourceLocation(resource) : undefined;
   const thread = resource.scheme === 'boxteam-thread' ? ThreadInput.fromResource(resource).owner : undefined;
+  const change = resource.scheme === 'boxteam-change' ? changeFileSource(resource) : undefined;
   const source = resource.scheme === 'boxteam' && resourceOwner ? { ...resourceOwner, uri: resource.toString() }
     : resource.scheme === 'boxteam-file' ? workspaceFileSource(resource)
     : resource.scheme === 'boxteam-source' ? sourceDocumentSource(resource) : undefined;
-  const owner = thread ?? source ?? (configuration && { gatewayId: configuration.target.gateway_id, workspaceId: configuration.target.workspace_id });
+  const owner = thread ?? change?.owner ?? source ?? (configuration && { gatewayId: configuration.target.gateway_id, workspaceId: configuration.target.workspace_id });
   if (!owner) throw new Error('此资源尚未提供规范 URI 复制能力');
   let sourceUri = source && ('path' in source ? source.path : source.uri);
   const gatewayId = workspaceContext.getSnapshot().gatewayId;
@@ -51,9 +57,12 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
       if (!entry?.uri) throw new Error('此配置来源没有可复制的规范 URI，请使用原设置来源入口');
       sourceUri = entry.uri;
     }
-    const address = await gateway.request<GatewayResourceAddressDTO>(thread
+    const address = await gateway.request<GatewayResourceAddressDTO>(change ? '/api/gateway/resource-addresses/change' : thread
       ? '/api/gateway/resource-addresses/thread' : '/api/gateway/resource-addresses/parse', {
-      method: 'POST', body: JSON.stringify(thread ? {
+      method: 'POST', body: JSON.stringify(change ? {
+        local_gateway_id: gatewayId, resource_gateway_id: change.owner.gatewayId, workspace_id: change.owner.workspaceId,
+        session_id: change.owner.sessionId, changeset_id: change.changesetId, file_uri: change.filePath,
+      } satisfies GatewayChangeAddressRequest : thread ? {
         local_gateway_id: gatewayId, resource_gateway_id: thread.gatewayId,
         workspace_id: thread.workspaceId, session_id: thread.sessionId, thread_id: thread.threadId,
       } satisfies GatewayThreadAddressRequest : { uri: sourceUri,
@@ -71,11 +80,15 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
       throw new Error('资源引用不属于指定的 Session／Thread');
     }
     if (configuration && address.kind !== 'config') throw new Error('配置来源没有返回规范配置资源 URI');
+    if (change && (address.kind !== 'changes' || address.session_id !== change.owner.sessionId || address.changeset_id !== change.changesetId)) {
+      throw new Error('更改引用不属于指定的 Session／变更范围');
+    }
+    if (usage === 'chat' && address.kind === 'changes') throw new Error('更改 URI 用于打开 Diff；请使用选定正文粘贴到聊天草稿');
     return address.reference_uri;
   } finally { release(); }
 }
 
-const referenceContext = ContextKeyExpr.or(...['boxteam-file', 'boxteam-source', 'boxteam-thread', configSourceScheme].map(scheme => ContextKeyExpr.equals('resourceScheme', scheme)));
+const referenceContext = ContextKeyExpr.or(...['boxteam-file', 'boxteam-source', 'boxteam-thread', 'boxteam-change', configSourceScheme].map(scheme => ContextKeyExpr.equals('resourceScheme', scheme)));
 
 registerAction2(class CopyResourceUri extends Action2 {
   constructor() {

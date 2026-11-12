@@ -1,8 +1,8 @@
 """资源 URI 的纯 grammar 与构造：boxteam:// 的唯一实现。
 
 规范 URI 只表达逻辑 scope/kind/name，不携带 revision、物理路径、endpoint
-或 credential。结构与身份段遵守严格 ASCII profile；只有已公布根的文件
-child 段按 UTF-8 解码一次并规范重编码。URI 是安全展示/引用层，不是
+或 credential。结构与身份段遵守严格 ASCII profile；文件 child 按原规则
+解码一次，更改的来源层级复用同一文件 grammar。URI 是安全展示/引用层，不是
 identity、capability、dedupe 或幂等 key。
 """
 
@@ -23,7 +23,7 @@ _SCOPE_KEYWORDS: Final = frozenset({"workspace", "user", "gateway", "inline"})
 # 语法 kind 闭集（parse_resource_uri 侧）；与 values.py 的描述符闭集 _DESCRIPTOR_KINDS 是两个
 # 独立闭集，不可混用。「config」承载配置来源文件本身，「session」承载会话上下文资源
 # （工作区集合根、Session 定位和 Thread 定位）。
-_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files", "attachments"})
+_RESOURCE_KINDS: Final = frozenset({"agent-spec", "skills", "config", "session", "workspace", "folder", "files", "attachments", "changes"})
 _NAME_CHARSET: Final = frozenset(string.ascii_letters + string.digits + "_-")
 _INVALID_PERCENT_ESCAPE: Final = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _CONTROL_CHAR: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -85,7 +85,8 @@ class ParsedResourceUri:
     display_uri: str
     gateway_authority: str | None
     # resources/{kind}/ 之后的身份与解码后的文件 segment；skills 的 logical_name
-    # 只取包名，文件名逐字保留。config/session 的 logical_name 即身份尾段逐段拼接。
+    # 只取包名，文件名逐字保留。changes 尾部保存原 Session、范围及规范源文件 URI。
+    # config/session 的 logical_name 即身份尾段逐段拼接。
     tail_segments: tuple[str, ...]
     session_artifact_kind: Literal["attachments", "tool-results"] | None = None
 
@@ -230,7 +231,9 @@ def _parsed(
     )
 
 
-def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> ParsedResourceUri:
+def parse_resource_uri(
+    uri: str, *, local_gateway_id: str | None = None, _file_reference_only: bool = False,
+) -> ParsedResourceUri:
     """严格解析 boxteam:// 资源 URI；任何拒绝都先于一切资源访问。"""
     if not isinstance(uri, str) or not uri:
         raise ResourceUriGrammarError("empty_uri", "URI 必须是非空字符串")
@@ -284,6 +287,19 @@ def parse_resource_uri(uri: str, *, local_gateway_id: str | None = None) -> Pars
     _expect_fixed_segment(body[1], "resources")
     kind = _parse_kind(body[2])
     tails = body[3:]
+    if _file_reference_only and kind not in {"files", "attachments"}:
+        raise ResourceUriGrammarError("malformed_path", "更改来源必须是普通文件或附件目录 child URI")
+
+    if kind == "changes":
+        if scope != "workspace" or len(tails) < 3:
+            raise ResourceUriGrammarError("malformed_path", "更改 URI 必须包含 Workspace、Session、变更范围与一个文件引用")
+        _validate_change_identity(tails[0], tails[1])
+        file_uri = _change_file_reference(_SCHEME + "/".join(tails[2:]), authority or local_gateway_id)
+        tails = [tails[0], tails[1], file_uri]
+        body[3:] = [*tails[:2], file_uri.removeprefix(_SCHEME)]
+        prefix = () if authority is None else (authority,)
+        uri = _SCHEME + "/".join((*prefix, scope, *body))
+        return _parsed(scope, body[0], kind, tails, "/".join(tails), uri, authority)
 
     if kind == "workspace":
         raise ResourceUriGrammarError("malformed_path", "Workspace 容器必须使用 boxteam://workspace/{id}")
@@ -402,8 +418,15 @@ def resource_display_uri(
     _validate_dynamic_segment(scope_id, field="scope id")
     if gateway_authority is not None:
         _validate_dynamic_segment(gateway_authority, field="gateway authority")
-    if any("/" in segment for segment in tail_segments):
+    identity_segments = tail_segments[:2] if kind == "changes" else tail_segments
+    if any("/" in segment for segment in identity_segments):
         raise ResourceUriGrammarError("invalid_character", "URI 构造的单个尾段不得包含分隔符")
+    if kind == "changes":
+        if scope != "workspace" or len(tail_segments) != 3:
+            raise ResourceUriGrammarError("malformed_path", "更改 URI 必须包含 Workspace、Session、变更范围与一个文件引用")
+        _validate_change_identity(tail_segments[0], tail_segments[1])
+        file_uri = _change_file_reference(tail_segments[2], gateway_authority)
+        tail_segments = (*tail_segments[:2], file_uri.removeprefix(_SCHEME))
     if kind in {"skills", "files", "attachments"} and tail_segments:
         _validate_directory_root(scope, scope_id, kind, tail_segments[0])
         tail_segments = (
@@ -417,6 +440,52 @@ def resource_display_uri(
     else:
         uri = _SCHEME + "/".join((*prefix, scope, scope_id, "resources", kind, *tail_segments))
     return parse_resource_uri(uri).display_uri
+
+
+def _validate_change_identity(session_id: str, selection: str) -> None:
+    _validate_dynamic_segment(session_id, field="session id")
+    _validate_dynamic_segment(selection, field="changeset")
+    try:
+        validate_session_id(session_id)
+    except ValueError as error:
+        raise ResourceUriGrammarError("invalid_character", "更改的 session_id 非法") from error
+    if selection != "all" and re.fullmatch(
+        r"(?:turn_[0-9a-f]{32}|turn-replay-[0-9a-f]{32})", selection,
+    ) is None:
+        raise ResourceUriGrammarError("invalid_character", "更改范围必须是 all 或原 turn_id")
+
+
+def _change_file_reference(uri: str, gateway_id: str | None) -> str:
+    # 只允许文件 child；递归解析在 kind 分支前拒绝其它类型，不接受嵌套更改引用。
+    parsed = parse_resource_uri(uri, local_gateway_id=gateway_id, _file_reference_only=True)
+    if len(parsed.tail_segments) < 2:
+        raise ResourceUriGrammarError("malformed_path", "更改必须指向文件，不能使用目录根")
+    return resource_display_uri(scope=parsed.scope, scope_id=parsed.scope_id, kind=parsed.kind,
+                                tail_segments=parsed.tail_segments, gateway_authority=parsed.gateway_authority or gateway_id)
+
+
+def change_resource_uri(
+    workspace_id: str, session_id: str, changeset_id: str, file_uri: str,
+    *, gateway_authority: str | None = None,
+) -> str:
+    """当前变更文件的逻辑地址；edit_id 与正文仍归原变更 owner，不写入 URI。"""
+    if changeset_id != "all" and not changeset_id.startswith("turn:"):
+        raise ResourceUriGrammarError("invalid_character", "changeset_id 必须是 all 或 turn:turn_id")
+    selection = changeset_id.removeprefix("turn:") if changeset_id.startswith("turn:") else changeset_id
+    return resource_display_uri(scope="workspace", scope_id=workspace_id, kind="changes",
+                                tail_segments=(session_id, selection, file_uri), gateway_authority=gateway_authority)
+
+
+def parse_change_resource_uri(
+    uri: str, *, local_gateway_id: str | None = None,
+) -> tuple[ParsedResourceUri, str, str, str]:
+    """返回原 Session、changeset_id 和文件 URI，不解析文件系统或变更正文。"""
+    parsed = parse_resource_uri(uri, local_gateway_id=local_gateway_id)
+    if parsed.kind != "changes":
+        raise ResourceUriGrammarError("malformed_path", "资源引用不是会话文件更改")
+    session_id, selection, file_uri = parsed.tail_segments
+    file = parse_resource_uri(file_uri, local_gateway_id=parsed.gateway_authority or local_gateway_id, _file_reference_only=True)
+    return parsed, session_id, "all" if selection == "all" else "turn:" + selection, file.display_uri
 
 
 def file_uri_root(uri: str) -> str:

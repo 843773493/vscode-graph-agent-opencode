@@ -19,6 +19,7 @@ def test_route_registration_order_is_stable() -> None:
         "/api/gateway/search/workspaces",
         "/api/gateway/resource-addresses/parse",
         "/api/gateway/resource-addresses/thread",
+        "/api/gateway/resource-addresses/change",
         "/api/v1/resources/navigation",
         "/api/v1/context/read",
         "/api/v1/context/search",

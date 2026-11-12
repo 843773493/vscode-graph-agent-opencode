@@ -27,6 +27,16 @@ export interface GatewayThreadAddressRequest {
   thread_id: string;
 }
 
+/** 会话变更文件的当前逻辑引用；不读取正文，也不新增快照或版本字段。 */
+export interface GatewayChangeAddressRequest {
+  local_gateway_id: string;
+  resource_gateway_id: string;
+  workspace_id: string;
+  session_id: string;
+  changeset_id: string;
+  file_uri: string;
+}
+
 export interface GatewayResourceAddressDTO {
   uri: string;
   gateway_id: string;
@@ -40,6 +50,8 @@ export interface GatewayResourceAddressDTO {
     | undefined;
   /** 用于复制与跨 Gateway 引用，始终包含所属 Gateway；不表示资源存在或访问授权。 */
   reference_uri: string;
+  changeset_id?: string | undefined;
+  change_file_uri?: string | undefined;
 }
 
 /** 同机认证控制链专用，不作为普通文件响应或联邦资源投影。 */
@@ -1033,6 +1045,67 @@ export const GatewayThreadAddressRequest: MessageFns<GatewayThreadAddressRequest
   },
 };
 
+function createBaseGatewayChangeAddressRequest(): GatewayChangeAddressRequest {
+  return {
+    local_gateway_id: "",
+    resource_gateway_id: "",
+    workspace_id: "",
+    session_id: "",
+    changeset_id: "",
+    file_uri: "",
+  };
+}
+
+export const GatewayChangeAddressRequest: MessageFns<GatewayChangeAddressRequest> = {
+  fromJSON(object: any): GatewayChangeAddressRequest {
+    return {
+      local_gateway_id: isSet(object.local_gateway_id) ? globalThis.String(object.local_gateway_id) : "",
+      resource_gateway_id: isSet(object.resource_gateway_id) ? globalThis.String(object.resource_gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      changeset_id: isSet(object.changeset_id) ? globalThis.String(object.changeset_id) : "",
+      file_uri: isSet(object.file_uri) ? globalThis.String(object.file_uri) : "",
+    };
+  },
+
+  toJSON(message: GatewayChangeAddressRequest): unknown {
+    const obj: any = {};
+    if (message.local_gateway_id !== "") {
+      obj.local_gateway_id = message.local_gateway_id;
+    }
+    if (message.resource_gateway_id !== "") {
+      obj.resource_gateway_id = message.resource_gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.changeset_id !== "") {
+      obj.changeset_id = message.changeset_id;
+    }
+    if (message.file_uri !== "") {
+      obj.file_uri = message.file_uri;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GatewayChangeAddressRequest>, I>>(base?: I): GatewayChangeAddressRequest {
+    return GatewayChangeAddressRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GatewayChangeAddressRequest>, I>>(object: I): GatewayChangeAddressRequest {
+    const message = createBaseGatewayChangeAddressRequest();
+    message.local_gateway_id = object.local_gateway_id ?? "";
+    message.resource_gateway_id = object.resource_gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.session_id = object.session_id ?? "";
+    message.changeset_id = object.changeset_id ?? "";
+    message.file_uri = object.file_uri ?? "";
+    return message;
+  },
+};
+
 function createBaseGatewayResourceAddressDTO(): GatewayResourceAddressDTO {
   return {
     uri: "",
@@ -1044,6 +1117,8 @@ function createBaseGatewayResourceAddressDTO(): GatewayResourceAddressDTO {
     session_id: undefined,
     thread_id: undefined,
     reference_uri: "",
+    changeset_id: undefined,
+    change_file_uri: undefined,
   };
 }
 
@@ -1059,6 +1134,8 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
       session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
       reference_uri: isSet(object.reference_uri) ? globalThis.String(object.reference_uri) : "",
+      changeset_id: isSet(object.changeset_id) ? globalThis.String(object.changeset_id) : undefined,
+      change_file_uri: isSet(object.change_file_uri) ? globalThis.String(object.change_file_uri) : undefined,
     };
   },
 
@@ -1091,6 +1168,12 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
     if (message.reference_uri !== "") {
       obj.reference_uri = message.reference_uri;
     }
+    if (message.changeset_id !== undefined) {
+      obj.changeset_id = message.changeset_id;
+    }
+    if (message.change_file_uri !== undefined) {
+      obj.change_file_uri = message.change_file_uri;
+    }
     return obj;
   },
 
@@ -1108,6 +1191,8 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
     message.session_id = object.session_id ?? undefined;
     message.thread_id = object.thread_id ?? undefined;
     message.reference_uri = object.reference_uri ?? "";
+    message.changeset_id = object.changeset_id ?? undefined;
+    message.change_file_uri = object.change_file_uri ?? undefined;
     return message;
   },
 };

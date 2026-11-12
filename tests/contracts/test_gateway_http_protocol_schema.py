@@ -49,7 +49,7 @@ def test_resource_address_http_projection_uses_descriptor_and_fresh_message_root
     gateway_openapi: JsonSchemaValue, http_descriptor_bundle: FileDescriptorSet,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for action, model in (("parse", "GatewayResourceAddressRequest"), ("thread", "GatewayThreadAddressRequest")):
+    for action, model in (("parse", "GatewayResourceAddressRequest"), ("thread", "GatewayThreadAddressRequest"), ("change", "GatewayChangeAddressRequest")):
         operation = gateway_openapi["paths"][f"/api/gateway/resource-addresses/{action}"]["post"]
         assert operation["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith("/" + model)
         assert model in openapi.GATEWAY_HTTP_JSON_DESCRIPTORS

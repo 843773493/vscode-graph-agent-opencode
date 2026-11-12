@@ -35,8 +35,24 @@ class GatewayThreadAddressRequest(_message.Message):
     thread_id: str
     def __init__(self, local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ...) -> None: ...
 
+class GatewayChangeAddressRequest(_message.Message):
+    __slots__ = ("local_gateway_id", "resource_gateway_id", "workspace_id", "session_id", "changeset_id", "file_uri")
+    LOCAL_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    CHANGESET_ID_FIELD_NUMBER: _ClassVar[int]
+    FILE_URI_FIELD_NUMBER: _ClassVar[int]
+    local_gateway_id: str
+    resource_gateway_id: str
+    workspace_id: str
+    session_id: str
+    changeset_id: str
+    file_uri: str
+    def __init__(self, local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., session_id: _Optional[str] = ..., changeset_id: _Optional[str] = ..., file_uri: _Optional[str] = ...) -> None: ...
+
 class GatewayResourceAddressDTO(_message.Message):
-    __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id", "reference_uri")
+    __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id", "reference_uri", "changeset_id", "change_file_uri")
     URI_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     SCOPE_FIELD_NUMBER: _ClassVar[int]
@@ -46,6 +62,8 @@ class GatewayResourceAddressDTO(_message.Message):
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
     REFERENCE_URI_FIELD_NUMBER: _ClassVar[int]
+    CHANGESET_ID_FIELD_NUMBER: _ClassVar[int]
+    CHANGE_FILE_URI_FIELD_NUMBER: _ClassVar[int]
     uri: str
     gateway_id: str
     scope: str
@@ -55,7 +73,9 @@ class GatewayResourceAddressDTO(_message.Message):
     session_id: str
     thread_id: str
     reference_uri: str
-    def __init__(self, uri: _Optional[str] = ..., gateway_id: _Optional[str] = ..., scope: _Optional[str] = ..., scope_id: _Optional[str] = ..., kind: _Optional[str] = ..., file_root_uri: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., reference_uri: _Optional[str] = ...) -> None: ...
+    changeset_id: str
+    change_file_uri: str
+    def __init__(self, uri: _Optional[str] = ..., gateway_id: _Optional[str] = ..., scope: _Optional[str] = ..., scope_id: _Optional[str] = ..., kind: _Optional[str] = ..., file_root_uri: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., reference_uri: _Optional[str] = ..., changeset_id: _Optional[str] = ..., change_file_uri: _Optional[str] = ...) -> None: ...
 
 class NativeDirectoryBindRequest(_message.Message):
     __slots__ = ("native_root",)

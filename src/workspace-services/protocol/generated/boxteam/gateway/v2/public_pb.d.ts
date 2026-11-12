@@ -83,6 +83,49 @@ export declare type GatewayThreadAddressRequest = Message<"boxteam.gateway.v2.Ga
 export declare const GatewayThreadAddressRequestSchema: GenMessage<GatewayThreadAddressRequest>;
 
 /**
+ * 会话变更文件的当前逻辑引用；不读取正文，也不新增快照或版本字段。
+ *
+ * @generated from message boxteam.gateway.v2.GatewayChangeAddressRequest
+ */
+export declare type GatewayChangeAddressRequest = Message<"boxteam.gateway.v2.GatewayChangeAddressRequest"> & {
+  /**
+   * @generated from field: string local_gateway_id = 1;
+   */
+  localGatewayId: string;
+
+  /**
+   * @generated from field: string resource_gateway_id = 2;
+   */
+  resourceGatewayId: string;
+
+  /**
+   * @generated from field: string workspace_id = 3;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string session_id = 4;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string changeset_id = 5;
+   */
+  changesetId: string;
+
+  /**
+   * @generated from field: string file_uri = 6;
+   */
+  fileUri: string;
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayChangeAddressRequest.
+ * Use `create(GatewayChangeAddressRequestSchema)` to create a new message.
+ */
+export declare const GatewayChangeAddressRequestSchema: GenMessage<GatewayChangeAddressRequest>;
+
+/**
  * @generated from message boxteam.gateway.v2.GatewayResourceAddressDTO
  */
 export declare type GatewayResourceAddressDTO = Message<"boxteam.gateway.v2.GatewayResourceAddressDTO"> & {
@@ -132,6 +175,16 @@ export declare type GatewayResourceAddressDTO = Message<"boxteam.gateway.v2.Gate
    * @generated from field: string reference_uri = 9;
    */
   referenceUri: string;
+
+  /**
+   * @generated from field: optional string changeset_id = 10;
+   */
+  changesetId?: string | undefined;
+
+  /**
+   * @generated from field: optional string change_file_uri = 11;
+   */
+  changeFileUri?: string | undefined;
 };
 
 /**

@@ -166,7 +166,7 @@ async def test_diff_and_source_models_share_references_and_restore(
         result = json.loads(result_path.read_text())
         for key in ("singleDiffRead", "splitShared", "readonly", "patch", "legacyMigrated", "diffRestored", "sourceRestored", "lastCloseRereads",
                     "sourceSplitShared", "editorGroupAndMru", "editorDirtyClose", "editorCloseIsolated", "textSymbolsAfterThread",
-                    "changesetBrowseOnly", "changesetOpened", "pasteRestored"):
+                    "changesetBrowseOnly", "changesetOpened", "pasteRestored", "diffUriReopened", "diffReferenceNotOfferedAsReadable"):
             assert result[key], key
         assert [item["phase"] for item in result["pastes"]] == [
             "paste-diff-original", "paste-diff-modified", "paste-patch",

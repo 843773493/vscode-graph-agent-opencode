@@ -289,6 +289,14 @@ Agent 搜索工具与脚本显式接收当前／指定集合／all 的同一范�
 
 ### 项目贡献接入原版服务
 
+#### Session 文件更改的公开 URI
+
+原 `boxteam-change` 只是只读编辑器内部投影。复制与重开由中央 `resource_uri.py` 登记 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/changes/{session_id}/{selection}/{source_gateway?}/{source_scope}/{source_scope_id}/resources/{source_kind}/{root}/{child...}`：selection 是 `all` 或原 Turn ID，映射原 API 的 `all`／`turn:{turn_id}`，包括正常执行和 replay 的原 Turn ID profile。selection 后的层级是源文件 URI 去掉 `boxteam://` 的规范地址，由同一 grammar 解析为 `files`／`attachments` child。源文件名沿原文件段编码，不将整条 URI 塞进单段，以保持原 URI 对象解析／序列化往返。源文件仍可属于原 Gateway 目录根，不以文件名猜路径或改变归属，不允许嵌套更改引用。
+
+认证 Gateway 的 `/api/gateway/resource-addresses/change` 仅构造和投影地址；`parse` 返回明确 Session、changeset 和源文件 URI，均不读取业务存储或证明访问资格。实际打开继续由原 SessionChanges owner 读取当前变更集，选择该文件及原最新 edit_id，再交原 ChangeDocuments／TextModelResolverService 创建前后只读模型。一次打开作用域共用同一次响应，结清即释放；不增加正文缓存、快照或持久引用账本。已打开模型及恢复仍遵守原变更版本合同，公开 URI 不携带 revision，也不承诺永远重建某个历史版本。
+
+复制仅请求地址，不读 Diff 正文。此 URI 当前提供打开能力；尚无通用上下文读取 owner 时，不在 Composer 上提供 URI 附加动作，程序化入口同样拒绝，用户可沿既有动作粘贴实际选定 Diff／patch 正文。普通文件引用继续保存 URI、读取当前内容，不增加固定版本动作、版本字段或“不支持固定版本”的提示。
+
 ```text
 领域查询 API ──候选──→ Quick Access／Quick Input
                              │

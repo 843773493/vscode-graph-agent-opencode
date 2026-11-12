@@ -8,7 +8,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../upstream/src/vs/wor
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import type { IAnythingQuickAccessProviderRunOptions } from '../upstream/src/vs/workbench/contrib/search/common/search.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
-import { ATTACH_RESOURCE_URI, ATTACH_SOURCE_URIS, PASTE_SELECTED_CONTENT, resourceReference, supportsResourceReference, type ResourceReferenceOwner } from './resourceActions.js';
+import { ATTACH_RESOURCE_URI, ATTACH_SOURCE_URIS, PASTE_SELECTED_CONTENT, resourceReference, supportsResourceReference, supportsChatResourceReference, type ResourceReferenceOwner } from './resourceActions.js';
 import { ThreadPane } from './threadPane.js';
 import { ThreadInput } from './threadInput.js';
 import type { SearchInvocationOptions } from './search/target.js';
@@ -22,7 +22,8 @@ export interface ComposerResourceTarget {
   target: ThreadPane['threadTarget'];
 }
 
-const resourceContext = ContextKeyExpr.or(ContextKeyExpr.equals('resourceScheme', 'boxteam-file'), ContextKeyExpr.equals('resourceScheme', 'boxteam-source'));
+const referenceContext = ContextKeyExpr.or(...['boxteam-file', 'boxteam-source'].map(scheme => ContextKeyExpr.equals('resourceScheme', scheme)));
+const contentContext = ContextKeyExpr.or(referenceContext, ContextKeyExpr.equals('resourceScheme', 'boxteam-change'));
 
 /** 接收者来自发起编辑器，或明确选择的可见 Thread；后续焦点不参与归属。 */
 async function appendToThread(accessor: ServicesAccessor, content: (assertRecipient: () => void) => Promise<string | undefined>, recipient?: ComposerResourceTarget | null): Promise<void> {
@@ -63,7 +64,7 @@ async function selectedReferences(selected: IQuickPickItem[] | undefined, assert
   if (!selected?.length) return;
   const sources = selected.map(pick => {
     const source = pick as IQuickPickItem & { resource?: URI; resourceOwner?: ResourceReferenceOwner };
-    if (!URI.isUri(source.resource) || !(supportsResourceReference(source.resource) || source.resource.scheme === 'boxteam' && source.resourceOwner)) {
+    if (!URI.isUri(source.resource) || !(supportsChatResourceReference(source.resource) || source.resource.scheme === 'boxteam' && source.resourceOwner)) {
       throw new Error('所选来源没有可用的规范资源引用');
     }
     return { resource: source.resource, owner: source.resourceOwner };
@@ -71,7 +72,7 @@ async function selectedReferences(selected: IQuickPickItem[] | undefined, assert
   const references: string[] = [];
   for (const source of sources) {
     assertRecipient();
-    references.push(await resourceReference(source.resource, source.owner));
+    references.push(await resourceReference(source.resource, source.owner, 'chat'));
   }
   return references.join('\n');
 }
@@ -79,17 +80,17 @@ async function selectedReferences(selected: IQuickPickItem[] | undefined, assert
 registerAction2(class AttachResourceReference extends Action2 {
   constructor() {
     super({ id: ATTACH_RESOURCE_URI, title: { value: '将资源 URI 加入聊天草稿…', original: 'Attach Resource URI to Chat…' },
-      f1: true, precondition: ContextKeyExpr.or(resourceContext, ContextKeyExpr.equals('activeEditor', ThreadPane.ID)),
-      menu: [{ id: MenuId.EditorTitleContext, group: '2_copy', when: resourceContext },
-        { id: MenuId.EditorContext, group: '9_cutcopypaste', when: resourceContext }] });
+      f1: true, precondition: ContextKeyExpr.or(referenceContext, ContextKeyExpr.equals('activeEditor', ThreadPane.ID)),
+      menu: [{ id: MenuId.EditorTitleContext, group: '2_copy', when: referenceContext },
+        { id: MenuId.EditorContext, group: '9_cutcopypaste', when: referenceContext }] });
   }
   async run(accessor: ServicesAccessor, supplied?: URI, sourceOwner?: ResourceReferenceOwner, recipient?: ComposerResourceTarget | null): Promise<void> {
     if (supplied !== undefined && !URI.isUri(supplied)) throw new Error('引用需要明确的资源 URI');
     const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService);
     const active = editors.activeEditor;
     const resource = supplied ?? EditorResourceAccessor.getCanonicalUri(active, { supportSideBySide: SideBySideEditor.PRIMARY });
-    if (resource && (supportsResourceReference(resource) || resource.scheme === 'boxteam' && sourceOwner) && (supplied || !(active instanceof ThreadInput))) {
-      await appendToThread(accessor, () => resourceReference(resource, sourceOwner), recipient);
+    if (resource && (supportsChatResourceReference(resource) || resource.scheme === 'boxteam' && sourceOwner) && (supplied || !(active instanceof ThreadInput))) {
+      await appendToThread(accessor, () => resourceReference(resource, sourceOwner, 'chat'), recipient);
       return;
     }
     if (supplied || !(active instanceof ThreadInput)) throw new Error('此资源尚未提供规范引用能力');
@@ -135,7 +136,7 @@ registerAction2(class AttachSourceReferences extends Action2 {
 
 registerAction2(class PasteSelectedContent extends Action2 {
   constructor() {
-    const context = ContextKeyExpr.and(ContextKeyExpr.or(resourceContext, ContextKeyExpr.equals('resourceScheme', 'boxteam-change')), ContextKeyExpr.has('editorHasSelection'));
+    const context = ContextKeyExpr.and(contentContext, ContextKeyExpr.has('editorHasSelection'));
     super({ id: PASTE_SELECTED_CONTENT, title: { value: '将选定正文粘贴到聊天草稿…', original: 'Paste Selected Content to Chat…' },
       f1: true, precondition: context, menu: { id: MenuId.EditorContext, group: '9_cutcopypaste', when: context } });
   }
@@ -145,7 +146,7 @@ registerAction2(class PasteSelectedContent extends Action2 {
       ? (control.getOriginalEditor().hasTextFocus() ? control.getOriginalEditor() : control.getModifiedEditor())
       : getCodeEditor(control);
     const model = editor?.getModel(), selection = editor?.getSelection();
-    if (!model || !(supportsResourceReference(model.uri) || model.uri.scheme === 'boxteam-change') || !selection || selection.isEmpty()) throw new Error('请先在支持的资源编辑器中选择正文');
+    if (!model || !supportsResourceReference(model.uri) || !selection || selection.isEmpty()) throw new Error('请先在支持的资源编辑器中选择正文');
     // 在任何 Quick Input 及异步步骤前取得实际正文；来源后来变化不替换这份选择。
     const text = model.getValueInRange(selection);
     await appendToThread(accessor, async () => text);

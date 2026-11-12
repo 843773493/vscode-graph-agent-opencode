@@ -7,7 +7,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.identifier import create_prefixed_id
-from app.core.resource_uri import resource_display_uri, thread_resource_uri
+from app.core.resource_uri import (
+    change_resource_uri,
+    parse_change_resource_uri,
+    resource_display_uri,
+    thread_resource_uri,
+)
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.routes.resource_addresses import router
@@ -75,6 +80,7 @@ def test_thread_identity_creates_reference_without_registry_or_history(
         "reference_uri": thread_resource_uri(workspace_id, SESSION, THREAD, gateway_authority=gateway_id),
         "gateway_id": gateway_id, "scope": "workspace", "scope_id": workspace_id,
         "kind": "session", "file_root_uri": None, "session_id": SESSION, "thread_id": THREAD,
+        "changeset_id": None, "change_file_uri": None,
     }
 
 
@@ -154,3 +160,50 @@ def test_changed_source_gateway_is_rejected_and_credentials_are_required(address
     response = address_client.post("/api/gateway/resource-addresses/parse", json={"uri": uri, "local_gateway_id": GATEWAY},
                                    headers={"X-Local-Token": "invalid"})
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize("gateway_id", [GATEWAY, REMOTE])
+@pytest.mark.parametrize("changeset_id", [
+    "all", "turn:" + create_prefixed_id("turn"), "turn:turn-replay-" + "a" * 32,
+])
+def test_change_reference_roundtrips_current_selection_without_history(
+    address_client: TestClient, gateway_id: str, changeset_id: str,
+) -> None:
+    workspace_id = "019a0000-0000-7000-8000-000000000001"
+    file_uri = resource_display_uri(scope="workspace", scope_id=workspace_id, kind="files",
+                                     tail_segments=("root", "中文 %:😀.txt"))
+    response = address_client.post("/api/gateway/resource-addresses/change", json={
+        "local_gateway_id": GATEWAY, "resource_gateway_id": gateway_id,
+        "workspace_id": workspace_id, "session_id": SESSION, "changeset_id": changeset_id, "file_uri": file_uri,
+    }, headers={"X-Request-ID": "copy-change"})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "copy-change"
+    data = response.json()["data"]
+    assert data["reference_uri"] == change_resource_uri(workspace_id, SESSION, changeset_id, file_uri,
+                                                       gateway_authority=gateway_id)
+    assert data["changeset_id"] == changeset_id
+    assert data["change_file_uri"] == file_uri
+    assert data["session_id"] == SESSION
+    assert data["thread_id"] is data["file_root_uri"] is None
+    parsed = address_client.post("/api/gateway/resource-addresses/parse", json={
+        "local_gateway_id": GATEWAY, "uri": data["reference_uri"],
+    })
+    assert parsed.status_code == 200
+    assert parsed.json()["data"] == data
+    assert parse_change_resource_uri(data["reference_uri"], local_gateway_id=gateway_id)[1:] == (SESSION, changeset_id, file_uri)
+
+
+@pytest.mark.parametrize("tail", [
+    "all/workspace/ws-test/resources/files/root",
+    "all/workspace/ws-test/resources/changes/session/all/anything",
+    "all/workspace/ws-test/resources/files/root/%FF",
+    "all/workspace/ws-test/resources/files/root/%2F",
+    "all/workspace/ws-test/resources/files/root/..",
+    "all/boxteam%3A%2F%2Fworkspace%2Fws-test%2Fresources%2Ffiles%2Froot%2Ffile.txt",
+    "turn%3Ainvalid/file", "unknown/file", "all/file/extra",
+])
+def test_change_grammar_rejects_non_file_and_malformed_identity(address_client: TestClient, tail: str) -> None:
+    uri = f"boxteam://workspace/ws-test/resources/changes/{SESSION}/{tail}"
+    response = address_client.post("/api/gateway/resource-addresses/parse", json={"local_gateway_id": GATEWAY, "uri": uri})
+    assert response.status_code == 400
+    assert response.json()["detail"]["owner"] == "resource_uri_grammar"
