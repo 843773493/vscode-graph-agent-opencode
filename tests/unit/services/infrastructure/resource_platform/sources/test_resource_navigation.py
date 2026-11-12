@@ -645,7 +645,8 @@ async def test_response_truncation_keeps_full_hash_but_byte_window_does_not(navi
 
 
 @pytest.mark.asyncio
-async def test_read_rejects_file_rewritten_during_read_even_with_restored_mtime(navigation_case, monkeypatch) -> None:
+@pytest.mark.parametrize("operation", ["read", "search"])
+async def test_read_rejects_file_rewritten_during_read_even_with_restored_mtime(navigation_case, monkeypatch, operation) -> None:
     owner, workspace, uri = navigation_case
     path = workspace / "text.txt"
     path.write_bytes(b"first")
@@ -662,7 +663,10 @@ async def test_read_rejects_file_rewritten_during_read_even_with_restored_mtime(
 
     monkeypatch.setattr(Path, "open", changed_open)
     with pytest.raises(ResourceFileOperationError) as failure:
-        await owner.navigate(ResourceNavigationRequest(uri=uri + "/text.txt", operation="read"), local_gateway_id=GATEWAY_ID)
+        request = ResourceNavigationRequest(uri=uri + "/text.txt", operation="read") if operation == "read" else ResourceNavigationRequest(
+            uri=uri, operation="search", search_mode="content", query="first",
+        )
+        await owner.navigate(request, local_gateway_id=GATEWAY_ID)
     assert (failure.value.code, failure.value.reason) == ("execution_failed", "file_changed")
 
 

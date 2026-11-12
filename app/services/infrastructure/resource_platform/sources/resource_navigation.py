@@ -602,7 +602,7 @@ class ResourceNavigation:
                 included = request.query in "/".join(child.tail_segments[1:])
             if included and request.operation == "search" and request.search_mode != "content":
                 included = self._file_included(name, request)
-            hits = self._file_matches(root, parsed, child, metadata, request, deadline, pattern, is_private, skip_matches=skipped) if (
+            hits = self._file_matches(parsed, child, child_path, metadata, request, deadline, pattern, skip_matches=skipped) if (
                 request.operation == "search" and request.search_mode == "content" and is_file
             ) else iter((None,))
             child_node = None
@@ -622,14 +622,13 @@ class ResourceNavigation:
             raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
 
     def _file_matches(
-        self, root: Path, parsed: ParsedResourceUri, child: ParsedResourceUri, metadata: FileObservation,
-        request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
-        is_private: Callable[[Path, Path], bool] | None, *, skip_matches: int = 0,
+        self, parsed: ParsedResourceUri, child: ParsedResourceUri, file: Path, metadata: FileObservation,
+        request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None, *, skip_matches: int = 0,
     ) -> Iterator[ContentMatch | None]:
         name = "/".join(child.tail_segments[len(parsed.tail_segments):]) or child.tail_segments[-1]
         if not self._file_included(name, request) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
             return
-        file = self._contained(root, child.tail_segments[1:], child, is_private)
+        # 遍历与单文件入口已确认真实路径及边界；读取沿用同次观察值核对文件变化。
         data = self._read_bytes(file, request.max_bytes, deadline, before=metadata.stat)
         # 与既有 grep 一致跳过二进制；已知媒体不进入文本解码。
         if b"\0" in data:
