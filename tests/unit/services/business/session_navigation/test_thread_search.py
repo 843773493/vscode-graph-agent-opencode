@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.core.identifier import create_prefixed_id
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_navigation import thread_search
 from app.services.business.session_navigation.service import SessionCatalogService
@@ -18,11 +19,13 @@ async def test_main_identity_and_scan_budget_continue_without_skips(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions = catalog._session_service
-    owners = [
-        await sessions.create(SessionCreateRequest(title="Matching Main"))
-        for _ in range(3)
-    ]
-    monkeypatch.setattr(thread_search, "_MAX_SCANNED_NODES", 1)
+    store = sessions.path_resolver.catalog_store
+    owners = []
+    for index in range(4):
+        store.create_folder(create_prefixed_id("ses"), sessions.workspace_id, None, f"Folder {index}")
+        if index < 3:
+            owners.append(await sessions.create(SessionCreateRequest(title="Matching Main")))
+    monkeypatch.setattr(thread_search, "_MAX_SESSION_PAGES", 1)
     cursor = None
     found = []
     for page_number in range(3):

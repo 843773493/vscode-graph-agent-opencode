@@ -19,7 +19,7 @@ from app.services.business.session_navigation.read_service import (
 )
 from app.services.business.session_service import SessionService
 
-_MAX_SCANNED_NODES = 64
+_MAX_SESSION_PAGES = 64
 _MAX_SCANNED_THREADS = 512
 _QUERY_SECONDS = 1.0
 
@@ -92,7 +92,7 @@ async def search_session_threads(
     if state.node_offset > len(snapshot.items):
         raise ThreadSearchCursorError("position_out_of_bounds", "Thread 搜索 cursor 目录位置越界")
     items: list[SessionThreadSearchResultDTO] = []
-    scanned_nodes = scanned_threads = 0
+    session_pages = scanned_threads = 0
     scanned_session_ids: set[str] = set()
     reason: Literal["result_limit", "scan_limit", "deadline"] | None = None
     while state.node_offset < len(snapshot.items):
@@ -100,18 +100,19 @@ async def search_session_threads(
         if len(items) >= limit:
             reason = "result_limit"
             break
-        if (
-            scanned_nodes >= _MAX_SCANNED_NODES
-            or scanned_threads >= _MAX_SCANNED_THREADS
-        ):
+        if scanned_threads >= _MAX_SCANNED_THREADS:
             reason = "scan_limit"
             break
         if monotonic() >= deadline:
             reason = "deadline"
             break
         node = snapshot.items[state.node_offset]
-        scanned_nodes += 1
         if node.session is not None:
+            # Folder 保留目录游标坐标，但不消耗实际 Thread 读取的名额。
+            if session_pages >= _MAX_SESSION_PAGES:
+                reason = "scan_limit"
+                break
+            session_pages += 1
             # 期限覆盖准入等待；原受保护 worker 仍结算后才释放 Session 句柄。
             waiting = asyncio.timeout(budget.remaining())
             try:
