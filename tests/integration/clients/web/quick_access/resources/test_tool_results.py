@@ -16,9 +16,6 @@ import pytest
 
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.web_workbench import (
-    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 复用正式 Workbench 构建。
-)
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
     chat_backend as chat_backend,  # noqa: PLC0414 - 复用真实 Backend 与 model_stream 控制器。
 )
@@ -40,14 +37,8 @@ from tests.support.terminal_plugin import (
 
 
 @pytest.fixture(autouse=True)
-def tool_results_web_assets(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
-) -> Path:
-    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
-    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
-    assert (assets / "version.json").is_file(), assets
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
-    return assets
+def tool_results_web_assets(resource_web_assets: Path) -> Path:
+    return resource_web_assets
 
 
 @pytest.mark.asyncio

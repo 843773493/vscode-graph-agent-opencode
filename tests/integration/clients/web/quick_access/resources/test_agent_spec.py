@@ -14,9 +14,6 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.web_workbench import (
-    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
-)
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )
@@ -32,11 +29,8 @@ from tests.support.workspaces import (
 
 
 @pytest.fixture(autouse=True)
-def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
-    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
-    assert (assets / "version.json").is_file(), assets
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
+def metadata_web_assets(resource_web_assets: Path) -> Path:
+    return resource_web_assets
 
 
 async def test_discover_and_open_workspace_agents(

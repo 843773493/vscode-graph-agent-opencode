@@ -47,11 +47,8 @@ async def attachment_browser_case(
 
 
 @pytest.fixture(autouse=True)
-def attachment_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
-    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
-    assert (assets / "version.json").is_file(), assets
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
+def attachment_web_assets(resource_web_assets: Path) -> Path:
+    return resource_web_assets
 
 
 def _api_data(response: httpx.Response) -> dict[str, object]:
