@@ -8,6 +8,8 @@ import pytest
 from app.core.config_sources import read_stable_config_file
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.services.infrastructure.config import WorkspaceSourceOwner
+from app.services.infrastructure.config.contracts import ConfigPublication
+from app.services.infrastructure.config.snapshot import ConfigRestartRequiredError
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from tests.harness.python.run_context import TestRunContext
@@ -286,7 +288,108 @@ def test_config_service_catches_up_stopped_workspace_from_source_high_water(
             source_key="workspace:user",
             source_generation=3,
             workspace_id="stopped-workspace",
-        ).status == "applied"
+        ).status == "applying"
+        restarted.validate_workspace_config()
+        assert owner.get_fanout(source_key="workspace:user", source_generation=3,
+            workspace_id="stopped-workspace").status == "applied"
     finally:
+        store.close()
+        owner.close()
+
+
+@pytest.mark.parametrize("outcome", [
+    "applied", "unchanged", "failed", "builder_failed", "restart_required", "restart_cleanup_failed",
+])
+async def test_shared_source_fanout_reports_candidate_application_not_layer_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    config_workspace_roots: tuple[Path, Path], outcome: str,
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    config_path = tmp_path / "workspace.jsonc"
+    _write_config(config_path, model_name="before")
+    workspace = config_workspace_roots[0]
+    owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
+    store = WorkspaceStateStore(workspace_root=workspace)
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path,
+        workspace_root=workspace, workspace_state_store=store, source_owner=owner,
+        source_owner_workspace_id="workspace-a")
+    if outcome == "unchanged":
+        (workspace / ".boxteam/workspace.jsonc").write_text('{"default_agent":"default"}')
+    service.validate_workspace_config()
+    active = store.get_active_config_snapshot("workspace")
+    assert active is not None
+    if outcome == "unchanged":
+        payload = json.loads(config_path.read_text())
+        # 只改变被工作区层遮蔽的字段，来源版本仍须前进。
+        payload["default_agent"] = "unused-default"
+        config_path.write_text(json.dumps(payload))
+    else:
+        _write_config(config_path, model_name="after")
+        if outcome == "builder_failed":
+            payload = json.loads(config_path.read_text())
+            payload["unexpected"] = True
+            config_path.write_text(json.dumps(payload))
+
+    async def apply(_previous, _candidate, _scope, _record_side_effect) -> ConfigPublication:
+        progress = owner.get_fanout(source_key="workspace:user", source_generation=2,
+            workspace_id="workspace-a")
+        assert progress.status == "applying" and progress.result == "materialized"
+        assert store.get_active_config_snapshot("workspace") == active
+        if outcome == "failed":
+            raise RuntimeError("runtime refused candidate")
+        if outcome == "builder_failed":
+            raise AssertionError("invalid schema candidate must not reach the applier")
+        if outcome in {"restart_required", "restart_cleanup_failed"}:
+            raise ConfigRestartRequiredError("runtime requires restart", changed_sections=("llm",))
+        return lambda: None
+
+    try:
+        if outcome in {"failed", "builder_failed", "restart_required", "restart_cleanup_failed"}:
+            expected_error = (
+                ValueError if outcome == "builder_failed"
+                else RuntimeError if outcome == "failed"
+                else ConfigRestartRequiredError
+            )
+            with pytest.raises(expected_error):
+                await service.reload(candidate_applier=apply)
+            assert store.get_active_config_snapshot("workspace") == active
+        else:
+            assert await service.reload(candidate_applier=apply) is (outcome == "applied")
+        result = owner.get_fanout(source_key="workspace:user", source_generation=2,
+            workspace_id="workspace-a")
+        expected_result = {
+            "builder_failed": "failed",
+            "restart_cleanup_failed": "restart_required",
+        }.get(outcome, outcome)
+        assert result.result == expected_result
+        assert result.status == {"failed": "failed", "builder_failed": "failed", "restart_required": "applying",
+            "restart_cleanup_failed": "applying"}.get(outcome, "applied")
+        assert result.error is not None if outcome in {"failed", "builder_failed", "restart_required", "restart_cleanup_failed"} else result.error is None
+        summary = owner.summary(workspace_ids=("workspace-a",))
+        assert summary["result"] == ("fanout_partial" if outcome in {"failed", "builder_failed", "restart_required", "restart_cleanup_failed"} else "applied")
+        if outcome in {"restart_required", "restart_cleanup_failed"}:
+            pending = store.get_pending_config_candidate(config_domain="workspace")
+            assert pending is not None and pending.candidate_ref is not None
+            proof = service._pending_restart.build_pending_restart_health_proof(
+                candidate_ref=pending.candidate_ref, pending=pending)
+            if outcome == "restart_cleanup_failed":
+                def fail_cleanup(_payload: dict[str, object]) -> None:
+                    raise RuntimeError("private input cleanup failed")
+
+                monkeypatch.setattr(service, "_remove_released_plugin_private_inputs", fail_cleanup)
+                with pytest.raises(RuntimeError, match="private input cleanup failed"):
+                    service.resolve_pending_restart(candidate_ref=pending.candidate_ref, health_proof=proof)
+                active_after_cleanup_failure = store.get_active_config_snapshot("workspace")
+                assert active_after_cleanup_failure is not None
+                assert active_after_cleanup_failure.source_generation == 2
+                assert active_after_cleanup_failure.state == "active"
+                assert active_after_cleanup_failure.effective_digest == pending.effective_digest
+            else:
+                service.resolve_pending_restart(candidate_ref=pending.candidate_ref, health_proof=proof)
+            assert owner.get_fanout(source_key="workspace:user", source_generation=2,
+                workspace_id="workspace-a").result == "applied"
+            assert owner.summary(workspace_ids=("workspace-a",))["result"] == "applied"
+    finally:
+        await service.close()
         store.close()
         owner.close()

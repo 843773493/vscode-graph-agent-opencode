@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import (
@@ -47,6 +47,9 @@ from configs.runtime import (
     read_jsonc_object,
     require_current_workspace_config,
 )
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.config_service import ConfigService
 
 
 class ConfigSourceLayersMixin:
@@ -611,7 +614,9 @@ class ConfigSourceLayersMixin:
                     source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
                     source_generation=prior.source_generation,
                     workspace_id=workspace_id,
-                    status="applied" if is_current else "superseded",
+                    # TODO: `_read_effective_config` 后续来源/策略检查若失败，此时本层已物化，
+                    # 但 source_details 尚未返回，需让该失败边界携带本次冻结详情后再结清。
+                    status="applying" if is_current else "superseded",
                     layer_revision=(materialized.layer_revision if is_current else None),
                     layer_digest=(materialized.layer_digest if is_current else None),
                     result="materialized" if is_current else "superseded",
@@ -621,7 +626,7 @@ class ConfigSourceLayersMixin:
                     source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
                     source_generation=owner_record.source_generation,
                     workspace_id=workspace_id,
-                    status="applied",
+                    status="applying",
                     layer_revision=materialized.layer_revision,
                     layer_digest=materialized.layer_digest,
                     result="materialized",
@@ -646,6 +651,33 @@ class ConfigSourceLayersMixin:
                 )
             ),
         )
+
+    def _record_shared_source_application(
+        self,
+        *,
+        sources: tuple[ConfigSource, ...],
+        result: Literal["applied", "unchanged", "restart_required", "conflict", "failed"],
+        error: str | None = None,
+    ) -> None:
+        """层物化只表示 applying；原候选链结清后才记录实际应用结果。"""
+        service = cast("ConfigService", self)
+        owner, workspace_id = service._source_owner, service._source_owner_workspace_id
+        if owner is None or workspace_id is None:
+            return
+        source = next((source for source in sources
+                       if source.source_key == "workspace_mutable_override"), None)
+        if source is None or not source.source_generation:
+            return
+        record = owner.get_fanout(source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+            source_generation=source.source_generation, workspace_id=workspace_id)
+        if record.status not in {"pending", "applying"}:
+            return
+        status = {"applied": "applied", "unchanged": "applied", "restart_required": "applying",
+                  "conflict": "conflict", "failed": "failed"}[result]
+        owner.record_fanout(source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+            source_generation=source.source_generation, workspace_id=workspace_id, status=status,
+            layer_revision=source.layer_revision, layer_digest=source.layer_digest,
+            result=result, error=error)
 
     @staticmethod
     def _read_config_source(

@@ -223,6 +223,7 @@ class ConfigReloadMixin:
                     expected_generation=self._shadow_lifecycle.generation,
                     publish_hook=refresh_sources,
                 )
+                cast("ConfigService", self)._record_shared_source_application(sources=candidate.source_details, result="unchanged")
                 return
 
             pending = self._prepare_candidate(previous, candidate, idempotency_key=idempotency_key, source_edit=source_edit)
@@ -393,6 +394,7 @@ class ConfigReloadMixin:
                     committed = True
                     publish_snapshot()
                     publish_shadow()
+                cast("ConfigService", self)._record_shared_source_application(sources=candidate.source_details, result="applied")
 
             try:
                 await self._validate_gateway_workspace_plugin_bindings(
@@ -456,6 +458,9 @@ class ConfigReloadMixin:
                         state="recovery_required" if recovery_required else "failed",
                         last_error=error_detail,
                     )
+                cast("ConfigService", self)._record_shared_source_application(sources=candidate.source_details,
+                    result="restart_required" if state == "pending_restart" else "conflict" if state == "conflict" else "failed",
+                    error=error_detail)
                 raise
             else:
                 await self._notify_workspace_plugin_binding_change(
@@ -897,6 +902,7 @@ class ConfigReloadMixin:
             schema_version=2,
             promoted_generation="bootstrap",
         )
+        cast("ConfigService", self)._record_shared_source_application(sources=snapshot.source_details, result="applied")
 
     def _persist_active_snapshot(
         self,

@@ -67,30 +67,38 @@ class ConfigSnapshotMixin:
         config, source_paths, source_details, schema_path = self._read_effective_config(
             workspace_source=workspace_source, import_sources=import_sources, source_payloads=source_payloads,
         )
-        require_current_workspace_config(config)
-        schema = self._load_schema(schema_path)
-        if validate_schema:
-            validate_config_payload(config, schema=schema)
-        workspace_plugin_bindings_for_root(config, workspace_root=cast("ConfigService", self)._workspace_root)
-        config = bound_plugin_configuration(config)
-        resources = cast(dict[str, object], config["resources"])
-        skill_sources = cast(dict[str, object], resources["skill_sources"])
-        validate_skill_sources(skill_sources.get("sources", []))
-        # 文件解析可能需要候选中的 Gateway 连接参数；只在本次读取的 Context
-        # 固定原始候选，不发布它，也不递归触发一次尚未完成的配置构建。
-        with self.use_snapshot(build_config_snapshot(
-            config, source_paths=source_paths, source_details=source_details, schema_path=schema_path,
-        )):
-            instruction_paths = (self._instruction_inputs.load if import_sources else self._instruction_inputs.preview)(config, schema=schema)
-        if validate_schema:
-            validate_config_payload(config, schema=schema)
-        snapshot = build_config_snapshot(
-            config,
-            source_paths=tuple(dict.fromkeys((*source_paths, *instruction_paths))),
-            source_details=source_details,
-            schema_path=schema_path,
-        )
-        return snapshot
+        try:
+            require_current_workspace_config(config)
+            schema = self._load_schema(schema_path)
+            if validate_schema:
+                validate_config_payload(config, schema=schema)
+            workspace_plugin_bindings_for_root(config, workspace_root=cast("ConfigService", self)._workspace_root)
+            config = bound_plugin_configuration(config)
+            resources = cast(dict[str, object], config["resources"])
+            skill_sources = cast(dict[str, object], resources["skill_sources"])
+            validate_skill_sources(skill_sources.get("sources", []))
+            # 文件解析可能需要候选中的 Gateway 连接参数；只在本次读取的 Context
+            # 固定原始候选，不发布它，也不递归触发一次尚未完成的配置构建。
+            with self.use_snapshot(build_config_snapshot(
+                config, source_paths=source_paths, source_details=source_details, schema_path=schema_path,
+            )):
+                instruction_paths = (self._instruction_inputs.load if import_sources else self._instruction_inputs.preview)(config, schema=schema)
+            if validate_schema:
+                validate_config_payload(config, schema=schema)
+            return build_config_snapshot(
+                config,
+                source_paths=tuple(dict.fromkeys((*source_paths, *instruction_paths))),
+                source_details=source_details,
+                schema_path=schema_path,
+            )
+        except Exception as error:
+            if import_sources:
+                cast("ConfigService", self)._record_shared_source_application(
+                    sources=source_details,
+                    result="failed",
+                    error=f"Workspace 配置候选构建失败: error={type(error).__name__}",
+                )
+            raise
 
     def validate_workspace_config(self) -> None:
         snapshot = self._require_snapshot()
@@ -385,10 +393,22 @@ class ConfigSnapshotMixin:
         """用新 generation 的完整 proof 提升已成功启动的 Workspace candidate。"""
 
         service = cast("ConfigService", self)
+        store = service._workspace_state_store
+
+        def after_promotion(payload: dict[str, object]) -> None:
+            if store is None:
+                raise ConfigConflictError("Workspace pending resolve 缺少状态库")
+            active = store.get_active_config_snapshot(service._CONFIG_DOMAIN)
+            if active is None or active.candidate_id != health_proof.get("candidate_id"):
+                raise ConfigConflictError("Workspace pending promotion 的 active candidate 不匹配")
+            service._record_shared_source_application(
+                sources=self._persisted_source_details(active.source_baseline)[0], result="applied")
+            service._remove_released_plugin_private_inputs(payload)
+
         return self._pending_restart.resolve_pending_restart(
             candidate_ref=candidate_ref,
             health_proof=health_proof,
-            after_promotion=service._remove_released_plugin_private_inputs,
+            after_promotion=after_promotion,
         )
 
     def discard_pending_restart(
