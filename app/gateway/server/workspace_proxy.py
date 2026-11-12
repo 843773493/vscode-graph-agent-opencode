@@ -751,7 +751,7 @@ async def proxy_context_search(
 
 @router.api_route(
     "/api/v1/{path:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
 async def proxy_workspace_api(
     path: str,

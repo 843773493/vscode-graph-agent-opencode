@@ -93,6 +93,12 @@ async def target_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
 
     def receive(request: httpx.Request) -> httpx.Response:
         forwarded.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={
+                "Content-Type": "image/jpeg", "Content-Length": "137",
+                "Content-Disposition": "inline; filename*=utf-8''%E5%8E%9F%E4%BB%B6.jpg",
+                "Cache-Control": "no-store", "X-Request-ID": request.headers["X-Request-ID"],
+            })
         return httpx.Response(200, json={"data": {"host": request.url.host},
                                          "request_id": request.headers["X-Request-ID"]})
 
@@ -143,6 +149,33 @@ async def test_canonical_workspace_route_uses_target_gateway_without_merging_equ
     else:
         assert outgoing.headers["X-BoxTeam-Federation-Token"] == state.credentials.get(f"rgw_{index}").token
         assert "X-Local-Token" not in outgoing.headers
+    assert state.registry.active_workspace == (state.gateway_id, WORKSPACE_ID)
+    assert all(state.registry.route_reference_counts(target.key) == (0, 0) for target in state.registry.targets())
+
+
+@pytest.mark.parametrize("index", [None, 0, 1])
+async def test_raw_head_preserves_method_owner_and_original_headers(target_proxy: Proxy, index: int | None) -> None:
+    state = target_proxy
+    owner = state.gateway_id if index is None else REMOTE_GATEWAY_IDS[index]
+    uri = resource_display_uri(scope="workspace", scope_id=WORKSPACE_ID, kind="attachments",
+                               tail_segments=("att_019b781159d47374805bc4427d081a14", "original", "content"))
+    response = await state.client.head("/api/v1/workspace/files/raw", params={"path": uri}, headers={
+        TARGET_GATEWAY_ID_HEADER: owner, "X-BoxTeam-Workspace-Id": WORKSPACE_ID, "X-Request-ID": "req_raw_head",
+    })
+    assert response.status_code == 200
+    assert response.content == b""
+    assert response.headers["Content-Type"] == "image/jpeg"
+    assert response.headers["Content-Length"] == "137"
+    assert response.headers["Content-Disposition"] == "inline; filename*=utf-8''%E5%8E%9F%E4%BB%B6.jpg"
+    assert response.headers["Cache-Control"] == "no-store"
+    outgoing, = state.requests
+    assert outgoing.method == "HEAD" and outgoing.content == b""
+    assert outgoing.url.path == "/api/v1/workspace/files/raw" and outgoing.url.params["path"] == uri
+    assert outgoing.url.host == ("local.test" if index is None else f"remote-{index}.test")
+    assert outgoing.headers["X-BoxTeam-Workspace-Id"] == WORKSPACE_ID
+    assert outgoing.headers["X-BoxTeam-Gateway-Id"] == state.gateway_id
+    assert outgoing.headers.get(TARGET_GATEWAY_ID_HEADER) == (None if index is None else owner)
+    assert outgoing.headers["X-Request-ID"] == response.headers["X-Request-ID"] == "req_raw_head"
     assert state.registry.active_workspace == (state.gateway_id, WORKSPACE_ID)
     assert all(state.registry.route_reference_counts(target.key) == (0, 0) for target in state.registry.targets())
 
