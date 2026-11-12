@@ -168,7 +168,8 @@ class SessionCatalogReadService:
             raise ValueError("会话目录搜索词不能为空")
         budget = NameSearchBudget.create(deadline_at)
         snapshot = await self._snapshot(check=budget.check)
-        return search_catalog(
+        return await run_sync_shielded(
+            search_catalog,
             nodes=snapshot.nodes, nodes_by_id=snapshot.nodes_by_id,
             folded_search_terms=snapshot.folded_search_terms,
             revision=snapshot.revision, catalog_revision=snapshot.catalog_revision,

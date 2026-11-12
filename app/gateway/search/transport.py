@@ -10,7 +10,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.core.failures import report_failure
-from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.diagnostic_log_transport import read_diagnostic_log_target
 from app.gateway.registry import GatewayWorkspaceRegistry
@@ -63,7 +63,7 @@ class SearchTransport:
         except SearchBranchError as error:
             if error.code != "target_unavailable" or not job.allow_catalog_mirror:
                 raise
-            return self._query_mirror(job, error)
+            return await run_sync_shielded(self._query_mirror, job, error)
 
     def _query_mirror(self, job: SearchJob, unavailable: SearchBranchError) -> SearchPage:
         assert job.key.owner is not None

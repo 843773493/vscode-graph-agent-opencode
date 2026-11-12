@@ -15,6 +15,7 @@ Gateway 联邦搜索的范围解析与跨目标查询编排；领域匹配仍由
 ## 规范
 
 - `scope.py` 和 `scheduler.py` 的核心不依赖 HTTP、SSE 或 UI；`transport.py` 只沿原登记路由读取有界领域页，SSE 编码归 `routes/`。
+- 离线 catalog 镜像的全量匹配与页编码也交给受保护 worker；复用原目录查询与期限，取消后等待结算再释放分支。
 - 目标用稳定 Gateway／workspace 身份，执行前重解当前登记路由；失效分支不得换投其它 owner。
 - 范围和原 cursor 可由调用方传回，不能引入持久搜索 session 或全域 revision。
 - 日志分支按冻结范围中 Gateway 首次出现的顺序分配配额并发布汇总；同 Gateway 的明确来源顺序保持，增量页仍按实际完成及时交付，不因排名读更多数据。
