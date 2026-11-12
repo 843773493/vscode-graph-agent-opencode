@@ -145,6 +145,40 @@ try {
     && item.path === '/api/gateway/service-plugins/install').length, 0, '取消安装快速入口不能发起安装');
   assert.equal(privateInputRequestCount, beforePrivateInputWrites, '取消安装不能写入插件秘密参数');
   assert.equal(sourceWriteRequestCount, beforeSourceWrites, '取消安装不能写入插件配置');
+  result.phase = 'workspace-only-package';
+  assert.equal(await view.getByRole('combobox', { name: '插件管理范围' }).inputValue(), 'gateway');
+  const workspaceOnly = version => view.locator('.service-plugin-package').filter({
+    has: page.getByRole('heading', { name: `仅工作区插件包 · ui.workspace-only@${version}`, exact: true }),
+  });
+  for (const [index, path] of input.workspaceOnlyPaths.entries()) {
+    await (index === 0 ? installButton : workspaceOnly('1.0.0').getByRole('button', { name: '重新安装/更新', exact: true })).click();
+    await pick('ZIP 文件');
+    await inputQuick(path);
+    const version = index === 0 ? '1.0.0' : '1.1.0';
+    await expect(workspaceOnly(version)).toBeVisible({ timeout: 30_000 });
+    await expect(workspaceOnly(version)).toContainText('workspace-preference（workspace）');
+    await expect(workspaceOnly(version).getByRole('button', { name: '全部启用此范围', exact: true })).toHaveCount(0);
+    await expect(workspaceOnly(version).getByRole('button', { name: '全部停用此范围', exact: true })).toHaveCount(0);
+    await expect(workspaceOnly(version).locator('[data-plugin-runtime-row]')).toHaveCount(0);
+  }
+  await expect(workspaceOnly('1.0.0')).toBeVisible();
+  for (const version of ['1.0.0', '1.1.0']) {
+    const removed = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/gateway/service-plugins/uninstall');
+    await workspaceOnly(version).getByRole('button', { name: '卸载整个包', exact: true }).click();
+    await pick('卸载整包');
+    const response = await removed;
+    assert.equal(response.status(), 200);
+    const receipt = (await response.json()).data;
+    assert.equal(receipt.package_id, 'ui.workspace-only');
+    assert.equal(receipt.package_version, version);
+    assert.equal(receipt.uninstalled, true);
+    await expect(workspaceOnly(version)).toHaveCount(0);
+  }
+  assert.equal(sourceWriteRequestCount, beforeSourceWrites, '跨范围管理整包不能创建或修改插件绑定');
+  assert.equal(privateInputRequestCount, beforePrivateInputWrites);
+  result.workspaceOnlyPackage = { scope: 'gateway', versions: ['1.0.0', '1.1.0'],
+    uninstalled: ['1.0.0', '1.1.0'], configurationWrites: sourceWriteRequestCount - beforeSourceWrites };
   result.phase = 'after-install-picker-cancel';
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.quickOpen', 'ext install '));
   await pick('安装自有插件包…');
@@ -1070,6 +1104,7 @@ try {
   await expect(view.getByLabel('插件管理范围')).toBeHidden();
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.installedExtensions'));
   await expect(view.getByLabel('插件管理范围')).toBeVisible();
+  await expect(view).toContainText('尚无插件包');
   const reopenedStatusStream = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/api/gateway/service-plugins/status/events');
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.extensions.action.refreshExtension'));
@@ -1077,13 +1112,12 @@ try {
   assert.equal(reopenedStatusResponse.status(), 200);
   assert.match(reopenedStatusResponse.headers()['content-type'] ?? '', /^text\/event-stream/);
   const releasedStreamRequest = reopenedStatusResponse.request();
-  const terminalCount = pluginStatusStreamTerminations.length;
+  const streamTermination = () => pluginStatusStreamTerminations.find(item => item.request === releasedStreamRequest);
   await view.getByLabel('插件管理范围').selectOption('defaults');
   await expect(view.getByLabel('插件管理范围')).toHaveValue('defaults');
-  await expect.poll(() => pluginStatusStreamTerminations.length, { timeout: 15_000 }).toBeGreaterThan(terminalCount);
-  const termination = pluginStatusStreamTerminations.at(-1);
-  assert(termination);
-  assert.equal(termination.request, releasedStreamRequest);
+  await expect.poll(() => Boolean(streamTermination()), { timeout: 15_000 }).toBe(true);
+  const termination = streamTermination();
+  assert(termination, '切换范围必须释放本次捕获的状态订阅');
   const releaseError = termination.request.failure()?.errorText ?? '';
   result.runtimeStatusSubscription = { path: new URL(termination.request.url()).pathname,
     method: termination.request.method(), responseStatus: reopenedStatusResponse.status(),

@@ -145,7 +145,23 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
     write_package(package_path, manifest)
     version_paths = []
     incompatible_packages = []
+    workspace_only_paths = []
     if scenario == "single":
+        for version in ("1.0.0", "1.1.0"):
+            candidate = copy.deepcopy(manifest)
+            candidate["package_id"] = "ui.workspace-only"
+            candidate["name"] = "仅工作区插件包"
+            candidate["version"] = version
+            candidate.pop("target")
+            candidate["plugins"] = [copy.deepcopy(manifest["plugins"][1])]
+            workspace_plugin = candidate["plugins"][0]
+            for field in ("runtime", "entrypoint", "management_protocol_version"):
+                workspace_plugin.pop(field)
+            workspace_plugin["requires"] = [{"extension_point": "configuration", "version": 1}]
+            workspace_plugin["contributes"].pop("services")
+            path = context.artifacts_dir / f"workspace-only-{version}.zip"
+            write_package(path, candidate)
+            workspace_only_paths.append(str(path))
         for version in ("1.1.0", "2.0.0", "3.0.0"):
             candidate = copy.deepcopy(manifest)
             candidate["version"] = version
@@ -217,6 +233,7 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         environment = os.environ | {
             "BOXTEAM_PLUGIN_UI_FIXTURE": json.dumps({"baseUrl": f"http://127.0.0.1:{gateway.port}",
                 "packagePath": str(package_path), "versionPaths": version_paths,
+                "workspaceOnlyPaths": workspace_only_paths,
                 "newWorkspacePath": str(new_workspace_path), "laterWorkspacePath": str(later_workspace_path),
                 "incompatiblePackages": incompatible_packages,
                 "sourceArtifact": plugin_source["artifact"] if scenario == "single" else None,
@@ -239,6 +256,8 @@ async def test_service_plugin_management_ui_installs_and_edits_each_owner(
         else:
             assert {"gateway", "workspace", "defaults"} <= set(result["configOwners"])
             assert result["installed"] and result["uninstalled"]
+            assert result["workspaceOnlyPackage"] == {"scope": "gateway", "versions": ["1.0.0", "1.1.0"],
+                "uninstalled": ["1.0.0", "1.1.0"], "configurationWrites": 0}
             assert result["pluginQuickAccess"]
             assert result["actualRuntimeLoop"] and result["reloadKeptInstances"]
             assert result["externalBindingActionsUpdated"]

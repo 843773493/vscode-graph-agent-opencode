@@ -354,13 +354,13 @@ export class ServicePluginPackagesView extends ViewPane {
       const manifest = pkg.manifest;
       if (!manifest) continue;
       const matching = manifest.plugins.filter(plugin => plugin.instance_scope === pluginScope);
-      if (!matching.length) continue;
       const packageSection = append(container, $('section.service-plugin-package'));
-      packageSection.dataset.search = `${manifest.package_id} ${manifest.name} ${manifest.description ?? ''} ${matching.map(plugin => `${plugin.id} ${plugin.name}`).join(' ')}`.toLocaleLowerCase();
+      packageSection.dataset.search = `${manifest.package_id} ${manifest.name} ${manifest.description ?? ''} ${manifest.plugins.map(plugin => `${plugin.id} ${plugin.name}`).join(' ')}`.toLocaleLowerCase();
       append(packageSection, $('h3')).textContent = `${manifest.name} · ${manifest.package_id}@${manifest.version}`;
       append(packageSection, $('p')).textContent = manifest.description ?? '';
+      if (!matching.length) append(packageSection, $('p')).textContent = `此包没有适用于当前范围的插件。包含：${manifest.plugins.map(plugin => `${plugin.id}（${plugin.instance_scope}）`).join('、')}。请切换管理范围以配置插件；整包更新和卸载仍在此处操作。`;
       const packageActions = append(packageSection, $('.service-plugin-package-actions'));
-      const batchButtons = [true, false].map(enabled => {
+      const batchButtons = matching.length ? [true, false].map(enabled => {
         const button = append(packageActions, $('button')) as HTMLButtonElement;
         button.textContent = enabled ? '全部启用此范围' : '全部停用此范围';
         button.addEventListener('click', () => void this.runTargetOperation(async lifecycle => {
@@ -403,7 +403,7 @@ export class ServicePluginPackagesView extends ViewPane {
           } finally { batchButtons.forEach(item => { item.disabled = false; }); }
         }, entryGatewayId));
         return button;
-      });
+      }) : [];
       const installInput = append(packageActions, $('button'));
       installInput.textContent = '重新安装/更新';
       installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(
