@@ -15,6 +15,7 @@ import httpx
 from app.core.failures import failure_detail
 from app.core.lifecycle import LifetimeScope
 from app.core.trace_middleware import get_current_request_id
+from app.core.workspace_identity import read_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.schemas.gateway.plugin_private_inputs import WorkspacePluginSchemas
 from app.schemas.gateway.service_plugin import PluginBinding, PluginSlotStatusDTO
@@ -28,6 +29,8 @@ from app.services.infrastructure.config.contracts import ConfigPublication
 from app.services.infrastructure.config.plugin_private_inputs import (
     PluginPrivateInputStore,
     has_parameter_references,
+    private_input_references,
+    remove_unreferenced_plugin_private_inputs,
 )
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.shadow_scope import (
@@ -95,6 +98,32 @@ class ConfigReloadMixin:
             if binding.enabled}
         if any((binding.package_id, binding.plugin_id, binding.workspace_id) not in enabled for binding in bindings):
             task.cancel()
+
+    def _remove_released_plugin_private_inputs(self, candidates: object) -> None:
+        candidate_references = private_input_references(candidates)
+        if not candidate_references:
+            return
+        if self._workspace_root is None or self._workspace_state_store is None:
+            return
+        workspace_id = read_workspace_id(self._workspace_root)
+        references = tuple(reference for reference in candidate_references
+                           if reference.workspace_id == workspace_id)
+        if not references:
+            return
+        layers: dict[str, dict[str, object]] = {}
+        self._read_effective_config(import_sources=False, source_payloads=layers)
+        active = self._workspace_state_store.get_active_config_snapshot(self._CONFIG_DOMAIN)
+        pending = self._workspace_state_store.list_pending_config_candidates(config_domain=self._CONFIG_DOMAIN)
+        retained_values: list[object] = list(layers.values())
+        if active is not None:
+            retained_values.append(active.payload)
+        retained_values.extend(record.payload for record in pending)
+        retained = tuple(reference for value in retained_values for reference in private_input_references(value))
+        remove_unreferenced_plugin_private_inputs(
+            self._workspace_root / ".boxteam/credentials/plugins",
+            candidates=references,
+            retained=retained,
+        )
 
     def validate_candidate(
         self,
@@ -434,15 +463,21 @@ class ConfigReloadMixin:
                     candidate_id=pending.candidate_id,
                 )
             finally:
-                if claim_renewal_task is not None:
-                    claim_renewal_task.cancel()
-                    await asyncio.gather(claim_renewal_task, return_exceptions=True)
-                if self._workspace_state_store is not None and claim is not None:
-                    self._workspace_state_store.release_config_apply_claim(
-                        config_domain=self._CONFIG_DOMAIN,
-                        apply_id=claim.apply_id,
-                        fencing_token=claim.fencing_token,
-                    )
+                try:
+                    if committed and active is not None:
+                        self._remove_released_plugin_private_inputs(active.payload)
+                finally:
+                    try:
+                        if claim_renewal_task is not None:
+                            claim_renewal_task.cancel()
+                            await asyncio.gather(claim_renewal_task, return_exceptions=True)
+                    finally:
+                        if self._workspace_state_store is not None and claim is not None:
+                            self._workspace_state_store.release_config_apply_claim(
+                                config_domain=self._CONFIG_DOMAIN,
+                                apply_id=claim.apply_id,
+                                fencing_token=claim.fencing_token,
+                            )
 
         try:
             return await self._snapshot_store.reload(

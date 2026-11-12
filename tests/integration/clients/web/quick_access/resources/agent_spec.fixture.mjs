@@ -5,7 +5,7 @@ import { ResourceOpener } from '../../../../../../src/clients/workbench/src/reso
 import { sourceDocumentSource } from '../../../../../../src/clients/workbench/src/sourceDocuments.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
-import { invalidateGatewayUserSession } from '../../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../../src/clients/web/src/api/http.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
 
 const owners = ['a', 'b'].map(letter => ({ gatewayId: `gateway_${letter.repeat(32)}`, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
@@ -30,6 +30,9 @@ export async function agentSpecContract(mode) {
     if (path === '/api/v1/resources/gateway-skills') return ok({ gateway_id: headers.get('X-BoxTeam-Target-Gateway-Id'), workspace_id: owners[0].workspaceId, revision: 'fixed', available: true, entries: [] });
     if (path === '/api/v1/resources/local-skills') return ok({ workspace_id: owners[0].workspaceId, entries: [] });
     if (path === '/api/v1/resources') return ok({ workspace_id: owners[0].workspaceId, items: [] });
+    if (path === '/api/v1/mcp/servers') return Response.json({ code: 0, request_id: 'agent-spec-contract', data: [],
+      protocol_version: 1, target: { kind: 'workspace', gateway_id: headers.get('X-BoxTeam-Target-Gateway-Id'), workspace_id: owners[0].workspaceId },
+      catalog_revision: `sha256:${'0'.repeat(64)}`, catalog_generation: 1 }, { headers: { 'X-Request-ID': 'agent-spec-contract' } });
     if (path === '/api/v1/resources/agent-spec') {
       const result = () => ok({ node: { uri, resource_shape: mode === 'unsupported' ? 'domain_object' : 'file', operations: ['describe', 'read'] },
         entries: [], matches: [], contexts: [], truncated: false, view: 'live' });
@@ -76,7 +79,7 @@ export async function agentSpecContract(mode) {
   try {
     if (mode === 'close' || mode === 'identity') {
       await until(() => releaseRead);
-      if (mode === 'close') lifetime.dispose(); else invalidateGatewayUserSession(0);
+      if (mode === 'close') lifetime.dispose(); else invalidateGatewayToken(0);
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
     } else {
       await until(() => !picker.busy && picker.items.length > 0);

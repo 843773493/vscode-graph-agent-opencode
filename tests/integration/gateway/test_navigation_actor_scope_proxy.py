@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +15,6 @@ import pytest
 
 from app.core.identifier import create_prefixed_id
 from app.core.workspace_identity import read_workspace_id
-from app.gateway.control.user_access import USER_ACCESS_COOKIE_NAME
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.gateway.proxy_upstream import load_proxy_gateway_id
 from app.services.business.session_context_resource import (
@@ -26,7 +25,6 @@ from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -227,275 +225,41 @@ def _enqueue_payload(
 async def test_gateway_proxy_binds_navigation_queue_to_verified_identity(
     navigation_scope_proxy_runtime: _NavigationScopeProxyRuntime,
 ) -> None:
-    """覆盖用户隔离、guest 稳定 scope、peer 认证、伪造头与请求上下文重置。"""
+    """覆盖本机及联邦主体、幂等、伪造头与请求上下文重置。"""
     runtime = navigation_scope_proxy_runtime
     gateway_id = load_proxy_gateway_id()
-    workspace_id = runtime.workspace_id
-    gateway_client = httpx.AsyncClient(
-        base_url=f"http://127.0.0.1:{runtime.gateway.port}",
-        headers=LOCAL_TOKEN_HEADERS,
-        timeout=30,
-    )
+    headers = {**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Workspace-Id": runtime.workspace_id,
+        "X-BoxTeam-Gateway-Id": "gateway:forged", "X-BoxTeam-Navigation-Actor": "user:forged"}
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{runtime.gateway.port}", headers=headers, timeout=30) as client:
+        async def enqueue(name: str, **extra: str) -> httpx.Response:
+            return await client.post("/api/v1/session-catalog/operations:enqueue",
+                headers=extra, json=_enqueue_payload(name, operation_id=_OPERATION_ID))
 
-    try:
-        async def create_user_access(user_id: str, display_name: str) -> str:
-            created = await gateway_client.post(
-                "/api/gateway/users",
-                json={"display_name": display_name, "user_id": user_id},
-            )
-            assert created.status_code == 200, created.text
-            access = await gateway_client.post(
-                f"/api/gateway/users/{user_id}/access",
-                json={"client_label": f"{display_name} test client"},
-            )
-            assert access.status_code == 200, access.text
-            cookie = access.cookies.get(USER_ACCESS_COOKIE_NAME)
-            assert cookie
-            gateway_client.cookies.clear()
-            return cookie
-
-        await acquire_gateway_guest(gateway_client)
-        guest_cookie_one = gateway_client.cookies.get(USER_ACCESS_COOKIE_NAME)
-        assert guest_cookie_one
-        gateway_client.cookies.clear()
-        await acquire_gateway_guest(gateway_client)
-        guest_cookie_two = gateway_client.cookies.get(USER_ACCESS_COOKIE_NAME)
-        assert guest_cookie_two
-        gateway_client.cookies.clear()
-        alice_cookie = await create_user_access("alice", "Alice")
-        bob_cookie = await create_user_access("bob", "Bob")
-        user_guest_cookie = await create_user_access("guest", "保留的名字空间")
-
-        async def enqueue_as(
-            *,
-            request_id: str,
-            name: str,
-            cookie: str | None = None,
-            federation_token: str | None = None,
-            operation_id: str = _OPERATION_ID,
-        ) -> httpx.Response:
-            headers = {
-                "X-Request-ID": request_id,
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Gateway-Id": "gateway:forged-client-value",
-                "X-BoxTeam-Navigation-Actor": "user:forged-client-value",
-            }
-            if federation_token is not None:
-                headers["X-Local-Token"] = ""
-                headers["X-BoxTeam-Federation-Token"] = federation_token
-            else:
-                headers["X-Local-Token"] = LOCAL_TOKEN_HEADERS["X-Local-Token"]
-            if cookie is not None:
-                headers["Cookie"] = f"{USER_ACCESS_COOKIE_NAME}={cookie}"
-            return await gateway_client.post(
-                "/api/v1/session-catalog/operations:enqueue",
-                headers=headers,
-                json=_enqueue_payload(name, operation_id=operation_id),
-            )
-
-        async def status_as(
-            *,
-            request_id: str,
-            cookie: str,
-            operation_ids: Sequence[str] = (_OPERATION_ID,),
-        ) -> httpx.Response:
-            return await gateway_client.get(
-                "/api/v1/session-catalog/operations",
-                headers={
-                    "X-Request-ID": request_id,
-                    "X-BoxTeam-Workspace-Id": workspace_id,
-                    "X-BoxTeam-Gateway-Id": "gateway:forged-status-value",
-                    "X-Local-Token": LOCAL_TOKEN_HEADERS["X-Local-Token"],
-                    "X-BoxTeam-Navigation-Actor": "user:forged-status-value",
-                    "Cookie": f"{USER_ACCESS_COOKIE_NAME}={cookie}",
-                },
-                params=[("operation_id", operation_id) for operation_id in operation_ids],
-            )
-
-        alice_first = await enqueue_as(
-            request_id="req-alice-first",
-            name="Alice operation",
-            cookie=alice_cookie,
-        )
-        assert alice_first.status_code == 202
-        alice_repeat = await enqueue_as(
-            request_id="req-alice-repeat",
-            name="Alice operation",
-            cookie=alice_cookie,
-        )
-        assert alice_repeat.status_code == 202
-        assert (
-            alice_repeat.json()["data"]["receipts"][0]["queue_seq"]
-            == alice_first.json()["data"]["receipts"][0]["queue_seq"]
-        )
-
-        alice_conflict = await enqueue_as(
-            request_id="req-alice-conflict",
-            name="Alice changed preimage",
-            cookie=alice_cookie,
-        )
-        assert alice_conflict.status_code == 409
-        alice_private = await enqueue_as(
-            request_id="req-alice-private",
-            name="Alice private operation",
-            cookie=alice_cookie,
-            operation_id=_ALICE_PRIVATE_OPERATION_ID,
-        )
-        assert alice_private.status_code == 202
-
-        bob_record = await enqueue_as(
-            request_id="req-bob",
-            name="Bob operation",
-            cookie=bob_cookie,
-        )
-        guest_record = await enqueue_as(
-            request_id="req-guest",
-            name="Guest operation",
-            cookie=guest_cookie_one,
-        )
-        guest_repeat_lease = await enqueue_as(
-            request_id="req-guest-new-lease",
-            name="Guest operation",
-            cookie=guest_cookie_two,
-        )
-        user_named_guest = await enqueue_as(
-            request_id="req-user-guest",
-            name="User named guest operation",
-            cookie=user_guest_cookie,
-        )
-        federation_record = await enqueue_as(
-            request_id="req-federation-peer",
-            name="Federation peer operation",
-            federation_token=runtime.peer_credential.token,
-        )
-        assert bob_record.status_code == 202
-        assert guest_record.status_code == 202
-        assert guest_repeat_lease.status_code == 202
-        assert user_named_guest.status_code == 202
-        assert federation_record.status_code == 202
-        assert (
-            guest_repeat_lease.json()["data"]["receipts"][0]["queue_seq"]
-            == guest_record.json()["data"]["receipts"][0]["queue_seq"]
-        )
-
-        alice_status = await status_as(
-            request_id="req-alice-status",
-            cookie=alice_cookie,
-        )
-        guest_status = await status_as(
-            request_id="req-guest-status",
-            cookie=guest_cookie_one,
-        )
-        alice_private_status = await status_as(
-            request_id="req-alice-private-status",
-            cookie=alice_cookie,
-            operation_ids=(_ALICE_PRIVATE_OPERATION_ID,),
-        )
-        guest_private_status = await status_as(
-            request_id="req-guest-private-status",
-            cookie=guest_cookie_one,
-            operation_ids=(_ALICE_PRIVATE_OPERATION_ID,),
-        )
-        assert alice_status.status_code == guest_status.status_code == 200
-        assert alice_status.json()["data"]["items"][0]["operation_id"] == _OPERATION_ID
-        assert guest_status.json()["data"]["items"][0]["operation_id"] == _OPERATION_ID
-        assert (
-            alice_status.json()["data"]["items"][0]["queue_seq"]
-            != guest_status.json()["data"]["items"][0]["queue_seq"]
-        )
-        assert alice_private_status.json()["data"]["items"][0]["operation_id"] == (
-            _ALICE_PRIVATE_OPERATION_ID
-        )
-        assert guest_private_status.json()["data"]["unknown_operation_ids"] == [
-            _ALICE_PRIVATE_OPERATION_ID
-        ]
-
-        # 重复 query key 经真实 Gateway 保留全部 ID，认证 scope 仍隔离私有回执。
-        alice_batch = await status_as(
-            request_id="req-alice-batch-status",
-            cookie=alice_cookie,
-            operation_ids=(_OPERATION_ID, _ALICE_PRIVATE_OPERATION_ID),
-        )
-        guest_batch = await status_as(
-            request_id="req-guest-batch-status",
-            cookie=guest_cookie_one,
-            operation_ids=(_OPERATION_ID, _ALICE_PRIVATE_OPERATION_ID),
-        )
-        assert alice_batch.status_code == guest_batch.status_code == 200
-        alice_batch_data = alice_batch.json()["data"]
-        guest_batch_data = guest_batch.json()["data"]
-        assert {item["operation_id"] for item in alice_batch_data["items"]} == {
-            _OPERATION_ID,
-            _ALICE_PRIVATE_OPERATION_ID,
-        }
-        assert alice_batch_data["unknown_operation_ids"] == []
-        assert [item["operation_id"] for item in guest_batch_data["items"]] == [_OPERATION_ID]
-        assert guest_batch_data["unknown_operation_ids"] == [_ALICE_PRIVATE_OPERATION_ID]
-        for response, request_id in (
-            (alice_batch, "req-alice-batch-status"),
-            (guest_batch, "req-guest-batch-status"),
-        ):
-            assert response.headers["X-Request-ID"] == request_id
-            assert response.json()["request_id"] == request_id
-
-        context_payload = {
-            "resource_identity": str(workspace_session_inventory_identity(runtime.workspace_id)),
-            "uri": workspace_session_inventory_uri(runtime.workspace_id),
-            "scope": "workspace",
-        }
-        public_read = await gateway_client.post(
-            "/api/v1/context/read",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Gateway-Id": "gateway:forged-public-value",
-                "X-BoxTeam-Navigation-Actor": "user:forged-public-value",
-                "Cookie": f"{USER_ACCESS_COOKIE_NAME}={guest_cookie_one}",
-            },
-            json=context_payload,
-        )
-        public_search = await gateway_client.post(
-            "/api/v1/context/search",
-            headers={
-                "X-BoxTeam-Workspace-Id": workspace_id,
-                "X-BoxTeam-Gateway-Id": "gateway:forged-public-value",
-                "X-BoxTeam-Navigation-Actor": "user:forged-public-value",
-                "Cookie": f"{USER_ACCESS_COOKIE_NAME}={guest_cookie_one}",
-            },
-            json={**context_payload, "query": "operation"},
-        )
+        first = await enqueue("Local operation")
+        repeat = await enqueue("Local operation")
+        assert first.status_code == repeat.status_code == 202
+        local_seq = first.json()["data"]["receipts"][0]["queue_seq"]
+        assert repeat.json()["data"]["receipts"][0]["queue_seq"] == local_seq
+        assert (await enqueue("Changed preimage")).status_code == 409
+        peer = await enqueue("Peer operation", **{"X-Local-Token": "", "X-BoxTeam-Federation-Token": runtime.peer_credential.token})
+        assert peer.status_code == 202
+        assert peer.json()["data"]["receipts"][0]["queue_seq"] != local_seq
+        status = await client.get("/api/v1/session-catalog/operations", params={"operation_id": _OPERATION_ID},
+            headers={"X-Request-ID": "local-status"})
+        assert status.status_code == 200
+        assert status.json()["data"]["items"][0]["queue_seq"] == local_seq
+        assert status.headers["X-Request-ID"] == status.json()["request_id"] == "local-status"
+        context_payload = {"resource_identity": str(workspace_session_inventory_identity(runtime.workspace_id)),
+            "uri": workspace_session_inventory_uri(runtime.workspace_id), "scope": "workspace"}
+        public_read = await client.post("/api/v1/context/read", json=context_payload)
+        public_search = await client.post("/api/v1/context/search", json={**context_payload, "query": "operation"})
         assert public_read.status_code == public_search.status_code == 200
         assert public_read.json()["actor"] is None
         assert public_search.json()["actor"] is None
         assert public_read.json()["gateway_id"] == gateway_id
-
-        async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{runtime.backend_port}",
-            timeout=30,
-        ) as backend_client:
-            scopes_response = await backend_client.get(
-                "/__test__/navigation-scopes"
-            )
-        assert scopes_response.status_code == 200, scopes_response.text
-        scopes = scopes_response.json()
-        expected_actors = [
-            "user:alice",
-            "user:alice",
-            "user:alice",
-            "user:alice",
-            "user:bob",
-            "guest",
-            "guest",
-            "user:guest",
-            "federation:gateway_peer_verified",
-            "user:alice",
-            "guest",
-            "user:alice",
-            "guest",
-            "user:alice",
-            "guest",
-        ]
-        assert [scope["actor"] for scope in scopes] == expected_actors
-        assert all(scope["gateway_id"] == gateway_id for scope in scopes)
-        assert all(scope["workspace_id"] == runtime.workspace_id for scope in scopes)
-    finally:
-        await gateway_client.aclose()
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{runtime.backend_port}", timeout=30) as backend:
+            observed = await backend.get("/__test__/navigation-scopes")
+        assert observed.status_code == 200
+        scopes = observed.json()
+        assert [scope["actor"] for scope in scopes] == ["local", "local", "local", "federation:gateway_peer_verified", "local"]
+        assert all(scope["gateway_id"] == gateway_id and scope["workspace_id"] == runtime.workspace_id for scope in scopes)

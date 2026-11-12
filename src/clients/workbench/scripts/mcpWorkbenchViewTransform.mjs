@@ -75,6 +75,9 @@ export function transformMcpWorkbenchView(path, source, replaceOnce, replaceSect
 \t\tconst disposables = new DisposableStore();
 \t\tlet servers = await this.mcpWorkbenchService.queryLocal();
 \t\tif (token.isCancellationRequested) throw new CancellationError();
+\t\tif (this.mcpWorkbenchService instanceof WorkspaceMcpWorkbenchService && !this.mcpWorkbenchService.isLocalCatalogAvailable) {
+\t\t\tthrow new Error('当前 Gateway 没有可读取的工作区 MCP 目录');
+\t\t}
 \t\tconst text = query.replace('@mcp', '').trim().toLocaleLowerCase();
 \t\tconst filter = (items: IWorkbenchMcpServer[]) => text
 \t\t\t? items.filter(server => (server.label + ' ' + server.description).toLocaleLowerCase().includes(text))

@@ -50,16 +50,7 @@ export const BULK_FILE_OPERATION_TIMEOUT_MS = 60_000;
  */
 export const RAW_RESPONSE_HEADER_TIMEOUT_MS = 90_000;
 
-interface GatewayResponseInit extends RequestInit {
-  /**
-   * 自行消费响应体的请求（SSE 实时流、二进制下载、multipart 上传）不建立 Gateway
-   * 用户会话屏障，只共享本地凭据与刷新重试；认证初始化内部请求也置为 true。
-   * 业务 JSON 请求不得绕过 Gateway 用户会话屏障。
-   */
-  skipGatewayUserSession?: boolean;
-}
-
-type RequestJsonInit = GatewayResponseInit & {
+type RequestJsonInit = RequestInit & {
   timeoutMs?: number;
   onResponse?: (requestId: string | null) => void;
 };
@@ -146,32 +137,11 @@ function normalizeHeaders(headers: HeadersInit | undefined): Record<string, stri
   return headers;
 }
 
-interface GatewayUnauthorizedResponse {
-  invalidLocalToken: boolean;
-  userSessionRequired: boolean;
-}
-
-async function inspectGatewayUnauthorizedResponse(
-  response: Response,
-): Promise<GatewayUnauthorizedResponse> {
-  if (response.status !== 401) {
-    return { invalidLocalToken: false, userSessionRequired: false };
-  }
-  const body = await response.clone().json().catch(() => null) as {
-    detail?: unknown;
-    message?: unknown;
-  } | null;
+async function isInvalidGatewayToken(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
+  const body = await response.clone().json().catch(() => null) as { detail?: unknown; message?: unknown } | null;
   const detail = body?.detail ?? body?.message;
-  return {
-    invalidLocalToken: typeof detail === "string"
-      && detail.includes("invalid local token"),
-    userSessionRequired: typeof detail === "string"
-      ? detail.includes("user_session_required")
-      : detail !== null
-        && typeof detail === "object"
-        && "code" in detail
-        && detail.code === "user_session_required",
-  };
+  return typeof detail === "string" && detail.includes("invalid local token");
 }
 
 interface RequestAbortState {
@@ -245,141 +215,9 @@ export function onGatewayTokenInvalidated(port: number, listener: () => void): (
   };
 }
 
-
-type GatewayUserSessionInitializer = (
-  port: number,
-  signal?: AbortSignal,
-) => Promise<unknown>;
-let gatewayUserSessionInitializer: GatewayUserSessionInitializer | null = null;
-const gatewayUserSessionReadyByPort = new Map<number, Promise<void>>();
-const gatewayUserSessionRecoveryByPort = new Map<number, Promise<void>>();
-const gatewayUserSessionWritesByPort = new Map<number, Promise<void>>();
-const gatewayUserSessionInvalidations = new Map<number, Set<() => void>>();
-
-// Gateway 用户会话 cookie 的写入必须按端口串行：acquire/takeover/游客重建
-// 与 401 恢复链并发时，后到达的 Set-Cookie 会按 last-write-wins 覆盖新身份，
-// 把刚完成的用户切换拉回游客态（gateway_user_view 双浏览器集成实证）。
-// 条件性游客重建必须在锁内重新判定 current，不得沿用锁外的 401 结论。
-export function withGatewayUserSessionWrite<T>(
-  port: number,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const previous = gatewayUserSessionWritesByPort.get(port) ?? Promise.resolve();
-  const result = previous.then(operation, operation);
-  const guarded = result.then(() => undefined, () => undefined);
-  gatewayUserSessionWritesByPort.set(port, guarded);
-  void guarded.then(() => {
-    if (gatewayUserSessionWritesByPort.get(port) === guarded) {
-      gatewayUserSessionWritesByPort.delete(port);
-    }
-  });
-  return result;
-}
-
-export function registerGatewayUserSessionInitializer(
-  initializer: GatewayUserSessionInitializer,
-): () => void {
-  const previous = gatewayUserSessionInitializer;
-  gatewayUserSessionInitializer = initializer;
-  return () => {
-    if (gatewayUserSessionInitializer === initializer) {
-      gatewayUserSessionInitializer = previous;
-    }
-  };
-}
-
-export function invalidateGatewayUserSession(port: number): void {
-  gatewayUserSessionReadyByPort.delete(port);
-  for (const listener of gatewayUserSessionInvalidations.get(port) ?? []) listener();
-}
-
-/** 沿唯一身份屏障撤销在途展示，不另建用户身份或凭据缓存。 */
-export function onGatewayUserSessionInvalidated(port: number, listener: () => void): () => void {
-  const listeners = gatewayUserSessionInvalidations.get(port) ?? new Set<() => void>();
-  gatewayUserSessionInvalidations.set(port, listeners);
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-    if (!listeners.size) gatewayUserSessionInvalidations.delete(port);
-  };
-}
-
-/**
- * 清除某个端口上缓存的本地凭据 Promise。Gateway 重启会轮换凭据，同一个 SPA
- * 进程不能永久复用旧 token；进程内按端口缓存意味着测试或同一进程的多个调用方
- * 切换后端时必须显式作废，否则会拿着上一个后端的 token 继续请求。
- */
 export function invalidateGatewayToken(port: number): void {
   gatewayTokenByPort.delete(port);
   for (const listener of gatewayTokenInvalidations.get(port) ?? []) listener();
-}
-
-async function initializeGatewayUserSessionFallback(
-  port: number,
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  await withGatewayUserSessionWrite(port, async () => {
-    try {
-      await requestJson<unknown>(port, "/api/gateway/users/current", {
-        signal,
-        skipGatewayUserSession: true,
-      });
-    } catch (error: unknown) {
-      if (!(error instanceof HttpRequestError) || error.status !== 401) throw error;
-      await requestJson<unknown>(port, "/api/gateway/users/guest", {
-        method: "POST",
-        body: JSON.stringify({}),
-        signal,
-        skipGatewayUserSession: true,
-      });
-    }
-  });
-}
-
-async function recoverGatewayUserSession(port: number): Promise<void> {
-  const existing = gatewayUserSessionRecoveryByPort.get(port);
-  if (existing) return await existing;
-
-  const recovery = (async () => {
-    invalidateGatewayUserSession(port);
-    // 恢复请求不复用可能已经失效的 gatewayApi pending 结果，直接完成
-    // current/guest 屏障；业务请求仍会在同一 requestJson 调用中重试一次。
-    await initializeGatewayUserSessionFallback(port, undefined);
-  })();
-  gatewayUserSessionRecoveryByPort.set(port, recovery);
-  void recovery.then(
-    () => {
-      if (gatewayUserSessionRecoveryByPort.get(port) === recovery) {
-        gatewayUserSessionRecoveryByPort.delete(port);
-      }
-    },
-    () => {
-      if (gatewayUserSessionRecoveryByPort.get(port) === recovery) {
-        gatewayUserSessionRecoveryByPort.delete(port);
-      }
-    },
-  );
-  return await recovery;
-}
-
-async function ensureGatewayUserSession(
-  port: number,
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  const existing = gatewayUserSessionReadyByPort.get(port);
-  if (existing) {
-    await awaitWithAbort(existing, signal);
-    return;
-  }
-  const initializer = gatewayUserSessionInitializer ?? initializeGatewayUserSessionFallback;
-  const initialization = initializer(port, signal).then(() => undefined);
-  gatewayUserSessionReadyByPort.set(port, initialization);
-  initialization.catch(() => {
-    if (gatewayUserSessionReadyByPort.get(port) === initialization) {
-      gatewayUserSessionReadyByPort.delete(port);
-    }
-  });
-  await awaitWithAbort(initialization, signal);
 }
 
 export function getGatewayToken(port: number): Promise<string> {
@@ -421,19 +259,18 @@ export function getGatewayToken(port: number): Promise<string> {
 }
 
 /**
- * 带凭据请求的唯一实现：收口 Gateway 用户会话屏障（可按需跳过）、本地凭据获取与
+ * 带凭据请求的唯一实现：收口本地凭据获取与
  * 401 `invalid local token` 刷新重试、统一的 HttpRequestError。凭据与重试逻辑只
  * 存在于这里，任何入口都必须经由它，不得另写一份。
  */
 async function runGatewayRequest<T>(
   port: number,
   path: string,
-  init: (GatewayResponseInit & { timeoutMs?: number }) | undefined,
+  init: (RequestInit & { timeoutMs?: number }) | undefined,
   consume: (response: Response, signal: AbortSignal | undefined) => T | Promise<T>,
 ): Promise<T> {
   const {
     timeoutMs,
-    skipGatewayUserSession = false,
     signal,
     headers,
     ...fetchInit
@@ -442,18 +279,11 @@ async function runGatewayRequest<T>(
   const abortState = createRequestAbortState(signal, timeoutMs, timeoutErrorMessage);
 
   try {
-    if (!skipGatewayUserSession && (path.startsWith("/api/v1/") || path.startsWith("/api/gateway/mcp/"))) {
-      await ensureGatewayUserSession(port, abortState.signal);
-    }
-    // Gateway 重启会轮换本地凭据；同一个 SPA 进程不能永久复用旧 token。
-    // user_session_required 和 invalid local token 各只恢复一次，真实鉴权
-    // 失败仍然向调用方抛出。
+    // 本机凭据由 Gateway 持久保存；明确失效时只重新获取并重试一次。
     let tokenPromise = getGatewayToken(port);
-    let userSessionRecovered = false;
-    let tokenRefreshed = false;
     const requestHeaders = new Headers(normalizeHeaders(headers));
     let response: Response | null = null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       const localToken = await awaitWithAbort(tokenPromise, abortState.signal);
       requestHeaders.set("X-Local-Token", localToken);
       response = await awaitWithAbort(
@@ -465,25 +295,10 @@ async function runGatewayRequest<T>(
         }),
         abortState.signal,
       );
-      if (response.status === 401) {
-        const canRecoverUserSession = !skipGatewayUserSession && !userSessionRecovered;
-        const canRefreshToken = !tokenRefreshed;
-        if (canRecoverUserSession || canRefreshToken) {
-          const unauthorizedResponse = await inspectGatewayUnauthorizedResponse(response);
-          if (canRecoverUserSession && unauthorizedResponse.userSessionRequired) {
-            userSessionRecovered = true;
-            await recoverGatewayUserSession(port);
-            continue;
-          }
-          if (canRefreshToken && unauthorizedResponse.invalidLocalToken) {
-            tokenRefreshed = true;
-            if (gatewayTokenByPort.get(port) === tokenPromise) {
-              invalidateGatewayToken(port);
-            }
-            tokenPromise = getGatewayToken(port);
-            continue;
-          }
-        }
+      if (attempt === 0 && await isInvalidGatewayToken(response)) {
+        if (gatewayTokenByPort.get(port) === tokenPromise) invalidateGatewayToken(port);
+        tokenPromise = getGatewayToken(port);
+        continue;
       }
       break;
     }
@@ -517,7 +332,7 @@ async function runGatewayRequest<T>(
 export async function requestGatewayResponse(
   port: number,
   path: string,
-  init?: GatewayResponseInit & { timeoutMs?: number },
+  init?: RequestInit & { timeoutMs?: number },
 ): Promise<Response> {
   // 默认给「建连 + 发送请求体 + 等待响应头」一个有限上限；调用方显式传 timeoutMs
   // 时仍以其为准。runGatewayRequest 的 consume 在这里是同步的，响应头一到就返回
@@ -602,7 +417,7 @@ function validateApiEnvelope(response: APIResponse<unknown>): void {
 
 /**
  * 与 unwrapApiData 共用同一信封校验，但允许 data 显式为 null。
- * 适用于「空结果本身是合法业务语义」的读取接口（如用户视图状态、会话目标）；
+ * 适用于「空结果本身是合法业务语义」的读取接口（如浏览器视图状态、会话目标）；
  * data 字段缺失仍属契约被破坏，必须响亮失败。
  */
 export function unwrapApiDataOrNull<T>(response: APIResponse<T | null>): T | null {

@@ -18,6 +18,7 @@ TestResultStatus = Literal[
 ]
 
 _PROCESS_RUN_ID = f"pid-{os.getpid()}-{uuid4().hex}"
+_PROCESS_STARTED_AT = datetime.now(UTC).isoformat()
 
 
 def _run_directory_name() -> str:
@@ -97,6 +98,14 @@ class TestRunContext:
             workspace_root=output_root / "workspace",
             boxteam_home=output_root / "boxteam-home",
         )
+
+    @property
+    def performance_dir(self) -> Path:
+        """性能产物单独按冻结日期归档，不移动已有工作区和运行产物。"""
+        started = datetime.fromisoformat(os.getenv("BOXTEAM_TEST_RUN_STARTED_AT", _PROCESS_STARTED_AT))
+        node_directory = _pytest_node_directory_name()
+        root = self.output_root / "artifacts" / started.strftime("%Y/%m/%d") / self.run_root.name
+        return root / node_directory if node_directory else root
 
     @property
     def artifacts_dir(self) -> Path:

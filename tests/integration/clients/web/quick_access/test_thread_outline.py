@@ -41,7 +41,7 @@ async def test_thread_outline_pages_preview_cancel_and_accept(
             deltas=[{"role": "assistant", "content": f"已完成第 {index} 次执行\n" + "大纲定位验收内容\n" * 16}],
             finish_reason="stop")).raw["interactions"])[0] for index in range(24)]
     result_path = context.artifacts_dir / "thread-outline.json"
-    command = ["bun", "tests/integration/clients/web/quick_access/thread_outline.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/thread_outline.mjs"]
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
                           "--timeout-seconds", "720", "--", *command]

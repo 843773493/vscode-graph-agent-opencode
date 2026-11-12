@@ -4,7 +4,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../upstream/src/vs/workbench/common/editor.js';
-import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { listGatewayWorkspaces } from '../../../web/src/gatewayApi.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -24,9 +24,9 @@ async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceA
   const initial = workspaceContext.getSnapshot();
   if (!initial.gatewayId) throw new Error('Gateway 登记身份尚未加载，请稍后重试');
   let invalidated = false;
-  const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+  const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error('Gateway 或用户身份已改变，请重新选择工作区');
+    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新选择工作区');
   };
   try {
     let owner = explicit;

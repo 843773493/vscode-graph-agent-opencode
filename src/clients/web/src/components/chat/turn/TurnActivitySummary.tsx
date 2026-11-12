@@ -170,10 +170,10 @@ export function TurnActivitySummary({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const turnId = conversation.turnId;
-  const { message } = React.useContext(MessageSearchLocationContext);
+  const { message, tool } = React.useContext(MessageSearchLocationContext);
   React.useEffect(() => {
-    if (message?.role === "tool" && message.turn_id === turnId) { setOpen(true); setError(null); }
-  }, [message, turnId]);
+    if (message?.role === "tool" && message.turn_id === turnId || tool?.turn_id === turnId) { setOpen(true); setError(null); }
+  }, [message, tool, turnId]);
   const boundaryStatus = historicalBoundaryStatus(conversation);
   const activityPreview = activityStatsPreview(conversation.activityStats);
   const displayPreview = boundaryStatus

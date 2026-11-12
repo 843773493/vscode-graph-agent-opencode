@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.harness.performance.record import stage
 from tests.harness.python.run_context import TestRunContext
 from tests.support.processes.workspace import terminate_process
 
@@ -48,7 +49,7 @@ def shared_web_workbench_build(integration_test_gate: None) -> WorkbenchBuild:
     receipt_path = context.artifacts_dir / "workbench-build.json"
     started = time.monotonic()
     try:
-        with log_path.open("x", encoding="utf-8") as log:
+        with log_path.open("x", encoding="utf-8") as log, stage("shared.workbench.build", scope="session"):
             process = subprocess.Popen(supervised_command, cwd=directory, stdout=log, stderr=subprocess.STDOUT, text=True)
             try:
                 receipt["exit_code"] = process.wait()

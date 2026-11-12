@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { extract as extractTar } from "tar";
 
 import {
   BOXTEAM_VERSION,
@@ -221,7 +222,7 @@ async function main() {
   mkdirSync(releaseAssetRoot, { recursive: true });
 
   const pythonArchive = await downloadPinnedLinuxPython(downloadRoot);
-  run("tar", ["-xzf", pythonArchive, "-C", runtimePackageRoot]);
+  await extractTar({ file: pythonArchive, cwd: runtimePackageRoot, strict: true });
   const pythonExecutable = path.join(
     runtimePackageRoot,
     "python",
@@ -235,7 +236,7 @@ async function main() {
   const nodeArchive = await downloadPinnedLinuxNode(downloadRoot);
   const bundledNodeRoot = path.join(runtimePackageRoot, "node");
   mkdirSync(bundledNodeRoot, { recursive: true });
-  run("tar", ["-xzf", nodeArchive, "-C", bundledNodeRoot, "--strip-components=1",
+  await extractTar({ file: nodeArchive, cwd: bundledNodeRoot, strip: 1, strict: true }, [
     `node-v${NODE_RUNTIME_LINUX_X64.version}-linux-x64/bin/node`,
     `node-v${NODE_RUNTIME_LINUX_X64.version}-linux-x64/LICENSE`,
   ]);

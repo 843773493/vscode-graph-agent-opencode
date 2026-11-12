@@ -11584,6 +11584,85 @@ export declare type TurnDetailDTO = Message<"boxteam.workspace.v2.TurnDetailDTO"
 export declare const TurnDetailDTOSchema: GenMessage<TurnDetailDTO>;
 
 /**
+ * 原历史视图的工具结果元数据；发现不读 canonical 正文。
+ *
+ * @generated from message boxteam.workspace.v2.TurnToolResultDTO
+ */
+export declare type TurnToolResultDTO = Message<"boxteam.workspace.v2.TurnToolResultDTO"> & {
+  /**
+   * @generated from field: string item_id = 1;
+   */
+  itemId: string;
+
+  /**
+   * @generated from field: string turn_id = 2;
+   */
+  turnId: string;
+
+  /**
+   * @generated from field: string tool_call_id = 3;
+   */
+  toolCallId: string;
+
+  /**
+   * @generated from field: string tool_name = 4;
+   */
+  toolName: string;
+
+  /**
+   * @generated from field: string status = 5;
+   */
+  status: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TurnToolResultDTO.
+ * Use `create(TurnToolResultDTOSchema)` to create a new message.
+ */
+export declare const TurnToolResultDTOSchema: GenMessage<TurnToolResultDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ThreadToolResultListDTO
+ */
+export declare type ThreadToolResultListDTO = Message<"boxteam.workspace.v2.ThreadToolResultListDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string thread_id = 2;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TurnToolResultDTO items = 3;
+   */
+  items: TurnToolResultDTO[];
+
+  /**
+   * @generated from field: optional int64 next_after = 4;
+   */
+  nextAfter?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string source_view_id = 5;
+   */
+  sourceViewId?: string | undefined;
+
+  /**
+   * @generated from field: int64 source_view_revision = 6;
+   */
+  sourceViewRevision: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ThreadToolResultListDTO.
+ * Use `create(ThreadToolResultListDTOSchema)` to create a new message.
+ */
+export declare const ThreadToolResultListDTOSchema: GenMessage<ThreadToolResultListDTO>;
+
+/**
  * 精确 SessionThread 的字面量正文搜索；cursor 仅由历史 owner 解释。
  *
  * @generated from message boxteam.workspace.v2.TurnMessageSearchRequest
@@ -11943,6 +12022,11 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
    * @generated from field: optional boxteam.workspace.v2.TurnMessageReferenceDTO anchor_message = 11;
    */
   anchorMessage?: TurnMessageReferenceDTO | undefined;
+
+  /**
+   * @generated from field: optional string anchor_tool_result = 12;
+   */
+  anchorToolResult?: string | undefined;
 };
 
 /**
@@ -12024,6 +12108,11 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: optional boxteam.workspace.v2.TurnMessageLocationDTO located_message = 14;
    */
   locatedMessage?: TurnMessageLocationDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TurnToolResultDTO located_tool_result = 15;
+   */
+  locatedToolResult?: TurnToolResultDTO | undefined;
 };
 
 /**

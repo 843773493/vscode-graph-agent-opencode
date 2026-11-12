@@ -9,7 +9,11 @@ from .attachment import AttachmentDirectoryURI, AttachmentFileURI
 from .common import JobStatus
 from .session import SessionDTO
 from .trace import TraceEventDTO
-from .turn_search import TurnMessageLocationDTO, TurnMessageReferenceDTO
+from .turn_search import (
+    TurnMessageLocationDTO,
+    TurnMessageReferenceDTO,
+    TurnToolResultDTO,
+)
 
 TurnInclude = Literal[
     "user",
@@ -349,6 +353,7 @@ class TurnHistoryLoadRequest(BaseModel):
     cursor: str | None = None
     anchor_turn_id: str | None = Field(default=None, min_length=1, max_length=256)
     anchor_message: TurnMessageReferenceDTO | None = None
+    anchor_tool_result: str | None = Field(default=None, min_length=1, max_length=256)
     turn_ids: list[str] | None = Field(default=None, min_length=1, max_length=4)
     execution_id: str | None = Field(default=None, min_length=1, max_length=256)
     # 只用于单个 Turn 内的 ToolRow 定点补载；不允许退化成整轮工具详情读取。
@@ -363,7 +368,9 @@ class TurnHistoryLoadRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_around_budget(self) -> TurnHistoryLoadRequest:
-        if self.anchor_message is not None and (
+        if self.anchor_message is not None and self.anchor_tool_result is not None:
+            raise ValueError("消息位置与工具结果定位不能混用")
+        if (self.anchor_message is not None or self.anchor_tool_result is not None) and (
             self.direction != "around" or self.anchor_turn_id is None
             or self.cursor is not None or self.turn_ids is not None or self.execution_id is not None
         ):
@@ -513,6 +520,7 @@ class TurnHistoryPageDTO(BaseModel):
     has_after: bool = False
     projection_epoch: int = Field(ge=1)
     located_message: TurnMessageLocationDTO | None = None
+    located_tool_result: TurnToolResultDTO | None = None
 
     @model_validator(mode="after")
     def validate_internal_execution_identity(self) -> TurnHistoryPageDTO:

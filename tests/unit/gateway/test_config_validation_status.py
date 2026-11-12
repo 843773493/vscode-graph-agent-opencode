@@ -322,7 +322,7 @@ async def test_runtime_failure_keeps_native_diagnostics_out_of_config_state(
     monkeypatch.setattr(service, "_on_runtime_config", apply)
     monkeypatch.setattr(store, "promote_active_config_snapshot", reject_promotion)
     payload = json.loads(original)
-    payload["ui"] = {"theme": {"default_theme_id": "blue"}}
+    payload["logging"] = {"runtime": {"level": "debug", "pretty": True}}
     config_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises((OSError, RuntimeError)) as failure:
@@ -386,7 +386,7 @@ async def test_runtime_failure_keeps_native_diagnostics_out_of_config_state(
     ("override", "location"),
     [
         ({"workspaces": "invalid"}, "workspaces"),
-        ({"ui": {"theme": {"default_theme_id": 3}}}, "ui.theme.default_theme_id"),
+        ({"logging": {"runtime": {"level": 3}}}, "logging.runtime.level"),
     ],
 )
 async def test_invalid_reload_exposes_schema_reason_without_native_source_paths(

@@ -94,15 +94,11 @@ def _dependant_dependency_names(route: object) -> set[str]:
 # 按路由名声明为设计无鉴权的自有路由（见各自 docstring）：
 # - health：存活探针；
 # - local_credential：同站点限制替代 token，本身就是取 token 的入口；
-# - current_gateway_user：无 cookie 时建立游客态；
-# - get_gateway_ui_asset：用户访问上下文；
 # - proxy_context_read/search：docstring 明确「不要求 Gateway 凭据」，被集成测试固化。
 _DELIBERATELY_UNPROTECTED_ENDPOINTS = frozenset(
     {
         "health",
         "local_credential",
-        "current_gateway_user",
-        "get_gateway_ui_asset",
         "proxy_context_read",
         "proxy_context_search",
     }
@@ -142,7 +138,7 @@ def test_every_gateway_route_mounts_a_credential_dependency() -> None:
         names = _dependant_dependency_names(route)
         if not (
             names
-            & {"verify_gateway_token", "verify_gateway_access", "verify_federation_token"}
+            & {"verify_gateway_token", "verify_gateway_access", "verify_federation_token", "verify_gateway_content_access"}
         ):
             unprotected.append(f"{','.join(sorted(methods))} {path}")
 

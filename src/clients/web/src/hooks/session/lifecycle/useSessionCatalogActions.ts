@@ -27,7 +27,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
   const {
     apiPort, currentSession, activeGatewayWorkspaceId,
     currentSessionGatewayWorkspaceId, setState, sessionCatalogOutboxRuntime,
-    gatewayUserAccess, workspaceRequestTargets,
+    workspaceRequestTargets,
   } = context;
 
   const workspaceRequestTarget = useCallback(
@@ -41,13 +41,12 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
     baseCatalogRevision: number,
     expectedRevision?: number,
   ) => {
-    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) {
+    if (!sessionCatalogOutboxRuntime) {
       throw new Error("Gateway 认证状态尚未就绪，不能修改会话目录");
     }
     const { handle, operationId } = await sessionCatalogOutboxRuntime.submit(
       workspaceRequestTarget(workspaceId),
-      gatewayUserAccess,
-      intent,
+        intent,
       {
         baseCatalogRevision,
         ...(expectedRevision === undefined ? {} : { expectedRevision }),
@@ -55,7 +54,7 @@ export function useSessionCatalogActions(context: SessionLifecycleContext) {
     );
     setState((prev) => ({ ...prev, status: "会话目录操作已保存本地待同步变更，等待提交" }));
     return { handle, operationId };
-  }, [gatewayUserAccess, sessionCatalogOutboxRuntime, setState, workspaceRequestTarget]);
+  }, [sessionCatalogOutboxRuntime, setState, workspaceRequestTarget]);
 
   const commitCatalogMutation = useCallback(async (
     workspaceId: string,

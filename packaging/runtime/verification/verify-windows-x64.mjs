@@ -9,10 +9,13 @@ import {
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import crossSpawn from "cross-spawn";
+import { extractZipArchive } from "../archives/zip.mjs";
 
 import { BOXTEAM_VERSION } from "../versions.mjs";
 import { waitForInstalledGateway } from "./verification-readiness.mjs";
 import { verifyBrowserResource } from "./browser-product.mjs";
+import { verifyDebugProduct } from "./debug-product.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
@@ -31,14 +34,12 @@ const gatewayUrl = "http://127.0.0.1:8014";
 // TODO: Windows 打包 Python 首次导入依赖较慢，验证等待窗口需覆盖 Launcher 的冷启动上限。
 const gatewayReadyTimeoutMs = 180_000;
 const headers = {};
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const result = crossSpawn.sync(command, args, {
     cwd: options.cwd ?? projectRoot,
     env: options.env ?? process.env,
     encoding: "utf8",
-    shell: options.shell ?? false,
     stdio: options.capture ? "pipe" : "inherit",
   });
   if (result.error) throw result.error;
@@ -55,10 +56,23 @@ function stopWindowsProcessTree(pid) {
   const result = spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(pid)], {
     encoding: "utf8",
     stdio: "pipe",
+    timeout: 5_000,
   });
   if (result.status === 0) return;
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (error.code === "ESRCH") return;
+    throw error;
+  }
   const message = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  if (/not found|no running instance/i.test(message)) return;
+  if (result.error?.code === "ETIMEDOUT") {
+    throw new Error(
+      `taskkill.exe /T /F /PID ${String(pid)} 超时（5 秒），Launcher 仍在运行\n${message}`,
+      { cause: result.error },
+    );
+  }
+  if (result.error) throw result.error;
   throw new Error(
     `命令失败 (${String(result.status)}): taskkill.exe /T /F /PID ${String(pid)}\n${message}`,
   );
@@ -201,8 +215,6 @@ async function requestJson(pathname, options = {}) {
       ...(options.headers ?? {}),
     },
   });
-  const cookies = response.headers.getSetCookie();
-  if (cookies.length) headers.Cookie = cookies.map((cookie) => cookie.split(";", 1)[0]).join("; ");
   const text = await response.text();
   if (!response.ok) {
     throw new Error(
@@ -243,10 +255,13 @@ async function stopLauncher(child) {
 async function verifyRunningProduct(
   child,
   readLauncherOutput,
-  { forceWindowsTreeShutdown = false, pluginArchive },
+  { forceWindowsTreeShutdown = false, pluginArchive, nodeExecutable },
 ) {
   const rootResponse = await fetch(`${gatewayUrl}/`);
-  if (!rootResponse.ok || !(await rootResponse.text()).includes("root")) {
+  if (
+    !rootResponse.ok ||
+    !(await rootResponse.text()).includes('id="workbench"')
+  ) {
     throw new Error("安装版 Gateway 未提供打包 Web UI");
   }
   const credentialResponse = await fetch(
@@ -264,9 +279,6 @@ async function verifyRunningProduct(
     throw new Error("安装版 Gateway 本地凭据响应非法");
   }
   headers["X-Local-Token"] = localToken;
-  await requestJson("/api/gateway/users/guest", {
-    method: "POST", body: JSON.stringify({ tracking: { release_verification: true } }),
-  });
 
   const workspacePayload = await requestJson("/api/gateway/workspaces");
   const workspace = workspacePayload.data?.items?.find((item) => item.managed);
@@ -275,10 +287,15 @@ async function verifyRunningProduct(
   }
 
   const browser = await verifyBrowserResource(requestJson, {
+    gatewayId: workspace.gateway_id, workspaceId: workspace.workspace_id,
+    packagePath: pluginArchive,
+    url: "data:text/html,<title>BoxTeam packaged browser</title>",
+  });
+
+  await verifyDebugProduct(requestJson, {
     gatewayId: workspace.gateway_id,
     workspaceId: workspace.workspace_id,
-    packagePath: pluginArchive,
-    url: "data:text/html,<title>BoxTeam packaged browser Windows</title>",
+    nodeExecutable,
   });
 
   const restartPayload = await requestJson(
@@ -354,7 +371,7 @@ async function main() {
   mkdirSync(installRoot, { recursive: true });
   mkdirSync(emptyPath, { recursive: true });
   run(
-    npmCommand,
+    "npm",
     [
       "install",
       "--no-audit",
@@ -370,7 +387,6 @@ async function main() {
         ...process.env,
         BOXTEAM_RUNTIME_ASSET_PATH: releaseAssetPath,
       },
-      shell: true,
     },
   );
   renameSync(installRoot, relocatedRoot);
@@ -422,6 +438,7 @@ async function main() {
     await verifyRunningProduct(child, () => launcherOutput, {
       pluginArchive: path.join(relocatedRoot,
         "node_modules/@boxteam/runtime-windows-x64/application/resources/plugins/developer-tools.zip"),
+      nodeExecutable,
     });
   } finally {
     await stopLauncher(child);
@@ -473,7 +490,7 @@ async function main() {
   process.stdout.write(`Windows relocation 验证通过: ${relocatedRoot}\n`);
 
   mkdirSync(standaloneExtractRoot, { recursive: true });
-  run("tar", ["-xf", standaloneArchivePath, "-C", standaloneExtractRoot]);
+  await extractZipArchive(standaloneArchivePath, { dir: standaloneExtractRoot });
   const [standaloneDirectory] = readdirSync(standaloneExtractRoot, {
     withFileTypes: true,
   }).filter((entry) => entry.isDirectory());
@@ -557,7 +574,7 @@ async function main() {
       () => standaloneOutput,
       { forceWindowsTreeShutdown: true, pluginArchive: path.join(
         standalonePackageRoot, "runtime/application/resources/plugins/developer-tools.zip",
-      ) },
+      ), nodeExecutable: standaloneNode },
     );
   } finally {
     await stopLauncher(standaloneChild);

@@ -7,7 +7,6 @@ import shutil
 import subprocess
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
-from uuid import uuid4
 
 import commentjson
 import httpx
@@ -134,54 +133,6 @@ async def _create_session(client: httpx.AsyncClient, title: str) -> str:
     return str(response.json()["data"]["session_id"])
 
 
-async def _verify_access_contract(base_url: str) -> dict[str, bool]:
-    """已删除账户菜单；保留真实 HTTP 租约合同，不以本地展示态替代认证。"""
-    user_a = f"browser-access-a-{uuid4().hex[:8]}"
-    user_b = f"browser-access-b-{uuid4().hex[:8]}"
-    async with (
-        httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=30) as first,
-        httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=30) as second,
-    ):
-        for user_id in (user_a, user_b):
-            created = await first.post("/api/gateway/users", json={"user_id": user_id, "display_name": user_id})
-            assert created.status_code == 200, created.text
-        acquired = await first.post(f"/api/gateway/users/{user_a}/access", json={"client_label": "电脑 A"})
-        assert acquired.status_code == 200, acquired.text
-        assert acquired.json()["data"]["user_id"] == user_a
-        occupied = await second.post(f"/api/gateway/users/{user_a}/access", json={"client_label": "电脑 B"})
-        assert occupied.status_code == 409, occupied.text
-        assert occupied.json()["detail"]["code"] == "user_lease_occupied"
-        users = await second.get("/api/gateway/users")
-        assert users.status_code == 200, users.text
-        user = next(item for item in users.json()["data"]["items"] if item["user_id"] == user_a)
-        assert user["lease"]["occupied"] is True
-        takeover = await second.post(f"/api/gateway/users/{user_a}/takeover", json={"client_label": "电脑 B"})
-        assert takeover.status_code == 200, takeover.text
-        assert takeover.json()["data"]["user_id"] == user_a
-        assert takeover.json()["data"]["lease_generation"] == acquired.json()["data"]["lease_generation"] + 1
-        previous = await first.get("/api/gateway/users/current")
-        assert previous.status_code == 401, previous.text
-        assert previous.json()["detail"] == "user_session_required"
-        # 浏览器由 ensureGatewayUserAccess 在 401 后显式重建游客，HTTP 本身不会替客户端切换身份。
-        guest = await first.post("/api/gateway/users/guest", json={})
-        assert guest.status_code == 200, guest.text
-        previous = await first.get("/api/gateway/users/current")
-        assert previous.status_code == 200, previous.text
-        assert previous.json()["data"]["kind"] == "guest"
-        assert previous.json()["data"]["user_id"] == guest.json()["data"]["user_id"]
-        assert previous.json()["data"]["user_id"] != user_a
-        async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=30) as expired_client:
-            expired = await expired_client.post(f"/api/gateway/users/{user_b}/access", json={"client_label": "过期电脑"})
-            assert expired.status_code == 200, expired.text
-            generation = expired.json()["data"]["lease_generation"]
-        # 保留真实 45 秒租约过期，不修改服务端时间、数据库或 TTL。
-        await asyncio.sleep(46)
-        reacquired = await second.post(f"/api/gateway/users/{user_b}/access", json={"client_label": "恢复电脑"})
-        assert reacquired.status_code == 200, reacquired.text
-        assert reacquired.json()["data"]["user_id"] == user_b
-        assert reacquired.json()["data"]["lease_generation"] == generation + 1
-    return {"ordinaryUserAcquisition": True, "occupiedConflict": True,
-            "takeoverInvalidatesOldAccess": True, "expiredLeaseReacquired": True}
 
 
 @pytest.mark.asyncio
@@ -231,8 +182,6 @@ async def test_browser_views_restore_locally_and_isolate_browser_contexts(
     screenshot_path = artifacts / "browser-view-sessions-failure.png"
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=60) as client:
-            guest = await client.post("/api/gateway/users/guest", json={"tracking": {"source": "browser-integration"}})
-            assert guest.status_code == 200, guest.text
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
             active = workspaces.json()["data"]["active_workspace"]
@@ -265,7 +214,7 @@ async def test_browser_views_restore_locally_and_isolate_browser_contexts(
         assert browser_result.returncode == 0, f"浏览器视图集成失败:\n{browser_result.stdout}\n{browser_result.stderr}\n{result_path}\n{screenshot_path}"
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["classification"] == "Integration"
-        for key in ("guestAccess", "viewRestoredAfterReload", "viewRestoredInNewPage", "browserContextsIsolated",
+        for key in ("localCredentialAccess", "viewRestoredAfterReload", "viewRestoredInNewPage", "browserContextsIsolated",
                     "historyCacheBeforeSync", "historyCacheContextsIsolated", "unopenedSessionUnread",
                     "openedSessionRead", "unreadPagesIsolated",
                     "noPrivateActivityContent", "noServerViewWrites"):
@@ -303,8 +252,6 @@ async def test_browser_views_restore_locally_and_isolate_browser_contexts(
         assert search_proof["gatewayId"] == gateway_id
         assert search_proof["sessionId"] == unopened_session_id
         assert search_proof["unreadBeforeEditorOpened"] is True
-        access = await _verify_access_contract(f"http://127.0.0.1:{gateway.port}")
-        (artifacts / "access-contract.json").write_text(json.dumps(access, indent=2) + "\n", encoding="utf-8")
         recordings = list(replay.artifacts.glob("*.json"))
         assert [path.stem for path in recordings] == [call_id], "只能执行未打开会话的真实通知消息"
         recorded = json.loads(recordings[0].read_text())

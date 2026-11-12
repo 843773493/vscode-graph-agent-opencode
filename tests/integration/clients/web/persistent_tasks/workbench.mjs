@@ -2,13 +2,6 @@ import assert from "node:assert/strict";
 import { expect } from "playwright/test";
 
 export async function openWorkbench(page, baseUrl) {
-  const credential = await page.context().request.get(`${baseUrl}/api/gateway/auth/local-credential`);
-  assert.equal(credential.status(), 200);
-  const access = await page.context().request.post(`${baseUrl}/api/gateway/users/guest`, {
-    headers: { "X-Local-Token": (await credential.json()).data.token },
-    data: { tracking: { source: "persistent-tasks-workbench" } },
-  });
-  assert.equal(access.status(), 200, await access.text());
   const target = new URL(baseUrl);
   await page.goto(target.href, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();

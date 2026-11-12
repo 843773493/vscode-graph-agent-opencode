@@ -23,7 +23,6 @@ from app.services.infrastructure.tool_output_store import (
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -108,7 +107,6 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=60, trust_env=False,
         ) as client:
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             gateway_id = health.json()["data"]["gateway_id"]
             workspace_info = await client.get("/api/v1/workspace")
@@ -469,7 +467,6 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
                 base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS,
                 timeout=60, trust_env=False,
             ) as recovered_client:
-                await acquire_gateway_guest(recovered_client)
                 settled = await wait_for_navigation_operation(recovered_client, operation_id, wait_for_settlement=True)
                 assert settled["state"] == "committed" and settled["settlement"] == "settled"
                 assert settled["receipt_revision"] > receipt["receipt_revision"]
@@ -495,7 +492,6 @@ async def test_real_gateway_navigation_grammar_errors_do_not_echo_native_input(
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS,
                                      timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             workspace_id = (await client.get("/api/v1/workspace")).json()["data"]["workspace_id"]
             registered = (await client.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
             registry = home / "state/gateway/gateway.sqlite"

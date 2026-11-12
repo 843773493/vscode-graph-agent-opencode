@@ -21,10 +21,6 @@ from configs.installer import (
     install_user_configuration,
     resolve_config_resource_source,
 )
-from configs.layout_migrations import (
-    migrate_legacy_user_configuration,
-    migrate_legacy_workspace_configuration,
-)
 
 GATEWAY_DEVELOPMENT_ASSETS_ENV = "BOXTEAM_INSTALL_DEVELOPMENT_ASSETS"
 DEV_LOCAL_ONLY_ENV = "BOXTEAM_DEV_LOCAL_ONLY"
@@ -64,6 +60,35 @@ def _prepare_storage(*, home: Path, boxteam_home: Path) -> None:
         boxteam_home=boxteam_home,
         default_workspace_root=default_workspace_root,
     )
+
+
+def _reject_implicit_layout_migration(
+    *,
+    home: Path,
+    boxteam_home: Path,
+    config_root: Path,
+    workspace: Path | None,
+) -> None:
+    legacy_paths = [config_root / "boxteam.jsonc"]
+    if boxteam_home == (home / ".boxteams").resolve():
+        legacy_paths.extend(
+            home / ".boxteam" / name
+            for name in ("boxteam.jsonc", "config.schema.jsonc", "web_ui_settings.json")
+        )
+    configured_default_workspace = os.environ.get("BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT")
+    default_workspace_root = Path(
+        configured_default_workspace or config_root.parent / "boxteam_workspace"
+    ).expanduser().resolve()
+    legacy_paths.append(default_workspace_root / ".boxteam" / "gateway")
+    if workspace is not None:
+        legacy_paths.append(workspace.expanduser().resolve() / ".boxteam" / "boxteam.jsonc")
+    existing = [path for path in legacy_paths if path.exists()]
+    if existing:
+        raise RuntimeError(
+            "发现旧版用户存储布局；普通初始化不会自动迁移。请先显式运行 "
+            "`python -m configs.boxteam migrate`，并为工作区旧配置添加 "
+            f"`--workspace <path>`。路径: {existing}"
+        )
 
 
 def _validate_installed_configuration(
@@ -238,8 +263,15 @@ def main() -> None:
         if args.project_root is not None
         else None
     )
+    if args.action in {"initialize", "install-source-development"}:
+        _reject_implicit_layout_migration(
+            home=home,
+            boxteam_home=boxteam_home,
+            config_root=config_root,
+            workspace=args.workspace,
+        )
     if args.action in {"preview-workspace-identity", "migrate-workspace-identity"}:
-        from configs.workspace_identity_migration import (
+        from configs.maintenance.workspace_identity_migration import (
             preview_workspace_identity_migration,
             verify_remote_workspace_identities,
         )
@@ -248,7 +280,7 @@ def main() -> None:
                         else boxteam_home / "state/gateway").expanduser().resolve()
         try:
             if args.action == "migrate-workspace-identity":
-                from configs.workspace_identity_commit import (
+                from configs.maintenance.workspace_identity_commit import (
                     commit_workspace_identity_migration,
                 )
 
@@ -285,8 +317,12 @@ def main() -> None:
             raise SystemExit(1)
         return
     if args.action == "migrate-runtime-config":
-        from configs.runtime_logging_commit import commit_runtime_logging_migration
-        from configs.runtime_logging_migration import preview_runtime_logging_migration
+        from configs.maintenance.runtime_logging_commit import (
+            commit_runtime_logging_migration,
+        )
+        from configs.maintenance.runtime_logging_migration import (
+            preview_runtime_logging_migration,
+        )
 
         workspaces = tuple(args.migration_workspace)
         if args.workspace is not None:
@@ -316,12 +352,18 @@ def main() -> None:
     else:
         load_dotenv(config_root / ".env", override=False)
 
-    _prepare_storage(home=home, boxteam_home=boxteam_home)
+    if args.action == "migrate":
+        _prepare_storage(home=home, boxteam_home=boxteam_home)
     gateway_schema_source, workspace_schema_source = _layout_schema_sources(
         project_root
     )
 
-    if args.action in {"initialize", "install-source-development", "migrate"}:
+    if args.action == "migrate":
+        from configs.maintenance.layout import (
+            migrate_legacy_user_configuration,
+            migrate_legacy_workspace_configuration,
+        )
+
         migrated_user_layout = migrate_legacy_user_configuration(
             config_root=config_root,
             gateway_schema_path=gateway_schema_source,
@@ -407,7 +449,9 @@ def main() -> None:
             profile="default",
             project_root=project_root,
         )
-        from configs.runtime_logging_commit import commit_runtime_logging_migration
+        from configs.maintenance.runtime_logging_commit import (
+            commit_runtime_logging_migration,
+        )
 
         commit_runtime_logging_migration(
             boxteam_home=boxteam_home,

@@ -18,6 +18,7 @@ from app.core.trace_middleware import TraceMiddleware
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.router import router as control_router
 from app.gateway.registry import GatewayWorkspaceRegistry
+from app.gateway.routes.health_config import router as health_router
 
 
 def _build_app(tmp_path: Path) -> FastAPI:
@@ -30,6 +31,7 @@ def _build_app(tmp_path: Path) -> FastAPI:
         storage_path=tmp_path / "navigation.json"
     )
     application.include_router(control_router)
+    application.include_router(health_router)
     return application
 
 
@@ -56,6 +58,28 @@ def test_workspace_navigation_rejects_wrong_local_token(gateway_app: FastAPI) ->
         )
 
     assert response.status_code == 401
+
+
+def test_first_browser_uses_local_credential_without_user_session(gateway_app: FastAPI) -> None:
+    with TestClient(gateway_app) as client:
+        credential = client.get("/api/gateway/auth/local-credential", headers={"Sec-Fetch-Site": "same-origin"})
+        assert credential.status_code == 200
+        assert credential.headers["Cache-Control"] == "no-store"
+        cookie = credential.headers["Set-Cookie"]
+        assert "HttpOnly" in cookie and "SameSite=strict" in cookie and "Path=/api/gateway" in cookie
+        token = credential.json()["data"]["token"]
+        response = client.get("/api/gateway/workspace-navigation", headers={"X-Local-Token": token})
+        assert response.status_code == 200, response.text
+        # Cookie 仅用于同源原生资源，不能让普通控制面绕过显式凭据。
+        assert client.get("/api/gateway/workspace-navigation").status_code == 401
+        assert client.get("/api/gateway/auth/local-credential", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+
+
+def test_retired_user_and_settings_routes_are_not_registered() -> None:
+    from app.gateway.main import app
+
+    assert not [route.path for route in app.routes if getattr(route, "path", "").startswith("/api/gateway/users")]
+    assert not [route for route in app.routes if getattr(route, "path", "") == "/api/gateway/ui-settings"]
 
 
 # 同族收口：以下端点与导航树属同一失败模式（控制面私有数据未挂本地凭据依赖），

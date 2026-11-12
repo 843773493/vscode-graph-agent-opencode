@@ -30,9 +30,9 @@ from app.core.sqlite_state import load_sql
 # thread creation record 冻结登记 revision 与 membership preimage，publish
 # 校验账本未回退及本 member 冻结内容一致；member 行随 thread catalog publish
 # 在同一事务内 registering → published（原子可见性）。
-_COLLABORATION_LEDGER_TABLE_DDL = load_sql(__package__, "sql/collaboration_ledger.sql")
+_COLLABORATION_LEDGER_TABLE_DDL = load_sql(__package__, "migrations/collaboration_ledger.sql")
 
-_COLLABORATION_MEMBERS_TABLE_DDL = load_sql(__package__, "sql/collaboration_members.sql")
+_COLLABORATION_MEMBERS_TABLE_DDL = load_sql(__package__, "migrations/collaboration_members.sql")
 
 _COLLABORATION_MEMBER_COLUMNS = (
     "delegation_id, creation_idempotency_key, membership_preimage_hash, "

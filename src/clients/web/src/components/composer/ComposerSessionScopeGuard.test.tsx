@@ -66,7 +66,6 @@ function appState(sessionId: string): AppState {
     goalLoading: false,
     goalError: null,
     compactLoading: false,
-    gatewayUserAccess: null,
   } as unknown as AppState;
 }
 

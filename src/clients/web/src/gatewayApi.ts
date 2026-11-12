@@ -21,9 +21,6 @@ import type {
   UpdateGatewayWorkspaceRequest,
   ReorderGatewayWorkspacesRequest,
   SshConnectionOptionList,
-  WebUiSettings,
-  WebUiSettingsUpdate,
-  GatewayThemeCatalog,
   GatewayUiAsset,
   GatewayUiAssetList,
   WorkspaceNavigationTree,
@@ -36,7 +33,6 @@ import type {
   WorkspaceNavigationNodeUpdateRequest,
   WorkspaceNavigationPlacementRequest,
 } from "./types/backend";
-import { normalizeWebUiSettings } from "./state/uiSettings/preferences";
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   HttpRequestError,
@@ -559,48 +555,6 @@ export async function reorderGatewayWorkspaces(
         body: JSON.stringify(payload),
       },
     ),
-  );
-}
-
-export async function getGatewayUiSettings(port: number): Promise<WebUiSettings> {
-  return normalizeWebUiSettings(
-    unwrapApiData(
-      await requestJson<APIResponse<WebUiSettings>>(
-        port,
-        "/api/gateway/ui-settings",
-      ),
-    ),
-  );
-}
-
-export async function updateGatewayUiSettings(
-  port: number,
-  payload: WebUiSettingsUpdate,
-): Promise<WebUiSettings> {
-  return normalizeWebUiSettings(
-    unwrapApiData(
-      await requestJson<APIResponse<WebUiSettings>>(
-        port,
-        "/api/gateway/ui-settings",
-        {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        },
-      ),
-    ),
-  );
-}
-
-/** 只解析主题和资源引用，不保存 Gateway 用户视图。 */
-export async function resolveGatewayUiSettings(port: number, payload: WebUiSettingsUpdate): Promise<WebUiSettings> {
-  return normalizeWebUiSettings(unwrapApiData(await requestJson<APIResponse<WebUiSettings>>(
-    port, "/api/gateway/ui-settings/resolve", { method: "POST", body: JSON.stringify(payload) },
-  )));
-}
-
-export async function getGatewayThemes(port: number): Promise<GatewayThemeCatalog> {
-  return unwrapApiData(
-    await requestJson<APIResponse<GatewayThemeCatalog>>(port, "/api/gateway/themes"),
   );
 }
 

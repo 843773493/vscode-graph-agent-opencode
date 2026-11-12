@@ -41,8 +41,8 @@ async def test_shutdown_preserves_preparation_until_original_message_commit_fini
     loop = asyncio.get_running_loop()
     committed: list[tuple[MessageDTO, UserExecutionIdentity]] = []
     body = b"shutdown must retain the original attachment and accepted input\n"
-    async with main.lifespan(main.app) as _main_lifespan_state_44:
-        await _main_lifespan_state_44["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         owner, peer = mounted_case.containers
         jobs = owner.job_service
         assert isinstance(jobs, JobService)

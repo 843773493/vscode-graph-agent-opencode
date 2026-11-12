@@ -10,7 +10,7 @@ import { Registry } from '../../../../../src/clients/workbench/upstream/src/vs/p
 import { Extensions } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickAccess.js';
 import { WorkspaceSymbolsQuickAccess } from '../../../../../src/clients/workbench/src/search/symbolsQuickAccess.js';
 import { WorkspaceSymbolProviderRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/common/search.js';
-import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 export { contentBranchContract, nameBranchContract, fileBranchContract, cursorRejectionContract, branchStateContract } from './federated_branches.fixture.mjs';
 export { contentSelectionContract } from './content_selection.fixture.mjs';
@@ -236,7 +236,7 @@ export async function identityContract() {
       return new Promise(resolve => calls.push({ pattern, token, resolve }));
     } } });
     try {
-      if (kind === 'user') invalidateGatewayUserSession(0);
+      if (kind === 'user') invalidateGatewayToken(0);
       else workspaceContext.publish({ ...before, gatewayId: 'gateway-b' });
       const cancelled = calls[0].token.isCancellationRequested;
       calls[0].resolve({ results: [{ resource: uri('old-user.txt') }], messages: [] });
@@ -247,7 +247,7 @@ export async function identityContract() {
     } finally { f.dispose(); workspaceContext.publish(before); }
   }
   // 已释放 Provider 不再订阅失效通知。
-  invalidateGatewayUserSession(0);
+  invalidateGatewayToken(0);
   return results;
 }
 

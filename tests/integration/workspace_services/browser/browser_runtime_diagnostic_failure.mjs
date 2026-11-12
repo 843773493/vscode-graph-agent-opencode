@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
 // 仅替换被测Node后端的Chromium启动参数和日志writer边界，不代填资源状态。
+const control = process.env.BOXTEAM_TEST_BROWSER_RUNTIME_CONTROL;
 if (path.basename(process.argv[1] || "") === "backend.js") {
-  const control = process.env.BOXTEAM_TEST_BROWSER_RUNTIME_CONTROL;
-  const projectRoot = process.env.BOXTEAM_TEST_PROJECT_ROOT;
-  if (!control || !projectRoot) throw new Error("Browser运行时故障测试缺少显式control/project root");
-  const { chromium } = await import(pathToFileURL(path.join(projectRoot, "node_modules/playwright/index.mjs")));
+  if (!control) throw new Error("Browser运行时故障测试缺少显式control");
+  const { chromium } = createRequire(pathToFileURL(process.argv[1]))("playwright");
   const launch = chromium.launch.bind(chromium);
   chromium.launch = options => launch(fs.existsSync(path.join(control, "fail-launch"))
     ? { ...options, executablePath: path.join(control, "missing-chromium") } : options);

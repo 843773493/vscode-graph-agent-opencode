@@ -4,9 +4,11 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from functools import lru_cache
+from hashlib import sha1
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from dotenv import load_dotenv
@@ -22,6 +24,7 @@ from tests.support.session_catalog_owner import (
 from tests.support.workspaces import render_test_workspace_config
 
 pytest_plugins = [
+    "tests.harness.performance.plugin",
     "tests.harness.python.integration_gate",
     "tests.harness.python.web_workbench",
 ]
@@ -98,6 +101,25 @@ if not os.environ.get("OPENROUTER_API_KEY"):
 
 CONFIGS_DIR = os.path.join(Path.cwd(), "configs")
 TEST_CONFIG_PATH = os.path.join(CONFIGS_DIR, "tests", "workspace", "default.jsonc")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: Sequence[pytest.Item]) -> None:
+    """按测试所在目录分类；文件级共享服务只在所属层内分组。"""
+    if config.getoption("keep_docker_runtime", default=False) and len(items) != 1:
+        raise pytest.UsageError(
+            "--keep-docker-runtime 只能配合一个已收集的测试使用，避免遗留大量端口进程"
+        )
+    tests_root = config.rootpath / "tests"
+    markers = {"unit": "unit", "contracts": "contract", "integration": "integration", "e2e": "e2e"}
+    for item in items:
+        if not item.path.is_relative_to(tests_root):
+            continue
+        layer = item.path.relative_to(tests_root).parts[0]
+        if layer in markers:
+            item.add_marker(markers[layer])
+        if layer in {"integration", "e2e"}:
+            suffix = sha1(item.path.as_posix().encode("utf-8")).hexdigest()[:8]
+            item.add_marker(pytest.mark.xdist_group(name=f"{layer}_file_{suffix}"))
 
 
 @pytest.fixture
@@ -203,7 +225,15 @@ def _read_test_config_text(config_path: Path) -> str:
 
 
 @pytest.fixture(autouse=True)
-def test_process_lifetime() -> Iterator[None]:
+def test_process_lifetime(test_module_process_lifetime: None) -> Iterator[None]:
+    del test_module_process_lifetime
+    with capture_test_processes():
+        yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def test_module_process_lifetime() -> Iterator[None]:
+    """模块装具在函数装具之前启动，同样需要覆盖取消和准备失败。"""
     with capture_test_processes():
         yield
 
@@ -293,19 +323,9 @@ def tmp_path(request: pytest.FixtureRequest) -> Path:
 
 @pytest.fixture(scope="session", autouse=True)
 def runtime_manifest_path(integration_test_gate: None) -> Iterator[Path]:
-    """构造稳定的 runtime manifest，供 distribution_id 推导（inline scope_id）。
-
-    路径 MUST NOT 落在 pytest 的 basetemp（``/tmp/pytest-of-<$USER>/pytest-<N>``）：
-    本仓库 ``tmp_path_retention_policy = "none"``，任何一次会话退出都会以 ``keep=0``
-    注册的 atexit 清理调用 ``cleanup_candidates``，把**共享 basetemp 根目录下的每一个
-    ``pytest-<N>`` 都收进候选并 rmtree**——包括仍在运行的别的会话所用的那个。实测：
-    嵌套或并发的第二个 pytest 会话一退出，第一个会话的 basetemp（含此处 manifest）即被
-    删除，其后触达 config 来源构造的用例全部撞上 ``load_distribution_id`` 的 fail-closed。
-    故 manifest MUST 写入确定性、不属于任何 basetemp 的位置：本仓库 ``out/`` 已在
-    ``.gitignore`` 中，且没有任何测试清理 ``out/tests/`` 本身（各用例只清各自的
-    ``out/tests/<镜像路径>/`` 叶子目录）。
-    """
-    manifest = Path.cwd() / "out" / "tests" / "runtime-manifest" / "runtime-manifest.json"
+    """会话独占 manifest，不参与并发重写或 pytest basetemp 的跨会话清理。"""
+    context = TestRunContext.from_test_file(Path("tests/conftest.py"))
+    manifest = context.run_root / "runtime" / f"runtime-manifest-{uuid4().hex}.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
         json.dumps(
@@ -318,7 +338,6 @@ def runtime_manifest_path(integration_test_gate: None) -> Iterator[Path]:
         + "\n",
         encoding="utf-8",
     )
-    # 会话级注入先于模块级服务启动；个别用例仍可显式移除以验证缺失配置。
     previous_manifest = os.environ.get("BOXTEAM_RUNTIME_MANIFEST")
     os.environ["BOXTEAM_RUNTIME_MANIFEST"] = str(manifest)
     try:

@@ -257,7 +257,6 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
             timeout=30,
             trust_env=False,
         ) as client:
-            _json(client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}))
             gateway_id = str(_json(client.get("/api/gateway/health"))["data"]["gateway_id"])
             managed = _json(client.post("/api/gateway/managed-workspaces", json={
                 "root_path": str(workspace),

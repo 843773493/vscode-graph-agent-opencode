@@ -22,18 +22,10 @@ export function useToolApprovals(port: number, workspaceId: string | null | unde
   useEffect(() => {
     const controller = new AbortController();
     lifetime.current = controller;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        await refresh();
-      } catch (failure) {
-        if (!controller.signal.aborted) setError(errorMessage(failure));
-      } finally {
-        if (!controller.signal.aborted) timer = setTimeout(poll, 1500);
-      }
-    }
-    void poll();
-    return () => { controller.abort(); clearTimeout(timer); };
+    void refresh().catch((failure) => {
+      if (!controller.signal.aborted) setError(errorMessage(failure));
+    });
+    return () => controller.abort();
   }, [refresh]);
 
   const submit = useCallback(async (jobId: string, payload: ToolApprovalSubmitRequest) => {

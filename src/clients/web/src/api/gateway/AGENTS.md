@@ -1,10 +1,10 @@
 # 目录用途
 
-`src/clients/web/src/api/gateway/` 存放浏览器前端的 Gateway 控制面 API 客户端：Gateway 用户访问控制与会话初始化、用户视图状态、端口转发、会话连接等 `/api/gateway/*` 契约。
+`src/clients/web/src/api/gateway/` 存放浏览器前端的 Gateway 控制面 API 客户端：端口转发、会话连接等 `/api/gateway/*` 契约。
 
 与相邻模块的边界：
 
-- `api/http.ts`（上级目录）：统一请求屏障（Gateway 凭据、用户会话初始化、重试、超时）与 JSON 解包。本包所有模块都基于它发起请求，不自带传输层。
+- `api/http.ts`（上级目录）：统一请求屏障（Gateway 本机凭据、重试、超时）与 JSON 解包。本包所有模块都基于它发起请求，不自带传输层。
 - `api/session/`（上级目录）：工作区后端会话域 API（`/api/v1/*`），不含 Gateway 控制面契约。
 - `api/stream/`（上级目录）：SSE 实时流与快照校验，与本包的一次性请求-响应语义不同。
 - `types/`：后端协议类型的权威来源，本包只消费不定义。

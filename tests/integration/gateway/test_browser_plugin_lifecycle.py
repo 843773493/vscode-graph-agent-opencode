@@ -136,10 +136,6 @@ def test_browser_plugin_runs_through_workspace_owner_and_exact_gateway_routes(
             timeout=45, trust_env=False,
         ) as client:
             gateway_id = _json(client.get("/api/gateway/health"))["data"]["gateway_id"]
-            client.post(
-                "/api/gateway/users/guest",
-                json={"tracking": {"test": True}},
-            ).raise_for_status()
             managed = _json(client.post("/api/gateway/managed-workspaces", json={
                 "root_path": str(workspace), "name": "Browser plugin lifecycle", "create_directory": False,
             }, timeout=75))["data"]

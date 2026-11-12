@@ -1,5 +1,4 @@
 import type {
-  GatewayUserAccess,
   Session,
 } from "../../../types/backend";
 import { gatewayWorkspaceKey, workspaceOwnerFromKey, type GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
@@ -91,9 +90,6 @@ export function installGatewayFetch(
       if (parsed.pathname === "/api/gateway/auth/local-credential") {
         return apiSuccessResponse({ token });
       }
-      if (parsed.pathname === "/api/gateway/users/current") {
-        return apiSuccessResponse({ kind: "guest", user_id: null });
-      }
       const method = String(init?.method ?? "GET");
       const response = await handler({
         url,
@@ -119,16 +115,6 @@ export function installGatewayFetch(
     },
     { preconnect: originalFetch.preconnect },
   ) as typeof fetch;
-}
-
-export function testGatewayUserAccess(): GatewayUserAccess {
-  return {
-    kind: "guest",
-    user_id: "",
-    lease_generation: 0,
-    expires_at: "",
-    takeover: false,
-  };
 }
 
 function sessionCatalogBreadcrumbResponse(sessionId: string): Response {

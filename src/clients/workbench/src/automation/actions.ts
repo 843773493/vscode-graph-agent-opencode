@@ -5,7 +5,7 @@ import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/di
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../upstream/src/vs/workbench/common/editor.js';
-import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { listGatewayWorkspaces } from '../../../web/src/gatewayApi.js';
 import { listPersistentTasks, type PersistentTaskDTO, type PersistentTaskConfigurationDTO } from '../../../web/src/api/persistentTasks.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
@@ -36,9 +36,9 @@ async function runTaskAction(accessor: ServicesAccessor, action: PersistentTaskA
   if (!initial.gatewayId) throw new Error('Gateway 登记身份尚未加载');
   let invalidated = false;
   let pending: ReturnType<INotificationService['status']> | undefined;
-  const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+  const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error('Gateway 或用户身份已改变，请重新选择任务');
+    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新选择任务');
   };
   // 显式参数在任何 await 前复制，保留所选 revision，不用新列表静默替换。
   const explicit = supplied ? { ...supplied, owner: { ...supplied.owner }, task: structuredClone(supplied.task),

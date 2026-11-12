@@ -62,3 +62,20 @@
 
 - **WHEN** 搜索后原完整输出被删除或被改为同长度的不同内容
 - **THEN** 原 around 入口明确拒绝旧引用，保留其他可用历史，不把新正文当作原命中
+
+
+### Requirement: 工具结果元数据发现沿原历史视图
+
+精确 SessionThread SHALL 提供有界工具结果元数据目录，沿同一历史 owner 的可见载体去重及既有调用索引返回 canonical item、Turn、ModelCall 限定调用身份、名称和状态。目录 MUST NOT 读取 canonical 或完整工具输出正文，也不得触发工具执行。续页 SHALL 绑定原视图及 revision，视图变化沿原历史游标合同明确拒绝；尚未物化的 Thread 返回空目录且不物化历史。
+
+接受候选 SHALL 在原 around 读取中通过独立工具结果 item 选择器核验可见性与 Turn 归属，按原工具调用身份补载并定位同一个 ToolRow，不伪造正文命中区间或工具输出 URI。
+
+#### Scenario: 浏览工具结果后精确打开
+
+- **WHEN** 用户在 child Thread 的资源快速访问中浏览工具结果并接受其中一项
+- **THEN** 浏览和筛选只读原元数据，接受后只加载该结果的原调用详情并定位，main 或其它 Thread 不混入，工具不重放
+
+#### Scenario: 历史改变后的续页
+
+- **WHEN** 用户使用先前目录的续点查询，而原历史视图或 revision 已改变
+- **THEN** owner 返回明确的失效历史游标，不静默从新视图继续或漏过结果

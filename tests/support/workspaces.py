@@ -23,7 +23,7 @@ def render_test_workspace_config(source_text: str) -> str:
 def _make_test_tree_writable(path: Path) -> None:
     """只放开待删除副本的 owner 权限，不跟随指向模板或其它目录的链接。"""
     mode = path.lstat().st_mode
-    if S_ISLNK(mode):
+    if S_ISLNK(mode) or path.is_junction():
         return
     writable = mode | S_IWUSR | (S_IRUSR | S_IXUSR if S_ISDIR(mode) else 0)
     if writable != mode:

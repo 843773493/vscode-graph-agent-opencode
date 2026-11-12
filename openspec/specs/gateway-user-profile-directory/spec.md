@@ -1,47 +1,32 @@
 # gateway-user-profile-directory Specification
 
 ## Purpose
-为每个普通 Gateway 用户提供可独立管理的 profile 目录和明确的 Git 边界，使主题等个人配置拥有稳定落点，同时避免工作区、Gateway 连接、凭据和运行时数据进入未来的用户配置同步范围。
+明确旧 Gateway 用户档案退出后的数据边界，保留历史原件，避免重新引入按账户维护的配置链路。
+
 ## Requirements
-### Requirement: 用户 profile 目录初始化
+### Requirement: 退出用户档案运行期管理
 
-系统 SHALL 在创建普通用户时初始化以稳定 `user_id` 命名的用户目录，并写入应用管理的 `.gitignore`；游客不得创建普通用户 profile 目录。
+Gateway MUST NOT 为当前浏览器访问创建、选择、修改或删除旧用户 profile。既有用户目录及历史数据库内容 SHALL 保留，不自动迁入本机默认账户，也不提供长期双读或双写链路。
 
-#### Scenario: 创建普通用户目录
+#### Scenario: 旧 profile 已存在
 
-- **WHEN** 普通用户创建成功
-- **THEN** 用户目录存在，目录名严格等于 `user_id`，并包含默认 `.gitignore`
+- **WHEN** 以本机凭据启动或修改当前展示偏好
+- **THEN** 旧 profile 原件保持不变，当前展示状态由浏览器既有存储管理
 
-#### Scenario: 游客访问
+### Requirement: 当前图片与配置归属明确
 
-- **WHEN** 游客进入工作区
-- **THEN** 系统不创建普通用户目录，也不把游客追踪数据写入可作为用户配置同步源的目录
+当前主题图片 SHALL 使用 Gateway 原有图片资源 owner；主题、布局与阅读偏好 SHALL 使用浏览器既有展示态存储。连接、凭据与 Gateway 控制面数据继续由各自原 owner 管理，不写入旧用户目录。
 
-### Requirement: 用户配置边界
+#### Scenario: 上传图片并保存偏好
 
-用户 profile 目录 SHALL 只承载用户主题、布局和其他可同步个人偏好；工作区数据、Gateway 连接、凭据、SQLite 数据库、游客记录和运行时缓存不得作为用户 profile 内容。
+- **WHEN** 浏览器上传背景图片并保存展示设置
+- **THEN** 图片经受保护入口存入 Gateway 资源范围，偏好写入浏览器存储，不创建用户目录
 
-#### Scenario: 主题保存
+### Requirement: 不新增用户配置同步
 
-- **WHEN** 用户保存个人主题
-- **THEN** 主题写入该用户 profile 范围，并且其他普通用户读取不到该主题作为自己的默认主题
+系统 MUST NOT 因清理旧用户体系而初始化 Git 同步、自动推送、或猜测旧用户数据归属。
 
-#### Scenario: 非 profile 数据隔离
+#### Scenario: 旧数据尚未人工整理
 
-- **WHEN** 系统生成工作区连接、凭据或运行时状态
-- **THEN** 这些数据写入各自的 Gateway 或 Workspace 状态范围，不出现在用户 profile 目录中
-
-### Requirement: 本次变更不执行 Git 同步
-
-本次系统 SHALL 只初始化 `.gitignore` 和 profile 文件边界，不得自动初始化远程仓库、保存远程 URL、执行拉取/推送或处理 Git 冲突。
-
-#### Scenario: 用户目录已初始化
-
-- **WHEN** 用户查看新建的 profile 目录
-- **THEN** 目录可被用户自行作为 Git 工作树使用，但系统没有创建或修改任何远程同步配置
-
-#### Scenario: Git 同步范围
-
-- **WHEN** 后续用户手动将 profile 目录加入 Git
-- **THEN** 默认忽略规则排除运行时、凭据、连接、工作区和数据库等非 profile 数据
-
+- **WHEN** 用户尚未决定历史 profile 的后续处理
+- **THEN** 系统保留原件且不自动导入或删除

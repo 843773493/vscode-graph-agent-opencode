@@ -19,7 +19,8 @@ def test_prepare_e2e_model_stream_config_overrides_mode_and_artifact_root(
     output_root = tmp_path / "test_model_stream_replay"
     generated = prepare_e2e_model_stream_config(
         CONFIG_PATH,
-        output_root=output_root,
+        runtime_root=output_root / "runtime",
+        artifacts_dir=output_root / "artifacts",
         mode=mode,
     )
 
@@ -39,6 +40,25 @@ def test_prepare_e2e_model_stream_config_rejects_unknown_mode(tmp_path: Path) ->
     with pytest.raises(ValueError, match="mode 不受支持"):
         prepare_e2e_model_stream_config(
             CONFIG_PATH,
-            output_root=tmp_path,
+            runtime_root=tmp_path / "runtime",
+            artifacts_dir=tmp_path / "artifacts",
             mode="unexpected",
         )
+
+
+def test_model_stream_config_and_recordings_remain_owned_by_their_node(tmp_path: Path) -> None:
+    generated = []
+    for name in ("first", "second"):
+        runtime = tmp_path / "runtime" / name
+        artifacts = tmp_path / "artifacts" / name
+        generated.append(prepare_e2e_model_stream_config(
+            CONFIG_PATH, runtime_root=runtime, artifacts_dir=artifacts,
+            exact_fixture_root=runtime / "fixture",
+        ))
+    first = load_model_stream_config(generated[0])
+    second = load_model_stream_config(generated[1])
+
+    assert generated[0] != generated[1]
+    assert first.transport.fixture_root != second.transport.fixture_root
+    assert first.transport.artifact_root == (tmp_path / "artifacts/first/model-stream").resolve()
+    assert second.transport.artifact_root == (tmp_path / "artifacts/second/model-stream").resolve()

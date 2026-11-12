@@ -14,7 +14,6 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -93,7 +92,6 @@ async def test_native_source_urls_use_the_same_file_owner_as_file_urls(
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
             active = workspaces.json()["data"]["active_workspace"]

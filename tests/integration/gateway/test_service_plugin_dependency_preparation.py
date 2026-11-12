@@ -195,7 +195,6 @@ def dependency_plugin_gateway(request: pytest.FixtureRequest, integration_worksp
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=30, trust_env=False) as client:
-            client.post("/api/gateway/users/guest", json={}).raise_for_status()
             active = client.get("/api/gateway/workspaces").raise_for_status().json()["data"]["active_workspace"]
             client.headers.update({
                 "X-BoxTeam-Target-Gateway-Id": active["gateway_id"],

@@ -26,20 +26,9 @@ try {
       result.settingsFailures.push(response.status());
     }
   });
-  // 使用本次真实 Gateway 的访客入口，不拦截页面请求或伪造工作区状态。
+  // 使用本次真实 Gateway 的本机凭据，不拦截页面请求或伪造工作区状态。
   const target = new URL("/", required("BOXTEAM_BROWSER_BASE_URL"));
   await page.goto(target.href, { waitUntil: "domcontentloaded" });
-  const guest = await page.evaluate(async () => {
-    const credential = await fetch("/api/gateway/auth/local-credential");
-    if (!credential.ok) throw new Error("读取本地凭证失败");
-    const token = (await credential.json()).data.token;
-    const response = await fetch("/api/gateway/users/guest", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Local-Token": token },
-      body: JSON.stringify({ tracking: { source: "attachment-directory-web" } }),
-    });
-    return { status: response.status, body: await response.text() };
-  });
-  assert.equal(guest.status, 200, guest.body);
   const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${fixture.sessionId}"][data-thread-id="${fixture.threadId}"]`);
   const metadata = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/workspace");
   await page.goto(target.href, { waitUntil: "domcontentloaded" });

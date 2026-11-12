@@ -33,10 +33,6 @@ export interface GatewayResourceAddressDTO {
   reference_uri: string;
 }
 
-export interface AcquireGatewayUserRequest {
-  client_label?: string | undefined;
-}
-
 /** 同机认证控制链专用，不作为普通文件响应或联邦资源投影。 */
 export interface NativeDirectoryBindRequest {
   native_root: string;
@@ -86,20 +82,11 @@ export interface CreateFederationManagedWorkspaceRequest {
   create_directory?: boolean | undefined;
 }
 
-export interface CreateGatewayGuestRequest {
-  tracking?: { [key: string]: any } | undefined;
-}
-
 export interface CreateGatewayManagedWorkspaceRequest {
   root_path: string;
   name?: string | undefined;
   create_directory?: boolean | undefined;
   gateway_connection_id?: string | undefined;
-}
-
-export interface CreateGatewayUserRequest {
-  display_name: string;
-  user_id?: string | undefined;
 }
 
 export interface CreatePortForwardRequest {
@@ -730,32 +717,6 @@ export interface GatewaySearchScopeResolutionDTO {
   branches: GatewaySearchScopeBranchDTO[];
 }
 
-export interface GatewayThemeBackgroundDTO {
-  type: string;
-  url?: string | undefined;
-  asset_id?: string | undefined;
-  position?: string | undefined;
-  size?: string | undefined;
-  repeat?: string | undefined;
-  appearance?: string | undefined;
-  overlay?: string | undefined;
-}
-
-export interface GatewayThemeCatalogDTO {
-  current_theme_id: string;
-  items: GatewayThemeOptionDTO[];
-  current_theme: ResolvedGatewayThemeDTO | undefined;
-}
-
-export interface GatewayThemeOptionDTO {
-  id: string;
-  label: string;
-  extends: string;
-  source: string;
-  preview_tokens: { [key: string]: any } | undefined;
-  background_image_url?: string | undefined;
-}
-
 export interface GatewayUIAssetDTO {
   asset_id: string;
   original_filename: string;
@@ -764,75 +725,28 @@ export interface GatewayUIAssetDTO {
   sha256: string;
   imported_at: string;
   url: string;
-  referenced_theme_ids: string[];
 }
 
 export interface GatewayUIAssetListDTO {
   items: GatewayUIAssetDTO[];
 }
 
-export interface GatewayUserAccessDTO {
-  kind: string;
-  user_id?: string | undefined;
-  lease_generation: number;
-  expires_at?: string | undefined;
-  takeover?: boolean | undefined;
-}
-
-export interface GatewayUserDTO {
-  user_id: string;
-  display_name: string;
-  created_at: string;
-  lease?: GatewayUserLeaseDTO | undefined;
-}
-
-export interface GatewayUserLeaseDTO {
-  occupied?: boolean | undefined;
-  client_label?: string | undefined;
-  heartbeat_at?: string | undefined;
-  expires_at?: string | undefined;
-}
-
-export interface GatewayUserListDTO {
-  items: GatewayUserDTO[];
-}
-
 /**
  * 视图状态按用户、Gateway、工作区与 Session 归属，仅用于主聊天 main thread。
  * 无锚点时 writer 记录当前 scrollTop，恢复忽略该像素偏移并回到最新尾部。
+ * PUT 请求完整替换当前用户、工作区和会话范围的视图状态；未提供字段采用服务端默认值。
  */
-export interface GatewayUserViewStateDTO {
-  user_id: string;
-  workspace_id: string;
-  session_id: string;
-  /** 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。 */
-  turn_anchor?:
-    | string
-    | undefined;
-  /** 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。 */
-  scroll_offset: number;
-  /** 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。 */
-  follow_latest?: boolean | undefined;
-  projection_version: number;
-  tool_details_expanded?: boolean | undefined;
-  updated_at: string;
+export interface GatewayManagementTargetDTO {
   gateway_id: string;
+  name: string;
+  connection_kind: string;
+  gateway_connection_id?: string | undefined;
+  connection_error?: string | undefined;
 }
 
-/** PUT 请求完整替换当前用户、工作区和会话范围的视图状态；未提供字段采用服务端默认值。 */
-export interface GatewayUserViewStateUpdateRequest {
-  /** 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。 */
-  turn_anchor?:
-    | string
-    | undefined;
-  /** 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。 */
-  scroll_offset?:
-    | number
-    | undefined;
-  /** 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。 */
-  follow_latest?: boolean | undefined;
-  projection_version?: number | undefined;
-  tool_details_expanded?: boolean | undefined;
+export interface GatewayManagementDirectoryDTO {
+  local_gateway_id: string;
+  items: GatewayManagementTargetDTO[];
 }
 
 export interface GatewayWorkspaceDTO {
@@ -885,14 +799,6 @@ export interface PortForwardListDTO {
 
 export interface ReorderGatewayWorkspacesRequest {
   workspaces: GatewaySearchWorkspaceOwnerDTO[];
-}
-
-export interface ResolvedGatewayThemeDTO {
-  id: string;
-  label: string;
-  color_scheme: string;
-  tokens: { [key: string]: any } | undefined;
-  background_image_url?: string | undefined;
 }
 
 export interface SshConnectionOptionDTO {
@@ -963,7 +869,6 @@ export interface WebUISettingsDTO {
   session_sidebar?: WebUISessionSidebarSettingsDTO | undefined;
   workspace_file_tree?: WebUIWorkspaceFileTreeSettingsDTO | undefined;
   gateway_console?: WebUIGatewayConsoleSettingsDTO | undefined;
-  theme?: WebUIThemeSettingsDTO | undefined;
 }
 
 export interface WebUISettingsUpdateDTO {
@@ -971,18 +876,6 @@ export interface WebUISettingsUpdateDTO {
   session_sidebar?: WebUISessionSidebarSettingsDTO | undefined;
   workspace_file_tree?: WebUIWorkspaceFileTreeSettingsDTO | undefined;
   gateway_console?: WebUIGatewayConsoleSettingsDTO | undefined;
-  theme?: WebUIThemeSettingsUpdateDTO | undefined;
-}
-
-export interface WebUIThemeSettingsDTO {
-  theme_id?: string | undefined;
-  background?: GatewayThemeBackgroundDTO | undefined;
-  resolved_theme?: ResolvedGatewayThemeDTO | undefined;
-}
-
-export interface WebUIThemeSettingsUpdateDTO {
-  theme_id?: string | undefined;
-  background?: GatewayThemeBackgroundDTO | undefined;
 }
 
 export interface WebUIWorkspaceBottomPanelSettingsDTO {
@@ -1037,20 +930,6 @@ export interface WorkspaceNavigationReorderRequest {
 export interface WorkspaceNavigationTreeDTO {
   revision: string;
   nodes: WorkspaceNavigationNodeDTO[];
-}
-
-/** 当前 registry 的入口投影，包括未投影任何工作区的远端连接。 */
-export interface GatewayManagementTargetDTO {
-  gateway_id: string;
-  name: string;
-  connection_kind: string;
-  gateway_connection_id?: string | undefined;
-  connection_error?: string | undefined;
-}
-
-export interface GatewayManagementDirectoryDTO {
-  local_gateway_id: string;
-  items: GatewayManagementTargetDTO[];
 }
 
 function createBaseGatewayResourceAddressRequest(): GatewayResourceAddressRequest {
@@ -1171,33 +1050,6 @@ export const GatewayResourceAddressDTO: MessageFns<GatewayResourceAddressDTO> = 
     message.session_id = object.session_id ?? undefined;
     message.thread_id = object.thread_id ?? undefined;
     message.reference_uri = object.reference_uri ?? "";
-    return message;
-  },
-};
-
-function createBaseAcquireGatewayUserRequest(): AcquireGatewayUserRequest {
-  return { client_label: undefined };
-}
-
-export const AcquireGatewayUserRequest: MessageFns<AcquireGatewayUserRequest> = {
-  fromJSON(object: any): AcquireGatewayUserRequest {
-    return { client_label: isSet(object.client_label) ? globalThis.String(object.client_label) : undefined };
-  },
-
-  toJSON(message: AcquireGatewayUserRequest): unknown {
-    const obj: any = {};
-    if (message.client_label !== undefined) {
-      obj.client_label = message.client_label;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<AcquireGatewayUserRequest>, I>>(base?: I): AcquireGatewayUserRequest {
-    return AcquireGatewayUserRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<AcquireGatewayUserRequest>, I>>(object: I): AcquireGatewayUserRequest {
-    const message = createBaseAcquireGatewayUserRequest();
-    message.client_label = object.client_label ?? undefined;
     return message;
   },
 };
@@ -1544,33 +1396,6 @@ export const CreateFederationManagedWorkspaceRequest: MessageFns<CreateFederatio
   },
 };
 
-function createBaseCreateGatewayGuestRequest(): CreateGatewayGuestRequest {
-  return { tracking: undefined };
-}
-
-export const CreateGatewayGuestRequest: MessageFns<CreateGatewayGuestRequest> = {
-  fromJSON(object: any): CreateGatewayGuestRequest {
-    return { tracking: isObject(object.tracking) ? object.tracking : undefined };
-  },
-
-  toJSON(message: CreateGatewayGuestRequest): unknown {
-    const obj: any = {};
-    if (message.tracking !== undefined) {
-      obj.tracking = message.tracking;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<CreateGatewayGuestRequest>, I>>(base?: I): CreateGatewayGuestRequest {
-    return CreateGatewayGuestRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<CreateGatewayGuestRequest>, I>>(object: I): CreateGatewayGuestRequest {
-    const message = createBaseCreateGatewayGuestRequest();
-    message.tracking = object.tracking ?? undefined;
-    return message;
-  },
-};
-
 function createBaseCreateGatewayManagedWorkspaceRequest(): CreateGatewayManagedWorkspaceRequest {
   return { root_path: "", name: undefined, create_directory: undefined, gateway_connection_id: undefined };
 }
@@ -1617,40 +1442,6 @@ export const CreateGatewayManagedWorkspaceRequest: MessageFns<CreateGatewayManag
     message.name = object.name ?? undefined;
     message.create_directory = object.create_directory ?? undefined;
     message.gateway_connection_id = object.gateway_connection_id ?? undefined;
-    return message;
-  },
-};
-
-function createBaseCreateGatewayUserRequest(): CreateGatewayUserRequest {
-  return { display_name: "", user_id: undefined };
-}
-
-export const CreateGatewayUserRequest: MessageFns<CreateGatewayUserRequest> = {
-  fromJSON(object: any): CreateGatewayUserRequest {
-    return {
-      display_name: isSet(object.display_name) ? globalThis.String(object.display_name) : "",
-      user_id: isSet(object.user_id) ? globalThis.String(object.user_id) : undefined,
-    };
-  },
-
-  toJSON(message: CreateGatewayUserRequest): unknown {
-    const obj: any = {};
-    if (message.display_name !== "") {
-      obj.display_name = message.display_name;
-    }
-    if (message.user_id !== undefined) {
-      obj.user_id = message.user_id;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<CreateGatewayUserRequest>, I>>(base?: I): CreateGatewayUserRequest {
-    return CreateGatewayUserRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<CreateGatewayUserRequest>, I>>(object: I): CreateGatewayUserRequest {
-    const message = createBaseCreateGatewayUserRequest();
-    message.display_name = object.display_name ?? "";
-    message.user_id = object.user_id ?? undefined;
     return message;
   },
 };
@@ -5915,189 +5706,8 @@ export const GatewaySearchScopeResolutionDTO: MessageFns<GatewaySearchScopeResol
   },
 };
 
-function createBaseGatewayThemeBackgroundDTO(): GatewayThemeBackgroundDTO {
-  return {
-    type: "",
-    url: undefined,
-    asset_id: undefined,
-    position: undefined,
-    size: undefined,
-    repeat: undefined,
-    appearance: undefined,
-    overlay: undefined,
-  };
-}
-
-export const GatewayThemeBackgroundDTO: MessageFns<GatewayThemeBackgroundDTO> = {
-  fromJSON(object: any): GatewayThemeBackgroundDTO {
-    return {
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      url: isSet(object.url) ? globalThis.String(object.url) : undefined,
-      asset_id: isSet(object.asset_id) ? globalThis.String(object.asset_id) : undefined,
-      position: isSet(object.position) ? globalThis.String(object.position) : undefined,
-      size: isSet(object.size) ? globalThis.String(object.size) : undefined,
-      repeat: isSet(object.repeat) ? globalThis.String(object.repeat) : undefined,
-      appearance: isSet(object.appearance) ? globalThis.String(object.appearance) : undefined,
-      overlay: isSet(object.overlay) ? globalThis.String(object.overlay) : undefined,
-    };
-  },
-
-  toJSON(message: GatewayThemeBackgroundDTO): unknown {
-    const obj: any = {};
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.url !== undefined) {
-      obj.url = message.url;
-    }
-    if (message.asset_id !== undefined) {
-      obj.asset_id = message.asset_id;
-    }
-    if (message.position !== undefined) {
-      obj.position = message.position;
-    }
-    if (message.size !== undefined) {
-      obj.size = message.size;
-    }
-    if (message.repeat !== undefined) {
-      obj.repeat = message.repeat;
-    }
-    if (message.appearance !== undefined) {
-      obj.appearance = message.appearance;
-    }
-    if (message.overlay !== undefined) {
-      obj.overlay = message.overlay;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayThemeBackgroundDTO>, I>>(base?: I): GatewayThemeBackgroundDTO {
-    return GatewayThemeBackgroundDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayThemeBackgroundDTO>, I>>(object: I): GatewayThemeBackgroundDTO {
-    const message = createBaseGatewayThemeBackgroundDTO();
-    message.type = object.type ?? "";
-    message.url = object.url ?? undefined;
-    message.asset_id = object.asset_id ?? undefined;
-    message.position = object.position ?? undefined;
-    message.size = object.size ?? undefined;
-    message.repeat = object.repeat ?? undefined;
-    message.appearance = object.appearance ?? undefined;
-    message.overlay = object.overlay ?? undefined;
-    return message;
-  },
-};
-
-function createBaseGatewayThemeCatalogDTO(): GatewayThemeCatalogDTO {
-  return { current_theme_id: "", items: [], current_theme: undefined };
-}
-
-export const GatewayThemeCatalogDTO: MessageFns<GatewayThemeCatalogDTO> = {
-  fromJSON(object: any): GatewayThemeCatalogDTO {
-    return {
-      current_theme_id: isSet(object.current_theme_id) ? globalThis.String(object.current_theme_id) : "",
-      items: globalThis.Array.isArray(object?.items)
-        ? object.items.map((e: any) => GatewayThemeOptionDTO.fromJSON(e))
-        : [],
-      current_theme: isSet(object.current_theme) ? ResolvedGatewayThemeDTO.fromJSON(object.current_theme) : undefined,
-    };
-  },
-
-  toJSON(message: GatewayThemeCatalogDTO): unknown {
-    const obj: any = {};
-    if (message.current_theme_id !== "") {
-      obj.current_theme_id = message.current_theme_id;
-    }
-    if (message.items?.length) {
-      obj.items = message.items.map((e) => GatewayThemeOptionDTO.toJSON(e));
-    }
-    if (message.current_theme !== undefined) {
-      obj.current_theme = ResolvedGatewayThemeDTO.toJSON(message.current_theme);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayThemeCatalogDTO>, I>>(base?: I): GatewayThemeCatalogDTO {
-    return GatewayThemeCatalogDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayThemeCatalogDTO>, I>>(object: I): GatewayThemeCatalogDTO {
-    const message = createBaseGatewayThemeCatalogDTO();
-    message.current_theme_id = object.current_theme_id ?? "";
-    message.items = object.items?.map((e) => GatewayThemeOptionDTO.fromPartial(e)) || [];
-    message.current_theme = (object.current_theme !== undefined && object.current_theme !== null)
-      ? ResolvedGatewayThemeDTO.fromPartial(object.current_theme)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseGatewayThemeOptionDTO(): GatewayThemeOptionDTO {
-  return { id: "", label: "", extends: "", source: "", preview_tokens: undefined, background_image_url: undefined };
-}
-
-export const GatewayThemeOptionDTO: MessageFns<GatewayThemeOptionDTO> = {
-  fromJSON(object: any): GatewayThemeOptionDTO {
-    return {
-      id: isSet(object.id) ? globalThis.String(object.id) : "",
-      label: isSet(object.label) ? globalThis.String(object.label) : "",
-      extends: isSet(object.extends) ? globalThis.String(object.extends) : "",
-      source: isSet(object.source) ? globalThis.String(object.source) : "",
-      preview_tokens: isObject(object.preview_tokens) ? object.preview_tokens : undefined,
-      background_image_url: isSet(object.background_image_url)
-        ? globalThis.String(object.background_image_url)
-        : undefined,
-    };
-  },
-
-  toJSON(message: GatewayThemeOptionDTO): unknown {
-    const obj: any = {};
-    if (message.id !== "") {
-      obj.id = message.id;
-    }
-    if (message.label !== "") {
-      obj.label = message.label;
-    }
-    if (message.extends !== "") {
-      obj.extends = message.extends;
-    }
-    if (message.source !== "") {
-      obj.source = message.source;
-    }
-    if (message.preview_tokens !== undefined) {
-      obj.preview_tokens = message.preview_tokens;
-    }
-    if (message.background_image_url !== undefined) {
-      obj.background_image_url = message.background_image_url;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayThemeOptionDTO>, I>>(base?: I): GatewayThemeOptionDTO {
-    return GatewayThemeOptionDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayThemeOptionDTO>, I>>(object: I): GatewayThemeOptionDTO {
-    const message = createBaseGatewayThemeOptionDTO();
-    message.id = object.id ?? "";
-    message.label = object.label ?? "";
-    message.extends = object.extends ?? "";
-    message.source = object.source ?? "";
-    message.preview_tokens = object.preview_tokens ?? undefined;
-    message.background_image_url = object.background_image_url ?? undefined;
-    return message;
-  },
-};
-
 function createBaseGatewayUIAssetDTO(): GatewayUIAssetDTO {
-  return {
-    asset_id: "",
-    original_filename: "",
-    content_type: "",
-    size: 0,
-    sha256: "",
-    imported_at: "",
-    url: "",
-    referenced_theme_ids: [],
-  };
+  return { asset_id: "", original_filename: "", content_type: "", size: 0, sha256: "", imported_at: "", url: "" };
 }
 
 export const GatewayUIAssetDTO: MessageFns<GatewayUIAssetDTO> = {
@@ -6110,9 +5720,6 @@ export const GatewayUIAssetDTO: MessageFns<GatewayUIAssetDTO> = {
       sha256: isSet(object.sha256) ? globalThis.String(object.sha256) : "",
       imported_at: isSet(object.imported_at) ? globalThis.String(object.imported_at) : "",
       url: isSet(object.url) ? globalThis.String(object.url) : "",
-      referenced_theme_ids: globalThis.Array.isArray(object?.referenced_theme_ids)
-        ? object.referenced_theme_ids.map((e: any) => globalThis.String(e))
-        : [],
     };
   },
 
@@ -6139,9 +5746,6 @@ export const GatewayUIAssetDTO: MessageFns<GatewayUIAssetDTO> = {
     if (message.url !== "") {
       obj.url = message.url;
     }
-    if (message.referenced_theme_ids?.length) {
-      obj.referenced_theme_ids = message.referenced_theme_ids;
-    }
     return obj;
   },
 
@@ -6157,7 +5761,6 @@ export const GatewayUIAssetDTO: MessageFns<GatewayUIAssetDTO> = {
     message.sha256 = object.sha256 ?? "";
     message.imported_at = object.imported_at ?? "";
     message.url = object.url ?? "";
-    message.referenced_theme_ids = object.referenced_theme_ids?.map((e) => e) || [];
     return message;
   },
 };
@@ -6191,318 +5794,97 @@ export const GatewayUIAssetListDTO: MessageFns<GatewayUIAssetListDTO> = {
   },
 };
 
-function createBaseGatewayUserAccessDTO(): GatewayUserAccessDTO {
-  return { kind: "", user_id: undefined, lease_generation: 0, expires_at: undefined, takeover: undefined };
-}
-
-export const GatewayUserAccessDTO: MessageFns<GatewayUserAccessDTO> = {
-  fromJSON(object: any): GatewayUserAccessDTO {
-    return {
-      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
-      user_id: isSet(object.user_id) ? globalThis.String(object.user_id) : undefined,
-      lease_generation: isSet(object.lease_generation) ? globalThis.Number(object.lease_generation) : 0,
-      expires_at: isSet(object.expires_at) ? globalThis.String(object.expires_at) : undefined,
-      takeover: isSet(object.takeover) ? globalThis.Boolean(object.takeover) : undefined,
-    };
-  },
-
-  toJSON(message: GatewayUserAccessDTO): unknown {
-    const obj: any = {};
-    if (message.kind !== "") {
-      obj.kind = message.kind;
-    }
-    if (message.user_id !== undefined) {
-      obj.user_id = message.user_id;
-    }
-    if (message.lease_generation !== 0) {
-      obj.lease_generation = Math.round(message.lease_generation);
-    }
-    if (message.expires_at !== undefined) {
-      obj.expires_at = message.expires_at;
-    }
-    if (message.takeover !== undefined) {
-      obj.takeover = message.takeover;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayUserAccessDTO>, I>>(base?: I): GatewayUserAccessDTO {
-    return GatewayUserAccessDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayUserAccessDTO>, I>>(object: I): GatewayUserAccessDTO {
-    const message = createBaseGatewayUserAccessDTO();
-    message.kind = object.kind ?? "";
-    message.user_id = object.user_id ?? undefined;
-    message.lease_generation = object.lease_generation ?? 0;
-    message.expires_at = object.expires_at ?? undefined;
-    message.takeover = object.takeover ?? undefined;
-    return message;
-  },
-};
-
-function createBaseGatewayUserDTO(): GatewayUserDTO {
-  return { user_id: "", display_name: "", created_at: "", lease: undefined };
-}
-
-export const GatewayUserDTO: MessageFns<GatewayUserDTO> = {
-  fromJSON(object: any): GatewayUserDTO {
-    return {
-      user_id: isSet(object.user_id) ? globalThis.String(object.user_id) : "",
-      display_name: isSet(object.display_name) ? globalThis.String(object.display_name) : "",
-      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : "",
-      lease: isSet(object.lease) ? GatewayUserLeaseDTO.fromJSON(object.lease) : undefined,
-    };
-  },
-
-  toJSON(message: GatewayUserDTO): unknown {
-    const obj: any = {};
-    if (message.user_id !== "") {
-      obj.user_id = message.user_id;
-    }
-    if (message.display_name !== "") {
-      obj.display_name = message.display_name;
-    }
-    if (message.created_at !== "") {
-      obj.created_at = message.created_at;
-    }
-    if (message.lease !== undefined) {
-      obj.lease = GatewayUserLeaseDTO.toJSON(message.lease);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayUserDTO>, I>>(base?: I): GatewayUserDTO {
-    return GatewayUserDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayUserDTO>, I>>(object: I): GatewayUserDTO {
-    const message = createBaseGatewayUserDTO();
-    message.user_id = object.user_id ?? "";
-    message.display_name = object.display_name ?? "";
-    message.created_at = object.created_at ?? "";
-    message.lease = (object.lease !== undefined && object.lease !== null)
-      ? GatewayUserLeaseDTO.fromPartial(object.lease)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseGatewayUserLeaseDTO(): GatewayUserLeaseDTO {
-  return { occupied: undefined, client_label: undefined, heartbeat_at: undefined, expires_at: undefined };
-}
-
-export const GatewayUserLeaseDTO: MessageFns<GatewayUserLeaseDTO> = {
-  fromJSON(object: any): GatewayUserLeaseDTO {
-    return {
-      occupied: isSet(object.occupied) ? globalThis.Boolean(object.occupied) : undefined,
-      client_label: isSet(object.client_label) ? globalThis.String(object.client_label) : undefined,
-      heartbeat_at: isSet(object.heartbeat_at) ? globalThis.String(object.heartbeat_at) : undefined,
-      expires_at: isSet(object.expires_at) ? globalThis.String(object.expires_at) : undefined,
-    };
-  },
-
-  toJSON(message: GatewayUserLeaseDTO): unknown {
-    const obj: any = {};
-    if (message.occupied !== undefined) {
-      obj.occupied = message.occupied;
-    }
-    if (message.client_label !== undefined) {
-      obj.client_label = message.client_label;
-    }
-    if (message.heartbeat_at !== undefined) {
-      obj.heartbeat_at = message.heartbeat_at;
-    }
-    if (message.expires_at !== undefined) {
-      obj.expires_at = message.expires_at;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayUserLeaseDTO>, I>>(base?: I): GatewayUserLeaseDTO {
-    return GatewayUserLeaseDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayUserLeaseDTO>, I>>(object: I): GatewayUserLeaseDTO {
-    const message = createBaseGatewayUserLeaseDTO();
-    message.occupied = object.occupied ?? undefined;
-    message.client_label = object.client_label ?? undefined;
-    message.heartbeat_at = object.heartbeat_at ?? undefined;
-    message.expires_at = object.expires_at ?? undefined;
-    return message;
-  },
-};
-
-function createBaseGatewayUserListDTO(): GatewayUserListDTO {
-  return { items: [] };
-}
-
-export const GatewayUserListDTO: MessageFns<GatewayUserListDTO> = {
-  fromJSON(object: any): GatewayUserListDTO {
-    return {
-      items: globalThis.Array.isArray(object?.items) ? object.items.map((e: any) => GatewayUserDTO.fromJSON(e)) : [],
-    };
-  },
-
-  toJSON(message: GatewayUserListDTO): unknown {
-    const obj: any = {};
-    if (message.items?.length) {
-      obj.items = message.items.map((e) => GatewayUserDTO.toJSON(e));
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayUserListDTO>, I>>(base?: I): GatewayUserListDTO {
-    return GatewayUserListDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayUserListDTO>, I>>(object: I): GatewayUserListDTO {
-    const message = createBaseGatewayUserListDTO();
-    message.items = object.items?.map((e) => GatewayUserDTO.fromPartial(e)) || [];
-    return message;
-  },
-};
-
-function createBaseGatewayUserViewStateDTO(): GatewayUserViewStateDTO {
+function createBaseGatewayManagementTargetDTO(): GatewayManagementTargetDTO {
   return {
-    user_id: "",
-    workspace_id: "",
-    session_id: "",
-    turn_anchor: undefined,
-    scroll_offset: 0,
-    follow_latest: undefined,
-    projection_version: 0,
-    tool_details_expanded: undefined,
-    updated_at: "",
     gateway_id: "",
+    name: "",
+    connection_kind: "",
+    gateway_connection_id: undefined,
+    connection_error: undefined,
   };
 }
 
-export const GatewayUserViewStateDTO: MessageFns<GatewayUserViewStateDTO> = {
-  fromJSON(object: any): GatewayUserViewStateDTO {
+export const GatewayManagementTargetDTO: MessageFns<GatewayManagementTargetDTO> = {
+  fromJSON(object: any): GatewayManagementTargetDTO {
     return {
-      user_id: isSet(object.user_id) ? globalThis.String(object.user_id) : "",
-      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      turn_anchor: isSet(object.turn_anchor) ? globalThis.String(object.turn_anchor) : undefined,
-      scroll_offset: isSet(object.scroll_offset) ? globalThis.Number(object.scroll_offset) : 0,
-      follow_latest: isSet(object.follow_latest) ? globalThis.Boolean(object.follow_latest) : undefined,
-      projection_version: isSet(object.projection_version) ? globalThis.Number(object.projection_version) : 0,
-      tool_details_expanded: isSet(object.tool_details_expanded)
-        ? globalThis.Boolean(object.tool_details_expanded)
-        : undefined,
-      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : "",
       gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      connection_kind: isSet(object.connection_kind) ? globalThis.String(object.connection_kind) : "",
+      gateway_connection_id: isSet(object.gateway_connection_id)
+        ? globalThis.String(object.gateway_connection_id)
+        : undefined,
+      connection_error: isSet(object.connection_error) ? globalThis.String(object.connection_error) : undefined,
     };
   },
 
-  toJSON(message: GatewayUserViewStateDTO): unknown {
+  toJSON(message: GatewayManagementTargetDTO): unknown {
     const obj: any = {};
-    if (message.user_id !== "") {
-      obj.user_id = message.user_id;
-    }
-    if (message.workspace_id !== "") {
-      obj.workspace_id = message.workspace_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.turn_anchor !== undefined) {
-      obj.turn_anchor = message.turn_anchor;
-    }
-    if (message.scroll_offset !== 0) {
-      obj.scroll_offset = message.scroll_offset;
-    }
-    if (message.follow_latest !== undefined) {
-      obj.follow_latest = message.follow_latest;
-    }
-    if (message.projection_version !== 0) {
-      obj.projection_version = Math.round(message.projection_version);
-    }
-    if (message.tool_details_expanded !== undefined) {
-      obj.tool_details_expanded = message.tool_details_expanded;
-    }
-    if (message.updated_at !== "") {
-      obj.updated_at = message.updated_at;
-    }
     if (message.gateway_id !== "") {
       obj.gateway_id = message.gateway_id;
     }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.connection_kind !== "") {
+      obj.connection_kind = message.connection_kind;
+    }
+    if (message.gateway_connection_id !== undefined) {
+      obj.gateway_connection_id = message.gateway_connection_id;
+    }
+    if (message.connection_error !== undefined) {
+      obj.connection_error = message.connection_error;
+    }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<GatewayUserViewStateDTO>, I>>(base?: I): GatewayUserViewStateDTO {
-    return GatewayUserViewStateDTO.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<GatewayManagementTargetDTO>, I>>(base?: I): GatewayManagementTargetDTO {
+    return GatewayManagementTargetDTO.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<GatewayUserViewStateDTO>, I>>(object: I): GatewayUserViewStateDTO {
-    const message = createBaseGatewayUserViewStateDTO();
-    message.user_id = object.user_id ?? "";
-    message.workspace_id = object.workspace_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.turn_anchor = object.turn_anchor ?? undefined;
-    message.scroll_offset = object.scroll_offset ?? 0;
-    message.follow_latest = object.follow_latest ?? undefined;
-    message.projection_version = object.projection_version ?? 0;
-    message.tool_details_expanded = object.tool_details_expanded ?? undefined;
-    message.updated_at = object.updated_at ?? "";
+  fromPartial<I extends Exact<DeepPartial<GatewayManagementTargetDTO>, I>>(object: I): GatewayManagementTargetDTO {
+    const message = createBaseGatewayManagementTargetDTO();
     message.gateway_id = object.gateway_id ?? "";
+    message.name = object.name ?? "";
+    message.connection_kind = object.connection_kind ?? "";
+    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
+    message.connection_error = object.connection_error ?? undefined;
     return message;
   },
 };
 
-function createBaseGatewayUserViewStateUpdateRequest(): GatewayUserViewStateUpdateRequest {
-  return {
-    turn_anchor: undefined,
-    scroll_offset: undefined,
-    follow_latest: undefined,
-    projection_version: undefined,
-    tool_details_expanded: undefined,
-  };
+function createBaseGatewayManagementDirectoryDTO(): GatewayManagementDirectoryDTO {
+  return { local_gateway_id: "", items: [] };
 }
 
-export const GatewayUserViewStateUpdateRequest: MessageFns<GatewayUserViewStateUpdateRequest> = {
-  fromJSON(object: any): GatewayUserViewStateUpdateRequest {
+export const GatewayManagementDirectoryDTO: MessageFns<GatewayManagementDirectoryDTO> = {
+  fromJSON(object: any): GatewayManagementDirectoryDTO {
     return {
-      turn_anchor: isSet(object.turn_anchor) ? globalThis.String(object.turn_anchor) : undefined,
-      scroll_offset: isSet(object.scroll_offset) ? globalThis.Number(object.scroll_offset) : undefined,
-      follow_latest: isSet(object.follow_latest) ? globalThis.Boolean(object.follow_latest) : undefined,
-      projection_version: isSet(object.projection_version) ? globalThis.Number(object.projection_version) : undefined,
-      tool_details_expanded: isSet(object.tool_details_expanded)
-        ? globalThis.Boolean(object.tool_details_expanded)
-        : undefined,
+      local_gateway_id: isSet(object.local_gateway_id) ? globalThis.String(object.local_gateway_id) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => GatewayManagementTargetDTO.fromJSON(e))
+        : [],
     };
   },
 
-  toJSON(message: GatewayUserViewStateUpdateRequest): unknown {
+  toJSON(message: GatewayManagementDirectoryDTO): unknown {
     const obj: any = {};
-    if (message.turn_anchor !== undefined) {
-      obj.turn_anchor = message.turn_anchor;
+    if (message.local_gateway_id !== "") {
+      obj.local_gateway_id = message.local_gateway_id;
     }
-    if (message.scroll_offset !== undefined) {
-      obj.scroll_offset = message.scroll_offset;
-    }
-    if (message.follow_latest !== undefined) {
-      obj.follow_latest = message.follow_latest;
-    }
-    if (message.projection_version !== undefined) {
-      obj.projection_version = Math.round(message.projection_version);
-    }
-    if (message.tool_details_expanded !== undefined) {
-      obj.tool_details_expanded = message.tool_details_expanded;
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => GatewayManagementTargetDTO.toJSON(e));
     }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<GatewayUserViewStateUpdateRequest>, I>>(
-    base?: I,
-  ): GatewayUserViewStateUpdateRequest {
-    return GatewayUserViewStateUpdateRequest.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<GatewayManagementDirectoryDTO>, I>>(base?: I): GatewayManagementDirectoryDTO {
+    return GatewayManagementDirectoryDTO.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<GatewayUserViewStateUpdateRequest>, I>>(
+  fromPartial<I extends Exact<DeepPartial<GatewayManagementDirectoryDTO>, I>>(
     object: I,
-  ): GatewayUserViewStateUpdateRequest {
-    const message = createBaseGatewayUserViewStateUpdateRequest();
-    message.turn_anchor = object.turn_anchor ?? undefined;
-    message.scroll_offset = object.scroll_offset ?? undefined;
-    message.follow_latest = object.follow_latest ?? undefined;
-    message.projection_version = object.projection_version ?? undefined;
-    message.tool_details_expanded = object.tool_details_expanded ?? undefined;
+  ): GatewayManagementDirectoryDTO {
+    const message = createBaseGatewayManagementDirectoryDTO();
+    message.local_gateway_id = object.local_gateway_id ?? "";
+    message.items = object.items?.map((e) => GatewayManagementTargetDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -6866,57 +6248,6 @@ export const ReorderGatewayWorkspacesRequest: MessageFns<ReorderGatewayWorkspace
   ): ReorderGatewayWorkspacesRequest {
     const message = createBaseReorderGatewayWorkspacesRequest();
     message.workspaces = object.workspaces?.map((e) => GatewaySearchWorkspaceOwnerDTO.fromPartial(e)) || [];
-    return message;
-  },
-};
-
-function createBaseResolvedGatewayThemeDTO(): ResolvedGatewayThemeDTO {
-  return { id: "", label: "", color_scheme: "", tokens: undefined, background_image_url: undefined };
-}
-
-export const ResolvedGatewayThemeDTO: MessageFns<ResolvedGatewayThemeDTO> = {
-  fromJSON(object: any): ResolvedGatewayThemeDTO {
-    return {
-      id: isSet(object.id) ? globalThis.String(object.id) : "",
-      label: isSet(object.label) ? globalThis.String(object.label) : "",
-      color_scheme: isSet(object.color_scheme) ? globalThis.String(object.color_scheme) : "",
-      tokens: isObject(object.tokens) ? object.tokens : undefined,
-      background_image_url: isSet(object.background_image_url)
-        ? globalThis.String(object.background_image_url)
-        : undefined,
-    };
-  },
-
-  toJSON(message: ResolvedGatewayThemeDTO): unknown {
-    const obj: any = {};
-    if (message.id !== "") {
-      obj.id = message.id;
-    }
-    if (message.label !== "") {
-      obj.label = message.label;
-    }
-    if (message.color_scheme !== "") {
-      obj.color_scheme = message.color_scheme;
-    }
-    if (message.tokens !== undefined) {
-      obj.tokens = message.tokens;
-    }
-    if (message.background_image_url !== undefined) {
-      obj.background_image_url = message.background_image_url;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<ResolvedGatewayThemeDTO>, I>>(base?: I): ResolvedGatewayThemeDTO {
-    return ResolvedGatewayThemeDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<ResolvedGatewayThemeDTO>, I>>(object: I): ResolvedGatewayThemeDTO {
-    const message = createBaseResolvedGatewayThemeDTO();
-    message.id = object.id ?? "";
-    message.label = object.label ?? "";
-    message.color_scheme = object.color_scheme ?? "";
-    message.tokens = object.tokens ?? undefined;
-    message.background_image_url = object.background_image_url ?? undefined;
     return message;
   },
 };
@@ -7381,13 +6712,7 @@ export const WebUISessionSidebarSettingsDTO: MessageFns<WebUISessionSidebarSetti
 };
 
 function createBaseWebUISettingsDTO(): WebUISettingsDTO {
-  return {
-    layout: undefined,
-    session_sidebar: undefined,
-    workspace_file_tree: undefined,
-    gateway_console: undefined,
-    theme: undefined,
-  };
+  return { layout: undefined, session_sidebar: undefined, workspace_file_tree: undefined, gateway_console: undefined };
 }
 
 export const WebUISettingsDTO: MessageFns<WebUISettingsDTO> = {
@@ -7403,7 +6728,6 @@ export const WebUISettingsDTO: MessageFns<WebUISettingsDTO> = {
       gateway_console: isSet(object.gateway_console)
         ? WebUIGatewayConsoleSettingsDTO.fromJSON(object.gateway_console)
         : undefined,
-      theme: isSet(object.theme) ? WebUIThemeSettingsDTO.fromJSON(object.theme) : undefined,
     };
   },
 
@@ -7420,9 +6744,6 @@ export const WebUISettingsDTO: MessageFns<WebUISettingsDTO> = {
     }
     if (message.gateway_console !== undefined) {
       obj.gateway_console = WebUIGatewayConsoleSettingsDTO.toJSON(message.gateway_console);
-    }
-    if (message.theme !== undefined) {
-      obj.theme = WebUIThemeSettingsDTO.toJSON(message.theme);
     }
     return obj;
   },
@@ -7444,21 +6765,12 @@ export const WebUISettingsDTO: MessageFns<WebUISettingsDTO> = {
     message.gateway_console = (object.gateway_console !== undefined && object.gateway_console !== null)
       ? WebUIGatewayConsoleSettingsDTO.fromPartial(object.gateway_console)
       : undefined;
-    message.theme = (object.theme !== undefined && object.theme !== null)
-      ? WebUIThemeSettingsDTO.fromPartial(object.theme)
-      : undefined;
     return message;
   },
 };
 
 function createBaseWebUISettingsUpdateDTO(): WebUISettingsUpdateDTO {
-  return {
-    layout: undefined,
-    session_sidebar: undefined,
-    workspace_file_tree: undefined,
-    gateway_console: undefined,
-    theme: undefined,
-  };
+  return { layout: undefined, session_sidebar: undefined, workspace_file_tree: undefined, gateway_console: undefined };
 }
 
 export const WebUISettingsUpdateDTO: MessageFns<WebUISettingsUpdateDTO> = {
@@ -7474,7 +6786,6 @@ export const WebUISettingsUpdateDTO: MessageFns<WebUISettingsUpdateDTO> = {
       gateway_console: isSet(object.gateway_console)
         ? WebUIGatewayConsoleSettingsDTO.fromJSON(object.gateway_console)
         : undefined,
-      theme: isSet(object.theme) ? WebUIThemeSettingsUpdateDTO.fromJSON(object.theme) : undefined,
     };
   },
 
@@ -7491,9 +6802,6 @@ export const WebUISettingsUpdateDTO: MessageFns<WebUISettingsUpdateDTO> = {
     }
     if (message.gateway_console !== undefined) {
       obj.gateway_console = WebUIGatewayConsoleSettingsDTO.toJSON(message.gateway_console);
-    }
-    if (message.theme !== undefined) {
-      obj.theme = WebUIThemeSettingsUpdateDTO.toJSON(message.theme);
     }
     return obj;
   },
@@ -7514,90 +6822,6 @@ export const WebUISettingsUpdateDTO: MessageFns<WebUISettingsUpdateDTO> = {
       : undefined;
     message.gateway_console = (object.gateway_console !== undefined && object.gateway_console !== null)
       ? WebUIGatewayConsoleSettingsDTO.fromPartial(object.gateway_console)
-      : undefined;
-    message.theme = (object.theme !== undefined && object.theme !== null)
-      ? WebUIThemeSettingsUpdateDTO.fromPartial(object.theme)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseWebUIThemeSettingsDTO(): WebUIThemeSettingsDTO {
-  return { theme_id: undefined, background: undefined, resolved_theme: undefined };
-}
-
-export const WebUIThemeSettingsDTO: MessageFns<WebUIThemeSettingsDTO> = {
-  fromJSON(object: any): WebUIThemeSettingsDTO {
-    return {
-      theme_id: isSet(object.theme_id) ? globalThis.String(object.theme_id) : undefined,
-      background: isSet(object.background) ? GatewayThemeBackgroundDTO.fromJSON(object.background) : undefined,
-      resolved_theme: isSet(object.resolved_theme)
-        ? ResolvedGatewayThemeDTO.fromJSON(object.resolved_theme)
-        : undefined,
-    };
-  },
-
-  toJSON(message: WebUIThemeSettingsDTO): unknown {
-    const obj: any = {};
-    if (message.theme_id !== undefined) {
-      obj.theme_id = message.theme_id;
-    }
-    if (message.background !== undefined) {
-      obj.background = GatewayThemeBackgroundDTO.toJSON(message.background);
-    }
-    if (message.resolved_theme !== undefined) {
-      obj.resolved_theme = ResolvedGatewayThemeDTO.toJSON(message.resolved_theme);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<WebUIThemeSettingsDTO>, I>>(base?: I): WebUIThemeSettingsDTO {
-    return WebUIThemeSettingsDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<WebUIThemeSettingsDTO>, I>>(object: I): WebUIThemeSettingsDTO {
-    const message = createBaseWebUIThemeSettingsDTO();
-    message.theme_id = object.theme_id ?? undefined;
-    message.background = (object.background !== undefined && object.background !== null)
-      ? GatewayThemeBackgroundDTO.fromPartial(object.background)
-      : undefined;
-    message.resolved_theme = (object.resolved_theme !== undefined && object.resolved_theme !== null)
-      ? ResolvedGatewayThemeDTO.fromPartial(object.resolved_theme)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseWebUIThemeSettingsUpdateDTO(): WebUIThemeSettingsUpdateDTO {
-  return { theme_id: undefined, background: undefined };
-}
-
-export const WebUIThemeSettingsUpdateDTO: MessageFns<WebUIThemeSettingsUpdateDTO> = {
-  fromJSON(object: any): WebUIThemeSettingsUpdateDTO {
-    return {
-      theme_id: isSet(object.theme_id) ? globalThis.String(object.theme_id) : undefined,
-      background: isSet(object.background) ? GatewayThemeBackgroundDTO.fromJSON(object.background) : undefined,
-    };
-  },
-
-  toJSON(message: WebUIThemeSettingsUpdateDTO): unknown {
-    const obj: any = {};
-    if (message.theme_id !== undefined) {
-      obj.theme_id = message.theme_id;
-    }
-    if (message.background !== undefined) {
-      obj.background = GatewayThemeBackgroundDTO.toJSON(message.background);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<WebUIThemeSettingsUpdateDTO>, I>>(base?: I): WebUIThemeSettingsUpdateDTO {
-    return WebUIThemeSettingsUpdateDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<WebUIThemeSettingsUpdateDTO>, I>>(object: I): WebUIThemeSettingsUpdateDTO {
-    const message = createBaseWebUIThemeSettingsUpdateDTO();
-    message.theme_id = object.theme_id ?? undefined;
-    message.background = (object.background !== undefined && object.background !== null)
-      ? GatewayThemeBackgroundDTO.fromPartial(object.background)
       : undefined;
     return message;
   },
@@ -7984,101 +7208,6 @@ export const WorkspaceNavigationTreeDTO: MessageFns<WorkspaceNavigationTreeDTO> 
     const message = createBaseWorkspaceNavigationTreeDTO();
     message.revision = object.revision ?? "";
     message.nodes = object.nodes?.map((e) => WorkspaceNavigationNodeDTO.fromPartial(e)) || [];
-    return message;
-  },
-};
-
-function createBaseGatewayManagementTargetDTO(): GatewayManagementTargetDTO {
-  return {
-    gateway_id: "",
-    name: "",
-    connection_kind: "",
-    gateway_connection_id: undefined,
-    connection_error: undefined,
-  };
-}
-
-export const GatewayManagementTargetDTO: MessageFns<GatewayManagementTargetDTO> = {
-  fromJSON(object: any): GatewayManagementTargetDTO {
-    return {
-      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      connection_kind: isSet(object.connection_kind) ? globalThis.String(object.connection_kind) : "",
-      gateway_connection_id: isSet(object.gateway_connection_id)
-        ? globalThis.String(object.gateway_connection_id)
-        : undefined,
-      connection_error: isSet(object.connection_error) ? globalThis.String(object.connection_error) : undefined,
-    };
-  },
-
-  toJSON(message: GatewayManagementTargetDTO): unknown {
-    const obj: any = {};
-    if (message.gateway_id !== "") {
-      obj.gateway_id = message.gateway_id;
-    }
-    if (message.name !== "") {
-      obj.name = message.name;
-    }
-    if (message.connection_kind !== "") {
-      obj.connection_kind = message.connection_kind;
-    }
-    if (message.gateway_connection_id !== undefined) {
-      obj.gateway_connection_id = message.gateway_connection_id;
-    }
-    if (message.connection_error !== undefined) {
-      obj.connection_error = message.connection_error;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayManagementTargetDTO>, I>>(base?: I): GatewayManagementTargetDTO {
-    return GatewayManagementTargetDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayManagementTargetDTO>, I>>(object: I): GatewayManagementTargetDTO {
-    const message = createBaseGatewayManagementTargetDTO();
-    message.gateway_id = object.gateway_id ?? "";
-    message.name = object.name ?? "";
-    message.connection_kind = object.connection_kind ?? "";
-    message.gateway_connection_id = object.gateway_connection_id ?? undefined;
-    message.connection_error = object.connection_error ?? undefined;
-    return message;
-  },
-};
-
-function createBaseGatewayManagementDirectoryDTO(): GatewayManagementDirectoryDTO {
-  return { local_gateway_id: "", items: [] };
-}
-
-export const GatewayManagementDirectoryDTO: MessageFns<GatewayManagementDirectoryDTO> = {
-  fromJSON(object: any): GatewayManagementDirectoryDTO {
-    return {
-      local_gateway_id: isSet(object.local_gateway_id) ? globalThis.String(object.local_gateway_id) : "",
-      items: globalThis.Array.isArray(object?.items)
-        ? object.items.map((e: any) => GatewayManagementTargetDTO.fromJSON(e))
-        : [],
-    };
-  },
-
-  toJSON(message: GatewayManagementDirectoryDTO): unknown {
-    const obj: any = {};
-    if (message.local_gateway_id !== "") {
-      obj.local_gateway_id = message.local_gateway_id;
-    }
-    if (message.items?.length) {
-      obj.items = message.items.map((e) => GatewayManagementTargetDTO.toJSON(e));
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<GatewayManagementDirectoryDTO>, I>>(base?: I): GatewayManagementDirectoryDTO {
-    return GatewayManagementDirectoryDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<GatewayManagementDirectoryDTO>, I>>(
-    object: I,
-  ): GatewayManagementDirectoryDTO {
-    const message = createBaseGatewayManagementDirectoryDTO();
-    message.local_gateway_id = object.local_gateway_id ?? "";
-    message.items = object.items?.map((e) => GatewayManagementTargetDTO.fromPartial(e)) || [];
     return message;
   },
 };

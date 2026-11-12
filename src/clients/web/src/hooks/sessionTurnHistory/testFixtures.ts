@@ -4,8 +4,8 @@ import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import {
   invalidateGatewayToken,
-  invalidateGatewayUserSession,
-  registerGatewayUserSessionInitializer,
+
+
 } from "../../api/http";
 
 export const SESSION_ID = "ses_partial_projection";
@@ -24,7 +24,6 @@ const originalWindowDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "window",
 );
-let restoreGatewayUserSessionInitializer: (() => void) | null = null;
 let installedApiPort: number | null = null;
 
 export function wait(milliseconds: number): Promise<void> {
@@ -154,14 +153,10 @@ export function appState(): AppState {
 }
 
 export function installWindow(apiPort: number): void {
-  restoreGatewayUserSessionInitializer?.();
-  invalidateGatewayUserSession(apiPort);
+
   // 进程级 token 缓存跨测试文件存活，同一端口必须显式作废。
   invalidateGatewayToken(apiPort);
   installedApiPort = apiPort;
-  restoreGatewayUserSessionInitializer = registerGatewayUserSessionInitializer(
-    async () => undefined,
-  );
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
@@ -173,10 +168,8 @@ export function installWindow(apiPort: number): void {
 }
 
 export function restoreTurnHistoryTestGlobals(): void {
-  restoreGatewayUserSessionInitializer?.();
-  restoreGatewayUserSessionInitializer = null;
   if (installedApiPort !== null) {
-    invalidateGatewayUserSession(installedApiPort);
+
     invalidateGatewayToken(installedApiPort);
     installedApiPort = null;
   }

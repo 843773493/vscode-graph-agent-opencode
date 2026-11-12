@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 
 import { clearSessionGoal, getSessionGoal } from "../../api";
-import { invalidateGatewayToken, invalidateGatewayUserSession } from "../http";
+import { invalidateGatewayToken } from "../http";
 
 const originalFetch = globalThis.fetch;
 
@@ -10,24 +10,14 @@ afterEach(() => {
 });
 
 /**
- * 安装本文件统一的 fetch 桩：先真实应答 Gateway 本地凭据与用户会话屏障
- * （GET /api/gateway/users/current、POST /api/gateway/users/guest），再把业务
- * 端点交给 handler；handler 不认领的请求一律抛出。
- *
- * 屏障必须真实应答，不能拿业务响应兜底：api/gateway/userAccess.ts 在模块加载时
- * 注册了生产 initializer，同一进程内 /api/v1/ 请求会先等 users/current 完成。
- * 若把 data:null 当万能兜底，屏障自己就会抛「后端响应缺少 data 字段」，本文件
- * 于是变成顺序依赖——与 gatewayApi.test.ts 同跑时红、单跑时绿。
- *
- * 端口在不同测试文件间可能被复用：进程级凭据缓存与「用户会话已就绪」缓存都必须
- * 显式作废，否则会拿着上一个文件缓存的 token 或已完成的屏障直接跳过本文件的桩。
+ * 按路径应答本机凭据与业务请求，未声明的请求直接报错；复用端口前作废凭据缓存。
  */
 function installGatewayBarrierFetch(
   port: number,
   handler: (url: URL, method: string) => Response | undefined,
 ): void {
   invalidateGatewayToken(port);
-  invalidateGatewayUserSession(port);
+
   globalThis.fetch = Object.assign(
     async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(
@@ -43,22 +33,6 @@ function installGatewayBarrierFetch(
           message: "ok",
           request_id: "req_gateway_token",
           data: { token: "test-token" },
-        });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return Response.json({
-          code: 0,
-          message: "ok",
-          request_id: "req_current_user",
-          data: { kind: "guest", user_id: null },
-        });
-      }
-      if (url.pathname === "/api/gateway/users/guest") {
-        return Response.json({
-          code: 0,
-          message: "ok",
-          request_id: "req_guest_user",
-          data: { kind: "guest", user_id: null },
         });
       }
       const response = handler(url, method);

@@ -1,30 +1,25 @@
 # sqlite-config-storage Specification
 
 ## Purpose
-将 Gateway 与 Workspace 的共享可变配置、控制状态和用户运行时状态放入职责清晰的 SQLite 存储，同时保留发行默认配置、schema、目录权威索引和单会话 rollout 索引的既有边界。
+将 Gateway 与 Workspace 的共享可变配置、控制状态放入职责清晰的 SQLite 存储，同时保留发行默认配置、schema、目录权威索引和单会话 rollout 索引的既有边界。
 ## Requirements
 ### Requirement: Gateway 共享状态持久化
 
-Gateway SHALL 将共享可变功能配置、Gateway 工作区注册状态、用户身份元数据、访问租约和用户视图状态保存到 Gateway 控制面 SQLite；这些状态必须支持事务性更新。
+Gateway SHALL 将共享可变功能配置及 Gateway 工作区注册状态保存到 Gateway 控制面 SQLite；这些状态必须支持事务性更新。
 
-#### Scenario: 并发申请用户租约
+#### Scenario: Gateway 状态事务更新
 
-- **WHEN** 两个客户端同时申请同一个普通用户
-- **THEN** SQLite 事务只允许一个申请成功，另一个得到明确的占用冲突结果
-
-#### Scenario: 接管更新租约
-
-- **WHEN** 接管操作更新旧租约和新租约
-- **THEN** 旧租约失效与新租约创建作为一个原子状态变化对后续请求可见
+- **WHEN** Gateway 更新共享配置或工作区登记
+- **THEN** 通过原控制面 SQLite 事务发布；退役用户、租约和视图历史保留，不再参与运行期访问判断
 
 ### Requirement: Workspace 共享状态持久化
 
 工作区后端 SHALL 将工作区共享可变功能配置和工作区级会话活动状态保存到工作区 `.boxteam` 范围内的 SQLite；Gateway 不得直接读写这些工作区业务数据。
 
-#### Scenario: 不同用户读取工作区配置
+#### Scenario: 不同客户端读取工作区配置
 
-- **WHEN** 两个普通用户通过同一 Gateway 读取同一工作区功能配置
-- **THEN** 两个用户得到相同的工作区有效配置，且配置不因用户视图切换而改变
+- **WHEN** 两个本机客户端通过同一 Gateway 读取同一工作区功能配置
+- **THEN** 两个客户端得到相同的工作区有效配置，且配置不因浏览器视图切换而改变
 
 #### Scenario: 工作区后端重启后读取状态
 
@@ -47,7 +42,7 @@ Gateway SHALL 将共享可变功能配置、Gateway 工作区注册状态、用�
 
 ### Requirement: 可恢复配置迁移
 
-从现有 JSON 状态迁移到 SQLite 或用户 profile 时，系统 SHALL 使用可恢复写入、显式版本和失败报告；迁移失败不得删除原始配置或返回部分有效配置。
+从现有 JSON 状态迁移到 SQLite 时，系统 SHALL 使用可恢复写入、显式版本和失败报告；迁移失败不得删除原始配置或返回部分有效配置。
 
 #### Scenario: 成功迁移
 

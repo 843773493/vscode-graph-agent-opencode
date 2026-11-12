@@ -46,7 +46,7 @@ async def test_canonical_tool_result_opens_in_original_readonly_editor(
     ).raw["interactions"])[0] for index, reply in enumerate(replies)]
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspace, default_backend_url=backend,
         port=ports.port(20), artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
-    command = ["bun", "tests/integration/clients/web/quick_access/resource_opener_sources.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/resource_opener_sources.mjs"]
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
                           "--timeout-seconds", "180", "--", *command]

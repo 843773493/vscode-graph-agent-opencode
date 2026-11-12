@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from app.core.session_lifecycle_gate import SessionOperationLease
 
 
-FORK_RETENTION_RELEASE_DDL = load_sql(__package__, "sql/fork_retention_releases.sql")
+FORK_RETENTION_RELEASE_DDL = load_sql(__package__, "migrations/fork_retention_releases.sql")
 
 
 @dataclass(frozen=True, slots=True)

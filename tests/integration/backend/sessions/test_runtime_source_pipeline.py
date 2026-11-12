@@ -29,7 +29,6 @@ from app.container import AppContainer
 from app.core import identifier, phase_observer
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
-from app.core.mounted_workspaces import MountedWorkspace
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadExecutionIntent
@@ -1969,7 +1968,6 @@ async def test_h5_completed_empty_seed_preserves_metadata_only_admission(
 @dataclass
 class RestartRuntimeSourceCase(ModelReplayCase):
     backends: list[BackendProcess]
-    mount: MountedWorkspace | None = None
 
     async def restart(self, *, hard: bool, while_stopped: Callable[[], None] | None = None) -> None:
         previous = self.backends[-1]
@@ -1985,7 +1983,6 @@ class RestartRuntimeSourceCase(ModelReplayCase):
             log_name=f"runtime-source-restart-{len(self.backends)}",
             asgi_app="tests.support.e2e_control.communication_backend_app:app",
             env_overrides=self.model.environment,
-            startup_mount=self.mount,
         )
         assert backend.process.pid != previous.process.pid
         self.backends.append(backend)
@@ -2041,16 +2038,12 @@ class RestartRuntimeSourceCase(ModelReplayCase):
 
 @pytest.fixture
 async def restart_source_case(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[RestartRuntimeSourceCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
     workspace = _prepare_source_workspace(context, ports.port(10))
     params = getattr(request, "param", {})
-    plugin_ids = frozenset(params.get("plugin_ids", ()))
-    prepared_package_root = (
-        request.getfixturevalue("prepared_developer_tools_package") if plugin_ids else None
-    )
     if "agents_content" in params:
         (workspace / "AGENTS.md").write_text(params["agents_content"], encoding="utf-8")
     runtime_root = context.runtime_root_for_node(request.node.nodeid)
@@ -2061,18 +2054,6 @@ async def restart_source_case(
             context.artifacts_dir, runtime_root=runtime_root,
             business_assertion="runtime-source-real-backend-restart-and-owner-recovery",
         ))
-        gateway_id = None
-        if params.get("managed_gateway") or plugin_ids:
-            monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home))
-            gateway_id, _ = await services.enter_async_context(_managed_gateway_skill_source(
-                workspace=workspace, workspace_id=load_or_create_workspace_id(workspace),
-                boxteam_home=context.boxteam_home, port=ports.port(11),
-                artifacts_dir=artifacts_dir,
-                prepared_package_root=prepared_package_root,
-                terminal="terminal" in plugin_ids,
-                browser="browser" in plugin_ids,
-            ))
-            monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{ports.port(11)}")
         backend = await asyncio.to_thread(
             start_backend_process, workspace_root=str(workspace), port=ports.port(0),
             log_name="runtime-source-restart-0",
@@ -2082,15 +2063,13 @@ async def restart_source_case(
         backends = [backend]
         case: RestartRuntimeSourceCase | None = None
         headers = {"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": backend.workspace_id}
-        if gateway_id is not None:
-            headers["X-BoxTeam-Gateway-Id"] = gateway_id
         try:
             async with httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{backend.port}",
                 headers=headers,
                 timeout=30,
             ) as client:
-                case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends, None)
+                case = RestartRuntimeSourceCase(client, model, workspace, artifacts_dir, backends)
                 yield case
         finally:
             for handle in reversed(backends):

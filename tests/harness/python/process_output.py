@@ -7,6 +7,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from uuid import uuid4
 
+from tests.support.processes.scope import register_test_process
 from tests.support.processes.workspace import terminate_process
 
 
@@ -31,6 +32,7 @@ def spawn_logged_process(
                 # 日志副本关闭前尚未移交进程；关闭失败仍由创建入口回收。
                 startup_cleanup.callback(terminate_process, process)
             startup_cleanup.pop_all()
+        register_test_process(process, lambda: terminate_process(process))
     except BaseException as error:
         for path in logs:
             error.add_note(f"辅助服务测试进程日志：{path}")

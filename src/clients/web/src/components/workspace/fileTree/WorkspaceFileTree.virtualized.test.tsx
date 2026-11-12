@@ -87,7 +87,6 @@ async function mount(
     }
     if (url.pathname === "/api/gateway/auth/local-credential") return apiResponse({ token: "t" });
     if (url.pathname === "/api/v1/workspace/files/roots") return apiResponse({ workspace_uri: ROOT, filesystem_uri: FILESYSTEM, filesystem_label: "/" });
-    if (url.pathname === "/api/gateway/users/current") return apiResponse({ kind: "guest", user_id: null });
     const path = url.searchParams.get("path") || ROOT;
     return apiResponse({
       root_path: path,

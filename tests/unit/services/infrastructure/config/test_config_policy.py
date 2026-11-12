@@ -52,7 +52,7 @@ def test_builtin_policies_cover_workspace_and_gateway_restart_boundaries():
     assert gateway_config_policy().restart_paths(("/workspaces/0/host",)) == (
         "/workspaces/0/host",
     )
-    assert gateway_config_policy().restart_paths(("/ui/theme/default_theme_id",)) == ()
+    assert gateway_config_policy().restart_paths(("/logging/runtime/level",)) == ()
 
 
 def test_activation_scope_exposes_mixed_and_restart_candidate_boundaries():
@@ -60,7 +60,7 @@ def test_activation_scope_exposes_mixed_and_restart_candidate_boundaries():
         ("/runtime/agent/run/timeout_seconds",)
     ) == "next_job"
     assert gateway_config_policy().activation_scope_for(
-        ("/ui/theme/default_theme_id", "/features/session_catalog/enabled")
+        ("/logging/runtime/level", "/features/session_catalog/enabled")
     ) == "mixed"
     assert workspace_config_policy().activation_scope_for(
         ("/ui/theme", "/logger")

@@ -98,10 +98,10 @@ def _docker_target_provision_lock(lock_path: Path) -> Iterator[None]:
 
 
 def docker_command_prefix() -> list[str]:
-    raw_command = os.environ.get("BOXTEAM_DOCKER_COMMAND", "docker").strip()
-    if not raw_command:
+    prefix = shlex.split(os.environ.get("BOXTEAM_DOCKER_COMMAND", "docker").strip())
+    if not prefix or not prefix[0]:
         raise ValueError("BOXTEAM_DOCKER_COMMAND 不能为空")
-    return shlex.split(raw_command)
+    return prefix
 
 
 def _run_target_command(project_root: Path, command: str, *arguments: str) -> None:

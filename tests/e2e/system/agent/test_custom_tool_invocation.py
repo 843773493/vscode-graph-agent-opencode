@@ -32,7 +32,6 @@ from tests.support.messages import last_assistant_message
 from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
-    terminate_process,
 )
 from tests.support.trace import get_trace_payload
 from tests.support.workspaces import prepare_test_workspace

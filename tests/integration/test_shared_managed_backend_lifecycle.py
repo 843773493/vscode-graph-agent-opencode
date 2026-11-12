@@ -47,7 +47,6 @@ from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -126,7 +125,6 @@ class SharedBackendCase:
             extra_env={**self.replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
         )
         assert self.gateway.process.pid != previous.process.pid
-        await acquire_gateway_guest(self.client)
 
 
 @pytest.fixture
@@ -178,7 +176,6 @@ async def shared_backend_case(request: pytest.FixtureRequest) -> AsyncIterator[S
                 base_url=f"http://127.0.0.1:{ports.port(20)}", headers=LOCAL_TOKEN_HEADERS, timeout=180,
             ) as client:
                 case = SharedBackendCase(client, context, roots, boxteam_home, replay, gateway)
-                await acquire_gateway_guest(client)
                 yield case
                 assert {path.stem for path in replay.artifacts.glob("*.json")} == set(case.planned_calls)
         finally:
@@ -900,9 +897,7 @@ async def test_real_stopped_shared_delete_persists_remaining_contract_then_start
     assert binding["workspace_id"] == third["workspace_id"]
     assert Path(binding["root_path"]) == nondefault_third_root.resolve()
     assert str(nondefault_third_root.resolve()) not in json.dumps(published_owner)
-    mount = MountedWorkspace(
-        binding["workspace_id"], Path(binding["root_path"]),
-    )
+    mount = MountedWorkspace(binding["workspace_id"], Path(binding["root_path"]))
     assert health["workspace_id"] == third["workspace_id"] == mount.workspace_id
     assert mount.workspace_root == nondefault_third_root.resolve()
     assert health["backend_generation"] == published_owner["generation"] == started["backend_generation"]

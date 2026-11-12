@@ -162,8 +162,8 @@ async def test_main_lifespan_recovers_running_operation_and_cleans_up_owner_conf
             (intent.client_operation_id,),
         )
 
-    async with main.lifespan(main.app) as _main_lifespan_state_165:
-        await _main_lifespan_state_165["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         registry = main.app.state.workspace_container_registry
         assert registry is not None
         assert registry.get(container.workspace_id) is container
@@ -200,8 +200,8 @@ async def test_main_lifespan_recovers_running_operation_and_cleans_up_owner_conf
     monkeypatch.setattr(operations, "start", start_with_short_conflict_window)
     async with external_executor.queue_owner():
         with pytest.raises(NavigationQueueOwnerError, match="启动恢复超时"):
-            async with main.lifespan(main.app) as _main_lifespan_state_202:
-                await _main_lifespan_state_202["after_http_startup"]()
+            async with main.lifespan(main.app) as _main_lifespan_state:
+                await _main_lifespan_state["after_http_startup"]()
                 raise AssertionError("owner 冲突时 lifespan 不得进入 ready")
 
     assert operations._worker_task is None
@@ -267,8 +267,8 @@ async def test_rejected_retained_session_delete_does_not_block_lifespan_restart(
     enqueue_request = NavigationMutationEnqueueRequest(intents=[intent])
     operations = container.session_catalog_service.operations
 
-    async with main.lifespan(main.app) as _main_lifespan_state_268:
-        await _main_lifespan_state_268["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         assert operations.worker_state == "running"
         accepted = await operations.enqueue(enqueue_request, scope)
         assert accepted.accepted_count == 1

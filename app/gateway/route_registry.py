@@ -19,7 +19,6 @@ from app.gateway.routes import (
     search,
     skill_sources,
     ui_assets,
-    users,
     workspaces,
     workspaces_lifecycle,
     workspaces_managed,
@@ -38,7 +37,6 @@ from app.gateway.server.workspace_proxy import router as workspace_proxy_router
 # Gateway 自有路由组保持拆分前的定义顺序，避免 openapi 路径与路由匹配顺序漂移。
 ROUTE_MODULES = (
     health_config,
-    users,
     workspaces,
     federation,
     workspaces_managed,

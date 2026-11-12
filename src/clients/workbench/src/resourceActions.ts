@@ -5,7 +5,7 @@ import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/co
 import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import type { GatewayResourceAddressDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { sourceDocumentSource } from './sourceDocuments.js';
@@ -28,13 +28,13 @@ export async function resourceReference(resource: URI): Promise<string> {
   const gatewayId = workspaceContext.getSnapshot().gatewayId;
   if (!gatewayId) throw new Error('尚未取得发起 Gateway 身份，无法复制资源引用');
   let invalidated = false;
-  const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+  const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   try {
     const address = await gateway.request<GatewayResourceAddressDTO>('/api/gateway/resource-addresses/parse', {
       method: 'POST', body: JSON.stringify({ uri: 'path' in source ? source.path : source.uri,
         local_gateway_id: gatewayId, resource_gateway_id: source.gatewayId }),
     });
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('Gateway 或用户身份已改变，请重新复制资源引用');
+    if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新复制资源引用');
     const sameScope = address.scope === 'workspace' ? address.scope_id === source.workspaceId
       : resource.scheme === 'boxteam-source' && address.scope === 'gateway' && address.kind === 'skills' && address.scope_id === source.gatewayId;
     if (address.gateway_id !== source.gatewayId || !sameScope) {

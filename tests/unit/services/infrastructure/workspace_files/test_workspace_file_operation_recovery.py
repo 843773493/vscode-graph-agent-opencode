@@ -77,7 +77,7 @@ asyncio.run(main())
 def recovery_case(request):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = prepare_test_workspace(
-        workspace_root=context.workspace_root,
+        workspace_root=context.runtime_root_for_node(request.node.nodeid) / "workspace",
         template_root=Path.cwd() / "tests/fixtures/workspaces/model_tool_test_workspace",
         template_items=(),
     )

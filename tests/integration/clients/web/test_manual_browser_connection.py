@@ -20,7 +20,6 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -84,7 +83,6 @@ async def test_manual_browser_creation_attaches_and_accepts_first_navigation(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             workspaces_response = await client.get("/api/gateway/workspaces")
             assert workspaces_response.status_code == 200, workspaces_response.text
             owner = workspaces_response.json()["data"]["active_workspace"]

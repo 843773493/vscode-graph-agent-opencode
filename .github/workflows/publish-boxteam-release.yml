@@ -32,19 +32,18 @@ jobs:
           node-version: "22"
 
       - run: bun install --frozen-lockfile
-      - run: bun install --cwd src/clients/web --frozen-lockfile
-      - run: bun install --cwd src/clients/workbench --frozen-lockfile
-      - run: uv sync --locked
+      - run: bun run worktree create release HEAD
       - run: bun run package:linux-x64
+        working-directory: out/worktrees/release
 
       - uses: actions/upload-artifact@v4
         with:
           name: boxteam-linux-x64-release
           path: |
-            out/packaging/linux-x64/tarballs/*.tgz
-            out/packaging/linux-x64/release-assets/*.tgz
-            out/packaging/linux-x64/build-result.json
-            out/packaging/linux-x64/size-report.json
+            out/worktrees/release/out/packaging/linux-x64/tarballs/*.tgz
+            out/worktrees/release/out/packaging/linux-x64/release-assets/*.tgz
+            out/worktrees/release/out/packaging/linux-x64/build-result.json
+            out/worktrees/release/out/packaging/linux-x64/size-report.json
           if-no-files-found: error
           compression-level: 0
 
@@ -68,20 +67,19 @@ jobs:
           node-version: "22"
 
       - run: bun install --frozen-lockfile
-      - run: bun install --cwd src/clients/web --frozen-lockfile
-      - run: bun install --cwd src/clients/workbench --frozen-lockfile
-      - run: uv sync --locked
+      - run: bun run worktree create release HEAD
       - run: bun run package:windows-x64
+        working-directory: out/worktrees/release
 
       - uses: actions/upload-artifact@v4
         with:
           name: boxteam-windows-x64-release
           path: |
-            out/packaging/windows-x64/tarballs/*.tgz
-            out/packaging/windows-x64/release-assets/*.tgz
-            out/packaging/windows-x64/standalone/*.zip
-            out/packaging/windows-x64/build-result.json
-            out/packaging/windows-x64/size-report.json
+            out/worktrees/release/out/packaging/windows-x64/tarballs/*.tgz
+            out/worktrees/release/out/packaging/windows-x64/release-assets/*.tgz
+            out/worktrees/release/out/packaging/windows-x64/standalone/*.zip
+            out/worktrees/release/out/packaging/windows-x64/build-result.json
+            out/worktrees/release/out/packaging/windows-x64/size-report.json
           if-no-files-found: error
           compression-level: 0
 

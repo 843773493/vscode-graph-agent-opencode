@@ -14,7 +14,6 @@ from app.core.failures import failure_detail
 from app.schemas.gateway.ui_settings import GatewayUIAssetDTO
 
 _ASSET_ID = re.compile(r"[a-f0-9]{64}")
-_THEME_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 MAX_UI_ASSET_BYTES = 20 * 1024 * 1024
 SUPPORTED_FORMATS = {
     "PNG": ("image/png", ".png"),
@@ -38,7 +37,6 @@ class _AssetRecord(TypedDict):
     sha256: str
     imported_at: str
     filename: str
-    referenced_theme_ids: list[str]
 
 
 def ui_assets_root(gateway_root: Path) -> Path:
@@ -86,12 +84,9 @@ def _read_manifest(gateway_root: Path) -> dict[str, _AssetRecord]:
         content_type = record.get("content_type")
         size = record.get("size")
         imported_at = record.get("imported_at")
-        references = record.get("referenced_theme_ids")
         if (not isinstance(content_type, str) or content_type not in {mime for mime, _ in SUPPORTED_FORMATS.values()}
                 or type(size) is not int or size < 0
-                or not isinstance(imported_at, str)
-                or not isinstance(references, list)
-                or not all(isinstance(theme_id, str) and (theme_id == "当前 UI 设置" or _THEME_ID.fullmatch(theme_id)) for theme_id in references)):
+                or not isinstance(imported_at, str)):
             _reject_asset_value(f"Gateway UI 资源清单元数据无效: asset_id={asset_id}", source=manifest_path, value=record)
         try:
             timestamp = datetime.fromisoformat(imported_at)
@@ -176,30 +171,10 @@ def import_ui_asset(
             "sha256": digest,
             "imported_at": datetime.now(UTC).isoformat(),
             "filename": filename,
-            "referenced_theme_ids": [],
         }
         manifest[digest] = asset_record
         _write_manifest(gateway_root, manifest)
     return _asset_dto(asset_record)
-
-
-def import_ui_asset_file(path: Path, *, gateway_root: Path) -> GatewayUIAssetDTO:
-    source = path.expanduser()
-    try:
-        if source.is_symlink():
-            _reject_asset_value("主题本地背景图片不允许使用符号链接", source=source, value=str(path))
-        resolved = source.resolve()
-        if not resolved.is_file():
-            raise FileNotFoundError(f"主题本地背景图片不存在: {resolved}")
-        _validate_image_size(resolved.stat().st_size)
-        content = resolved.read_bytes()
-    except OSError as error:
-        raise _asset_io_error("local-image-read", error) from error
-    return import_ui_asset(
-        content,
-        original_filename=resolved.name,
-        gateway_root=gateway_root,
-    )
 
 
 def _asset_dto(asset_record: _AssetRecord) -> GatewayUIAssetDTO:
@@ -212,7 +187,6 @@ def _asset_dto(asset_record: _AssetRecord) -> GatewayUIAssetDTO:
         sha256=asset_record["sha256"],
         imported_at=asset_record["imported_at"],
         url=f"/api/gateway/ui-assets/{asset_id}",
-        referenced_theme_ids=sorted(asset_record["referenced_theme_ids"]),
     )
 
 
@@ -263,23 +237,6 @@ def delete_ui_asset(asset_id: str, *, gateway_root: Path) -> None:
         raise _asset_io_error("image-delete", error, asset_id=asset_id) from error
     del manifest[asset_id]
     _write_manifest(gateway_root, manifest)
-
-
-def update_ui_asset_references(
-    references: dict[str, list[str]],
-    *,
-    gateway_root: Path,
-) -> None:
-    manifest = _read_manifest(gateway_root)
-    changed = False
-    for asset_id, asset_record in manifest.items():
-        referenced_theme_ids = sorted(set(references.get(asset_id, [])))
-        if asset_record.get("referenced_theme_ids") == referenced_theme_ids:
-            continue
-        asset_record["referenced_theme_ids"] = referenced_theme_ids
-        changed = True
-    if changed:
-        _write_manifest(gateway_root, manifest)
 
 
 def _require_asset_id(asset_id: str) -> None:

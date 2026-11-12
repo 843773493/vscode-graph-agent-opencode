@@ -57,7 +57,7 @@ def prefix_runtime(
     runtime = context.runtime_root_for_node(request.node.nodeid)
     with ExitStack() as lifetime:
         replay = lifetime.enter_context(model_stream_replay(
-            context.run_root, runtime_root=runtime, business_assertion="fork-prefix-backend-restart",
+            context.artifacts_dir, runtime_root=runtime, business_assertion="fork-prefix-backend-restart",
         ))
         lease = E2EProcessLease(runtime / "service-ports.json", tuple(ports.port(offset) for offset in (0, 10, 20)))
         lease.acquire()

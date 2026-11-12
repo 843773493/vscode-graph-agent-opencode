@@ -24,7 +24,7 @@
 
 # 规范
 
-- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+- 静态结构 SQL 位于同包 `migrations/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
 
 - `CommunicationLedgerMixin` 只依赖宿主类提供的 `database_path`、`_connection`、`_ensure_open()` 与 `_write_transaction()`；不得假设 `SessionControlStore` 的其它方法存在。
 - source/target 方向证明必须做在写事务内：`kind=reply` 时各自在本库对方表里要求方向相反的那一行，缺失或方向相同一律 fail closed。

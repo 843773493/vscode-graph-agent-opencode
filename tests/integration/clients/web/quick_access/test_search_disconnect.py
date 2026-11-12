@@ -116,7 +116,7 @@ async def test_search_disconnect_retains_request_and_original_network_cause(
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "真实 HTTP 验收需要 Chromium"
     suffix = f"{'scope' if scoped else 'headers'}:{'truncated' if truncated else 'eof'}"
-    command = ["bun", "tests/integration/clients/web/quick_access/search_disconnect.mjs", url, suffix,
+    command = ["node", "tests/integration/clients/web/quick_access/search_disconnect.mjs", url, suffix,
                str(run_context.artifacts_dir)]
     with chromium_temporary_environment(run_context.runtime_root_for_node(suffix) / "chromium-tmp") as temporary:
         result = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=45,

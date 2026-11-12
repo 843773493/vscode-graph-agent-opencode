@@ -427,6 +427,7 @@ async def test_failed_directory_lease_settlement_blocks_release_until_original_s
 async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and_results(
     terminal_workspace_root_path: str, request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
+    prepared_developer_tools_package: Path,
 ) -> None:
     root = Path(terminal_workspace_root_path)
     port = integration_port_block_for_file(Path(request.node.path)).port(40)
@@ -439,6 +440,7 @@ async def test_pending_cold_revision_keeps_original_pty_and_allows_other_pty_and
     pids: list[int] = []
     async with terminal_plugin_gateway_for_workspace(
         workspace_root=root, artifacts_dir=run.artifacts_dir, gateway_port=port, boxteam_home=home,
+        prepared_package_root=prepared_developer_tools_package,
     ) as plugin:
         monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
         # 第一代由真实上传/Shell创建目录和进程，提升后由原Session清理解除关联。

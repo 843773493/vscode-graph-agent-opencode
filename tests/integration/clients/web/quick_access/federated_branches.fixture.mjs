@@ -7,7 +7,7 @@ import { IconLabel } from '../../../../../src/clients/workbench/upstream/src/vs/
 import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
 import { WorkspaceQuickAccess } from '../../../../../src/clients/workbench/src/search/quickAccess.js';
-import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 
 /** 真实名称／正文分支与共享 SSE 消费器，只有 Gateway 网络响应为显式装具。 */
 export function fileBranchContract(mode) { return federatedBranchContract(mode, '文件'); }
@@ -41,7 +41,6 @@ async function federatedBranchContract(mode, category, diagnostic) {
     const path = new URL(String(url), location.origin).pathname; paths.push(path);
     if (path === '/api/gateway/auth/local-credential') return Response.json({ data: { token: 'content-test' } });
     const metadata = data => Response.json({ code: 0, message: 'ok', data, request_id: 'metadata' }, { headers: { 'X-Request-ID': 'metadata' } });
-    if (file && ['/api/gateway/users/current', '/api/gateway/users/guest'].includes(path)) return metadata({ kind: 'guest', user_id: null });
     if (file && path === '/api/gateway/health') return metadata({ gateway_id: owners[0].gatewayId });
     if (file && path === '/api/gateway/workspaces') return metadata({ items: targets, active_workspace: frozen.owners[0] });
     if (file && path === '/api/v1/workspace/files/roots') {
@@ -142,7 +141,7 @@ async function federatedBranchContract(mode, category, diagnostic) {
       const selectedIds = picker.selectedItems.map(item => item.id), currentSelectedObject = picker.selectedItems[0] === currentFirst;
       const currentStatusPickable = picker.items.filter(item => item.type !== 'separator' && !item.resource).map(item => item.pickable);
       const query = picker.value;
-      invalidateGatewayUserSession(0);
+      invalidateGatewayToken(0);
       await until(() => picker.items.some(item => item.id === 'identity-invalidated'));
       return { initiallyPickable, statusPickable, currentStatusPickable, firstId, selectedIds, currentSelectedObject,
         replacedFirstObject: original !== currentFirst, resourceIds: resources.map(item => item.id), resourcePickable: resources.map(item => item.pickable),

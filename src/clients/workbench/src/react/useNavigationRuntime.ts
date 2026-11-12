@@ -1,9 +1,7 @@
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../../web/src/api/workspaceIdentity.js";
-import { useGatewayAccessHeartbeat } from "../../../web/src/hooks/settings/useGatewayAccessHeartbeat.js";
 import { browserGatewayId, getBrowserUiSettings } from "../../../web/src/hooks/settings/browserUiSettings.js";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getSession } from '../../../web/src/api.js';
-import { ensureGatewayUserAccess } from '../../../web/src/api/gateway/userAccess.js';
 import { listGatewayWorkspaces } from '../../../web/src/gatewayApi.js';
 import { INITIAL_APP_STATE } from '../../../web/src/hooks/app/appStateSeed.js';
 import { cloneMaps } from '../../../web/src/state/appStateMaps.js';
@@ -52,14 +50,13 @@ export function useNavigationRuntime(
   const selectionIntentRef = useRef(0), gatewayListRequestRef = useRef(0);
   const [queue] = useState(createSerialTaskQueue);
   const [catalog] = useState(() => createSessionCatalogOutboxRuntime({ apiPort: 0, onError: reportError, refreshSessionOwner }));
-  useEffect(() => { catalog.activatePrincipal(state.gatewayUserAccess); }, [catalog, state.gatewayUserAccess]);
   useEffect(() => () => catalog.dispose(), [catalog]);
   const catalogSnapshot = useSyncExternalStore(catalog.subscribe, catalog.getSnapshot, catalog.getSnapshot);
   const invalidateWorkspaceRefreshes = useCallback(() => { gatewayListRequestRef.current += 1; }, []);
   const refreshSessions = useCallback(async () => {
     const request = ++gatewayListRequestRef.current;
-    const [workspaces, access, settings, browserViewScope] = await queue.enqueue(() => Promise.all([
-      listGatewayWorkspaces(0), ensureGatewayUserAccess(0), getBrowserUiSettings(0), browserGatewayId(0),
+    const [workspaces, settings, browserViewScope] = await queue.enqueue(() => Promise.all([
+      listGatewayWorkspaces(0), getBrowserUiSettings(0), browserGatewayId(0),
     ]));
     const workspaceKey = nullableGatewayWorkspaceKey(workspaces.active_workspace);
     const sessions = workspaceKey ? await gateway.sessions(workspaceKey) : [];
@@ -68,8 +65,7 @@ export function useNavigationRuntime(
       const next = cloneMaps(withFreshGatewayWorkspaceList(previous, workspaces.items));
       if (workspaceKey) next.sessionsByWorkspace.set(workspaceKey, sessions);
       return { ...next, activeGatewayWorkspaceId: workspaceKey, sessions,
-        workspaceName: workspaces.items.find(item => gatewayWorkspaceKey(item) === workspaceKey)?.name ?? '',
-        gatewayUserAccess: access, browserViewScope, uiSettings: settings, uiSettingsLoaded: true, isBootstrapping: false };
+        workspaceName: workspaces.items.find(item => gatewayWorkspaceKey(item) === workspaceKey)?.name ?? '', browserViewScope, uiSettings: settings, uiSettingsLoaded: true, isBootstrapping: false };
     });
     return workspaceKey;
   }, [queue]);
@@ -77,7 +73,6 @@ export function useNavigationRuntime(
     void refreshSessions().catch(cause => reportError(`导航初始化失败：${String(cause)}`));
     return invalidateWorkspaceRefreshes;
   }, [refreshSessions, invalidateWorkspaceRefreshes, reportError]);
-  useGatewayAccessHeartbeat(0, state.gatewayUserAccess !== null, refreshSessions, reportError);
   const refreshGatewayWorkspaceStatuses = useCallback(async () => { await refreshSessions(); }, [refreshSessions]);
   const orchestration = useWorkspaceRefreshOrchestration({
     apiPort: 0, gatewayWorkspaces: state.gatewayWorkspaces, setState, refreshSessions,
@@ -101,7 +96,7 @@ export function useNavigationRuntime(
     currentSessionGatewayWorkspaceId: state.currentSessionWorkspaceId,
     defaultGatewayWorkspaceId: nullableGatewayWorkspaceKey(state.gatewayWorkspaces.find(item => item.system_default)),
     readState, setState, abortCurrentStream: invalidateWorkspaceRefreshes, invalidateAgentState: invalidateWorkspaceRefreshes,
-    sessionCatalogOutboxRuntime: catalog, gatewayUserAccess: state.gatewayUserAccess,
+    sessionCatalogOutboxRuntime: catalog,
     workspaceRequestTargets: state.gatewayWorkspaces, selectionIntentRef, onSessionCreated };
   const creation = useSessionCreationActions(context);
   const sessionActions = useSessionCatalogActions(context);

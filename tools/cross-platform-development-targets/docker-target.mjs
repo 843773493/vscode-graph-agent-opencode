@@ -13,7 +13,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { commandForCurrentPlatform, runChecked } from "./process.mjs";
+import crossSpawn from "cross-spawn";
+// 固定1.x：后续版本会启用Python shlex不支持的Bash美元引号扩展。
+import { split } from "shlex";
+import { runChecked } from "./process.mjs";
 
 export function dockerPersistentPaths(target) {
   const root = path.resolve(target.docker.persistentRoot);
@@ -52,7 +55,9 @@ export function dockerComposeEnvironment({ target, projectRoot }) {
 }
 
 function dockerCommandPrefix() {
-  return (process.env.BOXTEAM_DOCKER_COMMAND?.trim() || "docker").split(/\s+/);
+  const prefix = split(process.env.BOXTEAM_DOCKER_COMMAND?.trim() ?? "docker");
+  if (!prefix[0]) throw new Error("BOXTEAM_DOCKER_COMMAND 不能为空");
+  return prefix;
 }
 
 export function dockerComposeCommand({ target, projectRoot }, ...args) {
@@ -176,25 +181,25 @@ function installDockerKnownHost(target) {
   while (true) {
     const remainingMs = Math.floor(deadline - performance.now());
     if (remainingMs <= 0) break;
-    const result = Bun.spawnSync(
-      commandForCurrentPlatform([
-        "ssh-keyscan",
+    const result = crossSpawn.sync(
+      "ssh-keyscan", [
         "-p",
         String(target.ssh.port),
         "-t",
         "ed25519",
         target.ssh.host,
-      ]),
-      { stdout: "pipe", stderr: "pipe", timeout: remainingMs },
+      ],
+      { stdio: "pipe", timeout: remainingMs },
     );
-    if (result.exitedDueToTimeout) {
+    if (result.error?.code === "ETIMEDOUT") {
       const stderr = new TextDecoder().decode(result.stderr).trim();
       lastError =
-        `ssh-keyscan 超过本次剩余子进程期限 ${remainingMs} ms，signal=${result.signalCode ?? "unknown"}` +
+        `ssh-keyscan 超过本次剩余子进程期限 ${remainingMs} ms，signal=${result.signal ?? "unknown"}` +
         (stderr ? `：${stderr}` : "");
       break;
     }
-    if (result.exitCode === 0) {
+    if (result.error) throw result.error;
+    if (result.status === 0) {
       const output = new TextDecoder().decode(result.stdout).trim();
       if (output) {
         if (performance.now() >= deadline) {
@@ -207,7 +212,7 @@ function installDockerKnownHost(target) {
       lastError = "ssh-keyscan 成功退出但没有返回 host key";
     } else {
       const stderr = new TextDecoder().decode(result.stderr).trim();
-      lastError = stderr || `ssh-keyscan exitCode=${result.exitCode}，signal=${result.signalCode ?? "none"}`;
+      lastError = stderr || `ssh-keyscan exitCode=${result.status}，signal=${result.signal ?? "none"}`;
     }
     const sleepMs = Math.min(500, deadline - performance.now());
     if (sleepMs <= 0) break;
@@ -226,15 +231,18 @@ export function provisionDockerTarget({ target, projectRoot, rebuild = false }) 
   initializePersistentDirectories(target);
   const environment = dockerComposeEnvironment({ target, projectRoot });
   const argumentsList = ["up", "-d"];
-  const imageExists = Bun.spawnSync(
-    commandForCurrentPlatform([
-      ...dockerCommandPrefix(),
+  const [dockerCommand, ...dockerArguments] = dockerCommandPrefix();
+  const imageResult = crossSpawn.sync(
+    dockerCommand, [
+      ...dockerArguments,
       "image",
       "inspect",
       target.docker.image,
-    ]),
-    { stdout: "ignore", stderr: "ignore", env: environment },
-  ).exitCode === 0;
+    ],
+    { stdio: "ignore", env: environment },
+  );
+  if (imageResult.error) throw imageResult.error;
+  const imageExists = imageResult.status === 0;
   argumentsList.push(rebuild || !imageExists ? "--build" : "--no-build");
   runChecked(dockerComposeCommand({ target, projectRoot }, ...argumentsList), {
     cwd: projectRoot,

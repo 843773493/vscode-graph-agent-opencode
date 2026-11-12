@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   copyWorkspaceFileEntry,
@@ -10,21 +11,24 @@ import {
 } from "../../api";
 import {
   businessRequest,
-  GATEWAY_CURRENT_USER_PATH,
+
   installWorkspaceFileFetchMock,
   type RecordedRequest,
 } from "./workspaceFileRequestMock";
 
 import type { WorkspaceFileMutationIntent } from "../../types/backend";
 
-const FILESYSTEM_ROOT = "boxteam://gateway/gw-files/resources/files/root";
+const FILE_OWNER = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000002" };
+const FILE_SELECTION = gatewayWorkspaceKey(FILE_OWNER);
+
+const FILESYSTEM_ROOT = "boxteam://gateway/gateway_00000000000040008000000000000001/resources/files/root";
 const FILESYSTEM_HOME = `${FILESYSTEM_ROOT}/home/hyf`;
 const FILESYSTEM_HOME_FILE = `${FILESYSTEM_HOME}/torch_home`;
 
 const intent: WorkspaceFileMutationIntent = { client_operation_id: "op_00000000000040008000000000000002",
   client_sequence: 1, expected_directory_revision: 1, depends_on: [], created_by_operation_id: null,
   relative_child_path: "", directory_revision_from_operation_id: null, client_ref: "file-api-unit",
-  directory_key: { workspace_id: "backend_files", scope: "filesystem", root: FILESYSTEM_ROOT, path: FILESYSTEM_HOME } };
+  directory_key: { workspace_id: FILE_OWNER.workspaceId, scope: "filesystem", root: FILESYSTEM_ROOT, path: FILESYSTEM_HOME } };
 
 const originalFetch = globalThis.fetch;
 
@@ -59,7 +63,7 @@ function installFileManagementBackend(
         return Response.json({
           request_id: "req_file_management",
           data: {
-            directory_key: { workspace_id: "backend_files", scope: "filesystem", root: FILESYSTEM_ROOT, path: FILESYSTEM_HOME },
+            directory_key: { workspace_id: FILE_OWNER.workspaceId, scope: "filesystem", root: FILESYSTEM_ROOT, path: FILESYSTEM_HOME },
             directory_revision: 7,
             root_path: FILESYSTEM_ROOT,
             path: FILESYSTEM_HOME,
@@ -91,12 +95,12 @@ describe("文件树管理 API", () => {
       38_014,
       FILESYSTEM_HOME,
       { name: "torch_home", kind: "directory", intent },
-      "workspace-files",
+      FILE_SELECTION,
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files/entries");
     expect(request.url).toEndWith(
-      `/api/v1/workspace/files/entries?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=workspace`,
+      `/api/v1/workspace/files/entries?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=filesystem`,
     );
     expect(request.init?.body).toBe(JSON.stringify({
       name: "torch_home",
@@ -116,12 +120,12 @@ describe("文件树管理 API", () => {
       38_015,
       FILESYSTEM_HOME,
       { source_paths: ["/data/model.bin", "/clipboard/cache"], intent },
-      "workspace-files",
+      FILE_SELECTION,
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files/paste");
     expect(request.url).toEndWith(
-      `/api/v1/workspace/files/paste?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=workspace`,
+      `/api/v1/workspace/files/paste?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=filesystem`,
     );
     expect(request.init?.body).toBe(JSON.stringify({
       source_paths: ["/data/model.bin", "/clipboard/cache"],
@@ -138,7 +142,7 @@ describe("文件树管理 API", () => {
       38_018,
       "target",
       { source_path: "source.txt", source_scope: "workspace", intent },
-      "workspace-files",
+      FILE_SELECTION,
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files/copy");
@@ -164,7 +168,7 @@ describe("文件树管理 API", () => {
       "uploads",
       [{ file, name: file.name, relativePath: file.name }],
       intent,
-      "workspace-files",
+      FILE_SELECTION,
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files/upload");
@@ -176,10 +180,10 @@ describe("文件树管理 API", () => {
     expect((body as FormData).get("relative_paths")).toBe("hello.txt");
     expect((body as FormData).get("intent")).toBe(JSON.stringify(intent));
     expect(((body as FormData).get("files") as File).name).toBe("hello.txt");
-    // 上传走 skipGatewayUserSession 的 multipart 通路，不建立用户会话屏障。
+    // 上传直接复用本机凭据，不初始化用户或游客。
     expect(
       requests.some(
-        (entry) => new URL(entry.url).pathname === GATEWAY_CURRENT_USER_PATH,
+        (entry) => new URL(entry.url).pathname === "/api/gateway/users/current",
       ),
     ).toBe(false);
   });
@@ -192,13 +196,13 @@ describe("文件树管理 API", () => {
       38_020,
       "models/model.bin",
       "model.bin",
-      "workspace-files",
+      FILE_SELECTION,
     );
 
     expect(request.url).toEndWith(
       "/api/v1/workspace/files/download?path=models%2Fmodel.bin&scope=workspace",
     );
-    expect(request.headers["X-BoxTeam-Workspace-Id"]).toBe("workspace-files");
+    expect(request.headers["X-BoxTeam-Workspace-Id"]).toBe(FILE_OWNER.workspaceId);
     expect(request.headers["X-Local-Token"]).toBe("file-manager-token");
     expect(request.suggestedName).toBe("model.bin");
   });
@@ -210,12 +214,12 @@ describe("文件树管理 API", () => {
     const result = await revealWorkspaceFileEntry(
       38_016,
       FILESYSTEM_HOME_FILE,
-      "workspace-files",
+      FILE_SELECTION,
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files/reveal");
     expect(request.url).toEndWith(
-      `/api/v1/workspace/files/reveal?path=${encodeURIComponent(FILESYSTEM_HOME_FILE)}&scope=workspace`,
+      `/api/v1/workspace/files/reveal?path=${encodeURIComponent(FILESYSTEM_HOME_FILE)}&scope=filesystem`,
     );
     expect(request.init?.method).toBe("POST");
     expect(result.path).toBe(FILESYSTEM_HOME_FILE);
@@ -228,14 +232,14 @@ describe("文件树管理 API", () => {
     const result = await getWorkspaceFiles(
       38_017,
       FILESYSTEM_HOME,
-      "workspace-files",
+      FILE_SELECTION,
       undefined,
       "opaque-cursor",
     );
 
     const request = businessRequest(requests, "/api/v1/workspace/files");
     expect(request.url).toEndWith(
-      `/api/v1/workspace/files?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=workspace&cursor=opaque-cursor`,
+      `/api/v1/workspace/files?path=${encodeURIComponent(FILESYSTEM_HOME)}&scope=filesystem&cursor=opaque-cursor`,
     );
     expect(result.next_cursor).toBe("next-page");
   });

@@ -30,9 +30,8 @@ workspace_files/
 # 规范
 
 - `workspace_file_dialog.test.mjs` 在真实 Chromium 中运行原 FileService、产品 WorkspaceFiles 和原 SimpleFileDialog；Quick Input 控件、路径／语言／上下文／存储服务与 HTTP 目标磁盘为具名边界。覆盖目录／stat 原错误、404 cause、递归／metadata、排队接受、取消／迟到／busy、失败后明确重开、保存候选及确认 prompt 结清，并保留非工作区 scheme 原成功和宽容语义；不替代完整 Workbench 渲染、真实 Gateway／磁盘或 Windows 验收。
-
 - 新 fixture 复制到与测试文件路径镜像的 `out/tests/integration/clients/web/workspace_files/<测试名>/workspace/`；原始输出和浏览器产物在同名 `artifacts/`，端口、进程等控制数据在同名 `runtime/`。
 - 受控传输/认证边界在测试与结果中明确列出；文件 owner、SQLite 操作与文件副作用必须是真实生产实现。
 - 测试使用进程外超时与数据段内存限制，记录真实退出码；生命周期 owner 回收 HTTP/SSE response、socket、Chromium 与全部测试子进程，失败不可被清理异常掩盖。
 - 断言按实际持久结果及浏览器行为，区分 durable acceptance、terminal 和未知效果，不以待确认意图伪报成功。
-- 完整页面由 `web_workbench_assets` 复用会话级构建并经真实 Gateway 提供，浏览器 profile 仍位于当前测试节点的独立 runtime；文件资源定位限定对应 Thread。预览与展开状态随原版 EditorInput 在浏览器持久化，使用同一 Chromium profile 经页面刷新、浏览器关闭及双 owner 重启核对，不再要求展示态写入 Gateway 用户档案；档案 API 的路径拒绝与响应脱敏契约仍须保留。
+- 完整页面由 `web_workbench_assets` 复用会话级构建并经真实 Gateway 提供，浏览器 profile 仍位于当前测试节点的独立 runtime；文件资源定位限定对应 Thread。预览与展开状态随原版 EditorInput 在浏览器持久化，使用同一 Chromium profile 经页面刷新、浏览器关闭及双 owner 重启核对，不再要求展示态写入 Gateway 用户档案；旧用户档案 API 已退役。

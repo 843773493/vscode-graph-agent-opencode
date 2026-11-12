@@ -52,8 +52,6 @@ async def test_rejected_identity_and_correction_survive_workbench_refresh(
     try:
         base_url = f"http://127.0.0.1:{gateway.port}"
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
-            guest = await client.post("/api/gateway/users/guest", json={"tracking": {"source": "resource-identity-tool-loop"}})
-            assert guest.status_code == 200, guest.text
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
             active_owner = workspaces.json()["data"]["active_workspace"]

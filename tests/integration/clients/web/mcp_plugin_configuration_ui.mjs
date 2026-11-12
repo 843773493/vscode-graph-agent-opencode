@@ -20,14 +20,6 @@ try {
     if (request.method() === 'PUT' && url.pathname.includes('/config/sources/')) result.writes.push(request.postDataJSON());
   });
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(async () => {
-    const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
-    const response = await fetch('/api/gateway/users/guest', { method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Local-Token': credential.data.token },
-      body: JSON.stringify({ tracking: { source: 'mcp-plugin-add' } }) });
-    if (!response.ok) throw new Error(await response.text());
-  });
-  await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
   result.initialization = await page.evaluate(async owner => {
     const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
@@ -112,6 +104,42 @@ try {
   await expect(panel).toBeVisible();
   await expect(panel.getByRole('listitem', { name: 'ui-plugin', exact: true })).toBeVisible();
   await expect(panel.getByRole('listitem', { name: 'ui-http', exact: true })).toBeVisible();
+  result.phase = 'resource-quick-access';
+  const mcpWrites = [];
+  const resourceOwnerReads = [];
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (request.method() === 'POST' && url.pathname.includes('/api/v1/mcp/')) mcpWrites.push(request.url());
+    if (result.phase === 'resource-quick-access' && request.method() === 'GET'
+      && url.pathname.startsWith('/api/v1/resources')) {
+      const headers = request.headers();
+      resourceOwnerReads.push({ path: url.pathname, gatewayId: headers['x-boxteam-target-gateway-id'],
+        workspaceId: headers['x-boxteam-workspace-id'] });
+    }
+  });
+  const findMcp = async () => {
+    await page.evaluate(owner => globalThis.workbench.commands.executeCommand('boxteam.quickAccess.resources', owner),
+      { gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId });
+    await quick.locator('input').first().fill('resource ui-plugin');
+    const row = quick.locator('.monaco-list-row').filter({ hasText: 'ui-plugin' });
+    await expect(row).toHaveCount(1); await expect(row).toContainText('MCP');
+    return row;
+  };
+  const lookup = await findMcp();
+  expect(resourceOwnerReads.length).toBeGreaterThan(0);
+  expect(resourceOwnerReads.every(request => request.gatewayId === fixture.gatewayId
+    && request.workspaceId === fixture.workspaceId)).toBe(true);
+  await lookup.click();
+  await expect(page.locator('.tab').filter({ hasText: 'MCP Server: ui-plugin' })).toBeVisible();
+  const details = page.locator('.mcp-server-editor').filter({ visible: true });
+  await expect(details).toContainText('ui-plugin'); await expect(details).toContainText(workspace.name);
+  const optionsLookup = await findMcp();
+  await optionsLookup.hover();
+  await optionsLookup.getByRole('button', { name: '更多 MCP 动作', exact: true }).click();
+  await expect(quick).toContainText('Show Details'); await quick.locator('input').first().press('Escape');
+  assert.deepEqual(mcpWrites, [], '发现、详情及取消管理菜单不改变MCP连接');
+  assert.equal(result.writes.length, 2);
+  result.mcpQuickAccess = true;
   assert.deepEqual(result.pageErrors, []);
   result.phase = 'completed';
 } finally {

@@ -4,6 +4,7 @@ import { act } from "react-test-renderer";
 import type {
   SessionCatalogNavigationEvent,
   SessionCatalogNavigationEventsPage,
+  SessionCatalogSnapshot,
   SessionCatalogOperationReceipt,
   SessionCatalogOperationStatusPage,
 } from "../../api/session/sessionCatalogOperations";
@@ -20,7 +21,7 @@ import type {
   CatalogOutboxPersistencePort,
   CatalogOutboxStoredOperation,
 } from "../../state/session/sessionCatalogOutboxStore";
-import type { GatewayUserAccess, Session, SessionCatalogNode } from "../../types/backend";
+import type { Session, SessionCatalogNode } from "../../types/backend";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import {
   apiSuccessResponse,
@@ -28,7 +29,7 @@ import {
   apiErrorResponse,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
-  testGatewayUserAccess,
+
   withDefaultGatewayApiResponses,
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import {
@@ -48,6 +49,7 @@ import { refreshCurrentSessionCatalogOwner } from "./useSessionLifecycleActions"
 import { CATALOG_OUTBOX_BROADCAST_CHANNEL } from "./sessionCatalogOutboxDriver";
 import { sessionScopeKey } from "../../state/session/sessionScope";
 import { CatalogReadSupersededError } from "../sessionResourceExplorer/resourceTreeSync";
+import { HttpRequestError } from "../../api/http";
 
 const API_PORT = 49_441;
 const GATEWAY_ID = "gateway-test";
@@ -55,6 +57,27 @@ const WORKSPACE_ID = "c6dd923e-4a7c-4db3-8c63-110ea072d3a4";
 const WORKSPACE_TARGET: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: WORKSPACE_ID };
 const GATEWAY_WORKSPACE_ID = gatewayWorkspaceKey(WORKSPACE_TARGET);
 const OPERATION_ID = "op_00000000000000000000000000000001";
+
+/** 显式投递目录通知；本文件验证 runtime 对账，真实 SSE 接线另有传输验收。 */
+function navigationNotifications(snapshot: () => SessionCatalogSnapshot) {
+  let deliver: (() => Promise<void>) | undefined;
+  let inFlight: Promise<void> | null = null;
+  return {
+    observeChanges: async (_port: number, _target: GatewayWorkspaceRequestTarget,
+      options: Parameters<NonNullable<Parameters<typeof createSessionCatalogOutboxRuntime>[0]["observeChanges"]>>[2]) => {
+      deliver = () => {
+        if (inFlight) return inFlight;
+        inFlight = options.onSnapshot(snapshot()).catch(options.onError).finally(() => { inFlight = null; });
+        return inFlight;
+      };
+      await new Promise<void>(resolve => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+    },
+    send() {
+      if (!deliver) throw new Error("目录观察者尚未订阅");
+      return deliver();
+    },
+  };
+}
 
 function navigationEvent(sequence: number): SessionCatalogNavigationEvent {
   return { event_seq: sequence, workspace_id: WORKSPACE_ID,
@@ -86,7 +109,7 @@ function rejectedReceipt(): SessionCatalogOperationReceipt {
 function persistedOperation(partition: CatalogOutboxPartition = {
   gatewayId: GATEWAY_ID,
   workspaceId: WORKSPACE_ID,
-  principal: "guest",
+  principal: "local",
 }, name = "新名字"): {
   record: CatalogOutboxStoredOperation;
 } {
@@ -176,7 +199,7 @@ function repairDeleteFixture(refreshFails: boolean) {
     return undefined;
   }));
   const runtimeOptions: Parameters<typeof createSessionCatalogOutboxRuntime>[0] = {
-    apiPort: API_PORT, reconcileIntervalMs: 60_000,
+    apiPort: API_PORT, observeChanges: async () => {},
     openPersistence: async () => persistence,
     onError: (message) => errors.push(message),
     adapter: {
@@ -213,7 +236,6 @@ function repairDeleteFixture(refreshFails: boolean) {
     },
   };
   const runtime = createSessionCatalogOutboxRuntime(runtimeOptions);
-  runtime.activatePrincipal(testGatewayUserAccess());
   runtime.subscribe(() => {
     for (const entry of runtime.getSnapshot().values()) {
       phases.push(...entry.outbox.operations.map((operation) =>
@@ -229,9 +251,8 @@ describe("真实 runtime 的删除修复提示", () => {
   test("首次公开 submit 与空回执启动对账并发时保留精确持久操作", async () => {
     const fixture = repairDeleteFixture(false);
     try {
-      fixture.runtime.activatePrincipal(testGatewayUserAccess());
       // 首次业务入口直接 submit；不预开 workspace，也不等待启动对账。
-      const submitted = await fixture.runtime.submit(WORKSPACE_TARGET, testGatewayUserAccess(), {
+      const submitted = await fixture.runtime.submit(WORKSPACE_TARGET, {
         kind: "rename_node", targetNodeId: fixture.folder.node_id, name: "首次提交",
       }, { baseCatalogRevision: 3, expectedRevision: 2 });
 
@@ -262,8 +283,7 @@ describe("真实 runtime 的删除修复提示", () => {
       let mounted: Awaited<ReturnType<typeof mountSessionResourceExplorerHarness>> | undefined;
       try {
         mounted = await mountSessionResourceExplorerHarness({ props: {
-          apiPort: API_PORT, activeWorkspaceId: GATEWAY_WORKSPACE_ID, workspaces: [WORKSPACE_TARGET],
-          gatewayUserAccess: testGatewayUserAccess(), sessionCatalogOutboxRuntime: fixture.runtime,
+          apiPort: API_PORT, activeWorkspaceId: GATEWAY_WORKSPACE_ID, workspaces: [WORKSPACE_TARGET], sessionCatalogOutboxRuntime: fixture.runtime,
         } });
         let result!: Awaited<ReturnType<ReturnType<typeof mounted.explorer>["deleteSessionFolder"]>>;
         await act(async () => {
@@ -305,9 +325,9 @@ describe("真实 runtime 的删除修复提示", () => {
     let mounted: Awaited<ReturnType<typeof mountSessionResourceExplorerHarness>> | undefined;
     let recovered: ReturnType<typeof createSessionCatalogOutboxRuntime> | undefined;
     try {
-      const initial = await fixture.runtime.openWorkspace(WORKSPACE_TARGET, testGatewayUserAccess());
+      const initial = await fixture.runtime.openWorkspace(WORKSPACE_TARGET, );
       await initial.driver.reconcile();
-      const submitted = await fixture.runtime.submit(WORKSPACE_TARGET, testGatewayUserAccess(), {
+      const submitted = await fixture.runtime.submit(WORKSPACE_TARGET, {
         kind: "delete_folder", targetNodeId: fixture.folder.node_id, recursive: true,
       }, { baseCatalogRevision: 3, expectedRevision: 2 });
       const terminal = fixture.runtime.waitForTerminal(submitted.handle, submitted.operationId);
@@ -318,16 +338,14 @@ describe("真实 runtime 的删除修复提示", () => {
       expect(fixture.errors.some((message) => message.includes(fixture.detail))).toBe(true);
       fixture.runtime.dispose();
       recovered = createSessionCatalogOutboxRuntime(fixture.runtimeOptions);
-      recovered.activatePrincipal(testGatewayUserAccess());
-      const restored = await recovered.openWorkspace(WORKSPACE_TARGET, testGatewayUserAccess());
+      const restored = await recovered.openWorkspace(WORKSPACE_TARGET, );
       expect(restored.driver.current().operations).toMatchObject([{
         client_operation_id: submitted.operationId, state: "committed", settlement: "repair_required",
         error_detail: fixture.detail, receipt_revision: 2,
       }]);
       const previousErrors = fixture.errors.length;
       mounted = await mountSessionResourceExplorerHarness({ props: {
-        apiPort: API_PORT, activeWorkspaceId: GATEWAY_WORKSPACE_ID, workspaces: [WORKSPACE_TARGET],
-        gatewayUserAccess: testGatewayUserAccess(), sessionCatalogOutboxRuntime: recovered,
+        apiPort: API_PORT, activeWorkspaceId: GATEWAY_WORKSPACE_ID, workspaces: [WORKSPACE_TARGET], sessionCatalogOutboxRuntime: recovered,
       } });
       const restoredError = fixture.errors.slice(previousErrors).find((message) =>
         message.includes("终态分支刷新失败"));
@@ -348,10 +366,38 @@ describe("真实 runtime 的删除修复提示", () => {
 });
 
 describe("会话目录 outbox runtime", () => {
+  test("本机分区不接管或重放旧账户和游客待办", async () => {
+    const records = ["guest", "user:retired"].map(principal => persistedOperation({
+      gatewayId: GATEWAY_ID, workspaceId: WORKSPACE_ID, principal,
+    }).record);
+    const before = structuredClone(records);
+    const loaded: string[] = [];
+    const runtime = createSessionCatalogOutboxRuntime({
+      apiPort: API_PORT, observeChanges: async () => {},
+      openPersistence: async () => ({
+        async load(key) { loaded.push(key); return records.filter(record => record.partition_key === key); },
+        insert: async () => { throw new Error("打开本机分区不能迁入旧命令"); },
+        applyReceipts: async () => { throw new Error("空分区不能改写旧回执"); },
+        delete: async () => { throw new Error("旧账户原件不得删除"); },
+      }),
+      adapter: {
+        enqueue: async () => { throw new Error("不得重放旧命令"); },
+        queryStatus: async () => { throw new Error("本机空分区不得查询旧命令"); },
+      },
+    });
+    try {
+      const handle = await runtime.openWorkspace(WORKSPACE_TARGET);
+      expect(handle.partition.principal).toBe("local");
+      expect(handle.driver.current().operations).toEqual([]);
+      expect(loaded).toEqual([handle.partitionKey]);
+      expect(records).toEqual(before);
+    } finally { runtime.dispose(); }
+  });
+
   test("直接使用已选 owner，零工作区身份 GET 且同 UUID 的不同 Gateway 分区可分别恢复", async () => {
     const partitions: CatalogOutboxPartition[] = [
-      { gatewayId: GATEWAY_ID, workspaceId: WORKSPACE_ID, principal: "guest" },
-      { gatewayId: "gateway-other", workspaceId: WORKSPACE_ID, principal: "guest" },
+      { gatewayId: GATEWAY_ID, workspaceId: WORKSPACE_ID, principal: "local" },
+      { gatewayId: "gateway-other", workspaceId: WORKSPACE_ID, principal: "local" },
     ];
     const targets = partitions.map((partition) => ({
       gateway_id: partition.gatewayId, workspace_id: partition.workspaceId,
@@ -373,7 +419,7 @@ describe("会话目录 outbox runtime", () => {
       return undefined;
     });
     const options: Parameters<typeof createSessionCatalogOutboxRuntime>[0] = {
-      apiPort: API_PORT, reconcileIntervalMs: 60_000,
+      apiPort: API_PORT, observeChanges: async () => {},
       openPersistence: async () => ({
         async load(key) { loads.push(key); return records.filter((record) => record.partition_key === key); },
         insert: async () => { throw new Error("打开既有分区不得新增命令"); },
@@ -395,9 +441,8 @@ describe("会话目录 outbox runtime", () => {
       for (let restore = 0; restore < 2; restore += 1) {
         const runtime = createSessionCatalogOutboxRuntime(options);
         runtimes.push(runtime);
-        const access = testGatewayUserAccess();
-        runtime.activatePrincipal(access);
-        const handles = await Promise.all(targets.map((target) => runtime.openWorkspace(target, access)));
+
+        const handles = await Promise.all(targets.map((target) => runtime.openWorkspace(target)));
         await Promise.all(handles.map((handle) => handle.driver.reconcile()));
         for (const [index, handle] of handles.entries()) {
           expect(handle.workspaceTarget).toEqual(targets[index]);
@@ -412,63 +457,6 @@ describe("会话目录 outbox runtime", () => {
       expect(loads).toEqual(records.map((record) => record.partition_key).concat(records.map((record) => record.partition_key)));
       expect(identityRequests).toBe(0);
     } finally { for (const runtime of runtimes) runtime.dispose(); }
-  });
-
-  test("持久层打开和 driver 恢复期间 principal 离开再返回，迟到 opening 不得取代新 generation", async () => {
-    const access = testGatewayUserAccess();
-    const otherAccess: GatewayUserAccess = { ...access, kind: "user", user_id: "another-user" };
-    const opened = createDeferredResult<void>();
-    const persistenceGate = createDeferredResult<CatalogOutboxPersistencePort>();
-    const restoring = createDeferredResult<void>();
-    const restoreGate = createDeferredResult<void>();
-    let loads = 0;
-    const persistence: CatalogOutboxPersistencePort = {
-      async load() {
-        loads += 1;
-        if (loads === 1) { restoring.release(); await restoreGate.promise; }
-        return [];
-      },
-      insert: async () => { throw new Error("打开分区不得新增命令"); },
-      applyReceipts: async (_key, receipts) => { expect(receipts).toEqual([]); return []; },
-      delete: async () => { throw new Error("打开分区不得删除命令"); },
-    };
-    installGatewayFetch(() => { throw new Error("打开分区不得发送身份 HTTP 请求"); });
-    const runtime = createSessionCatalogOutboxRuntime({
-      apiPort: API_PORT, reconcileIntervalMs: 60_000,
-      openPersistence: () => { opened.release(); return persistenceGate.promise; },
-      adapter: {
-        enqueue: async () => { throw new Error("空分区不得入队"); },
-        queryStatus: async () => { throw new Error("空分区不得查询命令"); },
-      },
-    });
-    try {
-      runtime.activatePrincipal(access);
-      const opening = runtime.openWorkspace(WORKSPACE_TARGET, access).catch((error: unknown) => error);
-      await opened.promise;
-      runtime.activatePrincipal(otherAccess);
-      runtime.activatePrincipal(access);
-      const restore = runtime.openWorkspace(WORKSPACE_TARGET, access).catch((error: unknown) => error);
-      persistenceGate.release(persistence);
-      expect(await opening).toHaveProperty("message", "Gateway 认证主体已切换，拒绝继续使用会话目录 outbox: guest");
-      await restoring.promise;
-      runtime.activatePrincipal(otherAccess);
-      runtime.activatePrincipal(access);
-      const current = await runtime.openWorkspace(WORKSPACE_TARGET, access);
-      await current.driver.reconcile();
-      const snapshot = runtime.getSnapshot();
-      restoreGate.release();
-      expect(await restore).toHaveProperty("message", `会话目录 outbox principal 已失效，停止派发: ${catalogOutboxPartitionKey({
-        gatewayId: GATEWAY_ID, workspaceId: WORKSPACE_ID, principal: "guest",
-      })}`);
-      expect(loads).toBe(2);
-      expect(runtime.getSnapshot()).toBe(snapshot);
-      expect(await runtime.openWorkspace(WORKSPACE_TARGET, access)).toBe(current);
-      expect(current.driver.current().operations).toEqual([]);
-    } finally {
-      persistenceGate.release(persistence);
-      restoreGate.release();
-      runtime.dispose();
-    }
   });
 
   for (const reloadFails of [false, true]) {
@@ -487,7 +475,7 @@ describe("会话目录 outbox runtime", () => {
       const errors: string[] = [];
       let loads = 0;
       const runtime = createSessionCatalogOutboxRuntime({
-        apiPort: API_PORT, reconcileIntervalMs: 60_000,
+        apiPort: API_PORT, observeChanges: async () => {},
         onError(message) { errors.push(message); observed("error"); },
         openPersistence: async () => ({
           async load() {
@@ -526,9 +514,8 @@ describe("会话目录 outbox runtime", () => {
       });
       let opening: ReturnType<typeof runtime.openWorkspace> | undefined;
       try {
-        const access = testGatewayUserAccess();
-        runtime.activatePrincipal(access);
-        opening = runtime.openWorkspace(WORKSPACE_TARGET, access);
+
+        opening = runtime.openWorkspace(WORKSPACE_TARGET);
         await loading;
         sender.postMessage({ partitionKey: record.partition_key });
         await received;
@@ -559,7 +546,7 @@ describe("会话目录 outbox runtime", () => {
   }
 
   test("恢复的拒绝回执先经过稳定错误通道，再快速清理 outbox", async () => {
-    const access: GatewayUserAccess = testGatewayUserAccess();
+
     const { record } = persistedOperation();
     const errors: string[] = [];
     let errorsAtDelete: string[] = [];
@@ -620,13 +607,13 @@ describe("会话目录 outbox runtime", () => {
       apiPort: API_PORT,
       openPersistence: async () => persistence,
       adapter,
+      observeChanges: async () => {},
       onError: (message) => errors.push(message),
     });
 
     try {
-      runtime.activatePrincipal(access);
       const phases: string[] = [];
-      runtime.registerFailureOwner(access, {
+      runtime.registerFailureOwner( {
         async refresh(target, reported, revision, signal) {
           expect(target).toEqual(WORKSPACE_TARGET);
           expect(revision).toBe(7);
@@ -636,7 +623,7 @@ describe("会话目录 outbox runtime", () => {
         },
         async waitForProjection() { phases.push("projection"); },
       });
-      const handle = await runtime.openWorkspace(WORKSPACE_TARGET, access);
+      const handle = await runtime.openWorkspace(WORKSPACE_TARGET);
       await statusRequest;
       const reconciling = handle.driver.reconcile();
       allowStatus({
@@ -656,7 +643,7 @@ describe("会话目录 outbox runtime", () => {
       expect(errors.join("\n")).toContain("会话正在运行");
       expect(handle.driver.current().operations).toEqual([]);
       expect(runtime.getSnapshot().get(
-        catalogOutboxWorkspaceScopeKey(GATEWAY_WORKSPACE_ID, "guest"),
+        catalogOutboxWorkspaceScopeKey(GATEWAY_WORKSPACE_ID, "local"),
       )?.outbox.operations).toEqual([]);
     } finally {
       runtime.dispose();
@@ -667,7 +654,7 @@ describe("会话目录 outbox runtime", () => {
 describe("失败 confirmed owner 的恢复边界", () => {
   for (const failure of ["owner 缺席", "刷新失败", "owner 在刷新中撤销"] as const) {
     test(`${failure}保留持久失败回执与真实错误，后注册 owner 可恢复`, async () => {
-      const access = testGatewayUserAccess();
+
       const { record } = persistedOperation();
       let records = [record];
       const errors: string[] = [];
@@ -690,7 +677,7 @@ describe("失败 confirmed owner 的恢复边界", () => {
         });
         return undefined;
       });
-      const runtime = createSessionCatalogOutboxRuntime({ apiPort: API_PORT, reconcileIntervalMs: 60_000,
+      const runtime = createSessionCatalogOutboxRuntime({ apiPort: API_PORT, observeChanges: async () => {},
         onError: (message) => errors.push(message),
         openPersistence: async () => ({
           load: async () => records,
@@ -719,10 +706,9 @@ describe("失败 confirmed owner 的恢复边界", () => {
         },
       });
       try {
-        runtime.activatePrincipal(access);
         let unregister: () => void = () => undefined;
         if (failure !== "owner 缺席") {
-          unregister = runtime.registerFailureOwner(access, {
+          unregister = runtime.registerFailureOwner( {
             async refresh() {
               if (failure === "刷新失败") throw new Error("权威 snapshot 请求失败");
               refreshStarted();
@@ -731,7 +717,7 @@ describe("失败 confirmed owner 的恢复边界", () => {
             async waitForProjection() {},
           });
         }
-        const handle = await runtime.openWorkspace(WORKSPACE_TARGET, access);
+        const handle = await runtime.openWorkspace(WORKSPACE_TARGET);
         const attempt = handle.driver.reconcile();
         if (failure === "owner 在刷新中撤销") {
           await refreshing;
@@ -747,7 +733,7 @@ describe("失败 confirmed owner 的恢复边界", () => {
         } }]);
         expect(errors.join("；")).toContain("会话正在运行");
         expect(errors.join("；")).toContain(OPERATION_ID);
-        runtime.registerFailureOwner(access, {
+        runtime.registerFailureOwner( {
           async refresh(target, reported, revision, signal) {
             expect(target).toEqual(WORKSPACE_TARGET);
             expect(revision).toBe(12);
@@ -768,6 +754,158 @@ describe("失败 confirmed owner 的恢复边界", () => {
 });
 
 describe("navigation 事件的真实 runtime 消费", () => {
+  test("服务端未受理且没有推送时，未知操作仍查询原ID再重试；受理后停止定时查询", async () => {
+    const { record } = persistedOperation();
+    let stored = record;
+    let enqueueCount = 0;
+    let queryCount = 0;
+    const errors: string[] = [];
+    const runtime = createSessionCatalogOutboxRuntime({ apiPort: API_PORT,
+      observeChanges: async () => {}, onError: error => errors.push(error),
+      openPersistence: async () => ({ load: async () => [],
+        insert: async (_key, operation) => {
+          stored = { ...record, operation: { ...operation, client_sequence: 1 } };
+          return stored;
+        },
+        applyReceipts: async (_key, receipts) => {
+          for (const receipt of receipts) stored = { ...stored, operation: {
+            ...applyCatalogOutboxOperationReceipt(stored.operation, receipt), client_sequence: 1,
+          } };
+          return receipts.length ? [stored] : [];
+        }, delete: async () => {},
+      }),
+      adapter: {
+        async enqueue(_port, _target, intents) {
+          enqueueCount += 1;
+          expect(intents.map(intent => intent.client_operation_id)).toEqual([stored.operation.client_operation_id]);
+          if (enqueueCount === 1) throw new HttpRequestError(503, "尚未受理", null, "/operations:enqueue", "req-backpressure");
+          return { workspace_id: WORKSPACE_ID, accepted_count: 1, created_node_ids: {}, receipts: [{
+            ...rejectedReceipt(), operation_id: stored.operation.client_operation_id,
+            state: "queued", error_code: null, error_detail: null,
+          }] };
+        },
+        async queryStatus(_port, _target, ids) {
+          queryCount += 1;
+          expect(ids).toEqual([stored.operation.client_operation_id]);
+          return { workspace_id: WORKSPACE_ID, catalog_revision: 7, items: [], unknown_operation_ids: ids.slice() };
+        },
+      },
+    });
+    try {
+
+      const { handle } = await runtime.submit(WORKSPACE_TARGET,
+        { kind: "rename_node", targetNodeId: "cnode_1", name: "重试" },
+        { baseCatalogRevision: 7, expectedRevision: 3 });
+      for (let attempt = 0; attempt < 200 && enqueueCount < 2; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(enqueueCount).toBe(2);
+      expect(queryCount).toBe(1);
+      expect(handle.driver.current().operations[0].state).toBe("accepted");
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      expect(queryCount).toBe(1);
+      expect(enqueueCount).toBe(2);
+      expect(errors).toEqual([]);
+    } finally { runtime.dispose(); }
+  });
+
+  test("真实观察连接闲置不轮询；推送和断线首帧补齐目录，dispose释放reader", async () => {
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout } });
+    const connections: { controller: ReadableStreamDefaultController<Uint8Array>; id: string; cancelled: boolean }[] = [];
+    const refreshed: number[] = [];
+    const errors: string[] = [];
+    const requestedAfter: number[] = [];
+    let watermark = 0;
+    let snapshotRequests = 0;
+    const encoder = new TextEncoder();
+    installGatewayFetch(({ path, url, init }) => {
+      if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
+      if (path === "/api/v1/workspace/observations/stream") {
+        const { subscriptions } = JSON.parse(String(init?.body)) as {
+          subscriptions: { subscription_id: string; kind: string }[];
+        };
+        expect(subscriptions.map(item => item.kind)).toEqual(["session_navigation"]);
+        const id = subscriptions[0].subscription_id;
+        let connection!: (typeof connections)[number];
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            connection = { controller, id, cancelled: false };
+            connections.push(connection);
+            controller.enqueue(encoder.encode(`event: observation\ndata: ${JSON.stringify({ subscription_id: id, state: "connected" })}\n\n`));
+          },
+          cancel() { connection.cancelled = true; },
+        }), { headers: { "Content-Type": "text/event-stream" } });
+      }
+      if (path === "/api/v1/session-catalog/snapshot") {
+        snapshotRequests += 1;
+        return apiSuccessResponse({ workspace_id: WORKSPACE_ID,
+          catalog_revision: 7 + watermark, event_seq_watermark: watermark, generation: 1 });
+      }
+      if (path === "/api/v1/session-catalog/navigation-events") {
+        const after = Number(new URL(url, "http://localhost").searchParams.get("after"));
+        requestedAfter.push(after);
+        return apiSuccessResponse({ workspace_id: WORKSPACE_ID, event_seq_watermark: watermark,
+          items: Array.from({ length: watermark - after }, (_, index) => navigationEvent(after + index + 1)),
+          next_cursor: null, has_more: false, cursor_gone: false });
+      }
+      return undefined;
+    });
+    async function waitUntil(check: () => boolean): Promise<void> {
+      for (let attempt = 0; attempt < 400; attempt += 1) {
+        if (check()) return;
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      throw new Error("目录推送未收敛");
+    }
+    function sendSnapshot(): void {
+      const connection = connections[connections.length - 1];
+      const frame = `event: session_navigation\ndata: ${JSON.stringify({ workspace_id: WORKSPACE_ID,
+        catalog_revision: 7 + watermark, event_seq_watermark: watermark, generation: 1 })}\n\n`;
+      connection.controller.enqueue(encoder.encode(`event: observation\ndata: ${JSON.stringify({
+        subscription_id: connection.id, state: "frame", frame,
+      })}\n\n`));
+    }
+    const runtime = createSessionCatalogOutboxRuntime({ apiPort: API_PORT,
+      onError: message => errors.push(message),
+      openPersistence: async () => ({ load: async () => [],
+        insert: async () => { throw new Error("通知不得生成操作"); },
+        applyReceipts: async () => [], delete: async () => {} }),
+      adapter: { enqueue: async () => { throw new Error("通知不得入队"); },
+        queryStatus: async () => { throw new Error("空outbox不得查询操作"); } },
+    });
+    try {
+
+      runtime.registerFailureOwner( {
+        async refresh(_target, _outbox, revision) { refreshed.push(revision); },
+        async waitForProjection() {},
+      });
+      await runtime.openWorkspace(WORKSPACE_TARGET);
+      await waitUntil(() => connections.length === 1);
+      sendSnapshot();
+      await waitUntil(() => refreshed.length === 1);
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      expect(snapshotRequests).toBe(0);
+      expect(requestedAfter).toEqual([]);
+      expect(connections).toHaveLength(1);
+      watermark = 1;
+      sendSnapshot();
+      await waitUntil(() => refreshed.length === 2);
+      connections[0].controller.close();
+      watermark = 2;
+      await waitUntil(() => connections.length === 2);
+      sendSnapshot();
+      await waitUntil(() => refreshed.length === 3);
+      expect(refreshed).toEqual([7, 8, 9]);
+      expect(requestedAfter).toEqual([0, 1]);
+      expect(snapshotRequests).toBe(0);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain("推送连接已关闭");
+    } finally {
+      runtime.dispose();
+      await waitUntil(() => connections[connections.length - 1]?.cancelled === true);
+    }
+  });
+
   for (const mode of ["乱序重复", "事件缺口", "cursor gone", "分页", "刷新取代", "真实同文案错误"] as const) {
     test(`${mode}只使 confirmed 失效并读取最新 snapshot，不制造目录命令`, async () => {
       const errors: string[] = [];
@@ -808,7 +946,9 @@ describe("navigation 事件的真实 runtime 消费", () => {
         }
         return undefined;
       });
-      const runtime = createSessionCatalogOutboxRuntime({ apiPort: API_PORT, reconcileIntervalMs: 10,
+      const notifications = navigationNotifications(() => ({ workspace_id: WORKSPACE_ID,
+        catalog_revision: 7 + watermark, event_seq_watermark: watermark, generation: 1 }));
+      const runtime = createSessionCatalogOutboxRuntime({ apiPort: API_PORT, observeChanges: notifications.observeChanges,
         onError: (message) => errors.push(message),
         openPersistence: async () => ({ load: async () => [],
           insert: async () => { throw new Error("事件消费不得写入 outbox"); },
@@ -823,9 +963,8 @@ describe("navigation 事件的真实 runtime 消费", () => {
         },
       });
       try {
-        const access = testGatewayUserAccess();
-        runtime.activatePrincipal(access);
-        runtime.registerFailureOwner(access, {
+
+        runtime.registerFailureOwner( {
           async refresh(target, outbox, revision) {
             expect(target).toEqual(WORKSPACE_TARGET);
             expect(outbox.operations).toEqual([]);
@@ -840,10 +979,14 @@ describe("navigation 事件的真实 runtime 消费", () => {
           },
           async waitForProjection() {},
         });
-        const handle = await runtime.openWorkspace(WORKSPACE_TARGET, access);
+        const handle = await runtime.openWorkspace(WORKSPACE_TARGET);
+        await notifications.send();
         await initialized;
         watermark = 2;
+        await notifications.send();
+        if (interruptedAt !== null) await notifications.send();
         await reconciled;
+        await notifications.send();
         await resumed;
         expect(refreshed).toEqual(interruptedAt === null ? [7, 9] : [7, 9, 9]);
         if (interruptedAt !== null) expect(requestedAfter[interruptedAt]).toBe(0);
@@ -886,7 +1029,7 @@ describe("navigation 对账中的已打开会话 owner", () => {
       ...createSessionHookState({
         workspaceId: GATEWAY_WORKSPACE_ID, currentSession: owner, sessions: [owner, survivor], unreadSessionKeys: new Set([key]),
       }),
-      apiPort: API_PORT, gatewayUserAccess: testGatewayUserAccess(),
+      apiPort: API_PORT,
     });
     let revision = 7;
     let status = 200;
@@ -917,8 +1060,10 @@ describe("navigation 对账中的已打开会话 owner", () => {
       }
       return undefined;
     });
+    const notifications = navigationNotifications(() => ({ workspace_id: WORKSPACE_ID,
+      catalog_revision: revision, event_seq_watermark: 0, generation: 1 }));
     const runtime = createSessionCatalogOutboxRuntime({
-      apiPort: API_PORT, reconcileIntervalMs: 10,
+      apiPort: API_PORT, observeChanges: notifications.observeChanges,
       openPersistence: async () => emptyPersistence, adapter: emptyAdapter,
       onError(message) { errors.push(message); failed(); },
       async refreshSessionOwner(target, signal) {
@@ -928,18 +1073,20 @@ describe("navigation 对账中的已打开会话 owner", () => {
       },
     });
     try {
-      const access = testGatewayUserAccess();
-      runtime.activatePrincipal(access);
-      await runtime.openWorkspace(WORKSPACE_TARGET, access);
+
+      await runtime.openWorkspace(WORKSPACE_TARGET);
+      await notifications.send();
       await ready;
       expect(mirror.current().currentSession).toEqual(fresh);
       expect(mirror.current().sessionsByWorkspace.get(GATEWAY_WORKSPACE_ID)?.[0]).toEqual(fresh);
       status = 409; revision = 8;
+      await notifications.send();
       await pendingError;
       expect(mirror.current().currentSession).toEqual(fresh);
       expect(errors.some((message) => message.includes("会话日期目录正在隔离"))).toBe(true);
       expect(errors).toContain(`对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : 会话日期目录正在隔离 [request_id=request-catalog-owner-409]`);
       status = 404; revision = 9;
+      await notifications.send();
       await removed;
       expect(mirror.current().currentSession).toBeNull();
       expect(mirror.current().currentSessionWorkspaceId).toBeNull();
@@ -950,14 +1097,15 @@ describe("navigation 对账中的已打开会话 owner", () => {
     } finally { runtime.dispose(); }
   });
 
-  test("周期对账在途时不重复订阅失败，后续独立请求仍报告并可恢复", async () => {
+  test("推送对账在途时不重复订阅失败，后续独立请求仍报告并可恢复", async () => {
     const mirror = createAppStateMirror({
       ...createSessionHookState({ workspaceId: GATEWAY_WORKSPACE_ID, currentSession: owner, sessions: [owner] }),
-      apiPort: API_PORT, gatewayUserAccess: testGatewayUserAccess(),
+      apiPort: API_PORT,
     });
     const responses: ReturnType<typeof createDeferredResult<Response>>[] = [];
     const errors: string[] = [];
-    const timer = spyOn(globalThis, "setInterval");
+    const notifications = navigationNotifications(() => ({ workspace_id: WORKSPACE_ID,
+      catalog_revision: 7, event_seq_watermark: 0, generation: 1 }));
     installGatewayFetch(({ path }) => {
       if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
       if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
@@ -974,7 +1122,7 @@ describe("navigation 对账中的已打开会话 owner", () => {
       return undefined;
     });
     const runtime = createSessionCatalogOutboxRuntime({
-      apiPort: API_PORT, reconcileIntervalMs: 60_000,
+      apiPort: API_PORT, observeChanges: notifications.observeChanges,
       openPersistence: async () => emptyPersistence, adapter: emptyAdapter,
       onError: (message) => errors.push(message),
       refreshSessionOwner: (target, signal) => refreshCurrentSessionCatalogOwner(
@@ -982,13 +1130,9 @@ describe("navigation 对账中的已打开会话 owner", () => {
       ),
     });
     try {
-      const access = testGatewayUserAccess();
-      runtime.activatePrincipal(access);
-      await runtime.openWorkspace(WORKSPACE_TARGET, access);
-      expect(timer.mock.calls).toHaveLength(1);
-      const handler = timer.mock.calls[0]![0];
-      if (typeof handler !== "function") throw new Error("对账周期必须注册函数");
-      const tick = () => handler();
+
+      await runtime.openWorkspace(WORKSPACE_TARGET);
+      const tick = () => { void notifications.send(); };
       for (const attempt of [1, 2]) {
         tick();
         await flushReactEffects();
@@ -1014,15 +1158,14 @@ describe("navigation 对账中的已打开会话 owner", () => {
       expect(errors).toHaveLength(2);
     } finally {
       runtime.dispose();
-      timer.mockRestore();
     }
   });
 
-  for (const changedScope of ["会话", "工作区", "用户", "endpoint"] as const) {
+  for (const changedScope of ["会话", "工作区", "endpoint"] as const) {
     test(`owner GET 迟到404不能重置新${changedScope}scope`, async () => {
       const mirror = createAppStateMirror({
         ...createSessionHookState({ workspaceId: GATEWAY_WORKSPACE_ID, currentSession: owner, sessions: [owner, survivor] }),
-        apiPort: API_PORT, gatewayUserAccess: testGatewayUserAccess(),
+        apiPort: API_PORT,
       });
       let started!: () => void;
       const requested = new Promise<void>((resolve) => { started = resolve; });
@@ -1039,8 +1182,10 @@ describe("navigation 对账中的已打开会话 owner", () => {
         return undefined;
       });
       const errors: string[] = [];
+      const notifications = navigationNotifications(() => ({ workspace_id: WORKSPACE_ID,
+        catalog_revision: 7, event_seq_watermark: 0, generation: 1 }));
       const runtime = createSessionCatalogOutboxRuntime({
-        apiPort: API_PORT, reconcileIntervalMs: 10,
+        apiPort: API_PORT, observeChanges: notifications.observeChanges,
         openPersistence: async () => emptyPersistence, adapter: emptyAdapter,
         onError: (message) => errors.push(message),
         async refreshSessionOwner(target, signal) {
@@ -1049,17 +1194,17 @@ describe("navigation 对账中的已打开会话 owner", () => {
         },
       });
       try {
-        const access = testGatewayUserAccess();
-        runtime.activatePrincipal(access);
-        await runtime.openWorkspace(WORKSPACE_TARGET, access);
+
+        await runtime.openWorkspace(WORKSPACE_TARGET);
+        const notification = notifications.send();
         await requested;
         mirror.setState((state) => changedScope === "会话" ? { ...state, currentSession: survivor }
           : changedScope === "工作区" ? { ...state, currentSessionWorkspaceId: "another-workspace" }
-          : changedScope === "用户" ? { ...state, gatewayUserAccess: { ...access, user_id: "another-user" } }
           : { ...state, apiPort: API_PORT + 1 });
         const switched = mirror.current();
         reply(apiErrorResponse(404, "Session not found"));
         await refreshed;
+        await notification;
         expect(mirror.current()).toBe(switched);
         expect(errors).toEqual([]);
       } finally { runtime.dispose(); }

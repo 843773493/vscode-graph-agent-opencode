@@ -9,7 +9,6 @@ import { errorMessage } from "../../../utils/errorMessage";
 function serviceLabel(log: GatewayDiagnosticLog): string {
   const labels: Record<string, string> = {
     browser: "浏览器服务",
-    browser_manager: "浏览器服务",
     terminal: "终端服务",
     terminal_manager: "终端服务",
   };

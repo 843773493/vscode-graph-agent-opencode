@@ -2,24 +2,12 @@ import { useContext, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ReactSurface } from "../../../../../src/clients/workbench/src/react/surface";
 import { productStyles } from "../../../../../src/clients/workbench/src/react/productStyles";
-import type { GatewayResolvedThemeConfig } from "../../../../../src/clients/web/src/theme/theme";
 import { OverlayRootContext } from "../../../../../src/clients/web/src/components/overlays/OverlayRootContext";
 import { useAppState } from "../../../../../src/clients/web/src/hooks/app/appContext";
 import WorkspaceAuxiliaryPanel, { type WorkspaceAuxiliaryTab } from "../../../../../src/clients/web/src/components/workspace/WorkspaceAuxiliaryPanel";
 
 const events: string[] = [];
 const surfaces = new Map<string, ReactSurface>();
-const themeLoads = new Map<string, Promise<void>>();
-const themeNotifications: Array<{ kind: "warn" | "error"; message: string }> = [];
-
-function notifyTheme(kind: "warn" | "error", message: string): void {
-  themeNotifications.push({ kind, message });
-  const item = document.createElement("p");
-  item.setAttribute("role", "status");
-  item.textContent = `${kind}: ${message}`;
-  document.getElementById("theme-notifications")!.append(item);
-}
-
 function Content({ name }: { name: string }): ReactNode {
   const [count, setCount] = useState(0);
   const [overlayVisible, setOverlayVisible] = useState(false);
@@ -74,11 +62,6 @@ function mount(name: string, children: ReactNode): void {
 
 window.reactSurfaceHarness = {
   events,
-  themeNotifications,
-  theme: (name, theme) => { themeLoads.set(theme.id, surfaces.get(name)!.applyTheme(theme, {
-    warn: message => notifyTheme("warn", message), error: message => notifyTheme("error", message),
-  })); },
-  themeSettled: id => themeLoads.get(id)!,
   mount: () => { for (const name of ["first", "second"]) mount(name, <Content name={name} />); },
   failContext: () => { surfaces.get("first")!.render(<ProviderLessConsumer />); },
   failProvider: () => { surfaces.get("first")!.render(<FailingProvider />); },
@@ -91,9 +74,6 @@ declare global {
   interface Window {
     reactSurfaceHarness: {
       events: string[];
-      themeNotifications: Array<{ kind: "warn" | "error"; message: string }>;
-      theme: (name: string, theme: GatewayResolvedThemeConfig) => void;
-      themeSettled: (id: string) => Promise<void>;
       mount: () => void;
       failContext: () => void;
       failProvider: () => void;

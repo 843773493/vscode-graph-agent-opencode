@@ -56,7 +56,6 @@ from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -143,7 +142,6 @@ async def client(provenance_gateway: GatewayProcess) -> AsyncIterator[httpx.Asyn
         base_url=f"http://127.0.0.1:{provenance_gateway.port}", headers=LOCAL_TOKEN_HEADERS,
         timeout=30,
     ) as connection:
-        await acquire_gateway_guest(connection)
         yield connection
 
 

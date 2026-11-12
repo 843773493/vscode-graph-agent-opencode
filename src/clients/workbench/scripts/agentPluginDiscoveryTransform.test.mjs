@@ -27,6 +27,8 @@ test('Workbench不启动旧Agent Plugin发现来源，保留产品Agent与Prompt
   expect(contribution).toContain('registerSingleton(IChatAgentService, ChatAgentService, InstantiationType.Delayed);');
   expect(contribution).toContain('registerSingleton(IPromptsService, PromptsService, InstantiationType.Delayed);');
   expect(contribution).toContain('registerSingleton(IAgentPluginService, AgentPluginService, InstantiationType.Delayed);');
+  expect(contribution).toContain("import { registerChatPluginActions } from './actions/chatPluginActions.js';");
+  expect(contribution).toContain('registerChatPluginActions();');
 
   const service = await transformUpstream('src/vs/workbench/contrib/chat/common/plugins/agentPluginServiceImpl.ts');
   expect(service).not.toContain('agentPluginDiscoveryRegistry');
@@ -47,4 +49,5 @@ test('Workbench不启动旧Agent Plugin发现来源，保留产品Agent与Prompt
   }
   expect(service).toContain('export class AgentPluginService extends Disposable implements IAgentPluginService');
   expect(service).toContain("observableValue<readonly IAgentPlugin[]>('discoveredAgentPlugins', [])");
+
 });

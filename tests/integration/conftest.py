@@ -4,8 +4,7 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import AsyncIterator, Generator, Sequence
-from hashlib import sha1
+from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
 import httpx
@@ -58,7 +57,7 @@ async def inprocess_model_replay(
 
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
-        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion=request.node.nodeid,
     ) as replay, monkeypatch.context() as replay_patch:
         for key, value in replay.environment.items():
@@ -246,15 +245,3 @@ async def integration_client(
         },
     ) as client:
         yield client
-
-
-def pytest_collection_modifyitems(
-    config: pytest.Config,
-    items: Sequence[pytest.Item],
-) -> None:
-    del config
-    for item in items:
-        item.add_marker(pytest.mark.integration)
-        path_key = item.path.as_posix() if hasattr(item, "path") else item.nodeid
-        group_suffix = sha1(path_key.encode("utf-8")).hexdigest()[:8]
-        item.add_marker(pytest.mark.xdist_group(name=f"integration_file_{group_suffix}"))

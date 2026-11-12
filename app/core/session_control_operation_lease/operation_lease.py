@@ -50,10 +50,10 @@ __all__ = [
 # 令牌（恢复接管时 +1，旧 token callback 一律失败）；状态闭集
 # active|settling|completed|cancelled|failed，无墙钟自动到期；
 # recovery_ref 是可选稳定恢复引用（不存物理路径或凭据）。
-SESSION_OPERATION_LEASES_TABLE_DDL = load_sql(__package__, "sql/session_operation_leases.sql")
+SESSION_OPERATION_LEASES_TABLE_DDL = load_sql(__package__, "migrations/session_operation_leases.sql")
 
 # 非终态索引（2.3-E）：删除 drain/恢复路径只消费 active|settling。
-IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL = load_sql(__package__, "sql/idx_session_operation_leases_non_terminal.sql")
+IDX_SESSION_OPERATION_LEASES_NON_TERMINAL_DDL = load_sql(__package__, "migrations/idx_session_operation_leases_non_terminal.sql")
 
 
 def _lease_from_row(row: sqlite3.Row) -> SessionOperationLease:

@@ -102,9 +102,6 @@ function aroundHarness(port: number, respond: (request: AroundRequest) => Respon
     const [input, init] = args;
     const path = new URL(String(input), `http://127.0.0.1:${port}`).pathname;
     if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: `token-${port}` } });
-    if (path === "/api/gateway/users/current") {
-      return Response.json({ code: 0, message: "ok", request_id: "request-around-user", data: { kind: "guest", user_id: null } });
-    }
     if (path !== `/api/v1/sessions/${SESSION_ID}/threads/${THREAD_ID}/history`) {
       throw new Error(`测试收到未预期请求: ${path}`);
     }
@@ -333,14 +330,6 @@ async function runPageCase({
       if (path === "/api/gateway/auth/local-credential") {
         return Response.json({ data: { token: `token-${port}` } });
       }
-      if (path === "/api/gateway/users/current") {
-        return Response.json({
-          code: 0,
-          message: "ok",
-          request_id: "request-page-current-user",
-          data: { kind: "guest", user_id: null },
-        });
-      }
       if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
         if (abortResponse) abortRequest?.();
         if (historyRequests) historyRequests.count += 1;
@@ -403,14 +392,6 @@ describe("Turn 历史分页 epoch 协调", () => {
         const path = new URL(String(input), `http://127.0.0.1:${port}`).pathname;
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: `token-${port}` } });
-        }
-        if (path === "/api/gateway/users/current") {
-          return Response.json({
-            code: 0,
-            message: "ok",
-            request_id: "request-page-current-user",
-            data: { kind: "guest", user_id: null },
-          });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
           historyRequests += 1;
@@ -482,14 +463,6 @@ describe("Turn 历史分页 epoch 协调", () => {
         const path = new URL(String(input), `http://127.0.0.1:${port}`).pathname;
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: `token-${port}` } });
-        }
-        if (path === "/api/gateway/users/current") {
-          return Response.json({
-            code: 0,
-            message: "ok",
-            request_id: "request-page-current-user",
-            data: { kind: "guest", user_id: null },
-          });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
           requestBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -577,14 +550,6 @@ describe("Turn 历史分页 epoch 协调", () => {
         const path = new URL(String(input), `http://127.0.0.1:${port}`).pathname;
         if (path === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: `token-${port}` } });
-        }
-        if (path === "/api/gateway/users/current") {
-          return Response.json({
-            code: 0,
-            message: "ok",
-            request_id: "request-page-current-user",
-            data: { kind: "guest", user_id: null },
-          });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
           requestCount += 1;

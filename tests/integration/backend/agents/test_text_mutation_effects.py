@@ -53,7 +53,7 @@ from tests.support.processes.workspace import close_backend_process
 def mutation_model(request):
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
-        context.artifacts_dir.parent, runtime_root=context.artifacts_dir.parent / "runtime" / request.node.name,
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="text-mutation-effects",
     ) as replay:
         yield replay

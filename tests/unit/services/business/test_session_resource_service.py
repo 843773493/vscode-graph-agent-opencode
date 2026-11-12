@@ -31,10 +31,10 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from tests.support.background_work import build_background_registry, spawn_waiting_task
-from tests.support.message_service import build_message_service
 from tests.support.resource_owners.browser import build_browser_owner_fixture
 from tests.support.resource_owners.sessions import SESSION_A
 from tests.support.resource_owners.terminal import build_terminal_owner_fixture
+from tests.support.message_service import build_message_service
 from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
     submit_catalog_intent,

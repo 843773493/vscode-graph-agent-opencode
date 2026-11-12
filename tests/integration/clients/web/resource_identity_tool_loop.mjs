@@ -91,18 +91,6 @@ try {
   page = await context.newPage();
   page.on("pageerror", error => actual.pageErrors.push(String(error)));
   await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
-  // 原生页面 fetch 处理 Gateway Cookie；不经过 Bun 的 APIRequestContext HTTP shim。
-  const access = await page.evaluate(async () => {
-    const credential = await fetch("/api/gateway/auth/local-credential");
-    if (!credential.ok) throw new Error(`本地凭据 HTTP ${credential.status}`);
-    const response = await fetch("/api/gateway/users/guest", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Local-Token": (await credential.json()).data.token },
-      body: JSON.stringify({ tracking: { source: "resource-identity-tool-loop" } }),
-    });
-    return { status: response.status, requestId: response.headers.get("x-request-id"), body: await response.json() };
-  });
-  assert.equal(access.status, 200);
-  assert.equal(access.body.request_id, access.requestId);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   let thread = await selectThread(page, owner, 0);

@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException
 
 from app.api import resources
 from app.api.deps import get_resource_navigation
-from app.core.resource_uri import skill_display_uri
+from app.core.resource_uri import resource_display_uri, skill_display_uri
 from app.core.trace_middleware import TraceMiddleware
 from app.services.infrastructure.resource_platform.sources import resource_navigation
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
@@ -95,7 +95,8 @@ async def test_discovery_uses_package_identity_and_skips_nonentries_without_read
     assert [entry["name"] for entry in payload["entries"]] == ["a-skill", "z-skill"]
     for entry in payload["entries"]:
         assert entry["node"] == {"uri": case.uri(entry["name"]), "resource_shape": "file",
-            "operations": ["describe", "read", "search"], "child_path": None, "stat": None}
+            "operations": ["describe", "read", "search"], "child_path": None,
+            "canonical_uri": None, "stat": None}
     for private in (str(case.workspace), "private-frontmatter-body", "a-different-name", "content", "revision"):
         assert private not in response.text
 
@@ -116,6 +117,26 @@ async def test_reopen_discovers_current_files_and_stale_pick_uses_original_not_f
     assert deleted.status_code == 404
     assert deleted.json()["detail"] == {"owner": "resource_uri_resolver", "code": "unknown_resource", "message": "资源不存在"}
     assert deleted.headers["X-Request-ID"] == deleted.json()["request_id"] == "local-skill-discovery"
+
+
+async def test_authorized_missing_file_is_file_not_found_but_private_uri_stays_denied(local_skill_case: LocalSkillCase) -> None:
+    case = local_skill_case
+    root_uri = resource_display_uri(scope="workspace", scope_id=case.workspace_id, kind="files", tail_segments=("root",))
+    missing = await case.client.post("/api/v1/resources/navigation", json={
+        "uri": root_uri + "/.vscode/settings.json", "operation": "describe",
+    })
+    assert missing.status_code == 404, missing.text
+    assert missing.json()["detail"] == {
+        "owner": "resource_file_operations", "code": "file_not_found",
+        "reason": "not_found", "message": "目标文件不存在",
+    }
+
+    private = await case.client.post("/api/v1/resources/navigation", json={
+        "uri": root_uri + "/.boxteam/missing.json", "operation": "describe",
+    })
+    assert private.status_code == 403, private.text
+    assert private.json()["detail"]["owner"] == "resource_uri_resolver"
+    assert private.json()["detail"]["code"] == "capability_denied"
 
 
 async def test_missing_fixed_root_is_empty_and_file_in_place_of_root_is_explicit(local_skill_case: LocalSkillCase) -> None:

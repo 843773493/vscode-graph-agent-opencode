@@ -34,7 +34,6 @@ from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -296,7 +295,6 @@ def scripted_gateway_process(
             async with httpx.AsyncClient(
                 base_url=gateway_url, headers=LOCAL_TOKEN_HEADERS, timeout=90,
             ) as client:
-                await acquire_gateway_guest(client)
                 response = await client.get("/api/gateway/workspaces")
                 response.raise_for_status()
                 active = response.json()["data"]["active_workspace"]

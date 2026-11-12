@@ -17,7 +17,7 @@
 
 - 使用原附件 owner 的维护锁。SQL 结构仍由现有 SQL 文件负责，此处只保留读取和执行协调。
 - 外部占用同时核对通用 lease 账本和 Terminal/Browser 领域记录；复用原 owner 的格式与终态闭集，不调用恢复或修改关联。已核实终态的领域记录必须逐字进入备份，创建中、待核实及 dispatching fork attach 明确拒绝。
-- prepare 仅准备 schema 3 备份；convert/verify-directories 只处理备份内独立目录。prepare-catalog/verify-catalog 在 `converted/catalog.sqlite` 准备 schema 5 的目录、文件版本、关联及不可变来源绑定，DDL 唯一定义在 `../sql/managed_directory_schema.sql`。线上 owner 只读写 schema 5，schema 4 由原 owner 原子升级，schema 3 须经此入口显式离线迁移；install/rollback 负责离线目录根发布，catalog_prepared 不能代替真实启动、上传与历史恢复验收。
+- prepare 仅准备 schema 3 备份；convert/verify-directories 只处理备份内独立目录。prepare-catalog/verify-catalog 在 `converted/catalog.sqlite` 准备 schema 5 的目录、文件版本、关联及不可变来源绑定，DDL 唯一定义在 `../migrations/managed_directory_schema.sql`。线上 owner 只读写 schema 5，schema 4 由原 owner 原子升级，schema 3 须经此入口显式离线迁移；install/rollback 负责离线目录根发布，catalog_prepared 不能代替真实启动、上传与历史恢复验收。
 - 每个旧 attachment_id 单独复制原件到 `original/content`，已有预览逐字复制到 `preview/512.webp`，`derived/` 留空；转换与安装共用物化入口，同时将已核验字节保存到目标根的 `.versions/sha256/`。不使用硬链接，不重新生成预览，不覆盖损坏成品。完整旧 owner/blob 行保留在转换清单，UTC 日期来自 owner 创建时间。只保留显式 retention 保护，released 目录标记待处理，不继承旧自动期限，tombstoned 不造目录或可靠字节。
 - 转换和核验复用原维护锁互斥；复制中断只回收本计划的 `.partial` 副本，已完成文件核 hash/length 后复用，损坏成品不覆盖。全量来源与目标校验、durability 完成后才发布目录准备完成。
 - convert 的初始化元数据先写入由完整计划 hash 定位的 `.converted-{hash}.preparing`，manifest/journal 全部 durable 后才原子发布 `converted/`，再复制正文。重试只回收同一计划的未发布初始化目录，不清理其它计划或原备份；已存在但缺失身份元数据的旧 `converted/` 仍明确拒绝，不猜测归属。

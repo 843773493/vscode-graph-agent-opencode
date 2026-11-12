@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import ChatPanel, { transcriptConversationsForDisplay } from "./ChatPanel";
 import type { ConversationView } from "../../types/frontend";
+import * as jobs from "../../api/jobs";
+import type { MessageStreamActivity } from "../../state/messageStream/types";
 
 function emptyPanelProps(onRetryHistory: () => void) {
   return {
@@ -76,6 +78,67 @@ describe("ChatPanel 历史错误", () => {
     act(() => renderer!.unmount());
   });
 
+});
+
+test("只有当前线程的活动确认等待才读取，终态与历史不触发查询", async () => {
+  const read = spyOn(jobs, "getThreadToolApprovals").mockResolvedValue([]);
+  const activity: MessageStreamActivity = {
+    activity_id: "wait-one", kind: "approval.wait", status: "waiting",
+    scope_ref: "turn", cancellable: true, resumable: false,
+    side_effect_policy: "none", resource_refs: [], detail_available: false,
+  };
+  const waiting: ConversationView = {
+    conversationId: "live-turn", sessionId: "session-long", threadId: "thread-main",
+    displayMode: "live", source: "pending", pending: true, status: "running",
+    jobId: "job-one", userMessage: null, events: [],
+    messageStream: {
+      connectionStatus: "connected", streamStatus: "open", lastEventSeq: 10,
+      failure: null, resumable: false, activities: [activity],
+    },
+  };
+  let renderer: ReactTestRenderer | undefined;
+  async function render(conversations: ConversationView[], threadId = "thread-main") {
+    await act(async () => {
+      const element = <ChatPanel {...emptyPanelProps(() => {})} historyError={null}
+        conversations={conversations} threadId={threadId} />;
+      if (renderer) renderer.update(element);
+      else renderer = create(element);
+    });
+  }
+  try {
+    await render([]);
+    await render([{ ...waiting, messageStream: undefined }]);
+    await render([{ ...waiting, threadId: "other-thread" }]);
+    await render([{ ...waiting, sessionId: "other-session" }]);
+    await render([{ ...waiting, displayMode: "history", source: "turn" }]);
+    await render([{ ...waiting, status: "done" }]);
+    await render([{ ...waiting, messageStream: { ...waiting.messageStream!, activities: [{ ...activity, status: "completed" }] } }]);
+    expect(read).not.toHaveBeenCalled();
+
+    // SSE 与刷新恢复的快照都通过同一 ConversationView 入口。
+    await render([waiting]);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0].slice(0, 4)).toEqual([8014, "workspace-long", "session-long", "thread-main"]);
+    await render([waiting]);
+    expect(read).toHaveBeenCalledTimes(1);
+    const firstSignal = read.mock.calls[0][4];
+    const next = { ...waiting, messageStream: { ...waiting.messageStream!, activities: [{ ...activity, activity_id: "wait-two" }] } };
+    await render([next]);
+    expect(firstSignal?.aborted).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+    const nextSignal = read.mock.calls[1][4];
+    await render([next], "other-thread");
+    expect(nextSignal?.aborted).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+    await render([waiting]);
+    expect(read).toHaveBeenCalledTimes(3);
+    const restoredSignal = read.mock.calls[2][4];
+    await render([{ ...waiting, status: "error" }]);
+    expect(restoredSignal?.aborted).toBe(true);
+  } finally {
+    if (renderer) act(() => renderer!.unmount());
+    read.mockRestore();
+  }
 });
 
 describe("ChatPanel transcript 投影", () => {

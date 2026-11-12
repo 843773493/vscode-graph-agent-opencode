@@ -28,7 +28,7 @@ from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.resource_navigation import router as navigation_router
 from app.gateway.server.text_mutation import router as text_mutation_router
-from app.gateway.server.workspace_proxy import router, verify_user_access_for_proxy
+from app.gateway.server.workspace_proxy import router
 from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
@@ -107,7 +107,6 @@ async def target_proxy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
     app.include_router(navigation_router)
     app.include_router(text_mutation_router)
     app.include_router(router)
-    app.dependency_overrides[verify_user_access_for_proxy] = lambda: None
     app.state.registry = registry
     app.state.gateway_id = gateway_id
     relay = Relay(gateway_id)

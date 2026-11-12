@@ -37,7 +37,6 @@ from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -52,7 +51,6 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
     observed = []
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{network.gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=25) as ui:
-            await acquire_gateway_guest(ui)
             gateway_id = (await ui.get("/api/gateway/health")).json()["data"]["gateway_id"]
             listing = (await ui.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
             workspace_a, workspace_b, workspace_c = (
@@ -95,12 +93,13 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
         assert stopped.state == "failed" and stopped.code == "target_unavailable" and stopped.retryable
         assert not (network.stopped / ".boxteam/sessions").exists()
 
-        # 机器入口不创建游客；普通浏览器和机器入口仍使用各自的认证边界。
-        denied = await transport._http_client.post(
+        # 普通入口与机器入口复用本机凭据，不创建游客或要求用户租约。
+        browser_search = await transport._http_client.post(
             f"http://127.0.0.1:{network.gateway_port}/api/gateway/search",
             json={"scope": {"mode": "all"}, "queries": [query]}, headers=LOCAL_TOKEN_HEADERS,
         )
-        assert denied.status_code == 401 and denied.json()["detail"] == "user_session_required"
+        assert browser_search.status_code == 200, browser_search.text
+        assert browser_search.headers["content-type"].startswith("text/event-stream")
         unauthorized = await transport._http_client.post(
             f"http://127.0.0.1:{network.gateway_port}/api/gateway/search/agent",
             json={"scope": {"mode": "all"}, "queries": [query]}, headers={"X-Local-Token": "wrong"},
@@ -158,7 +157,6 @@ async def test_model_execution_invokes_discovery_and_resource_search_through_gat
     original_client = case.client
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
-            await acquire_gateway_guest(ui)
             listing = (await ui.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
             owner = listing["active_workspace"]
             assert owner["workspace_id"] == case.mount.workspace_id

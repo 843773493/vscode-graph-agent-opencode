@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import zipfile
 from collections.abc import Iterator
@@ -385,14 +386,25 @@ def test_multi_plugin_package_install_enable_restart_switch_and_uninstall(
 
 
 @pytest.mark.parametrize("shared_package", [False, True], ids=["separate-packages", "same-package"])
-@pytest.mark.parametrize("runtime_change", ["missing", "different-version"])
+@pytest.mark.parametrize("runtime_change", ["missing", "different-version", "missing-package"])
 def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindings(
     request: pytest.FixtureRequest, integration_workspace_root_path: str, unused_tcp_port: int,
     shared_package: bool, runtime_change: str,
 ) -> None:
+    if runtime_change == "missing-package" and shared_package:
+        pytest.skip("整包丢失会同时移除兄弟插件；本反例使用两个独立包核恢复隔离")
     replacement_node = ""
-    expected_error = "BOXTEAM_NODE_BIN"
+    expected_error = "插件包版本不存在" if runtime_change == "missing-package" else "BOXTEAM_NODE_BIN"
     replacement_identity = None
+    selected_node_identity = None
+    if runtime_change == "missing-package":
+        selected_node = shutil.which("node")
+        if selected_node is None:
+            raise RuntimeError("缺失插件包恢复测试需要 PATH 中存在目标 Node")
+        replacement_node = str(Path(selected_node).resolve(strict=True))
+        selected_node_identity = json.loads(subprocess.run([replacement_node, "--print",
+            "JSON.stringify({version:process.versions.node,abi:process.versions.modules})"],
+            text=True, capture_output=True, check=True, timeout=5).stdout)
     if runtime_change == "different-version":
         alternate = os.environ.get("BOXTEAM_TEST_ALTERNATE_NODE_BIN")
         if not alternate:
@@ -451,8 +463,11 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
                 (f"cold.{runtime}", (runtime,)) for runtime in ("node", "python")]
             for package_id, runtimes in packages:
                 archive_path = context.artifacts_dir / f"{package_id}.zip"
+                target = native_plugin_target(*runtimes)
+                if "node" in runtimes and selected_node_identity is not None:
+                    target = {**target, "node": selected_node_identity}
                 manifest = {"manifest_version": 1, "package_id": package_id, "version": "1.0.0",
-                    "name": package_id, "target": native_plugin_target(*runtimes), "extension_contract_version": 1,
+                    "name": package_id, "target": target, "extension_contract_version": 1,
                     "plugins": [{"id": runtime, "name": runtime, "instance_scope": "gateway",
                         "runtime": runtime, "entrypoint": ["entry.mjs" if runtime == "node" else "entry.py"],
                         "management_protocol_version": 1,
@@ -469,19 +484,20 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
                 install_plugin(lambda endpoint, payload: client.post(endpoint, json=payload),
                     gateway_id=gateway_id, path=str(archive_path),
                     expected_digest=hashlib.sha256(archive_path.read_bytes()).hexdigest())
-            # 两个版本均通过原安装入口发布；环境改变后，关闭态切版也须拒绝。
-            package_id = bindings[0]["package_id"]
-            candidate_zip = context.artifacts_dir / f"{package_id}-2.0.0.zip"
-            with zipfile.ZipFile(context.artifacts_dir / f"{package_id}.zip") as original_archive, zipfile.ZipFile(candidate_zip, "w") as archive:
-                for entry in original_archive.infolist():
-                    data = original_archive.read(entry)
-                    if entry.filename == "plugin.jsonc":
-                        candidate_manifest = json.loads(data)
-                        candidate_manifest["version"] = "2.0.0"
-                        data = json.dumps(candidate_manifest).encode("utf-8")
-                    archive.writestr(entry, data)
-            install_plugin(lambda endpoint, payload: client.post(endpoint, json=payload),
-                gateway_id=gateway_id, path=str(candidate_zip))
+            if runtime_change != "missing-package":
+                # 两个版本均通过原安装入口发布；环境改变后，关闭态切版也须拒绝。
+                package_id = bindings[0]["package_id"]
+                candidate_zip = context.artifacts_dir / f"{package_id}-2.0.0.zip"
+                with zipfile.ZipFile(context.artifacts_dir / f"{package_id}.zip") as original_archive, zipfile.ZipFile(candidate_zip, "w") as archive:
+                    for entry in original_archive.infolist():
+                        data = original_archive.read(entry)
+                        if entry.filename == "plugin.jsonc":
+                            candidate_manifest = json.loads(data)
+                            candidate_manifest["version"] = "2.0.0"
+                            data = json.dumps(candidate_manifest).encode("utf-8")
+                        archive.writestr(entry, data)
+                install_plugin(lambda endpoint, payload: client.post(endpoint, json=payload),
+                    gateway_id=gateway_id, path=str(candidate_zip))
             document = client.get(source_path).raise_for_status().json()["data"]
             assert save(client, document, True).raise_for_status().json()["data"]["edit"]["state"] == "active"
             initial = states(client)
@@ -492,7 +508,10 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
         close_gateway_process(gateway)
         gateway = None
         assert all(not psutil.pid_exists(item["instance"]["process_id"]) for item in initial.values())
-        # 保存的包和 enabled 来自产品入口；冷启动实际移除或更换目标 Node。
+        # 保存的包和 enabled 来自产品入口；停机后模拟确切包丢失，或实际移除／更换目标 Node。
+        if runtime_change == "missing-package":
+            lost_package = home / "plugins/packages" / bindings[0]["package_id"] / "1.0.0"
+            lost_package.rename(context.artifacts_dir / "lost-installed-package")
         gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None,
             port=unused_tcp_port, boxteam_home=home, artifacts_dir=context.artifacts_dir,
             extra_env={"BOXTEAM_NODE_BIN": replacement_node})
@@ -519,26 +538,42 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
                 "plugin_id": "node", "revision": current["node"]["revision"]})
             assert failed_restart.status_code == 409 and expected_error in failed_restart.text
             assert states(client) == current, "被拒的显式重启不能改变原绑定、revision或实际实例"
-            unchanged = states(client)
-            for preflight in (True, False):
-                rejected = save(client, document, False, preflight=preflight, node_version="2.0.0")
-                assert rejected.status_code == 422 and expected_error in rejected.text
-                request_id = rejected.headers["X-Request-ID"]
-                assert request_id and rejected.json()["request_id"] == request_id
-                disabled_version_rejections.append({"preflight": preflight, "status": rejected.status_code,
-                    "request_id": request_id, "body": rejected.json()})
-                after = client.get(source_path).raise_for_status().json()["data"]
-                for field in ("jsonc", "file_digest", "active_revision", "active_digest"):
-                    assert after[field] == document[field], field
-                assert states(client) == unchanged, "关闭态切版拒绝不能改变原绑定或兄弟实例"
+            if runtime_change == "missing-package":
+                install_plugin(lambda endpoint, payload: client.post(endpoint, json=payload),
+                    gateway_id=gateway_id, path=str(context.artifacts_dir / f"{bindings[0]['package_id']}.zip"))
+                assert states(client) == current, "补齐确切包不隐式重启失败绑定"
+                recovered = client.post("/api/gateway/service-plugins/restart", json={
+                    "gateway_id": gateway_id, "package_id": bindings[0]["package_id"], "package_version": "1.0.0",
+                    "plugin_id": "node", "revision": current["node"]["revision"]}).raise_for_status().json()["data"]
+                assert recovered["state"] == "ready" and recovered["instance"] is not None
+                path = (f"/api/gateway/service-plugins/{bindings[0]['package_id']}/node/instances/"
+                    f"{recovered['instance']['instance_id']}/services/echo/value?package_version=1.0.0")
+                assert client.get(path).raise_for_status().json()["pid"] == recovered["instance"]["process_id"]
+                assert states(client)["python"]["instance"] == python["instance"]
+            if runtime_change != "missing-package":
+                unchanged = states(client)
+                for preflight in (True, False):
+                    rejected = save(client, document, False, preflight=preflight, node_version="2.0.0")
+                    assert rejected.status_code == 422 and expected_error in rejected.text
+                    request_id = rejected.headers["X-Request-ID"]
+                    assert request_id and rejected.json()["request_id"] == request_id
+                    disabled_version_rejections.append({"preflight": preflight, "status": rejected.status_code,
+                        "request_id": request_id, "body": rejected.json()})
+                    after = client.get(source_path).raise_for_status().json()["data"]
+                    for field in ("jsonc", "file_digest", "active_revision", "active_digest"):
+                        assert after[field] == document[field], field
+                    assert states(client) == unchanged, "关闭态切版拒绝不能改变原绑定或兄弟实例"
             disabled = save(client, document, False).raise_for_status().json()["data"]
             assert disabled["edit"]["state"] == "active"
             assert states(client)["node"]["state"] == "stopped"
             document = client.get(source_path).raise_for_status().json()["data"]
             preflight = save(client, document, True, preflight=True)
-            assert preflight.status_code == 422 and expected_error in preflight.text
-            rejected = save(client, document, True)
-            assert rejected.status_code == 422 and expected_error in rejected.text
+            if runtime_change == "missing-package":
+                assert preflight.status_code == 200
+            else:
+                assert preflight.status_code == 422 and expected_error in preflight.text
+                rejected = save(client, document, True)
+                assert rejected.status_code == 422 and expected_error in rejected.text
             assert client.get(source_path).raise_for_status().json()["data"]["file_digest"] == document["file_digest"]
             final = states(client)
             assert final["node"]["binding"]["enabled"] is False
@@ -554,10 +589,11 @@ def test_saved_plugin_without_runtime_reports_failure_and_preserves_other_bindin
                 client.post("/api/gateway/service-plugins/uninstall", json={
                     "gateway_id": gateway_id, "package_id": package_id, "package_version": "1.0.0"}).raise_for_status()
                 assert not (home / "plugins/packages" / package_id / "1.0.0").exists()
-            client.post("/api/gateway/service-plugins/uninstall", json={
-                "gateway_id": gateway_id, "package_id": bindings[0]["package_id"],
-                "package_version": "2.0.0"}).raise_for_status()
-            assert not (home / "plugins/packages" / bindings[0]["package_id"] / "2.0.0").exists()
+            if runtime_change != "missing-package":
+                client.post("/api/gateway/service-plugins/uninstall", json={
+                    "gateway_id": gateway_id, "package_id": bindings[0]["package_id"],
+                    "package_version": "2.0.0"}).raise_for_status()
+                assert not (home / "plugins/packages" / bindings[0]["package_id"] / "2.0.0").exists()
             inventory = client.post("/api/gateway/service-plugins/inventory", json={"gateway_id": gateway_id})
             assert inventory.raise_for_status().json()["data"]["packages"] == []
             client.get("/api/gateway/workspaces", timeout=90).raise_for_status()

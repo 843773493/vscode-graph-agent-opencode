@@ -1,6 +1,6 @@
 # 目录用途
 
-本目录按具体领域存放 Gateway 请求、响应与控制面 DTO；配置、工作区、生命周期、联邦、用户、诊断、界面设置、端口转发、目录和 SSH 类型分别由对应模块维护。
+本目录按具体领域存放 Gateway 请求、响应与控制面 DTO；配置、工作区、生命周期、联邦、诊断、界面设置、端口转发、目录和 SSH 类型分别由对应模块维护。
 
 ```text
 gateway/
@@ -16,7 +16,6 @@ gateway/
 ├── skill_sources.py      Gateway Skill 来源目录
 ├── ssh.py                远端 Gateway 添加与 SSH 连接选项
 ├── ui_settings.py        Web 布局、主题与 Gateway 界面设置
-├── users.py              Gateway 用户、租约和视图状态
 ├── workspaces.py         Gateway 工作区、激活、排序和管理状态
 └── __init__.py           保持轻量，不聚合转出 DTO
 ```

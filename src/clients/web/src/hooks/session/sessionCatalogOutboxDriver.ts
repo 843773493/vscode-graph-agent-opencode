@@ -130,7 +130,7 @@ export interface CatalogOutboxDriver {
   ): Promise<{ dispatch: Promise<CatalogOutboxDispatchOutcome> }>;
   /** 对未终态命令按精确 ID 查询服务端状态并对账。 */
   reconcile(): Promise<CatalogOutbox>;
-  /** 身份切换时 fence 当前请求并禁止后续请求。 */
+  /** driver 停止时取消当前请求并禁止后续请求。 */
   deactivate(): void;
   /** 按已确认的 catalog revision 清理已完成对账的终态条目。 */
   prune(

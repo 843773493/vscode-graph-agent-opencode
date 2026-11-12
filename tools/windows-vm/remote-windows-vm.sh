@@ -7,6 +7,8 @@ REPO_ROOT=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) || {
   exit 78
 }
 LOCAL_CONFIG=${WINDOWS_VM_REMOTE_CONFIG:-$REPO_ROOT/tools/ssh/windows-vm-remote.env}
+# 在本次命令启动时冻结 UTC 日期，跨天执行仍写入同一任务目录。
+WINDOWS_VM_ARTIFACT_ROOT="$REPO_ROOT/out/tests/temp/$(date -u +%Y/%m/%d)/windows-vm/artifacts"
 
 if [[ -f "$LOCAL_CONFIG" ]]; then
   # shellcheck disable=SC1090
@@ -251,10 +253,10 @@ run_guest_module() {
   (($# == 0)) || die 'run-module 不接受额外参数，模块必须保持结构化' dispatch 64
   local script
   script="& '$(guest_script_path run-module.ps1)' -Module '$module'"
-  mkdir -p "$REPO_ROOT/out/tests/temp/windows-vm/artifacts"
+  mkdir -p "$WINDOWS_VM_ARTIFACT_ROOT"
   local stamp log status
   stamp=$(date -u +%Y%m%d-%H%M%S)
-  log="$REPO_ROOT/out/tests/temp/windows-vm/artifacts/${module}-${stamp}.log"
+  log="$WINDOWS_VM_ARTIFACT_ROOT/${module}-${stamp}.log"
   set +e
   guest_repo_exec "$script" 2>&1 | tee "$log"
   status=${PIPESTATUS[0]}
@@ -350,7 +352,7 @@ collect_installer_verification() {
 
 collect_artifacts() {
   require_config
-  local destination=${1:-$REPO_ROOT/out/tests/temp/windows-vm/artifacts/remote}
+  local destination=${1:-$WINDOWS_VM_ARTIFACT_ROOT/remote}
   mkdir -p "$destination"
   local transport
   transport=$(rsync_transport)

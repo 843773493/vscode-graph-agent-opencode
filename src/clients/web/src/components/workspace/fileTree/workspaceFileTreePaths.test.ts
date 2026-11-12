@@ -68,6 +68,13 @@ describe("文件树 URI 路径语义", () => {
       .toEqual([`${workspaceSource}/a.ts`, "/workspace/b.ts"]);
   });
 
+  test.each(["file", "FILE", "FiLe"])("剪贴板按不区分大小写的协议解析 %s URI", (scheme) => {
+    expect(parseClipboardFilePaths(`copy\n${scheme}:///tmp/%E4%B8%AD%E6%96%87%20a%252F.txt\n${scheme}:///C:/work/a.txt`))
+      .toEqual(["/tmp/中文 a%2F.txt", "C:/work/a.txt"]);
+    expect(() => parseClipboardFilePaths(`${scheme}:///tmp/a%zz.txt`)).toThrow("非法百分号转义");
+    expect(() => parseClipboardFilePaths(`${scheme}:///tmp/a%00b.txt`)).toThrow("空字符");
+  });
+
   test("工作区标签使用显示名，缺失时显示通用名称", () => {
     expect(shortWorkspaceLabel("/a/b", "project")).toBe("project");
     expect(shortWorkspaceLabel("/a/b", null)).toBe("workspace");

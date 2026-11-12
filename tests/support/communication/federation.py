@@ -31,7 +31,6 @@ from tests.support.ports import TestFilePortBlock, integration_port_block_for_fi
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -247,7 +246,6 @@ async def open_communication_triad(
             )
             resources.push_async_callback(asyncio.to_thread, close_gateway_process, gateway)
             client = await resources.enter_async_context(httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=90))
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text
             nodes[name] = CommunicationNode(workspace, client, health.json()["data"]["gateway_id"], backends[name].workspace_id, backends[name], backend_starters[name], gateway_homes[name], gateway)

@@ -59,6 +59,7 @@ const goButton = document.querySelector("#go-button");
 const deviceProfileSelect = document.querySelector("#device-profile-select");
 const deviceWidthInput = document.querySelector("#device-width-input");
 const deviceHeightInput = document.querySelector("#device-height-input");
+const deviceSizeApplyButton = document.querySelector("#device-size-apply");
 const deviceDprSelect = document.querySelector("#device-dpr-select");
 const deviceFitButton = document.querySelector("#device-fit-button");
 const deviceRotateButton = document.querySelector("#device-rotate-button");
@@ -81,7 +82,6 @@ const screenStage = document.querySelector("#screen-stage");
 const screenScroll = document.querySelector("#screen-scroll");
 const screenContent = document.querySelector("#screen-content");
 const canvas = document.querySelector("#screen-canvas");
-const viewportResizeHandles = [...document.querySelectorAll(".viewport-resize-handle")];
 const keyboardTarget = document.querySelector("#browser-input-proxy");
 const overlay = document.querySelector("#screen-overlay");
 const elementHighlight = document.querySelector("#element-highlight");
@@ -148,20 +148,15 @@ let currentNavigationError = null;
 /** @type {{width: number, height: number}} 远端页面的 CSS 视口，不是 JPEG 或画布后备像素尺寸。 */
 let remoteViewport = { width: 1280, height: 800 };
 let remoteViewportInitialized = false;
-let viewportDraft = null;
+let viewportInputsDirty = false;
 let fitViewportToWindow = false;
 let autoFitSuppressed = false;
 let viewportZoom = 1;
 let viewportDrag = null;
-let viewportResize = null;
 /** @type {{x: number, y: number}|null} 画面在本地 screenScroll 内容区内的显示偏移，单位为 CSS 像素。 */
 let viewportDisplayPosition = null;
 let currentDeviceSnapshot = null;
 let debugSnapshotData = null;
-
-function viewportForLayout() {
-  return viewportDraft || remoteViewport;
-}
 
 function clampViewportDisplayPosition(displayPosition) {
   const visibleMarginCssPx = 12;
@@ -175,7 +170,7 @@ function clampViewportDisplayPosition(displayPosition) {
 function layoutScreen() {
   const containerWidth = screenScroll.clientWidth;
   const containerHeight = screenScroll.clientHeight;
-  const viewport = viewportForLayout();
+  const viewport = remoteViewport;
   if (containerWidth <= 0 || containerHeight <= 0 || viewport.width <= 0 || viewport.height <= 0) {
     return;
   }
@@ -196,7 +191,7 @@ function layoutScreen() {
   const contentHeight = Math.max(1, Math.floor(viewport.height * Math.max(0.05, scale)));
   screenContent.style.width = `${contentWidth}px`;
   screenContent.style.height = `${contentHeight}px`;
-  if (viewportDrag === null && viewportResize === null && viewportDisplayPosition === null) {
+  if (viewportDrag === null && viewportDisplayPosition === null) {
     const canCenter = contentWidth <= containerWidth - 32 && contentHeight <= containerHeight - 32;
     screenContent.style.left = canCenter ? "50%" : "16px";
     screenContent.style.top = canCenter ? "50%" : "16px";
@@ -230,7 +225,6 @@ function setRemoteViewport(viewport, pixelRatio = 1) {
     width: viewport.width,
     height: viewport.height,
   };
-  viewportDraft = null;
   remoteViewportInitialized = true;
   const pixelWidth = Math.max(1, Math.round(viewport.width * pixelRatio));
   const pixelHeight = Math.max(1, Math.round(viewport.height * pixelRatio));
@@ -387,9 +381,7 @@ function updateControls() {
     || (agentAccessLocked && agentLockOwnerId !== participantId);
   newTabButton.disabled = !hasBrowserId || !attached || deleted || !running;
   canvas.classList.toggle("is-disabled", !hasBrowserId || deleted || !running);
-  for (const handle of viewportResizeHandles) {
-    handle.hidden = !hasBrowserId || !attached || deleted || !running;
-  }
+  deviceSizeApplyButton.disabled = !hasBrowserId || !attached || deleted || !running;
 }
 
 let currentDeviceProfile = null;
@@ -459,8 +451,13 @@ function renderDeviceState(snapshot) {
     || 1;
   setRemoteViewport(viewport, pixelRatio);
   currentDeviceSnapshot = snapshot;
-  if (document.activeElement !== deviceWidthInput) deviceWidthInput.value = String(viewport.width);
-  if (document.activeElement !== deviceHeightInput) deviceHeightInput.value = String(viewport.height);
+  if (viewport.width === Number(deviceWidthInput.value) && viewport.height === Number(deviceHeightInput.value)) {
+    viewportInputsDirty = false;
+  }
+  if (!viewportInputsDirty) {
+    if (document.activeElement !== deviceWidthInput) deviceWidthInput.value = String(viewport.width);
+    if (document.activeElement !== deviceHeightInput) deviceHeightInput.value = String(viewport.height);
+  }
   if (document.activeElement !== deviceDprSelect) {
     const dprOverride = snapshot.device_scale_factor_override;
     deviceDprSelect.value = dprOverride === null || dprOverride === undefined
@@ -1341,6 +1338,7 @@ function command(name, extra = {}) {
 }
 
 function changeDeviceProfile(profileId, orientation) {
+  viewportInputsDirty = false;
   if (profileId.startsWith("preset:")) {
     const presetId = profileId.slice("preset:".length);
     const preset = (currentDeviceSnapshot?.device_presets || []).find((item) => item.id === presetId);
@@ -1370,6 +1368,7 @@ function changeDeviceProfile(profileId, orientation) {
 }
 
 function changeDeviceSettings(settings) {
+  if (settings.width === undefined && settings.height === undefined) viewportInputsDirty = false;
   sendIfAttached({ type: "deviceSettings", settings });
   setStatus("正在应用设备模拟设置…");
 }
@@ -1481,11 +1480,13 @@ function commitViewportInputs() {
     setStatus("宽度和高度必须是 1 到 4096 的整数", true);
     return;
   }
+  viewportInputsDirty = true;
   changeDeviceSettings({ width, height });
 }
 
-deviceWidthInput.addEventListener("change", commitViewportInputs);
-deviceHeightInput.addEventListener("change", commitViewportInputs);
+deviceSizeApplyButton.addEventListener("click", commitViewportInputs);
+deviceWidthInput.addEventListener("input", () => { viewportInputsDirty = true; });
+deviceHeightInput.addEventListener("input", () => { viewportInputsDirty = true; });
 deviceWidthInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -1577,7 +1578,7 @@ screenScroll.addEventListener("wheel", (event) => {
 }, { capture: true, passive: false });
 
 screenScroll.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0 || event.target === canvas || event.target.closest(".viewport-resize-handle")) {
+  if (event.button !== 0 || event.target === canvas) {
     return;
   }
   const workspaceRect = screenScroll.getBoundingClientRect();
@@ -1617,55 +1618,6 @@ function finishViewportDrag(event) {
 
 screenScroll.addEventListener("pointerup", finishViewportDrag);
 screenScroll.addEventListener("pointercancel", finishViewportDrag);
-
-for (const handle of viewportResizeHandles) {
-  handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    const contentRect = screenContent.getBoundingClientRect();
-    const viewport = viewportForLayout();
-    viewportResize = {
-      pointerId: event.pointerId,
-      axis: handle.dataset.resizeAxis || "xy",
-      startX: event.clientX,
-      startY: event.clientY,
-      startWidth: viewport.width,
-      startHeight: viewport.height,
-      scaleX: contentRect.width / viewport.width,
-      scaleY: contentRect.height / viewport.height,
-    };
-    viewportDraft = { ...viewport };
-    handle.setPointerCapture(event.pointerId);
-    event.preventDefault();
-    event.stopPropagation();
-  });
-  handle.addEventListener("pointermove", (event) => {
-    if (!viewportResize || viewportResize.pointerId !== event.pointerId) return;
-    const next = { ...viewportDraft };
-    if (viewportResize.axis.includes("x")) {
-      next.width = Math.max(120, Math.min(4096,
-        Math.round(viewportResize.startWidth + (event.clientX - viewportResize.startX) / viewportResize.scaleX)));
-    }
-    if (viewportResize.axis.includes("y")) {
-      next.height = Math.max(120, Math.min(4096,
-        Math.round(viewportResize.startHeight + (event.clientY - viewportResize.startY) / viewportResize.scaleY)));
-    }
-    viewportDraft = next;
-    deviceWidthInput.value = String(next.width);
-    deviceHeightInput.value = String(next.height);
-    layoutScreen();
-  });
-  const finishResize = (event) => {
-    if (!viewportResize || viewportResize.pointerId !== event.pointerId) return;
-    const next = { ...viewportDraft };
-    viewportResize = null;
-    viewportDraft = null;
-    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-    layoutScreen();
-    changeDeviceSettings({ width: next.width, height: next.height });
-  };
-  handle.addEventListener("pointerup", finishResize);
-  handle.addEventListener("pointercancel", finishResize);
-}
 
 for (const tab of debugTabs) {
   tab.addEventListener("click", () => setDebugPanel(tab.dataset.debugTab));

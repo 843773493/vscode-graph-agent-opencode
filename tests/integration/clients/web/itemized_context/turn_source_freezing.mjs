@@ -168,11 +168,11 @@ try {
     }
   });
   await openWorkbench(page, baseUrl);
-  const credential = await context.request.get(new URL("/api/gateway/auth/local-credential", baseUrl).href);
-  try {
-    assert.equal(credential.status(), 200);
-    token = (await credential.json()).data.token;
-  } finally { await credential.dispose(); }
+  token = await page.evaluate(async () => {
+    const response = await fetch('/api/gateway/auth/local-credential');
+    if (!response.ok) throw new Error(`本机凭据读取失败：${response.status}`);
+    return (await response.json()).data.token;
+  });
   await api("/api/gateway/health");
   assert.deepEqual((await api("/api/gateway/workspaces")).active_workspace, { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId });
   assert.equal((await api("/api/v1/workspace")).workspace_id, owner.workspaceId);

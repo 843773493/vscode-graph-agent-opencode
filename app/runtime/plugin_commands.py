@@ -36,6 +36,7 @@ from app.schemas.gateway.plugin_commands import (
 from app.schemas.gateway.service_plugin import (
     PluginCommandContribution,
     PluginInstanceStatus,
+    PluginShutdownDTO,
 )
 
 Progress = Callable[[float, float | None, str | None], Awaitable[None]]
@@ -100,9 +101,9 @@ def plugin_command_router(
         return PluginCommandRegistrationsDTO(instance_id=identity.instance_id, commands=list(registrations.values()))
 
     @router.post("/internal/plugin/shutdown")
-    async def stop(background: BackgroundTasks) -> dict[str, object]:
+    async def stop(background: BackgroundTasks) -> PluginShutdownDTO:
         background.add_task(shutdown)
-        return {"accepted": True, "process_id": os.getpid(), "instance_id": identity.instance_id}
+        return PluginShutdownDTO(accepted=True, process_id=os.getpid(), instance_id=identity.instance_id)
 
     @router.post("/internal/plugin/commands/cancel")
     async def cancel(payload: PluginCommandCancelRequest) -> PluginCommandCancelDTO:

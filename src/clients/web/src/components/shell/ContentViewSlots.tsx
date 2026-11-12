@@ -94,7 +94,7 @@ interface ContentViewSlotsProps extends Pick<
   changesHint: { sessionId: string; summary: SessionChangesSummary } | null;
   changesHintLoading: boolean;
   activeChangeset: SessionChangeset | null;
-  gatewayUserViewStates: Map<string, SessionViewState>;
+  sessionViewStates: Map<string, SessionViewState>;
 }
 
 function ContentViewSlot({
@@ -171,7 +171,7 @@ export default function ContentViewSlots({
   changesHint,
   changesHintLoading,
   activeChangeset,
-  gatewayUserViewStates,
+  sessionViewStates,
   onLoadOlderMessages,
   onLoadNewerMessages,
   onLoadAroundTurn,
@@ -306,7 +306,7 @@ export default function ContentViewSlots({
           onOpenChildReport={onOpenChildReport}
           viewState={
             activeSessionCacheKey
-              ? gatewayUserViewStates.get(activeSessionCacheKey) ?? null
+              ? sessionViewStates.get(activeSessionCacheKey) ?? null
               : null
           }
           onViewStateChange={onViewStateChange}

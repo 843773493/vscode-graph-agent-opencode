@@ -1,3 +1,4 @@
+import type { AppearanceBackground } from "../../../theme/theme";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
   getGatewayHealth,
@@ -9,8 +10,6 @@ import type {
   GatewayHealth,
   GatewayWorkspace,
   GatewayRemoteConnectionSummary,
-  WebUiSettings,
-  WebUiSettingsUpdate,
 } from "../../../types/backend";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import type { GatewayBackendRuntimeActions } from "./GatewayBackendRuntimePanel";
@@ -33,8 +32,10 @@ interface GatewayControlCenterProps extends GatewayBackendRuntimeActions {
   gatewayError: string | null;
   onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
   onRefresh: () => Promise<void>;
-  uiSettings: WebUiSettings;
-  onUpdateUiSettings: (update: WebUiSettingsUpdate) => Promise<void>;
+  onRemoteGatewayReconnected: (connectionId: string) => void;
+  background: AppearanceBackground;
+  onUpdateBackground: (value: AppearanceBackground) => Promise<void>;
+  onSelectColorTheme: () => Promise<void>;
   diagnosticLocation?: GatewayDiagnosticLogLocateRequest;
   onCloseDiagnosticLocation?: () => void;
 }
@@ -45,9 +46,11 @@ export default function GatewayControlCenter({
   gatewayError,
   onAddSsh,
   onRefresh,
+  onRemoteGatewayReconnected,
   onStart, onStop, onSafeRestart, onForceRestart,
-  uiSettings,
-  onUpdateUiSettings,
+  background,
+  onUpdateBackground,
+  onSelectColorTheme,
   diagnosticLocation, onCloseDiagnosticLocation,
 }: GatewayControlCenterProps) {
   const confirm = useWarmConfirm();
@@ -147,6 +150,7 @@ export default function GatewayControlCenter({
     setOperationNotice(null);
     try {
       await reconnectRemoteGatewayConnection(apiPort, remote.gateway_connection_id);
+      onRemoteGatewayReconnected(remote.gateway_connection_id);
       await onRefresh();
       await loadHealth();
       setOperationNotice(`远程 Gateway「${remote.ssh_config_host ?? remote.host}」已重新连接。`);
@@ -225,7 +229,7 @@ export default function GatewayControlCenter({
 
           <Suspense fallback={<div role="status" aria-live="polite">正在加载控制面页面…</div>}>
             {activePage === "theme" ? (
-              <GatewayThemeSettings apiPort={apiPort} settings={uiSettings} onUpdateSettings={onUpdateUiSettings} />
+              <GatewayThemeSettings apiPort={apiPort} background={background} onUpdateBackground={onUpdateBackground} onSelectColorTheme={onSelectColorTheme} />
             ) : activePage === "runtime" ? (
               <GatewayBackendRuntimePanel workspaces={workspaces} onStart={onStart} onStop={onStop} onSafeRestart={onSafeRestart} onForceRestart={onForceRestart} />
             ) : activePage === "diagnostics" ? (

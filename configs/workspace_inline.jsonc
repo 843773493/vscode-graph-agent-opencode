@@ -1,6 +1,6 @@
 {
   "$schema": "./workspace_schema.jsonc", // ConfigService._resolve_schema_path 读取 schema 引用。
-  "config_version": 2, // configs.legacy_migrations 与 workspace_schema 校验配置版本。
+  "config_version": 2, // Workspace 配置结构版本，由 workspace_schema 校验。
   "plugins": { "runtime": { "entries": [] } }, // Workspace 插件绑定由此配置 owner 提交。
   "llm": {
     "providers": [

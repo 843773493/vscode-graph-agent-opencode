@@ -19,7 +19,7 @@ from app.gateway.config import ConfiguredRemoteGateway, GatewayConfig
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes import workspaces_lifecycle
 from app.gateway.routes._shared import get_registry
-from app.gateway.ssh_command import build_ssh_command
+from app.gateway.ssh_command import build_ssh_command, ssh_path_option
 from app.gateway.ssh_config import (
     UserSshHost,
     list_user_ssh_hosts,
@@ -233,16 +233,31 @@ def test_ssh_config_read_failure_keeps_native_details_only_in_diagnostics(
     assert attempts.call_count == 2
 
 
+@pytest.mark.parametrize("separator", [" ", "=", " = ", "= ", "\t=\t"])
+def test_ssh_host_and_include_accept_openssh_assignment_syntax(
+    tmp_path: Path, stub_ssh_config_resolution: Mock, separator: str,
+) -> None:
+    included = tmp_path / "config=有 空格.conf"
+    included.write_text(f"Host{separator}jump\n", encoding="utf-8")
+    config = tmp_path / "config"
+    config.write_text(f'  Host{separator}dev\nInclude{separator}"{included}" # 注释\n', encoding="utf-8")
+
+    assert [host.alias for host in list_user_ssh_hosts(config)] == ["dev", "jump"]
+    assert resolve_user_ssh_host("jump", config).hostname == "jump.example.com"
+
+
+@pytest.mark.parametrize("separator", [" ", "=", " = "])
 def test_windows_ssh_include_keeps_backslashes_and_removes_quotes(
     monkeypatch: pytest.MonkeyPatch,
+    separator: str,
 ) -> None:
     monkeypatch.setattr("app.gateway.ssh_config.os.name", "nt")
 
     tokens = ssh_config._split_config_line(
-        r'Include "C:\Users\Jöhn Doe\.ssh\config.d\*.conf" # nested config'
+        'Include' + separator + r'"C:\Users\Jöhn Doe\.ssh\config=d\*.conf" # nested config'
     )
 
-    assert tokens == ["Include", r"C:\Users\Jöhn Doe\.ssh\config.d\*.conf"]
+    assert tokens == ["Include", r"C:\Users\Jöhn Doe\.ssh\config=d\*.conf"]
 
 
 def test_ssh_command_preserves_config_alias_and_explicit_connection(
@@ -274,10 +289,27 @@ def test_ssh_command_preserves_config_alias_and_explicit_connection(
     assert "-i" not in alias_command
     assert "StrictHostKeyChecking=accept-new" in alias_command
     assert "BatchMode=yes" in alias_command
-    assert f"UserKnownHostsFile={known_hosts_path}" in alias_command
+    assert ssh_path_option("UserKnownHostsFile", str(known_hosts_path)) in alias_command
     assert explicit_command[-1] == "ops@remote.example.com"
-    assert "-i" in explicit_command
+    identity_path = Path("~/.ssh/id_ed25519").expanduser().resolve()
+    assert ssh_path_option("IdentityFile", str(identity_path)) in explicit_command
     assert "-p" in explicit_command
+
+
+@pytest.mark.parametrize("field", ["identity", "known_hosts"])
+def test_ssh_command_rejects_literal_environment_expression(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, field: str,
+) -> None:
+    path = str(tmp_path / "${HOME}" / "file")
+    monkeypatch.delenv("BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE", raising=False)
+    if field == "known_hosts":
+        monkeypatch.setenv("BOXTEAM_GATEWAY_SSH_KNOWN_HOSTS_FILE", path)
+    with pytest.raises(ValueError, match="路径不支持 OpenSSH 环境变量语法"):
+        build_ssh_command(
+            host="fixture.invalid", port=22, username="fixture",
+            private_key_path=path if field == "identity" else str(tmp_path / "identity"),
+            ssh_config_host=None,
+        )
 
 
 def test_add_ssh_request_accepts_selection_or_complete_manual_connection():

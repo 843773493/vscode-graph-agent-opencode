@@ -46,7 +46,7 @@ async def test_query_branches_cancel_expire_and_retry_only_their_selected_owner(
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
     result_path = context.artifacts_dir / "query-lifecycle.json"
-    command = ["bun", "tests/integration/clients/web/quick_access/query_lifecycle.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/query_lifecycle.mjs"]
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(

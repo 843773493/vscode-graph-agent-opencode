@@ -116,9 +116,6 @@ async function mountTree(
       }
       return apiResponse({ workspace_uri: ROOT, filesystem_uri: FILESYSTEM, filesystem_label: "/" });
     }
-    if (url.pathname === "/api/gateway/users/current") {
-      return apiResponse({ kind: "guest", user_id: null });
-    }
     if (url.pathname.endsWith("/file-tree-settings")) {
       handle.settingsRequests += 1;
       if (handle.failSettings) {

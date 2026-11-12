@@ -89,49 +89,4 @@ describe("顶层语义表面", () => {
     expect(themeCss).toMatch(/--bt-workspace-backdrop-filter:\s*none/);
   });
 
-  test("Gateway 下发的语义表面默认值与前端静态默认值一致", async () => {
-    const [themeCss, builtins] = await Promise.all([
-      Bun.file(new URL("./theme.css", import.meta.url)).text(),
-      Bun.file(
-        new URL("../../../../../../app/gateway/theme/builtins.py", import.meta.url),
-      ).text(),
-    ]);
-    const normalize = (value: string | undefined) =>
-      value
-        ?.replace(/\s+/g, " ")
-        .replace(/\(\s+/g, "(")
-        .replace(/\s+\)/g, ")")
-        .trim();
-
-    for (const token of [
-      "--bt-chrome-surface",
-      "--bt-toolbar-background",
-      "--bt-workspace-header-background",
-      "--bt-workspace-surface",
-      "--bt-panel-surface",
-      "--bt-chrome-backdrop-filter",
-      "--bt-workspace-backdrop-filter",
-      "--bt-bottom-panel-background",
-      "--bt-bottom-panel-header-background",
-      "--bt-bottom-panel-toolbar-background",
-      "--bt-bottom-panel-list-background",
-      "--bt-bottom-panel-viewer-background",
-      "--bt-runtime-preview-background",
-      "--bt-runtime-preview-header-background",
-      "--bt-runtime-preview-border",
-      "--bt-status-bar-background",
-      "--bt-status-bar-border",
-      "--bt-status-bar-foreground",
-    ]) {
-      const cssValue = themeCss.match(
-        new RegExp(`${token}\\s*:\\s*([^;]+);`),
-      )?.[1];
-      const pythonValue = builtins.match(
-        new RegExp(`"${token}":\\s*"([^"]+)"`),
-      )?.[1];
-      expect(cssValue, `前端缺少 ${token}`).toBeTruthy();
-      expect(pythonValue, `Gateway 缺少 ${token}`).toBeTruthy();
-      expect(normalize(cssValue)).toBe(normalize(pythonValue));
-    }
-  });
 });

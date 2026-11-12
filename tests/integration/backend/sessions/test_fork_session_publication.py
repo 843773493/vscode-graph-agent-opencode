@@ -155,12 +155,12 @@ async def test_copy_session_publication_recovers_original_attachment_settlement(
         pytest.fail("本地 publication 冷恢复不得要求 Gateway 补写或重取 source")
 
     monkeypatch.setattr(recovered.forks._transport, "fork_transfer", forbid_gateway_transfer)
-    async with main.lifespan(main.app) as _main_lifespan_state_158, httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": container.workspace_id,
                  "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84"},
     ) as client:
-        await _main_lifespan_state_158["after_http_startup"]()
+        await _main_lifespan_state["after_http_startup"]()
         cold_catalog = recovered.sessions.path_resolver.catalog_store
         published = cold_catalog.get_creation_record(key)
         assert published.state == "published"

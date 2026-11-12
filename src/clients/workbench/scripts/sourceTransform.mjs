@@ -303,18 +303,18 @@ ${entry}`);
 ${entry}`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts')) {
-      contents = `import { onGatewayUserSessionInvalidated } from ${JSON.stringify(resolve(root, '../web/src/api/http.js'))};\n` + contents;
+      contents = `import { onGatewayTokenInvalidated } from ${JSON.stringify(resolve(root, '../web/src/api/http.js'))};\n` + contents;
       // 身份撤销沿原 input 释放 watcher、解码与 URL；旧 input 不能自动重读或恢复旧图。
       const watch = 'this._inputDisposables.add(this._fileService.onDidFilesChange(onDidFilesChange));';
       contents = replaceOnce(contents, watch, `${watch}
 if (input.resource.scheme === 'boxteam-file') {
-  this._inputDisposables.add(toDisposable(onGatewayUserSessionInvalidated(0, () => {
+  this._inputDisposables.add(toDisposable(onGatewayTokenInvalidated(0, () => {
     this._inputDisposables.clear();
     this._loadId++;
     this._viewer?.clear();
     this._objectUrl.clear();
     this._fileSize = undefined;
-    this._setMessage(localize('imagePreview.identityChanged', "Gateway 或用户身份已改变，请重新打开图片"));
+    this._setMessage(localize('imagePreview.identityChanged', "Gateway 或访问凭据已改变，请重新打开图片"));
     this._onDidChangeImageInfo.fire();
   })));
 }`);

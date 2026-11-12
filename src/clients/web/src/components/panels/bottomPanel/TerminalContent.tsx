@@ -37,9 +37,9 @@ export function TerminalContent({
   const [frameReloadToken, setFrameReloadToken] = useState(0);
   const resizingRef = useRef(false);
   const selectedEntry = useMemo(
-    () => entries.find(
+    () => selectedTerminalId === null ? entries[0] ?? null : entries.find(
       (entry) => entry.resource_id === selectedTerminalId,
-    ) ?? entries[0] ?? null,
+    ) ?? null,
     [entries, selectedTerminalId],
   );
   const terminalErrorMessage = [selectedEntry?.error, controller.error]
@@ -254,7 +254,8 @@ export function TerminalContent({
             </div>
           ) : (
             <div className="terminal-panel-viewer-empty">
-              <strong>当前工作区还没有终端</strong>
+              {selectedTerminalId && !loading ? <strong role="alert">所选终端已不存在：{selectedTerminalId}</strong>
+                : <strong>{loading ? "正在读取工作区终端…" : "当前工作区还没有终端"}</strong>}
             </div>
           )}
         </article>

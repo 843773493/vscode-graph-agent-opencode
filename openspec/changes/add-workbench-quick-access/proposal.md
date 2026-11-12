@@ -45,5 +45,6 @@
 - 复用关系：`add-native-web-workbench` 与 `integrate-workbench-features` 提供完整宿主和编辑器；`add-unified-virtual-resource-addressing` 独占 URI 合同；`resource-file-operations`、`session-context-resource-addressing`、`persistent-task-management` 等保留原领域职责。
 - 组织选择：新增一个聚焦的 change、一个用户可观察 capability，在 design 内拆分接入职责。既有工作台 change 已完成，URI owner 又不负责此交互，因此不重开旧 change，也不把搜索、命令、打开拆成多套互相重复的规范。
 - 不修改固定上游子模块；在既有 Vite／生产构建共用的 sourceTransform 中精确接入原贡献和搜索范围数据，不复制上游 UI 或另建转换管线。不新增原生 Electron 能力、后台全局索引或第二套业务存储。Web 与 Electron 复用同一工作台贡献；各宿主仍须分别验证实际行为。
+- 自有插件的声明式贡献／运行期 Provider／受管服务、终端／浏览器／MCP 的 Gateway 托管及统一设置由独立变更 [add-target-aware-extension-management](../add-target-aware-extension-management/proposal.md) 定义。首批命令、菜单、快捷键、配置和服务接原 Workbench 注册机制，插件命令沿原 `>` 使用明确目标调用；插件 Quick Access／搜索 Provider 尚未开放，不以原查询实现代替开放验收。该变更取消 VSIX／VS Code 用户扩展兼容和第三方市场；`ext `／MCP／设置入口消费自有模型及实际能力，不增加 Electron main/preload 原生能力。
 
 - 2026-11-04 范围收口：原第 17／18 组分层缓存及 Webview／持久字节缓存的剩余工作独立迁入 `refine-workbench-layered-caches`，不再阻塞本 change。已实现的私有条件读取、轻量观察与相关修复保留；搜索缓存、身份隔离、草稿和编辑器恢复仍是本轮实际消费者合同，不能借拆分跳过正确性验证。

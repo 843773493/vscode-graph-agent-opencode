@@ -19,6 +19,18 @@
    - **纵向单链路推进：** 单次改动只聚焦一条清晰垂直的业务子链路（例如：只重构"扫描元数据提取"这一条垂直链路），自底向上改透、测试跑通、老旧逻辑连根拔起，做原子化提交。
    - **坚定做代码减法：** 编码与重构应以降低圈复杂度、精简冗余为核心准则。优先追求代码净行数减少与链路清晰，严禁引入更绕的调用链、冗余的文件或增加维护负担。
 
+### 实现后的复杂度复审
+
+完成实现后，必须对本次改动进行一次最小充分实现复审：
+
+1. **重新推导**：从修改前的代码出发，判断是否存在更直接、更简单且完整满足需求的实现方案。
+2. **清理冗余**：删除本次引入的不必要包装器、抽象层、重复状态、重复校验、兼容分支、fallback、冗余测试和额外持久化机制。
+3. **验证必要性**：每项新增的非业务机制必须对应明确的需求、真实故障或实际风险；无法说明必要性的机制应当删除。
+4. **保持行为**：简化不能破坏已有业务契约、必要的安全边界和已验证的正确行为。
+5. **控制范围**：不为了精简本次改动而无依据地重构无关代码，也不引入额外审计系统或复杂度管理框架。
+
+最终目标不是代码行数最少，而是使用最少的必要机制完整实现需求。
+
 ### 沟通与交付
 
 1. 使用中文进行沟通；代码注释也应使用中文，专业术语除外。
@@ -29,7 +41,7 @@
 1. 第一次实现功能时，尽量减少使用 `try/except`，专注于核心功能。
 2. 对于自己不确定的代码部分，在代码中添加 TODO 注释。
 3. 当你或用户要求跳过某个重要实现细节时，在代码中添加 TODO 注释。
-4. 当使用面向兼容性的代码时，在其上方添加 TODO 注释。
+4. 仅在已验收 release 基线或用户明确授权确需兼容时使用兼容代码，并在其上方添加说明适用版本与退出条件的 TODO；不得为开发中间态自动保留兼容分支。
 5. 尽量避免使用 `any`；仅在处理泛型或其他复杂情况时使用。
 6. 在适当情况下优先使用第三方库；不要重复造轮子。
 7. 类：不要使用原型混入或变异，优先使用继承或组合。
@@ -45,6 +57,16 @@
 6. LLM provider 默认采用最小配置，只要求模型名称、endpoint、API key 和 provider 处理方式；采样参数、reasoning 参数和输出上限由上游模型采用默认值。
 7. 不要根据模型上下文窗口推导或擅自添加 `max_tokens`、`max_output_tokens` 等输出限制；上下文容量与单次输出限制是不同概念。
 8. 只有用户明确要求，或官方接口验证为必需参数时，才在配置中增加模型请求覆盖；增加前应先测试省略该参数的真实请求行为，并说明它对长文本、成本和工具调用的影响。
+
+### 共享 worktree 与验证顺序
+
+1. 根 worktree 是多个 Agent 的默认共享开发区。开始前检查 Git 状态，保留他人的 staged、unstaged 和 untracked 改动；用户指定目录时，命令必须显式绑定该目录。不得自行切换共享分支、stash、reset、清空暂存区或移动其他任务的文件。
+2. 默认验证顺序是：根 worktree 中验证自己的完整改动 → 必要时同步到固定 dev worktree 验证 → 前两者不适合时使用实验 worktree。选择隔离的理由应来自真实的并发冲突、依赖或运行环境需求，不默认要求每个 Agent 新建 worktree。
+3. 互不冲突的业务模块可以并发；同一文件、共享 DTO/schema、依赖锁文件、协议生成与实例启停须先协调写入方。依赖上游变更的任务等待对应契约就绪后再接入，不要求无关任务一起串行。测试前后核对受影响源码，期间变化时只补验受影响部分。
+4. 固定集成目录采用主 worktree 下的 `out/worktrees/dev/`，发布目录采用 `out/worktrees/release/`；实验 checkout 采用 `out/worktrees/YYYY/MM/DD/<task_name>/`。日期取首次创建时的 UTC 日期并冻结，跨天继续沿用原目录，不按日期自动清理。现有 worktree 不因新约定而被移动或删除。
+5. dev 用于接收明确选择的完整改动并运行供开发者查看的服务；release 只接收明确提交或标签，不导入未提交补丁和开发 Home。每个运行实例隔离 Home、业务工作区、端口和进程；不得用测试重启抢占另一 Agent 或开发者正在查看的服务。
+6. worktree 创建、默认本地配置复制、依赖初始化与同步统一使用 `bun run worktree`；固定实例用 `bun run workspace`。用法见 [worktree 与发布迁移约定](docs/architecture/worktree-and-release-policy.md)，不另造手工复制流程。
+7. 每次在 release worktree 打包前，Agent 必须主动提升软件小版本，无需用户另行提醒；默认递增 SemVer 补丁位（例如 `0.0.2 → 0.0.3`），不得沿用上次打包的版本号。软件版本以根 `package.json` 为唯一来源，相关版本信息沿既有流程同步；版本变更先提交并同步到 release，再从干净提交打包。
 
 ### 测试、验证与交付
 
@@ -206,19 +228,19 @@
 ### 测试工作区隔离
 
 1. 仓库正式测试脚本的运行工作区必须写入 `out/tests/<与 tests/ 下测试文件相同的路径（去掉测试文件后缀）>/workspace/`。例如 `tests/integration/workspace_services/mcp/test_mini_mcp.py` 对应 `out/tests/integration/workspace_services/mcp/test_mini_mcp/workspace/`。
-2. Codex/Agent 为当前开发任务执行的临时 Web UI、浏览器、E2E 探索或 subagent 真实操作不属于仓库正式测试脚本；这类临时操作只能使用当前用户明确允许的默认工作区，或使用 `out/tests/temp/<task_name>/workspace/` 下的临时隔离工作区。
+2. Codex/Agent 为当前开发任务执行的临时 Web UI、浏览器、E2E 探索或 subagent 真实操作不属于仓库正式测试脚本；这类临时操作只能使用当前用户明确允许的默认工作区，或使用 `out/tests/temp/YYYY/MM/DD/<task_name>/workspace/` 下的临时隔离工作区。
 3. 测试需要独立工作区时，从 `tests/fixtures/workspaces/` 选择合适的完整测试工作区 fixture 复制到上述对应的 `workspace/`，再使用复制后的目录；不要直接修改或注册 fixture 源目录。
 4. 禁止把本项目根目录注册为测试工作区，也禁止为了测试在项目根目录产生 `.boxteam/`、会话、运行时状态或其他测试数据。
-5. 向 subagent 委派临时 Web 或 E2E 操作时，任务说明必须明确指定 `out/tests/temp/<task_name>/` 下的工作区和产物目录，不能让 subagent 自行选择目录，也不能新增项目根目录工作区；让 subagent 运行仓库正式测试脚本时，沿用该脚本在 `out/tests/` 下的正式输出路径。
+5. 向 subagent 委派临时 Web 或 E2E 操作时，任务说明必须明确指定 `out/tests/temp/YYYY/MM/DD/<task_name>/` 下的工作区和产物目录，不能让 subagent 自行选择目录，也不能新增项目根目录工作区；让 subagent 运行仓库正式测试脚本时，沿用该脚本在 `out/tests/` 下的正式输出路径。
 
 ### 测试产物管理
 
-1. 仓库正式测试脚本产生的工作区、日志和可复查产物，统一放在 `out/tests/<同名测试路径>/`；目录结构必须镜像 `tests/` 下的测试文件路径并去掉 `.py` 后缀。
-2. Codex/Agent 在开发过程中自行创建的一次性诊断、截图、录屏、HTML 快照、浏览器下载、Playwright trace、审查报告、临时日志和临时工作区，统一放在 `out/tests/temp/<task_name>/`；其中隔离工作区使用 `workspace/`，其余产物使用 `artifacts/`。
+1. 仓库正式测试脚本产生的工作区、日志和可复查产物，统一放在 `out/tests/<同名测试路径>/`；目录结构必须镜像 `tests/` 下的测试文件路径并去掉 `.py` 后缀。需要保留多次运行证据时，可在 `artifacts/YYYY/MM/DD/<run_id>/` 下区分各次运行，日期按运行开始时的 UTC 日期确定；`workspace/`、`runtime/`、锁文件及协调状态保持稳定路径，不随日期迁移。
+2. Codex/Agent 在开发过程中自行创建的一次性诊断、截图、录屏、HTML 快照、浏览器下载、Playwright trace、审查报告、临时日志和临时工作区，统一放在 `out/tests/temp/YYYY/MM/DD/<task_name>/`；其中隔离工作区使用 `workspace/`，其余产物使用 `artifacts/`。日期统一取任务首次创建时的 UTC 日期并冻结；跨天继续或恢复同一任务时沿用原目录，不按执行当天新建。 整理既有目录时，不移动仍被进程使用的路径，待任务结束后再归档。
 3. **严禁在项目根目录生成或保存任何测试图片、截图、录屏或其他测试文件。** 同样不得把临时产物直接放在 `out/tests/` 顶层、`src/`、`app/`、`asset/` 或 `reference_repo/` 中。
-4. `asset/` 是只读测试模板目录，不是测试输出目录。正式测试只能写入自己的 `out/tests/<同名测试路径>/`；Agent 临时任务只能写入 `out/tests/temp/<task_name>/`，二者不得混用。
-5. Agent 调用截图、浏览器或审查工具前必须显式设置 `out/tests/temp/<task_name>/artifacts/`；仓库正式测试脚本则必须显式设置自己的 `out/tests/<同名测试路径>/artifacts/`。不得依赖工具默认当前目录。
-6. Agent 临时任务结束时必须列出本次生成的产物；纯临时产物应主动删除，用户需要查看的临时产物可以保留在对应的 `out/tests/temp/<task_name>/`。仓库正式测试脚本的输出默认保留，以便复查，不得按 Agent 临时产物规则自动删除。
+4. `asset/` 是只读测试模板目录，不是测试输出目录。正式测试只能写入自己的 `out/tests/<同名测试路径>/`；Agent 临时任务只能写入 `out/tests/temp/YYYY/MM/DD/<task_name>/`，二者不得混用。
+5. Agent 调用截图、浏览器或审查工具前必须显式设置 `out/tests/temp/YYYY/MM/DD/<task_name>/artifacts/`；仓库正式测试脚本则必须显式设置自己的 `out/tests/<同名测试路径>/artifacts/`。不得依赖工具默认当前目录。
+6. Agent 临时任务结束时必须列出本次生成的产物；纯临时产物应主动删除，用户需要查看的临时产物可以保留在对应的 `out/tests/temp/YYYY/MM/DD/<task_name>/`。仓库正式测试脚本的输出默认保留，以便复查，不得按 Agent 临时产物规则自动删除。
 7. 测试生成的二进制文件默认不得加入 Git。只有用户明确要求将其作为长期测试基线或产品资源时，才允许提交，并应放入语义明确的专用目录而不是 `out/tests/` 运行输出目录。
 
 ### 参考仓库
@@ -229,11 +251,11 @@
 ### 运行时说明
 
 1. 在 JS/TS 环境中使用 `bun`；使用 `bun install` 安装依赖，使用 `bun run dev` 启动本地开发环境。
-2. `bun run dev` 通过 `scripts/launch/dev-manager.mjs` 启动当前 worktree 的开发栈：Linux 使用 transient user-systemd unit，Windows/macOS 使用 detached 进程组；两种方式都由 `scripts/launch/dev.mjs` 启动服务。源码开发未显式设置 `BOXTEAM_HOME` 时默认使用当前 worktree 的 `out/development-runtime/boxteam-home/`。当前主服务监听关系为：工作区后端 `127.0.0.1:8010`、浏览器前端 `127.0.0.1:8011`、Workspace Gateway `127.0.0.1:8014`；Terminal attach 资源由 Gateway 发布，Terminal 插件由 Gateway 管理；Browser 辅助服务使用 8015/8016，默认监听 `127.0.0.1`。需要跨机访问时才通过 `BOXTEAM_DEV_LISTEN_HOST` 显式放开。
-3. `scripts/launch/dev.mjs` 启动前会清理 8010–8016 以及调试端口 8002 的旧监听进程，其中包括 Gateway。需要验证完整 Web 产品时必须通过该脚本统一重启，不要只手动重启 8010 后端而保留旧 Gateway 或旧前端。
+2. `bun run dev` 等价于 `bun run workspace dev start`：从根 worktree 启动 Vite 与 Browser 前端，从固定 `out/worktrees/dev/` 启动 Launcher、Gateway、Workspace 与辅助后端；Terminal attach 资源由 Gateway 发布，Terminal 插件由 Gateway 管理。Home 默认属于 dev。根源码自测使用 `bun run dev:root`；显式指定后端使用 `bun run dev --backend-root <绝对源码路径>`，状态与停止命令传同一选项。启动器用 `BOXTEAM_PROJECT_ROOT` 绑定后端、`BOXTEAM_FRONTEND_ROOT` 绑定前端，展示两侧路径和实际 Home；Linux 使用 transient user-systemd unit，Windows/macOS 使用 detached 进程组。基础端口为后端 8010、Vite 8011、Gateway 8014、Browser 辅助端口 8015/8016；固定 dev 默认偏移 100，实际以管理记录为准。默认监听 `127.0.0.1`，跨机访问需显式设置 `BOXTEAM_DEV_LISTEN_HOST`。
+3. `scripts/launch/dev.mjs` 启动前核对所选端口布局；默认包括 8010–8016 和调试端口 8002。发现占用直接报错，不按端口杀进程。实例启停由其已有 manager/launcher 归属管理；其他任务或开发者实例占用时选择独立布局。需要验证完整 Web 产品时统一重启本实例，不只重启后端而保留旧 Gateway 或旧前端；固定 dev 使用 `bun run workspace dev start|stop|status`。
 4. `bun run dev` 在完整服务就绪后返回，`bun run dev:status` 查看状态，`bun run dev:stop` 停止并回收对应平台的服务组。只有需要前台调试整组进程时才使用 `bun run dev:foreground`；任一关键进程退出时仍会停止其余进程。
 5. 验证 Web 可用性不能只检查 8010 健康接口或 8011 HTML。至少应通过 8011 实际请求 `/api/gateway/health`、`/api/gateway/workspaces` 和 `/api/v1/workspace`，确认页面初始化链路、激活工作区以及响应头/响应体 `request_id` 均正确；涉及交互时还应进行真实浏览器测试。
-6. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖。仅调试单个工作区后端时使用 `uv run python -m app.runtime.http_server app.main:app --host 127.0.0.1 --port 8010`，但这不代表 Gateway 和 Web 全链路已经启动。
+6. 在 Python 环境中使用 `uv`；使用 `uv sync` 安装依赖。仅调试单个工作区后端时可使用 `uv run uvicorn app.main:app --host 127.0.0.1 --port 8010`，但这不代表 Gateway 和 Web 全链路已经启动。
 7. 工作区后端 API 文档位于 http://127.0.0.1:8010/api/v1/docs；Gateway API 文档位于 http://127.0.0.1:8014/api/gateway/docs。
 
 ### 配置
@@ -243,6 +265,15 @@
 3. Gateway 内置默认配置位于发行包 `configs/gateway_inline.jsonc`，用户覆盖位于 `${BOXTEAM_HOME:-~/.boxteams}/config/gateway.jsonc`；Workspace 内置默认配置位于发行包 `configs/workspace_inline.jsonc`，用户覆盖位于同目录 `workspace.jsonc`；两者 schema 与配置文件同目录；使用 `python -m configs.boxteam` 安装或迁移配置。
 4. 工作区级配置位于 `${workspace_abs_path}/.boxteam/workspace.jsonc`，其有效配置覆盖 `workspace_inline.jsonc`、用户级 `workspace.jsonc` 和 `workspace_local.jsonc` 中的同名项；Gateway 不得读取该文件。
 5. 工作区后端初始化只能创建当前显式工作区的 `.boxteam/` 数据目录，不得顺带创建用户默认工作区或修改 Gateway 全局状态。
+
+### 已验收版本与迁移边界
+
+1. 配置、SQLite 和持久化数据迁移，以及旧参数、旧协议兼容，默认只根据 release 最近两次经用户完整验收并用于发布的固定提交识别需求。记最近一次为 `R_current`、前一次为 `R_previous`；普通 Git 提交、Agent 测试通过、release 目录名或 `HEAD~1` 均不能替代验收与发布证据。准备下一版时，以 `R_current` 为升级来源，候选提交须明确记录。
+2. 未经用户完整验收的根/dev/实验 Home、临时配置和开发中间数据库不构成迁移契约；默认直接实现当前结构，不为它们新增自动迁移、修复、旧字段回退或兼容层。已验收数据复制到开发环境后仍按其真实来源保护，不能因位置在开发目录就视为可丢弃。
+3. 开发数据不匹配时明确报告；优先使用新的隔离 Home/测试工作区。清理或重建只适用于已确认可丢弃且属于本任务的数据，不自动覆盖用户数据、身份、凭据或授权账本。
+4. 缺少可核验 release 基线时，继续当前功能实现并报告缺口，不根据开发残留推测旧版契约。也不得因此直接删除既有迁移；移除前先核对两个 release 提交中的调用方、持久化契约和历史迁移依赖。
+5. 两个 release 提交限定默认支持评估范围，不等于配置版本号只允许相邻或可随意截断 SQLite 历史。保留从支持基线到目标的必要链路；未知版本明确拒绝，需要更旧版本支持时由用户明确授权。
+6. 配置迁移按配置域组织；SQLite 有序迁移放在各数据库 owner 的 `migrations/`，复用既有执行原语。日期用于实验与产物，不决定迁移顺序。已有结构 SQL 与离线维护保持 owner 归属；本次整理范围和发布基线登记见 [worktree 与发布迁移约定](docs/architecture/worktree-and-release-policy.md)。
 
 ## 代理协作
 

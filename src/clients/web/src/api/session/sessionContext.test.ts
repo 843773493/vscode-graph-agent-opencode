@@ -1,3 +1,4 @@
+import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { afterEach, expect, test } from "bun:test";
 import {
   installSessionApiFetchMock,
@@ -37,7 +38,7 @@ test("上下文请求透传 Session API 身份与目录返回的 assembly_ref", 
 
   const result = await readSessionContext(
     49_321,
-    "gateway-workspace",
+    gatewayWorkspaceKey({ gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "11111111-1111-4111-8111-111111111111" }),
     session,
     "assembly",
     {

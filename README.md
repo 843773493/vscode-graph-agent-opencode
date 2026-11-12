@@ -44,7 +44,9 @@ Section 8 日常验证按改动影响选择场景，完整覆盖可以由各组�
 
 > Web 与 Electron 复用 `src/clients/workbench/` 的完整 Code OSS 工作台及 `src/clients/web/` 的 React 会话产品。首次运行先初始化固定 Git 子模块，再分别安装根目录、Web 与 Workbench 的依赖。`bun run dev` 通过统一启动器在配置的前端端口运行 Workbench Vite；`bun run build:web` 和发行包均构建同一静态入口。React Native 及移动 parity 仍为独立的 TODO 运行面。
 
-`mask install release` 会检查当前平台的本地打包指纹；产物缺失或源码变化时，先重新打包，再从本地 CLI 与 runtime tarball 安装，不从公共 npm registry 获取 BoxTeam 包。安装完成后运行 `boxteam start`；安装版 Launcher 会启动内置 Gateway，Gateway 再启动 Workspace 后端并托管打包后的 Web UI，不会启动 Vite dev server。
+在已选定提交的受管 release checkout 中执行 `mask install release`；它会检查当前平台的本地打包指纹，产物缺失或过期时先重新打包，再从本地 CLI 与 runtime tarball 安装，不从公共 npm registry 获取 BoxTeam 包。安装完成后运行 `boxteam start`；安装版 Launcher 会启动内置 Gateway，Gateway 再启动 Workspace 后端并托管打包后的 Web UI，不会启动 Vite dev server。
+
+日常多 Agent 开发默认共享根 worktree，优先用 `bun run dev:root` 验证根源码，再按需同步到固定 dev，最后才选择实验 worktree。使用 `bun run worktree create dev <base-ref> --scopes=python,root` 创建后端集成树，`bun run worktree sync dev <完整切片的文件...>` 同步。`bun run dev`（等价于 `bun run workspace dev start`）从根启动 Vite、从 dev 启动 Gateway 和后端；`bun run dev:status` / `bun run dev:stop` 管理同一实例。指定其他后端时使用 `bun run dev --backend-root /absolute/backend-checkout`，状态和停止命令传相同选项；启动日志展示两侧源码与实际 Home。正式发布来源固定为 `out/worktrees/release/` 的明确提交或标签；package 与 release 安装入口会检查来源，从根做定向构建须显式加 `--development`。角色、配置复制、归档和 release 迁移基线见 [worktree 与发布迁移约定](docs/architecture/worktree-and-release-policy.md)。
 
 ## 产品诊断日志
 
@@ -52,7 +54,9 @@ Section 8 日常验证按改动影响选择场景，完整覆盖可以由各组�
 
 默认日志根为 `${BOXTEAM_HOME:-~/.boxteams}/state/logs/`；显式 `BOXTEAM_SERVICE_LOG_PATH` 仍控制 Launcher 日志去向。只有打开文件时检查 64 MiB 阈值并轮转，最多保留 `.1`—`.3`；运行中的文件没有大小硬上限，Gateway 交接不会轮转存活进程的活动日志。
 
-旧运行时配置（包括 Workspace `logger`、Gateway 生成器轮询字段及持久化配置版本）必须在服务停止后显式迁移。先运行 `uv run python -m configs.boxteam migrate-runtime-config --preview --migration-workspace /absolute/workspace`；可重复提供 `--migration-workspace` 检查多个明确工作区，再移除 `--preview` 执行迁移。有冲突时先核对预览，使用 `--level info --pretty true` 等参数明确选值。迁移同时处理配置文件、SQLite 来源与 active 快照，保存可恢复备份，不会顺便激活待生效业务配置；未结算候选须先由原 owner 处理。中断后重跑同一迁移，或用 `--restore` 恢复原件；回退旧软件前先恢复配置，后续已产生新配置事实时恢复 CAS 会拒绝覆盖。历史日志原地保留，运行期不双读旧字段。
+以下是已实现的显式维护入口，是否使用须先核对真实来源和 release 支持基线；未验收开发 Home 中的旧结构不自动构成迁移需求，优先使用新的隔离 Home，不据此扩展兼容代码。
+
+需要保留的受支持旧运行时配置（包括 Workspace `logger`、Gateway 生成器轮询字段及持久化配置版本）必须在服务停止后显式迁移。先运行 `uv run python -m configs.boxteam migrate-runtime-config --preview --migration-workspace /absolute/workspace`；可重复提供 `--migration-workspace` 检查多个明确工作区，再移除 `--preview` 执行迁移。有冲突时先核对预览，使用 `--level info --pretty true` 等参数明确选值。迁移同时处理配置文件、SQLite 来源与 active 快照，保存可恢复备份，不会顺便激活待生效业务配置；未结算候选须先由原 owner 处理。中断后重跑同一迁移，或用 `--restore` 恢复原件；回退旧软件前先恢复配置，后续已产生新配置事实时恢复 CAS 会拒绝覆盖。历史日志原地保留，运行期不双读旧字段。
 
 ## 工作区 API 的显式身份
 

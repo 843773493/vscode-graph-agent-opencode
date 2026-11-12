@@ -4,5 +4,5 @@ from __future__ import annotations
 
 from app.core.sqlite_state import load_sql
 
-ASSEMBLY_REF_SCHEMA_SQL = load_sql(__package__, "sql/assembly_refs.sql")
-ASSEMBLY_REF_THREAD_MIGRATION_SQL = load_sql(__package__, "sql/assembly_refs_018_019.sql")
+ASSEMBLY_REF_SCHEMA_SQL = load_sql(__package__, "migrations/assembly_refs.sql")
+ASSEMBLY_REF_THREAD_MIGRATION_SQL = load_sql(__package__, "migrations/assembly_refs_018_019.sql")

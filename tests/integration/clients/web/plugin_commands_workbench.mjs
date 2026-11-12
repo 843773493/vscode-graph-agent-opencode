@@ -149,7 +149,9 @@ try {
   receipt.phase = 'menu';
   await editor.click({ button: 'right' });
   const menu = page.getByRole('menuitem').filter({ hasText: '命令验收：执行' });
-  await expect(menu).toBeVisible(); await menu.click();
+  await expect(menu).toBeVisible();
+  await menu.press('Enter');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Alt+Shift+9' : 'Control+Alt+Shift+9');
   await expect.poll(countExecutions).toBe(4 + extraExecutions);
   assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/events')).length, 2);
 

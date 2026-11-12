@@ -8,7 +8,7 @@ export function cloneMaps(state: AppState): AppState {
     pendingConversations: new Map(state.pendingConversations),
     activeJobIdsBySession: new Map(state.activeJobIdsBySession),
     unreadSessionKeys: new Set(state.unreadSessionKeys),
-    gatewayUserViewStates: new Map(state.gatewayUserViewStates),
+    sessionViewStates: new Map(state.sessionViewStates),
     sessionAttachmentSummaries: new Map(state.sessionAttachmentSummaries),
     sessionsByWorkspace: new Map(state.sessionsByWorkspace),
     sessionGatewayWorkspaceById: new Map(state.sessionGatewayWorkspaceById),

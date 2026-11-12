@@ -10,14 +10,15 @@ import WorkspaceRuntimePreviewArea from "../../workspace/WorkspaceRuntimePreview
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 
 /** 工作区 Browser 入口；资源行、预览与权威控制器均和现有产品共用。 */
-export function BrowserContent({ controller, workspaceId, currentThread, renderToolbar }: {
+export function BrowserContent({ controller, workspaceId, currentThread, selectedId, onSelect, renderToolbar }: {
   controller: WorkspaceResourcesController;
   workspaceId: string;
   currentThread: ResourceThreadRef | null;
+  selectedId: string | null;
+  onSelect: (resourceId: string | null) => void;
   renderToolbar: (tools: ReactNode) => ReactNode;
 }) {
   const confirm = useWarmConfirm();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [retention, setRetention] = useState<"thread" | "workspace">("workspace");
   const selected = controller.items.find(item => item.resource_id === selectedId);
@@ -40,7 +41,7 @@ export function BrowserContent({ controller, workspaceId, currentThread, renderT
   const create = async () => {
     if (!currentThread) throw new Error("新建浏览器需要明确的会话与 Thread");
     setNotice(null);
-    try { setSelectedId((await controller.create(currentThread, retention)).resource_id); }
+    try { onSelect((await controller.create(currentThread, retention)).resource_id); }
     catch { /* 控制器已显示创建错误并重读清单。 */ }
   };
 
@@ -54,6 +55,9 @@ export function BrowserContent({ controller, workspaceId, currentThread, renderT
       <button type="button" disabled={!currentThread || controller.mutating} onClick={() => void create()}>新建浏览器</button>
     </>)}
     {controller.error || notice ? <p role="alert" className="resource-notice is-error">{controller.error ?? notice}</p> : null}
+    {selectedId && !selected && !controller.loading ? <p role="alert">所选浏览器已不存在：{selectedId}</p> : null}
+    {selected?.retention_scope === "thread" && selected.status === "running" && selected.reconciliation_status === "verified" && !preview
+      ? <p role="status">临时浏览器仅可在已关联的会话线程中连接；选择资源不会自动关联或启动它。</p> : null}
     <div className="workspace-browser-content">
       <div className="resource-tree workspace-browser-list" role="tree" aria-label="当前工作区浏览器列表">
         {controller.items.map(resource => <ResourceTreeRow key={resource.resource_id} resource={workspaceResourceDisplay(resource)}
@@ -67,11 +71,11 @@ export function BrowserContent({ controller, workspaceId, currentThread, renderT
             && !resource.thread_associations.some(ref => ref.session_id === currentThread.session_id && ref.thread_id === currentThread.thread_id)
             && (resource.retention_scope === "workspace" || (resource.source_thread?.session_id === currentThread.session_id && resource.source_thread.thread_id === currentThread.thread_id)))}
           onCopy={id => { void copyTextToClipboard(id).catch(cause => setNotice(errorMessage(cause))); }}
-          onOpenBrowser={setSelectedId} onOpenTerminal={() => { throw new Error("Browser 面板不能打开终端"); }}
+          onOpenBrowser={onSelect} onOpenTerminal={() => { throw new Error("Browser 面板不能打开终端"); }}
           onReplaceBrowser={currentThread ? () => void create() : undefined} />)}
         {!controller.loading && !controller.items.length ? <p>当前工作区还没有浏览器。</p> : null}
       </div>
-      {preview ? <WorkspaceRuntimePreviewArea tab={preview} onClose={async () => setSelectedId(null)} /> : null}
+      {preview ? <WorkspaceRuntimePreviewArea tab={preview} onClose={async () => onSelect(null)} /> : null}
     </div>
   </section>;
 }

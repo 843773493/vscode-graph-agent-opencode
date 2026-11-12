@@ -4,7 +4,7 @@
 
 ## 职责树
 
-按配置从来源到应用的流程查找文件；`sql/` 子目录的表结构和迁移由自己的 `AGENTS.md` 说明。
+按配置从来源到应用的流程查找文件；`migrations/` 子目录的表结构和迁移由自己的 `AGENTS.md` 说明。
 
 ```text
 app/services/infrastructure/config/
@@ -31,7 +31,7 @@ app/services/infrastructure/config/
 │   └── session_defaults.py 会话默认 Agent 和 Provider 的持久化
 ├── 影子生命周期适配
 │   └── shadow_adapter.py   将影子配置生命周期接入宿主
-└── sql/                    Source owner 表结构与旧列迁移
+└── migrations/                    Source owner 表结构与旧列迁移
 ```
 
 # 可修改内容
@@ -63,5 +63,5 @@ app/services/infrastructure/config/
 - 会话默认值文件必须校验可解析、是对象且 schema 版本匹配；损坏或过期文件直接报错，不得静默回落默认值。
 - 重载状态协作者只接收快照状态的叶子提供者（无参、返回不可变 `ConfigReloadStatus`），不得注入 `ConfigSnapshotStore`，以免把候选快照构建反向拖入本目录。
 - 重载状态聚合不得抹掉快照基底的 `healthy`/`reason`/`last_error`，叠加 active/pending 只能补充字段。
-- `sql/` 保存 source owner 的结构和旧列迁移；连接、条件判断、事务协调留在 Python。
+- `migrations/` 保存 source owner 的结构和旧列迁移；连接、条件判断、事务协调留在 Python。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

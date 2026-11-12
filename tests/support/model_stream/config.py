@@ -28,7 +28,7 @@ class ModelStreamReplay:
 
 @contextmanager
 def model_stream_replay(
-    output_root: Path, *, runtime_root: Path, business_assertion: str,
+    artifacts_dir: Path, *, runtime_root: Path, business_assertion: str,
 ) -> Iterator[ModelStreamReplay]:
     """管理业务测试共用的精确回放资产、配置与控制端生命周期。"""
     fixture_root = runtime_root / "model-stream-fixture"
@@ -51,10 +51,11 @@ def model_stream_replay(
         control.bind_cassette(cassette_path)
         config = prepare_e2e_model_stream_config(
             Path.cwd() / "configs/tests/model_stream/model_stream_web_basic_chat_tool_loop.jsonc",
-            output_root=output_root, exact_fixture_root=fixture_root,
+            runtime_root=runtime_root, artifacts_dir=artifacts_dir,
+            exact_fixture_root=fixture_root,
         )
         control.start()
-        yield ModelStreamReplay(control, config, output_root / "artifacts/model-stream")
+        yield ModelStreamReplay(control, config, artifacts_dir / "model-stream")
     finally:
         control.close()
 
@@ -68,15 +69,12 @@ def _object(value: object, *, label: str) -> dict[str, object]:
 def prepare_e2e_model_stream_config(
     source_path: Path | str,
     *,
-    output_root: Path | str,
+    runtime_root: Path,
+    artifacts_dir: Path,
     mode: str | None = None,
     exact_fixture_root: Path | None = None,
 ) -> Path:
-    """为单个 E2E 文件生成带运行时覆盖的 model stream 配置。
-
-    原始 JSONC 只提供场景和 transport 基线；生成的配置属于当前测试文件，
-    录制产物固定写入该文件的正式 artifacts 目录，不自动复制到长期 fixture。
-    """
+    """配置及录制产物归调用方的运行目录，不改写源配置或长期 fixture。"""
 
     source = Path(source_path).expanduser().resolve()
     config = read_jsonc_object(source)
@@ -104,8 +102,7 @@ def prepare_e2e_model_stream_config(
         transport.get("recording", {}),
         label="model_stream.transport.recording",
     )
-    output = Path(output_root).expanduser().resolve()
-    recording["artifact_root"] = str(output / "artifacts" / "model-stream")
+    recording["artifact_root"] = str((artifacts_dir / "model-stream").resolve())
     transport["recording"] = recording
 
     raw_schema = config.get("$schema")
@@ -117,10 +114,10 @@ def prepare_e2e_model_stream_config(
             f"model stream 配置 schema 不存在: config={source} schema={schema_source}"
         )
 
-    runtime_root = output / "runtime" / "model-stream-config"
-    runtime_root.mkdir(parents=True, exist_ok=True)
-    runtime_schema = runtime_root / "model_stream_schema.jsonc"
-    runtime_config = runtime_root / "model_stream.jsonc"
+    config_root = runtime_root / "model-stream-config"
+    config_root.mkdir(parents=True, exist_ok=True)
+    runtime_schema = config_root / "model_stream_schema.jsonc"
+    runtime_config = config_root / "model_stream.jsonc"
     shutil.copyfile(schema_source, runtime_schema)
     config["$schema"] = runtime_schema.name
     runtime_config.write_text(

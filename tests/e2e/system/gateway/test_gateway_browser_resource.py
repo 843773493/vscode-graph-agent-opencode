@@ -42,7 +42,6 @@ from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     reset_gateway_user_configuration,
@@ -832,7 +831,6 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             workspace_response = await client.get("/api/gateway/workspaces")
             assert workspace_response.status_code == 200, workspace_response.text
             assert remote_workspace_path not in workspace_response.text
@@ -1048,7 +1046,6 @@ async def test_gateway_routes_remote_browser_and_terminal_services(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as restarted_client:
-            await acquire_gateway_guest(restarted_client)
             restored_response = await restarted_client.get(
                 f"/api/v1/resources/{browser_id}",
                 headers=remote_headers,

@@ -1,9 +1,11 @@
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { packagingSource } from "./source-policy.mjs";
 
 const projectRoot = path.resolve(
   process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd(),
 );
+packagingSource(projectRoot);
 
 for (const script of ["build-linux-x64.mjs", "verification/verify-linux-x64.mjs"]) {
   const result = spawnSync(

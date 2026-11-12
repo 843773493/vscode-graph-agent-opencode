@@ -1,4 +1,4 @@
-import { commandForCurrentPlatform } from "./process.mjs";
+import crossSpawn from "cross-spawn";
 
 export function windowsGitSshArguments([settingsJson, destination, remoteCommand]) {
   const { options, destination: expectedDestination, repository } = JSON.parse(settingsJson);
@@ -13,18 +13,11 @@ export function windowsGitSshArguments([settingsJson, destination, remoteCommand
   return ["ssh", ...options, destination, `git-receive-pack "${repository}"`];
 }
 
-export function windowsGitSshCommand(argumentsList, platform = process.platform) {
-  return commandForCurrentPlatform(
-    windowsGitSshArguments(argumentsList),
-    platform,
-  );
-}
-
 if (import.meta.main) {
   // 原样继承二进制 Git 协议流，不能通过文本解码或 PowerShell pipeline 中转。
-  const result = Bun.spawnSync(windowsGitSshCommand(process.argv.slice(2)), {
-    stdin: "inherit", stdout: "inherit", stderr: "inherit",
-  });
-  if (result.signalCode) throw new Error(`Windows Git SSH 被信号终止: ${result.signalCode}`);
-  process.exit(result.exitCode);
+  const [command, ...args] = windowsGitSshArguments(process.argv.slice(2));
+  const result = crossSpawn.sync(command, args, { stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.signal) throw new Error(`Windows Git SSH 被信号终止: ${result.signal}`);
+  process.exit(result.status);
 }

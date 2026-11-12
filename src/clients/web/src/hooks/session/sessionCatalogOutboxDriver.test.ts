@@ -31,7 +31,7 @@ const BACKEND_WORKSPACE_ID = "ca3f2988-8632-4b4b-bcba-055e6f3d8a21";
 const PARTITION = {
   gatewayId: "gateway-test",
   workspaceId: BACKEND_WORKSPACE_ID,
-  principal: "guest",
+  principal: "local",
 };
 const PARTITION_KEY = `${PARTITION.gatewayId}\u0000${PARTITION.workspaceId}\u0000${PARTITION.principal}`;
 const WORKSPACE_TARGET: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: BACKEND_WORKSPACE_ID };
@@ -1380,7 +1380,7 @@ describe("会话目录 outbox 驱动：分区广播", () => {
   });
 });
 
-describe("会话目录 outbox 驱动：身份切换 fence", () => {
+describe("会话目录 outbox 驱动：停止时的取消边界", () => {
   test("deactivate 中止在途请求并拒绝迟到回包与后续操作", async () => {
     const enqueueStarted = deferred<void>();
     const enqueueResult = deferred<SessionCatalogEnqueueResult>();
@@ -1513,7 +1513,7 @@ describe("会话目录失败对账的派发边界", () => {
     expect(driver.current().operations).toEqual([]);
   });
 
-  test("身份切换取消失败刷新，迟到 owner 不得清理持久 pending", async () => {
+  test("停止 driver 取消失败刷新，迟到 owner 不得清理持久 pending", async () => {
     const persistence = recordingPort();
     const refreshing = deferred();
     const release = deferred();

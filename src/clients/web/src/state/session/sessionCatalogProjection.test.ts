@@ -19,7 +19,7 @@ import {
 } from "./sessionCatalogProjection";
 import type { SessionCatalogOperationReceipt } from "../../api/session/sessionCatalogOperations";
 
-const PARTITION = { gatewayId: "local:8014", workspaceId: "workspace-1", principal: "guest" };
+const PARTITION = { gatewayId: "local:8014", workspaceId: "workspace-1", principal: "local" };
 
 function opId(suffix: string): string {
   return `op_${suffix.padStart(32, "0")}`;

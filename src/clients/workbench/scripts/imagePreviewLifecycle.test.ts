@@ -8,7 +8,7 @@ import { Emitter } from '../upstream/src/vs/base/common/event.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { FileChangeType } from '../upstream/src/vs/platform/files/common/files.js';
-import { invalidateGatewayUserSession, onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
+import { invalidateGatewayToken, onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import { pinnedUpstreamCommit, sourceTransform } from './sourceTransform.mjs';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
@@ -72,7 +72,7 @@ class ImagePreviewEditor extends EditorPane {
   ${editorMembers.map(node => node.getText()).join('\n')}
 }`, 'ImagePreviewEditor', { EditorPane: Pane, DisposableStore, MutableDisposable, Emitter, RunOnceScheduler,
   toDisposable, FileChangeType: { UPDATED: FileChangeType.UPDATED, ADDED: FileChangeType.ADDED, DELETED: FileChangeType.DELETED },
-  ImagePreviewEditorInput: Input, onGatewayUserSessionInvalidated,
+  ImagePreviewEditorInput: Input, onGatewayTokenInvalidated,
   isGitLfsPointer: async () => false, getMediaMime: () => 'image/png',
   localize: (_key: string, value: string, ...args: unknown[]) => value.replace(/\{(\d+)\}/g, (_match, index: string) => String(args[Number(index)])),
 });
@@ -126,19 +126,20 @@ for (const decoding of [false, true]) test(`身份失效撤销原 Pane ${decodin
   expect(f.decodes).toHaveLength(1);
   if (!decoding) { f.decodes[0]!.resolve(); await loading; }
   expect(f.viewer._image.src).toBe(decoding ? '' : 'blob:image-1');
-  invalidateGatewayUserSession(8015);
+
   expect(f.watches()).toBe(1);
   expect(f.revokeUrl).not.toHaveBeenCalled();
-  invalidateGatewayUserSession(0);
+
+  invalidateGatewayToken(0);
   expect(f.viewer._image.src).toBe('');
   expect(f.editor.fileSize).toBeUndefined();
-  expect(f.editor._message.label.textContent).toContain('身份已改变');
+  expect(f.editor._message.label.textContent).toContain('访问凭据已改变');
   expect(f.watches()).toBe(0);
   expect(f.revokeUrl.mock.calls).toEqual([['blob:image-1']]);
   f.decodes[0]!.resolve();
   await loading;
   expect(f.viewer._image.src).toBe('');
-  expect(f.editor._message.label.textContent).toContain('身份已改变');
+  expect(f.editor._message.label.textContent).toContain('访问凭据已改变');
   expect(f.revokeUrl).toHaveBeenCalledTimes(1);
   // 已撤销 input 不接受 watcher 的自动重读。
   f.changes.fire({ contains: () => true });
@@ -150,7 +151,7 @@ test('迟到解码和旧 input 释放不覆盖新图，关闭后身份事件无�
   const f = fixture();
   const oldLoad = f.load();
   await flush();
-  invalidateGatewayUserSession(0);
+
   const nextLoad = f.load(new Input(f.input.resource.with({ path: '/workspace/root/next.png' })));
   await flush();
   f.decodes[1]!.resolve();
@@ -167,7 +168,8 @@ test('迟到解码和旧 input 释放不覆盖新图，关闭后身份事件无�
   const listener = { changed() {} };
   const changed = spyOn(listener, 'changed');
   const release = f.editor.onDidChangeImageInfo(changed);
-  invalidateGatewayUserSession(0);
+
+  invalidateGatewayToken(0);
   expect(changed).not.toHaveBeenCalled();
   release.dispose();
   expect(f.watches()).toBe(0);
@@ -179,7 +181,8 @@ test('原生文件不订阅工作区身份，保持原图片行为', async () =>
   await flush();
   f.decodes[0]!.resolve();
   await loading;
-  invalidateGatewayUserSession(0);
+
+  invalidateGatewayToken(0);
   expect(f.viewer._image.src).toBe('blob:image-1');
   expect(f.editor.fileSize).toBe(1);
   expect(f.watches()).toBe(1);
@@ -195,13 +198,14 @@ test('身份失效期间读盘迟到完成，不进入 Blob 或解码阶段', as
   const loading = f.load();
   await flush();
   expect(f.read).toHaveBeenCalledTimes(1);
-  invalidateGatewayUserSession(0);
+
+  invalidateGatewayToken(0);
   content.resolve({ value: { buffer: new Uint8Array([2]) }, size: 1 });
   await loading;
   expect(f.createUrl).not.toHaveBeenCalled();
   expect(f.decodes).toHaveLength(0);
   expect(f.viewer._image.src).toBe('');
-  expect(f.editor._message.label.textContent).toContain('身份已改变');
+  expect(f.editor._message.label.textContent).toContain('访问凭据已改变');
 });
 
 test('切换 input 立即释放未完成解码的 URL，迟到完成只保留新图', async () => {

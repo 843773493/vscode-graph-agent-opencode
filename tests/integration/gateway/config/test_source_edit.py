@@ -81,7 +81,6 @@ def source_gateway(request: pytest.FixtureRequest, integration_workspace_root_pa
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=10, trust_env=False,
         ))
-        client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}).raise_for_status()
         yield SourceGateway(client, workspace.parent / "boxteam-home/config", context.artifacts_dir)
 
 
@@ -89,10 +88,10 @@ def test_source_writer_and_watcher_share_active_events_and_native_files(source_g
     case = source_gateway
     before = case.document(SOURCE)
     assert case.document("inline:0")["writable"] is False
-    local, _ = case.edit(LOCAL, '{"ui":{"theme":{"default_theme_id":"green"}}}', "local-green")
+    local, _ = case.edit(LOCAL, '{"logging":{"runtime":{"level":"warning"}}}', "local-green")
     # 原修订序列由 pending 与 active 共用，接纳和 promotion 各分配一次。
     assert local["edit"]["state"] == "active" and local["active_revision"] == before["active_revision"] + 2
-    source_text = '{ // 用户来源被 local 遮蔽\n "ui":{"theme":{"default_theme_id":"blue"}},\n}\n'
+    source_text = '{ // 用户来源被 local 遮蔽\n "logging":{"runtime":{"level":"debug"}},\n}\n'
     shadowed, original = case.edit(SOURCE, source_text, "shadowed-user")
     assert shadowed["edit"]["state"] == "active"
     assert shadowed["active_revision"] == local["active_revision"]
@@ -109,7 +108,7 @@ def test_source_writer_and_watcher_share_active_events_and_native_files(source_g
     while time.monotonic() < deadline:
         document = case.document(LOCAL)
         observations.append(document)
-        if document["file_presence"] == "absent" and document["layer_digest"] is None and document["effective"]["ui"]["theme"]["default_theme_id"] == "blue":
+        if document["file_presence"] == "absent" and document["layer_digest"] is None and document["effective"]["logging"]["runtime"]["level"] == "debug":
             break
         time.sleep(0.05)
     else:

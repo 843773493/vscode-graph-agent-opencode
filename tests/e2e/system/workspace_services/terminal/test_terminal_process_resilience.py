@@ -183,7 +183,7 @@ async def test_pty_worker_crash_is_isolated_and_shell_is_reaped(
             terminal_id = str(terminal["terminal_id"])
             shell_pid = int(terminal["os_pid"])
             worker_pid = int(terminal["pty_worker_pid"])
-            assert worker_pid not in {process.pid, shell_pid}
+            assert worker_pid not in {service.process.pid, shell_pid}
             survivor_response = await client.post(
                 "/api/terminals",
                 json={
@@ -243,7 +243,7 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
         artifacts_dir=terminal_run_context.artifacts_dir,
     )
     try:
-        initial_children = _direct_child_pids(process.pid)
+        initial_children = _direct_child_pids(service.process.pid)
         async with httpx.AsyncClient(
             base_url=service.http_url,
             headers=service.headers,
@@ -268,10 +268,10 @@ async def test_failed_terminal_start_rolls_back_session_and_worker(
             assert terminals == []
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
-                if _direct_child_pids(process.pid) == initial_children:
+                if _direct_child_pids(service.process.pid) == initial_children:
                     break
                 await asyncio.sleep(0.05)
-            assert _direct_child_pids(process.pid) == initial_children
+            assert _direct_child_pids(service.process.pid) == initial_children
             (await client.get("/health")).raise_for_status()
     finally:
         stop_terminal_plugin_service(service)
@@ -396,7 +396,7 @@ async def test_websocket_reconnect_replays_only_unacknowledged_output(
             initial_sequence = int(terminal["sequence"])
             websocket_url = service.websocket_url + f"?workspace_id={workspace_id}"
 
-            async with websockets.connect(websocket_url) as websocket:
+            async with websockets.connect(websocket_url, additional_headers=service.headers) as websocket:
                 await websocket.send(
                     json.dumps(
                         {
@@ -436,7 +436,7 @@ async def test_websocket_reconnect_replays_only_unacknowledged_output(
             else:
                 raise TimeoutError("断线期间的终端输出未写入缓冲")
 
-            async with websockets.connect(websocket_url) as websocket:
+            async with websockets.connect(websocket_url, additional_headers=service.headers) as websocket:
                 await websocket.send(
                     json.dumps(
                         {
@@ -529,8 +529,8 @@ async def test_manager_sigkill_reaps_terminal_and_term_resistant_descendant(
             assert descendant_pid > 0
             assert process_exists(descendant_pid)
 
-        process.kill()
-        process.wait(timeout=5)
+        service.process.kill()
+        service.process.wait(timeout=5)
         wait_process_gone(worker_pid)
         wait_process_gone(shell_pid)
         wait_process_gone(descendant_pid)
@@ -756,8 +756,8 @@ async def test_shutdown_persist_failure_still_exits_manager(
 
         manager_path.rename(backup_path)
         manager_path.write_text("阻止状态目录写入", encoding="utf-8")
-        process.send_signal(signal.SIGTERM)
-        assert process.wait(timeout=10) != 0
+        service.process.send_signal(signal.SIGTERM)
+        assert service.process.wait(timeout=10) != 0
     finally:
         if manager_path.is_file():
             manager_path.unlink()

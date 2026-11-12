@@ -114,10 +114,11 @@ try {
   page = await context.newPage();
   page.on("pageerror", error => facts.pageErrors.push(String(error)));
   await openWorkbench(page, baseUrl);
-  const credential = await context.request.get(new URL("/api/gateway/auth/local-credential", baseUrl).href);
-  assert.equal(credential.status(), 200);
-  token = (await credential.json()).data.token;
-  await credential.dispose();
+  token = await page.evaluate(async () => {
+    const response = await fetch('/api/gateway/auth/local-credential');
+    if (!response.ok) throw new Error(`本机凭据读取失败：${response.status}`);
+    return (await response.json()).data.token;
+  });
   const registry = await api("/api/gateway/workspaces");
   const active = registry.active_workspace;
   const workspaceOwner = { gatewayId: active.gateway_id, workspaceId: active.workspace_id };

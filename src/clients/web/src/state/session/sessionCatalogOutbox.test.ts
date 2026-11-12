@@ -23,7 +23,7 @@ import type { SessionCatalogOperationReceipt } from "../../api/session/sessionCa
 const LOCAL_PARTITION = {
   gatewayId: "local:8014",
   workspaceId: "workspace-1",
-  principal: "guest",
+  principal: "local",
 };
 
 function opId(suffix: string): string {
@@ -82,10 +82,10 @@ function operation(outbox: CatalogOutbox, operationId: string): CatalogOutboxOpe
 describe("会话目录 outbox 分区键", () => {
   test("按 gateway/workspace/principal 三元组隔离，不同分区绝不互相串键", () => {
     const base = catalogOutboxPartitionKey(LOCAL_PARTITION);
-    expect(base).toBe("local:8014\u0000workspace-1\u0000guest");
+    expect(base).toBe("local:8014\u0000workspace-1\u0000local");
     expect(catalogOutboxPartitionKey({ ...LOCAL_PARTITION, workspaceId: "workspace-2" }))
       .not.toBe(base);
-    expect(catalogOutboxPartitionKey({ ...LOCAL_PARTITION, principal: "user_a" }))
+    expect(catalogOutboxPartitionKey({ ...LOCAL_PARTITION, principal: "user:retired" }))
       .not.toBe(base);
     expect(catalogOutboxPartitionKey({ ...LOCAL_PARTITION, gatewayId: "gw_remote" }))
       .not.toBe(base);

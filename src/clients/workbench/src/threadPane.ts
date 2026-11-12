@@ -16,10 +16,12 @@ import { ThreadInput, UnavailableThreadInput } from './threadInput.js';
 import { ChatSurface } from './react/chatView.js';
 import { showFileOpenMenu } from './fileOpenMenu.js';
 import './thread.css';
-import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { LLMRequestLogMatchDTO, TraceMatchDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+
+import type { TurnNavigationTarget } from "../../web/src/api/session/sessionTurnHistory.js";
 
 export interface ThreadEditorOptions extends IEditorOptions {
-  boxteamMessage?: TurnMessageMatchDTO;
+  boxteamMessage?: TurnNavigationTarget;
   boxteamRequestLog?: LLMRequestLogMatchDTO;
   boxteamTrace?: TraceMatchDTO;
 }
@@ -28,8 +30,6 @@ export interface ThreadEditorOptions extends IEditorOptions {
 export class ThreadPane extends EditorPane {
   static readonly ID = 'boxteam.editor.threadPane';
   private root!: HTMLElement;
-  private content!: HTMLElement;
-  private toggle!: HTMLButtonElement;
   private conversation?: ChatSurface;
   private current?: ThreadInput;
   get threadTarget(): { input: ThreadInput; conversation: ChatSurface } | undefined {
@@ -49,19 +49,7 @@ export class ThreadPane extends EditorPane {
 
   protected override createEditor(parent: HTMLElement): void {
     this.root = document.createElement('section'); this.root.className = 'boxteam-thread';
-    const toolbar = document.createElement('header'); toolbar.className = 'boxteam-thread-toolbar';
-    this.toggle = document.createElement('button'); this.toggle.type = 'button';
-    this.toggle.className = 'codicon codicon-layout-sidebar-right';
-    this.toggle.title = '切换会话资源'; this.toggle.setAttribute('aria-label', '切换会话资源');
-    this.toggle.onclick = () => {
-      if (!this.current) return;
-      this.current.resourcesVisible = !this.current.resourcesVisible;
-      this.toggle.setAttribute('aria-expanded', String(this.current.resourcesVisible));
-      this.conversation?.update();
-    };
-    toolbar.append(this.toggle);
-    this.content = document.createElement('div'); this.content.className = 'boxteam-thread-body';
-    this.root.append(toolbar, this.content); parent.append(this.root);
+    parent.append(this.root);
   }
   override async setInput(input: EditorInput, options: ThreadEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
     this.conversation?.dispose(); this.conversation = undefined; this.current = undefined;
@@ -76,10 +64,7 @@ export class ThreadPane extends EditorPane {
     if (options?.viewState) input.restoreViewState({ ...input.getViewState(), ...options.viewState });
     this.root.dataset.threadId = input.owner.threadId; this.root.dataset.sessionId = input.owner.sessionId;
     this.root.dataset.workspaceId = input.owner.workspaceId;
-    this.toggle.setAttribute('aria-expanded', String(input.resourcesVisible));
-    this.conversation = new ChatSurface(this.content, input, this.editors, this.isVisible(), () => {
-      this.toggle.setAttribute('aria-expanded', String(input.resourcesVisible));
-    }, (path, anchor) => showFileOpenMenu(path, anchor, input.owner,
+    this.conversation = new ChatSurface(this.root, input, this.editors, this.isVisible(), (path, anchor) => showFileOpenMenu(path, anchor, input.owner,
       this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications);
     if (options?.boxteamMessage) this.conversation.revealMessage(options.boxteamMessage);
     if (options?.boxteamRequestLog) this.conversation.revealRequestLog(options.boxteamRequestLog);
@@ -90,7 +75,6 @@ export class ThreadPane extends EditorPane {
     if (!this.current) return;
     if (options?.viewState) {
       this.current.restoreViewState({ ...this.current.getViewState(), ...options.viewState });
-      this.toggle.setAttribute('aria-expanded', String(this.current.resourcesVisible));
       this.conversation?.update();
     }
     if (options?.boxteamMessage) this.conversation?.revealMessage(options.boxteamMessage);

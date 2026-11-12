@@ -99,9 +99,6 @@ describe("Turn 消息流空闲超时", () => {
       if (url.includes("/auth/local-credential")) {
         return Response.json({ data: { token: "thread-snapshot" }, request_id: "req_thread" });
       }
-      if (url.includes("/users/current")) {
-        return Response.json({ data: { kind: "guest", user_id: null }, request_id: "req_thread" });
-      }
       requests.push(url);
       return Response.json({ request_id: "req_snapshot", data: {
         session_id: "ses_message_test", thread_id: "thr_sibling", turn_id: "turn_message_test",

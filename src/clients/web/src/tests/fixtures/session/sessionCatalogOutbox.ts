@@ -76,13 +76,10 @@ export function createSessionCatalogOutboxTestRuntime(options: {
 
   const openWorkspace: SessionCatalogOutboxRuntime["openWorkspace"] = async (
     workspaceTarget,
-    access,
+
   ) => {
     const gatewayWorkspaceId = gatewayWorkspaceKey(workspaceTarget);
-    const principal = access.kind === "guest"
-      ? "guest"
-      : access.user_id ? `user:${access.user_id}` : "";
-    if (!principal) throw new Error("测试 outbox 缺少认证主体");
+    const principal = "local";
     const scope = `${gatewayWorkspaceId}\u0000${principal}`;
     const existing = handles.get(scope);
     if (existing) return existing;
@@ -162,11 +159,11 @@ export function createSessionCatalogOutboxTestRuntime(options: {
 
   const submit: SessionCatalogOutboxRuntime["submit"] = async (
     workspaceTarget,
-    access,
+
     intent,
     intentOptions,
   ) => {
-    const handle = await openWorkspace(workspaceTarget, access);
+    const handle = await openWorkspace(workspaceTarget);
     const operationId = `test_catalog_operation_${nextOperationId++}`;
     submitted.push({ workspaceId: gatewayWorkspaceKey(workspaceTarget), intent, options: intentOptions });
     const { dispatch } = await handle.driver.applyIntent(operationId, intent, intentOptions);
@@ -201,8 +198,8 @@ export function createSessionCatalogOutboxTestRuntime(options: {
   };
 
   const runtime: SessionCatalogOutboxRuntime = {
-    registerFailureOwner(access, owner) {
-      const principal = access.kind === "guest" ? "guest" : `user:${access.user_id}`;
+    registerFailureOwner(owner) {
+      const principal = "local";
       const owners = failureOwners.get(principal) ?? new Set<SessionCatalogFailureOwner>();
       owners.add(owner);
       failureOwners.set(principal, owners);
@@ -227,7 +224,6 @@ export function createSessionCatalogOutboxTestRuntime(options: {
     reportError(message) {
       errors.push(message);
     },
-    activatePrincipal() {},
     dispose() { failureOwners.clear(); },
   };
 

@@ -27,7 +27,7 @@ describe("开发服务日志捕获的归属", () => {
         // 执行真实环境组装表达式；ready文件只表示生命周期就绪，不证明stdio已被捕获。
         const forwarded = vm.runInNewContext(`(${mainEnvironment.initializer.getText(parsed)})`, {
           process: { env: environment, execPath: "fixture-bun" }, path,
-          runtimeManifest: "fixture-manifest", boxteamHome: "fixture-home", projectRoot: process.cwd(),
+          runtimeManifest: "fixture-manifest", boxteamHome: "fixture-home", projectRoot: process.cwd(), frontendRoot: process.cwd(),
           pythonBin: "fixture-python", nodeBin: "fixture-node", defaultWorkspaceRoot: "fixture-workspace",
           portOffset: 0, ports: {}, listenHost: "127.0.0.1", host: "127.0.0.1",
           detachedReadyFile: readyFile, SERVICE_LOG_CAPTURED_ENV: "BOXTEAM_SERVICE_LOG_CAPTURED",

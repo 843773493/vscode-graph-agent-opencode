@@ -6,6 +6,8 @@ import { expect } from "playwright/test";
 import { testControl } from "../../../support/e2e_control/browser_client.mjs";
 import { webSelectors } from "../../../clients/selectors/web-selectors.mjs";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
+import { Perf } from "../../../harness/js/performance.mjs";
+import { observePage } from "../../../harness/js/browser-performance.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -64,23 +66,9 @@ async function waitUntil(predicate, label, timeout = 30_000) {
   throw new Error(`等待${label}超时`);
 }
 
-async function ensureGuest(page) {
+async function openWorkbenchPage(page) {
   const target = new URL(baseUrl);
   await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  const current = await page.evaluate(async () => {
-    const response = await fetch("/api/gateway/users/current");
-    return { status: response.status, body: await response.text() };
-  });
-  if (current.status === 401) {
-    await api(page, "/api/gateway/users/guest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tracking: { source: "basic-chat-tool-loop" } }),
-    });
-    await page.reload({ waitUntil: "domcontentloaded" });
-  } else if (current.status !== 200) {
-    throw new Error(`检查游客访问失败: ${current.status} ${current.body}`);
-  }
 }
 
 function isSessionMessageRequest(request) {
@@ -577,6 +565,7 @@ async function verifyDeletionRefresh(page, owner, tabs) {
 }
 
 const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
+const perf = new Perf(runContext);
 let page;
 let executionError;
 const pageErrors = [];
@@ -592,6 +581,8 @@ try {
   });
   runContext.addCleanup("聊天 context", () => context.close());
   page = await context.newPage();
+  const observer = await observePage(page, perf, context);
+  if (observer.close) runContext.addCleanup("页面性能观察", () => observer.close());
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("response", (response) => {
     if (
@@ -612,7 +603,7 @@ try {
     }
   });
   result.phase = "gateway-bootstrap";
-  await ensureGuest(page);
+  await openWorkbenchPage(page);
   const gatewayId = requiredEnvironment("BOXTEAM_BROWSER_GATEWAY_ID");
   const workspaces = await api(page, "/api/gateway/workspaces");
   const workspaceId = expectedWorkspaceId;
@@ -670,6 +661,7 @@ try {
   );
   result.phase = "tab-lifecycle";
   const tabs = await verifyPreviewTabs(page, owner);
+  await observer.checkpoint("tabs.after_switches");
   result.tabs = tabs;
 
   result.phase = "navigation-clipboard-failure";
@@ -684,6 +676,7 @@ try {
     { timeout: 30_000 },
   );
   await composer.fill(userMessage);
+  const sendStarted = performance.now();
   await thread.locator(webSelectors.sendButton).click();
   const [sendRequest, sendResponse] = await Promise.all([
     sendRequestPromise,
@@ -701,6 +694,8 @@ try {
     throw new Error(`Composer 发送失败: HTTP ${sendResponse.status()}`);
   }
   const accepted = (await sendResponse.json()).data;
+  perf.record("end", "ui.send.accepted", { stage_id: crypto.randomUUID(), status: "passed", inclusive: true,
+    elapsed_ns: Math.round((performance.now() - sendStarted) * 1e6) });
   if (accepted.thread_id !== threadId) throw new Error("Composer acceptance Thread 归属不一致");
   const turnId = accepted?.turn_id;
   if (typeof turnId !== "string" || !turnId) {
@@ -720,6 +715,9 @@ try {
     "浏览器最终回复",
   );
   result.phase = "tool-details";
+  perf.record("end", "ui.send.final_visible", { stage_id: crypto.randomUUID(), status: "passed", inclusive: true,
+    elapsed_ns: Math.round((performance.now() - sendStarted) * 1e6) });
+  await observer.checkpoint("send.final_visible");
   const thinkingToggle = turn.getByRole("button", { name: /^展开 Turn 中间消息：/ });
   await thinkingToggle.waitFor({ state: "visible", timeout: 30_000 });
   await thinkingToggle.click();

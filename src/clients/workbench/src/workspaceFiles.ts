@@ -20,6 +20,8 @@ import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import { streamWorkspaceFileEvents } from '../../web/src/api/stream/workspaceFileEvents.js';
 import { getWorkspaceFileRoots, getWorkspaceFiles, getWorkspaceRawFileBlob } from '../../web/src/api/workspaceFilesystem.js';
+import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
+import { awaitWithAbort } from '../../web/src/utils/abortable.js';
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import { gateway, GatewayRequestError } from './agentApi.js';
 import { openWorkspaceFileIntentStore } from '../../web/src/state/workspaceFiles/intentStore.js';
@@ -294,15 +296,24 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     const range = options.position !== undefined || options.length !== undefined
       ? { start, end: options.length === undefined ? undefined : start + options.length - 1 } : undefined;
     const source = workspaceFileSource(resource);
-    const blob = await this.access(resource, workspaceKey => getWorkspaceRawFileBlob(0, source.path, workspaceKey, signal, range), signal);
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    signal?.throwIfAborted();
-    if (!range) {
-      // 复用后端 expected_revision 的原字节 SHA-256；不额外请求文本正文或重读磁盘。
-      const revision = encodeHex(VSBuffer.wrap(sha256(bytes)));
-      this.revisions.set(this.key(resource), revision);
-    }
-    return bytes;
+    const controller = new AbortController();
+    const reading = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    // raw 下载结束后仍须保护字节转换，失效或取消的结果不能交付或推进保存基线。
+    const release = onGatewayTokenInvalidated(0, () => controller.abort(
+      new DOMException('Gateway 凭据已失效，请重新读取文件', 'AbortError'),
+    ));
+    try {
+      const blob = await this.access(resource, workspaceKey => getWorkspaceRawFileBlob(0, source.path, workspaceKey, reading, range), reading);
+      reading.throwIfAborted();
+      const bytes = new Uint8Array(await awaitWithAbort(blob.arrayBuffer(), reading));
+      reading.throwIfAborted();
+      if (!range) {
+        // 复用后端 expected_revision 的原字节 SHA-256；不额外请求文本正文或重读磁盘。
+        const revision = encodeHex(VSBuffer.wrap(sha256(bytes)));
+        this.revisions.set(this.key(resource), revision);
+      }
+      return bytes;
+    } finally { release(); }
   }
   readFileStream(resource: URI, options: IFileReadStreamOptions, token: CancellationToken): ReadableStreamEvents<Uint8Array> {
     const stream = newWriteableStream<Uint8Array>(chunks => VSBuffer.concat(chunks.map(chunk => VSBuffer.wrap(chunk))).buffer);
@@ -316,6 +327,8 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     return stream;
   }
   async writeFile(resource: URI, bytes: Uint8Array, options: IFileWriteOptions): Promise<void> {
+    // 当前写入 owner 只接收 UTF-8 文本，先拒绝不支持的正文，避免先创建空文件。
+    const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     let expectedRevision = this.revisions.get(this.key(resource));
     let existsBeforeWrite = expectedRevision !== undefined;
     if (!expectedRevision || !options.overwrite) {
@@ -346,7 +359,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     }
     if (!expectedRevision) throw new Error('保存前未能建立后端 revision');
     try {
-      const file = await this.content(resource, { method: 'PUT', body: JSON.stringify({ content: new TextDecoder('utf-8', { fatal: true }).decode(bytes), expected_revision: expectedRevision }) });
+      const file = await this.content(resource, { method: 'PUT', body: JSON.stringify({ content, expected_revision: expectedRevision }) });
       this.revisions.set(this.key(resource), file.revision);
       this.changes.fire([{ resource, type: FileChangeType.UPDATED }]);
     } catch (error) {

@@ -2,39 +2,32 @@
 
 ## 当前源码布局
 
-产品级扩展工具说明统一维护在项目根目录 `resources/skills/`。每个目录代表一个可配置的 Skill 组，至少包含 `SKILL.md` 和该目录的 `AGENTS.md`：
+产品 Skill 按来源 owner 存放。随代码插件发布的 Browser、Debug 说明位于插件包 `resources/plugins/developer-tools/skills/`，并在插件 manifest 中声明；独立资源 `gateway-context` 和 `web-search-fetch` 位于项目根目录 `resources/skills/`：
 
 ```text
 resources/
-├── AGENTS.md
-└── skills/
-    ├── AGENTS.md
-    ├── browser-control/
-    │   ├── AGENTS.md
-    │   └── SKILL.md
-    ├── gateway-context/
-    │   ├── AGENTS.md
-    │   └── SKILL.md
-    ├── debugging/
-    │   ├── AGENTS.md
-    │   └── SKILL.md
-    └── web-search-fetch/
-        ├── AGENTS.md
-        └── SKILL.md
+├── skills/
+│   ├── gateway-context/SKILL.md
+│   └── web-search-fetch/SKILL.md
+└── plugins/developer-tools/
+    ├── plugin.jsonc
+    └── skills/
+        ├── browser-control/SKILL.md
+        └── debugging/SKILL.md
 ```
 
-`asset/` 是只读测试模板，不是产品 Skill 源码目录。扩展工具 E2E 测试创建隔离工作区时，会把 `resources/skills/` 下的共享 Skill 复制到目标工作区的 `/.boxteam/skills/`；模板自身只保留 `test-tool-2`、`large-test-output` 等测试专用 Skill。
+`asset/` 是只读测试模板，不是产品 Skill 源码目录。插件 Skill 不复制到工作区；Gateway 插件来源按原资源 URI 提供已安装包中的内容。测试应通过相应 owner 安装／启用插件并读取来源。工作区 `.boxteam/skills/` 只用于工作区自身的 Skill。
 
 ## 运行时加载链路
 
-Gateway 配置中的 `runtime.workspace.default_skill_groups` 是默认启用列表，默认值位于 `configs/gateway_inline.jsonc`。Gateway 启动或重启受管 Workspace 时，将列表序列化到 `BOXTEAM_DEFAULT_SKILL_GROUPS` 环境变量；Workspace Agent 运行时解析该变量，并把对应发行包资源挂载为只读的 `/.boxteam/bundled-skills/`。
+Gateway 配置中的 `runtime.workspace.default_skill_groups` 仅选择根目录 `resources/skills/` 中的内置资源组，默认值位于 `configs/gateway_inline.jsonc`。Gateway 启动或重启受管 Workspace 时，将列表序列化到 `BOXTEAM_DEFAULT_SKILL_GROUPS`；Workspace Agent 解析该列表。插件 Skill 由插件配置 owner 发布到现有 Gateway Skill 来源，不经过 bundled group，也不复制到 Workspace。
 
 Skill source 的优先级从低到高为：
 
-1. `/.boxteam/bundled-skills/`：发行包共享资源，只读，由 Gateway 配置选择组。
-2. `/.boxteam/skills`：当前工作区资源，可覆盖同名共享 Skill，并承载工作区专用 Skill。
+1. `/.boxteam/skills`：当前工作区资源。
+2. Gateway、network 与 inline 来源由现有 Skill catalog 读取和解析；插件 URI 由原 Gateway 插件资源 owner 提供。
 
-这两个虚拟路径都由 `app/agents/workspace_backend.py` 的 `CompositeBackend` 提供。内置资源只允许读取，不能通过 Agent 的 `write`、`edit` 或文件上传接口修改。工作区 Skill 仍属于工作区业务数据边界；Gateway 不读取工作区 `.boxteam/`。
+工作区文件后端提供工作区 Skill 目录。Gateway／插件资源按来源 owner 提供只读内容；Agent 不能通过 `write`、`edit` 或文件上传接口修改安装包。Gateway 不读取工作区 `.boxteam/`。
 
 Skill 的“可发现、可读取”与扩展工具的“实际启用”是两件事：Skill 负责告诉模型何时以及如何使用扩展工具，工具是否出现在当前 Agent 的工具策略中仍由 Workspace 配置、工具工厂和策略代码决定。新增扩展工具时必须同时检查这两条链路。
 
@@ -62,10 +55,10 @@ Skill 的“可发现、可读取”与扩展工具的“实际启用”是两�
 
 按以下顺序修改，保持源码、默认配置和发行包一致：
 
-1. 在 `resources/skills/<skill-group>/` 新增 `AGENTS.md` 与 `SKILL.md`，Skill 组 ID 使用小写字母、数字和连字符，并以小写字母开头。
+1. 独立内置 Skill 组在 `resources/skills/<skill-group>/` 新增 `SKILL.md`；随插件发布的说明放入插件已声明目录，名称和描述从 frontmatter 派生。
 2. 如果该组应随项目默认启用，把 ID 加入 `configs/gateway_inline.jsonc` 的 `runtime.workspace.default_skill_groups`；同步检查 `configs/gateway_schema.jsonc` 和 `configs/gateway_dev.jsonc`。
 3. 如果 Skill 使用新的扩展工具，补齐 Workspace 工具工厂、工具策略和 `configs/workspace_inline.jsonc` 中的默认工具配置；不要把工具启用逻辑放进 Gateway。
-4. 在相关 E2E 或单元测试中验证 Skill metadata、完整文件读取和真实工具调用；测试工作区使用 `tests/support/workspaces.py` 从 `resources/skills/` 复制共享 Skill，不要直接修改 `asset/` 模板中的产品副本。
-5. 确认 `packaging/runtime/build-linux-x64.mjs` 与 `build-windows-x64.mjs` 将 `resources/` 复制到 `application/resources/`，并保留 runtime manifest 的 `skill_resources` 路径。
+4. 在相关测试中验证 metadata、完整 URI 读取和真实工具调用；不要将产品 Skill 复制到工作区 fixture。
+5. 插件 Skill 随插件 ZIP 发布；只有明确选择的独立资源组才从 `resources/skills/` 读取。
 
-不需要为每个 Skill 组新增 Python 路由。运行时会校验配置的组 ID、资源目录和 `SKILL.md`；未知或缺失资源应直接报错，不能静默跳过。
+不需要为每个 Skill 新增业务 API。各来源 owner 校验其声明及资源；未知或缺失资源应明确报错，不能静默跳过。

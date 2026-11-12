@@ -2,15 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import shutil
-import subprocess
 import time
-from collections.abc import Callable, Generator
-from contextlib import ExitStack
-from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.parse import urlencode
 
 import httpx
 import pytest
@@ -18,8 +13,6 @@ import websockets
 
 from app.agents.tools.terminal import create_exec_command_tool
 from app.core.identifier import create_uuid_hex
-from app.core.mounted_workspaces import MountedWorkspace
-from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     prepare_empty_terminal_e2e_workspace,
 )
@@ -47,12 +40,12 @@ async def _create_terminal(
     response = await client.post(
         _terminal_api_url(gateway, "/api/terminals"),
         json={
-            "workspace_id": backend.workspace_id,
+            "workspace_id": gateway.workspace_id,
             "terminal_id": f"term_{create_uuid_hex()}",
             "owner_revision": 1,
             "title": title,
-            "cwd": backend.workspace_root,
-            "command": backend.powershell,
+            "cwd": str(gateway.context.workspace_root),
+            "command": "powershell.exe",
             "args": ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"],
         },
     )
@@ -135,11 +128,13 @@ async def test_powershell_executes_unicode_crlf_and_exit_code(
         terminal_id = await _create_terminal(client, gateway, "powershell_exec")
         await _wait_snapshot(
             client,
+            gateway,
             terminal_id,
             lambda snapshot: snapshot.get("status") == "running",
         )
         await _write(
             client,
+            gateway,
             terminal_id,
             "Write-Output 'BOXTEAM_PS_中文'; Write-Output 'BOXTEAM_PS_CRLF'; exit 7\r\n",
         )
@@ -213,6 +208,7 @@ async def test_powershell_websocket_input_kill_and_delete(
             await _receive_type(websocket, "input")
             await _wait_snapshot(
                 client,
+                gateway,
                 terminal_id,
                 lambda snapshot: (
                     "BOXTEAM_PS_READY" in str(snapshot.get("display_buffer", ""))
@@ -225,6 +221,7 @@ async def test_powershell_websocket_input_kill_and_delete(
             await _receive_type(websocket, "input")
             snapshot = await _wait_snapshot(
                 client,
+                gateway,
                 terminal_id,
                 lambda current: (
                     "BOXTEAM_PS_INPUT:BOXTEAM_INPUT_中文"
@@ -272,7 +269,7 @@ async def test_agent_exec_command_uses_windows_cmd_and_powershell_wrappers(
         cmd_result = await tool.ainvoke(
             {
                 "cmd": "echo BOXTEAM_AGENT_CMD_中文 & cmd.exe /c exit 7",
-                "workdir": backend.workspace_root,
+                "workdir": str(root),
             }
         )
         assert cmd_result["exit_code"] == 7
@@ -281,8 +278,8 @@ async def test_agent_exec_command_uses_windows_cmd_and_powershell_wrappers(
         powershell_result = await tool.ainvoke(
             {
                 "cmd": 'Write-Output "BOXTEAM_AGENT_PS_中文"; cmd.exe /c exit 9',
-                "workdir": backend.workspace_root,
-                "shell": backend.powershell,
+                "workdir": str(root),
+                "shell": "powershell.exe",
             }
         )
         assert powershell_result["exit_code"] == 9

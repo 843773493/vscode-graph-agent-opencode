@@ -134,7 +134,7 @@ async def test_diff_and_source_models_share_references_and_restore(
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspace, default_backend_url=backend,
         port=ports.port(20), boxteam_home=boxteam_home, artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
-    command = ["bun", "tests/integration/clients/web/quick_access/change_documents.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/change_documents.mjs"]
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     supervised_command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
                           "--timeout-seconds", "240", "--", *command]

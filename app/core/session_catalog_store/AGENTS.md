@@ -21,7 +21,7 @@ creation record journal（`creation_journal.py`）、fork source capture journal
 调用方注册既有表达式索引函数并持同一读快照，不重建索引或修复数据。
 `schema_validation.py` 是这两个入口共用的只读schema闸门；既有当前版本缺表、
 导航队列结构或revision触发器不符时拒绝，不补空表。导航队列3表/2索引的物理DDL
-与其余catalog结构统一放在 `sql/`；业务队列的行语义与执行仍由business owner负责。
+与其余catalog结构统一放在 `migrations/`；业务队列的行语义与执行仍由business owner负责。
 
 # 可修改内容
 
@@ -56,14 +56,14 @@ creation record journal（`creation_journal.py`）、fork source capture journal
 
 - 运行期关闭、回滚隔离及 metadata 缺失的公开拒绝只保留逻辑 artifact、阶段和错误类别／系统码；原数据库位置及诊断次错留原异常链。不得改变事务提交、回滚和关闭的顺序，缺失 metadata 不补建。
 
-- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+- 静态结构 SQL 位于同包 `migrations/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
 
 - 方法族 mixin 之间只通过宿主 `self` 协作；每个方法在 `SessionCatalogStore.__mro__` 中只允许
   定义一处（`__init__` 除外）。
 - 各 mixin 只依赖宿主类提供的 `database_path`、`sessions_root`、`_connection`、`_closed`、
   `_connection_lock`、`_ensure_open()`、`write_transaction()`、`read_transaction()` 等宿主接口，
   不得新增对其它族私有方法的隐式依赖。现有 nodes 族的 `_require_node`/`_fetch_node` 由组合后的宿主提供；此处仅明示这两个既存依赖，不授权扩展其它族私有接口。capture 不再调用 creation 族私有方法。
-- 表 DDL 的唯一定义点在本包 `sql/`，`_schema.py` 加载结构并维护列清单；各 mixin 从这里取用，不复制 DDL。
+- 表 DDL 的唯一定义点在本包 `migrations/`，`_schema.py` 加载结构并维护列清单；各 mixin 从这里取用，不复制 DDL。
 - 错误分类沿用 `session_catalog_store`：`TypeError` 输入类型错误、`ValueError` 输入形态非法、
   `KeyError` 目标行不存在、`RuntimeError` 语义冲突；库被外部改动一律 fail-closed。
 - 修改本目录后运行 `uv run ruff check app/core/session_catalog_store` 与带进程外保护地跑

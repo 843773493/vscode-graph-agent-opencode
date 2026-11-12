@@ -49,7 +49,7 @@ function slotProps(overrides: SlotOverrides = {}): Parameters<typeof ContentView
     changesHint: null,
     changesHintLoading: false,
     activeChangeset: null,
-    gatewayUserViewStates: new Map(),
+    sessionViewStates: new Map(),
     onLoadOlderMessages: async () => {},
     onLoadNewerMessages: async () => {},
     onLoadAroundTurn: async () => {},

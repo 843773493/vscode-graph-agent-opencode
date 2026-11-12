@@ -140,3 +140,20 @@ def test_prepare_does_not_hide_real_removal_errors(tmp_path: Path, monkeypatch: 
         workspaces.prepare_test_workspace(workspace_root=workspace, template_root=template, template_items=("new.txt",))
     assert caught.value is failure
     assert (workspace / "blocked").read_bytes() == b"existing output"
+
+
+def test_writable_walk_skips_junction_before_chmod_or_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    junction = tmp_path / "junction"
+    junction.mkdir()
+    original = junction / "original"
+    original.write_bytes(b"outside workspace")
+    original.chmod(0o400)
+    before = original.stat().st_mode
+    monkeypatch.setattr(Path, "is_junction", lambda path: path == junction)
+
+    workspaces._make_test_tree_writable(junction)
+
+    assert original.stat().st_mode == before
+    assert original.read_bytes() == b"outside workspace"

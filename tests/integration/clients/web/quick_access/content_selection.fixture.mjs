@@ -2,7 +2,7 @@ import { ContentQuickAccess } from '../../../../../src/clients/workbench/src/sea
 import { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
 import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
-import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 
 /** 真实正文 Provider 与联邦 HTTP 客户端；仅宿主 Picker 事件和 Gateway 响应为装具。 */
@@ -98,7 +98,7 @@ export async function contentSelectionContract(mode) {
     await until(() => choices.length === 1);
     const choice = choices[0], beforeConfirm = requests.length, preset = choice.items.filter(item => item.picked).map(item => item.label);
     if (mode === 'user' || mode === 'gateway') {
-      if (mode === 'user') invalidateGatewayUserSession(0);
+      if (mode === 'user') invalidateGatewayToken(0);
       else workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
       await until(() => errors.length === 1);
       return { requests, shows, errors, cancelled: choice.token.isCancellationRequested, beforeConfirm, preset };

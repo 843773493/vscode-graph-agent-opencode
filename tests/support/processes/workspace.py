@@ -53,22 +53,26 @@ def terminate_process(
     if already_exited and not owned_children:
         if stdin_eof and process.stdin is not None:
             process.stdin.close()
+        unregister_test_process(process)
         if stdin_eof and not force and process.returncode != 0:
             raise RuntimeError(f"stdin EOF 停机失败: pid={process.pid}, returncode={process.returncode}")
         return
 
     children: list[psutil.Process] = owned_children if owned_children is not None else []
+    server_processes: list[psutil.Process] = []
     if sys.platform == "win32" and not already_exited:
         try:
             # venv 启动器可能先于实际服务器退出；停止前冻结归属，不能等父进程消失后再查。
             owner = psutil.Process(process.pid)
+            server_processes = owner.children()
             children.extend(child for child in owner.children(recursive=True) if child not in children)
         except psutil.NoSuchProcess:
             if not stdin_eof:
                 process.wait(timeout=timeout_seconds)
+                unregister_test_process(process)
                 return
     if force and sys.platform == "win32":
-        # 崩溃恢复测试必须同时硬退出实际服务器，不能只杀启动器。
+        # 崩溃恢复场景明确要求硬终止整棵已持有的进程树。
         for child in reversed(children):
             try:
                 child.kill()
@@ -100,9 +104,12 @@ def terminate_process(
         finally:
             if stdin_eof and process.stdin is not None:
                 process.stdin.close()
-    if children:
+    if stdin_eof or already_exited:
+        server_processes = children
+    if server_processes:
+        # 正常关闭时启动器退出不代表服务器已释放监听端口，等待已持有的子进程。
         _, alive = psutil.wait_procs(
-            children,
+            server_processes,
             timeout=max(0, deadline - time.monotonic()) if stdin_eof and not force else timeout_seconds,
         )
         if alive:
@@ -114,6 +121,7 @@ def terminate_process(
         raise RuntimeError(f"stdin EOF 停机失败: pid={process.pid}, returncode={process.returncode}")
     if owned_children is not None:
         owned_children.clear()
+    unregister_test_process(process)
 
 
 def ensure_local_port_available(
@@ -430,6 +438,7 @@ def start_backend_process(
             workspace_id=backend_workspace_id,
         )
         log_files.pop_all()
+    register_test_process(handle, lambda: close_backend_process(handle))
     try:
         wait_for_backend_ready(port, process, backend_workspace_id)
     except BaseException as startup_error:
@@ -447,10 +456,6 @@ def start_backend_process(
             ) from None
         raise
 
-    register_test_process(
-        handle,
-        lambda: close_backend_process(handle),
-    )
     return handle
 
 

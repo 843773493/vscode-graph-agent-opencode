@@ -3,7 +3,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 import { getWorkspaceFileContent } from "../../api";
-import { invalidateGatewayToken, invalidateGatewayUserSession } from "../../api/http";
+import { invalidateGatewayToken } from "../../api/http";
 import WorkspaceFilePreviewArea from "./WorkspaceFilePreviewArea";
 import type { WorkspacePreviewTab } from "./WorkspaceFilePreviewArea";
 
@@ -28,10 +28,10 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** 真实应答 Gateway 凭据与用户会话屏障，业务端点交给 handler。 */
+/** 按端点应答 Gateway 本机凭据，业务端点交给 handler。 */
 function installFetch(handler: (url: URL, method: string) => Response | undefined): void {
   invalidateGatewayToken(PORT);
-  invalidateGatewayUserSession(PORT);
+
   globalThis.fetch = Object.assign(
     async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(
@@ -43,9 +43,6 @@ function installFetch(handler: (url: URL, method: string) => Response | undefine
       );
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return Response.json({ code: 0, message: "ok", request_id: "req_t", data: { token: "t" } });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return Response.json({ code: 0, message: "ok", request_id: "req_u", data: { kind: "guest", user_id: null } });
       }
       const response = handler(url, method);
       if (response === undefined) {

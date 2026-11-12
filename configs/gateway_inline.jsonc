@@ -1,6 +1,6 @@
 {
   "$schema": "./gateway_schema.jsonc", // load_gateway_config 使用对应 schema 校验最终 Gateway 配置。
-  "config_version": 4,
+  "config_version": 5,
   "plugins": {
     "sources": {"entries": []}, // 显式配置自有 HTTP(S) 来源；空源不发网络请求。
     "runtime": {"entries": []}, // 当前 Gateway 的包内插件绑定，安装不自动启用。
@@ -28,12 +28,6 @@
     }
   },
   "workspaces": [], // load_gateway_config 读取远程 Gateway 注册项。
-  "ui": {
-    "theme": {
-      "default_theme_id": "warm", // 首个普通用户 profile 的主题迁移默认值。
-      "custom_themes": [] // 首个普通用户创建时迁移到其 profile，运行时按用户隔离。
-    }
-  },
   "features": {
     "session_catalog": {
       "sync": {

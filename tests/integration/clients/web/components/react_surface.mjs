@@ -11,7 +11,7 @@ const scope = await TestRunContext.fromTestFile(file).prepare();
 const runtime = join(scope.outputRoot, "runtime");
 await mkdir(runtime, { recursive: true });
 for (const name of ["TMPDIR", "TMP", "TEMP"]) process.env[name] = runtime;
-const observations = { classification: "Integration: 真实 ReactSurface 组件宿主，文件根、授权及主题图片为显式 HTTP 替身，通知使用装具 collector，无 Gateway 或业务后端", errors: [], requests: [], apiRequests: [], themeRequests: [] };
+const observations = { classification: "Integration: 真实 ReactSurface 组件宿主，文件根与授权为显式 HTTP 替身，无 Gateway 或业务后端", errors: [], requests: [], apiRequests: [] };
 let page;
 let failure;
 const { createServer } = await import(pathToFileURL(join(scope.projectRoot, "src/clients/web/node_modules/vite/dist/node/index.js")).href);
@@ -26,7 +26,7 @@ try {
       react: join(scope.projectRoot, "src/clients/web/node_modules/react"),
       "react-dom": join(scope.projectRoot, "src/clients/web/node_modules/react-dom"),
     } },
-    esbuild: { jsx: "automatic" },
+    oxc: { jsx: { runtime: "automatic" } },
     // 首次挂载前固定共享 React 依赖，避免迟到预构建使同页持有两份模块实例。
     optimizeDeps: { entries: [join(dirname(file), "react_surface_harness.html")],
       include: ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime"] },
@@ -46,31 +46,12 @@ try {
     if (message.type() === "error") observations.errors.push({ kind: "console", message: message.text(), url: message.location().url });
   });
   page.on("requestfailed", request => observations.requests.push({ url: request.url(), error: request.failure()?.errorText }));
-  const pendingImages = new Map();
-  const completedImages = [];
-  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><path fill="red" d="M0 0h2v2H0z"/></svg>';
-  await page.route("**/fixture-theme/*", async route => {
-    const pathname = new URL(route.request().url()).pathname;
-    assert.equal(route.request().method(), "GET");
-    const filename = pathname.slice("/fixture-theme/".length);
-    assert.ok(["missing.svg", "current.svg", "old-success.svg", "old-failure.svg", "disposed.svg"].includes(filename), `未声明的主题图片 ${pathname}`);
-    observations.themeRequests.push(pathname);
-    if (filename.startsWith("old-") || filename === "disposed.svg") {
-      await new Promise(resolve => pendingImages.set(filename, resolve));
-    }
-    await route.fulfill({ status: filename === "missing.svg" ? 404 : 200,
-      contentType: filename === "missing.svg" ? "application/json" : "image/svg+xml",
-      body: filename === "missing.svg" ? JSON.stringify({ detail: "fixture-theme-image-not-found" })
-        : filename === "old-failure.svg" ? "invalid-image" : svg });
-    completedImages.push(filename);
-  });
   await page.route("**/api/**", async route => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (!pathname.startsWith("/api/")) { await route.continue(); return; }
     const declared = request.method() === "GET";
     const data = declared && pathname === "/api/gateway/auth/local-credential" ? { token: "fixture-surface-token" }
-      : declared && pathname === "/api/gateway/users/current" ? { kind: "guest", user_id: null }
       : declared && pathname === "/api/v1/workspace/files/roots" ? {
         workspace_uri: "boxteam://workspace/backend_surface/resources/files/root",
         filesystem_uri: "boxteam://gateway/gateway_surface/resources/files/root", filesystem_label: "装具文件系统",
@@ -148,52 +129,14 @@ try {
     await expect(first.getByRole("alert")).toHaveCount(0);
     await expect(second.getByRole("button", { name: `second 计数 ${count + 1}`, exact: true })).toBeVisible();
   }
-  const theme = (id, background) => ({ id, color_scheme: "light", tokens: { "--bt-page-background": "#123456" },
-    background_image_url: background ? `/fixture-theme/${background}` : null });
-  const applyTheme = (name, value) => page.evaluate(({ name, value }) => window.reactSurfaceHarness.theme(name, value), { name, value });
-  const themeSettled = id => page.evaluate(id => window.reactSurfaceHarness.themeSettled(id), id);
-  const firstHost = first.locator(".boxteam-react-surface");
-  await applyTheme("first", theme("missing", "missing.svg"));
-  await expect(page.getByRole("complementary", { name: "装具主题通知", exact: true }).getByRole("status"))
-    .toContainText("主题背景图加载失败，已回退为无背景图");
-  await expect(firstHost).toHaveAttribute("data-boxteam-theme", "missing");
-  assert.equal(await firstHost.evaluate(host => getComputedStyle(host).backgroundImage), "none");
-  assert.equal(await firstHost.evaluate(host => host.style.getPropertyValue("--bt-page-background")), "#123456");
-  for (const filename of ["old-success.svg", "old-failure.svg"]) {
-    await applyTheme("first", theme(filename, filename));
-    await expect.poll(() => pendingImages.has(filename)).toBe(true);
-    await applyTheme("first", theme("current", "current.svg"));
-    await expect(firstHost).toHaveAttribute("data-boxteam-theme", "current");
-    pendingImages.get(filename)();
-    await expect.poll(() => completedImages.includes(filename)).toBe(true);
-    await themeSettled(filename);
-    await expect(firstHost).toHaveAttribute("data-boxteam-theme", "current");
-    assert.ok((await firstHost.evaluate(host => getComputedStyle(host).backgroundImage)).endsWith('/fixture-theme/current.svg")'));
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty("--bt-background-image", "linear-gradient(red, blue)");
+  });
+  for (const region of [first, second]) {
+    assert.equal(await region.locator(".boxteam-react-surface").evaluate(host => getComputedStyle(host).getPropertyValue("--bt-background-image")), "linear-gradient(red, blue)");
   }
-  await applyTheme("second", theme("second", null));
-  await expect(second.locator(".boxteam-react-surface")).toHaveAttribute("data-boxteam-theme", "second");
-  await expect(firstHost).toHaveAttribute("data-boxteam-theme", "current");
-  const detachedHost = await firstHost.elementHandle();
-  assert.ok(detachedHost);
-  await applyTheme("first", theme("disposed", "disposed.svg"));
-  await expect.poll(() => pendingImages.has("disposed.svg")).toBe(true);
   const beforeDispose = await page.evaluate(() => window.reactSurfaceHarness.events);
   await page.evaluate(() => window.reactSurfaceHarness.dispose());
-  pendingImages.get("disposed.svg")();
-  await expect.poll(() => completedImages.includes("disposed.svg")).toBe(true);
-  await themeSettled("disposed");
-  assert.equal(await detachedHost.evaluate(host => host.dataset.boxteamTheme), "current");
-  observations.themeNotifications = await page.evaluate(() => window.reactSurfaceHarness.themeNotifications);
-  assert.equal(observations.themeNotifications.length, 1, "过期或已释放宿主不得发布主题通知");
-  assert.equal(observations.themeNotifications[0].kind, "warn");
-  assert.ok(observations.themeNotifications[0].message.endsWith("/fixture-theme/missing.svg"));
-  const themeErrors = observations.errors.slice(classifiedErrorCount);
-  assert.equal(themeErrors.length, 1);
-  assert.equal(themeErrors[0].kind, "console");
-  assert.equal(themeErrors[0].message, "Failed to load resource: the server responded with a status of 404 (Not Found)");
-  assert.equal(themeErrors[0].url, `http://127.0.0.1:${address.port}/fixture-theme/missing.svg`);
-  classifiedErrorCount += themeErrors.length;
-  await expect(first.locator(".boxteam-react-surface")).toHaveCount(0);
   const afterDispose = await page.evaluate(() => window.reactSurfaceHarness.events);
   assert.deepEqual(afterDispose, [...beforeDispose, "first:unmounted"]);
   assert.equal(afterDispose.filter(event => event === "second:mounted").length, 1);
@@ -207,9 +150,10 @@ try {
   failure = error;
   if (page) {
     try { observations.themeState = await page.evaluate(() => ({
-      notifications: window.reactSurfaceHarness?.themeNotifications,
       hosts: Array.from(document.querySelectorAll(".boxteam-react-surface"), host => ({
-        theme: host.dataset.boxteamTheme, background: getComputedStyle(host).backgroundImage,
+        background: getComputedStyle(host).backgroundImage,
+        pageBackground: host.style.getPropertyValue("--bt-page-background"),
+        colorScheme: getComputedStyle(host).colorScheme,
       })),
     })); }
     catch (diagnosticError) { failure = new AggregateError([failure, diagnosticError], "场景和主题诊断均失败"); }

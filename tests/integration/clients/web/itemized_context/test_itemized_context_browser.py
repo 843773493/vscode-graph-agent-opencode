@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import shutil
-import socket
 import subprocess
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -63,16 +62,11 @@ from tests.support.processes.gateway import (
 )
 from tests.support.processes.workspace import (
     close_backend_process,
+    ensure_local_port_available,
     start_backend_process,
 )
 
 __all__ = ["inspection_resource_registry"]
-
-
-def _require_free_port(port: int) -> None:
-    # 先验证测试专用端口，绝不借共享 harness 清理未知服务。
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", port))
 
 
 @pytest.fixture
@@ -89,8 +83,8 @@ def browser_runtime(
     assert workspace == context.workspace_root
     assert Path(integration_workspace_config_path).is_file()
     ports = integration_port_block_for_file(Path(request.node.path))
-    _require_free_port(ports.backend_port)
-    _require_free_port(ports.port(20))
+    ensure_local_port_available(ports.backend_port, service_name="itemized Web 后端")
+    ensure_local_port_available(ports.port(20), service_name="itemized Web Gateway")
     runtime_home = context.boxteam_home_for_node(request.node.nodeid)
     credential = runtime_home / "state/gateway/credentials/local-token"
     credential.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +142,7 @@ async def browser_model_replay(
 ) -> AsyncIterator[ModelStreamReplay]:
     context, _base_url = browser_runtime
     with model_stream_replay(
-        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="itemized-context-query-and-display",
     ) as replay:
         for key, value in replay.environment.items():
@@ -200,11 +194,6 @@ async def browser_source(browser_runtime, browser_model_replay, inspection_resou
     async with httpx.AsyncClient(
         base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=30
     ) as client:
-        guest = await client.post(
-            "/api/gateway/users/guest",
-            json={"tracking": {"source": "itemized-context-integration"}},
-        )
-        assert guest.status_code == 200, guest.text
         workspace_response = await client.get("/api/gateway/workspaces")
         assert workspace_response.status_code == 200, workspace_response.text
         owner = workspace_response.json()["data"]["active_workspace"]

@@ -17,9 +17,11 @@ from app.core.config_sources import config_revision
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from configs.cli import main
+from configs.maintenance.runtime_logging_commit import commit_runtime_logging_migration
+from configs.maintenance.runtime_logging_migration import (
+    preview_runtime_logging_migration,
+)
 from configs.runtime import read_jsonc_object
-from configs.runtime_logging_commit import commit_runtime_logging_migration
-from configs.runtime_logging_migration import preview_runtime_logging_migration
 from tests.harness.python.run_context import TestRunContext
 
 
@@ -435,7 +437,7 @@ def test_restore_database_before_restart_returns_exact_original(
 def test_interrupted_migration_blocks_runtime_and_can_resume_or_restore(
     migration_home: Path, migration_workspaces: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, restore: bool,
 ) -> None:
-    import configs.runtime_logging_commit as commit
+    import configs.maintenance.runtime_logging_commit as commit
 
     first = migration_workspaces[0]
     path = first / ".boxteam/workspace.jsonc"
@@ -498,7 +500,7 @@ def test_interrupt_after_database_commit_retains_recoverable_owner_boundary(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
     monkeypatch: pytest.MonkeyPatch, restore: bool,
 ) -> None:
-    import configs.runtime_logging_commit as commit
+    import configs.maintenance.runtime_logging_commit as commit
 
     first = migration_workspaces[0]
     _active(workspace_store, "workspace", _legacy_payload())
@@ -613,7 +615,7 @@ def test_cli_upgrades_v3_connection_ledger_and_restores_exact_original(
 def test_v3_connection_ledger_can_resume_or_restore_after_database_publication(
     migration_home: Path, gateway_store: GatewayStateStore, monkeypatch: pytest.MonkeyPatch, restore: bool,
 ) -> None:
-    import configs.runtime_logging_commit as commit
+    import configs.maintenance.runtime_logging_commit as commit
 
     gateway_store.set_config(config_key="gateway_connection_ids", config_version=3, payload={"entries": []})
     before = _database_dump(gateway_store.path)

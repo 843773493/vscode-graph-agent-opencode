@@ -162,6 +162,7 @@ try {
   assert.equal(structured.entries.length, 2); assert.deepEqual(structured.entries[1], { label: 'untouched' });
   assert.equal(structured.entries[0].credential.kind, 'plugin_private_file');
   assert.equal(structured.entries[0].credential.parameter_pointer, structuredPointer);
+  result.structured_reference = structured.entries[0].credential;
   assert(!JSON.stringify(structuredDocument).includes(structuredSecret));
   assert.equal(result.privateWrites.at(-1).parameter_pointer, structuredPointer);
   assert(result.privateWrites.every(item => item.status === 200 && !item.returnedValue));

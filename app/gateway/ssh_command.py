@@ -4,6 +4,15 @@ import os
 from pathlib import Path
 
 
+def ssh_path_option(name: str, value: str) -> str:
+    # OpenSSH 没有字面 ${...} 的转义语法，禁止静默改读环境变量展开后的路径。
+    if "${" in value:
+        raise ValueError(f"{name} 路径不支持 OpenSSH 环境变量语法: {value}")
+    # TODO: 在原生 Windows OpenSSH 上验证路径转义。
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    return f'{name}="{escaped}"'
+
+
 def build_ssh_command(
     *,
     host: str,
@@ -24,8 +33,8 @@ def build_ssh_command(
             raise ValueError("显式 SSH 连接缺少 private_key_path")
         command.extend(
             [
-                "-i",
-                str(Path(private_key_path).expanduser().resolve()),
+                "-o",
+                ssh_path_option("IdentityFile", str(Path(private_key_path).expanduser().resolve())),
                 "-p",
                 str(port),
             ]
@@ -37,10 +46,7 @@ def build_ssh_command(
         command.extend(
             [
                 "-o",
-                (
-                    "UserKnownHostsFile="
-                    f"{Path(known_hosts_file).expanduser().resolve()}"
-                ),
+                ssh_path_option("UserKnownHostsFile", str(Path(known_hosts_file).expanduser().resolve())),
                 "-o",
                 "StrictHostKeyChecking=accept-new",
             ]

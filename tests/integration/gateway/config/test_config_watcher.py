@@ -54,7 +54,6 @@ def watched_gateway(
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=10, trust_env=False,
         ))
-        client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}).raise_for_status()
         yield WatchedGateway(client, workspace.parent / "boxteam-home/config/gateway.jsonc", context.artifacts_dir)
 
 
@@ -94,7 +93,7 @@ def test_gateway_observes_repair_after_rejected_file(watched_gateway: WatchedGat
         assert "配置 JSONC 解析失败" in str(failed["last_error"])
         assert str(case.config_path) not in str(failed["last_error"])
 
-        original["ui"]["theme"]["default_theme_id"] = "blue"
+        original["logging"]["runtime"]["level"] = "debug"
         case.config_path.write_text(json.dumps(original), encoding="utf-8")
         recovered = wait_for(healthy=True)
         assert recovered["state"] == "active" and recovered["last_error"] is None
@@ -107,7 +106,7 @@ def test_gateway_observes_repair_after_rejected_file(watched_gateway: WatchedGat
         events = case.client.get("/api/gateway/config/events").raise_for_status().json()["data"]["events"]
         assert [event["result"] for event in events] == ["applied"]
         assert events[0]["active_revision"] == recovered["active_revision"]
-        assert events[0]["applied_paths"] == ["/ui/theme/default_theme_id"]
+        assert events[0]["applied_paths"] == ["/logging/runtime/level"]
     finally:
         (case.artifacts / "watcher-status.json").write_text(
             json.dumps(observations, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",

@@ -1,6 +1,6 @@
 # 目录用途
 
-集中存放真实 E2E 进程使用的外置控制面与受控组合：pytest 进程拥有测试控制服务，真实 Backend、Gateway、MCP stdio server 和浏览器客户端通过显式地址、token 与环境变量接入。
+集中存放真实 E2E 进程使用的外置控制面与受控组合：pytest 进程拥有测试控制服务，真实 Backend、Gateway 和浏览器客户端通过显式地址、token 与环境变量接入。
 
 ```text
 e2e_control/
@@ -10,7 +10,6 @@ e2e_control/
 ├── tool_observations.py   真实 canonical 工具提交的无绑定观测实现
 ├── communication_backend_app.py  在同一受控Backend安装通信故障及真实工具提交观测
 ├── gateway_app.py         连接受控 Backend ASGI app 的真实 Gateway app
-├── mcp_stdio_server.py    接受测试 catalog 的真实 MCP stdio server
 └── browser_client.mjs     浏览器端控制客户端、fork deadline 状态机和 watchdog 协议客户端
 ```
 
@@ -18,7 +17,6 @@ e2e_control/
 
 - E2E 控制协议及 pytest 所拥有的时钟、进程租约、phase barrier 和资源观测。
 - 绑定控制协议的真实服务组合与浏览器控制客户端；deadline watchdog 的进程身份和终止操作由 `tests/support/fork_deadline.py` 按宿主平台执行。
-- 真实外部 MCP stdio 服务的测试专用实现。
 
 ## 不可修改内容
 

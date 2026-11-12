@@ -44,10 +44,10 @@ def observation_error_code(value: object) -> str | None:
     return None
 
 
-REMOTE_OBSERVATIONS_DDL = load_sql(__package__, "sql/remote_observations.sql")
-REMOTE_OBSERVATION_PAGES_DDL = load_sql(__package__, "sql/remote_observation_pages.sql")
-REMOTE_OBSERVATION_EXPIRY_DDL = load_sql(__package__, "sql/idx_remote_observations_expiry.sql")
-REMOTE_OBSERVATION_KEY_DDL = load_sql(__package__, "sql/remote_observation_key.sql")
+REMOTE_OBSERVATIONS_DDL = load_sql(__package__, "migrations/remote_observations.sql")
+REMOTE_OBSERVATION_PAGES_DDL = load_sql(__package__, "migrations/remote_observation_pages.sql")
+REMOTE_OBSERVATION_EXPIRY_DDL = load_sql(__package__, "migrations/idx_remote_observations_expiry.sql")
+REMOTE_OBSERVATION_KEY_DDL = load_sql(__package__, "migrations/remote_observation_key.sql")
 
 
 def canonical_json(value: object) -> str:

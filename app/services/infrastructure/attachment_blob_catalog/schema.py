@@ -19,44 +19,44 @@ INGEST_RECORD_TERMINAL_STATES = ("published", "aborted")
 
 _SCHEMA_VERSION = 3
 
-_BLOBS_TABLE_DDL = load_sql(__package__, "sql/attachment_blobs.sql")
+_BLOBS_TABLE_DDL = load_sql(__package__, "migrations/attachment_blobs.sql")
 
-_INGEST_RECORDS_TABLE_DDL = load_sql(__package__, "sql/attachment_ingest_records.sql")
+_INGEST_RECORDS_TABLE_DDL = load_sql(__package__, "migrations/attachment_ingest_records.sql")
 
-_CLAIMS_TABLE_DDL = load_sql(__package__, "sql/attachment_blob_commit_claims.sql")
+_CLAIMS_TABLE_DDL = load_sql(__package__, "migrations/attachment_blob_commit_claims.sql")
 
-_OWNER_REFS_TABLE_DDL = load_sql(__package__, "sql/attachment_owner_refs.sql")
+_OWNER_REFS_TABLE_DDL = load_sql(__package__, "migrations/attachment_owner_refs.sql")
 
-_FORK_CLAIMS_TABLE_DDL = load_sql(__package__, "sql/fork_attachment_claims.sql")
+_FORK_CLAIMS_TABLE_DDL = load_sql(__package__, "migrations/fork_attachment_claims.sql")
 
-_FORK_CLAIMS_INDEX_DDL = load_sql(__package__, "sql/idx_fork_attachment_claims_blob.sql")
+_FORK_CLAIMS_INDEX_DDL = load_sql(__package__, "migrations/idx_fork_attachment_claims_blob.sql")
 
-_FORK_MAPPINGS_TABLE_DDL = load_sql(__package__, "sql/fork_attachment_mappings.sql")
+_FORK_MAPPINGS_TABLE_DDL = load_sql(__package__, "migrations/fork_attachment_mappings.sql")
 
-_FORK_MAPPINGS_INDEX_DDL = load_sql(__package__, "sql/fork_attachment_mappings_target.sql")
+_FORK_MAPPINGS_INDEX_DDL = load_sql(__package__, "migrations/fork_attachment_mappings_target.sql")
 
 _REVISION_DDL = (
-    load_sql(__package__, "sql/attachment_catalog_revision.sql"),
-    load_sql(__package__, "sql/attachment_catalog_revision_seed.sql"),
-    load_sql(__package__, "sql/attachment_revision_attachment_blobs_insert.sql"),
-    load_sql(__package__, "sql/attachment_revision_attachment_blobs_update.sql"),
-    load_sql(__package__, "sql/attachment_revision_attachment_blobs_delete.sql"),
-    load_sql(__package__, "sql/attachment_revision_attachment_owner_refs_insert.sql"),
-    load_sql(__package__, "sql/attachment_revision_attachment_owner_refs_update.sql"),
-    load_sql(__package__, "sql/attachment_revision_attachment_owner_refs_delete.sql"),
+    load_sql(__package__, "migrations/attachment_catalog_revision.sql"),
+    load_sql(__package__, "migrations/attachment_catalog_revision_seed.sql"),
+    load_sql(__package__, "migrations/attachment_revision_attachment_blobs_insert.sql"),
+    load_sql(__package__, "migrations/attachment_revision_attachment_blobs_update.sql"),
+    load_sql(__package__, "migrations/attachment_revision_attachment_blobs_delete.sql"),
+    load_sql(__package__, "migrations/attachment_revision_attachment_owner_refs_insert.sql"),
+    load_sql(__package__, "migrations/attachment_revision_attachment_owner_refs_update.sql"),
+    load_sql(__package__, "migrations/attachment_revision_attachment_owner_refs_delete.sql"),
 )
 
 _IDX_OWNER_REFS_BLOB_DDL = (
-    load_sql(__package__, "sql/idx_attachment_owner_refs_blob.sql")
+    load_sql(__package__, "migrations/idx_attachment_owner_refs_blob.sql")
 )
 _IDX_OWNER_REFS_SESSION_DDL = (
-    load_sql(__package__, "sql/idx_attachment_owner_refs_session.sql")
+    load_sql(__package__, "migrations/idx_attachment_owner_refs_session.sql")
 )
 _IDX_INGEST_STATE_DDL = (
-    load_sql(__package__, "sql/idx_attachment_ingest_records_state.sql")
+    load_sql(__package__, "migrations/idx_attachment_ingest_records_state.sql")
 )
 _IDX_INGEST_SESSION_DDL = (
-    load_sql(__package__, "sql/idx_attachment_ingest_records_session.sql")
+    load_sql(__package__, "migrations/idx_attachment_ingest_records_session.sql")
 )
 
 # 线上初始化与离线 schema 参照使用同一顺序，不复制表、约束和触发器定义。

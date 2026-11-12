@@ -6,7 +6,7 @@ import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/ty
 import { CancellationToken, CancellationTokenSource } from '../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../../../src/clients/workbench/upstream/src/vs/base/common/errors.js';
 import { Emitter, Event } from '../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
-import { Disposable, DisposableStore, toDisposable } from '../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
+import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../../../../src/clients/workbench/upstream/src/vs/base/common/uri.js';
 import { isEqual } from '../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
 import { Schemas } from '../../../../src/clients/workbench/upstream/src/vs/base/common/network.js';
@@ -92,6 +92,9 @@ const { settingsEditorIdentity, settingsHistoryLocation, parseSettingsLocation, 
       DefaultSettings, Settings2EditorModel, nullRange, parse, setProperty, applyEdits, configSourceEditorUri,
       configSourceFiles: files => files.getProvider(),
     });
+const { SettingsContextHeader } = evaluate(await source('src/settings/header.ts', true), ['SettingsContextHeader'], {
+  Disposable, ITargetSettingsContext, sourceStatus: () => '来源状态',
+});
 const parseSearchQuery = evaluate(await source('workbench/contrib/preferences/browser/settingsTreeModels.ts'),
   ['tagRegex', 'extensionRegex', 'featureRegex', 'idRegex', 'languageRegex', 'parseQuery'], {
     MODIFIED_SETTING_TAG, POLICY_SETTING_TAG, AGENTS_WINDOW_SETTING_TAG, ENABLE_LANGUAGE_FILTER,
@@ -350,6 +353,14 @@ function makeSource(locationValue) {
   return { source, model, document, provider, files, textFileModels, owner, notifications, schemaRequests, errors };
 }
 
+function settingsHeaderText(target) {
+  const element = { style: {} };
+  const header = new SettingsContextHeader(element, () => {}, { target });
+  const text = element.textContent;
+  header.dispose();
+  return text;
+}
+
 function childServices(source, configurationCalls) {
   const configurationService = {
     onDidChangeConfiguration: Event.None,
@@ -411,6 +422,43 @@ scenario('来源 schema 只构造当前 Settings2EditorModel，JSONC 表单编�
     expect(configurationCalls).toEqual([]);
     model.dispose();
   } finally { targetSettings.dispose(); }
+});
+
+scenario('来源标题仅提示本目标非空未绑定参数，保留 JSONC 入口并区分安装态', () => {
+  const packageId = 'schema.probe', pluginId = 'preference', version = '1.0.0';
+  const declaration = { package_id: packageId, plugin_id: pluginId, package_version: version, name: '参数插件',
+    configuration_schema: { type: 'object', properties: { mode: { type: 'string' } } } };
+  const a = makeSource(location());
+  const b = makeSource(location({ gateway_id: 'gateway-B', workspace_id: 'workspace-B', gateway_connection_id: 'connection-B' }));
+  const setValues = (fixture, values) => fixture.model.textEditorModel.pushEditOperations(null, [{ text: JSON.stringify({ config_version: 2,
+    plugins: { configuration: { values } } }) }]);
+  const setBinding = (fixture, entries) => { fixture.document.source_effective = { plugins: { runtime: { entries } } }; };
+  try {
+    setValues(a, { [packageId]: { [pluginId]: { mode: 'kept' } } });
+    a.source.replaceSchemas({ plugins: [declaration] });
+    const installedWarning = settingsHeaderText(a.source);
+    expect(installedWarning).toContain('参数未生效');
+    expect(installedWarning).toContain('已安装但未绑定');
+    expect(installedWarning).toContain('来源 JSONC 编辑或删除');
+    expect(a.source.groups.filter(group => group.extensionInfo)).toEqual([]);
+
+    setValues(b, { [packageId]: { [pluginId]: { mode: 'bound' } } });
+    setBinding(b, [{ package_id: packageId, plugin_id: pluginId, package_version: version, enabled: false }]);
+    b.source.replaceSchemas({ plugins: [declaration] });
+    expect(settingsHeaderText(b.source)).not.toContain('参数未生效');
+    expect(b.source.groups.filter(group => group.extensionInfo)).toHaveLength(1);
+    expect(settingsHeaderText(a.source)).toContain('已安装但未绑定');
+
+    setValues(a, { [packageId]: { [pluginId]: {} } });
+    expect(settingsHeaderText(a.source)).not.toContain('参数未生效');
+    setValues(a, { [packageId]: { [pluginId]: { mode: 'kept' } } });
+    a.source.replaceSchemas({ plugins: [] });
+    expect(settingsHeaderText(a.source)).toContain('schema.probe/preference 当前目标未见配置声明（可能已卸载），参数未生效');
+    a.source.replaceSchemas(undefined);
+    expect(settingsHeaderText(a.source)).toContain('schema.probe/preference 未绑定，安装声明不可用，参数未生效');
+    a.model.textEditorModel.pushEditOperations(null, [{ text: '{' }]);
+    expect(settingsHeaderText(a.source)).toContain('当前来源 JSONC 无效，无法判定未绑定参数');
+  } finally { a.source.dispose(); b.source.dispose(); }
 });
 
 scenario('source Input 通过原文本模型报告 dirty、显式 save 与 revert', async () => {
@@ -502,6 +550,58 @@ scenario('安装事件替换声明后按当前绑定展示，保存不补读，�
     setBinding('1.0.0'); await f.model.revert(); expect(fields()[0].type).toBe('string');
     f.source.replaceSchemas(undefined); expect(fields()).toEqual([]);
   } finally { f.source.dispose(); }
+});
+
+scenario('凭据失效保留各管理目标并取消在途选择，页面 Gateway 改变才清除选择', async () => {
+  const parsed = await source('src/managementTarget.ts', true);
+  const code = parsed.statements.filter(node => !ts.isImportDeclaration(node))
+    .map(node => ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, parsed)).join('\n').replace(/^export /gm, '');
+  const auth = new Emitter(), context = new Emitter(), actions = [], changes = [];
+  let entry = 'gateway-a', delayedPick;
+  const remote = { gateway_id: 'gateway-b', name: 'B', connection_kind: 'remote_gateway', gateway_connection_id: 'route-b' };
+  const environment = {
+    CancellationTokenSource, MutableDisposable, Emitter,
+    Action2: class { constructor(description) { this.id = description.id; } },
+    MenuId: {}, MenuRegistry: { appendMenuItem: () => toDisposable(() => {}) }, ContextKeyExpr: { equals: () => ({}) },
+    registerAction2: Action => actions.push(new Action()), VIEWLET_ID: 'extensions', IQuickInputService: {},
+    onGatewayTokenInvalidated: (_port, listener) => { const subscription = auth.event(listener); return () => subscription.dispose(); },
+    gateway: { request: async () => ({ local_gateway_id: entry, items: [remote] }) },
+    workspaceContext: { getSnapshot: () => ({ gatewayId: entry }), subscribe: listener => {
+      const subscription = context.event(listener); return () => subscription.dispose();
+    } },
+  };
+  const flow = new Function(...Object.keys(environment), ts.transpile(code, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None })
+    + '\nreturn { managementGateway, onDidChangeExtensionManagementTarget, onDidChangeMcpManagementTarget };')(...Object.values(environment));
+  const subscriptions = [flow.onDidChangeExtensionManagementTarget(() => changes.push('extensions')),
+    flow.onDidChangeMcpManagementTarget(() => changes.push('mcp'))];
+  const quick = { pick: async (items, _options, token) => delayedPick ? delayedPick(items, token) : items[0] };
+  const accessor = { get: () => quick };
+  try {
+    for (const action of actions) await action.run(accessor);
+    for (const scope of ['extensions', 'settings', 'mcp']) expect(flow.managementGateway(scope)).toEqual(remote);
+    changes.length = 0;
+    auth.fire();
+    expect(changes).toEqual([]);
+    for (const scope of ['extensions', 'settings', 'mcp']) expect(flow.managementGateway(scope)).toEqual(remote);
+
+    const entered = Promise.withResolvers(), picked = Promise.withResolvers();
+    delayedPick = (items, token) => { entered.resolve({ item: items[0], token }); return picked.promise; };
+    const pending = actions[0].run(accessor).then(() => undefined, error => error);
+    const input = await entered.promise;
+    auth.fire();
+    expect(input.token.isCancellationRequested).toBe(true);
+    picked.resolve(input.item);
+    const error = await pending;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain('页面 Gateway 或访问凭据已改变');
+    expect(flow.managementGateway('extensions')).toEqual(remote);
+
+    entry = 'gateway-c'; context.fire();
+    expect(changes).toEqual(['extensions', 'mcp']);
+    for (const scope of ['extensions', 'settings', 'mcp']) {
+      expect(flow.managementGateway(scope)).toEqual({ gateway_id: entry, name: '本地', connection_kind: 'local' });
+    }
+  } finally { for (const subscription of subscriptions) subscription.dispose(); auth.dispose(); context.dispose(); }
 });
 
 scenario('配置声明沿冻结目标读取并拒绝错误 Gateway 或 workspace 回执', async () => {

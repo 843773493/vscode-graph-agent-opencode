@@ -45,7 +45,6 @@ try {
     }
     return payload.data;
   }, { path, data, owner });
-  await api('/api/gateway/users/guest', { tracking: { source: 'resource-opener-sources' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces?check_health=false');

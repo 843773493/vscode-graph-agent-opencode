@@ -1,0 +1,13 @@
+{
+  "$schema": "./worktree_schema.jsonc",
+  "config_version": 1,
+  "runtime": {
+    "worktrees": {
+      "local_config_patterns": [".env", ".env.*", "configs/*_local.jsonc"],
+      "setup_scopes": ["python", "root", "web", "workbench"],
+      "dev_port_offset": 100,
+      "experiment_port_offset_start": 1000,
+      "experiment_port_stride": 20
+    }
+  }
+}

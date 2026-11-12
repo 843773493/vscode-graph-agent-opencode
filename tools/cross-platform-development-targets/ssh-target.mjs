@@ -85,11 +85,19 @@ function secureIdentityFile(target) {
   return identityFile;
 }
 
+function sshPathOption(name, value) {
+  // OpenSSH 没有字面 ${...} 的转义语法，禁止静默改读环境变量展开后的路径。
+  if (value.includes("${")) throw new Error(`${name} 路径不支持 OpenSSH 环境变量语法: ${value}`);
+  // TODO: 在原生 Windows OpenSSH 上验证路径转义。
+  const escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%");
+  return `${name}="${escaped}"`;
+}
+
 function sshOptions(target) {
   const identityFile = secureIdentityFile(target);
   return [
-    "-i",
-    identityFile,
+    "-o",
+    sshPathOption("IdentityFile", identityFile),
     "-p",
     String(target.ssh.port),
     "-o",
@@ -99,12 +107,18 @@ function sshOptions(target) {
     "-o",
     "StrictHostKeyChecking=yes",
     "-o",
-    `UserKnownHostsFile=${target.ssh.knownHostsFile}`,
+    sshPathOption("UserKnownHostsFile", target.ssh.knownHostsFile),
   ];
 }
 
 export function sshDestination(target) {
   return `${target.ssh.user}@${target.ssh.host}`;
+}
+
+function scpRemotePath(target, remotePath) {
+  const host = target.ssh.host.includes(":") && !target.ssh.host.startsWith("[")
+    ? `[${target.ssh.host}]` : target.ssh.host;
+  return `${target.ssh.user}@${host}:${remotePath}`;
 }
 
 export function sshCommand(target, remoteCommand) {
@@ -117,14 +131,14 @@ export function scpCommand(target, localPath, remotePath) {
   const options = sshOptions(target);
   const portIndex = options.indexOf("-p");
   options[portIndex] = "-P";
-  return ["scp", ...options, localPath, `${sshDestination(target)}:${remotePath}`];
+  return ["scp", ...options, localPath, scpRemotePath(target, remotePath)];
 }
 
 export function scpDownloadCommand(target, remotePath, localPath) {
   const options = sshOptions(target);
   const portIndex = options.indexOf("-p");
   options[portIndex] = "-P";
-  return ["scp", ...options, `${sshDestination(target)}:${remotePath}`, localPath];
+  return ["scp", ...options, scpRemotePath(target, remotePath), localPath];
 }
 
 export async function runTargetAction({
@@ -193,25 +207,17 @@ function gitSshCommand(target) {
   return ["ssh", ...sshOptions(target)].map(shellQuote).join(" ");
 }
 
-function gitRemoteUrl(target) {
-  if (target.platform === "windows") {
-    // SCP 风格保留盘符；远端 shell 的引号由 Windows Git SSH 入口转换。
-    const windowsPath = target.paths.repository.replaceAll("\\", "/");
-    const host = target.ssh.host.includes(":") && !target.ssh.host.startsWith("[")
-      ? `[${target.ssh.host}]` : target.ssh.host;
-    return `${target.ssh.user}@${host}:${windowsPath}`;
-  }
-  return `ssh://${encodeURIComponent(target.ssh.user)}@${target.ssh.host}:${target.ssh.port}${target.paths.repository}`;
-}
-
 export function pushSnapshot({ target, projectRoot, snapshot }) {
+  // SCP 风格保留原生路径中的百分号与盘符；端口由 SSH 配置传递。
+  const repository = target.platform === "windows"
+    ? target.paths.repository.replaceAll("\\", "/") : target.paths.repository;
   const environment = {
     ...process.env,
     GIT_SSH_COMMAND: gitSshCommand(target),
     ...(target.platform === "windows" ? { GIT_SSH_VARIANT: "simple" } : {}),
   };
   return runChecked(
-    ["git", "push", "--force", gitRemoteUrl(target), `${snapshot.commit}:${snapshot.ref}`],
+    ["git", "push", "--force", scpRemotePath(target, repository), `${snapshot.commit}:${snapshot.ref}`],
     {
       cwd: projectRoot,
       environment,

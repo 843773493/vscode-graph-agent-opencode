@@ -78,7 +78,7 @@ class SchemaInitMixin:
             self._connection.execute(_IDX_THREAD_CREATION_DELEGATION_DDL)
             self._connection.execute(_COLLABORATION_LEDGER_TABLE_DDL)
             self._connection.execute(
-                load_sql(__package__, "sql/seeds/collaboration_ledger.sql")
+                load_sql(__package__, "migrations/seeds/collaboration_ledger.sql")
             )
             self._connection.execute(_COLLABORATION_MEMBERS_TABLE_DDL)
             self._connection.execute(_THREAD_EXECUTION_INTENTS_TABLE_DDL)

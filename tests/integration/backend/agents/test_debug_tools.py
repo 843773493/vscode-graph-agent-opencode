@@ -30,7 +30,6 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
-from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugControlActionRequest,
@@ -829,7 +828,18 @@ async def test_node_debug_rejects_unimplemented_adapter(
     boxteam_root = workspace_root / ".boxteam"
     boxteam_root.mkdir(parents=True, exist_ok=True)
     config_path = workspace_root / "base.jsonc"
-    config_path.write_text(json.dumps({"runtime": {}}), encoding="utf-8")
+    config_path.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "gateway": {
+                        "connection": {"url": debug_plugin_gateway.gateway_url}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     workspace_config_path = boxteam_root / "workspace.jsonc"
     workspace_config_path.write_text(
         json.dumps(
@@ -859,7 +869,7 @@ async def test_node_debug_rejects_unimplemented_adapter(
     config_service.validate_workspace_config()
     service = NodeDebugService(
         workspace_root=workspace_root,
-        workspace_id=load_or_create_workspace_id(workspace_root),
+        workspace_id=debug_plugin_gateway.workspace_id,
         file_paths=node_debug_file_paths(workspace_root),
         config_service=config_service,
         session_admission=permissive_node_debug_session_admission(),

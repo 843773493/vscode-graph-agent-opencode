@@ -13,9 +13,9 @@ import {
   type CatalogOutboxStoredOperation,
 } from "./sessionCatalogOutboxStore";
 
-const PARTITION = { gatewayId: "local:8014", workspaceId: "workspace-1", principal: "guest" };
-const PARTITION_KEY = "local:8014\u0000workspace-1\u0000guest";
-const OTHER_PARTITION = { ...PARTITION, principal: "user_b" };
+const PARTITION = { gatewayId: "local:8014", workspaceId: "workspace-1", principal: "local" };
+const PARTITION_KEY = "local:8014\u0000workspace-1\u0000local";
+const OTHER_PARTITION = { ...PARTITION, principal: "user:retired" };
 
 function opId(suffix: string): string {
   return "op_" + suffix.padStart(32, "0");
@@ -105,13 +105,13 @@ describe("会话目录 outbox 持久层端口", () => {
     expect(restored.operations.map((operation) => operation.state)).toEqual(["persisted", "persisted"]);
   });
 
-  test("不同 principal 分区互不可见且分别从 1 分配", async () => {
+  test("本机与旧账户分区互不可见且分别从 1 分配", async () => {
     const port = memoryPort();
     await persistCatalogOutboxPendingOperation(port, PARTITION, pendingRename(opId("a")));
     const otherOperation = addCatalogOutboxIntent(
       createCatalogOutbox(OTHER_PARTITION),
       opId("b"),
-      { kind: "rename_node", targetNodeId: "node-2", name: "用户 B" },
+      { kind: "rename_node", targetNodeId: "node-2", name: "旧账户操作" },
       { baseCatalogRevision: 7, expectedRevision: 1 },
     ).operations[0];
     const other = await persistCatalogOutboxPendingOperation(port, OTHER_PARTITION, otherOperation);

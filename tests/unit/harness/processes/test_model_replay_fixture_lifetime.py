@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from tests.integration.harness import test_model_http_assets as replay_case
+from tests.support import http_server
 
 
 @dataclass
@@ -32,7 +33,7 @@ def replay_lifetime(
     thread.join.side_effect = lambda **_kwargs: cleanups.append("join")
     server.server_close.side_effect = lambda: cleanups.append("socket-close")
     monkeypatch.setattr(replay_case, "ThreadingHTTPServer", Mock(return_value=server))
-    monkeypatch.setattr(replay_case.threading, "Thread", Mock(return_value=thread))
+    monkeypatch.setattr(http_server, "Thread", Mock(return_value=thread))
     fixture = replay_case.model_replay.__wrapped__(str(tmp_path / "workspace"), request.param)
     return ReplayLifetime(fixture, server, thread, cleanups, tmp_path / "artifacts/model-replay-requests.json")
 

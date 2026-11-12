@@ -158,6 +158,22 @@ describe("源码开发运行目录", () => {
 });
 
 describe("transient systemd 启动", () => {
+  test("显式后端选用自己的 Home 和 Python 源码，根启动器与 Vite 保持根路径", () => {
+    const backend = path.join(fixtureRoot, "dev backend");
+    const unit = buildTransientDevelopmentUnit({ cwd: fixtureProjectRoot, environment: {},
+      args: ["--backend-root", backend] });
+    expect(unit.layout.projectRoot).toBe(backend);
+    expect(unit.layout.frontendRoot).toBe(fixtureProjectRoot);
+    expect(unit.layout.boxteamHome).toBe(path.join(backend, "out/development-runtime/boxteam-home"));
+    expect(unit.systemdRunArguments).toContain(`--setenv=BOXTEAM_PROJECT_ROOT=${backend}`);
+    expect(unit.systemdRunArguments).toContain(`--setenv=BOXTEAM_FRONTEND_ROOT=${fixtureProjectRoot}`);
+    expect(unit.systemdRunArguments).toContain(`--working-directory=${fixtureProjectRoot}`);
+    expect(unit.systemdRunArguments.at(-1)).toBe(path.join(fixtureProjectRoot, "scripts/launch/dev.mjs"));
+    const fromBackend = buildTransientDevelopmentUnit({ cwd: backend,
+      environment: { BOXTEAM_PROJECT_ROOT: backend, BOXTEAM_FRONTEND_ROOT: fixtureProjectRoot } });
+    expect(fromBackend.unitName).toBe(unit.unitName);
+  });
+
   test("使用 collect、Restart=no 和仓库内 BOXTEAM_HOME", () => {
     const unit = buildTransientDevelopmentUnit({
       cwd: fixtureProjectRoot,

@@ -18,6 +18,7 @@ async def terminal_plugin_gateway(
     e2e_workspace_root_path: str,
     e2e_workspace_config_path: str,
     e2e_backend_port: int,
+    prepared_developer_tools_package: Path,
 ) -> AsyncIterator[TerminalPluginGateway]:
     del e2e_workspace_config_path
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
@@ -26,5 +27,6 @@ async def terminal_plugin_gateway(
         context.artifacts_dir,
         e2e_backend_port + 95,
         context.boxteam_home,
+        prepared_package_root=prepared_developer_tools_package,
     ) as gateway:
         yield gateway

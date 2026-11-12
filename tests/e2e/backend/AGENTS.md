@@ -17,7 +17,7 @@
 
 - 每个 E2E 测试文件独立启动一个真实后端进程，客户端通过真实 HTTP 端口访问；同一文件内测试串行，不同文件可并发。
 - 依赖注入统一用 pytest fixture；应用代码统一用 FastAPI Depends。工作区目录、`BOXTEAM_HOME`、Gateway 状态目录按测试隔离。
-- 正式产物镜像测试路径写入 `out/tests/e2e/backend/<同名路径>/workspace/` 与 `artifacts/`；临时诊断只写入 `out/tests/temp/`，不得写入 `src/`、`app/`、`asset/` 或项目根。
+- 正式产物镜像测试路径写入 `out/tests/e2e/backend/<同名路径>/workspace/` 与 `artifacts/`；临时诊断只写入 `out/tests/temp/YYYY/MM/DD/<task_name>/`，不得写入 `src/`、`app/`、`asset/` 或项目根。
 - 缺少真实前置条件（真实进程、端口、外部依赖）时必须失败或明确报告未满足前置条件，不得静默回退到替身。
 - 程序绝不能默默失败：不得通过放宽断言或 `skip` 掩盖真实缺陷；断言必须覆盖真实后端响应、工作区文件和持久化状态。
 - 后端端口使用固定的本地测试端口段，并在启动前和退出后清理该端口上的旧进程。

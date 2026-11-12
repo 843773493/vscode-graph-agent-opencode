@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { WorkspaceResourceDTO } from "../../../api/workspaceResources";
 import { TerminalContent } from "./TerminalContent";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
+import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 
 const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 
@@ -41,7 +42,7 @@ function panelProps(entries: WorkspaceResourceDTO[], threadTargetUnavailable = f
     },
     currentThread: null,
     threadTargetUnavailable,
-    workspaceId: entries[0]?.workspace_id ?? "workspace_test",
+    workspaceId: entries[0]?.workspace_id ? gatewayWorkspaceKey({ gatewayId: "gateway_test", workspaceId: entries[0].workspace_id }) : "",
     workspaceName: "测试工作区",
     selectedTerminalId: null,
     onSelectTerminal: () => {},
@@ -76,6 +77,26 @@ function textOf(node: unknown): string {
 }
 
 describe("TerminalContent 终端连接兜底", () => {
+  test("同名终端按明确 ID 连接第二项", () => {
+    installWindow();
+    const items = [entry("workspace_test", "terminal_first"), entry("workspace_test", "terminal_second")];
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(<TerminalContent {...panelProps(items)} selectedTerminalId="terminal_second" />); });
+    expect(renderer.root.findByType("iframe").props.src).toContain("terminal_second");
+    expect(renderer.root.findByType("iframe").props.src).not.toContain("terminal_first");
+    act(() => renderer.unmount());
+  });
+  test("明确选择的终端消失后不连接清单中的其它终端", () => {
+    installWindow();
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(<TerminalContent {...panelProps([entry("workspace_test", "terminal_other")])} selectedTerminalId="terminal_deleted" />);
+    });
+    expect(renderer.root.findAllByType("iframe")).toHaveLength(0);
+    expect(textOf(renderer.root.findByProps({ role: "alert" }).props.children)).toContain("terminal_deleted");
+    act(() => renderer.unmount());
+  });
+
   test("终端 iframe 长时间未就绪时给出超时说明与重试入口", () => {
     installWindow();
     jest.useFakeTimers();
@@ -149,7 +170,7 @@ describe("TerminalContent 终端连接兜底", () => {
 
   test("临时孤儿不发起无授权 iframe，显示重新关联与保留入口", () => {
     installWindow();
-    const orphan = { ...entry("workspace_test", "term_orphan"), retention_scope: "thread", available_actions: ["promote", "attach"], thread_associations: [] };
+    const orphan: WorkspaceResourceDTO = { ...entry("workspace_test", "term_orphan"), retention_scope: "thread", available_actions: ["promote", "attach"], thread_associations: [] };
     const renderer = renderPanel([orphan]);
     expect(renderer.root.findAllByType("iframe")).toHaveLength(0);
     expect(textOf(findFrameFallback(renderer)!.props.children)).toContain("没有线程关联");

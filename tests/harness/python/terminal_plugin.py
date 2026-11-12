@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Self
 from urllib.parse import urlencode, urlsplit
 
 import commentjson
@@ -25,7 +25,6 @@ from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.federation.policy import FederationPolicyStore
-from app.gateway.plugins.packages import PluginPackageStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.service_plugins.runtime import (
     GatewayPluginRuntime,
@@ -142,7 +141,7 @@ class TerminalPluginGateway:
     def websocket_url(self) -> str:
         instance_id = str(self.instance["instance_id"])
         plugin_id = self.binding.plugin_id
-        service_name = "browser" if plugin_id == "browser" else "terminal"
+        service_name = "terminal" if plugin_id == "terminal" else "browser"
         query = urlencode({"package_version": PACKAGE_VERSION, "workspace_id": self.workspace_id})
         return (
             f"ws://127.0.0.1:{urlsplit(self.gateway_url).port}/api/gateway/service-plugins/"
@@ -160,10 +159,42 @@ class TerminalPluginGateway:
         self.instance = slot.receipt.model_dump(mode="json", exclude={"log_sink"})
 
 
+class PluginServiceHttpClient:
+    """将测试请求发到 Gateway 已授权的插件 HTTP 服务路由。"""
+
+    def __init__(self, gateway: TerminalPluginGateway) -> None:
+        self.gateway = gateway
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+        service_url = urlsplit(self.gateway.http_service_url)
+        service_path = service_url.path
+        params = kwargs.pop("params", None)
+        query = dict(part.split("=", 1) for part in service_url.query.split("&") if part)
+        if params is not None:
+            query.update(params)
+        headers = dict(self.gateway.workspace_headers)
+        headers.update(kwargs.pop("headers", {}))
+        return await self.gateway.client.request(
+            method, service_path + path, params=query, headers=headers, **kwargs,
+        )
+
+    async def get(self, path: str, **kwargs: object) -> httpx.Response:
+        return await self.request("GET", path, **kwargs)
+
+    async def post(self, path: str, **kwargs: object) -> httpx.Response:
+        return await self.request("POST", path, **kwargs)
+
+
 def prepare_terminal_plugin_configuration(
     workspace_root: Path, gateway_url: str, *, plugin_ids: frozenset[str] = frozenset({PLUGIN_ID}),
 ) -> None:
-    """为隔离测试 Workspace 预置启用绑定，保留其余现有配置内容。"""
+    """设置隔离 Workspace 的 Gateway URL，并为 Terminal/Browser 预置绑定。"""
 
     config_path = workspace_root / ".boxteam" / "workspace.jsonc"
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -259,8 +290,7 @@ async def install_terminal_plugin_gateway_components(
     workspace_root: Callable[[str], Path],
     artifacts_dir: Path,
     workspace_id: str | None = None,
-    package_archive: Path | None = None,
-    prepared_package_root: Path | None = None,
+    prepared_package_root: Path,
     read_config_snapshot: ConfigSnapshotReader = _read_config_service_snapshot,
 ) -> AsyncIterator[TerminalPluginGatewayComponents]:
     """将真实 Terminal 插件 owner 与 Gateway 服务路由装入调用方现有 app。"""
@@ -272,16 +302,7 @@ async def install_terminal_plugin_gateway_components(
     try:
         os.environ["BOXTEAM_NODE_BIN"] = node_bin
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        package_store = PluginPackageStore(boxteam_home / "plugins" / "packages")
-        if prepared_package_root is not None:
-            if package_archive is not None:
-                raise ValueError("prepared_package_root 与 package_archive 不能同时提供")
-            copy_prepared_developer_tools_package(prepared_package_root, boxteam_home)
-        else:
-            if package_archive is None:
-                package_archive = artifacts_dir / f"{PACKAGE_ID}-{PACKAGE_VERSION}.zip"
-                await asyncio.to_thread(build_developer_tools_package, Path.cwd().resolve(), package_archive)
-            await asyncio.to_thread(package_store.install_zip, package_archive)
+        copy_prepared_developer_tools_package(prepared_package_root, boxteam_home)
         app.include_router(service_plugin_proxy_router)
         app.include_router(service_plugins_router)
         if not any(middleware.cls is TraceMiddleware for middleware in app.user_middleware):
@@ -323,15 +344,15 @@ async def terminal_plugin_gateway_for_workspace(
     gateway_port: int,
     boxteam_home: Path,
     *,
+    prepared_package_root: Path,
     read_config_snapshot: ConfigSnapshotReader | None = None,
     plugin_ids: frozenset[str] = frozenset({PLUGIN_ID}),
-    prepared_package_root: Path | None = None,
 ) -> AsyncIterator[TerminalPluginGateway]:
     """启动只负责插件代理的测试 Gateway，不创建或启动 Workspace Backend。
 
-    测试装具会直接预置隔离 Workspace 的插件 binding，再由真实 ConfigService
-    读取已提交配置并通知真实 GatewayPluginRuntime；产品 CAS 写入口由 Gateway
-    lifecycle 集成测试单独覆盖。
+    Terminal/Browser 装具由真实 ConfigService 读取预置绑定；Debug 装具使用明确的
+    Workspace 测试快照，因为产品绑定不得写入 mutable override。产品 CAS 写入口
+    由 Gateway lifecycle 集成测试单独覆盖。
     """
 
     ensure_local_port_available(gateway_port, service_name="Terminal 插件测试 Gateway")
@@ -386,10 +407,6 @@ async def terminal_plugin_gateway_for_workspace(
             activate=False,
         )
         app = FastAPI()
-        archive = None
-        if prepared_package_root is None:
-            archive = artifacts_dir / f"{PACKAGE_ID}-{PACKAGE_VERSION}.zip"
-            await asyncio.to_thread(build_developer_tools_package, project_root, archive)
         async with AsyncExitStack() as resources:
             resources.callback(registry.close)
             server = uvicorn.Server(uvicorn.Config(
@@ -419,7 +436,6 @@ async def terminal_plugin_gateway_for_workspace(
                 boxteam_home=boxteam_home,
                 workspace_root=lambda _workspace_id: workspace_root,
                 artifacts_dir=artifacts_dir,
-                package_archive=archive,
                 prepared_package_root=prepared_package_root,
                 workspace_id=workspace_id,
                 read_config_snapshot=snapshot_reader,
@@ -480,7 +496,7 @@ async def terminal_plugin_gateway_for_workspace(
                     ) as probe:
                         response = await probe.get(
                             f"/api/gateway/service-plugins/{PACKAGE_ID}/{plugin_id}"
-                            f"/instances/{instance_id}/services/http/api/{'browsers' if plugin_id == 'browser' else 'terminals'}",
+                            f"/instances/{instance_id}/services/http/api/{'terminals' if plugin_id == 'terminal' else 'browsers'}",
                             headers={
                                 "X-BoxTeam-Workspace-Id": workspace_id,
                                 "X-BoxTeam-Resource-Owner": owner_name,
@@ -501,11 +517,7 @@ async def browser_plugin_gateway_for_workspace(
     """以正式 Gateway 插件运行时启动 Browser 服务。"""
 
     async with terminal_plugin_gateway_for_workspace(
-        workspace_root,
-        artifacts_dir,
-        gateway_port,
-        boxteam_home,
-        plugin_ids=frozenset({"browser"}),
+        workspace_root, artifacts_dir, gateway_port, boxteam_home, plugin_ids=frozenset({"browser"}),
         prepared_package_root=prepared_package_root,
     ) as gateway:
         yield gateway

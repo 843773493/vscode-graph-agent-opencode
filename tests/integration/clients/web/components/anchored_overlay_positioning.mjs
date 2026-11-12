@@ -157,10 +157,6 @@ try {
       await ok({ token: "layout-token" });
       return;
     }
-    if (url.pathname === "/api/gateway/users/current") {
-      await ok({ kind: "guest", user_id: null });
-      return;
-    }
     const requestOwner = { gatewayId: request.headers()["x-boxteam-target-gateway-id"],
       workspaceId: request.headers()["x-boxteam-workspace-id"] };
     if (requestOwner.gatewayId !== owner.gatewayId || requestOwner.workspaceId !== owner.workspaceId) {

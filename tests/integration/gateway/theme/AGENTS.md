@@ -13,6 +13,6 @@
 
 # 规范
 
-- 用户和资源通过正式 HTTP 入口创建；文件损坏仅作为查询或写入拒绝前提。
+- 资源通过正式 HTTP 入口创建，不准备游客或普通用户；文件损坏仅作为查询或写入拒绝前提。
 - 复用 `tests.support.diagnostic_sink` 注入日志故障，原生文件错误由实际 OS 产生。
 - 工作区与产物镜像到 `out/tests/integration/gateway/theme/`，保留集成闸门和进程外保护。

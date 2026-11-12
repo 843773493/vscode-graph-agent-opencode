@@ -5,13 +5,12 @@
 ```text
 http_stubs.py
 ├── HTTPStubState                      请求记录与响应回调
-├── _running_http_stub_server           三种替身共用的 socket 与线程生命周期
 ├── generation_target_stub              Gateway 下游身份与会话生成协议
 ├── openai_chat_stub                    Chat 文本响应及可控失败
 └── openai_chat_tool_loop_stub          Chat 工具调用与工具结果续写
 ```
 
-协议 Handler 决定请求与响应，私有运行上下文持有监听 socket 和服务线程。新增协议行为留在对应替身，不复制启动、停机或清理代码；保持公共上下文只返回请求状态，不向消费者暴露服务器句柄。
+协议 Handler 决定请求与响应，socket 和线程统一交给 `tests/support/http_server.py`。新增协议行为留在对应替身，不复制启动、停机或清理代码；保持公共上下文只返回请求状态，不向消费者暴露服务器句柄。
 
 ## 可修改内容
 

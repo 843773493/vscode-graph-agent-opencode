@@ -13,14 +13,13 @@ import { loadRuntimeLogContract } from "../../src/shared/serverRuntimeLogging.mj
 import {
   spawnDetachedProcess,
   terminateDetachedProcess,
-  terminateProcessWithEscalation,
 } from "../../packages/launcher/src/detached-process.mjs";
 import {
   resolveServiceLogPath,
 } from "../../packages/launcher/src/logging/service-log.mjs";
 import { requestGatewayHandoff } from "../../packages/launcher/src/gateway/supervisor.mjs";
-import { BOXTEAM_VERSION } from "../../packaging/runtime/versions.mjs";
 import {
+  assertDevelopmentPortsBindable,
   remainingOccupiedPorts,
   resolveDevelopmentLayout,
   resolveBackendWorkspaceId,
@@ -29,16 +28,20 @@ import {
 import { waitForDetachedReady, waitForHttpOk } from "./dev-readiness.mjs";
 
 const cliArguments = process.argv.slice(2);
-const developmentLayout = resolveDevelopmentLayout();
+const developmentLayout = resolveDevelopmentLayout({ args: cliArguments });
 const {
   projectRoot,
+  frontendRoot,
   boxteamHome,
   defaultWorkspaceRoot,
   portOffset,
   ports,
 } = developmentLayout;
 const logContract = loadRuntimeLogContract(projectRoot);
-const webRoot = path.join(projectRoot, "src", "clients", "workbench");
+const webRoot = path.join(frontendRoot, "src", "clients", "workbench");
+const workbenchArguments = ["run", "dev",
+  "--outdir", path.join(boxteamHome, "state", "workbench-assets", "dist"),
+  "--cache", path.join(boxteamHome, "state", "vite-cache")];
 const launcherEntry = path.join(
   projectRoot,
   "packages",
@@ -162,7 +165,11 @@ function installNodeDebugFixture() {
 }
 
 function writeDevelopmentManifest() {
-  const runtimeRoot = path.join(projectRoot, "out", "development-runtime");
+  const runtimeRoot = path.join(boxteamHome, "state");
+  const version = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8")).version;
+  if (typeof version !== "string" || !version.trim()) {
+    throw new Error(`后端 package.json 缺少有效 version: ${projectRoot}`);
+  }
   mkdirSync(runtimeRoot, { recursive: true });
   const manifestPath = path.join(runtimeRoot, "runtime-manifest.json");
   writeFileSync(
@@ -171,7 +178,7 @@ function writeDevelopmentManifest() {
       {
         schema_version: 1,
         distribution: "source-development",
-        version: BOXTEAM_VERSION,
+        version,
         python_executable: pythonBin,
         application_root: projectRoot,
         config_resources: {
@@ -206,11 +213,12 @@ async function launchDetachedManager() {
 
   const child = await spawnDetachedProcess({
     command: process.execPath,
-    args: [path.join(projectRoot, "scripts", "launch", "dev.mjs")],
-    cwd: projectRoot,
+    args: [path.join(frontendRoot, "scripts", "launch", "dev.mjs")],
+    cwd: frontendRoot,
     environment: {
       ...process.env,
       BOXTEAM_PROJECT_ROOT: projectRoot,
+      BOXTEAM_FRONTEND_ROOT: frontendRoot,
       BOXTEAM_DEV_READY_FILE: readyFile,
     },
     logPath,
@@ -326,53 +334,21 @@ function assertDevelopmentPortsFree(targetPorts, listenerPids) {
     .map(({ port, pids }) => `${port}(pid=${pids.join(",")})`)
     .join("、");
   throw new Error(
-    "开发端口清理后仍被占用，拒绝启动（可能是其它用户或权限不足的进程）: " +
+    "开发端口已有监听者，无法确认属于当前实例，拒绝启动且不会终止这些进程: " +
       details +
-      "；请手动释放这些端口或改用 BOXTEAM_DEV_PORT_OFFSET",
+      "；请检查监听进程，或改用 BOXTEAM_DEV_PORT_OFFSET 选择空闲端口",
   );
 }
 
-async function cleanDevelopmentPorts() {
+function assertDevelopmentPortsAvailable() {
   const targetPorts = selectedPorts();
   if (process.platform === "win32") {
-    // 一次查询覆盖全部目标端口；清理后的确认必须重新取得快照。
-    const listenersBeforeCleanup = readWindowsListenerPidsByPort(targetPorts);
-    const pids = new Set([...listenersBeforeCleanup.values()].flat());
-    for (const pid of pids) {
-      const result = Bun.spawnSync(["taskkill", "/T", "/F", "/PID", pid], {
-        cwd: projectRoot,
-        stdout: "ignore",
-        stderr: "pipe",
-      });
-      if (result.exitCode !== 0) {
-        throw new Error(`无法清理 Windows 开发进程: pid=${pid}`);
-      }
-    }
-    const listenersAfterCleanup = readWindowsListenerPidsByPort(targetPorts);
-    assertDevelopmentPortsFree(targetPorts, (port) => listenersAfterCleanup.get(port));
+    const listeners = readWindowsListenerPidsByPort(targetPorts);
+    assertDevelopmentPortsFree(targetPorts, (port) => listeners.get(port));
     return;
   }
-
-  const signalListener = (pid, signal) => {
-    try {
-      process.kill(Number(pid), signal);
-    } catch (error) {
-      // 监听查询和发信号之间进程可能已退出；其它失败必须原样暴露。
-      if (error.code !== "ESRCH") throw error;
-    }
-  };
-  const listenersBeforeCleanup = readUnixListenerPidsByPort(targetPorts);
-  const pids = new Set([...listenersBeforeCleanup.values()].flat());
-  for (const pid of pids) {
-    signalListener(pid, "SIGTERM");
-  }
-  if (pids.size > 0) await Bun.sleep(1_000);
-  const listenersAfterTerm = readUnixListenerPidsByPort(targetPorts);
-  for (const pid of new Set([...listenersAfterTerm.values()].flat())) {
-    signalListener(pid, "SIGKILL");
-  }
-  const listenersAfterCleanup = readUnixListenerPidsByPort(targetPorts);
-  assertDevelopmentPortsFree(targetPorts, (port) => listenersAfterCleanup.get(port));
+  const listeners = readUnixListenerPidsByPort(targetPorts);
+  assertDevelopmentPortsFree(targetPorts, (port) => listeners.get(port));
 }
 
 function launcherLockPid() {
@@ -382,16 +358,19 @@ function launcherLockPid() {
   return Number.isInteger(payload.pid) && payload.pid > 0 ? payload.pid : null;
 }
 
-async function stopPreviousLauncher() {
+function assertNoExistingLauncher() {
   const pid = launcherLockPid();
   if (pid === null) return;
-  process.stdout.write(`[dev] 正在停止旧 Launcher: pid=${pid}\n`);
-  await terminateProcessWithEscalation(pid, {
-    gracefulTimeoutMs: 15_000,
-    forceTimeoutMs: 5_000,
-    pollIntervalMs: 250,
-    sleepImpl: Bun.sleep,
-  });
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (error?.code === "ESRCH") return;
+    throw error;
+  }
+  throw new Error(
+    `BOXTEAM_HOME 的 Launcher 仍在运行: home=${boxteamHome} pid=${pid}；` +
+      "请先使用对应实例的 workspace.mjs 或 dev-manager.mjs stop 停止，再启动",
+  );
 }
 
 async function main() {
@@ -403,24 +382,25 @@ async function main() {
     requirePath(targetPath, label);
   }
   mkdirSync(defaultWorkspaceRoot, { recursive: true });
-  if (serviceMode === "all" || serviceMode === "gateway") {
-    await stopPreviousLauncher();
-  }
-  await cleanDevelopmentPorts();
+  if (serviceMode === "all" || serviceMode === "gateway") assertNoExistingLauncher();
+  assertDevelopmentPortsAvailable();
+  await assertDevelopmentPortsBindable(selectedPorts(), listenHost);
 
   const runtimeManifest = writeDevelopmentManifest();
   const environment = {
     ...process.env,
+    BOXTEAM_PROJECT_ROOT: projectRoot,
+    BOXTEAM_FRONTEND_ROOT: frontendRoot,
     BOXTEAM_HOME: boxteamHome,
     BOXTEAM_RUNTIME_MANIFEST: runtimeManifest,
     BOXTEAM_DEVELOPMENT_RESTART_RUNNER: process.execPath,
     BOXTEAM_DEVELOPMENT_RESTART_SCRIPT: path.join(
-      projectRoot,
+      frontendRoot,
       "scripts",
       "launch",
       "dev.mjs",
     ),
-    BOXTEAM_DEVELOPMENT_RESTART_CWD: projectRoot,
+    BOXTEAM_DEVELOPMENT_RESTART_CWD: frontendRoot,
     BOXTEAM_PYTHON_BIN: pythonBin,
     BOXTEAM_NODE_BIN: nodeBin,
     BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT: defaultWorkspaceRoot,
@@ -435,6 +415,7 @@ async function main() {
     `[dev] profile=source-development port_offset=${String(portOffset)} ` +
       `frontend=http://${host}:${ports.frontend} ` +
       `gateway=http://${host}:${ports.gateway} ` +
+      `frontend_root=${frontendRoot} backend_root=${projectRoot} ` +
       `boxteam_home=${boxteamHome}\n`,
   );
   installDevelopmentConfiguration(environment);
@@ -483,7 +464,7 @@ async function main() {
       ),
     );
   } else if (serviceMode === "web") {
-    processes.push(spawnProcess("bun", ["run", "dev"], webRoot, environment));
+    processes.push(spawnProcess("bun", workbenchArguments, webRoot, environment));
   } else {
     if (serviceMode === "all") installNodeDebugFixture();
     gatewayProcess = spawnProcess(
@@ -519,7 +500,7 @@ async function main() {
       });
       gatewayReady = true;
       if (serviceMode === "all") {
-        const frontend = spawnProcess("bun", ["run", "dev"], webRoot, environment);
+        const frontend = spawnProcess("bun", workbenchArguments, webRoot, environment);
         processes.push(frontend);
         await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend" });
       }
@@ -531,6 +512,7 @@ async function main() {
           pid: process.pid,
           ready_at: new Date().toISOString(),
           project_root: projectRoot,
+          frontend_root: frontendRoot,
           boxteam_home: boxteamHome,
         })}\n`,
         { encoding: "utf8", mode: 0o600 },

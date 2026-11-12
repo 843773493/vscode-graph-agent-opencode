@@ -12,8 +12,7 @@ import { IFileService, FilePermission, FileType, FileSystemProviderCapabilities,
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../upstream/src/vs/workbench/common/contributions.js';
 import { IFilesConfigurationService } from '../../upstream/src/vs/workbench/services/filesConfiguration/common/filesConfigurationService.js';
-import { onGatewayUserSessionInvalidated, HttpRequestError } from '../../../web/src/api/http.js';
-import { workspaceContext } from '../workspaceContext.js';
+import { HttpRequestError } from '../../../web/src/api/http.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceTarget, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
 
@@ -46,7 +45,6 @@ interface SourceEdit extends ConfigSourceBackup {
   schemaResource?: URI;
   initial?: SourceDocument;
   loading?: Promise<SourceDocument>;
-  invalidated: boolean;
   schemaStreams?: Set<SchemaStream>;
 }
 
@@ -63,20 +61,19 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     let edit = this.edits.get(key);
     if (!edit) {
       const location = sourceLocation(resource);
-      edit = { owner: new ConfigurationSourceOwner(location.target), sourceKey: location.sourceKey, invalidated: false };
+      edit = { owner: new ConfigurationSourceOwner(location.target), sourceKey: location.sourceKey };
       this.edits.set(key, edit);
     }
-    if (edit.invalidated) throw new Error('配置编辑器的入口或凭据已改变；草稿已保留，请从设置命令显式重新打开同一来源');
     return edit;
   }
   prepareEditor(target: SourceTarget, sourceKey: string, document: SourceDocument): URI {
     const resource = configSourceEditorUri(target, sourceKey), key = resource.toString();
     const current = this.edits.get(key);
     if (current) {
-      // 显式重开只恢复同一 owner 的传输，不改变 dirty 文本、保存基线或未知提交。
-      current.owner = new ConfigurationSourceOwner(target); current.invalidated = false;
+      // 显式重选只切换后续传输，保留当前草稿、CAS 和原提交身份。
+      if (current.owner.target.gateway_connection_id !== target.gateway_connection_id) current.owner = new ConfigurationSourceOwner(target);
     } else {
-      const edit: SourceEdit = { owner: new ConfigurationSourceOwner(target), sourceKey, initial: document, invalidated: false };
+      const edit: SourceEdit = { owner: new ConfigurationSourceOwner(target), sourceKey, initial: document };
       this.edits.set(key, edit); this.update(resource, edit, document);
     }
     return resource;
@@ -123,7 +120,6 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     for (const key of this.edits.keys()) this.release(URI.parse(key));
     super.dispose();
   }
-  invalidate(): void { for (const edit of this.edits.values()) edit.invalidated = true; }
   backup(resource: URI): ConfigSourceBackup {
     const edit = this.edits.get(resource.toString());
     return { baseline: edit?.baseline, submissionKey: edit?.submissionKey };
@@ -151,8 +147,6 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     if (edit.document) return edit.document;
     const owner = edit.owner;
     edit.loading ??= owner.read(edit.sourceKey).then(document => {
-      this.edit(resource);
-      if (edit.owner !== owner) throw new Error('配置连接已重新选择，未应用旧连接回执');
       return this.update(resource, edit, document);
     }).finally(() => { edit.loading = undefined; });
     return edit.loading;
@@ -171,8 +165,6 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     const edit = this.edit(resource), owner = edit.owner;
     if (edit.submissionKey) throw new Error('保存结果待核实，请先查询原来源提交；不能丢弃其身份后重新保存');
     const document = edit.initial ?? await owner.read(edit.sourceKey);
-    this.edit(resource);
-    if (edit.owner !== owner) throw new Error('配置连接已重新选择，未应用旧连接回执');
     edit.initial = undefined;
     this.update(resource, edit, document);
     edit.baseline = sourceBaseline(document);
@@ -180,20 +172,15 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
   }
   async query(resource: URI): Promise<SourceDocument> {
     const edit = this.edit(resource);
-    const owner = edit.owner;
-    const document = await owner.read(edit.sourceKey, edit.submissionKey);
-    this.edit(resource);
-    if (edit.owner !== owner) throw new Error('配置连接已重新选择，未应用旧连接回执');
-    return document;
+    return edit.owner.read(edit.sourceKey, edit.submissionKey);
   }
   async writeFile(resource: URI, content: Uint8Array, options: IFileWriteOptions): Promise<void> {
     if (this.schemaDocument(resource)) throw createFileSystemProviderError('配置 schema 只读', FileSystemProviderErrorCode.NoPermissions);
     if (options.append || options.atomic) throw new Error('配置来源不支持追加或通用原子文件替换，请使用原来源保存');
+    // 每次操作捕获原路由；显式重选连接只影响后续操作，资源目标始终来自 URI。
     const edit = this.edit(resource), owner = edit.owner, jsonc = VSBuffer.wrap(content).toString();
     if (edit.submissionKey) {
       const original = await owner.read(edit.sourceKey, edit.submissionKey);
-      this.edit(resource);
-      if (edit.owner !== owner) throw new Error('配置连接已重新选择；请用新连接查询原提交');
       this.update(resource, edit, original);
       if (!original.edit) throw new Error(`原保存结果仍未知，仅可查询提交 ${edit.submissionKey}，未重发写入`);
       edit.submissionKey = undefined;
@@ -207,8 +194,6 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     let document = edit.document;
     if (!document) {
       document = await owner.read(edit.sourceKey);
-      this.edit(resource);
-      if (edit.owner !== owner) throw new Error('配置连接已重新选择，未应用旧连接回执');
       edit.document = document;
     }
     if (!document.writable) throw createFileSystemProviderError('所选配置来源只读', FileSystemProviderErrorCode.NoPermissions);
@@ -217,17 +202,11 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     let saving = false;
     try {
       const preflight = await owner.preflight(intent);
-      this.edit(resource);
-      if (edit.owner !== owner) throw new Error('配置连接已重新选择；原预检回执未用于保存');
       const accepted = await this.dialogs.confirm({ type: 'question', message: '保存目标配置来源？', primaryButton: '保存来源',
         detail: `${owner.target.gateway_id}${owner.target.workspace_id ? ' · 工作区 ' + owner.target.workspace_id : ' · Gateway'} · ${edit.sourceKey}\n变更：${preflight.changed_paths.join('、') || '来源格式或被遮蔽的覆盖'}\n保存与运行生效分别报告。` });
       if (!accepted.confirmed) throw new CancellationError();
-      this.edit(resource);
-      if (edit.owner !== owner) throw new Error('配置连接已重新选择；原预检回执未用于保存');
       saving = true; edit.submissionKey = intent.idempotency_key;
       const saved = await owner.save(intent);
-      this.edit(resource);
-      if (edit.owner !== owner) throw new Error('配置连接已重新选择；已保留原提交身份，请查询原提交');
       this.update(resource, edit, saved); edit.submissionKey = undefined;
       if (!saved.edit?.source_saved) throw new Error(`来源未保存：${sourceStatus(saved)}`);
       edit.baseline = sourceBaseline(saved);
@@ -236,16 +215,12 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
       return;
     } catch (error) {
       if (error instanceof CancellationError) throw error;
-      this.edit(resource);
-      if (edit.owner !== owner) throw error;
       // PUT 的网络或服务端错误可能已经提交；只沿原键查询，后续保存也不能换键重放。
       const uncertain = saving && !(error instanceof HttpRequestError && error.status >= 400 && error.status < 500);
       if (!uncertain) edit.submissionKey = undefined;
       const latest = await owner.read(edit.sourceKey, saving ? intent.idempotency_key : undefined).catch(readError => {
         throw new AggregateError([error, readError], uncertain ? `保存结果未知，保留原提交 ${intent.idempotency_key}；来源回读也失败` : '配置修改失败，草稿已保留；来源回读也失败');
       });
-      this.edit(resource);
-      if (edit.owner !== owner) throw new Error('配置连接已重新选择；原响应未应用，原提交身份仍保留');
       this.update(resource, edit, latest);
       if (uncertain) {
         if (!latest.edit) throw new Error(`保存结果未知，保留提交 ${intent.idempotency_key}，未重发：${getErrorMessage(error)}`);
@@ -266,13 +241,9 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     if (edit.submissionKey) throw new Error('原保存结果待核实，只能先查询原提交；不能重新预检或重发');
     const owner = edit.owner;
     const latest = await owner.read(edit.sourceKey);
-    this.edit(resource);
-    if (edit.owner !== owner) throw new Error('配置连接已重新选择，未应用旧连接回执');
     const accepted = await this.dialogs.confirm({ type: 'warning', message: '以最新来源重新预检当前草稿？', primaryButton: '使用最新基线',
       detail: `${sourceStatus(latest)}\n保留编辑器中的完整草稿；再次保存将按最新来源预检。请先核对并发修改，避免用旧草稿覆盖它们。` });
     if (!accepted.confirmed) return;
-    this.edit(resource);
-    if (edit.owner !== owner) throw new Error('配置连接已重新选择，未应用旧连接回执');
     edit.baseline = sourceBaseline(latest); this.update(resource, edit, latest);
     this.notifications.info('已保留草稿并更新保存基线；尚未写入，请检查后显式保存');
   }
@@ -308,13 +279,6 @@ class ConfigurationSourceEditors extends Disposable {
       if (model.uri.scheme !== configSourceScheme) return;
       autoSave.get(model.uri.toString())?.dispose(); autoSave.delete(model.uri.toString()); provider.release(model.uri);
     }));
-    this._register({ dispose: onGatewayUserSessionInvalidated(0, () => provider.invalidate()) });
-    let entry = workspaceContext.getSnapshot().gatewayId;
-    this._register({ dispose: workspaceContext.subscribe(() => {
-      const current = workspaceContext.getSnapshot().gatewayId;
-      if (entry && current !== entry) provider.invalidate();
-      entry = current;
-    }) });
     this._register({ dispose: () => { for (const disposable of autoSave.values()) disposable.dispose(); autoSave.clear(); } });
   }
 }

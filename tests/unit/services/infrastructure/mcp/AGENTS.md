@@ -37,4 +37,4 @@ mcp/
 
 - 依赖统一通过 pytest fixture 注入。
 - 文件系统使用 `tmp_path` 隔离。
-- 真实 stdio Server 连接只放在 `tests/e2e/system/workspace_services/mcp/`。
+- 真实外部 MCP stdio 连接经 Gateway 插件桥接，产品验收放在 `tests/integration/gateway/`；本目录不启动外部 Server。

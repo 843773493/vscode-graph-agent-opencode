@@ -12,7 +12,7 @@ import {
   apiSuccessResponse,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
-  testGatewayUserAccess,
+
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
 import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
@@ -349,14 +349,14 @@ describe("会话目录更新保持树行稳定", () => {
       tree.root.findByProps({ "aria-label": `展开${kind === "session" ? "会话" : "文件夹"} parent` }).props.onClick();
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
     });
-    const access = testGatewayUserAccess();
-    const base = createCatalogOutbox({ gatewayId: "gateway-test", workspaceId: WORKSPACE_ID, principal: "guest" });
+
+    const base = createCatalogOutbox({ gatewayId: "gateway-test", workspaceId: WORKSPACE_ID, principal: "local" });
     const props = tree.root.findByType(SessionResourceExplorer).props as React.ComponentProps<typeof SessionResourceExplorer>;
     const updateOutbox = async (outbox: typeof base) => {
       await act(async () => {
-        tree.update(<SessionResourceExplorer {...props} gatewayUserAccess={access}
-          sessionCatalogOutboxSnapshot={new Map([[sessionCatalogOutboxScopeKey(WORKSPACE_KEY, access), {
-            gatewayWorkspaceId: WORKSPACE_KEY, principal: "guest", partitionKey: catalogOutboxPartitionKey(outbox.partition), outbox,
+        tree.update(<SessionResourceExplorer {...props}
+          sessionCatalogOutboxSnapshot={new Map([[sessionCatalogOutboxScopeKey(WORKSPACE_KEY), {
+            gatewayWorkspaceId: WORKSPACE_KEY, principal: "local", partitionKey: catalogOutboxPartitionKey(outbox.partition), outbox,
           }]])} />);
       });
     };

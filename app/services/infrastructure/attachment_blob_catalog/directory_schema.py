@@ -10,7 +10,7 @@ from contextlib import closing
 from app.core.sqlite_state import load_sql
 
 DIRECTORY_SCHEMA_VERSION = 5
-DIRECTORY_SCHEMA_SQL = load_sql("app.services.infrastructure.attachment_blob_catalog", "sql/managed_directory_schema.sql")
+DIRECTORY_SCHEMA_SQL = load_sql("app.services.infrastructure.attachment_blob_catalog", "migrations/managed_directory_schema.sql")
 DIRECTORY_SCHEMA_SHA256 = hashlib.sha256(DIRECTORY_SCHEMA_SQL.encode()).hexdigest()
 
 
@@ -69,7 +69,7 @@ def upgrade_directory_schema_4(connection: sqlite3.Connection, *, workspace_id: 
             if owner is None or owner[0] != workspace_id:
                 raise RuntimeError("附件目录 schema 4 的工作区归属不一致")
             rows = [dict(row) for row in connection.execute("SELECT * FROM attachment_directories")]
-            for statement in load_sql("app.services.infrastructure.attachment_blob_catalog", "sql/upgrade_schema4_directories.sql").split(";"):
+            for statement in load_sql("app.services.infrastructure.attachment_blob_catalog", "migrations/upgrade_schema4_directories.sql").split(";"):
                 if statement.strip():
                     connection.execute(statement)
             # 新 DDL 仍只来自唯一 SQL 资产，不维护另一套生产 schema。

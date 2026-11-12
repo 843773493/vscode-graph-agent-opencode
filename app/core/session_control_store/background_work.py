@@ -20,8 +20,8 @@ from app.core.session_control_thread_catalog.thread_catalog import read_fence_ro
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.sqlite_state import load_sql
 
-BACKGROUND_TASKS_DDL = load_sql(__package__, "sql/background_tasks.sql")
-BACKGROUND_TASKS_ACTIVE_DDL = load_sql(__package__, "sql/idx_background_tasks_active.sql")
+BACKGROUND_TASKS_DDL = load_sql(__package__, "migrations/background_tasks.sql")
+BACKGROUND_TASKS_ACTIVE_DDL = load_sql(__package__, "migrations/idx_background_tasks_active.sql")
 
 
 def background_task_from_row(row: sqlite3.Row) -> BackgroundTaskHandle:

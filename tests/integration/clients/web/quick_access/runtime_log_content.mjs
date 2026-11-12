@@ -56,7 +56,6 @@ try {
     return expected === 200 ? payload.data : payload;
   }, { path, body, owner, expected });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await api('/api/gateway/users/guest', { tracking: { source: 'runtime-log-content' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const health = await api('/api/gateway/health'), active = await api('/api/v1/workspace');

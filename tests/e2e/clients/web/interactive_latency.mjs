@@ -2,11 +2,14 @@ import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
+import { Perf } from '../../../harness/js/performance.mjs';
+import { observePage } from '../../../harness/js/browser-performance.mjs';
 
 const baseUrl = process.env.BOXTEAM_BROWSER_BASE_URL;
 const resultPath = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 if (!baseUrl || !resultPath) throw new Error('延迟验收缺少隔离 Gateway 或产物目录');
 const run = TestRunContext.fromTestFile('tests/e2e/clients/web/test_interactive_latency.py');
+const perf = new Perf(run);
 const result = { classification: 'E2E', phase: 'startup', pageErrors: [], forbiddenExecutions: [],
   samples: [], navigationMs: [], sessionOpenMs: [], fileOpenMs: [],
   boundary: '真实 Workbench/Gateway/Backend；无模型请求、HTTP 替身、浏览器缓存预写；目录32会话/128文件，非深历史验收' };
@@ -36,6 +39,8 @@ async function api(path, data) {
       bytes: new TextEncoder().encode(text).length, requestId: body.request_id, path };
   }, { path, data, token, route });
   result.samples.push({ ...receipt, body: undefined, phase: result.phase });
+  perf.record('end', 'http.browser_api', { stage_id: crypto.randomUUID(), elapsed_ns: Math.round(receipt.elapsedMs * 1e6),
+    status: 'passed', request_id: receipt.requestId, response_bytes: receipt.bytes, inclusive: true }, { phase: result.phase });
   return receipt;
 }
 
@@ -49,6 +54,8 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   run.addCleanup('BrowserContext', () => context.close());
   page = await context.newPage();
+  const observer = await observePage(page, perf, context);
+  if (observer.close) run.addCleanup('页面性能观察', () => observer.close());
   // Chromium网络事件证明实际传输；不把合成响应或DOM可见冒充完整正文传输。
   const cdp = await context.newCDPSession(page), transfers = new Map();
   cdp.on('Network.responseReceived', event => {
@@ -164,6 +171,9 @@ try {
     expect(bytes).toBeGreaterThanOrEqual(128 * 1024);
     result.samples.push({ phase: result.phase, path: new URL(response.url()).pathname, bytes,
       requestId: response.headers()['x-request-id'], elapsedMs: elapsed });
+    perf.record('end', 'ui.file.open', { stage_id: crypto.randomUUID(), elapsed_ns: Math.round(elapsed * 1e6), status: 'passed', inclusive: true },
+      { bytes, cache_state: index === 0 ? 'first_explicit_open' : 'subsequent_open' });
+    await observer.checkpoint('file.open', index);
 
   }
   expect(Math.max(...result.fileOpenMs), '每次文件打开到真实正文可见的总预算').toBeLessThanOrEqual(2000);
@@ -197,6 +207,9 @@ try {
     result.sessionOpenMs.push(elapsed);
     result.samples.push({ phase: result.phase, path: new URL(response.url()).pathname,
       requestId: body.request_id, bytes: Buffer.byteLength(JSON.stringify(body)), elapsedMs: elapsed });
+    perf.record('end', 'ui.session.open', { stage_id: crypto.randomUUID(), elapsed_ns: Math.round(elapsed * 1e6), status: 'passed', inclusive: true },
+      { cache_state: 'alternating_existing_sessions' });
+    await observer.checkpoint('session.open', index);
 
   }
 

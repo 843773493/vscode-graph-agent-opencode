@@ -26,6 +26,7 @@ from app.schemas.gateway.config import (
     GatewayConfigSourceOriginDTO,
     GatewayConfigSourcePreflightDTO,
 )
+from app.services.infrastructure.config.plugin_private_inputs import private_input_references
 from app.services.infrastructure.config.policy import gateway_config_policy
 from app.services.infrastructure.config.source_document import (
     parse_source_text,
@@ -269,7 +270,16 @@ class GatewaySourceEditMixin:
                 raise ConfigConflictError("Gateway 来源幂等键已绑定其它请求")
             if pending.state != "candidate_validated" or store.get_config_apply_claim(config_domain=service._CONFIG_DOMAIN) is not None:
                 return self.get_source_document(source_key=source_key, idempotency_key=request.idempotency_key)
+        previous_file = read_stable_config_file(self._source_path(source_key))
+        previous_source = parse_source_text(
+            previous_file.raw_bytes.decode("utf-8") if previous_file.raw_bytes is not None else "{}\n"
+        )
+        has_private_inputs = bool(private_input_references(previous_source))
+        remove_released_inputs = service._remove_released_plugin_private_inputs
+        if has_private_inputs and remove_released_inputs is None:
+            raise RuntimeError("Gateway 插件私有输入回收 owner 未装配，拒绝修改来源")
         text, candidate = self._preflight_source_edit(source_key, request, pending)
+        verify_stable_config_file(previous_file)
         intent: dict[str, object] = {
             "gateway_id": request.gateway_id, "source_key": source_key, "request_digest": request_digest,
             "file_digest": sha256(text.encode()).hexdigest(), "stage": "accepted",
@@ -301,6 +311,8 @@ class GatewaySourceEditMixin:
                     if before_write is not None:
                         before_write()
                     atomic_write_bytes(file.path, text.encode())
+                if has_private_inputs and remove_released_inputs is not None:
+                    remove_released_inputs(previous_source)
                 return True
 
         await service.reload(before_build=save, idempotency_key=request.idempotency_key, source_edit=intent)

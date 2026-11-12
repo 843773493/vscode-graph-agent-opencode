@@ -125,9 +125,6 @@ describe("workspace 文件树目录缓存", () => {
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
       if (url.pathname === "/api/v1/workspace/files") {
         requests += 1;
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -166,9 +163,6 @@ describe("workspace 文件树目录缓存", () => {
       const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
       }
       if (url.pathname === "/api/v1/workspace/files") {
         page += 1;
@@ -210,9 +204,6 @@ describe("workspace 文件树目录缓存", () => {
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
       requests += 1;
       return apiResponse({ root_path: workspaceRootUri, path: workspaceRootUri, items: [], truncated: false, next_cursor: null });
     }, { preconnect: originalFetch.preconnect });
@@ -233,9 +224,6 @@ describe("workspace 文件树目录缓存", () => {
       const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
       }
       return new Response(JSON.stringify({ detail: "目录读取失败" }), {
         status: 500,
@@ -265,9 +253,6 @@ describe("workspace 文件树目录缓存", () => {
       const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
       }
       const path = url.searchParams.get("path") ?? "";
       requestedPaths.push(path);
@@ -304,9 +289,6 @@ describe("workspace 文件树目录缓存", () => {
       const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
       }
       await new Promise<void>((resolve) => { releaseList.current = resolve; });
       // 迟到的响应带真实条目，用来证明中止后它不会写进缓存。
@@ -349,9 +331,6 @@ describe("workspace 文件树目录缓存", () => {
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
       return new Response(JSON.stringify({ detail: "文件树路径无访问权限: root" }), {
         status: 403,
         statusText: "Forbidden",
@@ -379,9 +358,6 @@ describe("workspace 文件树目录缓存", () => {
       const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
       }
       await new Promise<void>((resolve) => { releaseList.current = resolve; });
       const path = url.searchParams.get("path") ?? "";
@@ -419,9 +395,6 @@ describe("workspace 文件树目录缓存", () => {
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
       const path = url.searchParams.get("path") ?? "";
       return apiResponse({
         root_path: workspaceRootUri, path,
@@ -455,9 +428,6 @@ describe("workspace 文件树目录缓存", () => {
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
       }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
       const path = url.searchParams.get("path") ?? "";
       return apiResponse({
         root_path: workspaceRootUri, path,
@@ -489,9 +459,6 @@ describe("workspace 文件树目录缓存", () => {
       const url = requestUrl(input, init);
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "token" });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
       }
       await new Promise<void>((resolve) => { releases.push(resolve); });
       const path = url.searchParams.get("path") ?? "";

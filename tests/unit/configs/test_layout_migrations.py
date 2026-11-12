@@ -7,7 +7,7 @@ import commentjson
 import pytest
 
 from configs.installer import atomic_write
-from configs.layout_migrations import (
+from configs.maintenance.layout import (
     migrate_legacy_user_configuration,
     migrate_legacy_workspace_configuration,
 )
@@ -76,7 +76,7 @@ def test_user_layout_migration_recovers_after_one_target_commit(
         atomic_write(path, content, mode)
 
     monkeypatch.setattr(
-        "configs.layout_migrations.atomic_write",
+        "configs.maintenance.layout.atomic_write",
         interrupt_third_write,
     )
     with pytest.raises(OSError, match="模拟第二个目标"):
@@ -86,7 +86,7 @@ def test_user_layout_migration_recovers_after_one_target_commit(
             workspace_schema_path=workspace_schema_path,
         )
 
-    monkeypatch.setattr("configs.layout_migrations.atomic_write", atomic_write)
+    monkeypatch.setattr("configs.maintenance.layout.atomic_write", atomic_write)
     assert migrate_legacy_user_configuration(
         config_root=tmp_path,
         gateway_schema_path=gateway_schema_path,

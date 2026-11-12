@@ -3,7 +3,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, join, basename } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { create as createTar } from 'tar';
 import { parseArgs } from 'node:util';
 
 const { values } = parseArgs({ options: { 'project-root': { type: 'string' }, 'output-root': { type: 'string' } } });
@@ -31,9 +31,7 @@ await mkdir(join(output, 'releases'), { recursive: true });
 const archives = [];
 for (const bundle of bundles) {
   const archive = join(output, 'releases', `BoxTeam-${product.version}-${process.platform}-${process.arch}.tar.gz`);
-  const result = spawnSync('tar', ['-czf', archive, '-C', resolve(bundle, '..'), basename(bundle)], { stdio: 'inherit' });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`Electron 归档失败：exit=${result.status}`);
+  await createTar({ gzip: true, file: archive, cwd: resolve(bundle, '..'), strict: true }, [basename(bundle)]);
   const digest = createHash('sha256');
   for await (const chunk of createReadStream(archive)) digest.update(chunk);
   const sha256 = digest.digest('hex');

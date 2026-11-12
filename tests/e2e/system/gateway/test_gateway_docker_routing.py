@@ -52,7 +52,6 @@ from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
     workspace_id_from_response,
@@ -145,7 +144,6 @@ async def test_gateway_federates_complete_remote_gateway_through_docker(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             health_response = await client.get("/api/gateway/health")
             assert health_response.status_code == 200, health_response.text
             gateway_id = health_response.json()["data"]["gateway_id"]

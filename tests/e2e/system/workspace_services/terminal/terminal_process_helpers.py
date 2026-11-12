@@ -10,7 +10,6 @@ from urllib.request import Request, urlopen
 import psutil
 
 from app.core.identifier import create_uuid_hex
-from app.core.workspace_identity import load_or_create_workspace_id
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import TerminalPluginService
 from tests.support.ports import TEST_FILE_PORT_BLOCK_SIZE
@@ -71,7 +70,7 @@ def create_long_running_terminal(
     workspace_root: str,
     title: str,
 ) -> dict[str, object]:
-    workspace_id = load_or_create_workspace_id(Path(workspace_root))
+    workspace_id = plugin.workspace_id
     payload = {
         "workspace_id": workspace_id,
         "terminal_id": f"term_{create_uuid_hex()}",
@@ -110,7 +109,6 @@ def get_terminal_snapshot(plugin: TerminalPluginService, terminal_id: str) -> di
 def wait_terminal_snapshot(
     plugin: TerminalPluginService,
     terminal_id: str,
-    workspace_id: str,
     *,
     timeout_seconds: float = 5,
 ) -> dict[str, object]:

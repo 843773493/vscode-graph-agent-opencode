@@ -64,7 +64,7 @@ export function parseClipboardFilePaths(text: string): [string, ...string[]] {
       const unquoted = line.length >= 2 && line.startsWith('"') && line.endsWith('"')
         ? line.slice(1, -1)
         : line;
-      if (unquoted.startsWith("file://")) {
+      if (/^file:\/\//i.test(unquoted)) {
         return parseFileUri(unquoted);
       }
       if (unquoted.startsWith("boxteam://")) return unquoted;

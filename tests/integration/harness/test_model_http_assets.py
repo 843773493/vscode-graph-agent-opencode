@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import json
-import threading
 from collections.abc import Iterator
-from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -19,6 +17,7 @@ from tests.integration.stubs.http_stubs import (
     openai_chat_stub,
     openai_chat_tool_loop_stub,
 )
+from tests.support.http_server import running_http_server
 from tests.support.ports import integration_port_block_for_file
 
 
@@ -124,25 +123,13 @@ def model_replay(integration_workspace_root_path: str, model_protocol: str) -> I
             self.end_headers()
             self.wfile.write(body)
 
-    with ExitStack() as lifetime:
-        def save_replay_requests() -> None:
-            output = Path(integration_workspace_root_path).parent / "artifacts"
-            output.mkdir(exist_ok=True)
-            (output / "model-replay-requests.json").write_text(json.dumps(requests, ensure_ascii=False, indent=2))
-
-        lifetime.callback(save_replay_requests)
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        lifetime.callback(server.server_close)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-
-        def join_server_thread() -> None:
-            thread.join(timeout=5)
-            assert not thread.is_alive()
-
-        lifetime.callback(join_server_thread)
-        lifetime.callback(server.shutdown)
-        yield f"http://127.0.0.1:{server.server_port}/v1", requests
+    try:
+        with running_http_server(ThreadingHTTPServer(("127.0.0.1", 0), Handler)) as server:
+            yield f"http://127.0.0.1:{server.server_port}/v1", requests
+    finally:
+        output = Path(integration_workspace_root_path).parent / "artifacts"
+        output.mkdir(exist_ok=True)
+        (output / "model-replay-requests.json").write_text(json.dumps(requests, ensure_ascii=False, indent=2))
 
 
 @pytest.fixture

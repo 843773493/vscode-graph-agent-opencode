@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -20,12 +20,12 @@ from app.gateway.control.gateway_registry.snapshot import read_workspace_registr
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.generator_import import import_session_generators
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
-from app.gateway.control.user_access import UserAccessContext, UserAccessService
-from app.gateway.control.view_state import UserViewStateStore
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
-from configs import workspace_identity_migration as migration
 from configs.cli import main
-from configs.workspace_identity_migration import preview_workspace_identity_migration
+from configs.maintenance import workspace_identity_migration as migration
+from configs.maintenance.workspace_identity_migration import (
+    preview_workspace_identity_migration,
+)
 from tests.unit.configs.conftest import LegacyGateway
 
 LOCAL_ALIAS = "gw_local_0"
@@ -91,9 +91,6 @@ def _view_rows(path: Path) -> list[tuple[object, ...]]:
 
 @pytest.fixture
 def write_view_state(registered: LegacyGateway, current_state: GatewayStateStore) -> Callable[[str, str, str], sqlite3.Row]:
-    access = UserAccessService(state=current_state)
-    views = UserViewStateStore(state=current_state)
-    contexts: dict[str, UserAccessContext] = {}
     ordinal = 0
     with closing(sqlite3.connect(registered.database)) as connection:
         connection.execute("DELETE FROM user_view_state")
@@ -101,25 +98,13 @@ def write_view_state(registered: LegacyGateway, current_state: GatewayStateStore
 
     def write(user_id: str, workspace_id: str, session_id: str) -> sqlite3.Row:
         nonlocal ordinal
-        if user_id not in contexts:
-            access.create_user(display_name="保留用户显示名", user_id=user_id)
-            contexts[user_id] = access.acquire_user(user_id=user_id, client_label="identity-preview")
         ordinal += 1
-        record = views.put(
-            context=contexts[user_id], gateway_id=registered.gateway_id,
-            workspace_id=_workspace_id(registered, workspace_id) if workspace_id in registered.metadata["workspaces"] else _workspace_id(registered),
-            session_id=session_id,
-            turn_anchor=f"保留正文:{LOCAL_ALIAS}", scroll_offset=128.5 + ordinal,
-            follow_latest=bool(ordinal % 2), projection_version=ordinal,
-            tool_details_expanded=not bool(ordinal % 2),
-        )
-        with closing(current_state.connection()) as source, closing(sqlite3.connect(registered.database)) as destination:
-            user = source.execute("SELECT * FROM user_account WHERE user_id=?", (user_id,)).fetchone()
-            destination.execute("INSERT OR IGNORE INTO user_account VALUES(?,?,?,?)", tuple(user))
-            payload = asdict(record)
-            del payload["gateway_id"]
-            payload["workspace_id"] = workspace_id
-            destination.execute(f"INSERT INTO user_view_state({','.join(payload)}) VALUES({','.join('?' for _ in payload)})", tuple(payload.values()))
+        with closing(sqlite3.connect(registered.database)) as destination:
+            destination.execute("INSERT OR IGNORE INTO user_account VALUES(?,?,?,?)",
+                (user_id, "保留用户显示名", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
+            destination.execute("INSERT INTO user_view_state VALUES(?,?,?,?,?,?,?,?,?)",
+                (user_id, workspace_id, session_id, f"保留正文:{LOCAL_ALIAS}", 128.5 + ordinal,
+                 bool(ordinal % 2), ordinal, not bool(ordinal % 2), "2026-01-01T00:00:00Z"))
             destination.commit()
             destination.row_factory = sqlite3.Row
             return destination.execute("SELECT * FROM user_view_state WHERE user_id=? AND workspace_id=? AND session_id=?",

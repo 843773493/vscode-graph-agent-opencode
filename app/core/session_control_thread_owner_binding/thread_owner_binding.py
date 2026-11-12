@@ -64,7 +64,7 @@ __all__ = [
 # 不收物理路径、相对路径片段与凭据形态字段；列表槽存 canonical JSON。
 # prefix epoch 在此只是 owner 侧记录槽，权威解释仍属 ContextStore；
 # ToolSet applied 只由成功封存的 assembly binding 承载。
-THREAD_OWNER_BINDINGS_TABLE_DDL = load_sql(__package__, "sql/thread_owner_bindings.sql")
+THREAD_OWNER_BINDINGS_TABLE_DDL = load_sql(__package__, "migrations/thread_owner_bindings.sql")
 
 
 _OWNER_BINDING_EPOCH_REASONS = (

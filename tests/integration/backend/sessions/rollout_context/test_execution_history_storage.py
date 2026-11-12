@@ -34,7 +34,6 @@ from tests.support.model_stream.config import ModelStreamReplay, model_stream_re
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -257,7 +256,6 @@ async def test_same_workload_tools_restart_and_storage_measurements(
                           headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": target.backend.workspace_id}) as client,
         httpx.AsyncClient(base_url=f"http://127.0.0.1:{target.backend_port}", timeout=60) as observer,
     ):
-        await acquire_gateway_guest(client)
         session = await create_session(client, "执行历史存储同负载")
         main = await client.get(f"/api/v1/sessions/{session}/main-thread")
         assert main.status_code == 200, main.text

@@ -18,6 +18,7 @@ import { openWorkspaceFileIntentStore } from '../../web/src/state/workspaceFiles
 import { dispatchWorkspaceFileIntent, waitForWorkspaceFileOperation } from '../../web/src/state/workspaceFiles/dispatcher.js';
 import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import type { WorkspaceFileList, WorkspaceFileOperationReceipt } from '../../web/src/types/backend.js';
+import { invalidateGatewayToken } from '../../web/src/api/http.js';
 
 const owner = { gatewayId: 'gateway_file_test', workspaceId: 'workspace-a' };
 const ownerKey = gatewayWorkspaceKey(owner);
@@ -485,6 +486,22 @@ describe('后端文件目录根和稳定投影', () => {
     } finally { await store.remove(record); await store.remove(previous); create.mockRestore(); status.mockRestore(); }
   });
 
+  test('非 UTF-8 新文件在任何文件请求与创建 intent 前拒绝', async () => {
+    const files = fileService();
+    const resource = workspaceFileUri(owner, root + '/unsupported.bin', root);
+    const provider = files.getProvider(resource.scheme)!;
+    const roots = spyOn(fileApi, 'getWorkspaceFileRoots');
+    const create = spyOn(fileApi, 'createWorkspaceFileEntry');
+    const request = spyOn(gateway, 'request');
+    try {
+      await expect(provider.writeFile(resource, new Uint8Array([0xff, 0xfe]),
+        { create: true, overwrite: true, unlock: false, atomic: false })).rejects.toThrow();
+      expect(roots).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+    } finally { roots.mockRestore(); create.mockRestore(); request.mockRestore(); files.dispose(); }
+  });
+
   test('已有文件尊重 create/overwrite 标志，覆盖仍使用原字节 revision', async () => {
     const files = fileService();
     const exists = workspaceFileUri(owner, root + '/existing.json', root);
@@ -625,7 +642,7 @@ describe('后端文件目录根和稳定投影', () => {
   });
 
   for (const stage of ['request', 'body'] as const) {
-    test(`取消后迟到的 ${stage} 不交付字节或推进保存基线`, async () => {
+    for (const interruption of ['cancel', 'credential'] as const) test(`${interruption} 后迟到的 ${stage} 不交付字节或推进保存基线`, async () => {
       const files = fileService(), resource = workspaceFileUri(owner, root + '/cancelled.txt', root);
       const provider = files.getProvider(resource.scheme)!;
       if (!provider.readFile || !provider.readFileStream || !provider.writeFile) throw new Error('缺少文件字节能力');
@@ -646,15 +663,32 @@ describe('后端文件目录根和稳定投影', () => {
           raw.mockResolvedValueOnce(new PendingBlob());
         }
         const pending = consumeStream(provider.readFileStream(resource, {}, cancellation.token), chunks => chunks);
+        // 同时观察结算，避免等待转换结束才发现凭据已经失效；拒绝在此处立即被消费。
+        let outcome: 'pending' | 'resolved' | 'rejected' = 'pending';
+        const observed = pending.then(value => { outcome = 'resolved'; return value; }, error => {
+          outcome = 'rejected'; return error as unknown;
+        });
         await started.promise;
-        cancellation.cancel();
+
+        invalidateGatewayToken(1);
+        expect(raw.mock.calls.at(-1)?.[3]?.aborted).toBe(false);
+        if (interruption === 'cancel') cancellation.cancel();
+        else invalidateGatewayToken(0);
+        if (stage === 'body') {
+          for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+          expect(outcome).toBe('rejected');
+        }
         response.resolve(new Blob(['late bytes']));
         body.resolve(new TextEncoder().encode('late bytes').buffer);
-        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        expect(await observed).toMatchObject({ name: 'AbortError' });
         expect(raw.mock.calls.length - before).toBe(1);
         await provider.writeFile(resource, new TextEncoder().encode('saved'), { create: false, overwrite: true, unlock: false, atomic: false });
         expect(JSON.parse(String(request.mock.calls.at(-1)?.[1]?.body)).expected_revision).toBe(createHash('sha256').update('original').digest('hex'));
-      } finally { cancellation.dispose(true); request.mockRestore(); raw.mockRestore(); files.dispose(); }
+      } finally {
+        response.resolve(new Blob(['late bytes']));
+        body.resolve(new TextEncoder().encode('late bytes').buffer);
+        cancellation.dispose(true); request.mockRestore(); raw.mockRestore(); files.dispose();
+      }
     });
   }
 

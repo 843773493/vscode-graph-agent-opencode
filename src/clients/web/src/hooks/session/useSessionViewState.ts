@@ -16,7 +16,7 @@ export interface SessionViewStateHost {
   apiPort: number | null;
   currentWorkspaceId: string | null;
   currentSessionId: string | null;
-  gatewayUserViewStates: Map<string, SessionViewState>;
+  sessionViewStates: Map<string, SessionViewState>;
   expandDetails: boolean;
   threadId?: string;
   scopeKey?: string;
@@ -40,10 +40,10 @@ export function useSessionViewState({ host, setState, onError }: {
   const apply = useCallback((target: SessionViewStateHost, workspaceId: string, sessionId: string, view: SessionViewState | null, expand: boolean) => {
     const key = target.scopeKey ?? sessionScopeKey(workspaceId, sessionId);
     setState(previous => {
-      const views = new Map(previous.gatewayUserViewStates);
+      const views = new Map(previous.sessionViewStates);
       if (view) views.set(key, view); else views.delete(key);
       const current = latest.current;
-      return { ...previous, gatewayUserViewStates: views,
+      return { ...previous, sessionViewStates: views,
         expandDetails: expand && current.currentWorkspaceId === workspaceId && current.currentSessionId === sessionId
           && current.threadId === target.threadId ? view?.tool_details_expanded ?? false : previous.expandDetails };
     });
@@ -72,7 +72,7 @@ export function useSessionViewState({ host, setState, onError }: {
     const key = JSON.stringify([target.apiPort, workspaceId, sessionId, target.threadId]);
     const version = (versions.current.get(key) ?? 0) + 1;
     versions.current.set(key, version);
-    const existing = target.gatewayUserViewStates.get(target.scopeKey ?? sessionScopeKey(workspaceId, sessionId));
+    const existing = target.sessionViewStates.get(target.scopeKey ?? sessionScopeKey(workspaceId, sessionId));
     void writeSessionView(target.apiPort ?? DEFAULT_BACKEND_PORT, workspaceId, sessionId, {
       ...payload, projection_version: 1,
       tool_details_expanded: payload.tool_details_expanded ?? existing?.tool_details_expanded ?? target.expandDetails,
@@ -84,7 +84,7 @@ export function useSessionViewState({ host, setState, onError }: {
     setState(previous => ({ ...previous, expandDetails: expand }));
     const current = latest.current;
     const existing = current.currentWorkspaceId && current.currentSessionId
-      ? current.gatewayUserViewStates.get(current.scopeKey ?? sessionScopeKey(current.currentWorkspaceId, current.currentSessionId)) : null;
+      ? current.sessionViewStates.get(current.scopeKey ?? sessionScopeKey(current.currentWorkspaceId, current.currentSessionId)) : null;
     saveSessionViewState({ turn_anchor: existing?.turn_anchor ?? null, scroll_offset: existing?.scroll_offset ?? 0,
       follow_latest: existing?.follow_latest ?? true, tool_details_expanded: expand });
   }, [saveSessionViewState, setState]);

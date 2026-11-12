@@ -12,14 +12,13 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     GatewayProcess,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import e2e_port_block_for_file
 from tests.support.trace import get_trace_payload
 
 
@@ -83,7 +82,6 @@ async def client(team_gateway: GatewayProcess) -> AsyncIterator[httpx.AsyncClien
         headers=LOCAL_TOKEN_HEADERS,
         timeout=30,
     ) as gateway_client:
-        await acquire_gateway_guest(gateway_client)
         yield gateway_client
 
 

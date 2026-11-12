@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
-from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
-from time import perf_counter_ns
-from uuid import uuid4
 
+from tests.harness.performance.record import stage
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.session_catalog_owner import fixture_catalog_scope
 from tests.support.workspaces import prepare_test_workspace
@@ -38,122 +35,16 @@ def custom_tool_workspace_template_copy_paths(template_root: Path) -> tuple[str,
     )
 
 
-class FixtureStageObserver:
-    """仅供显式 profile 使用的标量 JSONL 计时记录器。"""
-
-    def __init__(self, artifacts_root: Path) -> None:
-        artifacts_root.mkdir(parents=True, exist_ok=True)
-        self.path = artifacts_root / f"fixture-stage-timing-{uuid4().hex}.jsonl"
-        with ExitStack() as startup_cleanup:
-            self._stream = startup_cleanup.enter_context(self.path.open("x", encoding="utf-8"))
-            self._sequence = 0
-            self._normal_prepare_calls = 0
-            self._completed_normal_turns = 0
-            self._completed_fork_turns = 0
-            self._closed = False
-            self.record(
-                "start",
-                "fixture.profile",
-                expected_total_turns=427,
-                expected_normal_turns=420,
-                expected_fork_turns=7,
-            )
-            startup_cleanup.pop_all()
-
-    def record(self, event: str, stage: str, **fields: object) -> None:
-        if any(not isinstance(value, (str, int, float, bool, type(None))) for value in fields.values()):
-            raise TypeError("fixture profile 只允许记录标量字段")
-        self._sequence += 1
-        self._stream.write(
-            json.dumps(
-                {
-                    "sequence": self._sequence,
-                    "event": event,
-                    "stage": stage,
-                    "monotonic_ns": perf_counter_ns(),
-                    **fields,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            + "\n"
-        )
-        self._stream.flush()
-        if event == "start" and stage == "generator.prepare_execution":
-            self._normal_prepare_calls += 1
-        elif event == "done" and fields.get("outcome") == "ok":
-            if stage == "generator.normal_turn":
-                self._completed_normal_turns += 1
-            elif stage == "generator.fork_copy":
-                fork_turns = fields.get("turn_count")
-                if isinstance(fork_turns, int):
-                    self._completed_fork_turns += fork_turns
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        with closing(self._stream):
-            self.record(
-                "summary",
-                "fixture.profile",
-                total_turns=self._completed_normal_turns + self._completed_fork_turns,
-                normal_turns=self._completed_normal_turns,
-                normal_prepare_calls=self._normal_prepare_calls,
-                fork_turns=self._completed_fork_turns,
-            )
-
-
-@contextmanager
-def timed_fixture_stage(
-    observer: FixtureStageObserver | None,
-    stage: str,
-    **fields: object,
-) -> Iterator[dict[str, object] | None]:
-    if observer is None:
-        yield None
-        return
-
-    started_ns = perf_counter_ns()
-    observer.record("start", stage, inclusive=True, **fields)
-    result_fields: dict[str, object] = {}
-    try:
-        yield result_fields
-    except BaseException as error:
-        observer.record(
-            "done",
-            stage,
-            duration_ns=perf_counter_ns() - started_ns,
-            inclusive=True,
-            outcome="error",
-            error_type=type(error).__name__,
-            **fields,
-            **result_fields,
-        )
-        raise
-    else:
-        observer.record(
-            "done",
-            stage,
-            duration_ns=perf_counter_ns() - started_ns,
-            inclusive=True,
-            outcome="ok",
-            **fields,
-            **result_fields,
-        )
-
-
 def prepare_custom_tool_test_workspace(
     *,
     workspace_root: Path,
     template_root: Path,
     shared_skill_root: Path | None = None,
-    observer: FixtureStageObserver | None = None,
 ) -> Path:
     """复制只读模板，并在测试副本重建完整 canonical rollout 历史。"""
 
     template_paths_to_copy = custom_tool_workspace_template_copy_paths(template_root)
-    with timed_fixture_stage(observer, "workspace.template_copy"):
+    with stage("workspace.template_copy"):
         workspace_root = prepare_test_workspace(
             workspace_root=workspace_root,
             template_root=template_root,
@@ -185,15 +76,15 @@ def prepare_custom_tool_test_workspace(
         generate_custom_tool_rollout_fixture,
     )
 
-    with timed_fixture_stage(observer, "workspace.generator", total_turns=427, normal_turns=420, fork_turns=7):
-        generate_custom_tool_rollout_fixture(workspace_root, observer=observer)
-    with timed_fixture_stage(observer, "workspace.manifest_restore"):
+    with stage("workspace.generator", total_turns=427, normal_turns=420, fork_turns=7):
+        generate_custom_tool_rollout_fixture(workspace_root)
+    with stage("workspace.manifest_restore"):
         manifest_path.write_bytes(manifest_bytes)
 
     with fixture_catalog_scope():
         sessions_root = workspace_root / ".boxteam" / "sessions"
         boundary_session_ids: list[str] = []
-        with timed_fixture_stage(observer, "workspace.boundary_catalog_seed", count=len(boundary_sessions)):
+        with stage("workspace.boundary_catalog_seed", count=len(boundary_sessions)):
             for item in boundary_sessions:
                 if not isinstance(item, dict):
                     raise TypeError(f"rollout fixture boundary entry 必须是 object: {item!r}")
@@ -206,6 +97,6 @@ def prepare_custom_tool_test_workspace(
 
         from tests.support.rollout.web_boundary_seeding import seed_boundary_cases
 
-        with timed_fixture_stage(observer, "workspace.boundary_web_seed", count=len(boundary_session_ids)):
+        with stage("workspace.boundary_web_seed", count=len(boundary_session_ids)):
             seed_boundary_cases(workspace_root, session_ids=boundary_session_ids)
         return workspace_root

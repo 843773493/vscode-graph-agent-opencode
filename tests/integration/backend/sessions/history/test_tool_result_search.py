@@ -171,3 +171,55 @@ async def test_tool_result_cursor_category_limits_and_stale_reference(
     finally:
         output_path.write_bytes(original)
     assert len(runtime_case.model_requests) == 2
+
+
+async def test_tool_result_metadata_lists_without_body_and_opens_original_tool_row(
+    runtime_case: RuntimeCase, history_client: httpx.AsyncClient, tool_history, monkeypatch: pytest.MonkeyPatch,
+):
+    base, main, child, _accepted, _output_path = tool_history
+    reader = runtime_case.runner.container.checkpointer._history_reader._context_reader
+    calls_before = len(runtime_case.model_requests)
+    with monkeypatch.context() as patch:
+        def reject_body(*args, **kwargs):
+            raise AssertionError("工具结果目录不得读取 canonical 正文")
+        patch.setattr(reader, "read_canonical_items", reject_body)
+        page_response = await history_client.get(f"{base}/{child}/tool-results", params={"limit": 1})
+        assert page_response.status_code == 200, page_response.text
+        page = page_response.json()["data"]
+        assert page_response.json()["request_id"] == "request-cold-history"
+        assert page["session_id"] == base.split("/")[4] and page["thread_id"] == child
+        assert len(page["items"]) == 1 and page["next_after"] is not None
+        following = await history_client.get(f"{base}/{child}/tool-results", params={
+            "limit": 1, "after": page["next_after"], "view_id": page["source_view_id"],
+            "view_revision": page["source_view_revision"],
+        })
+        assert following.status_code == 200, following.text
+        second = following.json()["data"]
+        assert len(second["items"]) == 1 and second["next_after"] is None
+        assert second["items"][0]["item_id"] != page["items"][0]["item_id"]
+        assert {entry["tool_call_id"].split(":tool-call:")[-1] for entry in [*page["items"], *second["items"]]} == {"search-output", "search-inline"}
+        assert all(entry["tool_name"] != "tool" for entry in [*page["items"], *second["items"]])
+        empty = await history_client.get(f"{base}/{main}/tool-results")
+        assert empty.status_code == 200 and empty.json()["data"]["items"] == []
+        missing_view = await history_client.get(f"{base}/{child}/tool-results", params={"after": page["next_after"]})
+        assert missing_view.status_code == 422
+        stale = await history_client.get(f"{base}/{child}/tool-results", params={
+            "after": page["next_after"], "view_id": page["source_view_id"],
+            "view_revision": page["source_view_revision"] + 1,
+        })
+        assert stale.status_code == 409 and stale.json()["detail"]["code"] == "stale_turn_cursor", stale.text
+    selected = page["items"][0]
+    around = await history_client.post(f"{base}/{child}/history", json={
+        "direction": "around", "anchor_turn_id": selected["turn_id"], "anchor_tool_result": selected["item_id"],
+        "before_turns": 0, "after_turns": 0,
+    })
+    assert around.status_code == 200, around.text
+    data = around.json()["data"]
+    assert data["located_tool_result"] == selected and data["located_message"] is None
+    results = [part for part in data["items"][0]["response_parts"] if part["kind"] == "tool_result"]
+    assert len(results) == 1 and results[0]["source"]["item_id"] == selected["item_id"]
+    wrong_thread = await history_client.post(f"{base}/{main}/history", json={
+        "direction": "around", "anchor_turn_id": selected["turn_id"], "anchor_tool_result": selected["item_id"],
+    })
+    assert wrong_thread.status_code == 409
+    assert len(runtime_case.model_requests) == calls_before == 2

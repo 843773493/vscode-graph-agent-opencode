@@ -56,7 +56,6 @@ from tests.support.api_helpers import create_session
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -122,7 +121,6 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
 
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
-            await acquire_gateway_guest(ui)
             gateway_id = (await ui.get("/api/gateway/health")).json()["data"]["gateway_id"]
             listing = (await ui.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
             owner = listing["active_workspace"]
@@ -263,7 +261,6 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
             ("position_out_of_bounds", {"offset": 999999}),
         ]
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
-            await acquire_gateway_guest(ui)
             ui.headers.update({"X-BoxTeam-Workspace-Id": owner["workspace_id"], "X-BoxTeam-Target-Gateway-Id": gateway_id})
             direct_entries = (("context/search", {
                 "resource_identity": workspace_session_inventory_identity(owner["workspace_id"]),
@@ -372,7 +369,6 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
 
         # 经真实模型工具入口消费相同 Provider；不替产品准备执行或工具结果。
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
-            await acquire_gateway_guest(ui)
             ui.headers.update({
                 "X-BoxTeam-Workspace-Id": owner["workspace_id"],
                 "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
@@ -409,7 +405,6 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
         actual["tool_final_wire"] = final_wire
         # 同一执行入口验证 search_context 的 Gateway inventory，不让测试手工写工具结果。
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
-            await acquire_gateway_guest(ui)
             ui.headers.update({
                 "X-BoxTeam-Workspace-Id": owner["workspace_id"],
                 "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
@@ -444,7 +439,6 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
 
         # 精确资源经真实工具入口走 relay，原拒绝不能升级为 Agent 内部失败。
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
-            await acquire_gateway_guest(ui)
             ui.headers.update({"X-BoxTeam-Workspace-Id": owner["workspace_id"], "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"]})
             invalid_caller = await create_session(ui, "Invalid Context Regex Caller")
             invalid_calls = await case.plan(invalid_caller, [

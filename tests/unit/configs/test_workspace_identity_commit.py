@@ -15,9 +15,11 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.gateway_state._schema import _GATEWAY_MIGRATIONS
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.registry import GatewayWorkspaceRegistry
-from configs import runtime_logging_commit as publisher
 from configs.cli import main
-from configs.workspace_identity_commit import commit_workspace_identity_migration
+from configs.maintenance import runtime_logging_commit as publisher
+from configs.maintenance.workspace_identity_commit import (
+    commit_workspace_identity_migration,
+)
 from tests.unit.configs.conftest import LegacyGateway
 
 
@@ -300,7 +302,7 @@ def test_merged_owner_view_conflict_is_never_silently_overwritten(
 def test_cli_reverifies_restored_source_before_new_migration(
     legacy_gateway: LegacyGateway, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from configs import workspace_identity_migration
+    from configs.maintenance import workspace_identity_migration
 
     first = commit(legacy_gateway)
     commit(legacy_gateway, restore=True)

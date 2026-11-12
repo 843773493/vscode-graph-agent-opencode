@@ -220,7 +220,6 @@ async def test_plugin_skill_install_binding_navigation_frozen_call_and_uninstall
         asgi_app="tests.support.e2e_control.gateway_app:app", extra_env=plugin_model.environment)
     try:
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=75, trust_env=False) as client:
-            await _data(await client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}))
             gateway_id = (await _data(await client.get("/api/gateway/health")))["gateway_id"]
             await _data(await client.get("/api/v1/workspace"))
             workspace_id = json.loads((workspace / ".boxteam/workspace-identity.json").read_text())["workspace_id"]

@@ -59,10 +59,10 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 BINDING_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/services/{service_id}/{path:path}"
 SERVICE_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/instances/{instance_id}/services/{service_id}/{path:path}"
-
 BINDING_DEBUG_RUNTIME_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/debug-runtime"
 INSTANCE_DEBUG_RUNTIME_PATH = "/api/gateway/service-plugins/{package_id}/{plugin_id}/instances/{instance_id}/debug-runtime"
 _workspace_id_adapter = TypeAdapter(CanonicalWorkspaceId)
+
 
 @dataclass(frozen=True, slots=True)
 class _ServiceRoute:
@@ -324,9 +324,10 @@ class _ServiceResponse(StreamingResponse):
 @router.api_route(SERVICE_PATH, methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     response_model=None, include_in_schema=False)
 async def service_request(package_id: str, plugin_id: str, service_id: str,
-    path: str, package_version: str, request: Request,
+    path: str, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
-    instance_id: str | None = None, workspace_id: CanonicalWorkspaceId | None = None,
+    package_version: str, instance_id: str | None = None,
+    workspace_id: CanonicalWorkspaceId | None = None,
 ) -> StreamingResponse:
     artifact_read = (package_id == "boxteam.developer-tools" and plugin_id == "browser"
         and request.method == "GET" and re.fullmatch(

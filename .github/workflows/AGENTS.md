@@ -15,5 +15,6 @@
 # 规范
 
 - 本地与 CI 必须复用同一构建入口，避免维护两套打包逻辑。
+- 发布构建先从本次 checkout 的明确 HEAD 创建受管 `out/worktrees/release/`，依赖安装与构建在 release 内执行；上传其 `out/packaging/`，不将候选自动登记为用户已验收基线。
 - 构建产物只从 `out/` 中语义明确的目录上传。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

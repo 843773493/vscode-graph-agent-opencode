@@ -36,16 +36,16 @@ from app.core.sqlite_state import load_sql
 # key、owner session、thread、creation key、initial state 与稳定
 # binding/job identity；claim owner/generation 是可恢复领取字段（不按
 # TTL 丢弃）；``last_error`` 只记录明确错误并保留 pending 可恢复事实。
-_THREAD_EXECUTION_INTENTS_TABLE_DDL = load_sql(__package__, "sql/thread_execution_intents.sql")
+_THREAD_EXECUTION_INTENTS_TABLE_DDL = load_sql(__package__, "migrations/thread_execution_intents.sql")
 
 
 
 # 每个 child thread 至多一条初始 execution intent（崩溃不能留下重复初始
 # Job 的持久侧保证）。
-_IDX_THREAD_EXECUTION_INTENT_THREAD_DDL = load_sql(__package__, "sql/idx_thread_execution_intent_thread.sql")
+_IDX_THREAD_EXECUTION_INTENT_THREAD_DDL = load_sql(__package__, "migrations/idx_thread_execution_intent_thread.sql")
 
 # worker 只消费状态索引（8.5-B）：pending 列表查询的覆盖索引。
-_IDX_THREAD_EXECUTION_INTENT_STATE_DDL = load_sql(__package__, "sql/idx_thread_execution_intent_state.sql")
+_IDX_THREAD_EXECUTION_INTENT_STATE_DDL = load_sql(__package__, "migrations/idx_thread_execution_intent_state.sql")
 
 _THREAD_EXECUTION_INTENT_COLUMNS = (
     "admission_idempotency_key, session_id, thread_id, "

@@ -39,7 +39,7 @@ test('候选保留跨Gateway同ID，聚焦与取消零写入，Goal不冒用auto
 test('身份失效取消原HTTP读取，迟到结果不能覆盖明确的失效提示', async () => {
   const result = await exercise('pending-identity');
   expect(result.aborted).toBe(true); expect(writes(result)).toEqual([]);
-  expect(result.rows).toEqual([{ id: 'task-access-invalidated', label: 'Gateway 或用户身份已改变，请重新查找任务' }]);
+  expect(result.rows).toEqual([{ id: 'task-access-invalidated', label: 'Gateway 或访问凭据已改变，请重新查找任务' }]);
 });
 test('关闭尚未接受的浮层取消实际HTTP读取，迟到结果不发布也不写入', async () => {
   const result = await exercise('pending-close');

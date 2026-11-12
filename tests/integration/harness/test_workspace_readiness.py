@@ -6,17 +6,16 @@ import json
 import os
 import subprocess
 from collections.abc import Iterator
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from threading import Thread
 from unittest.mock import Mock
 
 import pytest
 
 import tests.support.processes.workspace as workspace_processes
 from tests.harness.python.run_context import TestRunContext
+from tests.support.http_server import running_http_server
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.workspace import wait_for_backend_ready
 
@@ -87,18 +86,7 @@ def health_server() -> Iterator[tuple[int, _HealthResponse]]:
             self.end_headers()
             self.wfile.write(body)
 
-    with ExitStack() as lifetime:
-        server = HTTPServer(("127.0.0.1", 0), Handler)
-        lifetime.callback(server.server_close)
-        thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
-        thread.start()
-
-        def join_server_thread() -> None:
-            thread.join(timeout=5)
-            assert not thread.is_alive(), "测试 HTTP 服务线程未停止"
-
-        lifetime.callback(join_server_thread)
-        lifetime.callback(server.shutdown)
+    with running_http_server(HTTPServer(("127.0.0.1", 0), Handler)) as server:
         yield server.server_port, response
 
 

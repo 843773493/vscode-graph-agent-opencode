@@ -1,10 +1,10 @@
-import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
+import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
 import { StaleTurnReferenceHttpError } from "../../api/session/sessionTurnHistory";
 import React from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { errorMessage } from "../../utils/errorMessage";
 import type { ChatTranscriptItem } from "./transcriptItems";
-import type { TurnMessageMatchDTO, TurnMessageLocationDTO, TurnMessageReferenceDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { TurnToolResultDTO, TurnMessageLocationDTO, TurnMessageReferenceDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 export interface TurnViewportPosition {
   turn_anchor: string | null;
@@ -28,6 +28,7 @@ interface TurnAnchor {
   loading: boolean;
   located: boolean;
   message?: TurnMessageReferenceDTO;
+  tool?: TurnToolResultDTO;
 }
 
 function isTargetTurn(item: ChatTranscriptItem, turnId: string): boolean {
@@ -52,15 +53,15 @@ export function useTurnAnchorNavigation({
   viewState?: TurnViewportPosition | null;
   onViewStateChange?: (position: TurnViewportPosition) => void;
   onViewStateRestoreStatus?: (message: string) => void;
-  messageNavigation?: TurnMessageMatchDTO;
+  messageNavigation?: TurnNavigationTarget;
 }) {
   const anchorRef = React.useRef<TurnAnchor | null>(null);
   const scopeRef = React.useRef(scopeKey);
   const restoredScopeRef = React.useRef<string | null>(null);
   const frameRef = React.useRef<number | null>(null);
   const [navigation, setNavigation] = React.useState<TurnNavigation | null>(null);
-  const [locatedMessage, setLocatedMessage] = React.useState<{ scopeKey: string; message: TurnMessageLocationDTO }>();
-  const handledMessageRef = React.useRef<TurnMessageMatchDTO>();
+  const [located, setLocated] = React.useState<{ scopeKey: string; value: TurnMessageLocationDTO | TurnToolResultDTO }>();
+  const handledMessageRef = React.useRef<TurnNavigationTarget>();
   const currentRef = React.useRef({ items, scopeKey, onViewStateChange, onViewStateRestoreStatus });
   currentRef.current = { items, scopeKey, onViewStateChange, onViewStateRestoreStatus };
   if (scopeRef.current !== scopeKey) {
@@ -70,7 +71,7 @@ export function useTurnAnchorNavigation({
     restoredScopeRef.current = null;
     // 已取消的定位状态与任务一起失效，返回原 owner 时不能重新显示。
     setNavigation(null);
-    setLocatedMessage(undefined);
+    setLocated(undefined);
     followsLatestRef.current = true;
   }
 
@@ -79,7 +80,7 @@ export function useTurnAnchorNavigation({
     anchorRef.current = null;
     restoredScopeRef.current = currentRef.current.scopeKey;
     setNavigation(null);
-    if (clearMessage) setLocatedMessage(undefined);
+    if (clearMessage) setLocated(undefined);
   }, []);
   const closeMessageNavigation = React.useCallback(() => cancelAnchor(true), [cancelAnchor]);
 
@@ -99,7 +100,7 @@ export function useTurnAnchorNavigation({
     if (anchorRef.current !== anchor || anchor.scopeKey !== currentRef.current.scopeKey) return;
     anchor.controller.abort();
     anchorRef.current = null;
-    setLocatedMessage(undefined);
+    setLocated(undefined);
     if (anchor.restoring) {
       scrollToLatest();
       currentRef.current.onViewStateRestoreStatus?.("历史位置已失效，已回到会话尾部：" + message);
@@ -107,34 +108,35 @@ export function useTurnAnchorNavigation({
     setNavigation({ scopeKey: anchor.scopeKey, turnId: anchor.turnId, phase: "error", message });
   }, [scrollToLatest]);
 
-  const navigateToTurn = React.useCallback((turnId: string, offset = 0, restoring = false, message?: TurnMessageReferenceDTO) => {
+  const navigateToTurn = React.useCallback((turnId: string, offset = 0, restoring = false, message?: TurnMessageReferenceDTO, tool?: TurnToolResultDTO) => {
     cancelAnchor(true);
     restoredScopeRef.current = scopeKey;
     followsLatestRef.current = false;
     setShowJumpToLatest(true);
     const anchor: TurnAnchor = {
       scopeKey, turnId: turnId.trim(), offset, restoring,
-      controller: new AbortController(), loading: false, located: false, message,
+      controller: new AbortController(), loading: false, located: false, message, tool,
     };
     anchorRef.current = anchor;
     if (!anchor.turnId) {
       failAnchor(anchor, "请输入轮次 ID");
       return;
     }
-    const loaded = !message && currentRef.current.items.some((item) => isTargetTurn(item, anchor.turnId));
+    const loaded = !message && !tool && currentRef.current.items.some((item) => isTargetTurn(item, anchor.turnId));
     anchor.loading = !loaded;
     setNavigation({ scopeKey, turnId: anchor.turnId, phase: loaded ? "positioning" : "loading",
       message: loaded ? "正在定位轮次…" : "正在读取指定轮次…" });
     if (loaded) return;
-    void onLoadAroundTurn(anchor.turnId, anchor.controller.signal, message).then((located) => {
+    void onLoadAroundTurn(anchor.turnId, anchor.controller.signal, message, tool?.item_id).then((located) => {
       if (anchorRef.current !== anchor || anchor.controller.signal.aborted || currentRef.current.scopeKey !== scopeKey) return;
-      if (message && !located) { failAnchor(anchor, "后端未返回已核验的消息原文"); return; }
-      setLocatedMessage(located ? { scopeKey, message: located } : undefined);
+      if (message && (!located || !("reference" in located))) { failAnchor(anchor, "后端未返回已核验的消息原文"); return; }
+      if (tool && (!located || !("item_id" in located) || located.item_id !== tool.item_id)) { failAnchor(anchor, "后端未返回指定工具结果身份"); return; }
+      setLocated(located ? { scopeKey, value: located } : undefined);
       anchor.loading = false;
       setNavigation({ scopeKey, turnId: anchor.turnId, phase: "positioning", message: "正在定位轮次…" });
     }, (error: unknown) => {
-      failAnchor(anchor, message && error instanceof StaleTurnReferenceHttpError
-        ? "消息命中已过期，请重新搜索" : "无法跳到指定轮次：" + errorMessage(error));
+      failAnchor(anchor, (message || tool) && error instanceof StaleTurnReferenceHttpError
+        ? tool ? "工具结果已不属于当前历史，请重新查找" : "消息命中已过期，请重新搜索" : "无法跳到指定轮次：" + errorMessage(error));
     });
   }, [cancelAnchor, failAnchor, followsLatestRef, onLoadAroundTurn, scopeKey, setShowJumpToLatest]);
 
@@ -159,10 +161,11 @@ export function useTurnAnchorNavigation({
     const targetElement = anchor.message
       ? Array.from(element.querySelectorAll<HTMLElement>("[data-message-item-id]"))
         .find(candidate => candidate.dataset.messageItemId === anchor.message!.item_id)
-      : element;
+      : anchor.tool ? Array.from(element.querySelectorAll<HTMLElement>("[data-tool-result-item-id]"))
+        .find(candidate => candidate.dataset.toolResultItemId === anchor.tool!.item_id) : element;
     if (!targetElement) return;
     // 工具详情本身限高并滚动；先揭示内层命中，再对齐外层虚拟列表。
-    if (anchor.message) targetElement.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+    if (anchor.message || anchor.tool) targetElement.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
     const viewport = scroller.getBoundingClientRect();
     const delta = targetElement.getBoundingClientRect().top - viewport.top + anchor.offset;
     if (Math.abs(delta) > 0.5) {
@@ -174,7 +177,7 @@ export function useTurnAnchorNavigation({
     const target = currentRef.current.items[index];
     const ordinal = target.kind === "turn" ? target.conversation.turnOrdinal : undefined;
     setNavigation({ scopeKey: anchor.scopeKey, turnId: anchor.turnId, phase: "located",
-      message: anchor.message ? "已定位消息原文" : ordinal === undefined ? "已定位指定轮次" : "已定位第 " + ordinal + " 轮" });
+      message: anchor.tool ? "已定位工具结果" : anchor.message ? "已定位消息原文" : ordinal === undefined ? "已定位指定轮次" : "已定位第 " + ordinal + " 轮" });
     currentRef.current.onViewStateChange?.({ turn_anchor: anchor.turnId, scroll_offset: anchor.offset, follow_latest: false });
   }, [failAnchor, scrollerRef, streamRef]);
 
@@ -214,12 +217,16 @@ export function useTurnAnchorNavigation({
   React.useEffect(() => {
     if (!messageNavigation || historyLoading || handledMessageRef.current === messageNavigation) return;
     handledMessageRef.current = messageNavigation;
-    if (!messageNavigation.reference) {
-      cancelAnchor();
-      setNavigation({ scopeKey, turnId: messageNavigation.turn_id, phase: "error", message: "消息命中缺少位置引用，请重新查询" });
-      return;
+    if ("item_id" in messageNavigation) {
+      navigateToTurn(messageNavigation.turn_id, 0, false, undefined, messageNavigation);
+    } else {
+      if (!messageNavigation.reference) {
+        cancelAnchor();
+        setNavigation({ scopeKey, turnId: messageNavigation.turn_id, phase: "error", message: "消息命中缺少位置引用，请重新查询" });
+        return;
+      }
+      navigateToTurn(messageNavigation.turn_id, 0, false, messageNavigation.reference);
     }
-    navigateToTurn(messageNavigation.turn_id, 0, false, messageNavigation.reference);
   }, [cancelAnchor, historyLoading, messageNavigation, navigateToTurn, scopeKey]);
 
   React.useEffect(() => {
@@ -242,7 +249,8 @@ export function useTurnAnchorNavigation({
   return {
     anchorRef, cancelAnchor, navigateToTurn, scheduleAnchorAlignment, scrollToLatest,
     closeMessageNavigation,
-    locatedMessage: locatedMessage?.scopeKey === scopeKey ? locatedMessage.message : undefined,
+    locatedMessage: located?.scopeKey === scopeKey && "reference" in located.value ? located.value : undefined,
+    locatedTool: located?.scopeKey === scopeKey && "item_id" in located.value ? located.value : undefined,
     navigation: navigation?.scopeKey === scopeKey ? navigation : null,
   };
 }

@@ -39,15 +39,24 @@ def development_snapshot(request: pytest.FixtureRequest) -> Path:
     snapshot = runtime / "source"
     snapshot.mkdir()
     archive = runtime / "source.tar"
-    subprocess.run(["git", "archive", "--format=tar", "-o", str(archive), "HEAD"],
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=context.project_root, text=True).strip()
+    subprocess.run(["git", "archive", "--format=tar", "-o", str(archive), head],
                    cwd=context.project_root, check=True)
     with tarfile.open(archive) as files:
         files.extractall(snapshot, filter="data")
     archive.unlink()
     # 完整带入当前差异，避免测试与生产源码错配；随后只改独占副本中的观测属性。
-    difference = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=context.project_root)
+    difference = subprocess.check_output(["git", "diff", "--binary", head], cwd=context.project_root)
     subprocess.run(["git", "apply", "--whitespace=nowarn", "-"], input=difference,
-                   cwd=snapshot, check=True)
+                   cwd=snapshot, env={**os.environ, "GIT_CEILING_DIRECTORIES": str(snapshot.parent)}, check=True)
+    # 未提交的新源码也属于当前完整实现，不能只快照已跟踪文件。
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=context.project_root,
+    ).decode().split("\0")
+    for name in filter(None, untracked):
+        destination = snapshot / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(context.project_root / name, destination)
     for name in ("node_modules", "src/clients/web/node_modules", "src/clients/workbench/node_modules"):
         destination = snapshot / name
         if destination.is_dir():
@@ -69,7 +78,7 @@ def development_snapshot(request: pytest.FixtureRequest) -> Path:
     assert original.count(anchor) == 1
     source.write_text(original.replace(anchor, anchor + ' data-hmr-acceptance="version-1"'), encoding="utf-8")
     (context.artifacts_dir / "source-snapshot.json").write_text(json.dumps({
-        "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=context.project_root, text=True).strip(),
+        "head": head,
         "diff_sha256": hashlib.sha256(difference).hexdigest(),
         "source": str(source), "original_sha256": hashlib.sha256(original.encode()).hexdigest(),
         "upstream_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=upstream, text=True).strip(),
@@ -105,7 +114,7 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
         managed = ManagedProcess(process=process, log_file=log)
         register_test_process(managed, managed.close)
         await asyncio.to_thread(wait_for_http_ok, f"{base}/health", process, timeout_seconds=180)
-        driver = ["bun", "tests/integration/clients/web/quick_access/development_hmr.mjs"]
+        driver = ["node", "tests/integration/clients/web/quick_access/development_hmr.mjs"]
         supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
         protected = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
                      "--timeout-seconds", "90", "--", *driver]

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from threading import Event
 from types import ModuleType, SimpleNamespace
 from typing import TextIO
 from unittest.mock import ANY, Mock
@@ -13,6 +15,7 @@ import pytest
 
 import tests.support.processes.gateway as gateway_processes
 import tests.support.processes.workspace as workspace_processes
+from tests.support.processes import scope as process_scope
 
 
 @dataclass
@@ -159,6 +162,61 @@ def test_readiness_failure_releases_process_and_logs(startup: ProcessStartup) ->
     assert startup.spawn.call_args.kwargs["stdout"].closed
     assert startup.spawn.call_args.kwargs["stderr"].closed
     startup.terminate.assert_called_once_with(startup.spawn.return_value, **startup.termination_kwargs)
+
+
+@pytest.mark.parametrize("cancel_during", ["spawn", "readiness"])
+async def test_cancelled_thread_start_releases_process_and_logs(
+    startup: ProcessStartup, monkeypatch: pytest.MonkeyPatch, cancel_during: str,
+) -> None:
+    monkeypatch.setattr(startup.module, "register_test_process", process_scope.register_test_process)
+    monkeypatch.setattr(startup.module, "unregister_test_process", process_scope.unregister_test_process)
+    entered, release, finished = Event(), Event(), Event()
+    errors: list[BaseException] = []
+
+    def pause() -> None:
+        entered.set()
+        assert release.wait(5), "父测试未释放启动线程"
+
+    if cancel_during == "spawn":
+        def spawn(*_args: object, **_kwargs: object) -> object:
+            pause()
+            return startup.spawn.return_value
+        startup.spawn.side_effect = spawn
+    else:
+        startup.ready.side_effect = lambda *_args: pause()
+
+    def start() -> None:
+        try:
+            startup.start()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    try:
+        with process_scope.capture_test_processes():
+            task = asyncio.create_task(asyncio.to_thread(start))
+            assert await asyncio.to_thread(entered.wait, 3)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        if cancel_during == "readiness":
+            # 无须等待启动线程继续，就能回收它已创建的进程和日志。
+            startup.terminate.assert_called_once_with(startup.spawn.return_value, **startup.termination_kwargs)
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 3)
+        startup.terminate.assert_called_once_with(startup.spawn.return_value, **startup.termination_kwargs)
+        assert startup.spawn.call_args.kwargs["stdout"].closed
+        assert startup.spawn.call_args.kwargs["stderr"].closed
+        if cancel_during == "spawn":
+            assert len(errors) == 1
+            assert isinstance(errors[0], RuntimeError)
+            assert "scope 已关闭" in str(errors[0])
+        else:
+            assert not errors
+    finally:
+        release.set()
+        assert await asyncio.to_thread(finished.wait, 3)
 
 
 @pytest.mark.parametrize("close_error_type", [OSError, KeyboardInterrupt])

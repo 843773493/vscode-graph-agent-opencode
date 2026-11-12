@@ -74,19 +74,13 @@ def asset_gateway(request: pytest.FixtureRequest, integration_workspace_root_pat
 async def test_asset_and_diagnostic_failures_keep_http_state_and_explicit_retry(asset_gateway, asset_images) -> None:
     context, gateway, control, audit, blocked = asset_gateway
     endpoint = "/api/gateway/ui-assets"
-    profile = context.boxteam_home / "state/gateway/users/asset-user/profile.jsonc"
-    root = profile.parent / "themes/assets/ui-assets"
+    root = context.boxteam_home / "state/gateway/themes/assets/ui-assets"
     manifest = root / "manifest.json"
     evidence = []
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=15) as client:
-        created = await client.post("/api/gateway/users", json={"user_id": "asset-user", "display_name": "图片用户"})
-        assert created.status_code == 200, created.text
-        acquired = await client.post("/api/gateway/users/asset-user/access", json={"client_label": "图片测试"})
-        assert acquired.status_code == 200, acquired.text
         uploaded = await client.post(endpoint, files={"file": ("first.png", asset_images[0], "image/png")})
         assert uploaded.status_code == 200, uploaded.text
         first = uploaded.json()["data"]
-        original_profile = profile.read_bytes()
         original_manifest = manifest.read_bytes()
         second_dir = root / hashlib.sha256(asset_images[1]).hexdigest()
         blocked_image = second_dir / "original.png"
@@ -116,7 +110,6 @@ async def test_asset_and_diagnostic_failures_keep_http_state_and_explicit_retry(
                     expected_error = {"manifest-decode": "UnicodeDecodeError", "manifest-validate": "ValueError"}.get(operation, "IsADirectoryError")
                     assert f"error={expected_error}" in response.text
                     assert ("diagnostic_sink_error=NotADirectoryError" in response.text) == sink_failure
-                    assert profile.read_bytes() == original_profile
                     assert (manifest.read_bytes() if manifest.is_file() else None) == rejected_bytes
                     if sink_failure:
                         records = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
@@ -130,7 +123,7 @@ async def test_asset_and_diagnostic_failures_keep_http_state_and_explicit_retry(
                     if operation == "image-write":
                         blocked_image.rmdir()
                     manifest.write_bytes(original_manifest)
-                # 同一用户、同一资源根显式重试；不通过重启或修复writer制造成功事实。
+                # 同一 Gateway、同一资源根显式重试；不通过重启或修复writer制造成功事实。
                 if operation == "image-write":
                     retry = await client.post(endpoint, files={"file": ("second.png", asset_images[1], "image/png")})
                     assert retry.status_code == 200, retry.text
@@ -144,5 +137,5 @@ async def test_asset_and_diagnostic_failures_keep_http_state_and_explicit_retry(
                     assert retry.status_code == 200 and retry.json()["data"]["items"] == [first]
                 downloaded = await client.get(first["url"])
                 assert downloaded.status_code == 200 and downloaded.content == asset_images[0]
-        assert manifest.read_bytes() == original_manifest and profile.read_bytes() == original_profile
+        assert manifest.read_bytes() == original_manifest
         (context.artifacts_dir / "asset-failure-evidence.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -1,7 +1,7 @@
 """Workspace 控制面 SQLite 状态库的装配点与 lifecycle/config-kv 方法族。
 
 WorkspaceStateStore 组合 workspace activity、config event、config source 以及同包内
-apply / snapshot / restart 各族 mixin；本模块显式加载 workspace_state_sql/ 迁移、
+apply / snapshot / restart 各族 mixin；本模块显式加载 migrations/ 迁移、
 一次性来源层迁移回调与 lifecycle / config-kv 方法。"""
 
 from __future__ import annotations
@@ -69,12 +69,12 @@ def _migrate_workspace_config_into_source_layers(
     """
 
     exists = connection.execute(
-        load_sql(__package__, "workspace_state_sql/legacy_config/exists.sql")
+        load_sql(__package__, "migrations/legacy_config/exists.sql")
     ).fetchone()
     if exists is None:
         return
     rows = connection.execute(
-        load_sql(__package__, "workspace_state_sql/legacy_config/read_mirror.sql")
+        load_sql(__package__, "migrations/legacy_config/read_mirror.sql")
     ).fetchall()
     for row in rows:
         config_key = str(row[0])
@@ -91,7 +91,7 @@ def _migrate_workspace_config_into_source_layers(
                 f"config_source_layers: key={config_key}: {error}"
             ) from error
         layer = connection.execute(
-            load_sql(__package__, "workspace_state_sql/legacy_config/read_source.sql"),
+            load_sql(__package__, "migrations/legacy_config/read_source.sql"),
             (config_key,),
         ).fetchone()
         if layer is not None:
@@ -108,7 +108,7 @@ def _migrate_workspace_config_into_source_layers(
             continue
         connection.execute(
             load_sql(
-                __package__, "workspace_state_sql/legacy_config/insert_source.sql"
+                __package__, "migrations/legacy_config/insert_source.sql"
             ),
             (
                 config_key,
@@ -123,41 +123,41 @@ def _migrate_workspace_config_into_source_layers(
             config_key,
         )
     connection.execute(
-        load_sql(__package__, "workspace_state_sql/legacy_config/drop_mirror.sql")
+        load_sql(__package__, "migrations/legacy_config/drop_mirror.sql")
     )
 
 
 assert __package__ is not None
 
 _WORKSPACE_MIGRATIONS = (
-    load_sql(__package__, "workspace_state_sql/001.sql"),
-    load_sql(__package__, "workspace_state_sql/002.sql"),
-    load_sql(__package__, "workspace_state_sql/003.sql"),
-    load_sql(__package__, "workspace_state_sql/004.sql"),
-    load_sql(__package__, "workspace_state_sql/005.sql"),
-    load_sql(__package__, "workspace_state_sql/006.sql"),
-    load_sql(__package__, "workspace_state_sql/007.sql"),
-    load_sql(__package__, "workspace_state_sql/008.sql"),
-    load_sql(__package__, "workspace_state_sql/009.sql"),
-    load_sql(__package__, "workspace_state_sql/010.sql"),
-    load_sql(__package__, "workspace_state_sql/011.sql"),
-    load_sql(__package__, "workspace_state_sql/012.sql"),
+    load_sql(__package__, "migrations/001.sql"),
+    load_sql(__package__, "migrations/002.sql"),
+    load_sql(__package__, "migrations/003.sql"),
+    load_sql(__package__, "migrations/004.sql"),
+    load_sql(__package__, "migrations/005.sql"),
+    load_sql(__package__, "migrations/006.sql"),
+    load_sql(__package__, "migrations/007.sql"),
+    load_sql(__package__, "migrations/008.sql"),
+    load_sql(__package__, "migrations/009.sql"),
+    load_sql(__package__, "migrations/010.sql"),
+    load_sql(__package__, "migrations/011.sql"),
+    load_sql(__package__, "migrations/012.sql"),
     # 配置来源位置改以 URI 表达（real path 不持久化）：丢弃旧真实路径列、新增 URI 列。
     # 旧值一律不迁移（列本身即被删除）；新列可空，sqlite 层不可寻址即写 NULL。
-    load_sql(__package__, "workspace_state_sql/013.sql"),
+    load_sql(__package__, "migrations/013.sql"),
     # 一次性显式迁移：把 legacy workspace_config 残留行并入权威 config_source_layers
     # 后物理 DROP 该镜像表（彻底根除表级双轨）。遇同 key 语义冲突 fail-closed。
     _migrate_workspace_config_into_source_layers,
-    load_sql(__package__, "workspace_state_sql/015.sql"),
-    load_sql(__package__, "workspace_state_sql/016.sql"),
-    load_sql(__package__, "workspace_state_sql/017.sql"),
-    load_sql(__package__, "workspace_state_sql/018.sql"),
-    load_sql(__package__, "workspace_state_sql/019.sql"),
-    load_sql(__package__, "workspace_state_sql/020.sql"),
-    load_sql(__package__, "workspace_state_sql/021.sql"),
-    load_sql(__package__, "workspace_state_sql/022.sql"),
-    load_sql(__package__, "workspace_state_sql/023.sql"),
-    load_sql(__package__, "workspace_state_sql/024.sql"),
+    load_sql(__package__, "migrations/015.sql"),
+    load_sql(__package__, "migrations/016.sql"),
+    load_sql(__package__, "migrations/017.sql"),
+    load_sql(__package__, "migrations/018.sql"),
+    load_sql(__package__, "migrations/019.sql"),
+    load_sql(__package__, "migrations/020.sql"),
+    load_sql(__package__, "migrations/021.sql"),
+    load_sql(__package__, "migrations/022.sql"),
+    load_sql(__package__, "migrations/023.sql"),
+    load_sql(__package__, "migrations/024.sql"),
 )
 
 

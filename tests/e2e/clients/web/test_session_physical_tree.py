@@ -20,7 +20,6 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -66,7 +65,6 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             health_response = await client.get("/api/gateway/health")
             assert health_response.status_code == 200, health_response.text
             workspaces_response = await client.get("/api/gateway/workspaces")
@@ -202,7 +200,6 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             sessions_response = await client.get("/api/v1/sessions", params={"limit": 100})
             assert sessions_response.status_code == 200, sessions_response.text
             remaining = {

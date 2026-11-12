@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import net from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
+import open from "open";
 import {
   createGatewaySupervisorControl,
   gatewaySupervisorControlAddress,
@@ -353,29 +354,26 @@ export function installSignalForwarding(onStop, processObject = process, platfor
 }
 
 export async function openGatewayBrowser({
-  spawnImpl = spawn,
-  platform = process.platform,
   url,
   logger,
 }) {
   if (typeof url !== "string" || url.length === 0) {
     throw new TypeError("Gateway 浏览器 URL 必须是非空字符串");
   }
-  const command =
-    platform === "win32"
-      ? ["cmd.exe", ["/d", "/s", "/c", "start", "", url]]
-      : platform === "darwin"
-        ? ["open", [url]]
-        : ["xdg-open", [url]];
-  const child = spawnImpl(command[0], command[1], {
-    stdio: "ignore",
-    detached: false,
-  });
-  const [code] = await once(child, "exit");
-  if (code !== 0) {
-    logger.warning(
-      `无法自动打开浏览器（exit=${String(code)}），请访问 ${url}`,
-    );
+  let result;
+  try {
+    const child = await open(url);
+    // open在Windows等待启动器关闭后才交付child，不能再次等待已经发生的事件。
+    result = child.exitCode !== null || child.signalCode !== null
+      ? [child.exitCode, child.signalCode]
+      : await once(child, "close");
+  } catch (error) {
+    logger.warning(`无法自动打开浏览器（${String(error)}），请访问 ${url}`);
+    return;
+  }
+  const [code, signal] = result;
+  if (code !== 0 || signal !== null) {
+    logger.warning(`无法自动打开浏览器（exit=${String(code)}, signal=${signal ?? "none"}），请访问 ${url}`);
   }
 }
 
@@ -581,7 +579,7 @@ export async function superviseGateway({
       publicListener.setTarget({ host: endpoint.host, port: initialChild.childPort });
     }
     if (openBrowser) {
-      void openGatewayBrowser({ spawnImpl, url: endpoint.url, logger });
+      void openGatewayBrowser({ url: endpoint.url, logger });
     }
 
     while (true) {

@@ -156,7 +156,6 @@ def _assert_running_history(case: LegacyInput, label: str) -> None:
         assert workspaces["active_workspace"] == owner
         target, = workspaces["items"]
         assert (target["gateway_id"], target["workspace_id"]) == (owner["gateway_id"], owner["workspace_id"])
-        data(client.post(f"/api/gateway/users/{before['user']['user_id']}/access", json={"client_label": label}))
         workspace = data(client.get("/api/v1/workspace"))
         assert workspace["workspace_id"] == owner["workspace_id"]
         assert data(client.get(f"/api/v1/sessions/{session_id}")) == before["session"]
@@ -166,7 +165,19 @@ def _assert_running_history(case: LegacyInput, label: str) -> None:
         assert history["thread_id"] == thread_id
         messages = data(client.get(f"/api/v1/sessions/{session_id}/messages"))
         assert messages["items"] == before["messages"]["items"]
-        view = data(client.get("/api/gateway/users/current/view-state", params={**owner, "session_id": session_id}))
+        # 已退役的账户视图只保留历史原件；当前浏览器不读取或接管它。
+        with closing(sqlite3.connect(case.home / "state/gateway/gateway.sqlite")) as connection:
+            connection.row_factory = sqlite3.Row
+            stored = connection.execute(
+                "SELECT gateway_id, workspace_id, session_id, turn_anchor, scroll_offset, follow_latest, "
+                "projection_version, tool_details_expanded, updated_at FROM user_view_state "
+                "WHERE user_id=? AND gateway_id=? AND workspace_id=? AND session_id=?",
+                (before["user"]["user_id"], owner["gateway_id"], owner["workspace_id"], session_id),
+            ).fetchone()
+            assert stored is not None
+            view = dict(stored)
+            view["follow_latest"] = bool(view["follow_latest"])
+            view["tool_details_expanded"] = bool(view["tool_details_expanded"])
         assert view == {**before["view"], **owner}
         navigation = data(client.get("/api/gateway/workspace-navigation"))
         layout = lambda tree: [(node["node_id"], node["kind"], node["parent_node_id"], node["name"], node["position"])
@@ -177,7 +188,6 @@ def _assert_running_history(case: LegacyInput, label: str) -> None:
         business = business_snapshot(case.workspace, owner["workspace_id"], session_id, thread_id, before["captures"])
         assert business == before["business"]
         assert (case.workspace / ".boxteam/workspace-identity.json").read_text(encoding="utf-8") == before["identity_bytes"]
-        data(client.delete("/api/gateway/users/current"))
         (artifacts / "observed.json").write_text(json.dumps({
             "workspaces": workspaces, "view": view, "navigation": navigation, "history": history,
             "business": business, "pids": {"gateway": gateway.process.pid, "backend": backend.process.pid},

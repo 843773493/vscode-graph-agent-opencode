@@ -43,12 +43,6 @@ class GatewayResourceAddressDTO(_message.Message):
     reference_uri: str
     def __init__(self, uri: _Optional[str] = ..., gateway_id: _Optional[str] = ..., scope: _Optional[str] = ..., scope_id: _Optional[str] = ..., kind: _Optional[str] = ..., file_root_uri: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., reference_uri: _Optional[str] = ...) -> None: ...
 
-class AcquireGatewayUserRequest(_message.Message):
-    __slots__ = ("client_label",)
-    CLIENT_LABEL_FIELD_NUMBER: _ClassVar[int]
-    client_label: str
-    def __init__(self, client_label: _Optional[str] = ...) -> None: ...
-
 class NativeDirectoryBindRequest(_message.Message):
     __slots__ = ("native_root",)
     NATIVE_ROOT_FIELD_NUMBER: _ClassVar[int]
@@ -127,12 +121,6 @@ class CreateFederationManagedWorkspaceRequest(_message.Message):
     create_directory: bool
     def __init__(self, root_path: _Optional[str] = ..., name: _Optional[str] = ..., create_directory: _Optional[bool] = ...) -> None: ...
 
-class CreateGatewayGuestRequest(_message.Message):
-    __slots__ = ("tracking",)
-    TRACKING_FIELD_NUMBER: _ClassVar[int]
-    tracking: _struct_pb2.Struct
-    def __init__(self, tracking: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
-
 class CreateGatewayManagedWorkspaceRequest(_message.Message):
     __slots__ = ("root_path", "name", "create_directory", "gateway_connection_id")
     ROOT_PATH_FIELD_NUMBER: _ClassVar[int]
@@ -144,14 +132,6 @@ class CreateGatewayManagedWorkspaceRequest(_message.Message):
     create_directory: bool
     gateway_connection_id: str
     def __init__(self, root_path: _Optional[str] = ..., name: _Optional[str] = ..., create_directory: _Optional[bool] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
-
-class CreateGatewayUserRequest(_message.Message):
-    __slots__ = ("display_name", "user_id")
-    DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    display_name: str
-    user_id: str
-    def __init__(self, display_name: _Optional[str] = ..., user_id: _Optional[str] = ...) -> None: ...
 
 class CreatePortForwardRequest(_message.Message):
     __slots__ = ("remote_port", "local_port", "protocol", "label")
@@ -1235,54 +1215,8 @@ class GatewaySearchScopeResolutionDTO(_message.Message):
     branches: _containers.RepeatedCompositeFieldContainer[GatewaySearchScopeBranchDTO]
     def __init__(self, scope: _Optional[_Union[GatewaySearchScopeDTO, _Mapping]] = ..., branches: _Optional[_Iterable[_Union[GatewaySearchScopeBranchDTO, _Mapping]]] = ...) -> None: ...
 
-class GatewayThemeBackgroundDTO(_message.Message):
-    __slots__ = ("type", "url", "asset_id", "position", "size", "repeat", "appearance", "overlay")
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    URL_FIELD_NUMBER: _ClassVar[int]
-    ASSET_ID_FIELD_NUMBER: _ClassVar[int]
-    POSITION_FIELD_NUMBER: _ClassVar[int]
-    SIZE_FIELD_NUMBER: _ClassVar[int]
-    REPEAT_FIELD_NUMBER: _ClassVar[int]
-    APPEARANCE_FIELD_NUMBER: _ClassVar[int]
-    OVERLAY_FIELD_NUMBER: _ClassVar[int]
-    type: str
-    url: str
-    asset_id: str
-    position: str
-    size: str
-    repeat: str
-    appearance: str
-    overlay: str
-    def __init__(self, type: _Optional[str] = ..., url: _Optional[str] = ..., asset_id: _Optional[str] = ..., position: _Optional[str] = ..., size: _Optional[str] = ..., repeat: _Optional[str] = ..., appearance: _Optional[str] = ..., overlay: _Optional[str] = ...) -> None: ...
-
-class GatewayThemeCatalogDTO(_message.Message):
-    __slots__ = ("current_theme_id", "items", "current_theme")
-    CURRENT_THEME_ID_FIELD_NUMBER: _ClassVar[int]
-    ITEMS_FIELD_NUMBER: _ClassVar[int]
-    CURRENT_THEME_FIELD_NUMBER: _ClassVar[int]
-    current_theme_id: str
-    items: _containers.RepeatedCompositeFieldContainer[GatewayThemeOptionDTO]
-    current_theme: ResolvedGatewayThemeDTO
-    def __init__(self, current_theme_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayThemeOptionDTO, _Mapping]]] = ..., current_theme: _Optional[_Union[ResolvedGatewayThemeDTO, _Mapping]] = ...) -> None: ...
-
-class GatewayThemeOptionDTO(_message.Message):
-    __slots__ = ("id", "label", "extends", "source", "preview_tokens", "background_image_url")
-    ID_FIELD_NUMBER: _ClassVar[int]
-    LABEL_FIELD_NUMBER: _ClassVar[int]
-    EXTENDS_FIELD_NUMBER: _ClassVar[int]
-    SOURCE_FIELD_NUMBER: _ClassVar[int]
-    PREVIEW_TOKENS_FIELD_NUMBER: _ClassVar[int]
-    BACKGROUND_IMAGE_URL_FIELD_NUMBER: _ClassVar[int]
-    id: str
-    label: str
-    extends: str
-    source: str
-    preview_tokens: _struct_pb2.Struct
-    background_image_url: str
-    def __init__(self, id: _Optional[str] = ..., label: _Optional[str] = ..., extends: _Optional[str] = ..., source: _Optional[str] = ..., preview_tokens: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., background_image_url: _Optional[str] = ...) -> None: ...
-
 class GatewayUIAssetDTO(_message.Message):
-    __slots__ = ("asset_id", "original_filename", "content_type", "size", "sha256", "imported_at", "url", "referenced_theme_ids")
+    __slots__ = ("asset_id", "original_filename", "content_type", "size", "sha256", "imported_at", "url")
     ASSET_ID_FIELD_NUMBER: _ClassVar[int]
     ORIGINAL_FILENAME_FIELD_NUMBER: _ClassVar[int]
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -1290,7 +1224,6 @@ class GatewayUIAssetDTO(_message.Message):
     SHA256_FIELD_NUMBER: _ClassVar[int]
     IMPORTED_AT_FIELD_NUMBER: _ClassVar[int]
     URL_FIELD_NUMBER: _ClassVar[int]
-    REFERENCED_THEME_IDS_FIELD_NUMBER: _ClassVar[int]
     asset_id: str
     original_filename: str
     content_type: str
@@ -1298,8 +1231,7 @@ class GatewayUIAssetDTO(_message.Message):
     sha256: str
     imported_at: str
     url: str
-    referenced_theme_ids: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, asset_id: _Optional[str] = ..., original_filename: _Optional[str] = ..., content_type: _Optional[str] = ..., size: _Optional[int] = ..., sha256: _Optional[str] = ..., imported_at: _Optional[str] = ..., url: _Optional[str] = ..., referenced_theme_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, asset_id: _Optional[str] = ..., original_filename: _Optional[str] = ..., content_type: _Optional[str] = ..., size: _Optional[int] = ..., sha256: _Optional[str] = ..., imported_at: _Optional[str] = ..., url: _Optional[str] = ...) -> None: ...
 
 class GatewayUIAssetListDTO(_message.Message):
     __slots__ = ("items",)
@@ -1307,87 +1239,27 @@ class GatewayUIAssetListDTO(_message.Message):
     items: _containers.RepeatedCompositeFieldContainer[GatewayUIAssetDTO]
     def __init__(self, items: _Optional[_Iterable[_Union[GatewayUIAssetDTO, _Mapping]]] = ...) -> None: ...
 
-class GatewayUserAccessDTO(_message.Message):
-    __slots__ = ("kind", "user_id", "lease_generation", "expires_at", "takeover")
-    KIND_FIELD_NUMBER: _ClassVar[int]
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    LEASE_GENERATION_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
-    TAKEOVER_FIELD_NUMBER: _ClassVar[int]
-    kind: str
-    user_id: str
-    lease_generation: int
-    expires_at: str
-    takeover: bool
-    def __init__(self, kind: _Optional[str] = ..., user_id: _Optional[str] = ..., lease_generation: _Optional[int] = ..., expires_at: _Optional[str] = ..., takeover: _Optional[bool] = ...) -> None: ...
-
-class GatewayUserDTO(_message.Message):
-    __slots__ = ("user_id", "display_name", "created_at", "lease")
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
-    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
-    LEASE_FIELD_NUMBER: _ClassVar[int]
-    user_id: str
-    display_name: str
-    created_at: str
-    lease: GatewayUserLeaseDTO
-    def __init__(self, user_id: _Optional[str] = ..., display_name: _Optional[str] = ..., created_at: _Optional[str] = ..., lease: _Optional[_Union[GatewayUserLeaseDTO, _Mapping]] = ...) -> None: ...
-
-class GatewayUserLeaseDTO(_message.Message):
-    __slots__ = ("occupied", "client_label", "heartbeat_at", "expires_at")
-    OCCUPIED_FIELD_NUMBER: _ClassVar[int]
-    CLIENT_LABEL_FIELD_NUMBER: _ClassVar[int]
-    HEARTBEAT_AT_FIELD_NUMBER: _ClassVar[int]
-    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
-    occupied: bool
-    client_label: str
-    heartbeat_at: str
-    expires_at: str
-    def __init__(self, occupied: _Optional[bool] = ..., client_label: _Optional[str] = ..., heartbeat_at: _Optional[str] = ..., expires_at: _Optional[str] = ...) -> None: ...
-
-class GatewayUserListDTO(_message.Message):
-    __slots__ = ("items",)
-    ITEMS_FIELD_NUMBER: _ClassVar[int]
-    items: _containers.RepeatedCompositeFieldContainer[GatewayUserDTO]
-    def __init__(self, items: _Optional[_Iterable[_Union[GatewayUserDTO, _Mapping]]] = ...) -> None: ...
-
-class GatewayUserViewStateDTO(_message.Message):
-    __slots__ = ("user_id", "workspace_id", "session_id", "turn_anchor", "scroll_offset", "follow_latest", "projection_version", "tool_details_expanded", "updated_at", "gateway_id")
-    USER_ID_FIELD_NUMBER: _ClassVar[int]
-    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    TURN_ANCHOR_FIELD_NUMBER: _ClassVar[int]
-    SCROLL_OFFSET_FIELD_NUMBER: _ClassVar[int]
-    FOLLOW_LATEST_FIELD_NUMBER: _ClassVar[int]
-    PROJECTION_VERSION_FIELD_NUMBER: _ClassVar[int]
-    TOOL_DETAILS_EXPANDED_FIELD_NUMBER: _ClassVar[int]
-    UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
+class GatewayManagementTargetDTO(_message.Message):
+    __slots__ = ("gateway_id", "name", "connection_kind", "gateway_connection_id", "connection_error")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
-    user_id: str
-    workspace_id: str
-    session_id: str
-    turn_anchor: str
-    scroll_offset: float
-    follow_latest: bool
-    projection_version: int
-    tool_details_expanded: bool
-    updated_at: str
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    CONNECTION_KIND_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    CONNECTION_ERROR_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
-    def __init__(self, user_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., session_id: _Optional[str] = ..., turn_anchor: _Optional[str] = ..., scroll_offset: _Optional[float] = ..., follow_latest: _Optional[bool] = ..., projection_version: _Optional[int] = ..., tool_details_expanded: _Optional[bool] = ..., updated_at: _Optional[str] = ..., gateway_id: _Optional[str] = ...) -> None: ...
+    name: str
+    connection_kind: str
+    gateway_connection_id: str
+    connection_error: str
+    def __init__(self, gateway_id: _Optional[str] = ..., name: _Optional[str] = ..., connection_kind: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_error: _Optional[str] = ...) -> None: ...
 
-class GatewayUserViewStateUpdateRequest(_message.Message):
-    __slots__ = ("turn_anchor", "scroll_offset", "follow_latest", "projection_version", "tool_details_expanded")
-    TURN_ANCHOR_FIELD_NUMBER: _ClassVar[int]
-    SCROLL_OFFSET_FIELD_NUMBER: _ClassVar[int]
-    FOLLOW_LATEST_FIELD_NUMBER: _ClassVar[int]
-    PROJECTION_VERSION_FIELD_NUMBER: _ClassVar[int]
-    TOOL_DETAILS_EXPANDED_FIELD_NUMBER: _ClassVar[int]
-    turn_anchor: str
-    scroll_offset: float
-    follow_latest: bool
-    projection_version: int
-    tool_details_expanded: bool
-    def __init__(self, turn_anchor: _Optional[str] = ..., scroll_offset: _Optional[float] = ..., follow_latest: _Optional[bool] = ..., projection_version: _Optional[int] = ..., tool_details_expanded: _Optional[bool] = ...) -> None: ...
+class GatewayManagementDirectoryDTO(_message.Message):
+    __slots__ = ("local_gateway_id", "items")
+    LOCAL_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    local_gateway_id: str
+    items: _containers.RepeatedCompositeFieldContainer[GatewayManagementTargetDTO]
+    def __init__(self, local_gateway_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayManagementTargetDTO, _Mapping]]] = ...) -> None: ...
 
 class GatewayWorkspaceDTO(_message.Message):
     __slots__ = ("workspace_id", "name", "backend_url", "connection_kind", "status", "active", "managed", "removable", "system_default", "runtime_action", "config_reload", "services", "connection_error", "checked_at", "backend_generation", "affected_workspace_ids", "gateway_id", "parent_workspace", "remote_gateways", "backend_id")
@@ -1482,20 +1354,6 @@ class ReorderGatewayWorkspacesRequest(_message.Message):
     WORKSPACES_FIELD_NUMBER: _ClassVar[int]
     workspaces: _containers.RepeatedCompositeFieldContainer[GatewaySearchWorkspaceOwnerDTO]
     def __init__(self, workspaces: _Optional[_Iterable[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]]] = ...) -> None: ...
-
-class ResolvedGatewayThemeDTO(_message.Message):
-    __slots__ = ("id", "label", "color_scheme", "tokens", "background_image_url")
-    ID_FIELD_NUMBER: _ClassVar[int]
-    LABEL_FIELD_NUMBER: _ClassVar[int]
-    COLOR_SCHEME_FIELD_NUMBER: _ClassVar[int]
-    TOKENS_FIELD_NUMBER: _ClassVar[int]
-    BACKGROUND_IMAGE_URL_FIELD_NUMBER: _ClassVar[int]
-    id: str
-    label: str
-    color_scheme: str
-    tokens: _struct_pb2.Struct
-    background_image_url: str
-    def __init__(self, id: _Optional[str] = ..., label: _Optional[str] = ..., color_scheme: _Optional[str] = ..., tokens: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., background_image_url: _Optional[str] = ...) -> None: ...
 
 class SshConnectionOptionDTO(_message.Message):
     __slots__ = ("connection_id", "source", "label", "host", "port", "username", "ssh_config_host", "initial_path")
@@ -1610,50 +1468,28 @@ class WebUISessionSidebarSettingsDTO(_message.Message):
     def __init__(self, filter_mode: _Optional[str] = ..., sort_mode: _Optional[str] = ..., grouping_mode: _Optional[str] = ..., workspace_group_capped: _Optional[bool] = ..., collapsed_workspace_ids: _Optional[_Iterable[str]] = ..., collapsed_session_ids: _Optional[_Iterable[str]] = ..., expanded_root_tree_ids: _Optional[_Iterable[str]] = ..., collapsed_section_ids: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WebUISettingsDTO(_message.Message):
-    __slots__ = ("layout", "session_sidebar", "workspace_file_tree", "gateway_console", "theme")
+    __slots__ = ("layout", "session_sidebar", "workspace_file_tree", "gateway_console")
     LAYOUT_FIELD_NUMBER: _ClassVar[int]
     SESSION_SIDEBAR_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_FILE_TREE_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_CONSOLE_FIELD_NUMBER: _ClassVar[int]
-    THEME_FIELD_NUMBER: _ClassVar[int]
     layout: WebUILayoutSettingsDTO
     session_sidebar: WebUISessionSidebarSettingsDTO
     workspace_file_tree: WebUIWorkspaceFileTreeSettingsDTO
     gateway_console: WebUIGatewayConsoleSettingsDTO
-    theme: WebUIThemeSettingsDTO
-    def __init__(self, layout: _Optional[_Union[WebUILayoutSettingsDTO, _Mapping]] = ..., session_sidebar: _Optional[_Union[WebUISessionSidebarSettingsDTO, _Mapping]] = ..., workspace_file_tree: _Optional[_Union[WebUIWorkspaceFileTreeSettingsDTO, _Mapping]] = ..., gateway_console: _Optional[_Union[WebUIGatewayConsoleSettingsDTO, _Mapping]] = ..., theme: _Optional[_Union[WebUIThemeSettingsDTO, _Mapping]] = ...) -> None: ...
+    def __init__(self, layout: _Optional[_Union[WebUILayoutSettingsDTO, _Mapping]] = ..., session_sidebar: _Optional[_Union[WebUISessionSidebarSettingsDTO, _Mapping]] = ..., workspace_file_tree: _Optional[_Union[WebUIWorkspaceFileTreeSettingsDTO, _Mapping]] = ..., gateway_console: _Optional[_Union[WebUIGatewayConsoleSettingsDTO, _Mapping]] = ...) -> None: ...
 
 class WebUISettingsUpdateDTO(_message.Message):
-    __slots__ = ("layout", "session_sidebar", "workspace_file_tree", "gateway_console", "theme")
+    __slots__ = ("layout", "session_sidebar", "workspace_file_tree", "gateway_console")
     LAYOUT_FIELD_NUMBER: _ClassVar[int]
     SESSION_SIDEBAR_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_FILE_TREE_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_CONSOLE_FIELD_NUMBER: _ClassVar[int]
-    THEME_FIELD_NUMBER: _ClassVar[int]
     layout: WebUILayoutSettingsDTO
     session_sidebar: WebUISessionSidebarSettingsDTO
     workspace_file_tree: WebUIWorkspaceFileTreeSettingsDTO
     gateway_console: WebUIGatewayConsoleSettingsDTO
-    theme: WebUIThemeSettingsUpdateDTO
-    def __init__(self, layout: _Optional[_Union[WebUILayoutSettingsDTO, _Mapping]] = ..., session_sidebar: _Optional[_Union[WebUISessionSidebarSettingsDTO, _Mapping]] = ..., workspace_file_tree: _Optional[_Union[WebUIWorkspaceFileTreeSettingsDTO, _Mapping]] = ..., gateway_console: _Optional[_Union[WebUIGatewayConsoleSettingsDTO, _Mapping]] = ..., theme: _Optional[_Union[WebUIThemeSettingsUpdateDTO, _Mapping]] = ...) -> None: ...
-
-class WebUIThemeSettingsDTO(_message.Message):
-    __slots__ = ("theme_id", "background", "resolved_theme")
-    THEME_ID_FIELD_NUMBER: _ClassVar[int]
-    BACKGROUND_FIELD_NUMBER: _ClassVar[int]
-    RESOLVED_THEME_FIELD_NUMBER: _ClassVar[int]
-    theme_id: str
-    background: GatewayThemeBackgroundDTO
-    resolved_theme: ResolvedGatewayThemeDTO
-    def __init__(self, theme_id: _Optional[str] = ..., background: _Optional[_Union[GatewayThemeBackgroundDTO, _Mapping]] = ..., resolved_theme: _Optional[_Union[ResolvedGatewayThemeDTO, _Mapping]] = ...) -> None: ...
-
-class WebUIThemeSettingsUpdateDTO(_message.Message):
-    __slots__ = ("theme_id", "background")
-    THEME_ID_FIELD_NUMBER: _ClassVar[int]
-    BACKGROUND_FIELD_NUMBER: _ClassVar[int]
-    theme_id: str
-    background: GatewayThemeBackgroundDTO
-    def __init__(self, theme_id: _Optional[str] = ..., background: _Optional[_Union[GatewayThemeBackgroundDTO, _Mapping]] = ...) -> None: ...
+    def __init__(self, layout: _Optional[_Union[WebUILayoutSettingsDTO, _Mapping]] = ..., session_sidebar: _Optional[_Union[WebUISessionSidebarSettingsDTO, _Mapping]] = ..., workspace_file_tree: _Optional[_Union[WebUIWorkspaceFileTreeSettingsDTO, _Mapping]] = ..., gateway_console: _Optional[_Union[WebUIGatewayConsoleSettingsDTO, _Mapping]] = ...) -> None: ...
 
 class WebUIWorkspaceBottomPanelSettingsDTO(_message.Message):
     __slots__ = ("visible", "height", "tab", "terminal_id")
@@ -1744,25 +1580,3 @@ class WorkspaceNavigationTreeDTO(_message.Message):
     revision: str
     nodes: _containers.RepeatedCompositeFieldContainer[WorkspaceNavigationNodeDTO]
     def __init__(self, revision: _Optional[str] = ..., nodes: _Optional[_Iterable[_Union[WorkspaceNavigationNodeDTO, _Mapping]]] = ...) -> None: ...
-
-class GatewayManagementTargetDTO(_message.Message):
-    __slots__ = ("gateway_id", "name", "connection_kind", "gateway_connection_id", "connection_error")
-    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
-    NAME_FIELD_NUMBER: _ClassVar[int]
-    CONNECTION_KIND_FIELD_NUMBER: _ClassVar[int]
-    GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
-    CONNECTION_ERROR_FIELD_NUMBER: _ClassVar[int]
-    gateway_id: str
-    name: str
-    connection_kind: str
-    gateway_connection_id: str
-    connection_error: str
-    def __init__(self, gateway_id: _Optional[str] = ..., name: _Optional[str] = ..., connection_kind: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_error: _Optional[str] = ...) -> None: ...
-
-class GatewayManagementDirectoryDTO(_message.Message):
-    __slots__ = ("local_gateway_id", "items")
-    LOCAL_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
-    ITEMS_FIELD_NUMBER: _ClassVar[int]
-    local_gateway_id: str
-    items: _containers.RepeatedCompositeFieldContainer[GatewayManagementTargetDTO]
-    def __init__(self, local_gateway_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[GatewayManagementTargetDTO, _Mapping]]] = ...) -> None: ...

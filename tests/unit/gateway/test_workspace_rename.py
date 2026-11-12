@@ -230,10 +230,7 @@ async def test_default_workspace_starts_as_home_and_keeps_renamed_value(
     async def start_default_runtime(*, owner: ManagedBackendOwner, **_: object):
         owner.set_process(ProcessProbe("default"))
         runtime = WorkspaceRuntime(
-            service_urls={
-                "workspace_api": backend_url,
-                "browser_manager": "http://127.0.0.1:18015",
-            },
+            service_urls={"workspace_api": backend_url},
             workspace_id=owner.contract.members[0].workspace_id,
             backend_owner=owner,
         )

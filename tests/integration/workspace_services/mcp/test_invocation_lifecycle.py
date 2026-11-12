@@ -298,9 +298,14 @@ async def test_real_http_progress_cancel_and_following_request(http_schema_serve
         await pending
     receipt = mcp_cancelled_receipt(cancelled.value)
     assert receipt is not None and receipt.cancellation_delivery == "sent"
-    result = await call(case.invoker(), "http-following", "progress")
+    progress_case.values.clear()
+    with mcp_progress_scope(progress):
+        result = await target.ainvoke({
+            "type": "tool_call", "id": "http-following", "name": target.name,
+            "args": {"call_mode": "progress"},
+        })
     assert result.status == "success" and result.tool_call_id == "http-following"
-    assert progress_case.values == [(1, 2)]
+    assert progress_case.values == [(1, 2), (2, 2)]
     assert any(row.get("cancelled") for row in case.received())
 
 

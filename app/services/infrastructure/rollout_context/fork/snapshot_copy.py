@@ -128,9 +128,9 @@ def prepare_target_snapshot(
         # 队列/claim 属于当前执行控制，不能随历史复制到目标。
         connection.execute("DELETE FROM execution_queue")
         connection.execute("UPDATE execution_queue_revision SET revision=0 WHERE singleton_id=1")
-        connection.execute(load_sql(__package__, "sql/drop_context_epoch_pending_namespace.sql"))
+        connection.execute(load_sql(__package__, "migrations/drop_context_epoch_pending_namespace.sql"))
         connection.execute(
-            load_sql(__package__, "sql/context_epoch_pending_namespace.sql"),
+            load_sql(__package__, "migrations/context_epoch_pending_namespace.sql"),
         )
         if current_scope(connection) != (snapshot.source_session_id, snapshot.source_thread_id):
             raise ValueError("source-mismatch: captured SQLite 与精确 source Thread 不一致")

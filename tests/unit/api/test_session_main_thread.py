@@ -19,7 +19,6 @@ from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.trace_event_store import TraceEventStore
-from tests.harness.python.run_context import TestRunContext
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -28,12 +27,10 @@ from tests.unit.core.catalog_workspace_helper import (
 
 @pytest.fixture()
 def catalog_workspace(
-    request: pytest.FixtureRequest,
     empty_workspace_scope: tuple[str, Path],
 ) -> Iterator[CatalogWorkspaceContext]:
     workspace_id = empty_workspace_scope[0]
-    run_context = TestRunContext.from_test_file(Path(request.node.path))
-    context = build_catalog_workspace(run_context.output_root, workspace_id=workspace_id)
+    context = build_catalog_workspace(empty_workspace_scope[1].parent, workspace_id=workspace_id)
     try:
         yield context
     finally:

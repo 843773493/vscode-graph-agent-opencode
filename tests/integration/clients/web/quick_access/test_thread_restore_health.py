@@ -110,7 +110,7 @@ async def test_thread_restore_does_not_probe_unrelated_target(
     result_path = context.artifacts_dir / "thread-restore-health.json"
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "120", "--",
-               "bun", "tests/integration/clients/web/quick_access/thread_restore_health.mjs"]
+               "node", "tests/integration/clients/web/quick_access/thread_restore_health.mjs"]
     with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium") as temporary:
         completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
             env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),

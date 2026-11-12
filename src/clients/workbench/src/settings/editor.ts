@@ -16,7 +16,7 @@ import { ITextModelService } from '../../upstream/src/vs/editor/common/services/
 import { DefaultSettings, Settings2EditorModel, nullRange } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesModels.js';
 import type { ISetting, ISettingsGroup } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import { ITextFileService, type ITextFileEditorModel, type ITextFileEditorModelManager } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
-import { onGatewayUserSessionInvalidated, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { managementGateway, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -111,6 +111,24 @@ export class SourceSettings extends Disposable {
     this.changed.fire(true);
   }
   get document(): SourceDocument { return configSourceFiles(this.files).currentDocument(this.resource); }
+  unboundPluginParameters(): { packageId: string; pluginId: string; installation: 'declared' | 'unavailable' | 'unknown' }[] | undefined {
+    const errors: ParseError[] = [];
+    const payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);
+    if (errors.length) return undefined;
+    const values = object(at(payload, ['plugins', 'configuration', 'values']));
+    const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
+    const bound = new Set(Array.isArray(bindings) ? bindings.flatMap(binding => {
+      const entry = object(binding);
+      return typeof entry.package_id === 'string' && typeof entry.plugin_id === 'string'
+        ? [JSON.stringify([entry.package_id, entry.plugin_id])] : [];
+    }) : []);
+    return Object.entries(values).flatMap(([packageId, plugins]) => Object.entries(object(plugins)).flatMap(([pluginId, parameters]) => {
+      if (!Object.keys(object(parameters)).length || bound.has(JSON.stringify([packageId, pluginId]))) return [];
+      const installation = this.schemas === undefined ? 'unknown'
+        : this.schemas.plugins.some(plugin => plugin.package_id === packageId && plugin.plugin_id === pluginId) ? 'declared' : 'unavailable';
+      return [{ packageId, pluginId, installation }];
+    }));
+  }
   createModel(parent: IInstantiationService): Settings2EditorModel {
     const defaults = parent.invokeFunction(accessor => new SourceDefaults(this, [], ConfigurationTarget.USER_REMOTE, accessor.get(IConfigurationService)));
     this._register(defaults);
@@ -190,7 +208,7 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
   const controller = new AbortController(), cancel = token.onCancellationRequested(() => controller.abort(new CancellationError()));
   const entry = workspaceContext.getSnapshot().gatewayId;
   const invalidate = () => controller.abort(new CancellationError());
-  const auth = onGatewayUserSessionInvalidated(0, invalidate), context = workspaceContext.subscribe(() => { if (entry && workspaceContext.getSnapshot().gatewayId !== entry) invalidate(); });
+  const auth = onGatewayTokenInvalidated(0, invalidate), context = workspaceContext.subscribe(() => { if (entry && workspaceContext.getSnapshot().gatewayId !== entry) invalidate(); });
   try {
     if (token.isCancellationRequested) throw new CancellationError();
     const files = parent.invokeFunction(accessor => accessor.get(IFileService));
@@ -218,7 +236,7 @@ export async function prepareSettingsPane(parent: IInstantiationService, locatio
       controller.signal.throwIfAborted();
       source = lifetime.add(new SourceSettings(location, model, files, schemas, textFiles));
     } finally { controller.signal.removeEventListener('abort', aborted); }
-    lifetime.add({ dispose: onGatewayUserSessionInvalidated(0, () => { subscription.dispose(); source?.replaceSchemas(undefined); }) });
+    lifetime.add({ dispose: onGatewayTokenInvalidated(0, () => { subscription.dispose(); source?.replaceSchemas(undefined); }) });
     return parent.createChild(new ServiceCollection([ITargetSettingsContext, { _serviceBrand: undefined, target: source }]), lifetime);
   } finally { auth(); context(); cancel.dispose(); controller.abort(); }
 }

@@ -179,6 +179,8 @@ class ReloadPendingRestartMixin:
                 changed_paths=changed_paths,
             ),
         )
+        if self._remove_released_plugin_private_inputs is not None:
+            self._remove_released_plugin_private_inputs(pending.payload)
         return self.status()
     def resolve_pending_restart(
         self,
@@ -371,11 +373,15 @@ class ReloadPendingRestartMixin:
             applied_paths=(),
             deferred_paths=(),
         )
-        self._state_store.release_config_apply_claim(
-            config_domain=self._CONFIG_DOMAIN,
-            apply_id=claim.apply_id,
-            fencing_token=claim.fencing_token,
-        )
+        try:
+            if self._remove_released_plugin_private_inputs is not None and active is not None:
+                self._remove_released_plugin_private_inputs(active.payload)
+        finally:
+            self._state_store.release_config_apply_claim(
+                config_domain=self._CONFIG_DOMAIN,
+                apply_id=claim.apply_id,
+                fencing_token=claim.fencing_token,
+            )
         return promoted
     def build_pending_restart_health_proof(
         self,

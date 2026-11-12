@@ -3,7 +3,6 @@ import { resolveCatalogSearchTarget } from "../../api/gateway/catalogSearch";
 import { useState, type ReactNode } from "react";
 import { useSessionResourceExplorer } from "../../hooks/session/useSessionResourceExplorer";
 import type {
-  GatewayUserAccess,
   GatewayWorkspace,
   Session,
   WorkspaceNavigationNode,
@@ -66,7 +65,7 @@ interface SessionResourceExplorerProps {
   catalogRefreshVersions: ReadonlyMap<string, number>;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
-  gatewayUserAccess?: GatewayUserAccess | null;
+
   onSelectSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
   onPinSession?: (workspaceId: string, sessionId: string) => void;
   onStatusChange: (message: string) => void;
@@ -111,7 +110,7 @@ export default function SessionResourceExplorer({
   catalogRefreshVersions,
   sessionCatalogOutboxRuntime,
   sessionCatalogOutboxSnapshot,
-  gatewayUserAccess,
+
   onSelectSession,
   onPinSession,
   onStatusChange,
@@ -152,7 +151,6 @@ export default function SessionResourceExplorer({
     catalogRefreshVersions,
     sessionCatalogOutboxRuntime,
     sessionCatalogOutboxSnapshot,
-    gatewayUserAccess,
   });
   const workspacesById = new Map(
     workspaces.map((workspace) => [gatewayWorkspaceKey(workspace), workspace]),

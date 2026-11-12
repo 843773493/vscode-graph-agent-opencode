@@ -108,7 +108,7 @@
 
 `integration-web-child-thread` 使用固定模型回放及真实 Agent/task 委派，验证工作台首次与复用 child 标签的调试导航、SSE 和父子请求日志；固定420秒/4GiB，保留集成独占闸门，不标为真实 Provider E2E。
 
-`integration-web-browser-views` 使用正式 Workbench、真实 Gateway/Backend 和 model_stream 验证浏览器本地视图的刷新与新页面恢复、双浏览器隔离和未打开会话的真实通知；保留 HTTP 账户租约、接管及真实45秒过期合同，固定300秒/4GiB，不代替跨设备同步或 Electron 重启验收。
+`integration-web-browser-views` 使用正式 Workbench、真实 Gateway/Backend 和 model_stream 验证浏览器本地视图的刷新与新页面恢复、双浏览器隔离和未打开会话的真实通知；页面沿现有本机凭据初始化，不再创建账户或游客租约，固定300秒/4GiB，不代替跨设备同步或 Electron 重启验收。
 
 ## 可修改内容
 
@@ -136,7 +136,6 @@
 - `integration-skill-catalog-publication`经真实文件watcher、目录owner、catalog派生及SQLite封存装具验证来源失败/日志次错后的继续发布与同名覆盖历史绑定，固定60秒/4GiB；Gateway来源是显式替身，不代产品执行、HTTP、独立Backend重启或Web验收。
 - `integration-terminal-operation-receipts`显式选择原7场景，保留90秒/4GiB；`integration-terminal-lease-notifications`单独选择真实PTY完成后的通知／日志故障2场景，固定60秒/4GiB。两批复用同一正式工作区和场景实现，必须串行运行；不以扩大截止或减少断言处理总量增长，超时仍如实记为TIMEOUT。
 - `integration-workspace-file-navigation-errors`经真实文件owner、SQLite与ASGI路由验证原生访问及控制面回复错误、上传碰撞、文本预检和operation／日志双重故障；核原结算、未知效果、FIFO与worker重启，固定100秒/4GiB，不代表独立Backend、Gateway/Web或Windows实机。
-- `integration-gateway-profile-errors`经真实Gateway用户入口生成账户/profile并制造原生目录与日志写入双重故障，核原HTTP分类、request_id、账户副作用、原件保全与同入口恢复；固定90秒/4GiB，不启动Backend、Web或真实Provider。
 - `integration-test-gate` 经两个隔离Git worktree中的真实pytest进程验证集成/E2E在服务装具前排队、清理后交接、强杀释放和xdist串行；固定90秒/4GiB，不启动用户开发服务。普通pytest集成/E2E也自动加载相同闸门；排队占用原suite外部期限，不能把超时算通过。
 - `integration-service-json-errors` 经真实辅助服务 HTTP 验证 JSON 解析失败的诊断边界及同入口正常请求，固定90秒；Linux按每进程4GiB数据段保护，不代表整树总内存预算，也不代表 Python owner、Gateway／Web 或 Backend 重启验收。
 

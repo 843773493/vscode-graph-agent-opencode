@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const PROCESS_RUN_ID = `pid-${process.pid}-${randomUUID()}`;
+const PROCESS_STARTED_AT = new Date().toISOString();
 
 export const TEST_RESULT_STATUSES = Object.freeze([
   "passed",
@@ -70,6 +71,9 @@ export class TestRunContext {
       withoutFinalExtension(relativeTestFile),
     );
     this.runRoot = path.join(this.outputRoot, "runs", runDirectoryName());
+    this.performanceDir = path.join(this.outputRoot, "artifacts",
+      (process.env.BOXTEAM_TEST_RUN_STARTED_AT ?? PROCESS_STARTED_AT).slice(0, 10).replaceAll("-", "/"),
+      path.basename(this.runRoot), ...(pytestNodeDirectoryName() ? [pytestNodeDirectoryName()] : []));
     this.workspaceRoot = path.join(this.outputRoot, "workspace");
     const pytestNodeDirectory = pytestNodeDirectoryName();
     this.artifactsDir = pytestNodeDirectory

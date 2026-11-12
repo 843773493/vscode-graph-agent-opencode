@@ -718,6 +718,14 @@ def test_gateway_active_promotion_commits_apply_journal_atomically(tmp_path):
             apply_id=claim.apply_id,
             fencing_token=claim.fencing_token,
         )
+        with pytest.raises(ConfigConflictError, match="apply claim"):
+            state.create_pending_config_candidate(
+                config_domain="gateway", candidate_id="candidate-atomic-late",
+                idempotency_key="reload:atomic-late", payload={"config_version": 3, "workspaces": []},
+                source_baseline={}, candidate_digest="late-digest",
+                effective_digest="late-digest", target_generation="gateway-runtime-3",
+                fencing_token=None, state="candidate_validated", base_active_revision=active.active_revision,
+            )
         with pytest.raises(ConfigConflictError, match="fencing"):
             state.assert_config_apply_claim(
                 config_domain="gateway",

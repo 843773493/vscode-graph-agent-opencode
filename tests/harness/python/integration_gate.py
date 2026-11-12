@@ -8,6 +8,8 @@ import portalocker
 import pytest
 from _pytest.terminal import TerminalReporter
 
+from tests.harness.performance.record import stage
+
 
 def integration_gate_path(project_root: Path) -> Path:
     """同一 Git 仓库的 worktree 共用主工作树中的控制锁；源码归档使用显式根。"""
@@ -50,7 +52,12 @@ def integration_test_gate(request: pytest.FixtureRequest) -> Iterator[None]:
     reporter = request.config.pluginmanager.getplugin("terminalreporter")
     if isinstance(reporter, TerminalReporter):
         reporter.write_line(f"集成/E2E 等待独占运行名额（最多600秒）: {lock_path}")
-    with integration_gate(lock_path):
+    lock = integration_gate(lock_path)
+    try:
+        with stage("integration.gate.wait", scope="session"):
+            lock.acquire()
         if isinstance(reporter, TerminalReporter):
             reporter.write_line("集成/E2E 已取得运行名额；本仓库其他测试进程继续等待")
         yield
+    finally:
+        lock.release()

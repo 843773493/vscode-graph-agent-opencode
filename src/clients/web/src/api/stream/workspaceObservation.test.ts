@@ -2,13 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { HttpRequestError } from "../http";
 import { streamSessionActivity } from "../session/sessionActivity";
+import { streamSessionCatalogSnapshots } from "../session/sessionCatalogOperations";
 import { SessionStreamIdleTimeoutError, streamSessionEvents, TraceCursorGoneError } from "./sessionTraceStream";
 import { streamWorkspaceFileEvents } from "./workspaceFileEvents";
 import type { WorkspaceObservationSubscription } from "../../types/backend";
 
 const originalFetch = globalThis.fetch;
 const encoder = new TextEncoder();
-type Kind = "session_activity" | "session_trace" | "workspace_files";
+type Kind = "session_activity" | "session_trace" | "workspace_files" | "session_navigation";
 
 interface Connection {
   subscriptions: WorkspaceObservationSubscription[];
@@ -111,6 +112,42 @@ function readers(port: number, workspaceId = "workspace", traceTimeout?: number,
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe("Workspace 单物理 SSE 观察者", () => {
+  test("目录快照与活动共享连接，取消目录不终止活动", async () => {
+    const connections = installBackend();
+    const target = { gateway_id: "gateway-test", workspace_id: "workspace" };
+    const navigation = new AbortController();
+    const activityController = new AbortController();
+    const revisions: number[] = [];
+    const activityEvents: number[] = [];
+    const navigationStream = streamSessionCatalogSnapshots(49_120, target, {
+      signal: navigation.signal, onSnapshot: (snapshot) => { revisions.push(snapshot.catalog_revision); },
+    });
+    const activityStream = streamSessionActivity(49_120, target, {
+      signal: activityController.signal, onEvent: (_event, cursor) => { activityEvents.push(cursor); },
+    });
+    try {
+      await waitUntil(() => connections.length === 1);
+      expect(connections[0].subscriptions).toHaveLength(2);
+      send(connections[0], "session_navigation", `event: session_navigation\ndata: ${JSON.stringify({
+        workspace_id: "workspace", catalog_revision: 7, event_seq_watermark: 2, generation: 7,
+      })}\n\n`);
+      await waitUntil(() => revisions.length === 1);
+      navigation.abort();
+      await navigationStream;
+      await waitUntil(() => connections.length === 2);
+      expect(connections[1].subscriptions.map(item => item.kind)).toEqual(["session_activity"]);
+      send(connections[1], "session_activity", activity(8));
+      await waitUntil(() => activityEvents.length === 1);
+      expect(revisions).toEqual([7]);
+      expect(activityEvents).toEqual([8]);
+    } finally {
+      navigation.abort();
+      activityController.abort();
+      await Promise.all([navigationStream, activityStream]);
+    }
+    expect(connections.every(connection => connection.cancelled)).toBe(true);
+  });
+
   test("三个领域入口共享一个准确目标连接并分别交付原事件", async () => {
     const connections = installBackend();
     const active = readers(49_101);

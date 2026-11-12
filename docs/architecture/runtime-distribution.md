@@ -12,6 +12,8 @@ BoxTeam 区分“代码从哪里来”和“以什么方式运行”，不为每
 
 `BOXTEAM_HOME` 可以显式覆盖默认数据目录。源码安装和 npm 安装必须使用相同的 staging 布局、runtime manifest 和启动逻辑；二者只允许在产物来源和升级方式上不同。
 
+共享根、固定 dev/release 与日期实验 worktree 通过 `bun run worktree` 管理，固定源码实例通过 `bun run workspace` 选择。职责、命令与迁移支持规则见 [worktree 与发布迁移约定](worktree-and-release-policy.md)。正式发布入口检查固定来源及提交，验收证据另外显式登记。
+
 ## 进程所有权
 
 ```text

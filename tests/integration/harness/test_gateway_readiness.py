@@ -5,14 +5,13 @@ from __future__ import annotations
 import os
 import subprocess
 from collections.abc import Iterator
-from contextlib import ExitStack
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
 from unittest.mock import Mock
 
 import pytest
 
+from tests.support.http_server import running_http_server
 from tests.support.processes.gateway import wait_for_gateway_ready
 
 
@@ -34,18 +33,7 @@ def health_server() -> Iterator[tuple[int, _GatewayHealthResponse]]:
             self.send_response(status)
             self.end_headers()
 
-    with ExitStack() as lifetime:
-        server = HTTPServer(("127.0.0.1", 0), Handler)
-        lifetime.callback(server.server_close)
-        thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
-        thread.start()
-
-        def join_server_thread() -> None:
-            thread.join(timeout=5)
-            assert not thread.is_alive(), "测试 HTTP 服务线程未停止"
-
-        lifetime.callback(join_server_thread)
-        lifetime.callback(server.shutdown)
+    with running_http_server(HTTPServer(("127.0.0.1", 0), Handler)) as server:
         yield server.server_port, response
 
 

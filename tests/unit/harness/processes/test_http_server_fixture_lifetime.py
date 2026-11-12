@@ -1,30 +1,28 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from http.server import HTTPServer
 from unittest.mock import Mock
 
 import pytest
 
-from tests.integration.harness import test_gateway_readiness as gateway_case
-from tests.integration.harness import test_workspace_readiness as workspace_case
+from tests.support import http_server
 
 
 @dataclass
 class EndpointLifetime:
-    fixture: Generator[
-        tuple[int, gateway_case._GatewayHealthResponse | workspace_case._HealthResponse], None, None,
-    ]
+    context: AbstractContextManager[HTTPServer]
     server: Mock
     thread: Mock
     cleanups: list[str]
+    thread_factory: Mock
 
 
-@pytest.fixture(params=[gateway_case, workspace_case], ids=["gateway", "workspace"])
+@pytest.fixture
 def endpoint_lifetime(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> EndpointLifetime:
-    module = request.param
     server = Mock(server_port=18000)
     thread = Mock()
     thread.is_alive.return_value = False
@@ -32,22 +30,23 @@ def endpoint_lifetime(
     server.shutdown.side_effect = lambda: cleanups.append("shutdown")
     thread.join.side_effect = lambda **_kwargs: cleanups.append("join")
     server.server_close.side_effect = lambda: cleanups.append("socket-close")
-    monkeypatch.setattr(module, "HTTPServer", Mock(return_value=server))
-    monkeypatch.setattr(module, "Thread", Mock(return_value=thread))
-    fixture = module.health_server._get_wrapped_function()()
-    return EndpointLifetime(fixture, server, thread, cleanups)
+    thread_factory = Mock(return_value=thread)
+    monkeypatch.setattr(http_server, "Thread", thread_factory)
+    return EndpointLifetime(http_server.running_http_server(server), server, thread, cleanups, thread_factory)
 
 
 @pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("stage", ["construct", "start"])
 def test_endpoint_start_failure_closes_socket_without_stopping_unstarted_thread(
-    endpoint_lifetime: EndpointLifetime, interrupted: bool,
+    endpoint_lifetime: EndpointLifetime, interrupted: bool, stage: str,
 ) -> None:
     state = endpoint_lifetime
     error = KeyboardInterrupt("HTTP线程启动中断") if interrupted else OSError("HTTP线程启动失败")
-    state.thread.start.side_effect = error
+    action = state.thread_factory if stage == "construct" else state.thread.start
+    action.side_effect = error
 
-    with pytest.raises(type(error)) as failure:
-        next(state.fixture)
+    with pytest.raises(type(error)) as failure, state.context:
+        pytest.fail("启动失败不得进入上下文")
 
     assert failure.value is error
     assert state.cleanups == ["socket-close"]
@@ -61,14 +60,12 @@ def test_endpoint_close_checks_thread_exit_and_releases_socket(
 ) -> None:
     state = endpoint_lifetime
     state.thread.is_alive.return_value = thread_alive
-    port, response = next(state.fixture)
-    assert port == 18000 and response.observed_requests == []
-
     if thread_alive:
-        with pytest.raises(AssertionError, match="HTTP 服务线程未停止"):
-            state.fixture.close()
+        with pytest.raises(AssertionError, match="HTTP 服务线程未停止"), state.context:
+            pass
     else:
-        state.fixture.close()
+        with state.context as server:
+            assert server is state.server
 
     assert state.cleanups == ["shutdown", "join", "socket-close"]
     state.thread.join.assert_called_once_with(timeout=5)
@@ -90,9 +87,8 @@ def test_endpoint_teardown_failure_still_attempts_remaining_resources(
         raise cleanup_error
 
     action.side_effect = fail_cleanup
-    next(state.fixture)
-    with pytest.raises(type(cleanup_error)) as failure:
-        state.fixture.throw(body_error)
+    with pytest.raises(type(cleanup_error)) as failure, state.context:
+        raise body_error
 
     assert failure.value is cleanup_error
     assert cleanup_error.__context__ is body_error

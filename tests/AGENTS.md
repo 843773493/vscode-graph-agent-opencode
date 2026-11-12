@@ -33,9 +33,13 @@ tests/
 
 ## 规范
 
+- 默认先在共享根 worktree 验证本次完整改动，必要时同步到固定 dev，前两者不适合才使用实验 worktree；用户指定目录时显式绑定。并发修改相关源码后核对结果对应的实际输入，不能将旧结果归给新工作树。
+- worktree 选择不改变业务工作区隔离或下述集成闸门；不得为并行绕过锁或抢占另一任务的服务。迁移测试使用经核实的 release 旧契约输入与隔离副本，不能以临时开发 Home 推导生产兼容需求，也不访问真实用户 Home。
 - 根 `conftest.py` 自动加载集成/E2E session 闸门；同一 Git 仓库的 worktree 共用主工作树 `out/tests/harness/python/integration_gate/runtime/session.lock`，一次只运行一个 pytest 集成/E2E进程，xdist worker 也各自占名额。无 `.git` 的源码归档使用显式项目根。名额在 session 装具清理后释放；等待最多600秒，矩阵外部期限仍包括排队时间。锁文件是稳定控制位置，不能删除或按测试产物清理。单测、非pytest命令、不同clone和旧源码不会自动受此闸门限制，外部超时与内存保护仍须保留。
 - 只要关键链路使用 stub、fake、mock、固定响应、替代服务、模拟宿主或替代运行面，测试就属于 Integration。
 - E2E 必须经过真实客户端运行面、真实 Gateway、真实 Workspace 后端及场景所需真实外部依赖。
-- 正式产物路径镜像测试文件路径写入 `out/tests/`；临时诊断写入 `out/tests/temp/`。
+- 正式产物路径镜像测试文件路径写入 `out/tests/`；临时诊断写入 `out/tests/temp/YYYY/MM/DD/<task_name>/`。
+- 性能排查先使用现有矩阵和默认收据，不临时复制观察器；核心排查命令、报告查询与比较见 `tests/harness/performance/AGENTS.md`。SQL/内部调用次数是诊断数据，不自动变成业务断言。
 - 正式测试内部的临时目录和 `BOXTEAM_HOME` 也必须位于对应 `out/tests/.../runtime/`，并按运行与节点隔离。
+- 测试层标记与 integration／e2e 文件分组由根 `conftest.py` 按实际文件归属统一生成；子目录 collection hook 不得标记全 session。runtime manifest 由每个 pytest session 独占，不共用可重写文件。
 - 当前完整客户端 E2E 为纯 Web；Linux Electron 的真实 ASAR 产物与精确模型回放归 `integration/clients/electron/`，不能冒充真实 Provider 或其它平台的 E2E。其余原生运行面仍为 TODO。

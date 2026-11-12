@@ -4,7 +4,7 @@ import { IQuickInputService } from '../../../../../src/clients/workbench/upstrea
 import { INotificationService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/notification/common/notification.js';
 import { defaultAgentSourceCommand } from '../../../../../src/clients/workbench/src/settings/commands.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
-import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
 
 const target = { gateway_id: 'gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', workspace_id: '019a0000-0000-7000-8000-000000000001' };
@@ -103,7 +103,7 @@ export async function targetSettingsContract(mode) {
     async input(options, token) {
       inputs.push({ ...options, validateInput: undefined });
       if (mode === 'focus') workspaceContext.publish({ ...initial, activeId: 'B' });
-      if (mode === 'identity') invalidateGatewayUserSession(0);
+      if (mode === 'identity') invalidateGatewayToken(0);
       if (mode === 'gateway') workspaceContext.publish({ ...initial, gatewayId: 'gateway_changed' });
       inputs.at(-1).cancelled = token.isCancellationRequested;
       return mode === 'cancel-input' ? undefined : 'reviewer';

@@ -4,7 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ConversationView } from "../../types/frontend";
 import type { ChatTranscriptItem } from "./transcriptItems";
-import type { TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { TurnMessageLocationDTO, TurnToolResultDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import {
   requestTurnFollowLatestFrame,
@@ -40,8 +40,8 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, signal?: AbortSignal) => Promise<TurnMessageLocationDTO | void> = async () => {}, mountOnScroll = true,
-  messageTarget?: { dataset: { messageItemId: string }; scrollIntoView: (options: ScrollIntoViewOptions) => void; getBoundingClientRect: () => { top: number; bottom: number } }) {
+function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, signal?: AbortSignal) => Promise<TurnMessageLocationDTO | TurnToolResultDTO | void> = async () => {}, mountOnScroll = true,
+  messageTarget?: { dataset: { messageItemId?: string; toolResultItemId?: string }; scrollIntoView: (options: ScrollIntoViewOptions) => void; getBoundingClientRect: () => { top: number; bottom: number } }) {
   let items = initial;
   let scopeKey = "workspace/session/thread";
   let viewState: { turn_anchor: string | null; scroll_offset: number; follow_latest: boolean } | null = null;
@@ -240,6 +240,22 @@ describe("正式轮次定位与位置恢复", () => {
     expect(harness.scroller.scrollTop).toBe(180);
     expect(harness.state().navigation?.phase).toBe("located");
     expect(harness.state().locatedMessage).toEqual(message);
+  });
+
+  test("工具元数据接受后沿原around定位ToolRow，不伪造正文范围", async () => {
+    const tool: TurnToolResultDTO = { item_id: "result-meta", turn_id: "turn-2", tool_call_id: "model:tool-call:one", tool_name: "read_file", status: "completed" };
+    let request: unknown[] = [];
+    const marker = { dataset: { toolResultItemId: tool.item_id }, scrollIntoView() {},
+      getBoundingClientRect: () => ({ top: 180 - harness.scroller.scrollTop, bottom: 200 - harness.scroller.scrollTop }) };
+    const harness = navigationHarness([turn("turn-1", 1), turn("turn-2", 2)], async (...args) => { request = args; return tool; }, true, marker);
+    await act(async () => harness.state().navigateToTurn(tool.turn_id, 0, false, undefined, tool));
+    harness.settle(); harness.settle();
+    expect(request).toEqual([tool.turn_id, expect.any(AbortSignal), undefined, tool.item_id]);
+    expect(harness.state().locatedTool).toEqual(tool);
+    expect(harness.state().locatedMessage).toBeUndefined();
+    expect(harness.state().navigation?.phase).toBe("located");
+    act(() => harness.state().cancelMessageNavigation());
+    expect(harness.state().locatedTool).toBeUndefined();
   });
 
   test.each(["pointerdown", "mousedown", "pointermove", "mousemove"] as const)(

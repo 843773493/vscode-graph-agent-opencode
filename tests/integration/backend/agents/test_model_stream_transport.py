@@ -175,7 +175,13 @@ class SealedTransportOwner:
         self, messages: str | list[BaseMessage], *, identity: ModelCallIdentity | None = None,
     ) -> AsyncIterator[AIMessageChunk]:
         with self.call_scope(messages, identity=identity) as projected:
-            async for chunk in self.model.astream(projected):
+            from tests.harness.performance.observers import observe_model_stream
+            from tests.harness.performance.record import active_perf
+            perf = active_perf()
+            source = self.model.astream(projected)
+            if perf is not None and perf.mode in {"core", "diagnostic"}:
+                source = observe_model_stream(source, perf, provider="replay")
+            async for chunk in source:
                 yield chunk
 
     async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:

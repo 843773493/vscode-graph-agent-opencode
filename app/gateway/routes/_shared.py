@@ -25,12 +25,6 @@ from app.core.path_utils import (
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.gateway.config import GatewayConfigReloadService
 from app.gateway.control.navigation import WorkspaceNavigationStore
-from app.gateway.control.user_access import (
-    USER_ACCESS_COOKIE_NAME,
-    UserAccessContext,
-    UserAccessService,
-)
-from app.gateway.control.user_profile import UserProfileStore
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.managed_workspaces import list_direct_managed_workspaces
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_gateway_id
@@ -220,28 +214,10 @@ def get_gateway_config_reload_service(
     return service
 
 
-def get_user_access_service(request: Request) -> UserAccessService:
-    service = getattr(request.app.state, "user_access_service", None)
-    if not isinstance(service, UserAccessService):
-        raise RuntimeError("Gateway 用户访问服务尚未初始化")
-    return service
 
 
-def get_user_profile_store(request: Request) -> UserProfileStore:
-    store = getattr(request.app.state, "user_profile_store", None)
-    if not isinstance(store, UserProfileStore):
-        raise RuntimeError("Gateway 用户 profile 存储尚未初始化")
-    return store
 
 
-def _current_user_access(
-    request: Request,
-    service: UserAccessService,
-) -> UserAccessContext:
-    context = service.resolve_cookie(request.cookies.get(USER_ACCESS_COOKIE_NAME))
-    if context is None:
-        raise HTTPException(status_code=401, detail="user_session_required")
-    return context
 
 
 def get_workspace_runtime_controller(

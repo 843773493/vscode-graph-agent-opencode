@@ -21,7 +21,6 @@ from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -131,7 +130,6 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{network.gateway_port}", headers=LOCAL_TOKEN_HEADERS,
                                      timeout=25, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             health = (await client.get("/api/gateway/health")).json()["data"]
             gateway_id = health["gateway_id"]
             assert gateway_id == network.gateway_id

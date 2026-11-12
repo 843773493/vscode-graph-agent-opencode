@@ -48,7 +48,6 @@ class StartupCase:
     handles: list[tuple[ProcessProbe, ProcessProbe]] = field(default_factory=list)
     backend_adopted: bool = False
     auxiliary_failure: Exception | None = None
-    bad_fields: bool = False
 
     async def start(self, *, owner: ManagedBackendOwner, registry: GatewayWorkspaceRegistry, **options: object):
         mounts = registry.resolve_backend_mounts(owner.contract)
@@ -59,18 +58,15 @@ class StartupCase:
         port = 44000 + len(self.started) * 10
         runtimes = {}
         backend = ProcessProbe("backend")
-        browser = ProcessProbe("browser", failure=self.auxiliary_failure)
-        self.handles.append((backend, browser))
+        auxiliary = ProcessProbe("auxiliary", failure=self.auxiliary_failure)
+        self.handles.append((backend, auxiliary))
         owner.set_process(backend, adopted=self.backend_adopted)
         for index, member in enumerate(owner.contract.members):
-            browser_url = f"http://127.0.0.1:{port + index + 1}"
             runtime = WorkspaceRuntime(
-                service_urls={"workspace_api": f"http://127.0.0.1:{port}", "browser_manager": browser_url},
+                service_urls={"workspace_api": f"http://127.0.0.1:{port}"},
                 backend_owner=owner, workspace_id=member.workspace_id,
-                processes={"browser_manager": browser} if index == 0 else {},
+                processes={"auxiliary": auxiliary} if index == 0 else {},
             )
-            if self.bad_fields:
-                runtime.service_urls.pop("browser_manager")
             runtimes[member.workspace_id] = runtime
             owner.unpublished_runtimes[member.workspace_id] = runtime
         return replace(owner.contract, backend_url=f"http://127.0.0.1:{port}"), runtimes
@@ -702,43 +698,47 @@ async def test_registry_close_reclaims_runtimes_restored_after_listener_startup(
         preserve_existing_managed_runtimes=preserve_existing_managed_runtimes,
     )
     assert len(startup_case.started) == 1
-    backend, browser = startup_case.handles[0]
+    backend, auxiliary = startup_case.handles[0]
     if cleanup_fails:
         with pytest.raises(RuntimeError, match="owned workspace runtime close failed"):
             registry.close(detach_adopted_managed_processes=preserve_existing_managed_runtimes)
     else:
         registry.close(detach_adopted_managed_processes=preserve_existing_managed_runtimes)
-    assert browser.events.count("close:browser") == 1 and not browser.detached
+    assert auxiliary.events.count("close:auxiliary") == 1 and not auxiliary.detached
     assert backend.detached is preserve_existing_managed_runtimes
     assert backend.closed is not preserve_existing_managed_runtimes
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_point", ["default_runtime_fields", "registry_publish"])
-async def test_candidate_default_runtime_failure_detaches_adopted_processes(startup_case, monkeypatch, failure_point) -> None:
+async def test_candidate_default_publication_observer_detaches_adopted_processes(startup_case) -> None:
     startup_case.backend_adopted = True
-    startup_case.bad_fields = failure_point == "default_runtime_fields"
-    error = RuntimeError("candidate default workspace registry publish failed")
-    if failure_point == "registry_publish":
-        def fail_publish(*_):
-            raise error
-        monkeypatch.setattr(GatewayWorkspaceRegistry, "publish_backend_runtime", fail_publish)
+    error = RuntimeError("candidate default workspace registry observer failed")
     registry = await bootstrap.create_registry(preserve_existing_managed_runtimes=True)
     default_workspace_id = next(target.workspace_id for target in registry.targets() if target.system_default)
-    with pytest.raises(RuntimeError) as raised:
-        await bootstrap._restore_managed_local_runtimes(
-            registry=registry, default_workspace_id=default_workspace_id,
-            preserve_existing_managed_runtimes=True,
-        )
-    if failure_point == "registry_publish":
+
+    def fail_published_owner() -> None:
+        if registry.has_runtime(default_workspace_id):
+            raise error
+
+    registry.add_commit_observer(fail_published_owner)
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            await bootstrap._restore_managed_local_runtimes(
+                registry=registry, default_workspace_id=default_workspace_id,
+                only_workspace_ids={default_workspace_id},
+                preserve_existing_managed_runtimes=True,
+            )
         assert raised.value is error
-    else:
-        assert "Browser Manager 地址" in str(raised.value)
-    backend, browser = startup_case.handles[0]
+        backend, auxiliary = startup_case.handles[0]
+        assert registry.has_runtime(default_workspace_id)
+        assert not backend.closed and not backend.detached
+        assert not auxiliary.closed and not auxiliary.detached
+    finally:
+        registry.remove_commit_observer(fail_published_owner)
+        registry.close(detach_adopted_managed_processes=True)
     assert backend.detached and not backend.closed
-    assert browser.closed and not browser.detached
-    assert browser.events.count("close:browser") == 1
-    registry.close(detach_adopted_managed_processes=True)
+    assert auxiliary.closed and not auxiliary.detached
+    assert auxiliary.events.count("close:auxiliary") == 1
 
 
 @pytest.mark.asyncio
@@ -829,13 +829,13 @@ async def test_default_publication_observer_error_defers_cleanup_to_startup_owne
                 only_workspace_ids={target.workspace_id},
             )
         assert raised.value is failure
-        backend, browser = startup_case.handles[0]
+        backend, auxiliary = startup_case.handles[0]
         assert graph.owner.process is backend and not backend.closed
-        assert not browser.closed
+        assert not auxiliary.closed
         assert not graph.owner.unpublished_runtimes
         assert registry.managed_runtime(target.workspace_id).backend_owner is graph.owner
     finally:
         registry.remove_commit_observer(observer)
         registry.close()
     assert backend.events.count("close:backend") == 1
-    assert browser.events.count("close:browser") == 1
+    assert auxiliary.events.count("close:auxiliary") == 1

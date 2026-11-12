@@ -74,14 +74,13 @@ async function requestSessionAttachmentContent(
   if (options.variant === "thumbnail") {
     query.set("max_edge", "512");
   }
-  // 附件内容只共享统一凭据与刷新重试，不建立 Gateway 用户会话屏障。
+  // 附件内容复用统一本机凭据及一次有界刷新重试。
   return await requestGatewayResponse(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/attachments/content?${query}`,
     {
       headers: workspaceHeader(workspaceId),
       signal: options.signal,
-      skipGatewayUserSession: true,
     },
   );
 }

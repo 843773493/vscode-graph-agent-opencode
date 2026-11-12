@@ -14,12 +14,12 @@ from app.core.session_control_thread_catalog.thread_catalog import read_fence_ro
 from app.core.sqlite_state import load_sql
 
 COLLABORATION_STATE_DDL = (
-    load_sql(__package__, "sql/collaboration_boards.sql"),
-    load_sql(__package__, "sql/collaboration_events.sql"),
-    load_sql(__package__, "sql/collaboration_fanouts.sql"),
-    load_sql(__package__, "sql/collaboration_fanouts_pending.sql"),
-    load_sql(__package__, "sql/collaboration_deliveries.sql"),
-    load_sql(__package__, "sql/collaboration_deliveries_pending.sql"),
+    load_sql(__package__, "migrations/collaboration_boards.sql"),
+    load_sql(__package__, "migrations/collaboration_events.sql"),
+    load_sql(__package__, "migrations/collaboration_fanouts.sql"),
+    load_sql(__package__, "migrations/collaboration_fanouts_pending.sql"),
+    load_sql(__package__, "migrations/collaboration_deliveries.sql"),
+    load_sql(__package__, "migrations/collaboration_deliveries_pending.sql"),
 )
 
 

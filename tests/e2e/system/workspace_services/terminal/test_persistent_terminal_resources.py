@@ -2,19 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import shutil
 import time
-from collections.abc import Generator
-from contextlib import ExitStack
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 import pytest
 import websockets
 
-from app.core.mounted_workspaces import MountedWorkspace
-from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_history_fixture import (
     seed_historical_terminal_checkpoint,
 )
@@ -350,7 +345,7 @@ async def test_workspace_terminal_survives_source_session_delete(
     client.headers.update(
         {
             "X-BoxTeam-Gateway-Id": "gateway_0123456789abcdef0123456789abcdef",
-            "X-BoxTeam-Navigation-Actor": "guest:terminal-e2e",
+            "X-BoxTeam-Navigation-Actor": "local",
         }
     )
     receipt = await submit_navigation_operation(

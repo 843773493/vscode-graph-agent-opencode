@@ -10,7 +10,7 @@ import type {
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import { createAppStateMirror } from "./appState";
 import {
-  testGatewayUserAccess,
+
   testWorkspaceRequestTargetsFor,
 } from "./gatewayEnvironment";
 import { createSessionCatalogOutboxTestRuntime } from "./sessionCatalogOutbox";
@@ -54,7 +54,6 @@ export function mountSessionLifecycleActions(options: {
       abortCurrentStream: abortCurrentStream ?? (() => undefined),
       invalidateAgentState: () => undefined,
       sessionCatalogOutboxRuntime,
-      gatewayUserAccess: testGatewayUserAccess(),
       selectionIntentRef,
     });
     return null;

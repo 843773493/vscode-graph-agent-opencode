@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from contextlib import closing
 from itertools import pairwise
@@ -15,10 +14,9 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
     LangChainMessageCodec,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
+from tests.harness.performance.record import stage
 from tests.support.custom_tool_test_workspace import (
-    FixtureStageObserver,
     prepare_custom_tool_test_workspace,
-    timed_fixture_stage,
 )
 from tests.support.paths import output_root_for_test
 
@@ -36,27 +34,13 @@ def integration_workspace_root_path(request: pytest.FixtureRequest) -> str:
         test_layer="integration",
         project_root=project_root,
     )
-    observer = (
-        FixtureStageObserver(output_root / "artifacts")
-        if os.environ.get("BOXTEAM_FIXTURE_STAGE_TIMING") == "1"
-        else None
-    )
-    try:
-        with timed_fixture_stage(observer, "fixture.workspace_setup"):
-            workspace_root = prepare_custom_tool_test_workspace(
-                workspace_root=output_root / "workspace",
-                template_root=project_root
-                / "tests"
-                / "fixtures"
-                / "workspaces"
-                / "custom_tool_test_workspace",
-                shared_skill_root=project_root / "resources" / "skills",
-                observer=observer,
-            )
-        return str(workspace_root)
-    finally:
-        if observer is not None:
-            observer.close()
+    with stage("fixture.workspace_setup"):
+        workspace_root = prepare_custom_tool_test_workspace(
+            workspace_root=output_root / "workspace",
+            template_root=project_root / "tests/fixtures/workspaces/custom_tool_test_workspace",
+            shared_skill_root=project_root / "resources/skills",
+        )
+    return str(workspace_root)
 
 
 @pytest.fixture

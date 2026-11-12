@@ -38,10 +38,6 @@ from app.schemas.gateway.plugin_commands import (
     PluginCommandSnapshotDTO,
     PluginContributionTarget,
 )
-from app.schemas.gateway.plugin_private_inputs import (
-    PluginPrivateInputReference,
-    PluginPrivateInputWriteRequest,
-)
 from app.schemas.gateway.plugin_installation import (
     FrozenPluginInstallArtifact,
     InstallPluginRequest,
@@ -53,6 +49,10 @@ from app.schemas.gateway.plugin_installation import (
     PluginSourceCatalogRequest,
     PluginSourceConfig,
     PluginSourceStatusDTO,
+)
+from app.schemas.gateway.plugin_private_inputs import (
+    PluginPrivateInputReference,
+    PluginPrivateInputWriteRequest,
 )
 from app.schemas.gateway.service_plugin import (
     InstalledPluginPackageDTO,
@@ -132,7 +132,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionCatalogPageDTO", "SessionCatalogBreadcrumbDTO",
         "SessionCatalogSearchResultsDTO", "SessionCatalogExportDTO",
         "WorkspaceSearchCapabilitiesDTO", "WorkspaceSearchRequest", "WorkspaceSearchResultDTO",
-        "SessionTurnBootstrapDTO", "TurnHistoryLoadRequest", "TurnHistoryPageDTO", "ThreadAttachmentListDTO",
+        "SessionTurnBootstrapDTO", "TurnHistoryLoadRequest", "TurnHistoryPageDTO", "ThreadAttachmentListDTO", "TurnToolResultDTO", "ThreadToolResultListDTO",
         "TurnMessageSearchRequest", "TurnMessageSearchResultsDTO",
         "WorkspaceMessageSearchResultsDTO",
         "LLMRequestLogReferenceDTO", "LLMRequestLogLocationDTO", "WorkspaceLLMRequestLogSearchResultsDTO",
@@ -163,7 +163,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
 GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     name: f"{gateway_public_pb2.DESCRIPTOR.package}.{name}"
     for name in (
-        "GatewayManagementTargetDTO",
+        "GatewayManagementDirectoryDTO", "GatewayManagementTargetDTO",
         "GatewayDirectoryListDTO", "NativeDirectoryBindRequest",
         "NativeDirectoryBindingDTO", "NativeDirectoryResolveDTO",
         "GatewayResourceAddressRequest", "GatewayResourceAddressDTO",
@@ -172,8 +172,6 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
         "PortForwardListDTO", "CreatePortForwardRequest",
         "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
-        "GatewayUserListDTO", "GatewayUserDTO", "GatewayUserAccessDTO",
-        "CreateGatewayUserRequest", "AcquireGatewayUserRequest", "CreateGatewayGuestRequest",
         "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
         "GatewayDiagnosticLogQueryRequest", "GatewayDiagnosticLogQueryResultDTO",
         "GatewayDiagnosticLogLocateRequest", "GatewayDiagnosticLogLocationDTO",
@@ -190,7 +188,6 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "ActivateGatewayWorkspaceResultDTO", "WorkspaceFolderCreateRequest", "WorkspaceNavigationNodeUpdateRequest",
         "WorkspaceNavigationPlacementRequest", "WorkspaceNavigationReorderRequest",
         "WorkspaceNavigationTreeDTO", "WorkspaceNavigationBreadcrumbDTO",
-        "GatewayManagementDirectoryDTO",
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
@@ -228,6 +225,7 @@ HTTP_JSON_DESCRIPTORS = dict(HTTP_JSON_DESCRIPTORS) | {
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "PluginCommandSnapshotDTO": plugin_commands_pb2.DESCRIPTOR.message_types_by_name["PluginCommandSnapshotDTO"],
+    "PluginRuntimeStatusDTO": service_plugin_pb2.DESCRIPTOR.message_types_by_name["PluginRuntimeStatusDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],
     "FederatedSearchEventDTO": search_public_pb2.DESCRIPTOR.message_types_by_name["FederatedSearchEventDTO"],
     "TraceEventDTO": trace_pb2.DESCRIPTOR.message_types_by_name["TraceEvent"],
@@ -287,7 +285,8 @@ def assert_gateway_http_schemas(document: JsonSchemaValue, pool: DescriptorPool 
         PluginInstanceView, InstalledPluginPackageDTO, PluginSourceStatusDTO, PluginInventoryResultDTO,
         PluginSourceConfig, PluginSourceArtifact, PluginSourceCatalogRequest, PluginSourceCatalogDTO,
         FrozenPluginInstallArtifact, PluginInstallOperationRequest, PluginInstallOperationDTO,
-        PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginShutdownDTO, PluginUninstallResultDTO, WorkspacePluginConfigurationDTO,
+        PluginSlotStatusDTO, PluginRuntimeStatusDTO, PluginShutdownDTO, PluginUninstallResultDTO,
+        WorkspacePluginConfigurationDTO,
         PluginCommandCallRequest, PluginCommandCancelRequest, PluginCommandCancelDTO,
         PluginCommandInstanceRequest, PluginCommandRegistration, PluginCommandRegistrationsDTO,
         PluginCommandEventDTO,

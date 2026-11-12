@@ -49,7 +49,7 @@ async def test_cached_workbench_executes_upgraded_bundle_and_worker(
         workspace_root=Path(integration_workspace_root_path), default_backend_url=None, port=search_gateway_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
-    command = ["bun", "tests/integration/clients/web/quick_access/static_upgrade.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/static_upgrade.mjs"]
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     supervised = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
                   "--timeout-seconds", "120", "--", *command]

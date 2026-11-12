@@ -100,7 +100,7 @@ print(json.dumps({"loaded": core.__file__, "schema": 21}))
     passed = run("staged-initialize-reopen")
     assert passed.returncode == 0, passed.stderr
     assert json.loads(passed.stdout)["schema"] == 21
-    asset = staged_application / "app/gateway/control/gateway_state/sql/001.sql"
+    asset = staged_application / "app/gateway/control/gateway_state/migrations/001.sql"
     asset.unlink()
     missing = run("staged-missing-asset")
     assert missing.returncode != 0 and "FileNotFoundError" in missing.stderr
@@ -176,12 +176,12 @@ assert Path(__import__("app").__file__).is_relative_to(Path.cwd())
 with sqlite3.connect(":memory:") as connection:
     initialize_directory_schema(connection)
     require_directory_schema(connection)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
 """
     environment = {**os.environ, "PYTHONPATH": str(staged_application)}
     for name, available in (("managed-directory-present", True), ("managed-directory-missing", False)):
         if not available:
-            (staged_application / "app/services/infrastructure/attachment_blob_catalog/sql/managed_directory_schema.sql").unlink()
+            (staged_application / "app/services/infrastructure/attachment_blob_catalog/migrations/managed_directory_schema.sql").unlink()
         result = subprocess.run([sys.executable, "-c", script], cwd=staged_application,
                                 env=environment, capture_output=True, text=True, timeout=30, check=False)
         (tmp_path / f"{name}.json").write_text(json.dumps({

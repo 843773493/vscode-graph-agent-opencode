@@ -24,8 +24,6 @@ from app.gateway.config import (
 )
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.control.gateway_state import GatewayStateStore
-from app.gateway.control.user_access import UserAccessService
-from app.gateway.control.view_state import UserViewStateStore
 from app.gateway.federation.policy import (
     FederationPolicyStore,
     normalize_policy,
@@ -101,24 +99,6 @@ def _refresh_federation_workspace_ports(
     service.session_main.project_workspaces(projected)
 
 
-async def _cleanup_user_access_periodically(
-    service: UserAccessService,
-    view_state_store: UserViewStateStore,
-) -> None:
-    while True:
-        await asyncio.sleep(3600)
-        expired_leases, expired_guests = service.cleanup_expired()
-        if expired_leases or expired_guests:
-            logger.info(
-                "Gateway 清理过期用户访问: leases=%s guests=%s",
-                expired_leases,
-                expired_guests,
-            )
-        expired_view_states = view_state_store.cleanup_expired()
-        if expired_view_states:
-            logger.info(
-                "Gateway 清理过期视图状态: rows=%s", expired_view_states
-            )
 
 
 def _report_managed_runtime_restore_task(task: asyncio.Task[None]) -> None:

@@ -23,7 +23,6 @@ from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import router as proxy_router
-from app.gateway.server.workspace_proxy import verify_user_access_for_proxy
 from app.services.infrastructure.log_service import LogService
 
 SESSION_ID = "ses_019c257bff2c7c6989d1c38a6ae7fbf2"
@@ -155,7 +154,6 @@ async def test_snapshot_gateway_roundtrip_stays_on_explicit_workspace(
     gateway.include_router(proxy_router)
     gateway.state.registry = registry
     gateway.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
-    gateway.dependency_overrides[verify_user_access_for_proxy] = lambda: None
 
     class GatewayTransport(httpx.ASGITransport):
         def __init__(self, application: FastAPI, gateway_root: Path) -> None:
@@ -219,7 +217,6 @@ async def test_snapshot_gateway_roundtrip_stays_on_explicit_workspace(
             entry.include_router(proxy_router)
             entry.state.registry = entry_registry
             entry.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
-            entry.dependency_overrides[verify_user_access_for_proxy] = lambda: None
         else:
             entry = gateway
             entry_root = native_root

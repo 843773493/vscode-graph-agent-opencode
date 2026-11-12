@@ -12,10 +12,10 @@ from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
 from app.gateway.auth import GatewayAuthContext
-from app.gateway.control.user_access import UserAccessContext
 from app.gateway.proxy_upstream import UpstreamResponseBody
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
+from app.gateway.server import workspace_proxy as workspace_proxy_module
 from app.gateway.server.workspace_proxy import (
     _http_client,
     _is_streaming_workspace_path,
@@ -121,8 +121,8 @@ def test_backend_route_change_invalidates_existing_lease(
 @pytest.mark.parametrize(
     ("method", "path", "expected_actor"),
     [
-        ("POST", "session-catalog/operations:enqueue", "guest"),
-        ("GET", "session-catalog/operations", "guest"),
+        ("POST", "session-catalog/operations:enqueue", "local"),
+        ("GET", "session-catalog/operations", "local"),
         ("GET", "session-catalog/snapshot", None),
         ("POST", "context/read", None),
         ("POST", "context/search", None),
@@ -160,20 +160,8 @@ async def test_navigation_actor_only_reaches_operation_routes(
             }
         )
         request.state.request_id = "req_navigation_scope"
-        response = await _proxy_workspace_request(
-            path,
-            request,
-            auth=GatewayAuthContext(kind="local"),
-            user_access=UserAccessContext(
-                kind="guest",
-                user_id=None,
-                access_session_id="guest_scope",
-                lease_generation=1,
-                invalidated=asyncio.Event(),
-            ),
-            include_credentials=True,
-            request_body=b"",
-        )
+        response = await _proxy_workspace_request(path, request, auth=GatewayAuthContext(kind="local"),
+            include_credentials=True, request_body=b"")
         assert isinstance(response, StreamingResponse)
         assert [chunk async for chunk in response.body_iterator] == [b"upstream"]
 
@@ -229,7 +217,6 @@ async def test_rewritten_body_uses_actual_content_length(
             "context/read",
             request,
             auth=None,
-            user_access=None,
             include_credentials=False,
             request_body=rewritten_body,
         )
@@ -323,6 +310,50 @@ async def test_streaming_proxy_uses_dedicated_http_client() -> None:
 
 
 @pytest.mark.asyncio
+async def test_private_header_write_keeps_accepted_result_when_write_capability_is_revoked(
+    registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = FastAPI()
+    revoked = False
+    calls: list[str] = []
+
+    async def handler(upstream: httpx.Request) -> httpx.Response:
+        nonlocal revoked
+        revoked = True
+        return httpx.Response(200, headers={"content-type": "application/json"}, content=b'{"reference":"secret_1"}')
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        application.state.registry = registry
+        application.state.http_client = http_client
+
+        def authorize(_request, _auth, capability: str) -> None:
+            calls.append(capability)
+            if capability == "configuration_write" and revoked:
+                raise HTTPException(status_code=403, detail="configuration_write 已撤销")
+
+        monkeypatch.setattr(workspace_proxy_module, "require_federation_capability", authorize)
+        request = Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/mcp/private-headers",
+            "query_string": b"",
+            "headers": [(b"x-boxteam-workspace-id", WORKSPACE_ID.encode())],
+            "app": application,
+        })
+        request.state.request_id = "req_private_header"
+        response = await _proxy_workspace_request("mcp/private-headers", request,
+            auth=GatewayAuthContext(kind="local"), include_credentials=False, request_body=b"{}")
+
+    assert response.status_code == 200
+    assert response.body == b'{"reference":"secret_1"}'
+    assert calls == [
+        "configuration_read", "configuration_write", "configuration_read", "configuration_write",
+        "configuration_read",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_message_stream_availability_retries_after_upstream_connection_change(
     registry: GatewayWorkspaceRegistry,
 ) -> None:
@@ -386,7 +417,6 @@ async def test_message_stream_availability_retries_after_upstream_connection_cha
             "sessions/ses_1/message-streams/availability",
             request,
             auth=None,
-            user_access=None,
             include_credentials=False,
         )
     finally:
@@ -455,7 +485,6 @@ async def test_message_stream_hides_initial_upstream_404_until_stream_is_created
             "sessions/ses_1/turns/job_1/message-stream",
             request,
             auth=None,
-            user_access=None,
             include_credentials=False,
         )
         body = b"".join([chunk async for chunk in response.body_iterator])
@@ -516,7 +545,7 @@ async def test_proxy_waits_for_workspace_publication_before_acquiring_route_refe
         application.state.http_client = client
         responses = await asyncio.gather(*(
             _proxy_workspace_request("workspace", request, auth=GatewayAuthContext(kind="local"),
-                                     user_access=None, include_credentials=True)
+                                     include_credentials=True)
             for _ in range(5)
         ))
         for response in responses:
@@ -597,7 +626,6 @@ async def test_proxy_bounds_hung_upstream_response_headers_and_releases_connecti
                     "workspace",
                     request,
                     auth=None,
-                    user_access=None,
                     include_credentials=False,
                 ),
                 timeout=2,
@@ -652,7 +680,6 @@ async def test_proxy_rejects_path_that_folds_out_of_v1_namespace(
                 "../../api/gateway/health",
                 request,
                 auth=None,
-                user_access=None,
                 include_credentials=False,
             )
     finally:
@@ -811,7 +838,7 @@ async def test_shared_cleanup_preserves_original_error_and_route_count(
     def release() -> None:
         registry.release_route_reference(WORKSPACE_ID, streaming=streaming)
 
-    stream = (_stream_proxy_response(upstream, lease, None, release)
+    stream = (_stream_proxy_response(upstream, lease, release)
               if streaming else UpstreamResponseBody(upstream, release))
     with pytest.raises(OSError if close_fails else httpx.ReadError) as caught:
         _ = [chunk async for chunk in stream]

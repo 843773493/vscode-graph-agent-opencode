@@ -118,7 +118,7 @@ async function command(surface, label, action, resourceId, {
     (async () => {
       await surface.getByRole("button", { name: label, exact: true }).click();
       if (action === "delete") {
-        const dialog = surface.page().getByRole("dialog");
+        const dialog = surface.page().getByRole("dialog", { name: "删除浏览器", exact: true });
         await dialog.waitFor({ state: "visible" });
         if (beforeConfirm) await beforeConfirm();
         await dialog.getByRole("button", { name: "删除", exact: true }).click();
@@ -230,6 +230,14 @@ async function auditHttpErrors() {
   await Promise.all([...pendingResponses]);
   for (const error of result.http_errors) {
     assert.equal(error.collection_error, undefined, JSON.stringify(error));
+    if (!error.body) {
+      const abortedAttachAsset = error.method === "GET" && error.status === 404
+        && error.path === "/api/gateway/attach/browser/vendor/codicon/codicon.css"
+        && error.request_id === null;
+      assert.ok(abortedAttachAsset, JSON.stringify(error));
+      error.audit = "aborted_attach_asset_request";
+      continue;
+    }
     const body = JSON.parse(error.body);
     assert.ok(typeof error.request_id === "string" && error.request_id.length > 0, JSON.stringify(error));
     assert.equal(body.request_id, error.request_id, JSON.stringify(error));
@@ -247,26 +255,13 @@ async function auditHttpErrors() {
       && error.deletion_proof?.state === "committed" && error.deletion_proof.settlement === "settled"
       && typeof error.deletion_proof.operation_id === "string" && error.deletion_proof.operation_id.length > 0
       && error.path === `/api/v1/sessions/${error.deletion_proof.session_id}`;
-    const guestProbe = error.method === "GET" && error.path === "/api/gateway/users/current"
-      && error.status === 401 && result.initial_auth_probe?.status === 401
-      && error.request_id === result.initial_auth_probe.request_id;
-    error.audit = conflict ? "explicit_browser_revision_conflict" : deleted ? "committed_session_deleted"
-      : guestProbe ? "explicit_guest_probe" : "unclassified";
+    error.audit = conflict ? "explicit_browser_revision_conflict" : deleted ? "committed_session_deleted" : "unclassified";
   }
   assert.deepEqual(result.http_errors.filter((error) => error.audit === "unclassified"), [],
     "存在未归因的HTTP错误，保留正文与精确请求身份，不按时序豁免");
 }
 try {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded" });
-  const authProbe = await page.evaluate(async () => {
-    const response = await fetch("/api/gateway/users/current");
-    return { status: response.status, request_id: response.headers.get("X-Request-ID") };
-  });
-  result.initial_auth_probe = authProbe;
-  if (authProbe.status === 401) {
-    await api("/api/gateway/users/guest", "POST", { tracking: { source: "persistent-resource-web-e2e" } });
-    await page.reload({ waitUntil: "domcontentloaded" });
-  } else assert.equal(authProbe.status, 200);
   assert.equal((await api("/api/gateway/health")).gateway_id, gatewayId);
   assert.deepEqual((await api("/api/gateway/workspaces")).active_workspace,
     { gateway_id: gatewayId, workspace_id: workspaceId });
@@ -318,8 +313,13 @@ try {
     result.browser_id = resource.resource_id;
     const frame = await attachedBrowser(activeThread);
     const targetUrl = `${baseUrl}/api/gateway/health`;
+    const browserOperationRevision = await frame.locator("html").getAttribute("data-browser-operation-revision");
     await frame.locator("#address-input").fill(targetUrl);
     await frame.locator("#address-input").press("Enter");
+    await waitUntil("真实 Browser 导航 operationAck", async () => {
+      const revision = await frame.locator("html").getAttribute("data-browser-operation-revision");
+      return revision !== null && revision !== browserOperationRevision;
+    });
     await waitUntil("真实 Browser 导航", async () => (await api(`/api/v1/resources/${resource.resource_id}`)).metadata.url === targetUrl);
     const promoted = await command(await browserRow(activeThread, resource.resource_id), "保留到工作区", "promote", resource.resource_id);
     assert.equal(promoted.resource_id, resource.resource_id);
@@ -429,6 +429,8 @@ try {
       { expectedRevision: detachedBrowser.owner_revision });
     assert.equal(removedBrowser.status, "deleted");
     result.workspace_browser_created_and_deleted = true;
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "刷新资源树", exact: true }).waitFor({ state: "visible" });
     await deleteSession(other.session_id);
   }
   assert.deepEqual(result.page_errors, []);

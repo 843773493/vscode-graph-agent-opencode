@@ -14,7 +14,6 @@ from tests.support.messages import last_assistant_message
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -38,7 +37,6 @@ async def information_client(
             base_url=f"http://127.0.0.1:{port}",
             headers=LOCAL_TOKEN_HEADERS, timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text
             owner = {

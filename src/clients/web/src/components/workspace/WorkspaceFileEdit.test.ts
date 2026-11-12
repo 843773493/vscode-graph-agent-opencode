@@ -1,11 +1,15 @@
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, test } from "bun:test";
 import { updateWorkspaceFileContent } from "../../api";
 import {
   businessRequest,
-  GATEWAY_CURRENT_USER_PATH,
+
   installWorkspaceFileFetchMock,
   type RecordedRequest,
 } from "./workspaceFileRequestMock";
+
+const FILE_OWNER = { gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000002" };
+const FILE_SELECTION = gatewayWorkspaceKey(FILE_OWNER);
 
 const originalFetch = globalThis.fetch;
 
@@ -53,18 +57,17 @@ describe("工作区文件保存请求", () => {
         content: "after\n",
         expected_revision: "a".repeat(64),
       },
-      "workspace-test",
+      FILE_SELECTION,
     );
 
-    // 业务请求按端点路径选取：users/current 屏障会插在本地凭据与业务请求之间，
-    // 按下标取 requests[1] 拿到的是屏障请求而不是保存请求。
+    // 按业务端点定位请求，不依赖缓存导致的凭据请求次数。
     const request = businessRequest(requests, "/api/v1/workspace/files/content");
     expect(request.url).toEndWith(
       "/api/v1/workspace/files/content?path=notes%2Fa+b.txt&scope=workspace",
     );
     expect(request.init?.method).toBe("PUT");
     const headers = new Headers(request.init?.headers);
-    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe("workspace-test");
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(FILE_OWNER.workspaceId);
     expect(headers.get("X-Local-Token")).toBe("test-token");
     expect(request.init?.body).toBe(JSON.stringify({
       content: "after\n",
@@ -73,7 +76,7 @@ describe("工作区文件保存请求", () => {
     expect(saved.revision).toBe("b".repeat(64));
   });
 
-  test("保存请求经过 Gateway 用户会话屏障后才发出", async () => {
+  test("保存请求仅初始化本机凭据后发出", async () => {
     const requests: RecordedRequest[] = [];
     installSaveBackend(requests);
 
@@ -81,16 +84,17 @@ describe("工作区文件保存请求", () => {
       18_014,
       "notes/a b.txt",
       { content: "after\n", expected_revision: "a".repeat(64) },
-      "workspace-test",
+      FILE_SELECTION,
     );
 
-    const barrierIndex = requests.findIndex(
-      (entry) => new URL(entry.url).pathname === GATEWAY_CURRENT_USER_PATH,
+    const credentialIndex = requests.findIndex(
+      (entry) => new URL(entry.url).pathname === "/api/gateway/auth/local-credential",
     );
     const saveIndex = requests.findIndex(
       (entry) => new URL(entry.url).pathname === "/api/v1/workspace/files/content",
     );
-    expect(barrierIndex).toBeGreaterThanOrEqual(0);
-    expect(saveIndex).toBeGreaterThan(barrierIndex);
+    expect(credentialIndex).toBe(0);
+    expect(saveIndex).toBe(1);
+    expect(requests).toHaveLength(2);
   });
 });

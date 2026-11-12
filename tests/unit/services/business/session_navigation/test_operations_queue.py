@@ -235,10 +235,7 @@ def navigation_workspace(request: pytest.FixtureRequest) -> Path:
     context = TestRunContext.from_test_file(Path(request.node.path))
     template_root = Path.cwd() / "tests" / "fixtures" / "workspaces" / "default_test_workspace"
     return prepare_test_workspace(
-        workspace_root=(
-            context.workspace_root
-            / f"node-{hashlib.sha256(request.node.nodeid.encode()).hexdigest()[:12]}"
-        ),
+        workspace_root=context.runtime_root_for_node(request.node.nodeid) / "workspace",
         template_root=template_root,
         template_items=(".boxteam/workspace-identity.json",),
     )

@@ -162,6 +162,7 @@ class PendingRestartCoordinator:
         *,
         candidate_ref: str,
         health_proof: dict[str, object],
+        after_promotion: Callable[[dict[str, object]], None],
     ) -> ConfigReloadStatus:
         """用新 generation 的完整 proof 提升已成功启动的 Workspace candidate。"""
 
@@ -326,11 +327,14 @@ class PendingRestartCoordinator:
                 fencing_token=claim.fencing_token,
             )
             raise
-        self._store.release_config_apply_claim(
-            config_domain=self._config_domain,
-            apply_id=claim.apply_id,
-            fencing_token=claim.fencing_token,
-        )
+        try:
+            after_promotion(active.payload)
+        finally:
+            self._store.release_config_apply_claim(
+                config_domain=self._config_domain,
+                apply_id=claim.apply_id,
+                fencing_token=claim.fencing_token,
+            )
         return self._reload_status_provider()
 
     def discard_pending_restart(

@@ -4,30 +4,15 @@
  * 本包原先在 5 个测试文件里各写一份「第一次请求回本地凭据、之后按路径分发」的
  * 逐字重复实现；集中到这里后，凭据隧道与未声明请求的响亮失败只有一处实现。
  *
- * Gateway 用户会话屏障（api/http.ts 的 runGatewayRequest）会让每个 /api/v1/ 业务
- * 请求先等待 `GET /api/gateway/users/current` 完成，真实序列是「本地凭据 →
- * users/current → 业务请求」。若桩只应答凭据而把屏障请求交给用例 handler，用例里
- * 「无视路径一律返回某个响应」的桩就会把该响应喂给屏障请求：断言看似通过，业务端点
- * 其实从未被访问（断言空转）。因此本模块与 workspaceFileRequestMock 一致，在桩内部
- * 应答凭据与用户会话两条屏障隧道，只有业务请求才交给 handler。
- *
- * 生产代码不得导入本模块；它不是 API 客户端的一部分，只是测试支撑。
+ * 共享 HTTP 层先读取本机凭据，再发业务请求；本桩按端点应答，避免把凭据请求当作业务请求。
+ * 测试复用端口前显式作废凭据缓存。
  */
 
 const originalFetch = globalThis.fetch;
 
 const GATEWAY_CREDENTIAL_PATH = "/api/gateway/auth/local-credential";
-const GATEWAY_CURRENT_USER_PATH = "/api/gateway/users/current";
-const GATEWAY_GUEST_USER_PATH = "/api/gateway/users/guest";
 
-/**
- * 应答本地凭据与用户会话屏障两条隧道。
- *
- * 返回合法信封（request_id 非空、data 非 null）：屏障与业务端点共用
- * unwrapApiData 的信封校验，字段缺失会让屏障自己响亮失败，把有意义的断言淹没在
- * 无关错误里。`credentialToken` 为 null 表示调用方自行伪造凭据响应，此时凭据隧道
- * 不在此应答。
- */
+/** 应答本机凭据；业务请求继续交给测试 handler。 */
 function gatewayBarrierResponse(
   pathname: string,
   credentialToken: string | null,
@@ -38,22 +23,6 @@ function gatewayBarrierResponse(
       message: "ok",
       request_id: "req_local_credential",
       data: { token: credentialToken },
-    });
-  }
-  if (pathname === GATEWAY_CURRENT_USER_PATH) {
-    return Response.json({
-      code: 0,
-      message: "ok",
-      request_id: "req_current_user",
-      data: { kind: "guest", user_id: null },
-    });
-  }
-  if (pathname === GATEWAY_GUEST_USER_PATH) {
-    return Response.json({
-      code: 0,
-      message: "ok",
-      request_id: "req_guest_user",
-      data: { kind: "guest", user_id: null },
     });
   }
   return undefined;

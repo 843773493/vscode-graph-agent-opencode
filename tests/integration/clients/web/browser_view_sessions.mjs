@@ -77,7 +77,6 @@ function observe(page, name) {
 async function initialize(page) {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
-  assert.equal((await api(page, "/api/gateway/users/current")).kind, "guest");
   const workspaces = await api(page, "/api/gateway/workspaces");
   assert.deepEqual(workspaces.active_workspace, { gateway_id: gatewayId, workspace_id: workspaceId });
   assert.equal((await api(page, "/api/v1/workspace")).workspace_id, workspaceId);
@@ -385,7 +384,7 @@ try {
   for (const secret of ["后台完成通知测试", "tool_call", "tool_result"]) assert.ok(!activityText.includes(secret));
   assert.deepEqual(serverViewWrites, [], "展示态不应写回 Gateway 的用户视图档案");
   assert.deepEqual(pageErrors, [], "浏览器出现页面异常");
-  await writeFile(resultPath, JSON.stringify({ classification: "Integration", guestAccess: true,
+  await writeFile(resultPath, JSON.stringify({ classification: "Integration", localCredentialAccess: true,
     viewRestoredAfterReload: true, viewRestoredInNewPage: true, browserContextsIsolated: true,
     historyCacheBeforeSync: true, historyCacheContextsIsolated: true,
     unopenedSessionUnread: true, openedSessionRead: true, unreadPagesIsolated: true,

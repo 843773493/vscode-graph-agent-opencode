@@ -6,7 +6,7 @@ import { SourceDocuments, sourceDocumentSource, sourceDocumentUri } from '../../
 import { resourceReference } from '../../../../../../src/clients/workbench/src/resourceActions.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
-import { invalidateGatewayUserSession } from '../../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../../src/clients/web/src/api/http.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
 
 // 固定 HTTP 回执只证明客户端合同；公开 URI 的真实生成和语法由后端及页面另核。
@@ -41,6 +41,9 @@ export async function skillSourcesContract(mode) {
       return ok({ node: { uri: body.uri, resource_shape: 'file' }, content: 'Relay plugin body', content_encoding: 'utf-8', media_type: 'text', truncated: false });
     }
     if (path === '/api/v1/resources') return ok({ workspace_id: owners[0].workspaceId, items: [] });
+    if (path === '/api/v1/mcp/servers') return Response.json({ code: 0, request_id: 'skill-source-contract', data: [],
+      protocol_version: 1, target: { kind: 'workspace', gateway_id: gateway, workspace_id: owners[0].workspaceId },
+      catalog_revision: `sha256:${'0'.repeat(64)}`, catalog_generation: 1 }, { headers: { 'X-Request-ID': 'skill-source-contract' } });
     if (!['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/local-skills', '/api/v1/resources/gateway-skills',
       '/api/gateway/config/sources', '/api/v1/config/sources'].includes(path)) throw new Error(`非预期 Skill 请求: ${method} ${path}`);
     const configuration = path.endsWith('/config/sources');
@@ -119,7 +122,7 @@ export async function skillSourcesContract(mode) {
     if (['close', 'identity', 'gateway', 'filter-pending', 'scope-pending', 'local-close'].includes(mode)) {
       await until(() => releaseRead);
       if (mode === 'close' || mode === 'local-close') lifetime.dispose();
-      else if (mode === 'identity') invalidateGatewayUserSession(0);
+      else if (mode === 'identity') invalidateGatewayToken(0);
       else if (mode === 'gateway') workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
       else if (mode === 'scope-pending') { buttons.fire(picker.buttons[0]); await until(() => shows.length); }
       else { picker.value = 'resource 同名'; changes.fire(picker.value); }
@@ -135,14 +138,14 @@ export async function skillSourcesContract(mode) {
     if (['scope-change', 'scope-cancel'].includes(mode)) {
       buttons.fire(picker.buttons[0]); await until(() => shows.length && !picker.busy); snapshots.push(rows());
     }
-    if (mode === 'gateway-skill-no-owner' || mode === 'gateway-skill-owner-mismatch') {
-      const uri = `boxteam://gateway/${owners[1].gatewayId}/resources/skills/plugin/SKILL.md`;
-      try { await opener.open(uri, mode.endsWith('no-owner') ? {} : { boxteamResourceOwner: owners[1] }); }
     if (mode.startsWith('gateway-skill-copy')) {
       const uri = `boxteam://gateway/${owners[1].gatewayId}/resources/skills/plugin/SKILL.md`;
       try { documents.push({ reference: await resourceReference(sourceDocumentUri(owners[1], uri)) }); }
       catch (cause) { errors.push(String(cause)); }
     }
+    if (mode === 'gateway-skill-no-owner' || mode === 'gateway-skill-owner-mismatch') {
+      const uri = `boxteam://gateway/${owners[1].gatewayId}/resources/skills/plugin/SKILL.md`;
+      try { await opener.open(uri, mode.endsWith('no-owner') ? {} : { boxteamResourceOwner: owners[1] }); }
       catch (cause) { errors.push(String(cause)); }
     }
     if (['open', 'side', 'pinned', 'background', 'freeze', 'local-open', 'gateway-skill-open', 'gateway-skill-relay-open'].includes(mode)) {

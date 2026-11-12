@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -9,7 +10,7 @@ from pathlib import Path
 
 @contextmanager
 def chromium_temporary_environment(temporary: Path) -> Iterator[dict[str, str]]:
-    """提供短临时路径，规避 Unix socket 限长且保留正式 runtime 归属。"""
+    """提供短临时路径，规避原生路径限长且保留正式 runtime 归属。"""
     temporary.mkdir(parents=True, exist_ok=True)
     descriptor: int | None = None
     alias_root: tempfile.TemporaryDirectory | None = None
@@ -21,6 +22,15 @@ def chromium_temporary_environment(temporary: Path) -> Iterator[dict[str, str]]:
             alias_root = tempfile.TemporaryDirectory(prefix="bt-", dir="/tmp")
             alias = Path(alias_root.name) / "t"
             alias.symlink_to(temporary.resolve(), target_is_directory=True)
+            short_path = str(alias)
+        elif os.name == "nt":
+            alias_root = tempfile.TemporaryDirectory(prefix="bt-")
+            alias = Path(alias_root.name) / "t"
+            # Junction 不要求符号链接权限；只创建别名，正文仍归正式 runtime。
+            subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(temporary.resolve())],
+                check=True, capture_output=True, text=True, timeout=10,
+            )
             short_path = str(alias)
         else:
             short_path = str(temporary)

@@ -9,7 +9,7 @@ import commentjson
 import pytest
 
 from app.agents.builtin_tool_registry import builtin_tool_ids
-from configs.legacy_migrations import (
+from configs.migrations.legacy import (
     migrate_config,
     persist_config_migration,
     read_and_migrate_config,

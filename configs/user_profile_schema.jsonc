@@ -3,17 +3,24 @@
   "title": "BoxTeam user profile",
   "type": "object",
   "additionalProperties": false,
-  "required": ["config_version", "display_name", "theme", "layout", "preferences", "custom_themes"],
+  "required": [
+    "config_version",
+    "display_name",
+    "layout",
+    "preferences"
+  ],
   "properties": {
     "$schema": {"type": "string"},
-    "config_version": {"const": 1},
-    "display_name": {"type": "string", "minLength": 1, "maxLength": 120},
-    "theme": {"type": "object", "additionalProperties": true},
+    "config_version": {"const": 2},
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
     "layout": {"type": "object", "additionalProperties": true},
-    "preferences": {"type": "object", "additionalProperties": true},
-    "custom_themes": {
-      "type": "array",
-      "items": {"type": "object", "additionalProperties": true}
+    "preferences": {
+      "type": "object",
+      "additionalProperties": true
     }
   }
 }

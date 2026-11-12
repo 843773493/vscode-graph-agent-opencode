@@ -9,13 +9,13 @@ import subprocess
 import sys
 import threading
 from collections.abc import Iterator
-from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.http_server import running_http_server
 
 _COLD_PROCESS = r"""
 import json, sys
@@ -70,20 +70,11 @@ def metadata_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Threading
             self.end_headers()
             self.wfile.write(payload)
 
-    with ExitStack() as lifetime:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        lifetime.callback(server.server_close)
-        worker = threading.Thread(target=server.serve_forever, daemon=True)
-        worker.start()
-
-        def join() -> None:
-            worker.join(timeout=5)
-            assert not worker.is_alive()
-
-        lifetime.callback(join)
-        lifetime.callback(server.shutdown)
-        lifetime.callback(release.set)
-        yield server, release, requests
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", 0), Handler)) as server:
+        try:
+            yield server, release, requests
+        finally:
+            release.set()
 
 
 def test_late_http_catalog_is_adopted_next_request_and_restored_offline(

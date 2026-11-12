@@ -17,6 +17,7 @@ runtime/
 ├── application-sources.test.mjs     实际复制清单、字节码过滤及文件字节
 ├── windows-python-dependencies.mjs Windows Python锁定依赖、交叉安装及残留校验
 ├── windows-python-dependencies.test.mjs 命令/文件边界与实际构建入口接线
+├── archives/                       构建与验收共用的流式 ZIP 生成与解压
 ├── verification/                  两平台安装布局、relocation及产品验收
 │   ├── AGENTS.md                  安装验收目录职责与规则
 │   ├── verify-{linux,windows}-x64.mjs 平台安装验收入口
@@ -81,7 +82,7 @@ build-input-fingerprint/
 
 `pinned-archive-download.test.mjs`在正式镜像输出的独立`workspace/<run_id>/<archive_kind>/<scenario>/`中执行下载owner全文；版本资源指向随机本地HTTP，磁盘、流和摘要使用真实实现。文件边界注入短写/失败，核请求连接释放；Undici补建但未承载请求的空闲连接不属于该断言，fixture结束仍关闭全部连接。故障场景只压缩一秒退避，不改真实请求或fixture期限。
 
-`build-archive-downloads.test.mjs`在自己的正式镜像输出根执行构建入口全文，下载边界记录所选owner及目录，首个解包命令处主动结束；覆盖Linux、Windows原生及Linux交叉构建分支的默认根和独立下载根。平台为显式替身，不启动真实子进程。两层测试均不访问发布服务、安装依赖或执行打包，不证明真实归档可解包或Windows/macOS原生构建成功。
+`build-archive-downloads.test.mjs`在自己的正式镜像输出根执行构建入口全文，下载边界记录所选owner及目录，使用 Python 标准库生成最小归档并经真实 `tar` 包解压，在源码复制前结束；覆盖Linux、Windows原生及Linux交叉构建分支的默认根和独立下载根，以及损坏包和缺少Python的拒绝路径。解包时清空PATH，检查正文、执行权限和Linux符号链接；平台选择仍为显式替身。两层测试均不访问发布服务、安装依赖或执行打包，不证明完整发行包或Windows/macOS原生构建成功。
 
 两组下载测试都按用途、运行、平台和场景保留正式fixture，结束后只关闭自己的HTTP资源，不删除输入树与结果；运行ID和场景目录独占创建。每次运行只保存一份`observer.mjs`，各场景的`input.json`记录模块及调用参数；Node直接执行这份脚本。原始stdout/stderr和实际退出状态先保存，再判断成功或解析，失败信息指向对应artifacts，不能只留下聚合测试日志。
 
@@ -99,7 +100,7 @@ out/tests/packaging/runtime/
         └── <mode>/<scenario>/             input.json、stdout.raw、stderr.raw、result.json
 ```
 
-输入与观察先分开，同一运行ID、平台和场景连接两者；场景名说明默认目录、独立下载根、缓存、续传或故障目的。`result.json`保存准确命令、cwd、5秒子进程上限及真实退出原因；外层测试仍需进程外内存与超时保护。现场不是可发布runtime或可复用业务工作区；复查原件时不在原目录重跑以覆盖归档状态。
+输入与观察先分开，同一运行ID、平台和场景连接两者；场景名说明默认目录、独立下载根、缓存、续传或故障目的。`result.json`保存准确命令、cwd、子进程上限及真实退出原因；外层测试仍需进程外内存与超时保护。现场不是可发布runtime或可复用业务工作区；复查原件时不在原目录重跑以覆盖归档状态。
 
 
 `application-sources.mjs`统一Linux与Windows runtime的源码复制清单，显式接收项目根和application目录，不从文件位置推导根目录；复制`app/`、`configs/`、`resources/`、Terminal／Browser attach客户端与各自protocol、`terminal/shared/`客户端相对导入模块、`src/shared/`跨进程协议与服务端日志模块、共享protocol及`pyproject.toml`，过滤任意层级的`__pycache__`和`.pyc`。`application-sources.test.mjs`验证最小源码树的文件字节、中文和空格路径、源树不变及过滤；快照键统一使用`/`，真实读写路径仍遵循宿主规则，同一已读快照供相关断言复用。Windows依赖接线测试继续执行真实复制至依赖owner边界。测试不下载、安装依赖或执行发行构建。
@@ -151,4 +152,4 @@ out/tests/packaging/runtime/windows-python-dependencies/
 - staging 不得引用构建机仓库绝对路径。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 
-Terminal attach 页面及其明确使用的 xterm／codicon 静态文件由 application-sources 一并交付，不复制前端依赖树。Linux／Windows builder 将目标 OS、架构、系统基线及 Node/Python 版本与 ABI 传给 developer-tools 和 MCP stdio 两个 ZIP 打包器；两份 ZIP 均随 runtime 交付。插件打包脚本参与构建输入指纹。
+Terminal／Browser attach 页面及其明确使用的 xterm／codicon 静态文件由 application-sources 一并交付，不复制前端依赖树。Linux／Windows builder 将目标 OS、架构、系统基线及 Node/Python 版本与 ABI 传给 developer-tools 和 MCP stdio 两个 ZIP 打包器；两份 ZIP 均随 runtime 交付。插件打包脚本参与构建输入指纹。

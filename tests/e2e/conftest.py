@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import AsyncIterator, Generator, Sequence
-from hashlib import sha1
+from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
 import httpx
 import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
+from tests.harness.python.run_context import TestRunContext
 from tests.support.model_stream.config import prepare_e2e_model_stream_config
 from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
@@ -95,9 +95,9 @@ def e2e_model_stream_mode(request: pytest.FixtureRequest) -> str | None:
 
 @pytest.fixture(scope="module")
 def e2e_model_stream_runtime_config_path(
+    request: pytest.FixtureRequest,
     e2e_model_stream_config_path: str | None,
     e2e_model_stream_mode: str | None,
-    e2e_workspace_root_path: str,
 ) -> str | None:
     if e2e_model_stream_config_path is None:
         if e2e_model_stream_mode in {"record", "replay"}:
@@ -107,11 +107,12 @@ def e2e_model_stream_runtime_config_path(
             )
         return None
 
-    output_root = Path(e2e_workspace_root_path).resolve().parent
+    context = TestRunContext.from_test_file(Path(request.node.path))
     return str(
         prepare_e2e_model_stream_config(
             e2e_model_stream_config_path,
-            output_root=output_root,
+            runtime_root=context.runtime_root_for_node(request.node.nodeid),
+            artifacts_dir=context.artifacts_dir,
             mode=e2e_model_stream_mode,
         )
     )
@@ -218,25 +219,3 @@ async def client(
         },
     ) as client:
         yield client
-
-
-def pytest_collection_modifyitems(
-    config: pytest.Config,
-    items: Sequence[pytest.Item],
-) -> None:
-    """将 e2e 测试按文件路径分组，确保同一文件内测试串行执行，并配合文件级独立后端进程。"""
-
-    if config.getoption("--keep-docker-runtime") and len(items) != 1:
-        raise pytest.UsageError(
-            "--keep-docker-runtime 只能配合一个已收集的测试使用，避免遗留大量端口进程"
-        )
-
-    group_name_by_test_key: dict[str, str] = {}
-    for item in items:
-        test_group_key = item.path.as_posix() if hasattr(item, "path") else item.nodeid
-        group_name = group_name_by_test_key.get(test_group_key)
-        if group_name is None:
-            file_hash = sha1(test_group_key.encode("utf-8")).hexdigest()[:8]
-            group_name = f"e2e_file_{file_hash}"
-            group_name_by_test_key[test_group_key] = group_name
-        item.add_marker(pytest.mark.xdist_group(name=group_name))

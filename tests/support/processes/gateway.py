@@ -58,13 +58,6 @@ class GatewayProcess:
     shutdown_children: list[psutil.Process] = field(default_factory=list)
 
 
-async def acquire_gateway_guest(client: httpx.AsyncClient) -> None:
-    response = await client.post(
-        "/api/gateway/users/guest",
-        json={"tracking": {"test": True}},
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"Gateway 测试游客登录失败: {response.text}")
 
 
 def wait_for_gateway_ready(port: int, process: subprocess.Popen[str]) -> None:
@@ -169,6 +162,7 @@ def start_gateway_process(
             port=port,
         )
         log_files.pop_all()
+    register_test_process(handle, lambda: close_gateway_process(handle))
     try:
         wait_for_gateway_ready(port, process)
     except BaseException as startup_error:
@@ -180,10 +174,6 @@ def start_gateway_process(
                 [startup_error, cleanup_error],
             ) from None
         raise
-    register_test_process(
-        handle,
-        lambda: close_gateway_process(handle),
-    )
     return handle
 
 

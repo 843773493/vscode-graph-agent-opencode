@@ -11,13 +11,12 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import JobStartedEvent, JobStartedPayload
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
-from tests.support.ports import e2e_port_block_for_file
 
 
 @pytest.mark.asyncio
@@ -39,7 +38,6 @@ async def test_gateway_preserves_trace_cursor_and_relays_idle_heartbeat(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=httpx.Timeout(25.0, read=20.0),
         ) as client:
-            await acquire_gateway_guest(client)
             create_response = await client.post(
                 "/api/v1/sessions",
                 json={"title": "SSE 心跳 E2E"},

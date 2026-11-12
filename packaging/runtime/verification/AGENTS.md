@@ -8,6 +8,7 @@ verification/
 ├── verification-readiness.mjs          共用Gateway就绪观察
 ├── verification-readiness.test.mjs     就绪HTTP与进程状态场景
 ├── verification-shutdown.test.mjs      Windows Gateway停止观察
+├── verification-process-cleanup.test.mjs taskkill本地化输出与进程存在性
 └── verification-shutdown-timers.test.mjs  两验证器的进程终态与关闭等待
 ```
 

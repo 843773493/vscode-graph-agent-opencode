@@ -65,16 +65,19 @@ function ToolRow({
   showRawDetails: boolean;
   onLoadDetails?: (toolCallId: string) => Promise<void>;
 }): React.ReactNode {
-  const { message } = React.useContext(MessageSearchLocationContext);
+  const { message, tool, onMount } = React.useContext(MessageSearchLocationContext);
+  const locatedToolId = tool && item.responseSources?.some(entry => entry.source?.item_id === tool.item_id) ? tool.item_id : undefined;
   const locatedItemId = message?.role === "tool" && item.responseSources?.some(entry => entry.source?.item_id === message.reference?.item_id)
     ? message.reference?.item_id : undefined;
   const [open, setOpen] = React.useState(false);
-  React.useEffect(() => { if (locatedItemId) setOpen(true); }, [locatedItemId, message]);
+  React.useEffect(() => { if (locatedItemId || locatedToolId) setOpen(true); }, [locatedItemId, locatedToolId, message, tool]);
+  const locateRef = React.useCallback((element: HTMLElement | null) => { if (element && locatedToolId && open) onMount(); }, [locatedToolId, open, onMount]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const status = toolStatus(item);
   const hasMaterializedDetails = Boolean(
     locatedItemId
+    || locatedToolId
     || item.detailsLoaded
     || item.inputText
     || item.resultText
@@ -109,7 +112,7 @@ function ToolRow({
     : null;
 
   return (
-    <section className={`chat-tool-row ${status.className}`} data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
+    <section ref={locateRef} data-tool-result-item-id={locatedToolId} className={`chat-tool-row ${status.className}`} data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
       <button
         type="button"
         className="chat-tool-summary"

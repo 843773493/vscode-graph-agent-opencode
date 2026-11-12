@@ -30,7 +30,6 @@ from tests.support.diagnostic_sink import install_failing_diagnostic_sink
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -211,7 +210,6 @@ async def test_resource_catalog_errors_keep_healthy_scope_and_recover(
         )
         lifetime.callback(close_gateway_process, gateway)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
-            await acquire_gateway_guest(client)
             added = await client.post("/api/gateway/workspaces/local", json={
                 "root_path": str(sibling), "name": "健康工作区", "backend_url": f"http://127.0.0.1:{upstream_port}",
             })
@@ -300,7 +298,6 @@ async def test_context_search_validation_errors_keep_healthy_results_and_recover
         )
         lifetime.callback(close_gateway_process, gateway)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             health.raise_for_status()
             gateway_id = health.json()["data"]["gateway_id"]
@@ -383,7 +380,6 @@ async def test_context_read_rejects_invalid_addresses_and_preserves_null_and_dan
         )
         lifetime.callback(close_gateway_process, gateway)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             health.raise_for_status()
             gateway_id = health.json()["data"]["gateway_id"]

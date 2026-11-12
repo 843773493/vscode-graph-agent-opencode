@@ -11,7 +11,8 @@ import { DisposableStore } from '../upstream/src/vs/base/common/lifecycle.js';
 
 const root = resolve(process.cwd(), 'src/clients/workbench');
 const transform = sourceTransform(root, { commit: pinnedUpstreamCommit }, []);
-const sources = new Map(await Promise.all([...mcpSourcePaths, ...legacyExtensionDetailsSourcePaths,
+const sources = new Map<string, { path: string; text: string }>();
+for (const path of new Set([...mcpSourcePaths, ...legacyExtensionDetailsSourcePaths,
   'src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts',
   'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
   'src/vs/workbench/contrib/welcomeWalkthrough/browser/editor/vs_code_editor_walkthrough.ts',
@@ -25,12 +26,16 @@ const sources = new Map(await Promise.all([...mcpSourcePaths, ...legacyExtension
   'src/vs/workbench/contrib/notebook/browser/view/cellParts/cellOutput.ts',
   'src/vs/workbench/contrib/notebook/browser/diff/diffElementOutputs.ts',
   'src/vs/workbench/contrib/notebook/browser/notebookBrowser.ts',
-].map(async path => {
+])) {
   const full = join(root, 'upstream', path);
   const transformed = await transform(full, await readFile(full, 'utf8'));
-  return [path.split('/').at(-1)!, ts.createSourceFile(full, transformed, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)] as const;
-})));
-function source(name: string) { return sources.get(name)!; }
+  sources.set(path.split('/').at(-1)!, { path: full, text: transformed });
+}
+function source(name: string) {
+  const original = sources.get(name);
+  if (!original) throw new Error(`转换源码缺失：${name}`);
+  return ts.createSourceFile(original.path, original.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
 function declaration(name: string, kind: string) {
   const node = source(name).statements.find(node => ts.isClassDeclaration(node) && node.name?.text === kind);
   if (!node || !ts.isClassDeclaration(node)) throw new Error(`原声明缺失：${kind}`);
@@ -463,15 +468,15 @@ test.each([false, true])('原列表恢复 Add 行并等待同一命令；有现�
   complete(); await running; expect(settled).toBe(true);
 });
 
-test('原 Browse 与 BrowsePage 都交给同一个 MCP 查询 seam，不扩大为 All Sources 查询', async () => {
-  const serviceId = Symbol('IMcpWorkbenchService');
+test('MCP 浏览命令复用原扩展搜索入口，不绕回 MCP Gallery 服务', async () => {
+  const serviceId = Symbol('IExtensionsWorkbenchService');
   const calls: string[] = [];
   const accessor = { get(id: symbol) { expect(id).toBe(serviceId); return { openSearch: async (text: string) => { calls.push(text); } }; } };
   for (const kind of ['McpBrowseCommand', 'McpBrowsePageCommand']) {
-    const run = new Function('IMcpWorkbenchService', `return async function(accessor) ${methodBody('mcpCommands.ts', kind, 'run')};`)(serviceId) as (accessor: object) => Promise<void>;
+    const run = new Function('IExtensionsWorkbenchService', `return async function(accessor) ${methodBody('mcpCommands.ts', kind, 'run')};`)(serviceId) as (accessor: object) => Promise<void>;
     await run(accessor);
   }
-  expect(calls).toEqual(['', '']);
+  expect(calls).toEqual(['@mcp', '@mcp']);
 });
 
 test('新增原 MCP 搜索视图的查询拒绝进入既有通知通道，不产生未处理拒绝遮住整个工作台', async () => {
@@ -669,6 +674,67 @@ test('首次目录失败保留原 show 拒绝，恢复只由同一 owner 的可�
   expect(declaration('mcpWorkbenchService.ts', 'MCPContextsInitialisation').getText()).not.toContain('queryLocal().finally(');
 });
 
+test('无工作区 MCP 目录报错，已加载但为空的目录保留空列表状态', async () => {
+  const body = methodBody('mcpServersView.ts', 'McpServersListView', 'query');
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function query(query: string, token: { isCancellationRequested: boolean }) ${body}`);
+  class TestWorkbenchService {}
+  class TestEmitter {
+    readonly event = () => ({ dispose() {} });
+    fire() {}
+  }
+  class TestPagedModel {
+    constructor(readonly items: readonly unknown[]) {}
+  }
+  class TestDisposableStore {
+    add<T>(value: T): T { return value; }
+    dispose() {}
+  }
+  const run = new Function('DisposableStore', 'WorkspaceMcpWorkbenchService', 'CancellationError', 'Emitter', 'Event', 'PagedModel',
+    `return ${javascript};`)(TestDisposableStore, TestWorkbenchService, CancellationError, TestEmitter,
+      { debounce: () => () => ({ dispose() {} }) }, TestPagedModel) as
+      (this: { mcpWorkbenchService: { queryLocal(): Promise<unknown[]>; isLocalCatalogAvailable: boolean; local: unknown[]; onChange(): void; onReset(callback: () => void): { dispose(): void } }; mergeChangedMcpServers(): undefined },
+        query: string, token: { isCancellationRequested: boolean }) => Promise<{ model: TestPagedModel; disposables: TestDisposableStore }>;
+  const createView = (isLocalCatalogAvailable: boolean) => ({
+    mcpWorkbenchService: Object.assign(new TestWorkbenchService(), {
+      queryLocal: async (): Promise<unknown[]> => [],
+      isLocalCatalogAvailable,
+      local: [] as unknown[],
+      onChange() {},
+      onReset: (_callback: () => void) => ({ dispose() {} }),
+    }),
+    mergeChangedMcpServers: () => undefined,
+  });
+  const noWorkspace = createView(false);
+  noWorkspace.mcpWorkbenchService.queryLocal = async () => [];
+  noWorkspace.mcpWorkbenchService.isLocalCatalogAvailable = false;
+  await expect(run.call(noWorkspace, '@mcp', { isCancellationRequested: false })).rejects.toThrow('当前 Gateway 没有可读取的工作区 MCP 目录');
+
+  const emptyDirectory = createView(true);
+  emptyDirectory.mcpWorkbenchService.queryLocal = async () => [];
+  emptyDirectory.mcpWorkbenchService.isLocalCatalogAvailable = true;
+  const result = await run.call(emptyDirectory, '@mcp', { isCancellationRequested: false });
+  expect(result.model.items).toEqual([]);
+  result.disposables.dispose();
+});
+
+test('转换投影删除 Gallery 查询闭包与未注册旧 MCP 服务', () => {
+  const service = source('mcpWorkbenchService.ts');
+  const editor = source('mcpServerEditor.ts');
+  const workbench = source('mcpTypes.ts').statements.find(node => ts.isInterfaceDeclaration(node) && node.name.text === 'IMcpWorkbenchService');
+  if (!workbench || !ts.isInterfaceDeclaration(workbench)) throw new Error('MCP 管理服务合同缺失');
+  const serviceMethods = workbench.members.filter(ts.isMethodSignature).map(method => method.name.getText(workbench.getSourceFile()));
+  expect(serviceMethods).not.toContain('queryGallery');
+  expect(serviceMethods).not.toContain('getMcpServerFromGallery');
+  expect(serviceMethods).not.toContain('openSearch');
+  expect(service.statements.some(node => ts.isClassDeclaration(node) && node.name?.text === 'McpWorkbenchService')).toBe(false);
+  expect(service.text).not.toContain('queryGallery');
+  expect(service.text).not.toContain('getMcpServerFromGallery');
+  expect(editor.text).not.toContain('mcpServerManifest:');
+  expect(editor.text).not.toContain('mcpServerManifest =');
+  expect(editor.text).not.toContain('AdditionalDetailsWidget');
+  expect(editor.text).not.toContain('extension.gallery');
+});
+
 test('项目原列表自身接回 Extensions 隐藏作用域，恢复后隐藏旧错误且普通原视图不改作用域', async () => {
   const body = methodBody('mcpServersView.ts', 'McpServersListView', 'renderBody');
   const js = new Bun.Transpiler({ loader: 'ts' }).transformSync(`class View extends Base { renderBody(container: HTMLElement) ${body} }`);
@@ -751,4 +817,31 @@ test('旧扩展详情入口已从用户路径移除并保留其余操作', () =>
   expect(source('mcpListWidget.ts').text).not.toContain('Open extension details');
   expect(source('chatToolPicker.ts').text).toContain('mcpWorkbenchService.open(source');
   expect(source('localizationsActions.ts').text).toContain('localeService.setLocale(selectedLanguage)');
+});
+
+test('MCP Gallery 投影删除浏览路径后保留有效服务类型和来源归类', () => {
+  const marketplaceService = source('customizationMarketplaceService.ts').text;
+  expect(marketplaceService).toContain('ICustomizationMarketplaceSourceInfo');
+  expect(marketplaceService).toContain('ICustomizationMarketplaceService, ICustomizationMarketplaceSourceInfo } from');
+
+  const widget = source('mcpListWidget.ts');
+  expect(widget.text).not.toContain('entry.marketplace ?');
+  expect(widget.text).not.toContain('ITelemetryService');
+  const rowKey = widget.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'getMcpRowKey');
+  if (!rowKey) throw new Error('MCP row key function missing');
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(rowKey.getText(widget).replace(/^export /, ''));
+  const getMcpRowKey = new Function(`${javascript}\nreturn getMcpRowKey;`)() as
+    (entry: { type: string; server: { id: string } }) => string;
+  expect(getMcpRowKey({ type: 'server-item', server: { id: 'workspace:server' } })).toBe('server:workspace:server');
+
+  const telemetry = source('customizationMarketplaceInstallTelemetry.ts');
+  const getContextDeclaration = telemetry.statements.find(node =>
+    ts.isFunctionDeclaration(node) && node.name?.text === 'getCustomizationMarketplaceInstallTelemetryContext');
+  if (!getContextDeclaration) throw new Error('MCP install telemetry context function missing');
+  const telemetryJavaScript = new Bun.Transpiler({ loader: 'ts' }).transformSync(getContextDeclaration.getText(telemetry).replace(/^export /, ''));
+  const getContext = new Function(`${telemetryJavaScript}\nreturn getCustomizationMarketplaceInstallTelemetryContext;`)() as
+    (surface: string, installation: { kind: 'mcpGallery'; name: string; registry: 'default'; registryUrl: string }) => unknown;
+  expect(getContext('marketplace', {
+    kind: 'mcpGallery', name: 'legacy-mcp', registry: 'default', registryUrl: 'https://example.invalid',
+  })).toEqual({ surface: 'marketplace', customizationType: 'mcpServer', installKind: 'mcpGallery', origin: 'search' });
 });

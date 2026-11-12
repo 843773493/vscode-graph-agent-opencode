@@ -1,6 +1,1 @@
 .boxteam-thread{display:flex;flex-direction:column;box-sizing:border-box;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);overflow:hidden}
-.boxteam-thread-toolbar{display:flex;align-items:center;min-height:28px;padding:0 8px;border-bottom:1px solid var(--vscode-panel-border)}
-.boxteam-thread-toolbar button{background:transparent;color:var(--vscode-foreground);border:0;padding:4px;cursor:pointer}
-.boxteam-thread-toolbar button:hover{background:var(--vscode-toolbar-hoverBackground)}
-.boxteam-thread-toolbar button:focus-visible{outline:1px solid var(--vscode-focusBorder)}
-.boxteam-thread-body{flex:1;min-height:0;min-width:0}

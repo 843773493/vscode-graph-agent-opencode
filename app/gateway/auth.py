@@ -5,7 +5,7 @@ import secrets
 from dataclasses import dataclass
 from typing import Literal
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from app.core.file_permissions import (
     require_private_file_access,
@@ -15,6 +15,7 @@ from app.core.path_utils import get_gateway_root
 from app.gateway.credentials import FederationCredentialStore, credential_file_error
 
 LOCAL_TOKEN = "local-dev-token"
+LOCAL_TOKEN_COOKIE_NAME = "boxteam_local_token"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +98,8 @@ def verify_gateway_access(
     if x_local_token == get_gateway_local_token():
         return GatewayAuthContext(kind="local")
     if x_boxteam_federation_token is None:
+        if x_local_token is not None:
+            raise HTTPException(status_code=401, detail="invalid local token")
         raise HTTPException(status_code=401, detail="缺少 Gateway 访问凭据")
     store = FederationCredentialStore(
         storage_path=get_gateway_root() / "credentials" / "federation.json"
@@ -109,6 +112,20 @@ def verify_gateway_access(
         kind="federation",
         peer_gateway_id=credential.peer_gateway_id,
     )
+
+
+def verify_gateway_content_access(
+    request: Request,
+    x_local_token: str | None = Header(default=None),
+    x_boxteam_federation_token: str | None = Header(default=None),
+) -> GatewayAuthContext:
+    """原生图片、脚本等同源字节读取复用本机凭据，不创建浏览器用户或租约。"""
+    if x_local_token is not None or x_boxteam_federation_token is not None:
+        return verify_gateway_access(x_local_token, x_boxteam_federation_token)
+    if request.headers.get("sec-fetch-site") != "same-origin":
+        raise HTTPException(403, "资源读取只接受同源浏览器或 Gateway 访问凭据")
+    verify_gateway_token(request.cookies.get(LOCAL_TOKEN_COOKIE_NAME))
+    return GatewayAuthContext(kind="local")
 
 
 def verify_federation_token(

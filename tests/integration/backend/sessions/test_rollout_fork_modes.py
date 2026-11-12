@@ -94,6 +94,7 @@ from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
+    UserExecutionIdentity,
     user_turn_admission_payload_hash,
 )
 from app.domain.itemized.execution_queue import ExecutionQueueInput
@@ -1144,7 +1145,7 @@ def _checkpoint(
     return {
         "v": 1,
         "id": checkpoint_id,
-        "ts": "2026-08-15T00:00:00+00:00",
+        "ts": datetime.now(UTC).isoformat(),
         "channel_values": {"messages": messages, "counter": len(messages)},
         "channel_versions": {
             "messages": str(len(messages)),
@@ -1207,7 +1208,7 @@ def _assert_fork_provider_history(
 
 
 async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *, tail_outcome: str = "completed"):
-    # TODO: 迁为产品消息/执行入口后再作完整删除验收；当前手填历史缺少冻结队列输入。
+    # 准入事务同时冻结调度输入，来源 active execution 才能沿正式删除链路排空。
     source = await context.sessions.create(
         SessionCreateRequest(title="Fork 集成源会话")
     )
@@ -1227,6 +1228,12 @@ async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *
         turn_id="turn-1",
         root_item_id="item-u1",
         initial_execution_id="execution-turn-1",
+        queue_input=ExecutionQueueInput(
+            execution_binding=UserExecutionIdentity("job-turn-1", "turn-1", "admission-turn-1"),
+            message_id="u1", agent_id="default", provider_id=None, delivery_policy="after_turn",
+            gateway_id=get_current_gateway_id(), request_id=get_current_request_id(),
+            created_at=datetime.now(UTC).isoformat(),
+        ),
     )
     first_admission = context.saver.execution_admission(
         source.session_id,
@@ -1289,6 +1296,12 @@ async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *
         turn_id="turn-2",
         root_item_id="item-u2",
         initial_execution_id="execution-turn-2",
+        queue_input=ExecutionQueueInput(
+            execution_binding=UserExecutionIdentity("job-turn-2", "turn-2", "admission-turn-2"),
+            message_id="u2", agent_id="default", provider_id=None, delivery_policy="after_turn",
+            gateway_id=get_current_gateway_id(), request_id=get_current_request_id(),
+            created_at=datetime.now(UTC).isoformat(),
+        ),
     )
     # cp3 尚未写入时检查 source writer，避免 fork 端裁剪掩盖 checkpoint 污染。
     frozen_cp2 = await _get_tuple(context, source.session_id, checkpoint_id="cp2")
@@ -1403,10 +1416,10 @@ def _seed_debug_configurations(
         NodeDebugLaunchClaimDTO(
             session_id=source_session_id,
             thread_id=source_thread_id,
+            run_id="run_source",
             process_instance_id="node-debug-proc_source",
             phase="running",
             configuration_id=active_id,
-            run_id="run_source",
             debugger_binding=node_debug_binding_snapshot(),
             script_path="entry.mjs",
             args=[],
@@ -4063,12 +4076,14 @@ async def test_compaction_fork_keeps_only_required_body_backing(
         )
         final = AIMessage(content=[{"type": "text", "text": "新回答"}, {"type": "text", "text": "结束"}],
                           id="compaction-source-final", response_metadata={"model_call_id": produced["snapshot"].model_call_id})
+        expanded_checkpoint = _checkpoint("compaction-expanded-checkpoint", [*old_messages, user, final])
+        expanded_checkpoint["channel_versions"] = {"messages": "5", "counter": "5"}
         with (session_thread_owner_scope(source_owner, langgraph_thread_id=source_thread),
               execution_admission_scope(admission, langgraph_thread_id=source_thread)):
             commit_fixture_output(saver, messages=[*old_messages, user, final])
             await saver.aput(
                 build_checkpoint_config(source_thread),
-                _checkpoint("compaction-expanded-checkpoint", [*old_messages, user, final]),
+                expanded_checkpoint,
                 {"source": "loop", "step": 2, "parents": {}}, {"messages": "5", "counter": "5"},
             )
         retained = [final]
@@ -4085,7 +4100,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
     frozen_state = {"false_flag": False, "zero_count": 0, "empty_map": {}, "empty_list": [], "none_value": None}
     frozen_versions = {name: f"frozen-{name}" for name in frozen_state}
     compacted["channel_values"].update(frozen_state)
-    compacted["channel_versions"].update(frozen_versions)
+    compacted["channel_versions"].update({"messages": "6", "counter": "6", **frozen_versions})
     compacted["updated_channels"].extend(frozen_state)
     compacted["versions_seen"] = {"historical-node": frozen_versions}
     compacted["pending_sends"] = [{"node": "source-only-pending", "attempt": 3}]
@@ -4108,7 +4123,7 @@ async def test_compaction_fork_keeps_only_required_body_backing(
                           id="compaction-source-final", response_metadata={"model_call_id": produced["snapshot"].model_call_id})
         final_checkpoint = _checkpoint("compaction-final-checkpoint", [summary, user, final])
         final_checkpoint["channel_values"].update(frozen_state)
-        final_checkpoint["channel_versions"].update(frozen_versions)
+        final_checkpoint["channel_versions"].update({"messages": "7", "counter": "7", **frozen_versions})
         final_checkpoint["updated_channels"].extend(frozen_state)
         final_checkpoint["versions_seen"] = {"historical-node": frozen_versions}
         final_checkpoint["pending_sends"] = compacted["pending_sends"]
@@ -4836,11 +4851,11 @@ async def test_production_http_pinned_fork_and_preflight_have_exact_side_effects
     source = await _seed_source(context, fork_provider_prepare)
     request = await _fork_request(context, source.session_id, creation_kind="new_session_main", mode="last_completed_turn_fork", relationship="pinned", target_container_uri=source.uri)
     catalog = context.sessions.path_resolver.catalog_store
-    async with main.lifespan(main.app) as _main_lifespan_state_4839, httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id, "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "fork-http-proof"},
     ) as client:
-        await _main_lifespan_state_4839["after_http_startup"]()
+        await _main_lifespan_state["after_http_startup"]()
         before = (await context.sessions.list(limit=100)).total
         with catalog.read_transaction() as connection:
             counts = connection.execute(
@@ -5191,8 +5206,8 @@ async def test_shared_owner_cold_recovery_uses_frozen_creation_decision(
     cold_gateway = set_current_gateway_id(None)
     cold_request = set_current_request_id(None)
     try:
-        async with main.lifespan(main.app) as _main_lifespan_state_5193:
-            await _main_lifespan_state_5193["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             cold_catalog = recovered.sessions.path_resolver.catalog_store
             if creation_kind == 'new_session_main':
                 terminal = cold_catalog.get_creation_record(key)
@@ -5328,8 +5343,8 @@ async def test_child_capture_missing_final_locator_is_not_rebuilt(
 
         monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
         with pytest.raises(RuntimeError, match="已预留 capture.*最终 locator 目录缺失"):
-            async with main.lifespan(main.app) as _main_lifespan_state_5329:
-                await _main_lifespan_state_5329["after_http_startup"]()
+            async with main.lifespan(main.app) as _main_lifespan_state:
+                await _main_lifespan_state["after_http_startup"]()
                 pytest.fail("外删 target 不得让 startup ready")
         assert not final.exists() and not staging.exists()
         # 失败的 lifespan 会关闭真实 registry；从持久原件复核，不再使用已关闭容器。
@@ -5356,8 +5371,8 @@ async def test_child_capture_missing_final_locator_is_not_rebuilt(
             return await capture_source(**kwargs)
 
         monkeypatch.setattr(cleanup.saver.forks.source, "_capture_fork_source_snapshot", resume_original_capture)
-        async with main.lifespan(main.app) as _main_lifespan_state_5356:
-            await _main_lifespan_state_5356["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             terminal_capture = cleanup.sessions.path_resolver.catalog_store.get_fork_source_capture(copy_operation_id=key)
             with cleanup.forks._threads.for_owner_session(source.session_id) as thread_owner:
                 creation = thread_owner.control_store.get_thread_creation_record(key)
@@ -5447,8 +5462,8 @@ async def test_child_aborted_capture_resumes_original_cleanup_without_rebuilding
 
         monkeypatch.setattr(ThreadCreationService, "_prepare_staging", staticmethod(forbid_rebuild))
         monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
-        async with main.lifespan(main.app) as _main_lifespan_state_5446:
-            await _main_lifespan_state_5446["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             current = service.control_store.get_thread_creation_record(key)
             assert current.state == "aborted"
             assert replace(current, state=frozen.state, abort_reason=frozen.abort_reason, record_updated_at=frozen.record_updated_at) == frozen
@@ -5544,8 +5559,8 @@ async def test_main_fork_conflicting_capture_is_preserved_before_abort(
         restarted = _build_owned_container(context.workspace, monkeypatch)
         _isolate_non_navigation_services(restarted, monkeypatch)
         with pytest.raises(ValueError, match="fork_owner_overlap"):
-            async with main.lifespan(main.app) as _main_lifespan_state_5542:
-                await _main_lifespan_state_5542["after_http_startup"]()
+            async with main.lifespan(main.app) as _main_lifespan_state:
+                await _main_lifespan_state["after_http_startup"]()
                 pytest.fail("冲突 capture 不得让 startup ready")
     with closing(SessionCatalogStore(catalog.database_path, catalog.sessions_root)) as cold_catalog:
         assert cold_catalog.get_creation_record(key) == frozen
@@ -5579,8 +5594,8 @@ async def test_main_fork_conflicting_capture_is_preserved_before_abort(
         pytest.fail("撤销测试注入后仍须复用原冻结 capture")
 
     monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
-    async with main.lifespan(main.app) as _main_lifespan_state_5576:
-        await _main_lifespan_state_5576["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         published = recovered.sessions.path_resolver.catalog_store.get_creation_record(key)
         assert published.state == "published" and published.preimage_hash == frozen.preimage_hash
         replay = await recovered.forks.fork(request)
@@ -6257,8 +6272,8 @@ async def test_remote_aborted_main_capture_resumes_cleanup_after_restart(
         cold_gateway = set_current_gateway_id(None)
         cold_request = set_current_request_id(None)
         try:
-            async with main.lifespan(main.app) as _main_lifespan_state_6253:
-                await _main_lifespan_state_6253["after_http_startup"]()
+            async with main.lifespan(main.app) as _main_lifespan_state:
+                await _main_lifespan_state["after_http_startup"]()
                 cold_catalog = recovered.sessions.path_resolver.catalog_store
                 terminal = cold_catalog.get_creation_record(key)
                 assert terminal.state == "aborted"
@@ -6708,8 +6723,8 @@ async def test_production_lifespan_recovers_unpublished_fork(
     production_fork_container.session_catalog.close()
     restarted = _build_owned_container(context.workspace, monkeypatch)
     _isolate_non_navigation_services(restarted, monkeypatch)
-    async with main.lifespan(main.app) as _main_lifespan_state_6703:
-        await _main_lifespan_state_6703["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         durable = restarted.session_service.path_resolver.catalog_store.get_creation_record(
             record.session_creation_idempotency_key
         )
@@ -6811,8 +6826,8 @@ async def test_qualified_local_fork_lifespan_recovers_without_http_context(
     cold_gateway_token = set_current_gateway_id(None)
     cold_request_token = set_current_request_id(None)
     try:
-        async with main.lifespan(main.app) as _main_lifespan_state_6805:
-            await _main_lifespan_state_6805["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             assert get_current_gateway_id() is None and get_current_request_id() is None
             if creation_kind == 'new_session_main':
                 durable = recovered.sessions.path_resolver.catalog_store.get_creation_record(key)
@@ -7019,8 +7034,8 @@ async def test_local_partial_capture_abort_does_not_block_complete_marker_recove
     monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
     monkeypatch.setattr(recovered.forks, "recover_prepared_forks", count_recovery)
     monkeypatch.setattr(recovered.saver.forks.copy, "_afork_from_snapshot", count_materialization)
-    async with main.lifespan(main.app) as _main_lifespan_state_7012:
-        await _main_lifespan_state_7012["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         cold_catalog = recovered.sessions.path_resolver.catalog_store
         if creation_kind == 'new_session_main':
             aborted = cold_catalog.get_creation_record(partial_key)
@@ -7339,8 +7354,8 @@ async def test_fork_startup_rejects_corrupted_capture_proof(
     monkeypatch.setattr(recovered.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
     startup_error = "清理拒绝符号链接" if fault == "root_symlink" else expected
     with pytest.raises(RuntimeError, match=startup_error) as recovery_error:
-        async with main.lifespan(main.app) as _main_lifespan_state_7331:
-            await _main_lifespan_state_7331["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             pytest.fail("损坏 capture proof 不得让 startup ready")
     assert type(recovery_error.value) is RuntimeError
     if creation_kind == "new_session_main":
@@ -7364,8 +7379,8 @@ async def test_fork_startup_rejects_corrupted_capture_proof(
         _isolate_non_navigation_services(cleanup_container, monkeypatch)
         cleanup = _production_fork_context(cleanup_container)
         monkeypatch.setattr(cleanup.saver.forks.source, "_capture_fork_source_snapshot", forbid_recapture)
-        async with main.lifespan(main.app) as _main_lifespan_state_7355:
-            await _main_lifespan_state_7355["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             cleanup_catalog = cleanup.sessions.path_resolver.catalog_store
             cleanup_capture = cleanup_catalog.get_fork_source_capture(copy_operation_id=key)
             assert cleanup_capture is not None and cleanup_capture.state == "aborted"
@@ -8405,9 +8420,9 @@ async def test_live_fork_published_startup_preserves_dispatch_and_commit_facts(
     cold_gateway = set_current_gateway_id(None)
     cold_request = set_current_request_id(None)
     try:
-        async with main.lifespan(main.app) as _main_lifespan_state_8395:
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             # lifespan 在无 HTTP context 下恢复；公开 replay 仍带真实路由的 Gateway 身份。
-            await _main_lifespan_state_8395["after_http_startup"]()
             replay_gateway = set_current_gateway_id("gateway_6c8b2f9317a5a2c6c4569958b1e23d84")
             try:
                 repeated = await restarted.session_context_fork_service.fork(request)
@@ -8460,12 +8475,12 @@ async def test_http_live_fork_serializes_complete_owner_and_partial_failure_with
     request = (await _fork_request(context, source.session_id, creation_kind=creation_kind, mode="last_completed_turn_fork")).model_copy(
         update={"resources": [_fork_live_choice(resource)]},
     )
-    async with main.lifespan(main.app) as _main_lifespan_state_8449, httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": source.workspace_id,
                  "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "live-fork-wire"},
     ) as client:
-        await _main_lifespan_state_8449["after_http_startup"]()
+        await _main_lifespan_state["after_http_startup"]()
         point = await client.get(f"/api/v1/sessions/{source.session_id}/fork-source-point", params={"mode": "last_completed_turn_fork"})
         assert point.status_code == 200, point.text
         candidate = next(item for item in point.json()["data"]["live_resources"] if item["resource_id"] == resource["resource_id"])
@@ -8677,8 +8692,8 @@ async def test_folder_move_keeps_context_fork_kind_across_restart(
     production_fork_container.session_catalog.close()
     restarted = _build_owned_container(context.workspace, monkeypatch)
     _isolate_non_navigation_services(restarted, monkeypatch)
-    async with main.lifespan(main.app) as _main_lifespan_state_8665:
-        await _main_lifespan_state_8665["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         restored = await restarted.session_service.get(child.session_id)
         assert restored.kind == "context_fork" and restored.title == "上下文副本"
         assert restored.parent_session_id is None
@@ -8956,12 +8971,12 @@ async def test_http_fork_reply_preserves_committed_copy_across_target_delete(
                 await deleting
         assert not target_path.exists()
 
-    async with main.lifespan(main.app) as _main_lifespan_state_8943, httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id,
                  "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "copy-delete-order"},
     ) as client:
-        await _main_lifespan_state_8943["after_http_startup"]()
+        await _main_lifespan_state["after_http_startup"]()
         if replay:
             first = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
             assert first.status_code == 200, first.text
@@ -9149,12 +9164,12 @@ async def test_http_published_fork_without_attachment_claim_rejects_deleting_tar
     invocations = 0
     catalog = context.sessions.path_resolver.catalog_store
 
-    async with main.lifespan(main.app) as _main_lifespan_state_9135, httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": context.sessions.workspace_id,
                  "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84", "X-Request-ID": "unclaimed-copy-delete"},
     ) as client:
-        await _main_lifespan_state_9135["after_http_startup"]()
+        await _main_lifespan_state["after_http_startup"]()
         if resource_case == "unavailable":
             omitted = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
             assert omitted.status_code == 200, omitted.text
@@ -9400,8 +9415,8 @@ async def test_production_lifespan_recovers_detached_fork_after_source_deletion(
     production_fork_container.session_catalog.close()
     restarted = _build_owned_container(context.workspace, monkeypatch)
     _isolate_non_navigation_services(restarted, monkeypatch)
-    async with main.lifespan(main.app) as _main_lifespan_state_9385:
-        await _main_lifespan_state_9385["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         durable = restarted.session_service.path_resolver.catalog_store.get_creation_record(
             record.session_creation_idempotency_key
         )

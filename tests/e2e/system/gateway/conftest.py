@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_default_test_workspace
 
 if TYPE_CHECKING:
@@ -20,12 +20,10 @@ def docker_e2e_paths(request: pytest.FixtureRequest) -> GatewayTargetE2EPaths:
     tests_root = project_root / "tests"
     test_file_path = Path(request.node.fspath).resolve()
     relative_test_path = test_file_path.relative_to(tests_root).with_suffix("")
-    root = project_root / "out" / "tests" / relative_test_path
-    local_workspace = root / "workspace"
-    artifacts = root / "artifacts"
-
-    if root.exists():
-        shutil.rmtree(root)
+    context = TestRunContext.from_test_file(test_file_path, project_root=project_root)
+    root = context.output_root
+    local_workspace = context.workspace_root
+    artifacts = context.artifacts_dir
     prepare_default_test_workspace(
         workspace_root=local_workspace,
         template_root=project_root

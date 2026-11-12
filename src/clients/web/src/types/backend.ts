@@ -200,9 +200,7 @@ import type {
   AddLocalWorkspaceRequest as GeneratedAddLocalWorkspaceRequest,
   AddRemoteGatewayRequest as GeneratedAddRemoteGatewayRequest,
   CreateFederationManagedWorkspaceRequest as GeneratedCreateFederationManagedWorkspaceRequest,
-  CreateGatewayGuestRequest as GeneratedCreateGatewayGuestRequest,
   CreateGatewayManagedWorkspaceRequest as GeneratedCreateGatewayManagedWorkspaceRequest,
-  CreateGatewayUserRequest as GeneratedCreateGatewayUserRequest,
   DevelopmentRuntimeRestartDTO,
   GatewayConfigReloadStatusDTO,
   GatewayConfigSourceDTO,
@@ -223,23 +221,13 @@ import type {
   GatewayRuntimeRestartResultDTO,
   GatewayRuntimeStateResultDTO,
   GatewayServiceStatusDTO,
-  GatewayThemeBackgroundDTO,
-  GatewayThemeCatalogDTO,
-  GatewayThemeOptionDTO,
   GatewayUIAssetDTO,
   GatewayUIAssetListDTO,
-  GatewayUserAccessDTO,
-  GatewayUserDTO,
-  GatewayUserLeaseDTO,
-  GatewayUserListDTO,
-  GatewayUserViewStateDTO,
-  GatewayUserViewStateUpdateRequest as GeneratedGatewayUserViewStateUpdateRequest,
   GatewayWorkspaceDTO,
   GatewayWorkspaceListDTO,
   PortForwardDTO,
   PortForwardListDTO,
   ReorderGatewayWorkspacesRequest as GeneratedReorderGatewayWorkspacesRequest,
-  ResolvedGatewayThemeDTO,
   SshConnectionOptionDTO,
   SshConnectionOptionListDTO,
   UpdateGatewayWorkspaceRequest as GeneratedUpdateGatewayWorkspaceRequest,
@@ -249,7 +237,6 @@ import type {
   WebUISessionSidebarSettingsDTO,
   WebUISettingsDTO,
   WebUISettingsUpdateDTO,
-  WebUIThemeSettingsDTO,
   WebUIWorkspaceBottomPanelSettingsDTO,
   WebUIWorkspaceFileTreeSettingsDTO,
 } from "./gatewayProtocol";
@@ -371,11 +358,6 @@ export type AddLocalWorkspaceRequest = GeneratedAddLocalWorkspaceRequest;
 export type AddRemoteGatewayRequest = GeneratedAddRemoteGatewayRequest;
 export type CreateFederationManagedWorkspaceRequest =
   GeneratedCreateFederationManagedWorkspaceRequest;
-export type CreateGatewayGuestRequest = GeneratedCreateGatewayGuestRequest;
-export type CreateGatewayUserRequest = GeneratedCreateGatewayUserRequest;
-export type AcquireGatewayUserRequest = import("./gatewayProtocol").AcquireGatewayUserRequest;
-export type GatewayUserViewStateUpdateRequest =
-  GeneratedGatewayUserViewStateUpdateRequest;
 export type WorkspaceFolderCreateRequest = GeneratedWorkspaceFolderCreateRequest;
 export type WorkspaceNavigationNodeUpdateRequest =
   GeneratedWorkspaceNavigationNodeUpdateRequest;
@@ -390,15 +372,6 @@ export type GatewayWorkspace = Omit<Required<GatewayWorkspaceDTO>, "backend_id" 
   config_reload?: GatewayConfigReloadStatus;
   connection_error?: string | null;
 };
-export type GatewayUserLease = Required<GatewayUserLeaseDTO>;
-export type GatewayUser = Omit<Required<GatewayUserDTO>, "lease"> & {
-  lease: GatewayUserLease;
-};
-export type GatewayUserList = Omit<Required<GatewayUserListDTO>, "items"> & {
-  items: GatewayUser[];
-};
-export type GatewayUserAccess = Required<GatewayUserAccessDTO>;
-export type GatewayUserViewState = DeepRequired<GatewayUserViewStateDTO>;
 export type GatewayConfigReloadStatus = GatewayConfigReloadStatusDTO & Required<
   Pick<GatewayConfigReloadStatusDTO, "available" | "restart_required">
 >;
@@ -573,20 +546,6 @@ export type WebUiWorkspaceFileTreeSettings =
 
 export type WebUiGatewayConsoleSettings = WebUIGatewayConsoleSettingsDTO;
 
-export type GatewayThemeBackground = Omit<
-  DeepRequired<GatewayThemeBackgroundDTO>,
-  "url" | "asset_id"
-> & {
-  url?: string | null;
-  asset_id?: string | null;
-};
-
-export type ResolvedGatewayTheme = ResolvedGatewayThemeDTO;
-
-export type GatewayThemeOption = GatewayThemeOptionDTO;
-
-export type GatewayThemeCatalog = GatewayThemeCatalogDTO;
-
 export type GatewayUiAsset = DeepRequired<GatewayUIAssetDTO>;
 export type GatewayUiAssetList = Omit<
   DeepRequired<GatewayUIAssetListDTO>,
@@ -595,34 +554,24 @@ export type GatewayUiAssetList = Omit<
   items: GatewayUiAsset[];
 };
 
-export type WebUiThemeSettings = Omit<
-  DeepRequired<WebUIThemeSettingsDTO>,
-  "background" | "resolved_theme"
-> & {
-  background: GatewayThemeBackground | null;
-  resolved_theme: ResolvedGatewayTheme | null;
-};
-
 export type WebUiSettings = Omit<
   DeepRequired<WebUISettingsDTO>,
-  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme"
+  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console"
 > & {
   layout: WebUiLayoutSettings;
   session_sidebar: WebUiSessionSidebarSettings;
   workspace_file_tree: WebUiWorkspaceFileTreeSettings;
   gateway_console: WebUiGatewayConsoleSettings;
-  theme: WebUiThemeSettings;
 };
 
 export type WebUiSettingsUpdate = Omit<
   WebUISettingsUpdateDTO,
-  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console" | "theme"
+  "layout" | "session_sidebar" | "workspace_file_tree" | "gateway_console"
 > & {
   layout?: WebUiLayoutSettings | null;
   session_sidebar?: Partial<WebUiSessionSidebarSettings> | null;
   workspace_file_tree?: Partial<WebUiWorkspaceFileTreeSettings> | null;
   gateway_console?: Partial<WebUiGatewayConsoleSettings> | null;
-  theme?: Partial<WebUiThemeSettings> | null;
 };
 
 export type GatewayDirectoryEntry = Required<GatewayDirectoryEntryDTO>;

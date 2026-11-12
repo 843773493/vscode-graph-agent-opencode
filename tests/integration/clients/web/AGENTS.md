@@ -64,7 +64,7 @@ web/
 - 认证恢复和渐进历史场景加载正式 Workbench。资源页验证真实 401 恢复、可见性轮询及窄宽布局；历史滚动先确认精确 owner 和正文节点，再测分页、工具详情与渲染耗时，不能用全局 document 查询的空结果证明成功。
 - `navigation_mutation_measurements` 是显式独立组件量化 harness，保留其受控挂载边界；不因完整页面改用 ShadowRoot 就机械改写该 harness 的 document 查询。
 - 子 Thread 委派场景使用明确的模型回放与真实 Gateway/Agent/task 工具，属于 Integration；工作台按精确 main/child owner 操作，保留原三次父调用与一次子调用，并额外核验当前自动回报父 Thread 的一次内部调用（合计五次）。子请求必须包含完整冻结任务来源，父回报必须包含真实子结果；保留 SSE 断言，并验证首次与复用标签都展开 child 调试资源。
-- `test_browser_view_sessions.py` 加载正式 Workbench，用真实滚轮和控件产生 IndexedDB 展示态，验证刷新及同浏览器新页面恢复、独立 BrowserContext 隔离、草稿隔离和未打开会话的真实未读通知。旧账户菜单已删除，账户占用／接管／真实过期重取只通过 HTTP 核原合同；不再期望另一浏览器自动继承视图，不预写数据库，不向服务端写展示态。历史装具与受控模型回放必须明确保留 Integration 边界。
+- `test_browser_view_sessions.py` 加载正式 Workbench，用真实滚轮和控件产生 IndexedDB 展示态，验证刷新及同浏览器新页面恢复、独立 BrowserContext 隔离、草稿隔离和未打开会话的真实未读通知。旧账户／游客生命周期及视图 HTTP API 已删除，页面只取得既有本机凭据；不再期望另一浏览器自动继承视图，不预写数据库，不向服务端写展示态。历史装具与受控模型回放必须明确保留 Integration 边界。
   - 未读验收先在两个独立 BrowserContext 观察真实后台完成提示，再聚焦其中一个页面，延迟精确工作区／Session 的真实 main-thread GET。树行打开中会以加载图标替换活动指示，必须通过真实搜索中的同一会话确认未读保留，核搜索回执的精确 owner／request_id，不能用加载图标或不可见节点证明未读状态。放行真实查询并核 Session／Thread／request_id，打开精确 Thread，核正文和输入可用后搜索结果与树行提示均消失；另一页面仍保持未读。不直接改 React 状态、不伪造活动事件。
   - 历史缓存验收在新页面导航前延迟精确 owner 的真实 Thread bootstrap GET，只使用 `route.continue()`；同浏览器重开先显示已持久化的只读历史、没有输入框，独立 BrowserContext 先显示加载状态且无缓存正文（输入仍沿用既有可用行为）。放行后核真实响应 owner／request_id、缓存退出与输入恢复；不得以预写 IndexedDB、伪造 HTTP 响应或组件单测代替。释放延迟点后等待路由回调结束，再关闭页面。
 

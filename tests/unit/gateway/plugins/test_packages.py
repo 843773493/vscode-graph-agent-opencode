@@ -43,16 +43,6 @@ def _manifest() -> dict[str, object]:
     }
 
 
-@pytest.fixture
-def configured_node_bin(monkeypatch: pytest.MonkeyPatch) -> str:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("测试主机没有 Node")
-    executable = str(Path(node).resolve(strict=True))
-    monkeypatch.setenv("BOXTEAM_NODE_BIN", executable)
-    return executable
-
-
 def test_plugin_extension_catalog_freezes_seven_open_points_and_four_statuses() -> None:
     expected_business = {
         "commands": "connected",
@@ -73,6 +63,16 @@ def test_plugin_extension_catalog_freezes_seven_open_points_and_four_statuses() 
         assert support.plugin == "open"
         assert support.acceptance == "pending"
         assert support.owner_seam
+
+
+@pytest.fixture
+def configured_node_bin(monkeypatch: pytest.MonkeyPatch) -> str:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("测试主机没有 Node")
+    executable = str(Path(node).resolve(strict=True))
+    monkeypatch.setenv("BOXTEAM_NODE_BIN", executable)
+    return executable
 
 
 def _write_zip(path: Path, files: dict[str, bytes]) -> None:
@@ -400,17 +400,17 @@ def test_install_accepts_typed_plugin_contributions(
         (lambda manifest: manifest["plugins"][0]["requires"].append(
             manifest["plugins"][0]["requires"][0].copy()), "requires 中扩展点不得重复"),
         (lambda manifest: manifest["plugins"][0]["requires"].append(
+            {"extension_point": "not_supported", "version": 1}), "未知或未开放"),
+        (lambda manifest: manifest["plugins"][0]["requires"][0].update(version=2), "版本不兼容"),
+        (lambda manifest: manifest["plugins"][0]["contributes"]["skills"].append(
+            {"id": "browser-control", "path": "custom/docs/browser-guide"}), "不得重复"),
+        (lambda manifest: manifest["plugins"][0]["requires"].append(
             {"extension_point": "commands", "version": 1}) or manifest["plugins"][0]["contributes"].update({
                 "commands": [
                     {"id": "browser.open", "title": "Open", "handler": "open", "arguments_schema": {}, "result_schema": {}},
                     {"id": "browser.open", "title": "Open again", "handler": "open", "arguments_schema": {}, "result_schema": {}},
                 ],
             }), "commands 中贡献标识不得重复"),
-        (lambda manifest: manifest["plugins"][0]["requires"].append(
-            {"extension_point": "not_supported", "version": 1}), "未知或未开放"),
-        (lambda manifest: manifest["plugins"][0]["requires"][0].update(version=2), "版本不兼容"),
-        (lambda manifest: manifest["plugins"][0]["contributes"]["skills"].append(
-            {"id": "browser-control", "path": "custom/docs/browser-guide"}), "不得重复"),
         (lambda manifest: manifest["plugins"][0]["contributes"]["skills"][0].update({
             "tool_bindings": [
                 {"tool_id": "openBrowserPage", "contract_version": 1},

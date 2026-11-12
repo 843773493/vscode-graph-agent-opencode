@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import shutil
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -12,8 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from configs.workspace_identity_migration import preview_workspace_identity_migration
-from tests.harness.python.run_context import TestRunContext
+from configs.maintenance.workspace_identity_migration import preview_workspace_identity_migration
 
 
 @dataclass
@@ -39,11 +36,8 @@ class LegacyGateway:
 
 
 @pytest.fixture
-def legacy_gateway(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> LegacyGateway:
-    context = TestRunContext.from_test_file(Path(request.node.path))
-    directory = context.workspace_root / hashlib.sha256(request.node.nodeid.encode()).hexdigest()[:12]
-    if directory.exists():
-        shutil.rmtree(directory)
+def legacy_gateway(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LegacyGateway:
+    directory = tmp_path / "legacy-gateway"
     root = directory / "gateway"
     root.mkdir(parents=True)
     source = Path.cwd() / "tests/fixtures/workspace_identity"

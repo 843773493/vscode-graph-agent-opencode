@@ -1,10 +1,4 @@
-"""3.4-C：代理请求都必须按请求注入权威 ``X-BoxTeam-Gateway-Id``。
-
-覆盖生命周期/配置 control-plane（``_backend_headers``）与联邦冷 catalog
-端口。控制面读取 registry
-的原生 Gateway 身份，代理与联邦端口读取同一隔离 Gateway 根的 ``identity.json``；
-三者必须保留真实 gateway_id，而不是任何字面量或瞬时通道标识。
-"""
+"""验证生命周期控制面与联邦 catalog 注入原生 Gateway 身份。"""
 
 from __future__ import annotations
 

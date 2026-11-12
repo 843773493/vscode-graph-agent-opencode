@@ -248,14 +248,6 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             data: { token: "turn-history-cached-token" },
           });
         }
-        if (path === "/api/gateway/users/current") {
-          return Response.json({
-            code: 0,
-            message: "ok",
-            request_id: "req_current_cached_history",
-            data: { kind: "guest", user_id: null },
-          });
-        }
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {
           bootstrapCalls += 1;
           return Response.json({
@@ -448,14 +440,6 @@ describe("useSessionTurnHistory partial bootstrap", () => {
             message: "ok",
             request_id: "req_credential",
             data: { token: "turn-history-test-token" },
-          });
-        }
-        if (path === "/api/gateway/users/current") {
-          return Response.json({
-            code: 0,
-            message: "ok",
-            request_id: "req_user",
-            data: { user_id: "user_turn_history", display_name: "Turn History" },
           });
         }
         if (path === `/api/v1/sessions/${SESSION_ID}/bootstrap`) {

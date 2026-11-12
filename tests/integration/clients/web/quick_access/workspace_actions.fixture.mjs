@@ -10,7 +10,7 @@ import { workspaceActionCommands } from '../../../../../src/clients/workbench/sr
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 import { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';
 import { gatewayWorkspaceKey } from '../../../../../src/clients/web/src/api/workspaceIdentity.js';
-import { invalidateGatewayUserSession } from '../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
 
 const owners = ['gateway_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb']
@@ -124,7 +124,7 @@ export async function workspaceControlContract(mode) {
         picker.selectedItems = [picker.items[0]]; accepts.fire({ inBackground: false });
         if (mode === 'action-identity' || mode === 'action-gateway') {
           await until(() => releaseChoice);
-          if (mode === 'action-identity') invalidateGatewayUserSession(0);
+          if (mode === 'action-identity') invalidateGatewayToken(0);
           else workspaceContext.publish({ ...initial, gatewayId: 'changed-control-gateway' });
           releaseChoice();
         }

@@ -26,7 +26,7 @@ tools/windows-vm/windows-vm.sh bootstrap-js
 
 ## 固定模块闭环
 
-所有模块都会先同步当前工作区，并把输出保留到 \`out/tests/temp/windows-vm/artifacts/\`：
+所有模块都会先同步当前工作区，并按本次命令启动时冻结的 UTC 日期把输出保留到 \`out/tests/temp/YYYY/MM/DD/windows-vm/artifacts/\`：
 
 \`\`\`bash
 tools/windows-vm/windows-vm.sh run-module runtime

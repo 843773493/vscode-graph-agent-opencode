@@ -100,7 +100,7 @@ try {
   const partition = {
     gatewayId: "idb-browser-test",
     workspaceId: `workspace-${randomUUID()}`,
-    principal: "guest",
+    principal: "local",
   };
   const upgradePartition = { ...partition, workspaceId: `upgrade-${randomUUID()}` };
   const collisionPartition = { ...partition, workspaceId: `collision-${randomUUID()}` };

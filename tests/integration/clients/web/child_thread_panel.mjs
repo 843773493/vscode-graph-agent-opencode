@@ -74,11 +74,9 @@ async function waitUntil(predicate, label, timeout = 30_000) {
   throw new Error(`等待${label}超时`);
 }
 
-async function ensureGuest(page) {
+async function openWorkbenchPage(page) {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  // 工作台通过自身初始化链取得访客身份，不以整页重载刷新导航树。
   await expect(page.getByRole("button", { name: "刷新资源树", exact: true })).toBeVisible({ timeout: 30_000 });
-  await api(page, "/api/gateway/users/current");
 }
 
 function isSessionMessageRequest(request) {
@@ -211,7 +209,7 @@ const streamResponses = [];
 const pageErrors = [];
 const consoleErrors = [];
 const failedRequests = [];
-let expectedUnauthorizedProbeCount = 0;
+
 /** 失败时把页面关键状态转储到诊断 JSON，供离线排查（不影响正常断言路径）。 */
 async function dumpFailureDiagnostics() {
   const diagnosticsPath = resultPath.replace(/-result\.json$/, "-diagnostics.json");
@@ -272,41 +270,19 @@ try {
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
-    if (
-      expectedUnauthorizedProbeCount > 0
-      && text === "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
-    ) {
-      expectedUnauthorizedProbeCount -= 1;
-      return;
-    }
     consoleErrors.push(text);
-  });
-  page.on("request", (request) => {
-    if (
-      request.method() === "GET"
-      && new URL(request.url()).pathname === "/api/gateway/users/current"
-    ) {
-      expectedUnauthorizedProbeCount += 1;
-    }
   });
   page.on("requestfailed", (request) => {
     if (isExpectedBrowserAbort(request)) return;
     failedRequests.push({ url: request.url(), error: request.failure()?.errorText || "unknown" });
   });
   page.on("response", (response) => {
-    if (
-      response.status() !== 401
-      && new URL(response.url()).pathname === "/api/gateway/users/current"
-      && expectedUnauthorizedProbeCount > 0
-    ) {
-      expectedUnauthorizedProbeCount -= 1;
-    }
     if (response.status() === 200 && streamKind(response.request())) {
       streamResponses.push(response.request());
     }
   });
 
-  await ensureGuest(page);
+  await openWorkbenchPage(page);
   const workspaces = await api(page, "/api/gateway/workspaces");
   assert.deepEqual(workspaces?.data?.active_workspace,
     { gateway_id: expectedGatewayId, workspace_id: expectedWorkspaceId }, "active workspace 不一致");

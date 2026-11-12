@@ -6,7 +6,7 @@ import re
 
 from app.core.sqlite_state import load_sql
 
-COMMUNICATION_OUTBOX_TABLE_DDL = load_sql(__package__, "sql/communication_outbox.sql")
+COMMUNICATION_OUTBOX_TABLE_DDL = load_sql(__package__, "migrations/communication_outbox.sql")
 
 
 # 跨 Session 通信 inbox（2.4/4.7，D5）：target main-thread node 持久化的
@@ -15,10 +15,10 @@ COMMUNICATION_OUTBOX_TABLE_DDL = load_sql(__package__, "sql/communication_outbox
 # payload_hash) 确定性派生（重试不变）。state 闭集
 # target_accepted → execution_bound → terminal，任一非终态可进
 # failed|cancelled；claim owner/generation 是可恢复领取字段（无 TTL）。
-COMMUNICATION_INBOX_TABLE_DDL = load_sql(__package__, "sql/communication_inbox.sql")
+COMMUNICATION_INBOX_TABLE_DDL = load_sql(__package__, "migrations/communication_inbox.sql")
 
 # worker 只消费状态索引（2.4/4.7）：target_accepted 未绑定列表的覆盖索引。
-IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL = load_sql(__package__, "sql/idx_communication_inbox_target_accepted.sql")
+IDX_COMMUNICATION_INBOX_TARGET_ACCEPTED_DDL = load_sql(__package__, "migrations/idx_communication_inbox_target_accepted.sql")
 
 
 _COMMUNICATION_OUTBOX_COLUMNS = (

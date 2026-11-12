@@ -63,8 +63,8 @@ async def test_failed_file_blocks_new_execution_without_persisting_native_diagno
     )
     config_path.write_text(json.dumps({"agents": {"default": {"instructions": instructions}}}), encoding="utf-8")
     replay, controller = inprocess_model_replay
-    async with main.lifespan(main.app) as _main_lifespan_state_66:
-        await _main_lifespan_state_66["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         selected = next(item for item in mounted_case.containers if item.workspace_id == identity)
         config = selected.config_service
         jobs = selected.job_service

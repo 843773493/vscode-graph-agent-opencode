@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 from jsonschema import ValidationError
 
-import app.gateway.config as gateway_config_module
 from app.gateway.auth import GatewayAuthContext
 from app.gateway.config import (
     REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
@@ -17,7 +16,6 @@ from app.gateway.config import (
     GatewayConfigReloadService,
     load_gateway_config,
     resolve_gateway_path,
-    rollback_gateway_connection_id_migration,
 )
 from app.gateway.config.sources import _gateway_persisted_source_details
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
@@ -48,7 +46,7 @@ def _write_gateway_config(
         json.dumps(
             {
                 "$schema": "./gateway_schema.jsonc",
-                "config_version": 1,
+                "config_version": 4,
                 "workspaces": workspaces,
             }
         ),
@@ -76,7 +74,7 @@ def test_gateway_local_skill_update_policy_uses_final_config_and_schema(
     config = load_gateway_config(config_path=path, schema_path=schema)
     assert config.local_skill_updates.mode == mode
     assert config.local_skill_updates.poll_seconds == seconds
-    assert config.payload["config_version"] == 1  # 新增可选配置无需伪造迁移。
+    assert config.payload["config_version"] == 4  # 新增可选配置无需伪造迁移。
 
 
 @pytest.mark.parametrize("policy", [
@@ -475,7 +473,7 @@ def test_gateway_history_loading_config_is_nested_and_uses_anchor_window(
         json.dumps(
             {
                 "$schema": "./gateway_schema.jsonc",
-                "config_version": 1,
+                "config_version": 4,
                 "workspaces": [],
                 "features": {
                     "session_history": {
@@ -538,7 +536,7 @@ def test_load_gateway_config_merges_local_override_and_records_sources(
     local_config_path.write_text(
         json.dumps(
             {
-                "ui": {"theme": {"default_theme_id": "green"}},
+                "logging":{"runtime":{"level":"warning"}},
             }
         ),
         encoding="utf-8",
@@ -549,7 +547,7 @@ def test_load_gateway_config_merges_local_override_and_records_sources(
         schema_path=schema_path,
     )
 
-    assert result.default_theme_id == "green"
+    assert result.payload["logging"]["runtime"]["level"] == "warning"
     assert result.source_paths == (
         Path("configs/gateway_inline.jsonc").resolve(),
         config_path,
@@ -571,7 +569,7 @@ async def test_gateway_config_sources_endpoint_exposes_effective_sources(
     config_path, schema_path = _write_gateway_config(tmp_path, [])
     local_config_path = tmp_path / "gateway_local.jsonc"
     local_config_path.write_text(
-        json.dumps({"ui": {"theme": {"default_theme_id": "blue"}}}),
+        json.dumps({"logging": {"runtime": {"level": "debug"}}}),
         encoding="utf-8",
     )
     config = load_gateway_config(config_path=config_path, schema_path=schema_path)
@@ -698,7 +696,7 @@ def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -
     config_path, schema_path = _write_gateway_config(tmp_path, [])
     local_config_path = tmp_path / "gateway_local.jsonc"
     local_config_path.write_text(
-        json.dumps({"ui": {"theme": {"default_theme_id": "blue"}}}),
+        json.dumps({"logging": {"runtime": {"level": "debug"}}}),
         encoding="utf-8",
     )
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
@@ -709,7 +707,7 @@ def test_gateway_config_migrates_mutable_json_layers_to_sqlite(tmp_path: Path) -
             local_config_path=local_config_path,
             state_store=state,
         )
-        assert config.default_theme_id == "blue"
+        assert config.payload["logging"]["runtime"]["level"] == "debug"
         # config 来源层只以权威 config_source_layers 为唯一载体；gateway_config
         # 不再镜像这些来源层 key。
         assert state.get_source_layer("gateway_mutable_override") is not None
@@ -732,7 +730,7 @@ def test_gateway_source_layer_consistent_across_read_paths(tmp_path: Path) -> No
     config_path, schema_path = _write_gateway_config(tmp_path, [])
     local_config_path = tmp_path / "gateway_local.jsonc"
     local_config_path.write_text(
-        json.dumps({"ui": {"theme": {"default_theme_id": "blue"}}}),
+        json.dumps({"logging": {"runtime": {"level": "debug"}}}),
         encoding="utf-8",
     )
 
@@ -839,331 +837,67 @@ def test_gateway_persisted_source_details_rejects_empty_baseline() -> None:
         _gateway_persisted_source_details({})
 
 
-def test_gateway_connection_id_migration_is_comment_preserving_and_idempotent(
+def test_legacy_gateway_connection_id_requires_explicit_migration(tmp_path: Path) -> None:
+    config_path, schema_path = _write_gateway_config(
+        tmp_path,
+        [{
+            "kind": "remote_gateway",
+            "host": "remote.example.com",
+            "username": "developer",
+            "private_key_path": "keys/id_ed25519",
+        }],
+    )
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["config_version"] = 1
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    original = config_path.read_bytes()
+    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
+    try:
+        with pytest.raises(ValueError, match="普通配置加载不会自动迁移"):
+            load_gateway_config(
+                config_path=config_path,
+                schema_path=schema_path,
+                state_store=state,
+            )
+        assert config_path.read_bytes() == original
+        assert state.get_config("gateway_connection_ids") is None
+    finally:
+        state.close()
+
+
+def test_current_gateway_connection_id_is_stable_without_file_rewrite(
     tmp_path: Path,
 ) -> None:
     config_path, schema_path = _write_gateway_config(
         tmp_path,
-        [
-            {
-                "kind": "remote_gateway",
-                "host": "remote.example.com",
-                "username": "developer",
-                "private_key_path": "keys/id_ed25519",
-            }
-        ],
-    )
-    original = config_path.read_bytes()
-    config_path.write_text(
-        config_path.read_text(encoding="utf-8").replace(
-            '"config_version": 1',
-            '// 保留用户注释\n  "config_version": 1',
-        ),
-        encoding="utf-8",
+        [{
+            "kind": "remote_gateway",
+            "host": "remote.example.com",
+            "username": "developer",
+            "private_key_path": "keys/id_ed25519",
+        }],
     )
     original = config_path.read_bytes()
     state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
     try:
-        migrated = load_gateway_config(
+        first = load_gateway_config(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
         )
-        assert migrated.workspaces[0].connection_id
-        migrated_bytes = config_path.read_bytes()
-        migrated_text = config_path.read_text(encoding="utf-8")
-        assert "保留用户注释" in migrated_text
-        assert '"config_version": 2' in migrated_text
-        assert migrated.workspaces[0].connection_id in migrated_text
-        record = state.get_config("gateway_connection_ids")
-        assert record is not None
-        assert record.config_version == 4
-        assert record.payload["migration"]["state"] == "completed"
-        assert json.dumps(str(config_path.parent))[1:-1] not in json.dumps(record.payload)
-        migration_id = record.payload["migration"]["migration_id"]
-        backup_path = config_path.with_name(f"{config_path.name}.{migration_id}.v1.bak")
-        assert backup_path.read_bytes() == original
+        identity = first.workspaces[0].connection_id
+        assert identity
+        assert config_path.read_bytes() == original
         state.close()
+
         state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
         second = load_gateway_config(
             config_path=config_path,
             schema_path=schema_path,
             state_store=state,
         )
-        assert (
-            second.workspaces[0].connection_id == migrated.workspaces[0].connection_id
-        )
-        assert config_path.read_bytes() == migrated_bytes
-    finally:
-        state.close()
-
-
-def test_gateway_connection_id_migration_can_restore_v1_backup(
-    tmp_path: Path,
-) -> None:
-    config_path, schema_path = _write_gateway_config(
-        tmp_path,
-        [
-            {
-                "kind": "remote_gateway",
-                "host": "remote.example.com",
-                "username": "developer",
-                "private_key_path": "keys/id_ed25519",
-            }
-        ],
-    )
-    original = config_path.read_bytes()
-    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    try:
-        load_gateway_config(
-            config_path=config_path,
-            schema_path=schema_path,
-            state_store=state,
-        )
-        assert config_path.read_bytes() != original
-        state.close()
-        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-        rollback_gateway_connection_id_migration(
-            config_path=config_path,
-            state_store=state,
-        )
+        assert second.workspaces[0].connection_id == identity
         assert config_path.read_bytes() == original
-        record = state.get_config("gateway_connection_ids")
-        assert record is not None
-        assert record.payload["migration"]["state"] == "rolled_back"
-        assert json.dumps(str(config_path.parent))[1:-1] not in json.dumps(record.payload)
-    finally:
-        state.close()
-
-
-@pytest.mark.parametrize("crash_phase", [
-    "before_backup", "after_backup", "before_write", "after_write",
-])
-def test_gateway_connection_id_migration_recovers_after_interrupted_file_write(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    crash_phase: str,
-) -> None:
-    config_path, schema_path = _write_gateway_config(
-        tmp_path,
-        [
-            {
-                "kind": "remote_gateway",
-                "host": "remote.example.com",
-                "username": "developer",
-                "private_key_path": "keys/id_ed25519",
-            }
-        ],
-    )
-    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    original = config_path.read_bytes()
-    original_writer = gateway_config_module.connection_ids._atomic_write_gateway_jsonc
-
-    def write_then_crash(path: Path, raw_bytes: bytes) -> None:
-        interrupted = path == config_path if crash_phase.endswith("write") else path != config_path
-        if not interrupted or crash_phase.startswith("after"):
-            original_writer(path, raw_bytes)
-        if not interrupted:
-            return
-        raise OSError("模拟迁移写入阶段退出")
-
-    # 拆分后 _atomic_write_gateway_jsonc 的_具名定义处_在 config 包的 connection_ids
-    # 子模块；调用方 _migrate_gateway_connection_ids_in_source 也解析该子模块全局，
-    # 故注入点必须指向真正持有它的模块（注入 facade 不影响子模块查找）。
-    monkeypatch.setattr(
-        gateway_config_module.connection_ids,
-        "_atomic_write_gateway_jsonc",
-        write_then_crash,
-    )
-    try:
-        with pytest.raises(OSError, match="迁移写入阶段退出"):
-            load_gateway_config(
-                config_path=config_path,
-                schema_path=schema_path,
-                state_store=state,
-            )
-        planned = state.get_config("gateway_connection_ids")
-        assert planned is not None
-        assert planned.payload["migration"]["state"] == "planned"
-        assert json.dumps(str(config_path.parent))[1:-1] not in json.dumps(planned.payload)
-        assert f'"config_version": {2 if crash_phase == "after_write" else 1}' in config_path.read_text(encoding="utf-8")
-        migration_id = planned.payload["migration"]["migration_id"]
-        backup = config_path.with_name(f"{config_path.name}.{migration_id}.v1.bak")
-        if crash_phase == "before_backup":
-            assert not backup.exists()
-        else:
-            assert backup.read_bytes() == original
-        state.close()
-        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-
-        monkeypatch.setattr(
-            gateway_config_module.connection_ids,
-            "_atomic_write_gateway_jsonc",
-            original_writer,
-        )
-        restored = load_gateway_config(
-            config_path=config_path,
-            schema_path=schema_path,
-            state_store=state,
-        )
-        completed = state.get_config("gateway_connection_ids")
-        assert completed is not None
-        assert completed.payload["migration"]["state"] == "completed"
-        assert completed.payload["migration"]["migration_id"] == planned.payload["migration"]["migration_id"]
-        assert restored.workspaces[0].connection_id == planned.payload["entries"][0]["connection_id"]
-        assert json.dumps(str(config_path.parent))[1:-1] not in json.dumps(completed.payload)
-    finally:
-        state.close()
-
-
-def test_gateway_connection_id_migration_backup_publication_failure_is_atomic(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path, schema_path = _write_gateway_config(tmp_path, [{
-        "kind": "remote_gateway", "host": "remote.example.com", "username": "developer",
-        "private_key_path": "keys/id_ed25519",
-    }])
-    original = config_path.read_bytes()
-    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    replace = gateway_config_module.connection_ids.os.replace
-
-    def fail_backup_publication(source: str | Path, target: str | Path) -> None:
-        if Path(target).name.endswith(".v1.bak"):
-            assert Path(source).read_bytes() == original
-            raise OSError("备份发布失败")
-        replace(source, target)
-
-    monkeypatch.setattr(gateway_config_module.connection_ids.os, "replace", fail_backup_publication)
-    try:
-        with pytest.raises(OSError, match="备份发布失败"):
-            load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
-        assert config_path.read_bytes() == original
-        assert not tuple(tmp_path.glob("*.v1.bak"))
-        assert not tuple(tmp_path.glob(".*.migration-*"))
-        planned = state.get_config("gateway_connection_ids")
-        assert planned is not None and planned.payload["migration"]["state"] == "planned"
-        monkeypatch.setattr(gateway_config_module.connection_ids.os, "replace", replace)
-        state.close()
-        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-        restored = load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
-        assert restored.workspaces[0].connection_id == planned.payload["entries"][0]["connection_id"]
-        (backup,) = tuple(tmp_path.glob("*.v1.bak"))
-        assert backup.read_bytes() == original
-        rollback_gateway_connection_id_migration(config_path=config_path, state_store=state)
-        assert config_path.read_bytes() == original
-    finally:
-        state.close()
-
-
-@pytest.mark.parametrize("operation", ["resume", "rollback"])
-@pytest.mark.parametrize("backup_state", ["missing", "corrupt"])
-def test_gateway_connection_id_migration_rejects_unverifiable_backup(
-    tmp_path: Path, operation: str, backup_state: str,
-) -> None:
-    config_path, schema_path = _write_gateway_config(tmp_path, [{
-        "kind": "remote_gateway", "host": "remote.example.com", "username": "developer",
-        "private_key_path": "keys/id_ed25519",
-    }])
-    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    try:
-        load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
-        record = state.get_config("gateway_connection_ids")
-        assert record is not None
-        payload = record.payload
-        if operation == "resume":
-            payload["migration"]["state"] = "planned"
-            state.set_config(config_key=record.config_key, config_version=4, payload=payload)
-        migration_id = payload["migration"]["migration_id"]
-        backup = config_path.with_name(f"{config_path.name}.{migration_id}.v1.bak")
-        if backup_state == "missing":
-            backup.unlink()
-        else:
-            backup.write_bytes(b"wrong-migration-backup")
-        before = config_path.read_bytes()
-        state.close()
-        state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-        with pytest.raises(ConfigConflictError, match="备份") as caught:
-            if operation == "resume":
-                load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
-            else:
-                rollback_gateway_connection_id_migration(config_path=config_path, state_store=state)
-        assert str(config_path.parent) not in str(caught.value)
-        assert config_path.read_bytes() == before
-        assert state.get_config("gateway_connection_ids").payload == payload
-        if backup_state == "missing":
-            assert not backup.exists()
-        else:
-            assert backup.read_bytes() == b"wrong-migration-backup"
-    finally:
-        state.close()
-
-
-@pytest.mark.parametrize("operation", ["startup", "rollback"])
-@pytest.mark.parametrize("legacy_shape", ["old_version", "native_path"])
-def test_gateway_connection_id_migration_rejects_obsolete_records(
-    tmp_path: Path, operation: str, legacy_shape: str,
-) -> None:
-    config_path, schema_path = _write_gateway_config(tmp_path, [{
-        "kind": "remote_gateway", "host": "remote.example.com", "username": "developer",
-        "private_key_path": "keys/id_ed25519",
-    }])
-    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    try:
-        load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
-        record = state.get_config("gateway_connection_ids")
-        assert record is not None
-        payload = record.payload
-        if legacy_shape == "native_path":
-            payload["migration"]["backup_path"] = str(tmp_path / "unrelated-backup")
-        state.set_config(config_key=record.config_key, config_version=3 if legacy_shape == "old_version" else 4, payload=payload)
-        before = config_path.read_bytes()
-        with pytest.raises(ConfigConflictError, match="旧开发记录已失效|已废弃的原生路径"):
-            if operation == "startup":
-                load_gateway_config(config_path=config_path, schema_path=schema_path, state_store=state)
-            else:
-                rollback_gateway_connection_id_migration(config_path=config_path, state_store=state)
-        assert config_path.read_bytes() == before
-        assert state.get_config("gateway_connection_ids").payload == payload
-    finally:
-        state.close()
-
-
-def test_gateway_connection_id_migration_rejects_partial_source_layer(
-    tmp_path: Path,
-) -> None:
-    config_path, _ = _write_gateway_config(
-        tmp_path,
-        [
-            {
-                "kind": "remote_gateway",
-                "host": "remote-a.example.com",
-                "username": "developer",
-                "private_key_path": "keys/id_ed25519",
-            },
-            {
-                "kind": "remote_gateway",
-                "host": "remote-b.example.com",
-                "username": "developer",
-                "private_key_path": "keys/id_ed25519",
-            },
-        ],
-    )
-    original = config_path.read_bytes()
-    raw_config = json.loads(original)
-    state = GatewayStateStore(path=tmp_path / "gateway.sqlite")
-    try:
-        with pytest.raises(
-            gateway_config_module.ConfigConflictError,
-            match="partial source layer",
-        ):
-            gateway_config_module._migrate_gateway_connection_ids_in_source(
-                raw_config=raw_config,
-                config_path=config_path,
-                state_store=state,
-                connection_ids=("connection-one",),
-            )
-        assert config_path.read_bytes() == original
-        assert state.get_config("gateway_connection_ids") is None
     finally:
         state.close()
 
@@ -1192,9 +926,9 @@ def test_gateway_startup_without_ref_uses_persisted_active_snapshot(
         config_path.write_text(
             json.dumps(
                 {
-                    "config_version": 1,
+                    "config_version": 4,
                     "workspaces": [],
-                    "ui": {"theme": {"default_theme_id": "blue"}},
+                    "logging":{"runtime":{"level":"debug"}},
                 }
             ),
             encoding="utf-8",
@@ -1207,7 +941,7 @@ def test_gateway_startup_without_ref_uses_persisted_active_snapshot(
             startup=True,
         )
         assert restored.revision == initial.revision
-        assert restored.default_theme_id == initial.default_theme_id
+        assert restored.payload["logging"]["runtime"]["level"] == initial.payload["logging"]["runtime"]["level"]
         assert [
             (source.layer, source.precedence) for source in restored.source_details
         ] == [("inline", 0), ("user", 1), ("user_local", 2)]
@@ -1273,7 +1007,7 @@ async def test_gateway_pending_startup_loads_exact_candidate_and_promotes(
         config_path.write_text(
             json.dumps(
                 {
-                    "config_version": 1,
+                    "config_version": 4,
                     "workspaces": [],
                     "runtime": {
                         "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
@@ -1456,17 +1190,26 @@ async def test_gateway_config_reload_promotes_ui_candidate_and_emits_event(
             schema_path=schema_path,
         )
         service.initialize_active_snapshot()
+        claims_during_cleanup = []
+
+        def observe_claim_during_cleanup(_released: object) -> None:
+            claims_during_cleanup.append(state.get_config_apply_claim(config_domain="gateway"))
+
+        service._remove_released_plugin_private_inputs = observe_claim_during_cleanup
         config_path.write_text(
             json.dumps(
                 {
-                    "config_version": 1,
+                    "config_version": 4,
                     "workspaces": [],
-                    "ui": {"theme": {"default_theme_id": "blue"}},
+                    "logging":{"runtime":{"level":"debug"}},
                 }
             ),
             encoding="utf-8",
         )
         await service.reload()
+        assert len(claims_during_cleanup) == 1
+        assert claims_during_cleanup[0] is not None
+        assert state.get_config_apply_claim(config_domain="gateway") is None
         status = service.status()
         assert status.state == "active"
         assert status.restart_required is False
@@ -1519,9 +1262,9 @@ async def test_gateway_config_reload_compensates_runtime_apply_on_promotion_conf
         config_path.write_text(
             json.dumps(
                 {
-                    "config_version": 1,
+                    "config_version": 4,
                     "workspaces": [],
-                    "ui": {"theme": {"default_theme_id": "blue"}},
+                    "logging":{"runtime":{"level":"debug"}},
                 }
             ),
             encoding="utf-8",
@@ -1584,7 +1327,7 @@ async def test_gateway_config_reload_keeps_old_active_for_runtime_pending(
         config_path.write_text(
             json.dumps(
                 {
-                    "config_version": 1,
+                    "config_version": 4,
                     "workspaces": [],
                     "runtime": {
                         "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
@@ -1670,7 +1413,7 @@ async def test_gateway_pending_restart_failure_rejects_stale_startup_contract(
         config_path.write_text(
             json.dumps(
                 {
-                    "config_version": 1,
+                    "config_version": 4,
                     "workspaces": [],
                     "runtime": {
                         "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
@@ -1767,7 +1510,7 @@ async def test_gateway_recovery_pending_requires_matching_proof_before_resolve(
         config_path.write_text(
             json.dumps(
                 {
-                    "config_version": 1,
+                    "config_version": 4,
                     "workspaces": [],
                     "runtime": {
                         "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}
@@ -1877,7 +1620,7 @@ async def test_gateway_pending_discard_requires_safe_active_baseline(
         config_path.write_text(
             json.dumps(
                 {
-                    "config_version": 1,
+                    "config_version": 4,
                     "workspaces": [],
                     "runtime": {
                         "gateway": {"process": {"health": {"poll_interval_seconds": 1}}}

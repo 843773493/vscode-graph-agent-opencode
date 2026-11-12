@@ -30,6 +30,40 @@ async function exercise(mode) {
 }
 const writes = result => result.requests.filter(item => item.method === 'POST');
 const ownerB = `gateway_${'b'.repeat(32)}`;
+for (const mode of ['mcp-open', 'mcp-options']) test(`${mode}复用原目录和命令，保持同名服务的精确owner`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors).toEqual([]); expect(writes(result)).toEqual([]);
+  expect(result.rows.filter(row => row.id.endsWith('/mcp/Needle MCP'))).toHaveLength(2);
+  expect(result.requests.filter(item => item.path === '/api/v1/mcp/servers').every(item => item.query === '?refresh=false')).toBe(true);
+  if (mode === 'mcp-open') {
+    expect(result.mcpOpened).toEqual([{ name: 'Needle MCP', target: { gateway_id: ownerB, workspace_id: '019a0000-0000-7000-8000-000000000001' } }]);
+    expect(result.mcpOptions).toEqual([]);
+  } else {
+    expect(result.mcpOpened).toEqual([]);
+    expect(JSON.parse(result.mcpOptions[0])[0]).toContain(ownerB);
+  }
+});
+test('MCP目录归属错误只使该分支不可用，不能打开错误owner对象', async () => {
+  const result = await exercise('mcp-mismatch');
+  expect(result.rows.some(row => row.label.includes('MCP 管理响应不属于请求'))).toBe(true);
+  expect(result.rows.filter(row => row.id.endsWith('/mcp/Needle MCP'))).toHaveLength(1);
+  expect(result.mcpOpened).toEqual([]); expect(writes(result)).toEqual([]);
+});
+test('凭据失效后旧MCP候选不能打开，关闭picker取消其目录实际读取', async () => {
+  const invalidated = await exercise('mcp-identity');
+  expect(invalidated.errors).toHaveLength(1); expect(invalidated.mcpOpened).toEqual([]); expect(writes(invalidated)).toEqual([]);
+  const closed = await exercise('mcp-pending-close');
+  expect(closed.aborted).toBe(true); expect(closed.rows).toEqual([]); expect(writes(closed)).toEqual([]);
+});
+for (const mode of ['focus', 'focus-browser']) test(`${mode}默认回车只聚焦所选owner与资源，不打开管理菜单或写入`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors).toEqual([]); expect(result.choices).toEqual([]); expect(writes(result)).toEqual([]);
+  expect(result.focuses).toHaveLength(1);
+  expect(result.focuses[0].owner.gatewayId).toBe(ownerB);
+  expect(result.focuses[0].resource.resource_id).toBe(mode === 'focus' ? 'terminal_same' : 'browser_same');
+  expect(result.focuses[0].resource.owner_revision).toBe(7);
+  expect(result.requests).toHaveLength(result.discoveryCount);
+});
 test('同名终端和浏览器按owner保留；发现／逐键过滤／取消没有写入或正文读取', async () => {
   const result = await exercise('browse');
   expect(result.rows).toHaveLength(4); expect(new Set(result.rows.map(row => row.id)).size).toBe(4);

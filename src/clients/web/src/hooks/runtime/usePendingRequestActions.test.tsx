@@ -48,9 +48,6 @@ function installFetch(): void {
       if (path === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: "local-pending-error-token" });
       }
-      if (path === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
       calls.push(`${method} ${path}`);
       queries.push(url.search);
       return route(path, method);

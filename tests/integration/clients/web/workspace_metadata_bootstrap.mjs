@@ -75,17 +75,17 @@ async function verifyThemeBackgroundWarning() {
   check(response.status() === 404, `缺失背景图片没有返回真实 404: ${JSON.stringify(payload)}`);
   check(payload.request_id && response.headers()["x-request-id"] === payload.request_id, "背景图片 404 缺少原请求身份");
   check(payload.detail === `'Gateway UI 资源不存在: ${missingAsset}'`, "背景图片错误不属于指定资源");
-  const warning = `主题背景图加载失败，已回退为无背景图：背景图片加载失败: ${missingUrl}`;
+  const warning = `背景图加载失败，已清除展示图片，配置仍保留：背景图片加载失败: ${missingUrl}`;
   const toast = page.locator(".notifications-toasts").getByText(warning, { exact: true });
   await expect(toast).toBeVisible();
   await expect(control.getByRole("status").filter({ hasText: "网络背景已保存。" })).toBeVisible();
   const hosts = page.locator(".boxteam-react-surface");
   check(await hosts.count() >= 2, "主题验收必须同时存在导航和会话宿主");
-  await expect.poll(() => hosts.evaluateAll(nodes => nodes.every(node => getComputedStyle(node).backgroundImage === "none"))).toBe(true);
+  await expect.poll(() => hosts.evaluateAll(nodes => nodes.every(node => getComputedStyle(node).getPropertyValue("--bt-background-image") === "none"))).toBe(true);
   result.theme_background_warning = { request_id: payload.request_id, asset_id: missingAsset, url: missingUrl,
     http_status: response.status(), notification: await toast.innerText(), hosts: await hosts.count() };
-  await control.getByRole("button", { name: "使用主题默认背景", exact: true }).click();
-  await expect(control.getByRole("status").filter({ hasText: "已恢复当前主题的默认背景。" })).toBeVisible();
+  await control.getByRole("button", { name: "清除背景图片", exact: true }).click();
+  await expect(control.getByRole("status").filter({ hasText: "已清除背景图片。" })).toBeVisible();
   await expect(backgroundInput).toHaveValue("");
   await control.getByRole("button", { name: "关闭 Gateway 控制中心", exact: true }).click();
   const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${fixture.nativeDirectory.sessionId}"][data-thread-id="${fixture.nativeDirectory.threadId}"]`);

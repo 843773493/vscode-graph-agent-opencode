@@ -51,7 +51,7 @@ async def test_request_content_search_opens_only_the_exact_record(
             deltas=[{"role": "assistant", "content": "已完成请求日志验收"}], finish_reason="stop"),
     ).raw["interactions"])[0]
     result_path = context.artifacts_dir / "request-content.json"
-    command = ["bun", "tests/integration/clients/web/quick_access/request_content.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/request_content.mjs"]
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,

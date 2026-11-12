@@ -27,10 +27,6 @@ for (const [index, script] of scripts.entries()) {
       recursive: true,
       force: true,
     });
-    rmSync(path.join(packagingOutputRoot, "downloads"), {
-      recursive: true,
-      force: true,
-    });
   }
   const result = spawnSync(
     scriptRuntime,

@@ -18,7 +18,6 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -110,7 +109,6 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             initial_response = await client.get("/api/gateway/workspaces")
             assert initial_response.status_code == 200, initial_response.text
             expected_owners = {(item["gateway_id"], item["workspace_id"])
@@ -132,7 +130,6 @@ async def test_managed_startup_access_failure_keeps_root_out_of_public_and_persi
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             await inspect_public_errors(client, "restarted")
 
         logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
@@ -203,7 +200,6 @@ async def test_managed_process_failure_stays_explicit_without_persisting_native_
             async with httpx.AsyncClient(
                 base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=60,
             ) as client:
-                await acquire_gateway_guest(client)
                 if stage == "registered":
                     response = await client.post("/api/gateway/workspaces/local", json={"root_path": str(workspace)})
                     assert response.status_code == 500, response.text

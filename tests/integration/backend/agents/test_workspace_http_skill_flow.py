@@ -32,7 +32,6 @@ from tests.integration.backend.agents.test_gateway_skill_source_flow import (
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -86,7 +85,6 @@ async def test_private_http_skill_updates_rebinds_explicitly_and_replays_frozen_
     receipts: dict[str, object] = {}
     try:
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             info = await client.get("/api/v1/workspace")
             assert info.status_code == 200, info.text
             assert len(source.requests) == 1
@@ -160,7 +158,6 @@ async def test_private_http_skill_updates_rebinds_explicitly_and_replays_frozen_
         close_gateway_process(gateway)
         gateway = start("gateway-restarted")
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             state.plan(session_id, thread_id, _text_reply("PRIVATE_COLD_REPLAY_OK"))
             job = await _job(client, session_id)
             assert job["status"] in {"completed", "succeeded"}, job

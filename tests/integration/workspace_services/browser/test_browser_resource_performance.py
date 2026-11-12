@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import threading
 import time
 from collections.abc import AsyncIterator, Generator
 from contextlib import ExitStack
@@ -22,6 +21,7 @@ from tests.harness.python.terminal_plugin import (
     TerminalPluginGateway,
     browser_plugin_gateway_for_workspace,
 )
+from tests.support.http_server import running_http_server
 from tests.support.ports import integration_port_block_for_file
 
 MAX_SHARED_RUNTIME_PROCESS_MEMORY_KIB = 400 * 1024
@@ -352,13 +352,7 @@ async def _measure_latest_frame_delivery(gateway: TerminalPluginGateway, browser
 @pytest.fixture(scope="module")
 def dynamic_page_server(request: pytest.FixtureRequest) -> Generator[str, None, None]:
     port = integration_port_block_for_file(Path(request.node.fspath)).port(62)
-    with ExitStack() as lifetime:
-        server = ThreadingHTTPServer(("127.0.0.1", port), _DynamicPageHandler)
-        lifetime.callback(server.server_close)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        lifetime.callback(thread.join, timeout=5)
-        lifetime.callback(server.shutdown)
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", port), _DynamicPageHandler)):
         yield f"http://127.0.0.1:{port}/"
 
 

@@ -69,7 +69,7 @@ def convert_catalog_v10(source: Path, destination: Path) -> None:
                 original.backup(converted)
                 converted.execute("BEGIN IMMEDIATE")
                 try:
-                    for statement in load_sql(__package__, "sql/upgrade_v10.sql").split(";"):
+                    for statement in load_sql(__package__, "migrations/upgrade_v10.sql").split(";"):
                         if statement.strip():
                             converted.execute(statement)
                     for row in converted.execute("SELECT * FROM fork_source_captures"):

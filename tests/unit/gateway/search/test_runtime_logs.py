@@ -13,7 +13,6 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes.diagnostic_logs import router as diagnostics_router
 from app.gateway.routes.search import router as search_router
-from app.gateway.server.workspace_proxy import verify_user_access_for_proxy
 from app.schemas.gateway.diagnostics import GatewayDiagnosticLogQueryResultDTO
 from app.schemas.search_federation import FederatedSearchEventDTO
 
@@ -31,7 +30,6 @@ async def log_http(diagnostic_registry: GatewayWorkspaceRegistry, tmp_path: Path
     app.state.registry = diagnostic_registry
     app.state.gateway_id = GATEWAY
     app.state.workspace_navigation_store = WorkspaceNavigationStore(storage_path=tmp_path / "navigation.json")
-    app.dependency_overrides[verify_user_access_for_proxy] = lambda: None
 
     async def reject_workspace_transport(request: httpx.Request) -> httpx.Response:
         raise AssertionError(f"运行日志不得读工作区搜索：{request.url}")

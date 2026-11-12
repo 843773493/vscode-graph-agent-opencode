@@ -1,6 +1,6 @@
 {
   "$schema": "./gateway_schema.jsonc",
-  "config_version": 4,
+  "config_version": 5,
   "plugins": {
     "sources": {"entries": []}, // TODO：接自有在线目录；空源不发网络请求。
     "runtime": {"entries": []}, // 当前 Gateway 的包内插件绑定，安装不自动启用。

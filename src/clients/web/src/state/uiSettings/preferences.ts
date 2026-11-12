@@ -98,7 +98,6 @@ export function createDefaultWebUiSettings(): WebUiSettings {
     },
     workspace_file_tree: { expanded_paths_by_workspace: {} },
     gateway_console: { view: "routing" },
-    theme: { theme_id: "warm", background: null, resolved_theme: null },
   };
 }
 
@@ -122,10 +121,6 @@ export function normalizeWebUiSettings(
     gateway_console: {
       ...defaults.gateway_console,
       ...value.gateway_console,
-    },
-    theme: {
-      ...defaults.theme,
-      ...value.theme,
     },
   };
 }

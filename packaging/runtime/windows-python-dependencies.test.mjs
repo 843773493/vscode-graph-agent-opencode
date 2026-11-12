@@ -185,6 +185,13 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
       downloadPinnedWindowsPython: async () => { downloads++; return path.join(projectRoot, "python.tgz"); },
       downloadPinnedWindowsNode: async () => { downloads++; return path.join(projectRoot, "node.zip"); },
     };
+    else if (specifier === "tar") exports = {
+      async extract(options) {
+        commands.push(["extract", { ...options }]);
+        fs.mkdirSync(path.dirname(pythonExecutable), { recursive: true });
+        fs.writeFileSync(pythonExecutable, "fixture");
+      },
+    };
     else if (specifier === "../../scripts/plugins/pack-developer-tools.mjs") exports = {
       packDeveloperTools: async () => {},
     };
@@ -194,48 +201,24 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
     else if (specifier === "./windows-python-dependencies.mjs") exports = {
       installWindowsPythonDependencies(options) {
         installations++;
-        assert.equal(
-          fs.readFileSync(
-            path.join(outputRoot, "stage/build-node/node-v22.17.0-win-x64/node.exe"),
-            "utf8",
-          ),
-          "fixture node",
-          "Windows Node 必须在 Python 依赖owner之前解包并校验",
-        );
         assert.equal(options.pythonExecutable, pythonExecutable);
         assert.equal(options.outputRoot, outputRoot);
         assert.equal(options.runtimePackageRoot, runtimePackageRoot);
-        assert.equal(options.crossBuild, false);
+        assert.equal(options.crossBuild, mode === "cross");
         assert.equal(options.run("fixture-run", ["argument"], { capture: true }), "fixture output");
         throw stop;
       },
     };
     else {
       exports = { ...await import(specifier.startsWith(".") ? new URL(specifier, builderUrl).href : specifier) };
-      if (specifier === "node:child_process") exports.spawnSync = (command, args, options) => {
-        commands.push([command, [...args], options.cwd]);
-        if (command === "tar" && args[0] === "-xzf") {
-          fs.mkdirSync(path.dirname(pythonExecutable), { recursive: true });
-          fs.writeFileSync(pythonExecutable, "fixture");
-        } else if (command === "tar" && args[0] === "-xf") {
-          const extractRoot = args[args.indexOf("-C") + 1];
-          const nodeExecutable = path.join(
-            extractRoot,
-            "node-v22.17.0-win-x64/node.exe",
-          );
-          fs.mkdirSync(path.dirname(nodeExecutable), { recursive: true });
-          fs.writeFileSync(nodeExecutable, "fixture node");
-        } else if (command === "unzip") {
-          const extractRoot = args[args.indexOf("-d") + 1];
-          const nodeExecutable = path.join(
-            extractRoot,
-            "node-v22.17.0-win-x64/node.exe",
-          );
-          fs.mkdirSync(path.dirname(nodeExecutable), { recursive: true });
-          fs.writeFileSync(nodeExecutable, "fixture node");
-        }
-        return { status: 0, stdout: "fixture output\n" };
-      };
+      if (specifier === "node:child_process" || specifier === "cross-spawn") {
+        const spawnSync = (command, args, options) => {
+          commands.push([command, [...args], options.cwd]);
+          return { status: 0, stdout: "fixture output\n" };
+        };
+        if (specifier === "cross-spawn") exports = { default: { sync: spawnSync } };
+        else exports.spawnSync = spawnSync;
+      }
     }
     return new SyntheticModule(Object.keys(exports), function () {
       for (const [name, value] of Object.entries(exports)) this.setExport(name, value);
@@ -250,14 +233,12 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
     assert.equal(installations, 0, "Linux --cross 必须在 Python 依赖owner前拒绝");
     assert.deepEqual(commands, [], "Linux --cross 不得解包或运行构建命令");
     assert.equal(fs.existsSync(outputRoot), false, "Linux --cross 不得创建staging");
-    return { mode, rejectedBeforeWrites: true, downloads, installations, commands: commands.length };
+    return { scenario: mode, rejectedBeforeWrites: true, downloads, installations, commands: commands.length };
   }
   await assert.rejects(module.evaluate(), (error) => error === stop);
   assert.equal(installations, 1);
-  assert.deepEqual(JSON.parse(JSON.stringify(commands)), [
-    ["tar", ["-xzf", path.join(projectRoot, "python.tgz"), "-C", runtimePackageRoot], projectRoot],
-    ["tar", ["-xf", path.join(projectRoot, "node.zip"), "-C",
-      path.join(outputRoot, "stage/build-node")], projectRoot],
+  assert.deepEqual(commands, [
+    ["extract", { file: path.join(projectRoot, "python.tgz"), cwd: runtimePackageRoot, strict: true }],
     ["fixture-run", ["argument"], projectRoot],
   ]);
   assert.equal(fs.readFileSync(path.join(runtimePackageRoot, "application/resources/fixture.txt"), "utf8"), "resources");
@@ -305,7 +286,7 @@ describe("Windows Python依赖准备的唯一owner", () => {
       : `真实构建入口/${mode}传入目录、模式与原命令runner`, () => {
       const observation = runObservation(observeBuilderDependencyCall, "./build-windows-x64.mjs", "builder-wiring", mode);
       if (mode === "cross") {
-        expect(observation).toEqual({ mode, rejectedBeforeWrites: true, downloads: 0, installations: 0, commands: 0 });
+        expect(observation).toEqual({ scenario: mode, rejectedBeforeWrites: true, downloads: 0, installations: 0, commands: 0 });
       } else {
         expect(observation.scenario).toBe(mode);
       }

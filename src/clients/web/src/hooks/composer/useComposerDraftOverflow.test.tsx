@@ -130,7 +130,7 @@ test("草稿恢复前不发布外部writer，附加写入失败保留输入并�
   let value = "", controller: ComposerDraftController | undefined;
   const errors: string[] = [];
   function Draft() {
-    [value, , controller] = useComposerDraft("external-restore", "session", "gateway", "a", message => errors.push(message));
+    [value, controller] = useComposerDraft("external-restore", "session", "gateway", "a", message => errors.push(message));
     return null;
   }
   let renderer!: ReactTestRenderer;

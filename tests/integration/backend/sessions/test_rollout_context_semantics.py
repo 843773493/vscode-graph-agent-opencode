@@ -88,15 +88,13 @@ def accept_context_turn(
 
 
 def _checkpoint(
-    checkpoint_id: str, messages: list[object], **channels: object
+    checkpoint_id: str, messages: list[object], *, version: str = "1", **channels: object
 ) -> dict[str, object]:
     checkpoint = empty_checkpoint()
     checkpoint["id"] = checkpoint_id
     checkpoint["channel_values"] = {"messages": messages, **channels}
-    checkpoint["channel_versions"] = {
-        channel: str(index + 1)
-        for index, channel in enumerate(checkpoint["channel_values"])
-    }
+    # 版本随 checkpoint 推进，与消息条数和字段位置无关。
+    checkpoint["channel_versions"] = {channel: version for channel in checkpoint["channel_values"]}
     checkpoint["updated_channels"] = list(checkpoint["channel_values"])
     return checkpoint
 
@@ -184,12 +182,14 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
     with execution_admission_scope(admission, langgraph_thread_id=thread_id):
         saver.put(
             first_config,
-            _checkpoint("checkpoint-2", second_messages, scratchpad={"job": "parent"}),
+            _checkpoint("checkpoint-2", second_messages, version="2", scratchpad={"job": "parent"}),
             {"source": "job", "step": 2},
             {"messages": "2", "scratchpad": "2"},
         )
 
-    restored = saver.get_tuple(build_checkpoint_config(thread_id))
+    # 冷查询保留冻结历史；执行隔离必须由真实 admission 确定。
+    with execution_admission_scope(admission, langgraph_thread_id=thread_id):
+        restored = saver.get_tuple(build_checkpoint_config(thread_id))
     assert restored is not None
     assert [
         message.id for message in restored.checkpoint["channel_values"]["messages"]
@@ -235,6 +235,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
                     *first_messages,
                     AIMessage(content="重放后的回答", id="assistant-final-2"),
                 ],
+                version="3",
                 scratchpad={"job": "parent"},
             ),
             {"source": "replay", "step": 3},
@@ -255,6 +256,7 @@ def test_context_view_filters_control_records_and_keeps_business_messages(
             _checkpoint(
                 "checkpoint-compacted",
                 raw_messages,
+                version="4",
                 _summarization_event={
                     "cutoff_index": len(raw_messages),
                     "summary_message": HumanMessage(
@@ -336,8 +338,8 @@ def test_incremental_checkpoint_keeps_tool_call_with_later_tool_result(
                     response_metadata={"turn_id": "turn-tool-call"},
                 )
             ],
+            version="2",
         )
-        result_checkpoint["channel_versions"] = {"messages": "2"}
         saver.put(
             first_config,
             result_checkpoint,
@@ -440,8 +442,7 @@ def test_parallel_tool_continuation_restores_all_call_declarations(
     # LangGraph continuation 只带新 HumanMessage；冻结 membership 必须保留整个并行工具组。
     continuation = HumanMessage(content="继续处理", id="user-continuation")
     admission = accept_context_turn(continuation, "turn-continuation")
-    continuation_checkpoint = _checkpoint("parallel-continuation", [continuation])
-    continuation_checkpoint["channel_versions"] = {"messages": "2"}
+    continuation_checkpoint = _checkpoint("parallel-continuation", [continuation], version="2")
     with execution_admission_scope(admission, langgraph_thread_id=thread_id):
         saver.put(
             parent_config,
@@ -574,7 +575,7 @@ def test_compaction_control_event_keeps_message_cutoff_identity(
         )
         saver.put(
             config,
-            _checkpoint("cp-2", messages, _summarization_event={
+            _checkpoint("cp-2", messages, version="2", _summarization_event={
                 "cutoff_message_id": "tool-1",
                 "cutoff_index": len(messages),
                 "summary_message": HumanMessage(
@@ -684,7 +685,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     with execution_admission_scope(second_admission, langgraph_thread_id=thread_id):
         config = saver.put(
             config,
-            _checkpoint("cp-2", compacted_messages),
+            _checkpoint("cp-2", compacted_messages, version="2"),
             {"source": "anchor-test", "step": 2},
             {"messages": "2"},
         )
@@ -699,11 +700,12 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
     assert cp2_anchor.cutoff_message_sequence == cp2_anchor.last_message_sequence
 
     # Provider 截止点不删除原始可见历史，因此各 checkpoint view 仍有完整 Turn-1 锚点。
-    # _checkpoint 按字段位置生成版本；这里显式区分两次压缩事件。
+    # 两次压缩事件各自使用新版本，保证 channel 和 new_versions 一致。
     with execution_admission_scope(second_admission, langgraph_thread_id=thread_id):
         cp3 = _checkpoint(
             "cp-3",
             compacted_messages,
+            version="3",
             _summarization_event={
                 "cutoff_message_id": "turn-1-tool-result",
                 "cutoff_index": 3,
@@ -712,9 +714,6 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
                 ),
             },
         )
-        cp3_versions = cp3["channel_versions"]
-        assert isinstance(cp3_versions, dict)
-        cp3_versions["_summarization_event"] = "3"
         config = saver.put(
             config,
             cp3,
@@ -730,6 +729,7 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
         cp4 = _checkpoint(
             "cp-4",
             compacted_messages,
+            version="4",
             _summarization_event={
                 "cutoff_message_id": "turn-1-final",
                 "cutoff_index": 4,
@@ -738,9 +738,6 @@ def test_turn_anchor_walks_active_lineage_after_message_level_compaction(
                 ),
             },
         )
-        cp4_versions = cp4["channel_versions"]
-        assert isinstance(cp4_versions, dict)
-        cp4_versions["_summarization_event"] = "4"
         config = saver.put(
             config,
             cp4,
@@ -860,7 +857,7 @@ def test_logical_pruning_marks_unreferenced_checkpoints_without_touching_jsonl(
         with execution_admission_scope(admission, langgraph_thread_id=thread_id):
             config = saver.put(
                 config,
-                _checkpoint(f"cp-{index}", messages),
+                _checkpoint(f"cp-{index}", messages, version=str(index)),
                 {"source": "pruning-test", "step": index},
                 {"messages": str(index)},
             )
@@ -902,7 +899,7 @@ def test_context_view_jump_validation_rejects_cycle_or_wrong_ancestor(
         )
         saver.put(
             config,
-            _checkpoint("cp-2", [user, AIMessage(content="二", id="a1")]),
+            _checkpoint("cp-2", [user, AIMessage(content="二", id="a1")], version="2"),
             {"source": "jump-test"},
             {"messages": "2"},
         )
@@ -949,6 +946,7 @@ def test_pruning_preserves_all_canonical_bytes_and_item_offsets(
                     second_user,
                     AIMessage(content="待回收的回答", id="a2"),
                 ],
+                version="2",
             ),
             {"source": "compaction-test", "step": 2},
             {"messages": "2"},
@@ -970,6 +968,7 @@ def test_pruning_preserves_all_canonical_bytes_and_item_offsets(
                     third_user,
                     AIMessage(content="新分支的回答", id="a3"),
                 ],
+                version="3",
             ),
             {"source": "compaction-test", "step": 3},
             {"messages": "3"},

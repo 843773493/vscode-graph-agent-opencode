@@ -3,10 +3,8 @@ import { Emitter, type Event } from '../../upstream/src/vs/base/common/event.js'
 import { observableValue } from '../../upstream/src/vs/base/common/observable.js';
 import { MarkdownString } from '../../upstream/src/vs/base/common/htmlContent.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
-import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
+import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
-import { IMcpGalleryManifest } from '../../upstream/src/vs/platform/mcp/common/mcpGalleryManifest.js';
-import { IQueryOptions } from '../../upstream/src/vs/platform/mcp/common/mcpManagement.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { ContributionEnablementState, type IEnablementModel } from '../../upstream/src/vs/workbench/contrib/chat/common/enablement.js';
@@ -17,13 +15,13 @@ import {
 import { McpServerEditorInput } from '../../upstream/src/vs/workbench/contrib/mcp/browser/mcpServerEditorInput.js';
 import { IWorkbenchLocalMcpServer } from '../../upstream/src/vs/workbench/services/mcp/common/mcpWorkbenchManagementService.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { GatewayManagementDirectoryDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { managementGateway, onDidChangeMcpManagementTarget } from '../managementTarget.js';
-import { WorkspaceMcpCatalog, mcpCatalogKey, pendingMcpOperation } from './catalog.js';
+import { WorkspaceMcpCatalog, mcpCatalogKey, pendingMcpOperation, type McpWorkspaceRequestTarget } from './catalog.js';
 import { WorkspaceMcpServer } from './server.js';
 
 export const unavailableWorkspaceMcpWrite = () => new Error('此目标的 MCP 工作区配置与凭据写入、Node host 尚未接入；已有动态命令不表示已安装制品');
@@ -64,9 +62,9 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     super();
     this._register(toDisposable(workspaceContext.subscribe(() => this.synchronizeTargets())));
     this._register(onDidChangeMcpManagementTarget(() => this.synchronizeTargets()));
-    this._register(toDisposable(onGatewayUserSessionInvalidated(0, () => {
+    this._register(toDisposable(onGatewayTokenInvalidated(0, () => {
       for (const { catalog } of this.scopes.values()) catalog.dispose();
-      this.authorizationController.abort(new Error('原 MCP 授权入口的用户身份已失效，请重新打开原对象'));
+      this.authorizationController.abort(new Error('原 MCP 授权入口的访问凭据已失效，请重新打开原对象'));
       this.authorizationCatalog = undefined;
       this.scopes.clear(); this.selected.clear(); this.publish(); this.resets.fire();
     })));
@@ -90,6 +88,7 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
   get hasCurrentCatalog(): boolean {
     const context = workspaceContext.getSnapshot();
     return !context.loading && !context.error && Boolean(context.gatewayId) && !this.selectionError
+      && this.selected.size > 0
       && [...this.selected].every(catalog => Boolean(catalog.snapshot.catalog) && !catalog.snapshot.error);
   }
 
@@ -237,6 +236,25 @@ export class WorkspaceMcpService extends Disposable implements IMcpService {
     return this.servers.get().filter(server => catalogs.includes(server.catalog));
   }
 
+  /** 快速访问只打开明确工作区的原对象，不改管理视图的目标或启动连接。 */
+  async queryWorkspace(target: McpWorkspaceRequestTarget): Promise<WorkspaceMcpServer[]> {
+    this.synchronizeTargets();
+    const snapshot = workspaceContext.getSnapshot();
+    if (snapshot.loading || snapshot.error || !snapshot.gatewayId) throw new Error(snapshot.error ?? 'Gateway 归属尚未完成初始化，请重新查找 MCP 服务');
+    const workspace = requireGatewayWorkspaceRequestTarget(snapshot.workspaces,
+      { gatewayId: target.gateway_id, workspaceId: target.workspace_id });
+    if (workspace.status !== 'ready' || workspace.backend_id !== target.backend_id) throw new Error('原 MCP 工作区已停止或 Backend 身份已改变，请重新查找');
+    const key = mcpCatalogKey(target);
+    let scope = this.scopes.get(key);
+    if (!scope) {
+      scope = { catalog: new WorkspaceMcpCatalog(target, workspace.name, () => this.publish()), models: new Map() };
+      this.scopes.set(key, scope);
+    }
+    await scope.catalog.refresh();
+    if (this.scopes.get(key) !== scope || workspaceContext.getSnapshot().gatewayId !== snapshot.gatewayId) throw new CancellationError();
+    return this.servers.get().filter(server => server.catalog === scope.catalog);
+  }
+
   private report(catalog: WorkspaceMcpCatalog, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
     if (this.reportedErrors.get(catalog) !== message) this.notifications.error(message);
@@ -287,10 +305,6 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   observe(): IDisposable { return this.owner.observe(); }
   queryLocal(): Promise<WorkspaceMcpServer[]> { return this.owner.queryLocal(); }
   getEnabledLocalMcpServers(): IWorkbenchLocalMcpServer[] { throw unavailable(); }
-  async queryGallery(_options?: IQueryOptions, _token = CancellationToken.None, _manifest?: IMcpGalleryManifest): Promise<never> {
-    throw new Error('第三方 MCP Gallery 已由目标插件包管理取代');
-  }
-  async getMcpServerFromGallery(): Promise<never> { throw unavailable(); }
   canInstall(_server: IWorkbenchMcpServer): MarkdownString { return new MarkdownString().appendText('MCP 服务由目标插件包管理器安装和启用'); }
   async install(_server: IWorkbenchMcpServer): Promise<never> { throw unavailable(); }
   async uninstall(): Promise<never> { throw unavailable(); }
@@ -298,7 +312,6 @@ export class WorkspaceMcpWorkbenchService implements IMcpWorkbenchService {
   getMcpConfigPath(arg: IWorkbenchLocalMcpServer): undefined;
   getMcpConfigPath(arg: URI): Promise<undefined>;
   getMcpConfigPath(arg: IWorkbenchLocalMcpServer | URI): undefined | Promise<undefined> { return URI.isUri(arg) ? Promise.resolve(undefined) : undefined; }
-  async openSearch(_searchValue: string): Promise<never> { throw new Error('第三方 MCP Gallery 已由目标插件包管理取代'); }
   async open(server: IWorkbenchMcpServer | string, options?: IMcpServerEditorOptions): Promise<void> { await this.owner.open(server, options); }
 }
 

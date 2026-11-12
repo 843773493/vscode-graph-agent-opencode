@@ -22,15 +22,17 @@ try {
   run.addCleanup('hmr-browser', () => browser.close());
   const context = await browser.newContext();
   run.addCleanup('hmr-context', () => context.close());
-  page = await context.newPage();
-  page.on('pageerror', error => result.pageErrors.push(String(error)));
-  page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
-  page.on('response', response => {
-    if (response.status() >= 400) result.failedResponses.push({ url: response.url(), status: response.status() });
+  context.on('page', observed => {
+    observed.on('pageerror', error => result.pageErrors.push(String(error)));
+    observed.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
+    observed.on('response', response => {
+      if (response.status() >= 400) result.failedResponses.push({ url: response.url(), status: response.status() });
+    });
+    observed.on('websocket', socket => socket.on('framereceived', ({ payload }) => {
+      if (typeof payload === 'string') result.websocket.push(JSON.parse(payload));
+    }));
   });
-  page.on('websocket', socket => socket.on('framereceived', ({ payload }) => {
-    if (typeof payload === 'string') result.websocket.push(JSON.parse(payload));
-  }));
+  page = await context.newPage();
   await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' });
   await expect(page.locator('.native-session-navigation')).toHaveAttribute('data-hmr-acceptance', 'version-1', { timeout: 45000 });
   result.initialization = await page.evaluate(async () => {
@@ -54,6 +56,10 @@ try {
     }
     return [health, workspaces, workspace];
   });
+  // 预构建完成后，新页面仍须正确加载 React 热更新运行时。
+  page = await context.newPage();
+  await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.native-session-navigation')).toHaveAttribute('data-hmr-acceptance', 'version-1', { timeout: 45000 });
   result.phase = 'source-update';
   const source = required('BOXTEAM_HMR_SOURCE'), before = await readFile(source, 'utf8');
   expect(before.split('data-hmr-acceptance="version-1"')).toHaveLength(2);
@@ -67,6 +73,7 @@ try {
   result.scripts = await page.locator('script[src]').evaluateAll(scripts => scripts.map(script => script.src));
   const scriptPaths = result.scripts.map(source => new URL(source).pathname);
   expect(scriptPaths.filter(path => path === '/out/main.js')).toHaveLength(0);
+  expect(scriptPaths.filter(path => path === '/@vite/client')).toHaveLength(1);
   expect(scriptPaths.filter(path => path === '/src/main.ts')).toHaveLength(1);
   expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';

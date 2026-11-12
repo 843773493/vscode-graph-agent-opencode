@@ -75,7 +75,6 @@ function appState(agents: Agent[]): AppState {
     goalLoading: false,
     goalError: null,
     compactLoading: false,
-    gatewayUserAccess: null,
   } as unknown as AppState;
 }
 

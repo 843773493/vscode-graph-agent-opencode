@@ -53,30 +53,33 @@ def join_runtime_logging_workspaces(gateway_url: str, token: str, workspace_root
     (artifacts / "runtime-logging-shared-backend.json").write_text(json.dumps(joined, indent=2) + "\n", encoding="utf-8")
 
 
-def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, artifacts: Path, cookie: str) -> None:
+def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, artifacts: Path) -> None:
     """只编辑用户来源，由真实 watcher、配置事务和进程 owner 完成状态转换。"""
     path = home / "config" / "gateway.jsonc"
     original = path.read_text(encoding="utf-8")
     document = commentjson.loads(original)
     observed = []
-    with httpx.Client(timeout=5, trust_env=False, headers={"X-Local-Token": token, "Cookie": cookie}) as client:
-        targets = client.get(f"{gateway_url}/api/gateway/workspaces").raise_for_status().json()["data"]["items"]
+    with httpx.Client(timeout=5, trust_env=False, headers={"X-Local-Token": token}) as client:
+        listing = client.get(f"{gateway_url}/api/gateway/workspaces").raise_for_status().json()["data"]
+        targets = listing["items"]
         urls = {"gateway": f"{gateway_url}/api/gateway/internal/runtime-logging"}
         resources = []
         for target in targets:
-            for role, service in (("backend", "workspace_api"), ("terminal", "terminal_manager"), ("browser", "browser_manager")):
-                suffix = "/api/v1/internal/runtime-logging" if role == "backend" else "/internal/runtime-logging"
-                url = target["services"][service]["local_url"].rstrip("/") + suffix
-                if url not in urls.values():
-                    urls[f"{role}:{target['workspace_id']}"] = url
-            headers = {"X-BoxTeam-Workspace-Id": target["workspace_id"]}
-            session = client.post(f"{gateway_url}/api/v1/sessions", headers=headers, json={"title": "日志热应用资源保持"}).raise_for_status().json()["data"]
-            for kind in ("terminal", "browser"):
-                created = client.post(f"{gateway_url}/api/v1/resources/{kind}s", headers=headers, timeout=45, json={
-                    "session_id": session["session_id"], "thread_id": session["thread_id"],
-                    "retention_scope": "workspace", "title": f"logging-{kind}",
-                }).raise_for_status().json()["data"]
-                resources.append((target["workspace_id"], created))
+            url = target["services"]["workspace_api"]["local_url"].rstrip("/") + "/api/v1/internal/runtime-logging"
+            if url not in urls.values():
+                urls[f"backend:{target['workspace_id']}"] = url
+        active_workspace = listing["active_workspace"]
+        assert active_workspace is not None
+        target = next(item for item in targets
+                      if {"gateway_id": item["gateway_id"], "workspace_id": item["workspace_id"]} == active_workspace)
+        headers = {"X-BoxTeam-Workspace-Id": target["workspace_id"]}
+        session = client.post(f"{gateway_url}/api/v1/sessions", headers=headers, json={"title": "日志热应用资源保持"}).raise_for_status().json()["data"]
+        for kind in ("terminal", "browser"):
+            created = client.post(f"{gateway_url}/api/v1/resources/{kind}s", headers=headers, timeout=45, json={
+                "session_id": session["session_id"], "thread_id": session["thread_id"],
+                "retention_scope": "workspace", "title": f"logging-{kind}",
+            }).raise_for_status().json()["data"]
+            resources.append((target["workspace_id"], created))
 
         def resource_identity(resource):
             metadata = resource["metadata"]
@@ -93,6 +96,10 @@ def verify_runtime_logging_reload(gateway_url: str, token: str, home: Path, *, a
             return result
 
         before = states()
+        expected_roles = set(urls) | {"launcher"}
+        assert set(before) == expected_roles, before
+        assert len([role for role in urls if role.startswith("backend:")]) == 1, urls
+        assert len({state["runtime_instance_id"] for state in before.values()}) == len(expected_roles), before
         original_level, original_pretty = before["gateway"]["level"], before["gateway"]["pretty"]
 
         def wait_for_settings(level: str, pretty: bool) -> None:
@@ -209,12 +216,9 @@ def verify_runtime_logging_controls(
         target = next(item for item in listing["items"]
                       if {"gateway_id": item["gateway_id"], "workspace_id": item["workspace_id"]} == active)
         urls = {"gateway": f"{gateway_url}/api/gateway/internal/runtime-logging"}
-        for name, service in (("backend", "workspace_api"), ("terminal", "terminal_manager"), ("browser", "browser_manager")):
-            base = target["services"][service]["local_url"]
-            assert base, (name, target["services"])
-            suffix = "/api/v1/internal/runtime-logging" if name == "backend" else "/internal/runtime-logging"
-            urls[name] = f"{base.rstrip('/')}{suffix}"
-
+        base = target["services"]["workspace_api"]["local_url"]
+        assert base
+        urls["backend"] = f"{base.rstrip('/')}/api/v1/internal/runtime-logging"
         authority_revision = client.get(urls["gateway"], headers={"X-Local-Token": token}).json()["data"]["applied_revision"]
         assert isinstance(authority_revision, str) and authority_revision
         for service, url in urls.items():
@@ -286,6 +290,6 @@ def verify_runtime_logging_controls(
     assert states["launcher"]["pid"] == launcher_pid
     launcher_text = contract.path_for(log_root, "launcher").read_text(encoding="utf-8")
     assert launcher_text.count("应用产品日志设置: revision=control-launcher-debug") == 1
-    assert len({state["runtime_instance_id"] for state in states.values()}) == 5
+    assert len({state["runtime_instance_id"] for state in states.values()}) == len(states), states
     (artifacts / "runtime-logging-control.json").write_text(json.dumps(states, indent=2) + "\n", encoding="utf-8")
     return states

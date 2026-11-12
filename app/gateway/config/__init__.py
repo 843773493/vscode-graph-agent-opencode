@@ -1,7 +1,7 @@
 """Gateway 配置加载与热重载（facade）。
 
 原单文件 app/gateway/config.py 已按垂直链路拆入本包：values.py 承载配置值对象与
-取值/路径解析；connection_ids.py 承载 connection_id 规范化与迁移；sources.py 承载
+取值/路径解析；connection_ids.py 承载 connection_id 规范化；sources.py 承载
 来源层加载/迁移/日志；loader.py 承载 load_gateway_config 与 consumer 健康摘要；
 reload_lifecycle.py 与 reload_pending_restart.py 承载 GatewayConfigReloadService 的
 两个 mixin。本 facade 组装并再导出全部原顶层符号（含原模块级导入名），导入路径
@@ -95,21 +95,10 @@ from configs.runtime import merge_json_objects as merge_json_objects
 from configs.runtime import read_jsonc_object as read_jsonc_object
 from configs.runtime import validate_config as validate_config
 
-from .connection_ids import _atomic_write_gateway_jsonc as _atomic_write_gateway_jsonc
 from .connection_ids import (
     _connection_identity_fingerprint as _connection_identity_fingerprint,
 )
-from .connection_ids import (
-    _jsonc_workspaces_object_starts as _jsonc_workspaces_object_starts,
-)
-from .connection_ids import (
-    _migrate_gateway_connection_ids_in_source as _migrate_gateway_connection_ids_in_source,
-)
-from .connection_ids import _new_connection_id as _new_connection_id
 from .connection_ids import _normalize_connection_ids as _normalize_connection_ids
-from .connection_ids import (
-    rollback_gateway_connection_id_migration as rollback_gateway_connection_id_migration,
-)
 from .loader import (
     _consumer_health_digests_from_proof as _consumer_health_digests_from_proof,
 )
@@ -136,11 +125,9 @@ from .values import (
     REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS as REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
 )
 from .values import ConfiguredRemoteGateway as ConfiguredRemoteGateway
-from .values import ConfiguredTheme as ConfiguredTheme
 from .values import GatewayConfig as GatewayConfig
 from .values import GatewayConfigRuntimeApplier as GatewayConfigRuntimeApplier
 from .values import GatewayHistoryLoadingConfig as GatewayHistoryLoadingConfig
-from .values import _configured_theme_background as _configured_theme_background
 from .values import _history_loading_config as _history_loading_config
 from .values import _nested_config_value as _nested_config_value
 from .values import _positive_integer_config as _positive_integer_config

@@ -20,7 +20,6 @@ from tests.integration.gateway.test_federated_search import (
 from tests.support.api_helpers import create_session
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
 )
 from tests.support.processes.workspace import workspace_backend_id_for_root
@@ -37,7 +36,6 @@ async def test_all_scope_keeps_removed_owner_and_excludes_later_registration(net
     later_root = network.workspace / "later-offline-d"
     try:
         async with httpx.AsyncClient(base_url=origin, headers=LOCAL_TOKEN_HEADERS, timeout=25, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             gateway_id = (await client.get("/api/gateway/health")).json()["data"]["gateway_id"]
             listing = (await client.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
             workspace_a, workspace_b, workspace_c = (

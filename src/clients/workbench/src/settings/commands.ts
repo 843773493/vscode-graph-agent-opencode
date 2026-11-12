@@ -3,7 +3,7 @@ import { Action2, MenuId, registerAction2 } from '../../upstream/src/vs/platform
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
-import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { createManagementTargetLifecycle, managementGateway } from '../managementTarget.js';
@@ -50,8 +50,8 @@ registerAction2(class extends Action2 {
     const initial = workspaceContext.getSnapshot();
     if (initial.loading || initial.error || !initial.gatewayId) throw new Error(initial.error ?? '工作区目标尚未完成初始化');
     const controller = new AbortController(), cancellation = new CancellationTokenSource();
-    const invalidate = () => { controller.abort(new Error('Gateway 或用户身份已改变，请重新选择配置目标')); cancellation.cancel(); };
-    const release = onGatewayUserSessionInvalidated(0, invalidate);
+    const invalidate = () => { controller.abort(new Error('Gateway 或访问凭据已改变，请重新选择配置目标')); cancellation.cancel(); };
+    const release = onGatewayTokenInvalidated(0, invalidate);
     const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate(); });
     let selected: WorkspaceOwner | undefined;
     const check = () => {

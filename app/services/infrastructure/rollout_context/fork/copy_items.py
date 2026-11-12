@@ -173,22 +173,22 @@ def select_view_prefix(
         if empty is not None:
             raise ValueError("fork_source_not_completed: source view 没有可复制的安全锚点")
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_items.sql"),
+        load_sql(__package__, "migrations/fork_selected_items.sql"),
     )
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_assemblies.sql"),
+        load_sql(__package__, "migrations/fork_selected_assemblies.sql"),
     )
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_details.sql"),
+        load_sql(__package__, "migrations/fork_selected_details.sql"),
     )
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_model_calls.sql"),
+        load_sql(__package__, "migrations/fork_selected_model_calls.sql"),
     )
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_source_checkpoints.sql"),
+        load_sql(__package__, "migrations/fork_selected_source_checkpoints.sql"),
     )
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_activations.sql"),
+        load_sql(__package__, "migrations/fork_selected_activations.sql"),
     )
     connection.execute(
         "INSERT INTO fork_selected_items(item_id,visible_ordinal) "
@@ -292,9 +292,9 @@ def select_view_prefix(
                 # 先冻结原有前缀允许保留的 checkpoint，再展开 pending 正文依赖。
                 # backing item 不能反过来扩大 checkpoint 集合而递归带入锚点之后的历史。
                 for table in ("turns", "executions", "checkpoints"):
-                    connection.execute(load_sql(__package__, f"sql/fork_selected_{table}.sql"))
-                connection.execute(load_sql(__package__, "sql/drop_fork_selected_turns.sql"))
-                connection.execute(load_sql(__package__, "sql/drop_fork_selected_executions.sql"))
+                    connection.execute(load_sql(__package__, f"migrations/fork_selected_{table}.sql"))
+                connection.execute(load_sql(__package__, "migrations/drop_fork_selected_turns.sql"))
+                connection.execute(load_sql(__package__, "migrations/drop_fork_selected_executions.sql"))
                 _include_delta_history(connection)
                 _include_pending_message_references(storage, connection, stage=stage)
                 checkpoints_frozen = True
@@ -431,7 +431,7 @@ def select_view_prefix(
     ).fetchone():
         raise ValueError("source-mismatch: 前缀正文闭包存在缺失 canonical item")
     connection.execute(
-        load_sql(__package__, "sql/fork_visible_messages.sql"),
+        load_sql(__package__, "migrations/fork_visible_messages.sql"),
     )
 
 
@@ -544,13 +544,13 @@ def _detail_file_owner(connection: sqlite3.Connection, assembly_id: str, detail_
 def _prune_prefix_facts(connection: sqlite3.Connection) -> None:
     """保留关系由各事实 owner 明确列出，不凭同名列推断业务依赖。"""
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_turns.sql"),
+        load_sql(__package__, "migrations/fork_selected_turns.sql"),
     )
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_executions.sql"),
+        load_sql(__package__, "migrations/fork_selected_executions.sql"),
     )
     connection.execute(
-        load_sql(__package__, "sql/fork_selected_plans.sql"),
+        load_sql(__package__, "migrations/fork_selected_plans.sql"),
     )
     connection.execute(
         "DELETE FROM messages WHERE NOT EXISTS(SELECT 1 FROM item_catalog item "
@@ -620,7 +620,7 @@ def _copy_selected_jsonl(connection: sqlite3.Connection, stage: Path) -> None:
     source = stage / "rollout.jsonl"
     destination = stage / ".prefix.jsonl"
     connection.execute(
-        load_sql(__package__, "sql/fork_item_offsets.sql"),
+        load_sql(__package__, "migrations/fork_item_offsets.sql"),
     )
     cursor = connection.execute(
         "SELECT jsonl_offset,jsonl_length FROM item_catalog ORDER BY item_sequence",

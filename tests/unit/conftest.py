@@ -45,7 +45,8 @@ def _workspace_scope(
     *,
     template_items: tuple[str, ...] | None,
 ) -> Iterator[tuple[str, Path]]:
-    root = TestRunContext.from_test_file(Path(request.node.path)).workspace_root
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    root = context.runtime_root_for_node(request.node.nodeid) / "workspace"
     template_root = Path.cwd() / "tests/fixtures/workspaces/default_test_workspace"
     if template_items is None:
         prepare_default_test_workspace(

@@ -2,7 +2,7 @@ import { renderToString } from "react-dom/server";
 import type { GatewayWorkspace } from "../../../types/backend";
 import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
 import GatewayControlCenter from "./GatewayControlCenter";
-import { createDefaultWebUiSettings } from "../../../state/uiSettings/preferences";
+import { DEFAULT_BACKGROUND } from "../../../theme/theme";
 
 const localWorkspace: GatewayWorkspace = {
   gateway_id: "gateway-test",
@@ -25,18 +25,19 @@ const localWorkspace: GatewayWorkspace = {
 const noop = async () => {};
 const html = renderToString(
   <WarmConfirmProvider>
-    <GatewayControlCenter
+    <GatewayControlCenter onSelectColorTheme={async () => undefined}
       apiPort={8014}
       workspaces={[localWorkspace]}
       gatewayError={null}
       onAddSsh={noop}
       onRefresh={noop}
+      onRemoteGatewayReconnected={() => undefined}
       onStart={noop}
       onStop={noop}
       onSafeRestart={noop}
       onForceRestart={noop}
-      uiSettings={createDefaultWebUiSettings()}
-      onUpdateUiSettings={noop}
+      background={DEFAULT_BACKGROUND}
+      onUpdateBackground={noop}
     />
   </WarmConfirmProvider>,
 );

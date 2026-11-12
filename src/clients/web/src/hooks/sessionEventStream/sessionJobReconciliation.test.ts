@@ -148,8 +148,7 @@ function appState(): AppState {
     workspaceSwitching: false,
     gatewayError: null,
     gatewayWorkspacesStale: false,
-    gatewayUserAccess: null,
-    gatewayUserViewStates: new Map(),
+    sessionViewStates: new Map(),
     uiSettings: {
       layout: {},
       session_sidebar: {
@@ -164,10 +163,8 @@ function appState(): AppState {
       },
       workspace_file_tree: { expanded_paths_by_workspace: {} },
       gateway_console: { view: "routing" },
-      theme: { theme_id: "warm", background: null, resolved_theme: null },
     },
     uiSettingsLoaded: true,
-    themeBackgroundWarning: null,
     workspaceName: "reconciliation-workspace",
     agents: [],
     sessions: [currentSession],
@@ -276,9 +273,6 @@ function installMockBackend({
       const url = new URL(String(input));
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return apiResponse({ token: `token-${port}` });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return apiResponse({ kind: "guest", user_id: null });
       }
       businessRequests.push(`${url.pathname}${url.search}`);
       if (url.pathname === `/api/v1/jobs/${ACTIVE_JOB_ID}`) {

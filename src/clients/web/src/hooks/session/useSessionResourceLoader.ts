@@ -3,8 +3,6 @@ import {
   controlSessionResource as apiControlSessionResource,
   getSessionResources,
 } from "../../api";
-import { HttpRequestError } from "../../api";
-import { ensureGatewayUserAccess } from "../../api/gateway/userAccess";
 import type {
   Session,
   SessionResourceAction,
@@ -50,13 +48,6 @@ export function useSessionResourcePolling({ active, workspaceId, sessionId, refr
   }, [active, workspaceId, sessionId, refresh, onStatusChange]);
 }
 
-function isExpiredGatewayUserAccess(error: unknown): error is HttpRequestError {
-  return (
-    error instanceof HttpRequestError
-    && error.status === 401
-    && error.detail === "user_session_required"
-  );
-}
 
 export function useSessionResourceLoader({
   apiPort,
@@ -75,7 +66,6 @@ export function useSessionResourceLoader({
     key: string;
     promise: Promise<SessionResourceRefreshResult>;
   } | null>(null);
-  const userAccessRecoveryRef = useRef<Promise<Awaited<ReturnType<typeof ensureGatewayUserAccess>> | null> | null>(null);
 
   if (
     ownerRef.current.apiPort !== apiPort
@@ -119,27 +109,7 @@ export function useSessionResourceLoader({
         });
 
         try {
-          const loadResources = async () => {
-            try {
-              return await getSessionResources(apiPort, sessionId, workspaceId);
-            } catch (error: unknown) {
-              if (!isExpiredGatewayUserAccess(error)) {
-                throw error;
-              }
-              const pendingRecovery = userAccessRecoveryRef.current ?? ensureGatewayUserAccess(apiPort);
-              userAccessRecoveryRef.current = pendingRecovery;
-              const userAccess = await pendingRecovery.finally(() => {
-                if (userAccessRecoveryRef.current === pendingRecovery) {
-                  userAccessRecoveryRef.current = null;
-                }
-              });
-              if (ownerRef.current !== owner || requestId !== requestIdRef.current) return null;
-              setState((prev) => ({ ...prev, gatewayUserAccess: userAccess }));
-              return await getSessionResources(apiPort, sessionId, workspaceId);
-            }
-          };
-          const resources = await loadResources();
-          if (resources === null) return "stale";
+          const resources = await getSessionResources(apiPort, sessionId, workspaceId);
           if (ownerRef.current !== owner || requestId !== requestIdRef.current) return "stale";
           setState((prev) => {
             if (

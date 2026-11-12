@@ -19,7 +19,7 @@ class GatewayClient {
   async request<T>(path: string, options: RequestInit & { onResponse?: (requestId: string | null) => void } = {}, workspaceKey?: string): Promise<T> {
     const headers = new Headers(options.headers);
     for (const [key, value] of Object.entries(workspaceHeader(workspaceKey))) headers.set(key, value);
-    // 所有业务贡献共用既有凭据、用户屏障和错误协议，不再维护第二套初始化。
+    // 所有业务贡献共用既有本机凭据、请求屏障和错误协议，不再维护第二套初始化。
     const body = await requestJson<APIResponse<T> & { data: T }>(0, path, { ...options, headers });
     unwrapApiDataOrNull(body);
     if (body.code !== 0) throw new Error(`${path}：${body.message}（${body.request_id}）`);

@@ -45,7 +45,6 @@ def cold_materialization_counts(thread_node):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("communication_triad", [{"browser_plugin_nodes":("c",)}], indirect=True)
 async def test_a04_remote_session_inventory_search_and_durable_read(communication_triad) -> None:
     case = communication_triad
     nodes, artifacts = case.nodes, case.artifacts
@@ -167,8 +166,9 @@ async def test_a04_remote_session_inventory_search_and_durable_read(communicatio
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("communication_triad", [{"browser_plugin_nodes": ("c",),
-    "shared_session_ids": (AMBIGUOUS_SESSION,)}], indirect=True)
+@pytest.mark.parametrize("communication_triad", [{
+    "shared_session_ids": (AMBIGUOUS_SESSION,),
+}], indirect=True)
 async def test_a06_bare_and_uri_send_wait_read_share_frozen_target_across_activation_reconnect(communication_triad):
     case = communication_triad
     nodes, artifacts = case.nodes, case.artifacts

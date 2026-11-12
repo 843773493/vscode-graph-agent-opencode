@@ -76,7 +76,7 @@ async def test_original_quick_text_search_and_view_keep_business_scope(
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
     try:
-        command = ["bun", "tests/integration/clients/web/quick_access/text_search.mjs"]
+        command = ["node", "tests/integration/clients/web/quick_access/text_search.mjs"]
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             result = await asyncio.to_thread(
                 subprocess.run, command, cwd=context.project_root,

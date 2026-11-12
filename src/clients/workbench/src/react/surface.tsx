@@ -4,8 +4,6 @@ import { OverlayRootContext } from '../../../web/src/components/overlays/Overlay
 import AppErrorBoundary from '../../../web/src/components/shell/AppErrorBoundary.js';
 import baseStyle from './surface.css?text';
 import themeStyle from '../../../web/src/styles/foundation/theme.css?text';
-import { loadAndApplyResolvedGatewayTheme, type GatewayResolvedThemeConfig } from '../../../web/src/theme/theme.js';
-import { errorMessage } from '../../../web/src/utils/errorMessage.js';
 import codiconStyle from '../../node_modules/@vscode/codicons/dist/codicon.css?text';
 
 /** 每个编辑器实例拥有自己的 React 根和浮层，业务样式不会进入原版工作台。 */
@@ -13,7 +11,6 @@ export class ReactSurface {
   private readonly root: Root;
   private readonly overlay = document.createElement('div');
   private readonly host = document.createElement('div');
-  private themeLoad?: AbortController;
 
   constructor(container: HTMLElement, styles: readonly string[]) {
     this.host.className = 'boxteam-react-surface';
@@ -37,19 +34,7 @@ export class ReactSurface {
     this.root.render(<AppErrorBoundary><OverlayRootContext.Provider value={this.overlay}>{children}</OverlayRootContext.Provider></AppErrorBoundary>);
   }
 
-  applyTheme(theme: GatewayResolvedThemeConfig, notifications: {
-    warn: (message: string) => unknown; error: (message: string) => unknown;
-  }): Promise<void> {
-    this.themeLoad?.abort();
-    const load = this.themeLoad = new AbortController();
-    return loadAndApplyResolvedGatewayTheme(theme, { root: this.host, signal: load.signal }).then(result => {
-      if (!load.signal.aborted && result.backgroundWarning) notifications.warn(result.backgroundWarning);
-    }, cause => {
-      if (!load.signal.aborted) notifications.error(errorMessage(cause));
-    });
-  }
-
   focus(selector: string): void { this.host.shadowRoot?.querySelector<HTMLElement>(selector)?.focus(); }
 
-  dispose(): void { this.themeLoad?.abort(); this.root.unmount(); this.host.remove(); }
+  dispose(): void { this.root.unmount(); this.host.remove(); }
 }

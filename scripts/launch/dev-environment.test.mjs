@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 
 import { DEVELOPMENT_BASE_PORTS, remainingOccupiedPorts, resolveDevelopmentLayout } from "./dev-environment.mjs";
 

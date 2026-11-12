@@ -50,7 +50,7 @@ from tests.integration.backend.sessions.rollout_context.test_execution_history_s
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
-from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS, acquire_gateway_guest
+from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.sealed_request_audit import audit_sealed_requests
 from tests.support.session_navigation.http_operations import submit_navigation_operation
 
@@ -117,7 +117,6 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
         base_url=f"http://127.0.0.1:{target.gateway_port}", timeout=60,
         headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": target.backend.workspace_id},
     ) as client:
-        await acquire_gateway_guest(client)
         health = await client.get("/api/gateway/health")
         assert health.status_code == 200, health.text
         gateway_id = health.json()["data"]["gateway_id"]

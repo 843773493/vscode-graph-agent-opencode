@@ -8,9 +8,9 @@ import { parse, printParseErrorCode } from "jsonc-parser";
 const CONFIG_ENV = "BOXTEAM_CROSS_PLATFORM_TARGET_CONFIG";
 
 function replaceTokens(value, { projectRoot, homeDirectory }) {
-  return value
-    .replaceAll("${PROJECT_ROOT}", projectRoot)
-    .replaceAll("${HOME}", homeDirectory);
+  return value.replace(/\$\{(PROJECT_ROOT|HOME)\}/g, (_, token) =>
+    token === "PROJECT_ROOT" ? projectRoot : homeDirectory,
+  );
 }
 
 function expandValue(value, context) {
@@ -61,7 +61,7 @@ export function defaultTargetConfigPath({ environment = process.env } = {}) {
   const homeDirectory = os.homedir();
   const configuredHome = environment.BOXTEAM_HOME?.trim();
   const boxteamHome = configuredHome
-    ? path.resolve(configuredHome.replace(/^~(?=$|[\\/])/, homeDirectory))
+    ? path.resolve(configuredHome.replace(/^~(?=$|[\\/])/, () => homeDirectory))
     : path.join(homeDirectory, ".boxteams-dev");
   return path.join(boxteamHome, "config", "cross-platform-development-targets.jsonc");
 }
@@ -75,7 +75,7 @@ export function loadTargetConfiguration({
   const requestedPath =
     configPath ?? environment[CONFIG_ENV]?.trim() ?? defaultTargetConfigPath({ environment });
   const resolvedConfigPath = path.resolve(
-    requestedPath.replace(/^~(?=$|[\\/])/, os.homedir()),
+    requestedPath.replace(/^~(?=$|[\\/])/, () => os.homedir()),
   );
   if (!existsSync(resolvedConfigPath)) {
     throw new Error(

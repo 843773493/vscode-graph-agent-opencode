@@ -120,16 +120,6 @@ try {
 
   const target = new URL("/", baseUrl);
   await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  const guest = await page.evaluate(async () => {
-    const credential = await fetch("/api/gateway/auth/local-credential");
-    const token = (await credential.json()).data.token;
-    const response = await fetch("/api/gateway/users/guest", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Local-Token": token },
-      body: JSON.stringify({ tracking: { source: "manual-browser-workbench" } }),
-    });
-    return { status: response.status, body: await response.text() };
-  });
-  assertCondition(guest.status === 200, guest.body);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   await page.locator(`button[data-session-id="${fixture.sessionId}"]`).dblclick();

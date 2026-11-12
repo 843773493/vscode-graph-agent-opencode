@@ -3,8 +3,11 @@ import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/di
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
+import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
+import { getWorkbenchContribution } from '../../upstream/src/vs/workbench/common/contributions.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { controlWorkspaceResource, listWorkspaceResources, type ResourceAction, type ResourceThreadRef, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { resourceActionLabels, settleWorkspaceResourceOperation, workspaceResourceName, type WorkspaceResourceActionSource } from '../../../web/src/hooks/workspace/resourceActions.js';
@@ -12,8 +15,12 @@ import { gateway } from '../agentApi.js';
 import { captureSearchOwner } from '../search/target.js';
 import { ThreadInput } from '../threadInput.js';
 import { workspaceContext } from '../workspaceContext.js';
+import { workspaceActionCommands } from '../search/workspaceActions.js';
+import type { WorkspacePanel } from '../workspacePanel.js';
+import { WorkspacePanelState } from '../workspacePanelState.js';
 
 export const resourceActionCommand = (action: ResourceAction) => `boxteam.resource.${action}`;
+export const resourceFocusCommand = 'boxteam.resource.focus';
 export interface RuntimeResourceCommandTarget {
   owner: WorkspaceOwner;
   resource: WorkspaceResourceDTO;
@@ -33,9 +40,9 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
     thread: { session_id: origin.owner.sessionId, thread_id: origin.owner.threadId } } : undefined;
   if (!initial.gatewayId) throw new Error('Gateway 登记身份尚未加载');
   let invalidated = false;
-  const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+  const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error('Gateway 或用户身份已改变，请重新选择资源');
+    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新选择资源');
   };
   let pending: ReturnType<INotificationService['status']> | undefined;
   try {
@@ -110,6 +117,41 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
     return result;
   } finally { pending?.close(); release(); }
 }
+
+registerAction2(class extends Action2 {
+  constructor() { super({ id: resourceFocusCommand, title: { value: '聚焦工作区资源', original: 'Focus Workspace Resource' }, f1: false }); }
+  async run(accessor: ServicesAccessor, supplied: RuntimeResourceCommandTarget): Promise<void> {
+    const commands = accessor.get(ICommandService), views = accessor.get(IViewsService);
+    const owner = { ...supplied.owner }, resource = structuredClone(supplied.resource);
+    const initialGateway = workspaceContext.getSnapshot().gatewayId;
+    let invalidated = false;
+    const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+    const assertAccess = () => {
+      if (invalidated || workspaceContext.getSnapshot().gatewayId !== initialGateway) throw new Error('Gateway 或访问凭据已改变，请重新选择资源');
+    };
+    try {
+      if (!initialGateway) throw new Error('Gateway 登记身份尚未加载');
+      if (resource.workspace_id !== owner.workspaceId) throw new Error('资源回执不属于明确选择的工作区');
+      if (resource.kind !== 'terminal' && resource.kind !== 'browser') throw new Error('此入口只聚焦终端或浏览器资源');
+      if (resource.status === 'deleted') throw new Error('所选资源已删除');
+      const key = gatewayWorkspaceKey(owner);
+      if (workspaceContext.getSnapshot().activeId !== key) {
+        await commands.executeCommand(workspaceActionCommands.activate, owner);
+        assertAccess();
+        // 原导航的 React 发布可能尚未提交，沿已有镜像回读，不自行写入活动工作区。
+        await workspaceContext.refresh();
+      }
+      await getWorkbenchContribution<WorkspacePanelState>(WorkspacePanelState.ID).whenRestored(key);
+      assertAccess();
+      if (workspaceContext.getSnapshot().activeId !== key) throw new Error('工作区选择已改变，请重新聚焦资源');
+      const view = await views.openView<WorkspacePanel>(resource.kind === 'terminal' ? 'boxteam.workspace.terminal' : 'boxteam.browser.view', true);
+      assertAccess();
+      if (workspaceContext.getSnapshot().activeId !== key) throw new Error('工作区选择已改变，请重新聚焦资源');
+      if (!view) throw new Error('资源所属工作区面板不可用');
+      view.revealResource(owner, resource.resource_id);
+    } finally { release(); }
+  }
+});
 
 for (const action of Object.keys(resourceActionLabels) as ResourceAction[]) registerAction2(class extends Action2 {
   constructor() { super({ id: resourceActionCommand(action), title: { value: resourceActionLabels[action], original: resourceActionLabels[action] }, f1: true }); }

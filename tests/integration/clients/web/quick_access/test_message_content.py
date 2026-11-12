@@ -43,7 +43,7 @@ async def test_message_content_search_opens_unloaded_child_and_exact_original_ra
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
     )
     result_path = context.artifacts_dir / "message-content.json"
-    command = ["bun", "tests/integration/clients/web/quick_access/message_content.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/message_content.mjs"]
     model = "browser-chat-tool-loop-stub"
     endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
     interactions = [cast(list[dict[str, object]], build_cassette(

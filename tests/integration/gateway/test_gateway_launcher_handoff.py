@@ -186,7 +186,8 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         "BOXTEAM_DEVELOPMENT_RESTART_CWD": str(project_root),
         "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(prepare_e2e_model_stream_config(
             project_root / "configs/tests/model_stream/model_stream_chat_basic.jsonc",
-            output_root=context.run_root,
+            runtime_root=context.runtime_root_for_node(request.node.nodeid),
+            artifacts_dir=context.artifacts_dir,
             mode="replay",
         )),
     }
@@ -244,24 +245,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         if not isinstance(initial_process_id, int):
             raise TypeError(f"Gateway health 缺少 process_id: {initial_health}")
 
-        guest_request = Request(
-            f"http://127.0.0.1:{port}/api/gateway/users/guest",
-            data=b'{"tracking":{"test":"launcher-handoff-cookie"}}',
-            method="POST",
-            headers={
-                "X-Local-Token": token,
-                "Content-Type": "application/json",
-            },
-        )
-        with urlopen(guest_request, timeout=10) as response:
-            guest_payload = json.loads(response.read().decode("utf-8"))
-            guest_cookie_header = response.headers.get("Set-Cookie")
-        if not isinstance(guest_payload, dict):
-            raise TypeError("Gateway 游客登录响应必须是对象")
-        if guest_cookie_header is None:
-            raise AssertionError("Gateway 游客登录没有返回访问 Cookie")
-        guest_cookie = guest_cookie_header.split(";", 1)[0]
-
         workspace_config_url = f"http://127.0.0.1:{port}/api/v1/config"
         workspace_status_url = (
             f"http://127.0.0.1:{port}/api/v1/config/reload-status"
@@ -273,7 +256,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             token,
             process,
             lambda payload: payload.get("code") == 0,
-            cookie=guest_cookie,
         )
         initial_config_data = initial_config.get("data")
         if not isinstance(initial_config_data, dict):
@@ -287,7 +269,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         initial_sources = _get_json(
             workspace_sources_url,
             token,
-            cookie=guest_cookie,
         ).get("data")
         if not isinstance(initial_sources, dict):
             raise TypeError("初始 Workspace 配置来源 data 无效")
@@ -324,7 +305,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                 "idempotency_key": "launcher-workspace-config-update",
                 "auto_summarize": False,
             },
-            cookie=guest_cookie,
         )
         api_config_data = api_config.get("data")
         assert isinstance(api_config_data, dict)
@@ -337,7 +317,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                 isinstance(payload.get("data"), dict)
                 and payload["data"].get("state") == "active"
             ),
-            cookie=guest_cookie,
         )
         workspace_status_data = workspace_status["data"]
         assert isinstance(workspace_status_data, dict)
@@ -355,7 +334,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                     for event in payload["data"].get("events", [])
                 )
             ),
-            cookie=guest_cookie,
         )
         workspace_event_data = workspace_event_payload["data"]
         assert isinstance(workspace_event_data, dict)
@@ -373,7 +351,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         replayed_workspace_events = _get_json(
             workspace_events_url,
             token,
-            cookie=guest_cookie,
         )
         replayed_data = replayed_workspace_events["data"]
         assert isinstance(replayed_data, dict)
@@ -386,7 +363,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         after_workspace_cursor = _get_json(
             f"{workspace_events_url}?after={workspace_cursor}",
             token,
-            cookie=guest_cookie,
         )
         after_workspace_data = after_workspace_cursor["data"]
         assert isinstance(after_workspace_data, dict)
@@ -410,7 +386,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                 isinstance(payload.get("data"), dict)
                 and payload["data"].get("default_model") == "integration-file-model"
             ),
-            cookie=guest_cookie,
         )
         file_config_data = file_config["data"]
         assert isinstance(file_config_data, dict)
@@ -428,7 +403,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                     for event in payload["data"].get("events", [])
                 )
             ),
-            cookie=guest_cookie,
         )
         file_event_data = file_event_payload["data"]
         assert isinstance(file_event_data, dict)
@@ -445,7 +419,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             token,
             method="POST",
             payload={"title": "Configuration handoff session"},
-            cookie=guest_cookie,
         )
         session_data = session_payload.get("data")
         assert isinstance(session_data, dict)
@@ -461,7 +434,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                 "message": {"content": "请回复 LAUNCHER_HANDOFF_JOB_OK"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
             },
-            cookie=guest_cookie,
         )
         message_data = message_payload.get("data")
         assert isinstance(message_data, dict)
@@ -477,7 +449,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
                 and payload["data"].get("status") in {"completed", "succeeded"}
             ),
             timeout_seconds=60,
-            cookie=guest_cookie,
         )
         completed_job_data = completed_job["data"]
         assert isinstance(completed_job_data, dict)
@@ -486,7 +457,6 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
         messages = _get_json(
             f"http://127.0.0.1:{port}/api/v1/sessions/{session_id}/messages",
             token,
-            cookie=guest_cookie,
         )["data"]
         assert isinstance(messages, dict)
         assert [
@@ -495,7 +465,7 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             if message["role"] == "assistant"
         ] == [(session_id, thread_id, "基础回放")]
 
-        verify_runtime_logging_reload(f"http://127.0.0.1:{port}", token, boxteam_home, artifacts=artifacts, cookie=guest_cookie)
+        verify_runtime_logging_reload(f"http://127.0.0.1:{port}", token, boxteam_home, artifacts=artifacts)
         verify_runtime_logging_diagnostics_ui(f"http://127.0.0.1:{port}", artifacts=artifacts)
         before_restart_status = _get_json(status_url, token)["data"]
         assert isinstance(before_restart_status, dict)
@@ -738,16 +708,14 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
             targets = client.get(f"http://127.0.0.1:{port}/api/gateway/workspaces", headers=headers).json()["data"]["items"]
             target = next(item for item in targets if item["active"])
             retained_logs = {}
-            for role, service in (("backend", "workspace_api"), ("terminal", "terminal_manager"), ("browser", "browser_manager")):
-                base = target["services"][service]["local_url"]
-                suffix = "/api/v1/internal/runtime-logging" if role == "backend" else "/internal/runtime-logging"
-                state = client.get(f"{base.rstrip('/')}{suffix}", headers=headers).json()["data"]
-                assert state == logging_states[role] | {"applied_revision": current["applied_revision"]}, role
-                sink = state["log_sink"]
-                path = Path(sink["path"])
-                assert str(path.stat().st_ino) == sink["inode"]
-                assert not path.with_name(path.name + ".1").exists()
-                retained_logs[role] = state
+            backend_url = f"{target['services']['workspace_api']['local_url'].rstrip('/')}/api/v1/internal/runtime-logging"
+            state = client.get(backend_url, headers=headers).json()["data"]
+            assert state == logging_states["backend"] | {"applied_revision": current["applied_revision"]}
+            sink = state["log_sink"]
+            path = Path(sink["path"])
+            assert str(path.stat().st_ino) == sink["inode"]
+            assert not path.with_name(path.name + ".1").exists()
+            retained_logs["backend"] = state
             (artifacts / "retained-process-logs.json").write_text(json.dumps(retained_logs, indent=2) + "\n")
         assert "logger=uvicorn.error" in persisted_gateway_log
         assert gateway_log.stat().st_ino == gateway_log_identity

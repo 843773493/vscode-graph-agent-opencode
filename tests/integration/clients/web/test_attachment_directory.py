@@ -29,7 +29,7 @@ from tests.integration.backend.sessions.rollout_context.test_execution_history_s
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.paths import chromium_temporary_environment
-from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS, acquire_gateway_guest
+from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +41,6 @@ async def attachment_case(history_target, request) -> AsyncIterator[tuple]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{history_target.gateway_port}",
                                  headers=LOCAL_TOKEN_HEADERS, timeout=60) as client:
-        await acquire_gateway_guest(client)
         yield client, context, history_target.workspace, history_target.replay
 
 

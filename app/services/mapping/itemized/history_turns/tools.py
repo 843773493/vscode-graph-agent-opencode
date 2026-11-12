@@ -15,6 +15,7 @@ from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.turn import (
     TurnToolSummaryDTO,
 )
+from app.schemas.internal_v2.turn_search import TurnToolResultDTO
 from app.services.mapping.itemized.history_turns.content import (
     content_text,
     message_time,
@@ -176,3 +177,11 @@ def bounded_tool_summary(
     head_count = _TOOL_SUMMARY_LIMIT // 2
     tail_count = _TOOL_SUMMARY_LIMIT - head_count
     return [*items[:head_count], *items[-tail_count:]], True
+
+
+def tool_result_metadata_dto(row: tuple[int, str, str, str, str | None, str, str]) -> TurnToolResultDTO:
+    """沿同一历史聚合身份投影目录元数据，不读取或复制工具正文。"""
+    _ordinal, item_id, turn_id, call_id, model_id, status, name = row
+    return TurnToolResultDTO(item_id=item_id, turn_id=turn_id,
+        tool_call_id=history_tool_call_id(ItemProjectionIdentity(model_call_id=model_id), call_id),
+        tool_name=name, status=status)

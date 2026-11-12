@@ -4,12 +4,31 @@ import { IMcpService } from '../../upstream/src/vs/workbench/contrib/mcp/common/
 import { WorkspaceMcpService } from './service.js';
 import { WorkspaceMcpServer } from './server.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
-import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { managementGateway } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { addMcpConfiguration } from './addConfiguration.js';
 import { mcpConfigurationErrorMessage } from './configuration.js';
+import { Action2, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
+import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
+import type { McpWorkspaceRequestTarget } from './catalog.js';
+
+export const openWorkspaceMcpServerCommand = 'boxteam.mcp.openServer';
+
+registerAction2(class extends Action2 {
+  constructor() { super({ id: openWorkspaceMcpServerCommand, title: '打开指定 MCP 服务', f1: false }); }
+  async run(accessor: ServicesAccessor, supplied: { target: McpWorkspaceRequestTarget; serverId: string; showOptions?: boolean }): Promise<void> {
+    const service = accessor.get(IMcpService), commands = accessor.get(ICommandService);
+    if (!(service instanceof WorkspaceMcpService)) throw new Error('MCP 命令未接入项目 owner');
+    const target = { ...supplied.target }, serverId = supplied.serverId, showOptions = supplied.showOptions;
+    const servers = await service.queryWorkspace(target);
+    const server = servers.find(item => item.name === serverId);
+    if (!server) throw new Error(`MCP 服务已不在原工作区目录中：${serverId}`);
+    if (showOptions) await commands.executeCommand('workbench.mcp.serverOptions', server.id);
+    else await service.open(server);
+  }
+});
 
 /** 原 Add 的全部调用方共用此 seam，错误进入原通知通道，目标和身份贯穿所有输入及提交。 */
 export async function addWorkspaceMcpConfiguration(accessor: ServicesAccessor, configUri?: URI | string): Promise<void> {
@@ -19,10 +38,10 @@ export async function addWorkspaceMcpConfiguration(accessor: ServicesAccessor, c
     const initial = workspaceContext.getSnapshot();
     if (initial.error) throw new Error(initial.error);
     if (!initial.gatewayId) throw new Error('Gateway 身份尚未完成初始化');
-    const selected = Object.freeze({ ...managementGateway('mcp') });
+    const selected = managementGateway('mcp');
     const controller = new AbortController();
-    const invalidate = () => controller.abort(new Error('Gateway 或用户身份已改变，请重新添加 MCP 配置'));
-    const releaseUser = onGatewayUserSessionInvalidated(0, invalidate);
+    const invalidate = () => controller.abort(new Error('Gateway 或访问凭据已改变，请重新添加 MCP 配置'));
+    const releaseUser = onGatewayTokenInvalidated(0, invalidate);
     const releaseContext = workspaceContext.subscribe(() => {
       if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate();
     });

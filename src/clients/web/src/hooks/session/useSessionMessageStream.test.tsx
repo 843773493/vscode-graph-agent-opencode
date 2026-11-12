@@ -55,7 +55,7 @@ function minimalState(): AppState {
     pendingConversations: new Map(),
     activeJobIdsBySession: new Map(),
     unreadSessionKeys: new Set(),
-    gatewayUserViewStates: new Map(),
+    sessionViewStates: new Map(),
     sessionAttachmentSummaries: new Map(),
     sessionsByWorkspace: new Map(),
     sessionGatewayWorkspaceById: new Map(),

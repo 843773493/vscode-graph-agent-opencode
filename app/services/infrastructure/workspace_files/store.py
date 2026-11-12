@@ -99,15 +99,15 @@ class WorkspaceFileStore:
                 version = self._db.execute("PRAGMA user_version").fetchone()[0]
                 if version == 0 and not self._db.execute("SELECT 1 FROM sqlite_master WHERE type='table'").fetchone():
                     with self.transaction() as db:
-                        db.execute(load_sql(__package__, "sql/owner.sql"))
-                        db.execute(load_sql(__package__, "sql/owner_seed.sql"), (workspace_id,))
+                        db.execute(load_sql(__package__, "migrations/owner.sql"))
+                        db.execute(load_sql(__package__, "migrations/owner_seed.sql"), (workspace_id,))
                         # 每个已访问目录只留固定宽度摘要与版本，不存逐文件身份或正文。
-                        db.execute(load_sql(__package__, "sql/directories.sql"))
-                        db.execute(load_sql(__package__, "sql/file_directory_uri.sql"))
-                        db.execute(load_sql(__package__, "sql/operations.sql"))
-                        db.execute(load_sql(__package__, "sql/file_operations_pending.sql"))
-                        db.execute(load_sql(__package__, "sql/file_operations_cleanup.sql"))
-                        db.execute(load_sql(__package__, "sql/events.sql"))
+                        db.execute(load_sql(__package__, "migrations/directories.sql"))
+                        db.execute(load_sql(__package__, "migrations/file_directory_uri.sql"))
+                        db.execute(load_sql(__package__, "migrations/operations.sql"))
+                        db.execute(load_sql(__package__, "migrations/file_operations_pending.sql"))
+                        db.execute(load_sql(__package__, "migrations/file_operations_cleanup.sql"))
+                        db.execute(load_sql(__package__, "migrations/events.sql"))
                         db.execute("PRAGMA user_version=3")
                 elif version != 3:
                     raise RuntimeError(f"文件导航库 schema 不受支持: {identity}, version={version}")

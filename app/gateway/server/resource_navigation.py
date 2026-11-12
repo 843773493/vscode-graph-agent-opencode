@@ -20,7 +20,6 @@ from app.gateway.auth import (
     verify_gateway_access,
     verify_gateway_token,
 )
-from app.gateway.control.user_access import UserAccessContext
 from app.gateway.federation.errors import (
     FEDERATION_AUTHORIZATION_REVOKED,
     FEDERATION_CAPABILITY_DENIED,
@@ -37,7 +36,6 @@ from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER, parse_target_ga
 from app.gateway.server.workspace_proxy import (
     _proxy_workspace_request,
     _registry,
-    verify_user_access_for_proxy,
 )
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.communication import ResourceNavigationRelayRequest
@@ -64,13 +62,12 @@ router = APIRouter()
 
 async def _navigate(
     payload: ResourceNavigationRequest, request: Request, *, auth: GatewayAuthContext | None,
-    user_access: UserAccessContext | None, workspace_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> Response:
     try:
         deadline = navigation_deadline(payload, deadline_at=request.headers.get(NAVIGATION_DEADLINE_HEADER))
         async with asyncio.timeout(max(0, deadline - time.monotonic())):
-            response = await _navigate_target(payload, request, auth=auth, user_access=user_access,
-                                             workspace_id=workspace_id, deadline=deadline)
+            response = await _navigate_target(payload, request, auth=auth, workspace_id=workspace_id, deadline=deadline)
             ResourceNavigation._check_deadline(deadline)
             return response
     except TimeoutError as error:
@@ -83,7 +80,7 @@ async def _navigate(
 
 async def _navigate_target(
     payload: ResourceNavigationRequest, request: Request, *, auth: GatewayAuthContext | None,
-    user_access: UserAccessContext | None, workspace_id: str | None, deadline: float,
+    workspace_id: str | None, deadline: float,
 ) -> Response:
     gateway_id = request.app.state.gateway_id
     requested_gateway_id = parse_target_gateway_id(request.headers.get(TARGET_GATEWAY_ID_HEADER))
@@ -114,7 +111,7 @@ async def _navigate_target(
             if workspace_target.connection_kind != "remote_gateway":
                 return await _proxy_workspace_request(
                     f"workspaces/{workspace_id}/resources/navigation", request,
-                    auth=auth, user_access=user_access, include_credentials=True,
+                    auth=auth, include_credentials=True,
                     target_workspace_id=workspace_target.key,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                     navigation_deadline_at=navigation_deadline_at(deadline),
@@ -133,8 +130,7 @@ async def _navigate_target(
             if len(targets) != 1:
                 raise FederationError(FEDERATION_TARGET_AMBIGUOUS, "多个本地 Gateway route 指向同一导航 workspace")
             return await _proxy_workspace_request(
-                "resources/navigation", request, auth=auth, user_access=user_access,
-                include_credentials=True, target_workspace_id=targets[0].key,
+                "resources/navigation", request, auth=auth, include_credentials=True, target_workspace_id=targets[0].key,
                 request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                 navigation_deadline_at=navigation_deadline_at(deadline),
             )
@@ -156,8 +152,7 @@ async def _navigate_target(
                 if file_owner is None:
                     raise ResourceUriResolveError("unknown_resource", "原生目录没有可用的同机文件 owner")
                 return await _proxy_workspace_request(
-                    "resources/navigation", request, auth=auth, user_access=user_access,
-                    include_credentials=True, target_workspace_id=file_owner.key,
+                    "resources/navigation", request, auth=auth, include_credentials=True, target_workspace_id=file_owner.key,
                     request_body=payload.model_dump_json(exclude_unset=True).encode("utf-8"),
                     navigation_deadline_at=navigation_deadline_at(deadline),
                 )
@@ -211,18 +206,16 @@ async def _navigate_target(
 async def navigate_resource(
     payload: ResourceNavigationRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
-    user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> Response:
-    return await _navigate(payload, request, auth=auth, user_access=user_access)
+    return await _navigate(payload, request, auth=auth, )
 
 
 @router.post("/api/v1/workspaces/{workspace_id}/resources/navigation", response_model=APIResponse[ResourceNavigationResultDTO])
 async def navigate_workspace_resource(
     workspace_id: str, payload: ResourceNavigationRequest, request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
-    user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> Response:
-    return await _navigate(payload, request, auth=auth, user_access=user_access, workspace_id=workspace_id)
+    return await _navigate(payload, request, auth=auth, workspace_id=workspace_id)
 
 
 @router.post("/api/gateway/resource-navigation/workspaces/{source_workspace_id}",
@@ -234,4 +227,4 @@ async def navigate_from_workspace(
     if not any(target.connection_kind == "local" and target.workspace_id == source_workspace_id
                for target in _registry(request).targets()):
         raise HTTPException(403, detail="文件导航来源不是当前 Gateway 的本机 Workspace")
-    return await _navigate(payload, request, auth=None, user_access=None)
+    return await _navigate(payload, request, auth=None, )

@@ -3,7 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../../../api";
 import WorkspaceMarkdownImage from "./WorkspaceMarkdownImage";
 import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
-import { invalidateGatewayUserSession } from "../../../api/http";
+import { invalidateGatewayToken } from "../../../api/http";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -249,14 +249,14 @@ for (const pending of [false, true]) {
     expect(getBlob).toHaveBeenCalledTimes(1);
     const signal = getBlob.mock.calls[0]?.[3];
 
-    act(() => invalidateGatewayUserSession(8015));
+    act(() => invalidateGatewayToken(8015));
     expect(signal?.aborted).toBe(false);
     expect(revokeUrl).not.toHaveBeenCalled();
 
-    act(() => invalidateGatewayUserSession(8014));
+    act(() => invalidateGatewayToken(8014));
     expect(signal?.aborted).toBe(true);
     expect(renderer.root.findAllByType("img")).toHaveLength(0);
-    expect(renderer.root.findByProps({ role: "alert" }).children.join("")).toContain("身份已改变");
+    expect(renderer.root.findByProps({ role: "alert" }).children.join("")).toContain("访问凭据已改变");
     expect(revokeUrl.mock.calls).toEqual(pending ? [] : [["blob:identity-image"]]);
     response.resolve(new Blob(["late image"]));
     await flush();
@@ -273,7 +273,7 @@ for (const pending of [false, true]) {
     expect(getBlob.mock.calls[1]?.[3]?.aborted).toBe(false);
     act(() => renderer.unmount());
     const released = revokeUrl.mock.calls.length;
-    act(() => invalidateGatewayUserSession(8014));
+    act(() => invalidateGatewayToken(8014));
     expect(revokeUrl).toHaveBeenCalledTimes(released);
     expect(createUrl.mock.calls.length).toBe(released);
   });

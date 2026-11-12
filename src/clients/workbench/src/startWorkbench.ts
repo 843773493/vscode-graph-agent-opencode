@@ -1,5 +1,4 @@
 import { create, URI, commands } from '../upstream/src/vs/workbench/workbench.web.main.internal.js';
-import { isCancellationError } from '../upstream/src/vs/base/common/errors.js';
 import { workspaceFolder } from './filesystem.js';
 import './thread.contribution.js';
 import './resourceOpener.js';
@@ -14,19 +13,11 @@ import './extensions/contribution.js';
 import './extensions/pluginCommands.js';
 import './debug/contribution.js';
 import './managementTarget.js';
+import './theme.js';
 
 installReadonlyDocumentSerialization();
 
 export async function startWorkbench(): Promise<void> {
-  function showError(error: unknown): void {
-    // 与原版工作台一致：视图释放时取消异步任务属于正常控制流。
-    if (isCancellationError(error)) return;
-    const display = document.getElementById('startup-error');
-    if (display) display.textContent = error instanceof Error ? error.stack ?? error.message : String(error);
-  }
-  window.addEventListener('error', event => showError(event.error ?? event.message));
-  window.addEventListener('unhandledrejection', event => showError(event.reason));
-
   const parameters = new URLSearchParams(location.search);
   await import('./agent.contribution.js');
   const folder = parameters.get('folder');

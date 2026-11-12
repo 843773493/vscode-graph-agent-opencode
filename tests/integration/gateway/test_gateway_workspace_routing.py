@@ -76,7 +76,6 @@ from tests.support.api_helpers import checkpoint_fixture
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -327,7 +326,6 @@ async def test_gateway_routes_sessions_between_local_workspaces(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             default_workspace_response = await client.get("/api/v1/workspace")
             default_request_id = default_workspace_response.json()["request_id"]
             assert default_request_id
@@ -558,7 +556,6 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             health_response = await client.get("/api/gateway/health")
             assert health_response.status_code == 200, health_response.text
             gateway_id = health_response.json()["data"]["gateway_id"]
@@ -856,7 +853,6 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             add_response = await client.post(
                 "/api/gateway/workspaces/local",
                 json={"root_path": str(managed_workspace), "name": "managed-local"},
@@ -889,7 +885,6 @@ async def test_gateway_restores_frontend_added_managed_local_workspace(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as restarted_client:
-            await acquire_gateway_guest(restarted_client)
             restored_response = await restarted_client.get("/api/gateway/workspaces")
             assert restored_response.status_code == 200, restored_response.text
             restored_list = restored_response.json()["data"]
@@ -944,7 +939,6 @@ async def test_gateway_pending_restart_is_loaded_by_new_gateway_process(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             document = gateway_config_path.read_text(encoding="utf-8")
             changed_document = document.replace(
                 '"poll_interval_seconds": 0.5',
@@ -986,7 +980,6 @@ async def test_gateway_pending_restart_is_loaded_by_new_gateway_process(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as restarted_client:
-            await acquire_gateway_guest(restarted_client)
             status_response = await restarted_client.get(
                 "/api/gateway/config/reload-status"
             )
@@ -1066,7 +1059,6 @@ async def test_gateway_expired_pending_requires_explicit_retry_before_startup(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             document = gateway_config_path.read_text(encoding="utf-8")
             changed_document = document
             for old_value in (0.5, 0.75, 0.8):
@@ -1136,7 +1128,6 @@ async def test_gateway_expired_pending_requires_explicit_retry_before_startup(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             status_response = await client.get("/api/gateway/config/reload-status")
             assert status_response.status_code == 200, status_response.text
             status = status_response.json()["data"]
@@ -1186,7 +1177,6 @@ async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             document = gateway_config_path.read_text(encoding="utf-8")
             changed_document = document.replace(
                 '"poll_interval_seconds": 0.5',
@@ -1285,7 +1275,6 @@ async def test_gateway_pending_startup_failure_keeps_active_snapshot_recoverable
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as recovered_client:
-            await acquire_gateway_guest(recovered_client)
             status_response = await recovered_client.get(
                 "/api/gateway/config/reload-status"
             )
@@ -1364,7 +1353,6 @@ async def test_gateway_stale_pending_startup_cannot_mutate_restart_state(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             document = gateway_config_path.read_text(encoding="utf-8")
             changed_document = document.replace(
                 '"poll_interval_seconds": 0.5',
@@ -1434,7 +1422,6 @@ async def test_gateway_stale_pending_startup_cannot_mutate_restart_state(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as recovered_client:
-            await acquire_gateway_guest(recovered_client)
             status_response = await recovered_client.get(
                 "/api/gateway/config/reload-status"
             )

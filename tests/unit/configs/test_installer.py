@@ -316,6 +316,100 @@ def test_cli_migrate_splits_legacy_user_configuration(
     assert not (config_root / "boxteam.jsonc").exists()
 
 
+def test_cli_initialize_rejects_implicit_legacy_layout_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boxteam_home = tmp_path / "boxteam-home"
+    config_root = boxteam_home / "config"
+    config_root.mkdir(parents=True)
+    legacy_path = config_root / "boxteam.jsonc"
+    legacy_path.write_text('{"config_version": 4}\n', encoding="utf-8")
+    monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "boxteam",
+            "initialize",
+            "--project-root",
+            str(Path.cwd()),
+            "--home",
+            str(tmp_path),
+        ],
+    )
+
+    from configs.boxteam import main
+
+    with pytest.raises(RuntimeError, match="普通初始化不会自动迁移"):
+        main()
+
+    assert legacy_path.is_file()
+    assert not (config_root / "gateway.jsonc").exists()
+    assert not (config_root / "workspace.jsonc").exists()
+
+
+def test_cli_initialize_rejects_old_home_layout_without_moving_any_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "old-home"
+    boxteam_home = home / ".boxteams"
+    legacy_config = home / ".boxteam" / "boxteam.jsonc"
+    legacy_schema = home / ".boxteam" / "config.schema.jsonc"
+    legacy_settings = home / ".boxteam" / "web_ui_settings.json"
+    legacy_gateway = boxteam_home / "boxteam_workspace" / ".boxteam" / "gateway"
+    for path, payload in (
+        (legacy_config, '{"legacy": "config"}\n'),
+        (legacy_schema, '{"legacy": "schema"}\n'),
+        (legacy_settings, '{"legacy": "settings"}\n'),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(payload, encoding="utf-8")
+    legacy_gateway.mkdir(parents=True)
+    (legacy_gateway / "gateway.sqlite").write_bytes(b"legacy database")
+    original_files = {
+        path: path.read_bytes()
+        for path in (legacy_config, legacy_schema, legacy_settings, legacy_gateway / "gateway.sqlite")
+    }
+    monkeypatch.delenv("BOXTEAM_HOME", raising=False)
+    monkeypatch.delenv("BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT", raising=False)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["boxteam", "initialize", "--home", str(home)],
+    )
+
+    from configs.boxteam import main
+
+    with pytest.raises(RuntimeError, match="普通初始化不会自动迁移"):
+        main()
+
+    assert {path: path.read_bytes() for path in original_files} == original_files
+    assert not (boxteam_home / "config").exists()
+    assert legacy_gateway.is_dir()
+
+
+def test_cli_initialize_custom_boxteam_home_ignores_unrelated_old_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "user-home"
+    custom_home = tmp_path / "isolated-boxteams"
+    legacy = home / ".boxteam" / "boxteam.jsonc"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"legacy": true}\n', encoding="utf-8")
+    monkeypatch.setenv("BOXTEAM_HOME", str(custom_home))
+    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--home", str(home)])
+
+    from configs.boxteam import main
+
+    main()
+
+    assert json.loads(capsys.readouterr().out)["action"] == "initialize"
+    assert legacy.read_text(encoding="utf-8") == '{"legacy": true}\n'
+    assert (custom_home / "config" / "gateway.jsonc").is_file()
+
+
 def test_install_gateway_development_assets_is_idempotent(tmp_path: Path) -> None:
     project_root = Path.cwd().resolve()
     home = tmp_path / "home"

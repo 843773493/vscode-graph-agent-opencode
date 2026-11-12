@@ -46,7 +46,6 @@ from tests.support.api_helpers import create_session
 from tests.support.plugin_package import install_plugin_async
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -119,7 +118,6 @@ async def provider_case(
                 base_url=f"http://127.0.0.1:{gateway_port}", timeout=30,
                 headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": backend.workspace_id},
             ) as client:
-                await acquire_gateway_guest(client)
                 health = await client.get("/api/gateway/health")
                 health.raise_for_status()
                 gateway_id = health.json()["data"]["gateway_id"]

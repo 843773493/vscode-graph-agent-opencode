@@ -20,10 +20,12 @@ export function sourceBaseline(document: SourceDocument): SourceBaseline {
 export class ConfigurationSourceOwner {
   readonly target: SourceTarget;
   constructor(target: SourceTarget) {
-    this.target = Object.freeze({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id,
-      workspace_id: target.workspace_id });
+    this.target = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id,
+      workspace_id: target.workspace_id };
   }
-  private get workspace(): GatewayWorkspaceRequestTarget { return { gateway_id: this.target.gateway_id, workspace_id: this.target.workspace_id! }; }
+  private get workspace(): GatewayWorkspaceRequestTarget {
+    return { gateway_id: this.target.gateway_id, workspace_id: this.target.workspace_id!, gateway_connection_id: this.target.gateway_connection_id };
+  }
   private path(sourceKey?: string, operation = '', idempotencyKey?: string): string {
     const query = new URLSearchParams();
     if (this.target.gateway_connection_id) query.set('gateway_connection_id', this.target.gateway_connection_id);
@@ -50,30 +52,30 @@ export class ConfigurationSourceOwner {
   watchConfigurationSchemas(signal: AbortSignal, onSnapshot: (snapshot: PluginConfigurationSchemasDTO) => void): Promise<void> {
     return watchPluginConfigurationSchemas(this.target, signal, onSnapshot);
   }
-  private document(document: SourceDocument, sourceKey: string, key?: string): SourceDocument {
-    if (document.gateway_id !== this.target.gateway_id || ('workspace_id' in document ? document.workspace_id : undefined) !== this.target.workspace_id
-      || document.source_key !== sourceKey || key && document.edit && document.edit.idempotency_key !== key) throw new Error('配置回执不属于冻结目标、来源或原提交');
+  private document(document: GatewayConfigSourceDocumentDTO, sourceKey: string, key?: string): GatewayConfigSourceDocumentDTO {
+    if (document.gateway_id !== this.target.gateway_id || document.source_key !== sourceKey
+      || key && document.edit && document.edit.idempotency_key !== key) throw new Error('配置回执不属于冻结目标、来源或原提交');
     return document;
   }
   async read(sourceKey: string, key?: string, signal?: AbortSignal): Promise<SourceDocument> {
-    const document = this.target.workspace_id ? await getConfigSourceDocument(0, this.workspace, sourceKey, { idempotencyKey: key, signal })
-      : await this.request<GatewayConfigSourceDocumentDTO>(this.path(sourceKey, '', key), { signal });
+    if (this.target.workspace_id) return getConfigSourceDocument(0, this.workspace, sourceKey, { idempotencyKey: key, signal });
+    const document = await this.request<GatewayConfigSourceDocumentDTO>(this.path(sourceKey, '', key), { signal });
     return this.document(document, sourceKey, key);
   }
   intent(sourceKey: string, jsonc: string, baseline: SourceBaseline): SourceIntent {
-    return Object.freeze({ gateway_id: this.target.gateway_id, ...(this.target.workspace_id ? { workspace_id: this.target.workspace_id } : {}),
-      source_key: sourceKey, jsonc, ...baseline, idempotency_key: crypto.randomUUID() });
+    return { gateway_id: this.target.gateway_id, ...(this.target.workspace_id ? { workspace_id: this.target.workspace_id } : {}),
+      source_key: sourceKey, jsonc, ...baseline, idempotency_key: crypto.randomUUID() };
   }
   async preflight(intent: SourceIntent, signal?: AbortSignal) {
-    const result = this.target.workspace_id ? await preflightConfigSource(0, this.workspace, intent as ConfigSourceEditRequest, signal)
-      : await this.request<GatewayConfigSourcePreflightDTO>(this.path(intent.source_key, '/preflight'), { method: 'POST', body: JSON.stringify(intent), signal });
+    if (this.target.workspace_id) return preflightConfigSource(0, this.workspace, intent as ConfigSourceEditRequest, signal);
+    const result = await this.request<GatewayConfigSourcePreflightDTO>(this.path(intent.source_key, '/preflight'), { method: 'POST', body: JSON.stringify(intent), signal });
     if (!result.document) throw new Error('配置预检没有返回原来源文档');
     this.document(result.document, intent.source_key);
     return result;
   }
   async save(intent: SourceIntent, signal?: AbortSignal): Promise<SourceDocument> {
-    const document = this.target.workspace_id ? await saveConfigSource(0, this.workspace, intent as ConfigSourceEditRequest, signal)
-      : await this.request<GatewayConfigSourceDocumentDTO>(this.path(intent.source_key), { method: 'PUT', body: JSON.stringify(intent), signal });
+    if (this.target.workspace_id) return saveConfigSource(0, this.workspace, intent as ConfigSourceEditRequest, signal);
+    const document = await this.request<GatewayConfigSourceDocumentDTO>(this.path(intent.source_key), { method: 'PUT', body: JSON.stringify(intent), signal });
     this.document(document, intent.source_key, intent.idempotency_key);
     if (!document.edit) throw new Error('配置保存回执没有原提交记录，请查询原幂等键');
     return document;

@@ -21,6 +21,7 @@ workspace 前提
 ```
 
 `empty_workspace_scope` 仍创建工作区 identity 并注入上下文，但不复制默认项目模板；从空目录创建文件的测试应优先使用它。
+两种函数级装具都将工作区置于当前 run／worker／node 的 runtime 下，不重建集成测试使用的文件级共享 `workspace/`。
 
 ## 规范
 

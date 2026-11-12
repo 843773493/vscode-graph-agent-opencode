@@ -297,7 +297,7 @@ class _OrderedCloseProcess:
         self._events.append(f"terminate:{self._name}")
 
     def close(self, *, timeout_seconds: float = 8) -> None:
-        assert timeout_seconds == 8
+        assert timeout_seconds > 0
         assert (
             len([event for event in self._events if event.startswith("terminate:")])
             == self._process_count
@@ -914,7 +914,7 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
             ),
             runtime=WorkspaceRuntime(
                 service_urls={"workspace_api": f"http://127.0.0.1:{8100 + index}"},
-                processes={"ssh_tunnel": process},
+        processes={"auxiliary": process},
             ),
             activate=index == 0,
         )
@@ -927,6 +927,34 @@ def test_registry_signals_all_runtime_processes_before_waiting_for_exit(
         "close:workspace-0",
         "close:workspace-1",
     ]
+
+
+@pytest.mark.parametrize("preserve_backend", [False, True])
+def test_registry_detaches_adopted_auxiliary_process_for_gateway_restart(tmp_path: Path, managed_backend_factory, preserve_backend: bool) -> None:
+    events: list[str] = []
+    backend = ProcessProbe("backend", events)
+    auxiliary = ProcessProbe("auxiliary", events)
+    registry = GatewayWorkspaceRegistry(gateway_id=LOCAL_GATEWAY, storage_path=tmp_path / "gateway.json")
+    target = WorkspaceTarget(
+        gateway_id=LOCAL_GATEWAY,
+        workspace_id="00000000-0000-4000-8000-000000000001", name="Workspace", root_path=str(tmp_path),
+        backend_url="http://127.0.0.1:8100", connection_kind="local",
+        managed=True,
+    )
+    registry.upsert(target)
+    graph = managed_backend_factory(
+        (target,), backend_url=target.backend_url, process=backend,
+        auxiliary_processes={WORKSPACE_ID: {"auxiliary": auxiliary}},
+    )
+    graph.runtimes[WORKSPACE_ID].adopted_process_names.add("auxiliary")
+    graph.publish(registry)
+    registry.close(
+        preserve_workspace_backends=preserve_backend,
+        detach_adopted_managed_processes=True,
+    )
+    assert events == [f"{'detach' if preserve_backend else 'close'}:backend", "detach:auxiliary"]
+    assert graph.owner.process is None
+    assert graph.runtimes[WORKSPACE_ID].processes == {}
 
 
 @pytest.mark.parametrize("schema_version", [1, 5, 8, 11])
@@ -956,7 +984,6 @@ def test_registry_rejects_removed_ssh_direct_backend_in_current_schema(tmp_path:
     with pytest.raises(ValueError, match="未知工作区连接类型: ssh"):
         GatewayWorkspaceRegistry(gateway_id=LOCAL_GATEWAY, storage_path=path)
     assert path.read_bytes() == original
-
 
 
 @pytest.mark.asyncio

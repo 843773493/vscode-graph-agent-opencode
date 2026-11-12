@@ -155,11 +155,11 @@ test("未知工具结果不使用会误导为成功的折叠文案", () => {
 test("普通文件读取不按路径推断 Skill 来源或宣称已加载", () => {
   const item = toolItem("read_file");
   item.rawStart.args = {
-    path: ".boxteam/bundled-skills/browser-control/SKILL.md",
+    path: ".boxteam/skills/guide.md",
   };
 
   expect(isSkillInternalToolItem(item)).toBe(false);
-  expect(deriveToolRowDisplay(item, false).previewText).toBe("read_file 处理：.boxteam/bundled-skills/browser-control/SKILL.md");
+  expect(deriveToolRowDisplay(item, false).previewText).toBe("read_file 处理：.boxteam/skills/guide.md");
 });
 
 test("Skill 加载工具由明确工具名分类，错误回执保留原结果", () => {

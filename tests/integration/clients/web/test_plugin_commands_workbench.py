@@ -114,19 +114,21 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
     try:
+        node = shutil.which("node")
+        assert node, "Workbench Playwright 驱动需要发行 Node"
         supervisor = context.project_root / "app/runtime" / ("windows_job.py" if os.name == "nt" else "posix_job.py")
         command_line = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "150", "--",
-            "bun", "tests/integration/clients/web/plugin_commands_workbench.mjs"]
+            node, "tests/integration/clients/web/plugin_commands_workbench.mjs"]
         output = context.artifacts_dir / "executions.txt"
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
-            result = subprocess.run(command_line, cwd=context.project_root, timeout=165, check=False, capture_output=True, text=True,
+            result = subprocess.run(command_line, cwd=context.project_root, timeout=165, check=False, capture_output=True,
                 env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                     "BOXTEAM_COMMAND_UI_INPUT": json.dumps({"baseUrl": f"http://127.0.0.1:{plugin_commands_port}",
                         "artifacts": str(context.artifacts_dir), "packagePaths": packages, "output": str(output.resolve())})})
-        (context.artifacts_dir / "browser.stdout.raw").write_text(result.stdout, encoding="utf-8")
-        (context.artifacts_dir / "browser.stderr.raw").write_text(result.stderr, encoding="utf-8")
+        (context.artifacts_dir / "browser.stdout.raw").write_bytes(result.stdout)
+        (context.artifacts_dir / "browser.stderr.raw").write_bytes(result.stderr)
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command_line, "exit_code": result.returncode}), encoding="utf-8")
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.returncode == 0, result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
         receipt = json.loads((context.artifacts_dir / "command-ui.json").read_text())
         assert receipt["phase"] == "complete" and receipt["pageErrors"] == [], receipt
         executions = [json.loads(line) for line in output.read_text().splitlines()]

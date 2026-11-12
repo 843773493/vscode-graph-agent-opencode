@@ -37,7 +37,7 @@ def _migrate_gateway_config_into_source_layers(
     """
 
     exists = connection.execute(
-        load_sql(__package__, "sql/legacy_config/exists.sql")
+        load_sql(__package__, "migrations/legacy_config/exists.sql")
     ).fetchone()
     if exists is None:
         return
@@ -47,7 +47,7 @@ def _migrate_gateway_config_into_source_layers(
     )
     for config_key in mirror_keys:
         row = connection.execute(
-            load_sql(__package__, "sql/legacy_config/read_mirror.sql"),
+            load_sql(__package__, "migrations/legacy_config/read_mirror.sql"),
             (config_key,),
         ).fetchone()
         if row is None:
@@ -65,7 +65,7 @@ def _migrate_gateway_config_into_source_layers(
                 f"config_source_layers: key={config_key}: {error}"
             ) from error
         layer = connection.execute(
-            load_sql(__package__, "sql/legacy_config/read_source.sql"),
+            load_sql(__package__, "migrations/legacy_config/read_source.sql"),
             (config_key,),
         ).fetchone()
         if layer is not None:
@@ -81,7 +81,7 @@ def _migrate_gateway_config_into_source_layers(
                 )
         else:
             connection.execute(
-                load_sql(__package__, "sql/legacy_config/insert_source.sql"),
+                load_sql(__package__, "migrations/legacy_config/insert_source.sql"),
                 (
                     config_key,
                     config_version,
@@ -95,7 +95,7 @@ def _migrate_gateway_config_into_source_layers(
                 config_key,
             )
         connection.execute(
-            load_sql(__package__, "sql/legacy_config/delete_mirror.sql"), (config_key,)
+            load_sql(__package__, "migrations/legacy_config/delete_mirror.sql"), (config_key,)
         )
 
 
@@ -107,7 +107,7 @@ def _migrate_workspace_owner_schema(connection: sqlite3.Connection) -> None:
     if row is None and connection.execute("SELECT 1 FROM gateway_workspace_registry UNION ALL SELECT 1 FROM user_view_state LIMIT 1").fetchone() is not None:
         raise RuntimeError("工作区身份迁移缺少 registry metadata，禁止按当前工作区猜测归属")
     assert __package__ is not None
-    for statement in load_sql(__package__, "sql/019.sql").split(";"):
+    for statement in load_sql(__package__, "migrations/019.sql").split(";"):
         if statement.strip():
             connection.execute(statement)
 
@@ -115,28 +115,28 @@ def _migrate_workspace_owner_schema(connection: sqlite3.Connection) -> None:
 assert __package__ is not None
 
 _GATEWAY_MIGRATIONS = (
-    load_sql(__package__, "sql/001.sql"),
-    load_sql(__package__, "sql/002.sql"),
-    load_sql(__package__, "sql/003.sql"),
-    load_sql(__package__, "sql/004.sql"),
-    load_sql(__package__, "sql/005.sql"),
-    load_sql(__package__, "sql/006.sql"),
-    load_sql(__package__, "sql/007.sql"),
-    load_sql(__package__, "sql/008.sql"),
-    load_sql(__package__, "sql/009.sql"),
-    load_sql(__package__, "sql/010.sql"),
-    load_sql(__package__, "sql/011.sql"),
-    load_sql(__package__, "sql/012.sql"),
-    load_sql(__package__, "sql/013.sql"),
-    load_sql(__package__, "sql/014.sql"),
+    load_sql(__package__, "migrations/001.sql"),
+    load_sql(__package__, "migrations/002.sql"),
+    load_sql(__package__, "migrations/003.sql"),
+    load_sql(__package__, "migrations/004.sql"),
+    load_sql(__package__, "migrations/005.sql"),
+    load_sql(__package__, "migrations/006.sql"),
+    load_sql(__package__, "migrations/007.sql"),
+    load_sql(__package__, "migrations/008.sql"),
+    load_sql(__package__, "migrations/009.sql"),
+    load_sql(__package__, "migrations/010.sql"),
+    load_sql(__package__, "migrations/011.sql"),
+    load_sql(__package__, "migrations/012.sql"),
+    load_sql(__package__, "migrations/013.sql"),
+    load_sql(__package__, "migrations/014.sql"),
     # 配置来源位置改以 URI 表达（real path 不持久化）：丢弃旧真实路径列、新增 URI 列。
-    load_sql(__package__, "sql/015.sql"),
+    load_sql(__package__, "migrations/015.sql"),
     # 一次性显式迁移：把 legacy gateway_config 中的 config 来源层镜像行并入权威
     # config_source_layers 后物理删除这些镜像行；控制面独有 KV 必须留在该表。
     _migrate_gateway_config_into_source_layers,
-    load_sql(__package__, "sql/017.sql"),
-    load_sql(__package__, "sql/018.sql"),
+    load_sql(__package__, "migrations/017.sql"),
+    load_sql(__package__, "migrations/018.sql"),
     _migrate_workspace_owner_schema,
-    load_sql(__package__, "sql/020.sql"),
-    load_sql(__package__, "sql/021.sql"),
+    load_sql(__package__, "migrations/020.sql"),
+    load_sql(__package__, "migrations/021.sql"),
 )

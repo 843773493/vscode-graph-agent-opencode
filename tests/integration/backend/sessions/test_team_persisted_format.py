@@ -35,13 +35,10 @@ def integration_workspace_root_path() -> str:
 @pytest.fixture
 async def team_runtime(
     integration_workspace_root_path: str,
-    integration_backend_port: int,
 ) -> AsyncIterator[tuple[AppContainer, str, dict[str, BaseTool]]]:
     root = Path(integration_workspace_root_path)
     # 本例不创建外部资源，后台监控也只能访问本测试端口块，不能触达开发服务。
-    mount = MountedWorkspace(
-        load_or_create_workspace_id(root), root,
-    )
+    mount = MountedWorkspace(load_or_create_workspace_id(root), root)
     async with workspace_tool_runtime(root, startup_mount=mount) as (container, session_id, invocation):
         session = await container.session_service.get(session_id)
         tools = create_team_tools(

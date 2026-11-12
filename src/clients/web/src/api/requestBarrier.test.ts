@@ -3,8 +3,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   HttpRequestError,
-  invalidateGatewayUserSession,
-  onGatewayUserSessionInvalidated,
+  invalidateGatewayToken,
+
+  onGatewayTokenInvalidated,
   requestJson,
   RAW_RESPONSE_HEADER_TIMEOUT_MS,
   requestGatewayResponse,
@@ -130,7 +131,6 @@ describe("统一请求屏障 requestGatewayResponse", () => {
     });
 
     const response = await requestGatewayResponse(48_601, "/api/v1/workspace/files/raw", {
-      skipGatewayUserSession: true,
     });
 
     expect(await response.text()).toBe("raw-bytes");
@@ -155,7 +155,6 @@ describe("统一请求屏障 requestGatewayResponse", () => {
     );
 
     const failure = requestGatewayResponse(48_602, "/api/v1/workspace/files/raw", {
-      skipGatewayUserSession: true,
     });
     await expect(failure).rejects.toBeInstanceOf(HttpRequestError);
     await expect(failure).rejects.toMatchObject({ status: 403 });
@@ -316,7 +315,6 @@ describe("原始响应入口的响应头等待有界", () => {
     // 显式把上限压到 30ms：若定时器不在「响应头到达」时清除，它会在下面的慢响应体
     // 消费阶段触发并 abort，本用例随之失败。这正是「只约束响应头等待」的守护点。
     const response = await requestGatewayResponse(port, "/api/v1/anything", {
-      skipGatewayUserSession: true,
       timeoutMs: 30,
     });
     expect(requestSignal).not.toBeNull();
@@ -344,15 +342,17 @@ describe("共享 HTTP 回执和身份失效", () => {
 
   test("身份失效订阅按目标隔离，释放后不再通知", () => {
     const calls: number[] = [];
-    const stop = onGatewayUserSessionInvalidated(49_399, () => calls.push(49_399));
-    const other = onGatewayUserSessionInvalidated(49_398, () => calls.push(49_398));
+    const stop = onGatewayTokenInvalidated(49_399, () => calls.push(49_399));
+    const other = onGatewayTokenInvalidated(49_398, () => calls.push(49_398));
     try {
-      invalidateGatewayUserSession(49_399);
+
+      invalidateGatewayToken(49_399);
       expect(calls).toEqual([49_399]);
       stop();
-      invalidateGatewayUserSession(49_399);
+      invalidateGatewayToken(49_399);
       expect(calls).toEqual([49_399]);
-      invalidateGatewayUserSession(49_398);
+
+      invalidateGatewayToken(49_398);
       expect(calls).toEqual([49_399, 49_398]);
     } finally { stop(); other(); }
   });

@@ -10,7 +10,7 @@ import { taskActionCommand } from '../../../../../../src/clients/workbench/src/a
 import { ThreadInput } from '../../../../../../src/clients/workbench/src/threadInput.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
-import { invalidateGatewayUserSession } from '../../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../../src/clients/web/src/api/http.js';
 import { availableTaskActions } from '../../../../../../src/clients/web/src/hooks/persistentTasks/taskActions.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
 
@@ -110,7 +110,7 @@ export async function automationContract(mode) {
   try {
     if (mode === 'pending-identity' || mode === 'pending-close') {
       await until(() => releaseRead);
-      if (mode === 'pending-identity') invalidateGatewayUserSession(0);
+      if (mode === 'pending-identity') invalidateGatewayToken(0);
       else { lifetime.dispose(); cancellation.cancel(); }
       releaseRead();
       await new Promise(resolve => setTimeout(resolve, 20));
@@ -129,7 +129,7 @@ export async function automationContract(mode) {
       picker.activeItems = [picker.items[1]]; cancellation.cancel();
     } else if (mode === 'identity' || mode === 'action-cancel') {
       picker.selectedItems = [picker.items[1]]; accepts.fire({ inBackground: false });
-      if (mode === 'identity') { await until(() => releaseChoice); invalidateGatewayUserSession(0); releaseChoice(); }
+      if (mode === 'identity') { await until(() => releaseChoice); invalidateGatewayToken(0); releaseChoice(); }
       await until(() => errors.length || shows.length);
     } else {
       const action = ['pause', 'resume', 'check', 'checkOnly', 'details', 'history', 'edit'].includes(mode) ? mode

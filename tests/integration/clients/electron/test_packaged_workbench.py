@@ -26,7 +26,6 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -96,7 +95,7 @@ def packaged_electron(request: pytest.FixtureRequest, electron_service_ports: Te
                    str(download_cache), str(output / "downloads")]
         assert _run_process(command, cwd=context.project_root,
             log=context.artifacts_dir / "seed-cache.log", timeout=30, environment=environment) == 0
-    command = ["bun", "run", "package:electron", "--output-root", str(output)]
+    command = ["bun", "run", "package:electron", "--development", "--output-root", str(output)]
     log_path = context.artifacts_dir / "package.log"
     exit_code = _run_process(command, cwd=context.project_root, log=log_path, timeout=360,
                              environment=environment)
@@ -228,7 +227,6 @@ async def test_packaged_electron_chat_files_and_restart_cache(
             "X-BoxTeam-Target-Gateway-Id": active_owner["gateway_id"],
             "X-BoxTeam-Workspace-Id": active_owner["workspace_id"],
         }, timeout=60) as client:
-            await acquire_gateway_guest(client)
             history = await client.post(f"/api/v1/sessions/{owner['session_id']}/threads/{owner['thread_id']}/history", json={})
             assert history.status_code == 200, history.text
             assert history.headers["X-Request-ID"] == history.json()["request_id"]

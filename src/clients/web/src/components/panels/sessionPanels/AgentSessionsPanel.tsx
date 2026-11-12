@@ -2,7 +2,6 @@ import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../../api/w
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AddManagedGatewayWorkspaceRequest,
-  GatewayUserAccess,
   GatewayWorkspace,
   Session,
   WebUiSessionSidebarSettings,
@@ -116,7 +115,7 @@ interface AgentSessionsPanelProps {
   catalogRefreshVersions: ReadonlyMap<string, number>;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
-  gatewayUserAccess?: GatewayUserAccess | null;
+
   flexRatio: number;
   preferences: AgentSessionsPreferences;
   onPreferencesChange: (
@@ -174,7 +173,7 @@ export default function AgentSessionsPanel({
   catalogRefreshVersions,
   sessionCatalogOutboxRuntime,
   sessionCatalogOutboxSnapshot,
-  gatewayUserAccess,
+
   flexRatio,
   preferences,
   onPreferencesChange,
@@ -513,7 +512,6 @@ export default function AgentSessionsPanel({
                 catalogRefreshVersions={catalogRefreshVersions}
                 sessionCatalogOutboxRuntime={sessionCatalogOutboxRuntime}
                 sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}
-                gatewayUserAccess={gatewayUserAccess}
                 onSelectSession={onSelectWorkspaceSession}
                 onPinSession={onPinSession}
                 onStatusChange={onStatusChange}

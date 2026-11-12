@@ -1,6 +1,6 @@
 # 目录用途
 
-存放 Browser、Terminal、MCP 与 Web Search 真实工作区辅助服务链路的 E2E。
+存放 Browser、Terminal 与 Web Search 真实工作区辅助服务链路的 E2E。
 
 ## 可修改内容
 

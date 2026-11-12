@@ -86,6 +86,22 @@ def test_workspace_logger_requires_explicit_cross_domain_migration(tmp_path: Pat
         service.get_snapshot()
 
 
+def test_legacy_workspace_layout_requires_explicit_migration(tmp_path: Path) -> None:
+    legacy_path = tmp_path / ".boxteam" / "boxteam.jsonc"
+    legacy_path.parent.mkdir()
+    legacy_path.write_text('{"config_version": 1}\n', encoding="utf-8")
+    service = ConfigService(
+        config_dir=Path.cwd() / "configs",
+        workspace_root=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="不会自动迁移"):
+        service.get_snapshot()
+
+    assert legacy_path.is_file()
+    assert not (legacy_path.parent / "workspace.jsonc").exists()
+
+
 def _append_test_event(store: WorkspaceStateStore, event_id: str) -> None:
     store.append_config_event(
         event_id=event_id,
@@ -2727,12 +2743,23 @@ async def test_workspace_pending_restart_resolves_with_matching_proof(
             candidate_ref=pending.candidate_ref,
             pending=pending,
         )
+        claims_during_cleanup = []
+
+        def observe_claim_during_cleanup(_released: object) -> None:
+            claims_during_cleanup.append(
+                store.get_config_apply_claim(config_domain="workspace")
+            )
+
+        service._remove_released_plugin_private_inputs = observe_claim_during_cleanup
 
         service.resolve_pending_restart(
             candidate_ref=pending.candidate_ref,
             health_proof=proof,
         )
 
+        assert len(claims_during_cleanup) == 1
+        assert claims_during_cleanup[0] is not None
+        assert store.get_config_apply_claim(config_domain="workspace") is None
         active = store.get_active_config_snapshot("workspace")
         resolved = store.get_pending_config_candidate(config_domain="workspace")
         assert active is not None

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -19,6 +18,7 @@ from app.testing.model_stream import (
     chat_completion_frames,
     get_protocol_codec,
 )
+from tests.support.http_server import running_http_server
 
 
 @dataclass(slots=True)
@@ -67,26 +67,6 @@ def _request_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise TypeError("集成测试 stub 只接受 JSON object 请求")
     return payload
-
-
-@contextmanager
-def _running_http_stub_server(
-    handler: type[BaseHTTPRequestHandler], port: int,
-) -> Iterator[None]:
-    with ExitStack() as cleanup:
-        server = ThreadingHTTPServer(("127.0.0.1", port), handler)
-        cleanup.callback(server.server_close)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-
-        def join_thread() -> None:
-            thread.join(timeout=5)
-            assert not thread.is_alive(), "HTTP替身服务线程未停止"
-
-        # 仅在线程启动后登记停机，按 shutdown、join、关闭 socket 的顺序释放。
-        cleanup.callback(join_thread)
-        cleanup.callback(server.shutdown)
-        yield
 
 
 @contextmanager
@@ -248,7 +228,7 @@ def generation_target_stub(
                 return
             _json_response(self, {"detail": f"未知路径: {self.path}"}, status=404)
 
-    with _running_http_stub_server(Handler, port):
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", port), Handler)):
         yield state
 
 
@@ -332,7 +312,7 @@ def openai_chat_stub(
                 },
             )
 
-    with _running_http_stub_server(Handler, port):
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", port), Handler)):
         yield state
 
 
@@ -407,5 +387,5 @@ def openai_chat_tool_loop_stub(port: int) -> Iterator[HTTPStubState]:
                 status=400,
             )
 
-    with _running_http_stub_server(Handler, port):
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", port), Handler)):
         yield state

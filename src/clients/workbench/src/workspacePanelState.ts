@@ -11,7 +11,8 @@ import { workspaceContext } from './workspaceContext.js';
 interface PanelState { visible: boolean; id: string; size?: { width: number; height: number } }
 
 /** 仅按 Gateway 路由保存原生面板展示态，业务状态仍由各产品控制器持有。 */
-class WorkspacePanelState extends Disposable {
+export class WorkspacePanelState extends Disposable {
+  static readonly ID = 'boxteam.workspacePanelState';
   private route: string | null = null;
   private appliedRoute: string | null = null;
   private restoring = Promise.resolve();
@@ -40,6 +41,11 @@ class WorkspacePanelState extends Disposable {
   }
 
   private key(route: string): string { return `boxteam.workspacePanel.${route}`; }
+  async whenRestored(route: string): Promise<void> {
+    this.selectWorkspace();
+    await this.restoring;
+    if (this.disposed || this.appliedRoute !== route) throw new Error('工作区底部面板尚未恢复到所选目标');
+  }
   private captureSize(): void {
     if (this.route !== this.appliedRoute || !this.layout.isVisible(Parts.PANEL_PART)) return;
     this.size = this.layout.getSize(Parts.PANEL_PART);
@@ -102,4 +108,4 @@ class WorkspacePanelState extends Disposable {
   override dispose(): void { this.disposed = true; this.save(); super.dispose(); }
 }
 
-registerWorkbenchContribution2('boxteam.workspacePanelState', WorkspacePanelState, WorkbenchPhase.AfterRestored);
+registerWorkbenchContribution2(WorkspacePanelState.ID, WorkspacePanelState, WorkbenchPhase.AfterRestored);

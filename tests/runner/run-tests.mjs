@@ -1,7 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { parse, printParseErrorCode } from "jsonc-parser";
+import { beginPerformance, collectionOptions, finishPerformance, tee } from "./performance.mjs";
 
 const projectRoot = path.resolve(process.env.BOXTEAM_PROJECT_ROOT ?? process.cwd());
 const matrixPath = path.join(projectRoot, "tests", "runner", "matrix.jsonc");
@@ -35,6 +36,7 @@ function validateSuite(suite) {
   if (suite.dataLimitKb !== undefined && (!Number.isInteger(suite.dataLimitKb) || suite.dataLimitKb <= 0)) {
     throw new Error(`测试 suite ${suite.id} 的 dataLimitKb 必须是正整数`);
   }
+  collectionOptions(suite);
 }
 
 // 用 ulimit -d 限定数据段：harness 一旦无界增长就立刻 MemoryExhaustion 退出，
@@ -128,8 +130,15 @@ function parseArguments(args) {
   let listCount = 0;
   let suiteCount = 0;
   let suiteId = null;
+  const collection = {};
+  const options = { "--perf": "mode", "--perf-tool": "tool", "--perf-interval-ms": "sample_interval_ms", "--perf-limit-bytes": "sample_limit_bytes" };
   for (const argument of args) {
-    if (argument === "--list") {
+    const [flag, value] = argument.split("=", 2);
+    if (flag in options) {
+      const key = options[flag];
+      if (value === undefined || key in collection) throw new Error(`${flag} 需要唯一的值`);
+      collection[key] = ["mode", "tool"].includes(key) ? value : Number(value);
+    } else if (argument === "--list") {
       listCount += 1;
     } else if (argument === "--all") {
       throw new Error("不支持 --all；必须使用 --suite=<id> 选择单个测试套件");
@@ -149,7 +158,7 @@ function parseArguments(args) {
   if (suiteCount === 0) throw new Error("必须使用 --suite=<id> 选择测试套件；使用 --list 查看列表");
   if (!suiteId.trim()) throw new Error("--suite 的值不能为空");
   if (suiteId === "all") throw new Error("不支持 --suite=all；必须选择单个测试套件");
-  return { mode: "suite", suiteId };
+  return { mode: "suite", suiteId, collection };
 }
 
 function unmetPrerequisites(suite) {
@@ -159,7 +168,7 @@ function unmetPrerequisites(suite) {
   });
 }
 
-async function runSuite(suite) {
+async function runSuite(suite, overrides) {
   if (!suite.enabled) {
     process.stdout.write(`${JSON.stringify({ suite: suite.id, status: "skipped", reason: suite.todo })}\n`);
     return 0;
@@ -172,18 +181,28 @@ async function runSuite(suite) {
     return 2;
   }
   const timeoutMs = suite.timeoutMs ?? defaultTimeoutMs;
+  const collection = collectionOptions(suite, overrides);
+  const run = await beginPerformance(projectRoot, suite, collection);
+  process.stdout.write(`性能运行: ${run.directory}\n`);
+  const command = buildSuiteCommand(suite, suite.dataLimitKb ?? defaultDataLimitKb);
   const child = Bun.spawn(buildSuiteCommand(suite, suite.dataLimitKb ?? defaultDataLimitKb), {
     cwd: projectRoot,
     env: {
       ...process.env,
       BOXTEAM_TEST_SUITE: suite.id,
       BOXTEAM_TEST_RUN_ID: process.env.BOXTEAM_TEST_RUN_ID ?? `${Date.now()}-${process.pid}`,
+      ...run.env,
     },
     stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: "pipe",
+    stderr: "pipe",
     detached: true,
   });
+  const outputs = Promise.allSettled([tee(child.stdout, path.join(run.directory, "stdout.log"), process.stdout),
+    tee(child.stderr, path.join(run.directory, "stderr.log"), process.stderr)]);
+  // 独立于受测事件循环；采样器本身也沿用同一内存保护及进程回收入口。
+  let sampler = null;
+  let samplingError = null;
   let timedOut = false;
   let interrupted = false;
   let interruptKillTimer = null;
@@ -213,6 +232,18 @@ async function runSuite(suite) {
   process.on("SIGTERM", onInterrupt);
   let exitCode;
   try {
+    if (collection.mode !== "off") {
+      try {
+        sampler = Bun.spawn(buildSuiteCommand({ command: [
+          "uv", "run", "--no-sync", "python", "-m", "tests.harness.performance.resources",
+          "--pid", String(child.pid), "--directory", run.directory,
+          "--interval-ms", String(collection.sample_interval_ms), "--limit-bytes", String(collection.sample_limit_bytes),
+          "--max-seconds", String((timeoutMs + timeoutGraceMs) / 1000),
+        ] }, 1024 * 1024), { cwd: projectRoot, stdout: "inherit", stderr: "inherit", detached: true });
+      } catch (error) {
+        samplingError = error;
+      }
+    }
     exitCode = await child.exited;
   } finally {
     clearTimeout(termTimer);
@@ -222,7 +253,26 @@ async function runSuite(suite) {
     process.off("SIGTERM", onInterrupt);
     // POSIX根进程退出不等于进程组为空；Windows监督器关闭时由Job Object回收后代。
     if (isPosix) terminateSuiteProcesses(child.pid, "SIGKILL");
+    if (sampler) {
+      const stopTimer = setTimeout(() => terminateSuiteProcesses(sampler.pid, "SIGKILL"), 5000);
+      try {
+        try { await writeFile(path.join(run.directory, "stop-sampling"), "stop\n"); }
+        catch (error) { samplingError = error; terminateSuiteProcesses(sampler.pid, "SIGKILL"); }
+        await sampler.exited;
+      } finally { clearTimeout(stopTimer); }
+    }
   }
+  const outputResults = await outputs;
+  const infrastructureFailed = samplingError || (sampler && sampler.exitCode !== 0) || outputResults.some((item) => item.status === "rejected");
+  if (samplingError) process.stderr.write(`性能采样失败: ${samplingError}\n`);
+  for (const item of outputResults) if (item.status === "rejected") process.stderr.write(`性能输出失败: ${item.reason}\n`);
+  await finishPerformance(projectRoot, run, { test_exit_code: exitCode, signal: child.signalCode,
+    status: interrupted ? "interrupted" : timedOut ? "TIMEOUT" : exitCode === 0 ? "passed" : "failed",
+    infrastructure_status: infrastructureFailed ? "failed" : "passed", timeout_ms: timeoutMs,
+    data_limit_kb: suite.dataLimitKb ?? defaultDataLimitKb, supervised_command: command });
+  const summary = Bun.spawnSync(["uv", "run", "--no-sync", "python", "-m", "tests.harness.performance.report", "summarize", run.directory],
+    { cwd: projectRoot, stdout: "inherit", stderr: "inherit", timeout: 30000 });
+  process.stdout.write(`性能产物: ${run.directory}\n`);
   if (interrupted) return 130;
   if (timedOut) {
     process.stdout.write(
@@ -230,7 +280,7 @@ async function runSuite(suite) {
     );
     return 3;
   }
-  return exitCode;
+  return infrastructureFailed || summary.exitCode !== 0 ? (exitCode || 97) : exitCode;
 }
 
 const matrix = await loadMatrix();
@@ -246,4 +296,4 @@ if (selection.mode === "list") {
 
 const suite = matrix.suites.find((item) => item.id === selection.suiteId);
 if (!suite) throw new Error(`测试矩阵中不存在 suite: ${selection.suiteId}`);
-process.exit(await runSuite(suite));
+process.exit(await runSuite(suite, selection.collection));

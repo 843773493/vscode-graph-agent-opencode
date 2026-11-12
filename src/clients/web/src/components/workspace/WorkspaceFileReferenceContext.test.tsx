@@ -38,7 +38,7 @@ function installWindow(): void {
 }
 
 /**
- * 安装只认领凭据与用户会话两条隧道的 fetch mock；内容接口由 handler 决定。
+ * 安装只认领本机凭据的 fetch mock；内容接口由 handler 决定。
  * 未预期请求一律响亮抛出，避免静默返回伪响应掩盖真实调用。
  */
 function installBackend(
@@ -61,14 +61,6 @@ function installBackend(
           message: "ok",
           request_id: "req_local_credential",
           data: { token: "test-token" },
-        });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return Response.json({
-          code: 0,
-          message: "ok",
-          request_id: "req_current_user",
-          data: { kind: "guest", user_id: null },
         });
       }
       if (url.pathname === "/api/v1/workspace/files") {

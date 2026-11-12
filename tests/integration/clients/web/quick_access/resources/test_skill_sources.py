@@ -116,7 +116,7 @@ async def test_local_and_http_skills_discover_open_and_fail_without_runtime_or_r
     initial_count = len(source.requests)
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180", "--",
-               "bun", "tests/integration/clients/web/quick_access/resources/skill_sources.mjs"]
+               "node", "tests/integration/clients/web/quick_access/resources/skill_sources.mjs"]
     with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
         task = asyncio.create_task(asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
             env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),

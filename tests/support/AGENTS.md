@@ -18,6 +18,7 @@
 │   ├── processes/scope.py                    进程句柄登记及作用域释放
 │   ├── processes/workspace.py                Workspace后端、日志、端口预检与限频监听/HTTP就绪
 │   ├── processes/gateway.py                  Gateway进程、配置和就绪
+│   ├── http_server.py                      本地HTTP测试服务的socket与线程生命周期
 │   ├── gateway_managed_backends.py        Gateway托管后端的显式进程替身
 │   └── session_catalog_owner.py           测试catalog连接的登记与释放
 ├── 会话与历史数据前提（`rollout/skill_catalog.py` 构造局部冻结输入，经正式 load 激活）
@@ -46,8 +47,7 @@
 │   ├── e2e_control/backend_app.py            注入测试控制入口的Workspace ASGI
 │   ├── e2e_control/tool_observations.py      真实 canonical 工具提交观测
 │   ├── e2e_control/communication_backend_app.py  同一受控Backend的通信故障观测组合
-│   ├── e2e_control/gateway_app.py            将托管后端绑定到测试ASGI的Gateway入口
-│   └── e2e_control/mcp_stdio_server.py       场景所用的MCP服务入口
+│   └── e2e_control/gateway_app.py            将托管后端绑定到测试ASGI的Gateway入口
 ├── model_stream/                          流式模型回放与故障执行
 │   ├── config.py                           provider配置、回放生命周期与运行参数
 │   ├── frozen_provider.py                  冻结请求构造和检查点读取观测
@@ -102,12 +102,13 @@ socket 回调不在创建 Promise 时的同步异常边界内：回执解析或�
 - helper 必须按单一职责命名，禁止重新形成 `utils.py` 杂物箱。
 - 正式测试产物路径由调用测试决定并镜像 `tests/` 路径，本目录不得改变其规则。
 - 进程和外部资源必须由创建者明确清理，失败时暴露完整错误。
+- 函数级单测工作区统一使用 `TestRunContext.runtime_root_for_node(nodeid)/workspace`；模块共享工作区仍使用固定 `workspace_root`。清理副本前放开权限时必须同时跳过 symlink 和 Windows junction，不得修改链接目标。
 
 ### 工作区路径与模板准备
 
 - `processes/workspace.py::resolve_workspace_python_executable`按当前宿主平台选择`.venv`文件：Windows为`Scripts/python.exe`，Linux/macOS为`bin/python`。两个布局并存时不以存在顺序猜平台；当前布局缺失或只是目录时明确报告平台与预期路径，不回退到其他平台残留，也不使用全局Python。
 - `paths.py::output_root_for_test`以显式`project_root`解析相对测试文件和相对`tests_root`，未传项目根时才使用当前工作目录；两者不能分别归属不同的根。绝对路径保持原目标，自定义绝对测试根仍可位于项目外；函数只计算镜像路径，不创建目录或要求测试文件已存在。
-- `custom_tool_test_workspace.py`中的`FixtureStageObserver`只持有显式profile的JSONL文件，不生成业务事实。打开后首条记录写入或flush失败也要关闭；关闭时摘要失败仍尝试关闭文件，并保留原始异常链。摘要只尝试一次，普通记录仍逐条flush；生成器和累计计数不由清理逻辑重建。
+- 工作区造数与Provider准备统一使用`tests.harness.performance.record.stage`，性能查询入口见`tests/harness/performance/AGENTS.md`；不另建专用计时器，不因采集重建业务事实或重复消费结果。
 
 ### 进程、端口与HTTP就绪
 
@@ -123,6 +124,7 @@ socket 回调不在创建 Promise 时的同步异常边界内：回执解析或�
 
 ### 业务装具的资源释放
 
+- 本地 HTTP 服务统一使用 `http_server.py::running_http_server` 接管已绑定的 server；线程构造和启动失败也关闭 socket，成功后依次 shutdown、join 并确认退出、关闭 socket。响应协议、请求记录、屏障释放和诊断保存仍归场景，不能再复制一套线程启停代码。
 - `session_catalog_owner.py` 只管理测试 catalog 的连接生命周期；登记和定向释放使用同一绝对路径，避免相对路径与绝对路径形成两个 owner。关闭发生中断时仍尝试释放全部选中组件，再汇总原始异常；生产 catalog 装配不依赖此替身。
 - `workspace_tool_runtime.py` 通过真实消息准入一次性冻结canonical输入和执行队列，领取并启动精确Thread的holder后才执行工具。装具只验证资源工具，不伪造模型完成；准入成功后即登记自身执行的结算责任，准备失败也取消已准入执行，结算未成功须明确报错；退出清理在原 admission 内依次重置调用/作用域绑定、关闭执行作用域、释放浏览器与终端、取消自身执行，最后释放holder。任一步骤失败或取消仍尝试剩余动作。退出应用 lifespan 后分别关闭活动库和 catalog；准备失败也走该外层清理，多个原始错误由标准退出栈的异常链保留，不另建业务关闭入口。
 

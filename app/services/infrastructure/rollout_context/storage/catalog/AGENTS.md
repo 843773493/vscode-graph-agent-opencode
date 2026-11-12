@@ -18,3 +18,5 @@
 - 摘要读取只访问 SQLite，不打开 JSONL 正文。
 
 - item轻量投影读取必须显式传入`(session_id, thread_id)`；不得用Session ID冒充Thread或隐式查询main，且冷读不得物化未初始化的rollout。
+
+工具结果名称目录复用 message_search 的可见载体选择，仅查询原 tool_calls 与 item 元数据，不读取 projection content／JSONL 或新建索引。

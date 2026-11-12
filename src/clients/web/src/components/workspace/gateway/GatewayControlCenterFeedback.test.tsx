@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { createDefaultWebUiSettings } from "../../../state/uiSettings/preferences";
+import { DEFAULT_BACKGROUND } from "../../../theme/theme";
 import type { GatewayHealth } from "../../../types/backend";
 import {
   apiSuccessResponse,
@@ -40,18 +40,19 @@ function gatewayControlCenter(
   const noop = async () => {};
   return (
     <WarmConfirmProvider>
-      <GatewayControlCenter
+      <GatewayControlCenter onSelectColorTheme={async () => undefined}
         apiPort={8014}
         workspaces={[]}
         gatewayError={gatewayError}
         onAddSsh={noop}
         onRefresh={onRefresh}
+        onRemoteGatewayReconnected={() => undefined}
         onStart={noop}
         onStop={noop}
         onSafeRestart={noop}
         onForceRestart={noop}
-        uiSettings={createDefaultWebUiSettings()}
-        onUpdateUiSettings={noop}
+        background={DEFAULT_BACKGROUND}
+        onUpdateBackground={noop}
       />
     </WarmConfirmProvider>
   );

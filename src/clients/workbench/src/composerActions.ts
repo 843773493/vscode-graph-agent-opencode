@@ -7,7 +7,7 @@ import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/commo
 import { EditorResourceAccessor, SideBySideEditor } from '../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import type { IAnythingQuickAccessProviderRunOptions } from '../upstream/src/vs/workbench/contrib/search/common/search.js';
-import { onGatewayUserSessionInvalidated } from '../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import { ATTACH_RESOURCE_URI, PASTE_SELECTED_CONTENT, resourceReference, supportsResourceReference } from './resourceActions.js';
 import { ThreadPane } from './threadPane.js';
 import { ThreadInput } from './threadInput.js';
@@ -28,7 +28,7 @@ async function appendToThread(accessor: ServicesAccessor, content: () => Promise
   const gatewayId = workspaceContext.getSnapshot().gatewayId;
   if (!gatewayId) throw new Error('尚未取得发起 Gateway 身份');
   let invalidated = false;
-  const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+  const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
   try {
     const selected = originating ?? await quick.pick(targets.map(item => ({ ...item, label: item.target.input.owner.title,
         description: `${item.target.input.owner.gatewayId} · ${item.target.input.owner.workspaceId}`,
@@ -40,7 +40,7 @@ async function appendToThread(accessor: ServicesAccessor, content: () => Promise
     const draft = target.conversation.captureDraft();
     const text = await content();
     if (text === undefined) return;
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('Gateway 或用户身份已改变，请重新选择来源与接收者');
+    if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新选择来源与接收者');
     if (selected.pane.threadTarget?.conversation !== target.conversation) throw new Error('接收 Thread 已关闭或改变，请重新选择');
     await draft.append(text);
   } finally { release(); }

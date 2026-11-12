@@ -2,7 +2,7 @@ import { TEST_GATEWAY_WORKSPACE_KEY } from "../../tests/fixtures/session/gateway
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create } from "react-test-renderer";
-import type { GatewayUserAccess, SessionCatalogNode, WorkspaceNavigationTree } from "../../types/backend";
+import type { SessionCatalogNode, WorkspaceNavigationTree } from "../../types/backend";
 import { useSessionResourceExplorer } from './useSessionResourceExplorer';
 import { gatewayWorkspaceKey } from '../../api/workspaceIdentity';
 import type { SessionCatalogFailureOwner } from './sessionCatalogOutboxRuntime';
@@ -12,7 +12,7 @@ import {
   apiErrorResponse,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
-  testGatewayUserAccess,
+
   TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
   withDefaultGatewayApiResponses,
 } from "../../tests/fixtures/session/gatewayEnvironment";
@@ -104,7 +104,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     } finally { act(() => renderer?.unmount()); }
   });
 
-  test('同一主体的 access 刷新保留目录 owner，真正切换用户才释放旧 owner', async () => {
+  test('普通重绘保留目录 owner，组件卸载后拒绝迟到刷新', async () => {
     installGatewayFetch(withDefaultGatewayApiResponses(({ path }) => path === '/api/v1/session-catalog/snapshot'
       ? apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id, catalog_revision: 4, event_seq_watermark: 0, generation: 1 })
       : undefined));
@@ -112,36 +112,35 @@ describe("useSessionResourceExplorer 自动同步", () => {
     const registrations: SessionCatalogFailureOwner[] = [];
     const removed: SessionCatalogFailureOwner[] = [];
     const originalRegister = fixture.runtime.registerFailureOwner.bind(fixture.runtime);
-    const registration = spyOn(fixture.runtime, 'registerFailureOwner').mockImplementation((access, owner) => {
+    const registration = spyOn(fixture.runtime, 'registerFailureOwner').mockImplementation((owner) => {
       registrations.push(owner);
-      const unregister = originalRegister(access, owner);
+      const unregister = originalRegister(owner);
       return () => { removed.push(owner); unregister(); };
     });
-    const access = testGatewayUserAccess();
-    function Harness({ value }: { value: GatewayUserAccess }) {
+
+    function Harness() {
       useSessionResourceExplorer(createSessionResourceExplorerProps({
-        activeWorkspaceId: null, workspaces: [TEST_GATEWAY_WORKSPACE_REQUEST_TARGET],
-        gatewayUserAccess: value, sessionCatalogOutboxRuntime: fixture.runtime,
+        activeWorkspaceId: null, workspaces: [TEST_GATEWAY_WORKSPACE_REQUEST_TARGET], sessionCatalogOutboxRuntime: fixture.runtime,
       }));
       return null;
     }
     let renderer: ReturnType<typeof create> | undefined;
     try {
-      await act(async () => { renderer = create(<Harness value={access} />); await flushReactEffects(); });
+      await act(async () => { renderer = create(<Harness />); await flushReactEffects(); });
       expect(registrations).toHaveLength(1);
       const originalOwner = registrations[0];
       await act(async () => {
-        renderer!.update(<Harness value={{ ...access, lease_generation: 2, expires_at: '2026-10-30T00:00:00Z' }} />);
+        renderer!.update(<Harness />);
         await flushReactEffects();
       });
       expect(registrations).toHaveLength(1);
       expect(removed).toHaveLength(0);
-      const handle = await fixture.runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, access);
+      const handle = await fixture.runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET);
       await act(async () => {
         await originalOwner.refresh(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, handle.driver.current(), 0, new AbortController().signal);
       });
-      await act(async () => { renderer!.update(<Harness value={{ ...access, kind: 'user', user_id: 'another-user' }} />); });
-      expect(registrations).toHaveLength(2);
+      await act(async () => { renderer!.unmount(); });
+      expect(registrations).toHaveLength(1);
       expect(removed).toEqual([originalOwner]);
       await expect(originalOwner.refresh(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, handle.driver.current(), 0, new AbortController().signal)).rejects.toThrow('owner 已离开');
     } finally { act(() => renderer?.unmount()); registration.mockRestore(); fixture.runtime.dispose(); }
@@ -377,8 +376,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
   test("恢复的终态分支被新读取取代后保留新 confirmed，只由新读取清理回执", async () => {
     const runtime = createSessionCatalogOutboxTestRuntime();
-    await runtime.runtime.submit(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, testGatewayUserAccess(),
-      { kind: "create_folder", name: "恢复的目录" }, { baseCatalogRevision: 3 });
+    await runtime.runtime.submit(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, { kind: "create_folder", name: "恢复的目录" }, { baseCatalogRevision: 3 });
     let started!: () => void;
     const reading = new Promise<void>(resolve => { started = resolve; });
     let release!: () => void;
@@ -393,7 +391,6 @@ describe("useSessionResourceExplorer 自动同步", () => {
     }));
     const mounted = await mountSessionResourceExplorerHarness({ props: {
       sessionCatalogOutboxRuntime: runtime.runtime, sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
-      gatewayUserAccess: testGatewayUserAccess(),
     } });
     try {
       await reading;
@@ -410,7 +407,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       expect(confirmed?.catalog_revision).toBe(4);
       expect(confirmed?.error).toBeNull();
       expect(runtime.pruneCalls).toHaveLength(1);
-      expect(runtime.runtime.getSnapshot().get(`${TEST_GATEWAY_WORKSPACE_KEY}\u0000guest`)?.outbox.operations).toEqual([]);
+      expect(runtime.runtime.getSnapshot().get(`${TEST_GATEWAY_WORKSPACE_KEY}\u0000local`)?.outbox.operations).toEqual([]);
     } finally {
       release();
       mounted.unmount();
@@ -433,7 +430,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       return undefined;
     }));
     const mounted = await mountSessionResourceExplorerHarness({ props: {
-      sessionCatalogOutboxRuntime: runtime.runtime, gatewayUserAccess: testGatewayUserAccess(),
+      sessionCatalogOutboxRuntime: runtime.runtime,
     } });
     try {
       await act(async () => {
@@ -458,7 +455,6 @@ describe("useSessionResourceExplorer 自动同步", () => {
     const runtime = createSessionCatalogOutboxTestRuntime();
     await runtime.runtime.submit(
       TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
-      testGatewayUserAccess(),
       { kind: "create_folder", name: "恢复后的文件夹" },
       { baseCatalogRevision: 3 },
     );
@@ -474,7 +470,6 @@ describe("useSessionResourceExplorer 自动同步", () => {
         apiPort: 49_413,
         sessionCatalogOutboxRuntime: runtime.runtime,
         sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
-        gatewayUserAccess: testGatewayUserAccess(),
       },
     });
     await act(async () => {
@@ -485,7 +480,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     expect(explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.error).toContain("终态分支刷新故障");
     expect(runtime.errors[0]).toContain("终态分支刷新故障");
     expect(runtime.pruneCalls).toHaveLength(0);
-    const restoredOutbox = runtime.runtime.getSnapshot().get(`${TEST_GATEWAY_WORKSPACE_KEY}\u0000guest`)?.outbox;
+    const restoredOutbox = runtime.runtime.getSnapshot().get(`${TEST_GATEWAY_WORKSPACE_KEY}\u0000local`)?.outbox;
     expect(restoredOutbox?.operations).toHaveLength(1);
     expect(restoredOutbox?.operations[0].state).toBe("committed");
     unmount();
@@ -495,7 +490,6 @@ describe("useSessionResourceExplorer 自动同步", () => {
     const runtime = createSessionCatalogOutboxTestRuntime();
     await runtime.runtime.submit(
       TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
-      testGatewayUserAccess(),
       { kind: "create_folder", name: "等待分支确认的文件夹" },
       { baseCatalogRevision: 3 },
     );
@@ -519,7 +513,6 @@ describe("useSessionResourceExplorer 自动同步", () => {
         apiPort: 49_414,
         sessionCatalogOutboxRuntime: runtime.runtime,
         sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
-        gatewayUserAccess: testGatewayUserAccess(),
       },
     });
     await act(async () => {
@@ -532,7 +525,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       catalogRevision: 4,
       operationIds: ["test_catalog_operation_1"],
     }]);
-    expect(runtime.runtime.getSnapshot().get(`${TEST_GATEWAY_WORKSPACE_KEY}\u0000guest`)?.outbox.operations)
+    expect(runtime.runtime.getSnapshot().get(`${TEST_GATEWAY_WORKSPACE_KEY}\u0000local`)?.outbox.operations)
       .toHaveLength(0);
     unmount();
   });
@@ -707,7 +700,6 @@ describe("useSessionResourceExplorer 自动同步", () => {
         apiPort: 49_404,
         sessionCatalogOutboxRuntime: runtime.runtime,
         sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
-        gatewayUserAccess: testGatewayUserAccess(),
       },
     });
 
@@ -882,7 +874,6 @@ describe("useSessionResourceExplorer 自动同步", () => {
         apiPort: 49_407,
         sessionCatalogOutboxRuntime: runtime.runtime,
         sessionCatalogOutboxSnapshot: runtime.runtime.getSnapshot(),
-        gatewayUserAccess: testGatewayUserAccess(),
       },
       flushes: 3,
     });

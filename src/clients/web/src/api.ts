@@ -2,8 +2,6 @@ export {
   DEFAULT_BACKEND_HOST,
   DEFAULT_BACKEND_PORT,
   HttpRequestError,
-  invalidateGatewayUserSession,
-  registerGatewayUserSessionInitializer,
   requestJson,
   unwrapApiData,
   workspaceHeader,

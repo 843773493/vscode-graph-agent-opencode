@@ -25,11 +25,15 @@ Windows/macOS 的 detached manager 在 `out/development-runtime/detached-ready.j
 
 detached manager启动失败后，终止请求成功时原样抛出启动异常；终止请求也失败时，`AggregateError.errors`按顺序保留启动和清理两份原异常，`cause`指向启动异常。`dev-detached-lifetime.test.mjs`通过AST提取实际入口函数并注入文件、进程和信号替身，不执行开发编排或操作用户服务；该证据只覆盖异常交付与清理调用，不能替代真实进程退出确认。
 
-Unix开发端口清理只查询TCP监听进程，不把已连接客户端纳入终止名单；`lsof`关闭名称解析，以`-iTCP:<逗号分隔端口>`和`-Fpn`一次取得全部目标端口的PID及监听地址，解析为端口→PID列表。仅正常结束、无任何输出的exit 1表示无匹配，其它命令失败或信号中断必须明确报错，不能当作端口空闲；无效字段、未登记端口或缺少PID的记录直接失败。`dev-port-listeners.test.mjs`用两个随机本地监听端口、一个空闲端口和独立客户端验证一次查询返回完整监听映射；错误路径以替身核查清理前失败，不发送真实终止命令。fixture与观察原件保留在`out/tests/scripts/launch/dev-port-listeners/{workspace,artifacts}/<run_id>/`；原生选择用例需要Linux/macOS和lsof，不代表完整开发栈启动验收。
+Unix及Windows启动前只查询本次目标端口的TCP监听者；有任何监听者时列出端口与PID并拒绝启动，不尝试判断其属于哪个实例，也不发送TERM、KILL或taskkill。`lsof`关闭名称解析，以`-iTCP:<逗号分隔端口>`和`-Fpn`一次取得全部监听映射；仅正常结束、无任何输出的exit 1表示无匹配，其它查询失败必须明确报错，不能当作端口空闲。Windows通过`netstat -ano -p tcp`只读取LISTENING行。`dev-port-listeners.test.mjs`以真实随机本地监听者验证拒绝启动且不发信号；Windows测试以命令替身验证不会执行taskkill。产物保留在对应`out/tests/scripts/launch/<测试文件名>/<run_id>/`路径；不能把端口空闲证明视为完整开发栈启动验收。
 
-Unix监听进程使用Linux/macOS共用的`process.kill`发信号，不再启动外部`kill`命令；先批量TERM，保留1秒等待，再重查并KILL残留，最后确认端口释放。三个阶段各取一次新快照，每阶段跨端口去重PID，不能对同一进程重复强杀；不因合并查询省略后续重查。仅ESRCH表示查询后的进程已退出，EPERM等其它异常原样抛出；Windows继续使用taskkill结束进程树。真实清理测试只允许向本次创建的随机端口监听子进程发信号，并保留PID、信号、lsof调用和退出结果；其它进程、外部kill命令及开发服务均不在授权范围。ESRCH/EPERM由独立替身验证，不将替身结果当作原生权限验收。
+监听进程查询不可见的端口仍可能因权限或平台差异不可 bind；因此 `dev.mjs` 启动前还会通过 Node `net.createServer` 对选中监听地址及所有目标 TCP 端口逐个 bind/close。任一失败保留 host、port、错误码和原始错误并停止启动；该检查只短暂占用本次候选端口，不终止现有进程。`dev-port-bindable.test.mjs`使用随机端口上的真实 TCP listener 检查 EADDRINUSE、空闲 bind/close 与其它 bind 错误，不依赖 lsof 可见性。
 
-Windows每个清理阶段只读取一次完整TCP监听表，按目标端口分组；清理前的快照用于去重PID和taskkill，清理后的新快照用于确认释放，不跨阶段复用。只选本地端口上的TCP LISTENING行，不选择连接客户端或其它端口；查询失败保留命令、退出码、signal与stderr，目标监听行的无效PID直接报错。`dev-windows-port-listeners.test.mjs`以真实入口源码和命令替身验证IPv4/IPv6、去重、两阶段查询及失败，workspace与观察原件分别保留在`out/tests/scripts/launch/dev-windows-port-listeners/{workspace,artifacts}/<run_id>/`；不执行netstat/taskkill，不代表Windows原生服务验收。
+实例重启由该实例的 manager/systemd 生命周期负责回收进程组；若端口仍被占用，启动器保留进程并明确失败。禁止以端口占用本身作为终止进程的授权依据。
+
+`dev.mjs` 启动前若目标 Home 的 Launcher 锁仍指向存活 PID，就拒绝启动并要求调用对应实例的 `dev-manager stop`；不能在新启动链里停止现有 Launcher。锁 PID 仅用于 `kill(pid, 0)` 存活探测，ESRCH 视为陈旧锁，其他进程错误显式报出。`dev-launcher-lock.test.mjs`提取此入口并只验证零信号探测。
+
+Windows每次启动只读取一次完整TCP监听表，按目标端口找出本地LISTENING行；只选LISTENING，不选择客户端或其它端口。查询失败保留命令、退出码、signal与stderr；任一端口被占用就拒绝启动，不执行taskkill。`dev-windows-port-listeners.test.mjs`用命令替身验证占用与失败路径，不能替代Windows原生服务验收。
 
 `dev-systemd.test.mjs`的布局用例只计算路径和unit参数：输入根放正式输出镜像路径，含中文、空格，路径及PATH分隔符遵循宿主规则。状态观察用例只在该输出根下创建ready标记和`systemctl`替身，并使用动态本地HTTP端口验证真实status CLI的限时、响应正文取消和迟到响应；不启动transient unit、开发栈或用户端口。纯计算测试可跨平台运行，依赖POSIX替身和systemd CLI形态的状态用例仅Linux运行，不能把路径模拟通过当作跨平台服务启动验收。
 
@@ -51,6 +55,11 @@ Windows每个清理阶段只读取一次完整TCP监听表，按目标端口分�
 
 # 规范
 
+- worktree 角色与脚本目标契约见 [worktree 与发布迁移约定](../../docs/architecture/worktree-and-release-policy.md)：根共享开发，根验证优先，dev 集成次之，实验隔离最后；固定目录采用主 worktree 的 `out/worktrees/dev/`、`out/worktrees/release/`，实验目录按首次创建 UTC 日期归入 `out/worktrees/YYYY/MM/DD/<task_name>/`。
+- `workspace.mjs <root|dev|experiment> <start|stop|status> [experiment-path]` 是开发服务的统一实例路由。dev 使用根启动器和根 Vite，后端源码/Home/工作区/端口绑定到受管 dev；root 从根启动整组服务；experiment 从自己的 checkout 启动。dev/experiment 核对匹配 `primary_root` 的 metadata，归档 checkout 拒绝启动。root/dev 可用 `--backend-root <路径>` 显式选择后端源码，其 Home 默认属于选定后端并使用显式环境端口偏移；只有实验允许 `--home=<路径>`。入口拒绝冲突的继承 Home/workspace，不启动 release。
+- `worktree.mjs` 提供 create/setup/sync/list/artifact/archive：按 Git 注册定位主 worktree，保留源暂存/未暂存/新增改动；同步只允许明确选择文件并在目标冲突时拒绝覆盖；archive 保留 checkout 与完整脏状态。归档调用者必须完成进程与其他 Agent 引用检查并显式传 `--checked-references`；入口还会检查 ready、manager lock、Launcher lock 与同一布局的 systemd unit，活动/未知状态或 status 查询错误都会拒绝归档。此参数是检查确认，不是删除或停服授权。
+- 本机 dev/实验创建默认复制明确清单中的 `.env`、未跟踪 `.env.*` 与 `configs/*_local.jsonc`，不复制 Home/数据库/身份/运行账本；不得打印配置值，不把本机复制授权扩展为远端同步授权。初始化依赖使用各 checkout 自己的锁文件和依赖目录。
+- 固定 dev 的 Workbench Vite、Terminal/Browser 前端取根源码，Launcher、Gateway、Workspace 与辅助后端、Python 环境、配置资源取 dev。`BOXTEAM_PROJECT_ROOT` 是后端路径，`BOXTEAM_FRONTEND_ROOT` 是前端路径，启动和状态均展示两者；底层启动器也接受 `--backend-root`。固定 dev 的 Home/工作区与端口独立，配置复制不能继承源实例运行身份；同步时核对协议。不得重启或清理另一任务正在使用的实例。
 - 完整浏览器前端只从 `src/clients/workbench` 启动 Vite；端口与 Gateway 路由由统一环境布局传入，不启动旧 React App 外壳。
 
 - `cross-platform-development-target.test.mjs` 的 Linux bootstrap 检查实际执行管理脚本，uv、bun、node、python3 和 Git 为明确的命令替身；验证缺失上游时在安装前失败、三份依赖安装顺序、Workbench 锁变化的 metadata 指纹，以及安装失败的退出码与零成功回执。命令、原始 stdout/stderr 和替身调用保留在同名正式镜像目录的 artifacts/<run_id>/bootstrap/；只在隔离 fixture 写文件，不连接目标或修改宿主环境，不替代 Windows 及真实依赖安装验收。

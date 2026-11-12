@@ -45,7 +45,7 @@ async def test_dirty_model_coverage_reaches_target_before_page_allocation(
         workspace_root=targets[0], default_backend_url=None, port=search_gateway_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
-    command = ["bun", "tests/integration/clients/web/quick_access/file_model_coverage.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/file_model_coverage.mjs"]
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             process = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,

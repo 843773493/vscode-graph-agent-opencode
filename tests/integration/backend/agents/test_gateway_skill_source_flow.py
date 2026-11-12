@@ -21,12 +21,12 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.services.orchestration.session_subagent_service import _derive_delegation_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from tests.harness.python.run_context import TestRunContext
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -82,10 +82,10 @@ def _text_reply(text: str) -> tuple[dict, str]:
 
 
 @pytest.fixture
-def scripted_model(request: pytest.FixtureRequest, integration_workspace_root_path: str) -> Iterator[ModelState]:
-    output = Path(integration_workspace_root_path).parent
+def scripted_model(request: pytest.FixtureRequest) -> Iterator[ModelState]:
+    context = TestRunContext.from_test_file(Path(request.node.path))
     with model_stream_replay(
-        output, runtime_root=output / "runtime" / request.node.name,
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="gateway-skill-source-flow",
     ) as replay:
         yield ModelState(replay.control, replay.config_path, replay.artifacts)
@@ -170,7 +170,6 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
     base_url = f"http://127.0.0.1:{port}"
     try:
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             gateway_id = health.json()["data"]["gateway_id"]
             workspace_info = await client.get("/api/v1/workspace")
@@ -316,7 +315,6 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             extra_env=state.environment,
         )
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             restarted_health = await client.get("/api/gateway/health")
             assert restarted_health.json()["data"]["gateway_id"] == gateway_id
             rebuilt = (await client.get(raw_path)).json()["data"]
@@ -367,7 +365,6 @@ async def test_gateway_local_update_policy_drives_workspace_skill_and_cold_resta
     receipts: dict[str, object] = {}
     try:
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             gateway_id = health.json()["data"]["gateway_id"]
             workspace_reply = await client.get("/api/v1/workspace")
@@ -448,7 +445,6 @@ async def test_gateway_local_update_policy_drives_workspace_skill_and_cold_resta
             asgi_app="tests.support.e2e_control.gateway_app:app",
         )
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             assert (await client.get("/api/v1/workspace")).status_code == 200
             assert (await client.get(raw_path)).json()["data"] == current
             skill.write_bytes((FRONTMATTER + OLD_BODY).encode())
@@ -496,7 +492,6 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
         )
         base_url = f"http://127.0.0.1:{port}"
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             gateway_id = (await client.get("/api/gateway/health")).json()["data"]["gateway_id"]
             assert (await client.get("/api/v1/workspace")).status_code == 200
             await _assert_skill_tool_schema(client)
@@ -555,7 +550,6 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             extra_env=state.environment,
         )
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             assert (await client.get("/api/v1/workspace")).status_code == 200
             child_job = await _wait_job(client, intent["job_id"])
             assert child_job["status"] in {"completed", "succeeded"}, child_job

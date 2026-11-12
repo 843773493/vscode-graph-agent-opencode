@@ -15,7 +15,6 @@ from tests.integration.gateway.test_federated_search import (
 )
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
 )
 from tests.support.processes.workspace import workspace_backend_id_for_root
@@ -27,7 +26,6 @@ async def test_two_roots_resume_subset_with_new_page_budget(network: Network) ->
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{network.gateway_port}", headers=LOCAL_TOKEN_HEADERS,
                                      timeout=25, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             workspace_id = workspace_backend_id_for_root(network.workspace)
             client.headers.update({"X-BoxTeam-Target-Gateway-Id": network.gateway_id,
                                    "X-BoxTeam-Workspace-Id": workspace_id})

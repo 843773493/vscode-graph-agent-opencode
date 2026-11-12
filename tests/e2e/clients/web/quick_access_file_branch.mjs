@@ -60,7 +60,6 @@ try {
     result.apiReceipts.push(response.receipt);
     return response.data;
   };
-  await api('/api/gateway/users/guest', undefined, { tracking: { source: 'quick-access-file-branch' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces?check_health=false');

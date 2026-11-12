@@ -1,4 +1,5 @@
 import { Disposable, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { Emitter } from '../../upstream/src/vs/base/common/event.js';
 import { IContextKeyService } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
@@ -14,6 +15,12 @@ import { captureSearchOwner } from '../search/target.js';
 import { PluginCommandContributions, pluginGatewayContextKey, pluginWorkspaceContextKey, pluginTargetKey,
   type FrozenPluginCommand, type PluginCommandOwner } from './pluginCommandRegistry.js';
 import { callPluginCommand, watchPluginCommands } from '../../../web/src/api/pluginCommands.js';
+
+const remoteGatewayReconnected = new Emitter<string>();
+
+export function notifyPluginCommandGatewayReconnected(connectionId: string): void {
+  remoteGatewayReconnected.fire(connectionId);
+}
 
 /** 与搜索共用发起编辑器归属；空窗口允许明确的入口 Gateway。 */
 export function capturePluginCommandOwner(editors: IEditorService,
@@ -115,6 +122,17 @@ class PluginCommands extends Disposable {
     this._register(editors.onDidVisibleEditorsChange(update));
     this._register(groups.onDidAddGroup(update));
     this._register(groups.onDidRemoveGroup(update));
+    this._register(remoteGatewayReconnected.event(connectionId => {
+      let retired = false;
+      for (const [key, stream] of this.streams) {
+        if (stream.target.gateway_connection_id !== connectionId) continue;
+        stream.abort.abort();
+        this.contributions.remove(stream.target);
+        this.streams.delete(key);
+        retired = true;
+      }
+      if (retired) update();
+    }));
     this._register(toDisposable(onGatewayTokenInvalidated(0, () => {
       for (const stream of this.streams.values()) { stream.abort.abort(); this.contributions.remove(stream.target); }
       this.streams.clear();

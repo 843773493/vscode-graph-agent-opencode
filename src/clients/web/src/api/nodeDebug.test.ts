@@ -91,9 +91,6 @@ describe("Node Debug API client", () => {
         if (url.pathname === "/api/gateway/auth/local-credential") {
           return Response.json({ data: { token: "node-debug-token" } });
         }
-        if (url.pathname === "/api/gateway/users/current") {
-          return Response.json({ data: { kind: "guest", user_id: null }, request_id: "req-user" });
-        }
 
         requests.push({
           url,

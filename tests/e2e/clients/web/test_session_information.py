@@ -19,7 +19,6 @@ from tests.support.paths import output_root_for_test
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -88,7 +87,6 @@ async def test_copy_session_information_uses_bounded_protocol_projection(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             health_response = await client.get("/api/gateway/health")
             assert health_response.status_code == 200, health_response.text
             owner = {

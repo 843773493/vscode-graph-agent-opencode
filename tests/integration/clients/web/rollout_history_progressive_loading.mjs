@@ -66,22 +66,8 @@ async function waitUntil(predicate, label, timeout = 30_000) {
   throw new Error(`等待${label}超时`);
 }
 
-async function ensureGuest(page) {
+async function openWorkbenchPage(page) {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  const current = await page.evaluate(async () => {
-    const response = await fetch("/api/gateway/users/current");
-    return { status: response.status, body: await response.text() };
-  });
-  if (current.status === 401) {
-    await api(page, "/api/gateway/users/guest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tracking: { source: "rollout-history-browser" } }),
-    });
-    await page.reload({ waitUntil: "domcontentloaded" });
-  } else if (current.status !== 200) {
-    throw new Error(`检查游客访问失败: ${current.status} ${current.body}`);
-  }
 }
 
 function historyPayload(response) {
@@ -158,7 +144,7 @@ try {
   scope.addCleanup("长历史 context", () => context.close());
   page = await context.newPage();
   page.on("pageerror", error => pageErrors.push(String(error)));
-  await ensureGuest(page);
+  await openWorkbenchPage(page);
   const sessionButton = page.locator(`button[data-session-id="${sessionId}"]`);
   await sessionButton.waitFor({ state: "visible", timeout: 30_000 });
   await sessionButton.dblclick();

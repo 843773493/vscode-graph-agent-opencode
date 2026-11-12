@@ -1,11 +1,12 @@
+import { observeSessionCatalogChanges } from "../sessionEventStream/sessionCatalogObservation";
 import { gatewayWorkspaceKey, gatewayWorkspaceOwner } from "../../api/workspaceIdentity";
 import { HttpRequestError } from "../../api/http";
 import {
   fetchSessionCatalogSnapshot,
   listSessionCatalogNavigationEvents,
+  type SessionCatalogSnapshot,
 } from "../../api/session/sessionCatalogOperations";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
-import type { GatewayUserAccess } from "../../types/backend";
 import { errorMessage, ReportedError } from "../../utils/errorMessage";
 import { CatalogReadSupersededError } from "../sessionResourceExplorer/resourceTreeSync";
 import {
@@ -62,12 +63,11 @@ export interface SessionCatalogFailureOwner {
 
 export interface SessionCatalogOutboxRuntime {
   /** 接入 confirmed 目录刷新，供失败回退和 navigation 事件失效共同使用。 */
-  registerFailureOwner: (access: GatewayUserAccess, owner: SessionCatalogFailureOwner) => () => void;
+  registerFailureOwner: (owner: SessionCatalogFailureOwner) => () => void;
   getSnapshot: () => SessionCatalogOutboxSnapshot;
   subscribe: (listener: () => void) => () => void;
   openWorkspace: (
     workspaceTarget: GatewayWorkspaceRequestTarget,
-    access: GatewayUserAccess,
   ) => Promise<SessionCatalogOutboxHandle>;
   waitForTerminal: (
     handle: SessionCatalogOutboxHandle,
@@ -75,7 +75,6 @@ export interface SessionCatalogOutboxRuntime {
   ) => Promise<CatalogOutboxOperation>;
   submit: (
     workspaceTarget: GatewayWorkspaceRequestTarget,
-    access: GatewayUserAccess,
     intent: CatalogOutboxIntent,
     intentOptions: CatalogOutboxOptions,
   ) => Promise<{
@@ -84,7 +83,6 @@ export interface SessionCatalogOutboxRuntime {
   }>;
   applyAndWait: (
     workspaceTarget: GatewayWorkspaceRequestTarget,
-    access: GatewayUserAccess,
     intent: CatalogOutboxIntent,
     intentOptions: CatalogOutboxOptions,
   ) => Promise<{
@@ -93,7 +91,6 @@ export interface SessionCatalogOutboxRuntime {
     operation: CatalogOutboxOperation;
   }>;
   reportError: (message: string) => void;
-  activatePrincipal: (access: GatewayUserAccess | null) => void;
   dispose: () => void;
 }
 
@@ -104,11 +101,10 @@ interface SessionCatalogOutboxRuntimeOptions {
   refreshSessionOwner?: (workspaceTarget: GatewayWorkspaceRequestTarget, signal: AbortSignal) => Promise<void>;
   openPersistence?: () => Promise<CatalogOutboxPersistencePort>;
   adapter?: SessionCatalogOperationsAdapter;
-  reconcileIntervalMs?: number;
+  observeChanges?: typeof observeSessionCatalogChanges;
 }
 
 const OPERATION_POLL_INTERVAL_MS = 750;
-const RECONCILE_INTERVAL_MS = 1_000;
 
 function waitForNextOperationPoll(): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -118,12 +114,11 @@ function waitForNextOperationPoll(): Promise<void> {
 
 interface RuntimeDriver extends SessionCatalogOutboxHandle {
   principal: string;
-  generation: number;
   opening: Promise<void>;
   activeRequests: Set<AbortController>;
   navigationEventSequence: number | null;
   confirmedCatalogRevision: number | null;
-  reconciliation: Promise<void> | null;
+  dispatchRetryTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export function catalogOutboxWorkspaceScopeKey(
@@ -133,17 +128,8 @@ export function catalogOutboxWorkspaceScopeKey(
   return `${gatewayWorkspaceId}\u0000${principal}`;
 }
 
-function principalFor(access: GatewayUserAccess): string {
-  if (access.kind === "guest") return "guest";
-  if (access.kind === "user" && access.user_id) return `user:${access.user_id}`;
-  throw new Error(`Gateway 认证主体不支持会话目录 outbox: kind=${access.kind}`);
-}
-
-export function sessionCatalogOutboxScopeKey(
-  gatewayWorkspaceId: string,
-  access: GatewayUserAccess,
-): string {
-  return catalogOutboxWorkspaceScopeKey(gatewayWorkspaceId, principalFor(access));
+export function sessionCatalogOutboxScopeKey(gatewayWorkspaceId: string): string {
+  return catalogOutboxWorkspaceScopeKey(gatewayWorkspaceId, "local");
 }
 
 export function createSessionCatalogOutboxRuntime(
@@ -153,16 +139,13 @@ export function createSessionCatalogOutboxRuntime(
   const openingsByScope = new Map<string, Promise<RuntimeDriver>>();
   const driversByPartition = new Map<string, RuntimeDriver>();
   const listeners = new Set<() => void>();
-  const failureOwners = new Map<string, Set<SessionCatalogFailureOwner>>();
+  const failureOwners = new Set<SessionCatalogFailureOwner>();
   const terminalOperations = new Map<string, CatalogOutboxOperation>();
   const reportedFailures = new Set<string>();
   let snapshot: SessionCatalogOutboxSnapshot = new Map();
   let persistencePromise: Promise<CatalogOutboxPersistencePort> | null = null;
   let broadcast: ReturnType<typeof createCatalogOutboxBroadcaster> | null = null;
   let unsubscribeBroadcast: (() => void) | null = null;
-  let reconcileTimer: ReturnType<typeof globalThis.setInterval> | null = null;
-  let activePrincipal: string | null = null;
-  let principalGeneration = 0;
   let disposed = false;
 
   const reportError = (message: string): void => {
@@ -170,28 +153,17 @@ export function createSessionCatalogOutboxRuntime(
     options.onError?.(message);
   };
 
-  const assertActivePrincipal = (principal: string, generation: number): void => {
-    if (disposed || activePrincipal !== principal || principalGeneration !== generation) {
-      throw new Error(
-        `Gateway 认证主体已切换，拒绝继续使用会话目录 outbox: ${principal}`,
-      );
-    }
-  };
-
   const isCurrentDriver = (runtimeDriver: RuntimeDriver): boolean =>
     !disposed
-    && activePrincipal === runtimeDriver.principal
-    && principalGeneration === runtimeDriver.generation
     && driversByScope.get(catalogOutboxWorkspaceScopeKey(
       runtimeDriver.gatewayWorkspaceId,
       runtimeDriver.principal,
     )) === runtimeDriver;
 
   const assertCurrentDriver = (runtimeDriver: RuntimeDriver): void => {
-    assertActivePrincipal(runtimeDriver.principal, runtimeDriver.generation);
     if (!isCurrentDriver(runtimeDriver)) {
       throw new Error(
-        `会话目录 outbox driver 已被身份切换替换: ${runtimeDriver.gatewayWorkspaceId}`,
+        `会话目录 outbox driver 已停止或替换: ${runtimeDriver.gatewayWorkspaceId}`,
       );
     }
   };
@@ -216,23 +188,9 @@ export function createSessionCatalogOutboxRuntime(
   };
 
   const deactivateDriver = (runtimeDriver: RuntimeDriver): void => {
+    if (runtimeDriver.dispatchRetryTimer !== null) clearTimeout(runtimeDriver.dispatchRetryTimer);
     runtimeDriver.driver.deactivate();
     for (const controller of runtimeDriver.activeRequests) controller.abort();
-  };
-
-  const activatePrincipal: SessionCatalogOutboxRuntime["activatePrincipal"] = (access) => {
-    if (disposed) throw new Error("会话目录 outbox runtime 已停止");
-    const nextPrincipal = access ? principalFor(access) : null;
-    if (nextPrincipal === activePrincipal) return;
-    activePrincipal = nextPrincipal;
-    principalGeneration += 1;
-    for (const [scopeKey, runtimeDriver] of driversByScope) {
-      deactivateDriver(runtimeDriver);
-      driversByScope.delete(scopeKey);
-      if (driversByPartition.get(runtimeDriver.partitionKey) === runtimeDriver) {
-        driversByPartition.delete(runtimeDriver.partitionKey);
-      }
-    }
   };
 
   const publish = (entry: SessionCatalogOutboxEntry): void => {
@@ -265,125 +223,137 @@ export function createSessionCatalogOutboxRuntime(
     });
   };
 
-  const reconcileWorkspace = async (runtimeDriver: RuntimeDriver): Promise<void> => {
-    const request = (async () => {
-      await runtimeDriver.opening;
-      assertCurrentDriver(runtimeDriver);
-      const owners = [...(failureOwners.get(runtimeDriver.principal) ?? [])];
-      if (owners.length === 0 && !options.refreshSessionOwner) {
-        await runtimeDriver.driver.reconcile();
-        return;
-      }
-      const controller = new AbortController();
-      runtimeDriver.activeRequests.add(controller);
-      const signal = controller.signal;
-      try {
-        const initial = runtimeDriver.navigationEventSequence === null;
-        let sequence = runtimeDriver.navigationEventSequence ?? 0;
-        let changed = initial;
-        let cursor: string | null = null;
-        if (!initial) {
-          for (;;) {
-            const page = await listSessionCatalogNavigationEvents(
-              options.apiPort, runtimeDriver.workspaceTarget, { after: sequence, cursor, signal },
-            );
-            assertCurrentDriver(runtimeDriver);
-            if (page.workspace_id !== runtimeDriver.partition.workspaceId) {
-              throw new Error("navigation 事件 workspace 与当前 outbox 分区不一致");
-            }
-            if (page.cursor_gone) {
-              changed = true;
-              break;
-            }
-            const identities = new Map<number, string>();
-            for (const event of page.items) {
-              const previousId = identities.get(event.event_seq);
-              if (previousId && previousId !== event.operation_id) {
-                throw new Error("navigation 同 event_seq 的 operation identity 冲突");
-              }
-              identities.set(event.event_seq, event.operation_id);
-            }
-            const events = [...page.items].sort((left, right) => left.event_seq - right.event_seq);
-            let gap = false;
-            for (const event of events) {
-              if (event.workspace_id !== page.workspace_id) throw new Error("navigation 事件页含其它工作区");
-              if (event.event_seq <= sequence) continue;
-              if (event.event_seq !== sequence + 1) {
-                gap = true;
-                break;
-              }
-              sequence = event.event_seq;
-              changed = true;
-            }
-            if (gap || (!page.has_more && page.event_seq_watermark > sequence)) {
-              changed = true;
-              break;
-            }
-            if (!page.has_more) break;
-            if (!page.next_cursor || page.next_cursor === cursor || events.length === 0) {
-              throw new Error("navigation 事件分页没有推进 cursor");
-            }
-            cursor = page.next_cursor;
-          }
-        }
-        await runtimeDriver.driver.reconcile();
-        assertCurrentDriver(runtimeDriver);
-        // physical settlement 不新增 navigation 事件；原对账也核对标量 catalog 版本。
-        const catalog = await fetchSessionCatalogSnapshot(options.apiPort, runtimeDriver.workspaceTarget, { signal });
-        assertCurrentDriver(runtimeDriver);
-        if (catalog.workspace_id !== runtimeDriver.partition.workspaceId
-          || catalog.event_seq_watermark < sequence
-          || catalog.catalog_revision < (runtimeDriver.confirmedCatalogRevision ?? 0)) {
-          throw new Error("navigation 权威 snapshot 落后于已消费目录或事件");
-        }
-        changed ||= catalog.catalog_revision !== runtimeDriver.confirmedCatalogRevision;
-        if (changed) {
-          // 事件只使既有镜像失效；状态与目录仍从同 ID 回执和最新 snapshot 取得。
-          await Promise.all([
-            ...owners.map((owner) => owner.refresh(
-              runtimeDriver.workspaceTarget, runtimeDriver.driver.current(), catalog.catalog_revision, signal,
-            )),
-            options.refreshSessionOwner?.(runtimeDriver.workspaceTarget, signal),
-          ]);
-          await Promise.all(owners.map((owner) => owner.waitForProjection(signal)));
+  const reconcileWorkspace = async (runtimeDriver: RuntimeDriver, notified: SessionCatalogSnapshot): Promise<void> => {
+    await runtimeDriver.opening;
+    assertCurrentDriver(runtimeDriver);
+    const owners = [...failureOwners];
+    if (owners.length === 0 && !options.refreshSessionOwner) {
+      await runtimeDriver.driver.reconcile();
+      return;
+    }
+    const controller = new AbortController();
+    runtimeDriver.activeRequests.add(controller);
+    const signal = controller.signal;
+    try {
+      const initial = runtimeDriver.navigationEventSequence === null;
+      let sequence = runtimeDriver.navigationEventSequence ?? 0;
+      let changed = initial;
+      let cursor: string | null = null;
+      if (!initial) {
+        for (;;) {
+          const page = await listSessionCatalogNavigationEvents(
+            options.apiPort, runtimeDriver.workspaceTarget, { after: sequence, cursor, signal },
+          );
           assertCurrentDriver(runtimeDriver);
-          if (owners.some((owner) => !failureOwners.get(runtimeDriver.principal)?.has(owner))) {
-            throw new Error("navigation confirmed owner 已离开，保留原 cursor 等待恢复");
+          if (page.workspace_id !== runtimeDriver.partition.workspaceId) {
+            throw new Error("navigation 事件 workspace 与当前 outbox 分区不一致");
           }
-          sequence = catalog.event_seq_watermark;
-          runtimeDriver.confirmedCatalogRevision = catalog.catalog_revision;
+          if (page.cursor_gone) {
+            changed = true;
+            break;
+          }
+          const identities = new Map<number, string>();
+          for (const event of page.items) {
+            const previousId = identities.get(event.event_seq);
+            if (previousId && previousId !== event.operation_id) {
+              throw new Error("navigation 同 event_seq 的 operation identity 冲突");
+            }
+            identities.set(event.event_seq, event.operation_id);
+          }
+          const events = [...page.items].sort((left, right) => left.event_seq - right.event_seq);
+          let gap = false;
+          for (const event of events) {
+            if (event.workspace_id !== page.workspace_id) throw new Error("navigation 事件页含其它工作区");
+            if (event.event_seq <= sequence) continue;
+            if (event.event_seq !== sequence + 1) {
+              gap = true;
+              break;
+            }
+            sequence = event.event_seq;
+            changed = true;
+          }
+          if (gap || (!page.has_more && page.event_seq_watermark > sequence)) {
+            changed = true;
+            break;
+          }
+          if (!page.has_more) break;
+          if (!page.next_cursor || page.next_cursor === cursor || events.length === 0) {
+            throw new Error("navigation 事件分页没有推进 cursor");
+          }
+          cursor = page.next_cursor;
         }
-        runtimeDriver.navigationEventSequence = sequence;
-      } finally {
-        runtimeDriver.activeRequests.delete(controller);
       }
-    })().finally(() => {
-      if (runtimeDriver.reconciliation === request) runtimeDriver.reconciliation = null;
-    });
-    runtimeDriver.reconciliation = request;
-    return await request;
+      await runtimeDriver.driver.reconcile();
+      assertCurrentDriver(runtimeDriver);
+      // physical settlement 不新增 navigation 事件；原对账也核对标量 catalog 版本。
+      // 仅当分页已读到通知之后的新事件时补读，在线空闲不再定时查询 snapshot。
+      const catalog = notified.event_seq_watermark < sequence
+        || notified.catalog_revision < (runtimeDriver.confirmedCatalogRevision ?? 0)
+        ? await fetchSessionCatalogSnapshot(options.apiPort, runtimeDriver.workspaceTarget, { signal }) : notified;
+      assertCurrentDriver(runtimeDriver);
+      if (catalog.workspace_id !== runtimeDriver.partition.workspaceId
+        || catalog.event_seq_watermark < sequence
+        || catalog.catalog_revision < (runtimeDriver.confirmedCatalogRevision ?? 0)) {
+        throw new Error("navigation 权威 snapshot 落后于已消费目录或事件");
+      }
+      changed ||= catalog.catalog_revision !== runtimeDriver.confirmedCatalogRevision;
+      if (changed) {
+        // 事件只使既有镜像失效；状态与目录仍从同 ID 回执和最新 snapshot 取得。
+        await Promise.all([
+          ...owners.map((owner) => owner.refresh(
+            runtimeDriver.workspaceTarget, runtimeDriver.driver.current(), catalog.catalog_revision, signal,
+          )),
+          options.refreshSessionOwner?.(runtimeDriver.workspaceTarget, signal),
+        ]);
+        await Promise.all(owners.map((owner) => owner.waitForProjection(signal)));
+        assertCurrentDriver(runtimeDriver);
+        if (owners.some((owner) => !failureOwners.has(owner))) {
+          throw new Error("navigation confirmed owner 已离开，保留原 cursor 等待恢复");
+        }
+        sequence = catalog.event_seq_watermark;
+        runtimeDriver.confirmedCatalogRevision = catalog.catalog_revision;
+      }
+      runtimeDriver.navigationEventSequence = sequence;
+    } finally {
+      runtimeDriver.activeRequests.delete(controller);
+    }
   };
 
-  const scheduleReconciliation = (): void => {
-    if (reconcileTimer !== null) return;
-    reconcileTimer = globalThis.setInterval(() => {
-      for (const runtimeDriver of driversByScope.values()) {
-        // 每轮对账只注册一个错误回调；在途期间不为同一请求重复订阅失败。
-        if (!isCurrentDriver(runtimeDriver) || runtimeDriver.reconciliation) continue;
-        void reconcileWorkspace(runtimeDriver).catch((error: unknown) => {
-          // 新的目录读取已接管发布权。保留原事件水位，由既有对账继续取得完整 confirmed；
-          // 不能将被取代的旧页记为成功，也不能把正常取消升级成用户可见的业务故障。
-          if (error instanceof CatalogReadSupersededError) return;
-          if (isCurrentDriver(runtimeDriver)) {
-            const requestIdentity = error instanceof HttpRequestError && error.requestId
-              ? ` [request_id=${error.requestId}]` : "";
-            reportError(
-              `对账会话目录操作失败 (${runtimeDriver.gatewayWorkspaceId}): ${errorMessage(error)}${requestIdentity}`,
-            );
-          }
-        });
-      }
-    }, options.reconcileIntervalMs ?? RECONCILE_INTERVAL_MS);
+  const reportReconciliationError = (runtimeDriver: RuntimeDriver, error: unknown): void => {
+    if (!isCurrentDriver(runtimeDriver) || error instanceof CatalogReadSupersededError) return;
+    const requestIdentity = error instanceof HttpRequestError && error.requestId
+      ? ` [request_id=${error.requestId}]` : "";
+    reportError(`对账会话目录操作失败 (${runtimeDriver.gatewayWorkspaceId}): ${errorMessage(error)}${requestIdentity}`);
+  };
+
+  const scheduleDispatchRetry = (runtimeDriver: RuntimeDriver, outbox: CatalogOutbox): void => {
+    if (!isCurrentDriver(runtimeDriver)) return;
+    // 尚未受理的请求可能完全没有服务端提交，不能只等 SSE 才重试同一 ID。
+    const needsRetry = outbox.operations.some(operation => operation.state === "persisted" || operation.state === "unknown");
+    if (!needsRetry) {
+      if (runtimeDriver.dispatchRetryTimer !== null) clearTimeout(runtimeDriver.dispatchRetryTimer);
+      runtimeDriver.dispatchRetryTimer = null;
+      return;
+    }
+    if (runtimeDriver.dispatchRetryTimer !== null) return;
+    const timer = setTimeout(() => {
+      void runtimeDriver.driver.reconcile().catch(error => reportReconciliationError(runtimeDriver, error)).finally(() => {
+        if (runtimeDriver.dispatchRetryTimer === timer) runtimeDriver.dispatchRetryTimer = null;
+        scheduleDispatchRetry(runtimeDriver, runtimeDriver.driver.current());
+      });
+    }, OPERATION_POLL_INTERVAL_MS);
+    runtimeDriver.dispatchRetryTimer = timer;
+  };
+
+  const startObservation = (runtimeDriver: RuntimeDriver): void => {
+    const controller = new AbortController();
+    runtimeDriver.activeRequests.add(controller);
+    const onError = (error: unknown) => reportReconciliationError(runtimeDriver, error);
+    void (options.observeChanges ?? observeSessionCatalogChanges)(options.apiPort, runtimeDriver.workspaceTarget, {
+      signal: controller.signal,
+      onSnapshot: (snapshot) => reconcileWorkspace(runtimeDriver, snapshot),
+      onError,
+    }).catch(onError).finally(() => runtimeDriver.activeRequests.delete(controller));
   };
 
   const getPersistence = (): Promise<CatalogOutboxPersistencePort> => {
@@ -395,20 +365,13 @@ export function createSessionCatalogOutboxRuntime(
 
   const openWorkspace: SessionCatalogOutboxRuntime["openWorkspace"] = async (
     workspaceTarget,
-    access,
   ) => {
     if (disposed) throw new Error("会话目录 outbox runtime 已停止");
     const owner = gatewayWorkspaceOwner(workspaceTarget);
     const gatewayWorkspaceId = gatewayWorkspaceKey(owner);
-    const principal = principalFor(access);
-    if (activePrincipal !== principal) {
-      throw new Error(
-        `Gateway 认证主体已切换，拒绝打开旧 principal outbox: requested=${principal}, active=${activePrincipal ?? "none"}`,
-      );
-    }
-    const generation = principalGeneration;
+    const principal = "local";
     const scopeKey = catalogOutboxWorkspaceScopeKey(gatewayWorkspaceId, principal);
-    const openingKey = `${scopeKey}\u0000${generation}`;
+    const openingKey = scopeKey;
     const existing = driversByScope.get(scopeKey);
     if (existing && isCurrentDriver(existing)) {
       await existing.opening;
@@ -423,7 +386,7 @@ export function createSessionCatalogOutboxRuntime(
       const partitionKey = catalogOutboxPartitionKey(partition);
       startBroadcast();
       const persistence = await getPersistence();
-      assertActivePrincipal(principal, generation);
+      if (disposed) throw new Error("会话目录 outbox runtime 已停止");
       let runtimeDriver!: RuntimeDriver;
       const driver = createSessionCatalogOutboxDriver({
         port: options.apiPort,
@@ -434,7 +397,7 @@ export function createSessionCatalogOutboxRuntime(
         broadcast: broadcast?.broadcaster,
         async reconcileFailure(outbox, catalogRevision, finalize, signal) {
           assertCurrentDriver(runtimeDriver);
-          const owners = [...(failureOwners.get(principal) ?? [])];
+          const owners = [...failureOwners];
           if (owners.length === 0) {
             throw new Error("会话目录失败对账缺少 confirmed 分支刷新 owner，保留 pending 等待恢复");
           }
@@ -445,7 +408,7 @@ export function createSessionCatalogOutboxRuntime(
           // 新 confirmed 必须先经过现有纯投影，才允许撤销失败闭包。
           await Promise.all(owners.map((owner) => owner.waitForProjection(signal)));
           assertCurrentDriver(runtimeDriver);
-          if (owners.some((owner) => !failureOwners.get(principal)?.has(owner))) {
+          if (owners.some((owner) => !failureOwners.has(owner))) {
             throw new Error("会话目录 confirmed owner 已离开，保留 pending 等待恢复");
           }
           await finalize();
@@ -474,6 +437,7 @@ export function createSessionCatalogOutboxRuntime(
             }
           }
           publish({ gatewayWorkspaceId, principal, partitionKey, outbox });
+          scheduleDispatchRetry(runtimeDriver, outbox);
         },
       });
       runtimeDriver = {
@@ -483,12 +447,11 @@ export function createSessionCatalogOutboxRuntime(
         partitionKey,
         driver,
         principal,
-        generation,
         opening: Promise.resolve(),
         activeRequests: new Set(),
         navigationEventSequence: null,
         confirmedCatalogRevision: null,
-        reconciliation: null,
+        dispatchRetryTimer: null,
       };
       driversByScope.set(scopeKey, runtimeDriver);
       driversByPartition.set(partitionKey, runtimeDriver);
@@ -504,7 +467,7 @@ export function createSessionCatalogOutboxRuntime(
         }
         throw error;
       }
-      scheduleReconciliation();
+      startObservation(runtimeDriver);
       // 恢复只取回本地 pending；对账错误保持可见，不丢命令，也不阻止目录显示。
       void driver.reconcile().catch((error: unknown) => {
         if (isCurrentDriver(runtimeDriver)) {
@@ -535,7 +498,7 @@ export function createSessionCatalogOutboxRuntime(
     ));
     if (!runtimeDriver || runtimeDriver.driver !== handle.driver) {
       throw new Error(
-        `会话目录 outbox handle 已因身份切换失效: ${handle.gatewayWorkspaceId}`,
+        `会话目录 outbox handle 已停止: ${handle.gatewayWorkspaceId}`,
       );
     }
     const terminalKey = `${handle.partitionKey}\u0000${operationId}`;
@@ -587,11 +550,10 @@ export function createSessionCatalogOutboxRuntime(
 
   const submit: SessionCatalogOutboxRuntime["submit"] = async (
     workspaceTarget,
-    access,
     intent,
     intentOptions,
   ) => {
-    const handle = await openWorkspace(workspaceTarget, access);
+    const handle = await openWorkspace(workspaceTarget);
     const operationId = createSessionCatalogOperationId();
     const targetOperations = intent.targetNodeId
       ? orderedCatalogOutboxOperations(handle.driver.current())
@@ -641,13 +603,11 @@ export function createSessionCatalogOutboxRuntime(
 
   const applyAndWait: SessionCatalogOutboxRuntime["applyAndWait"] = async (
     workspaceTarget,
-    access,
     intent,
     intentOptions,
   ) => {
     const submitted = await submit(
       workspaceTarget,
-      access,
       intent,
       intentOptions,
     );
@@ -655,33 +615,25 @@ export function createSessionCatalogOutboxRuntime(
     return { ...submitted, operation };
   };
 
-  const registerFailureOwner: SessionCatalogOutboxRuntime["registerFailureOwner"] = (access, owner) => {
+  const registerFailureOwner: SessionCatalogOutboxRuntime["registerFailureOwner"] = (owner) => {
     if (disposed) throw new Error("会话目录 outbox runtime 已停止");
-    const principal = principalFor(access);
-    const owners = failureOwners.get(principal) ?? new Set<SessionCatalogFailureOwner>();
-    owners.add(owner);
-    failureOwners.set(principal, owners);
+    failureOwners.add(owner);
     // owner 晚于恢复就绪时重新对账现存命令，不给合法的打开入口增加注册前置。
     for (const runtimeDriver of driversByScope.values()) {
-      if (runtimeDriver.principal !== principal || !isCurrentDriver(runtimeDriver)) continue;
+      if (!isCurrentDriver(runtimeDriver)) continue;
       if (runtimeDriver.driver.current().operations.length === 0) continue;
       void runtimeDriver.driver.reconcile().catch((error: unknown) => {
         if (isCurrentDriver(runtimeDriver)) reportError("恢复失败对账: " + errorMessage(error));
       });
     }
     return () => {
-      owners.delete(owner);
-      if (owners.size === 0) failureOwners.delete(principal);
+      failureOwners.delete(owner);
     };
   };
 
   const dispose: SessionCatalogOutboxRuntime["dispose"] = () => {
     if (disposed) return;
     disposed = true;
-    activePrincipal = null;
-    principalGeneration += 1;
-    if (reconcileTimer !== null) globalThis.clearInterval(reconcileTimer);
-    reconcileTimer = null;
     for (const runtimeDriver of driversByScope.values()) deactivateDriver(runtimeDriver);
     driversByScope.clear();
     driversByPartition.clear();
@@ -705,7 +657,6 @@ export function createSessionCatalogOutboxRuntime(
     submit,
     applyAndWait,
     reportError,
-    activatePrincipal,
     dispose,
   };
 }

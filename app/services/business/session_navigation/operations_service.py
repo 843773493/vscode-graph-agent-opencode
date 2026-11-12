@@ -22,7 +22,8 @@ import asyncio
 import base64
 import json
 import logging
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -452,6 +453,12 @@ class SessionCatalogOperationsService:
             event_seq_watermark=watermark,
             generation=generation,
         )
+
+    async def changes(self) -> AsyncIterator[NavigationSnapshotDTO]:
+        """每次已提交写入发布当前读快照，包含后续 settlement 的唤醒。"""
+        async with aclosing(self._store.changes()) as changes:
+            async for _ in changes:
+                yield self.snapshot()
 
     def events(
         self,

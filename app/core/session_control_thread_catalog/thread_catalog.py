@@ -78,12 +78,12 @@ def read_fence_row(
 
 
 # 当前 thread_catalog：main/child 共用唯一 catalog，旧生成数据不在此升级。
-THREAD_CATALOG_TABLE_DDL = load_sql(__package__, "sql/thread_catalog.sql")
+THREAD_CATALOG_TABLE_DDL = load_sql(__package__, "migrations/thread_catalog.sql")
 
 
 
 
-LIFECYCLE_FENCE_TABLE_DDL = load_sql(__package__, "sql/lifecycle_fence.sql")
+LIFECYCLE_FENCE_TABLE_DDL = load_sql(__package__, "migrations/lifecycle_fence.sql")
 
 
 _FENCE_STATES = ("active", "deleting")

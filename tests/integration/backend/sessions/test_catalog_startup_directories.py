@@ -86,8 +86,8 @@ async def test_lifespan_rejects_unregistered_session_directories_without_repair(
     catalog_path = restarted.session_service.path_resolver.catalog_store.database_path
     before = _catalog_dump(catalog_path)
     with pytest.raises(CatalogMaintenanceRequiredError, match="日期目录|Session 目录"):
-        async with main.lifespan(main.app) as _main_lifespan_state_89:
-            await _main_lifespan_state_89["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             pytest.fail("未知日期树必须在服务 ready 前拒绝，不能被恢复或 GC 吸收")
     assert observed == ["topology-held"]
     assert _catalog_dump(catalog_path) == before
@@ -125,8 +125,8 @@ async def test_lifespan_accepts_registered_preparing_creation_directories(
     original_directory = container.session_service.path_resolver.resolve_prepared_session_node(frozen)
     manifest = (original_directory / "session.json").read_bytes()
     restarted, observed = _restart_for_lifespan(container, monkeypatch, request)
-    async with main.lifespan(main.app) as _main_lifespan_state_127:
-        await _main_lifespan_state_127["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         assert observed == ["topology-held"]
         catalog = restarted.session_service.path_resolver.catalog_store
         assert catalog.get_creation_record(frozen.session_creation_idempotency_key) == frozen
@@ -160,15 +160,15 @@ async def test_lifespan_checks_empty_date_bucket_after_real_subtree_delete(
         catalog_path = restarted.session_service.path_resolver.catalog_store.database_path
         before = _catalog_dump(catalog_path)
         with pytest.raises(CatalogMaintenanceRequiredError, match="Session 目录"):
-            async with main.lifespan(main.app) as _main_lifespan_state_161:
-                await _main_lifespan_state_161["after_http_startup"]()
+            async with main.lifespan(main.app) as _main_lifespan_state:
+                await _main_lifespan_state["after_http_startup"]()
                 pytest.fail("被删除的目录不能因历史 creation/delete 记录重新成为合法正文")
         assert observed == ["topology-held"]
         assert _catalog_dump(catalog_path) == before
         assert (directory / "session.json").read_bytes() == manifest
         return
-    async with main.lifespan(main.app) as _main_lifespan_state_167:
-        await _main_lifespan_state_167["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         assert observed == ["topology-held"]
         catalog = restarted.session_service.path_resolver.catalog_store
         assert catalog.get_subtree_delete_record("startup-empty-date").state == "completed"
@@ -197,8 +197,8 @@ async def test_cancelled_lifespan_holds_topology_until_directory_worker_finishes
             loop.call_soon_threadsafe(finished.set)
 
     async def start():
-        async with main.lifespan(main.app) as _main_lifespan_state_196:
-            await _main_lifespan_state_196["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             pytest.fail("启动取消后不得进入 ready")
 
     monkeypatch.setattr(catalog, "verify_registered_date_directories", blocked_verify)
@@ -282,8 +282,8 @@ async def test_lifespan_accepts_registered_leaf_isolated_during_directory_scan(
     ))
     try:
         await asyncio.wait_for(marked.wait(), timeout=5)
-        async with main.lifespan(main.app) as _main_lifespan_state_280:
-            await _main_lifespan_state_280["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             await asyncio.wait_for(deletion, timeout=5)
             assert observed == ["topology-held"] and isolated.is_set()
             assert resolver.catalog_store.get_subtree_delete_record("startup-scan-delete").state == "completed"
@@ -319,8 +319,8 @@ async def test_lifespan_rejects_registered_leaf_replaced_with_non_directory(
     # 普通文件会在更早的 manifest 初始化失败；符号链接由本次目录归属检查拒绝。
     expected = NotADirectoryError if replacement == "file" else CatalogMaintenanceRequiredError
     with pytest.raises(expected):
-        async with main.lifespan(main.app) as _main_lifespan_state_316:
-            await _main_lifespan_state_316["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             pytest.fail("仍存在的非法叶目录不能按并发消失处理")
     assert observed == ([] if replacement == "file" else ["topology-held"])
     assert _catalog_dump(restarted.session_service.path_resolver.catalog_store.database_path) == before

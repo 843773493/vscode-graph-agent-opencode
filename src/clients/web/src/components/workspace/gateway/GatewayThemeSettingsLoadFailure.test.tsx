@@ -1,8 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { WebUiSettings } from "../../../types/backend";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
-import { createDefaultWebUiSettings } from "../../../state/uiSettings/preferences";
+import { DEFAULT_BACKGROUND } from "../../../theme/theme";
 import {
   installGatewayFetch,
   restoreGatewayTestEnvironment,
@@ -56,22 +55,16 @@ function textOf(renderer: ReactTestRenderer): string {
   return parts.join(" ");
 }
 
-/**
- * 主题配置首读失败的可见终态。
- *
- * 面板在 `catalog` 为空时提前 return 一句「正在读取 Gateway 主题配置…」。首读失败
- * 时 catalog 永远为空：错误只写进组件状态，却因为走不到主渲染分支而从不显示，
- * 用户看到的是永久转圈的空态，没有任何失败原因，也没有重试入口。
- */
-test("主题配置首读失败必须显示可见错误与重试入口，而不是永久停在加载态", async () => {
+/** 背景资源首读失败仍显示原因和重试入口。 */
+test("背景资源首读失败必须显示可见错误与重试入口", async () => {
   const PORT = 49_763;
   installWindow(PORT);
   let requestCount = 0;
   installGatewayFetch(({ path }) => {
-    if (path === "/api/gateway/themes" || path === "/api/gateway/ui-assets") {
+    if (path === "/api/gateway/ui-assets") {
       requestCount += 1;
       return Response.json(
-        { detail: "Gateway 主题服务不可达" },
+        { detail: "Gateway 背景资源服务不可达" },
         { status: 503, headers: { "content-type": "application/json" } },
       );
     }
@@ -81,10 +74,10 @@ test("主题配置首读失败必须显示可见错误与重试入口，而不�
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <GatewayThemeSettings
+      <GatewayThemeSettings onSelectColorTheme={async () => undefined}
         apiPort={PORT}
-        settings={createDefaultWebUiSettings() as WebUiSettings}
-        onUpdateSettings={async () => undefined}
+        background={DEFAULT_BACKGROUND}
+        onUpdateBackground={async () => undefined}
       />,
     );
   });
@@ -94,7 +87,7 @@ test("主题配置首读失败必须显示可见错误与重试入口，而不�
   const text = textOf(renderer);
   // 失败必须是可见错误，而不是永久加载态。
   expect(renderer.root.findAllByProps({ role: "alert" }).length).toBeGreaterThan(0);
-  expect(text).not.toContain("正在读取 Gateway 主题配置");
+  expect(text).not.toContain("正在读取背景图片");
 
   // 重试入口必须存在，点一下会重新发起读取。
   const retry = renderer.root.findAllByType("button").find((button) => {

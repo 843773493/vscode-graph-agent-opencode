@@ -85,3 +85,22 @@ class WorkspaceMessageSearchResultsDTO(BaseModel):
     scanned_threads: int = Field(ge=0)
     scanned_items: int = Field(ge=0)
     scanned_bytes: int = Field(ge=0)
+
+
+class TurnToolResultDTO(BaseModel):
+    """原可见 canonical 结果及历史聚合调用身份，不含输出正文。"""
+
+    item_id: str
+    turn_id: str
+    tool_call_id: str
+    tool_name: str
+    status: str
+
+
+class ThreadToolResultListDTO(BaseModel):
+    session_id: str
+    thread_id: str
+    items: list[TurnToolResultDTO]
+    next_after: int | None = None
+    source_view_id: str | None
+    source_view_revision: int

@@ -22,5 +22,6 @@ model_stream/
 # 规范
 
 - 回放及崩溃场景的产物目录由调用测试显式传入，并遵守 `out/tests/` 镜像布局。
+- 配置生成统一接收 `runtime_root` 和 `artifacts_dir`：配置写入当前运行的 runtime，录制写入当前产物根的 `model-stream/`；不得从文件级输出根另建共享配置。`model_stream_replay`沿用同一归属。
 - worker 只作为独立进程入口使用；Python 命令通过 `uv` 和项目虚拟环境解析。
 - SDK 与 HTTP handler 统一从 `app.runtime.litellm_runtime` 取得，避免直接 SDK 导入绕过本地目录初始化；真实 HTTP 与崩溃恢复场景仍保留原协议资产、编码及就绪断言。

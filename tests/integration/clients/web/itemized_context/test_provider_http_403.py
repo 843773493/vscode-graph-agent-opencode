@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import socket
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Lock
 from uuid import uuid4
 
 import commentjson
@@ -16,6 +15,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.http_server import running_http_server
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -24,16 +24,12 @@ from tests.support.processes.gateway import (
 )
 from tests.support.processes.workspace import (
     close_backend_process,
+    ensure_local_port_available,
     start_backend_process,
 )
 
 PROVIDER_API_KEY = "provider-403-integration-key"
 PROVIDER_ERROR_MARKER = "provider-403-fixed-denial"
-
-
-def _require_free_port(port: int) -> None:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", port))
 
 
 @dataclass
@@ -56,7 +52,7 @@ def provider_403_server(
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     provider_port = provider_403_ports[1]
     for port in provider_403_ports:
-        _require_free_port(port)
+        ensure_local_port_available(port, service_name="Provider HTTP 403 场景")
     state = Provider403State()
 
     class Handler(BaseHTTPRequestHandler):
@@ -91,16 +87,10 @@ def provider_403_server(
             self.end_headers()
             self.wfile.write(response_body)
 
-    server = ThreadingHTTPServer(("127.0.0.1", provider_port), Handler)
-    server.daemon_threads = True
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     try:
-        yield context, state
+        with running_http_server(ThreadingHTTPServer(("127.0.0.1", provider_port), Handler)):
+            yield context, state
     finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
         safe_requests = [
             {
                 "path": row["path"],
@@ -305,11 +295,6 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
     ) as client:
         health = await client.get("/api/gateway/health")
         assert health.status_code == 200, health.text
-        guest = await client.post(
-            "/api/gateway/users/guest",
-            json={"tracking": {"source": "provider-http-403-integration"}},
-        )
-        _assert_request_envelope(guest)
         workspaces = _assert_request_envelope(
             await client.get("/api/gateway/workspaces")
         )

@@ -26,7 +26,6 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -106,7 +105,7 @@ async def metadata_case(
         agent["model"]["fallback_providers"] = []
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
     with model_stream_replay(
-        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="metadata-and-unregistered-native-directory-without-model-call",
     ) as provider:
         gateway = await asyncio.to_thread(
@@ -116,7 +115,6 @@ async def metadata_case(
         )
         try:
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=90) as client:
-                await acquire_gateway_guest(client)
                 yield client, context, workspace, provider
         finally:
             await asyncio.to_thread(close_gateway_process, gateway)
@@ -170,7 +168,6 @@ async def metadata_frontend(
             health = await frontend.get("/health")
             assert health.status_code == 200
             assert health.json() == {"status": "ok", "service": "frontend"}
-            await acquire_gateway_guest(frontend)
             initialization = {path: await metadata_data(frontend, path) for path in (
                 "/api/gateway/health", "/api/gateway/workspaces", "/api/v1/workspace",
             )}
@@ -178,6 +175,7 @@ async def metadata_frontend(
             assert html.status_code == 200
             assert 'src="/@vite/client"' in html.text
             assert 'src="/src/main.ts"' in html.text
+            assert 'src="/out/main.js"' not in html.text
         (context.artifacts_dir / "vite-initialization.json").write_text(json.dumps({
             "command": command, "pid": process.pid, "base_url": base_url,
             "health": health.json(), "initialization": initialization,

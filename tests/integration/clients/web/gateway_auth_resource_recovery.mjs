@@ -115,19 +115,18 @@ try {
       resourceResponses.push(response.status());
     }
   });
-  // Chromium 不允许 route.continue 覆盖 Cookie；由真实 Gateway 收到一次无 Cookie 请求，回注原响应。
-  // 其它导航轮询可以并发恢复 Cookie，这里精确验证资源请求自身的 401 恢复链。
+  // 让真实 Gateway 收到一次过期凭据，验证公共 HTTP 入口重新获取并有界重试。
   await context.route(`**/api/v1/sessions/${owner.sessionId}/resources`, async route => {
     if (expireNextResourceRequest) {
       expireNextResourceRequest = false;
       expiredResourceRequests += 1;
-      const response = await route.fetch({ headers: { ...route.request().headers(), cookie: "" } });
+      const response = await route.fetch({ headers: { ...route.request().headers(), "x-local-token": "expired-test-token" } });
       expect(response.status()).toBe(401);
-      expect((await response.json()).detail).toBe("user_session_required");
+      expect((await response.json()).detail).toBe("invalid local token");
       await route.fulfill({ response });
     } else await route.continue();
   });
-  // 不预先获取访客 Cookie，直接验证工作台初始化本身的认证恢复。
+  // 不预先获取本机凭据，直接验证工作台初始化本身的认证恢复。
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   const sessionButton = page.locator(`button[data-session-id="${owner.sessionId}"]`);
@@ -142,7 +141,7 @@ try {
   const resources = thread.locator(".native-thread-resources");
   await resources.getByRole("tab", { name: "运行与连接", exact: true }).click();
   await expect.poll(() => resourceResponses.includes(200)).toBe(true);
-  // 下一次真实资源轮询自己承受 401，并通过既有认证链自动恢复。
+  // 下一次真实资源请求承受 401，并通过现有本机凭据链恢复。
   resourceResponses.length = 0;
   expireNextResourceRequest = true;
   await context.clearCookies();

@@ -1,16 +1,18 @@
 import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
-import { CommandsRegistry } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
+import { CommandsRegistry, ICommandService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
 import { IQuickInputService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { IDialogService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { INotificationService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/notification/common/notification.js';
 import { IEditorService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IMcpService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
+import { WorkspaceMcpService } from '../../../../../../src/clients/workbench/src/mcp/service.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
-import { resourceActionCommand } from '../../../../../../src/clients/workbench/src/resources/runtimeActions.js';
+import { resourceActionCommand, resourceFocusCommand } from '../../../../../../src/clients/workbench/src/resources/runtimeActions.js';
 import { ThreadInput } from '../../../../../../src/clients/workbench/src/threadInput.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
-import { invalidateGatewayUserSession } from '../../../../../../src/clients/web/src/api/http.js';
+import { invalidateGatewayToken } from '../../../../../../src/clients/web/src/api/http.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
 
 const owners = ['a', 'b'].map(letter => ({ gatewayId: `gateway_${letter.repeat(32)}`, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
@@ -23,7 +25,8 @@ const record = (kind, index) => ({ resource_id: `${kind}_same`, workspace_id: ow
 /** 真实 Provider／Action／HTTP 客户端；仅宿主服务与后端回执为显式装具。 */
 export async function runtimeActionContract(mode) {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
-  const requests = [], errors = [], shows = [], choices = [], notices = [], confirmations = [], sourceCalls = [];
+  const requests = [], errors = [], shows = [], choices = [], notices = [], confirmations = [], sourceCalls = [], focuses = [];
+  const mcpOpened = [], mcpOptions = [];
   const targets = owners.map((owner, i) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: `工作区 ${i}`, status: 'ready' }));
   const initial = { ...previous, gatewayId: 'control-gateway', loading: false, error: null, workspaces: targets, activeId: gatewayWorkspaceKey(owners[0]) };
   workspaceContext.publish(initial);
@@ -49,6 +52,19 @@ export async function runtimeActionContract(mode) {
     if (path === '/api/v1/resources/gateway-skills') return ok({ gateway_id: owners[index].gatewayId, workspace_id: owners[index].workspaceId, revision: 'fixed', available: true, entries: [] });
     if (path === '/api/v1/resources/agent-spec') return ok({ node: { uri: 'boxteam://workspace/x/resources/agent-spec/root/AGENTS.md', resource_shape: 'file', operations: ['read'] } });
     if (path.endsWith('skill-sources') || path.endsWith('local-skills')) return ok({ workspace_id: owners[index].workspaceId, entries: [] });
+    if (path === '/api/v1/mcp/servers' || path === '/api/v1/mcp/connection-operations') {
+      const response = () => Response.json({ code: 0, message: 'ok', request_id: 'mcp-contract', protocol_version: 1,
+        target: { kind: 'workspace', gateway_id: mode === 'mcp-mismatch' && index === 0 ? owners[1].gatewayId : owners[index].gatewayId,
+          workspace_id: owners[index].workspaceId }, catalog_revision: `sha256:${'0'.repeat(64)}`, catalog_generation: 1,
+        data: path.endsWith('servers') && mode.startsWith('mcp-')
+          ? [{ server_id: 'Needle MCP', transport: 'http', enabled: true, status: 'ready', tools: [] }] : [],
+      }, { headers: { 'X-Request-ID': 'mcp-contract' } });
+      if (mode === 'mcp-pending-close' && index === 0) {
+        init.signal.addEventListener('abort', () => { aborted = true; });
+        return new Promise(resolve => { releaseRead = () => resolve(response()); });
+      }
+      return response();
+    }
     if (path === '/api/v1/resources') {
       const kind = new URL(url, location.href).searchParams.get('kind');
       const response = () => ok({ workspace_id: mode === 'mismatch' && index === 0 && kind === 'terminal' ? 'wrong-owner' : owners[index].workspaceId,
@@ -87,15 +103,22 @@ export async function runtimeActionContract(mode) {
     return items[0];
   } };
   const origin = new ThreadInput({ ...owners[1], workspaceKey: gatewayWorkspaceKey(owners[1]), sessionId: thread.session_id, threadId: thread.thread_id, title: '精确 child' });
-  const editors = { activeEditor: origin, editors: [origin] };
+  const editors = { activeEditor: origin, editors: [origin], async openEditor(input) {
+    mcpOpened.push({ name: input.mcpServer.name, target: input.mcpServer.catalog.target });
+  } };
   const notifications = { error: cause => errors.push(String(cause)), info: value => notices.push(value),
     status: value => { notices.push(value); return { close() { notices.push('pending-closed'); } }; } };
   const commands = { executeCommand(id, ...args) {
+    // 面板宿主在真实 Gateway 场景验收；这里核 Provider 冻结的精确命令目标。
+    if (id === resourceFocusCommand) { focuses.push(structuredClone(args[0])); return Promise.resolve(); }
+    if (id === 'workbench.mcp.serverOptions') { mcpOptions.push(args[0]); return Promise.resolve(); }
     let valid = true;
     const accessor = { get(service) {
       if (!valid) throw new Error('异步使用 ServicesAccessor');
       if (service === IQuickInputService) return quick;
       if (service === IEditorService) return editors;
+      if (service === IMcpService) return mcpService;
+      if (service === ICommandService) return commands;
       if (service === INotificationService) return notifications;
       if (service === IDialogService) return { confirm: async options => { confirmations.push(options); return { confirmed: mode !== 'delete-cancel' }; } };
       throw new Error(`额外服务：${service}`);
@@ -103,6 +126,7 @@ export async function runtimeActionContract(mode) {
     try { return CommandsRegistry.getCommand(id).handler(accessor, ...args); }
     finally { valid = false; }
   } };
+  const mcpService = new WorkspaceMcpService(editors, notifications, quick);
   const picker = { value: mode === 'empty-title' ? 'resource browser_same' : 'resource Needle', items: [], activeItems: [], selectedItems: [], buttons: [], keyMods: { alt: false, ctrlCmd: false },
     onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerButton: buttons.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() {} };
@@ -112,25 +136,40 @@ export async function runtimeActionContract(mode) {
     throw new Error(`运行资源合同未收敛：${JSON.stringify({ errors, requests, choices, rows: picker.items.map(item => item.label) })}`); };
   let result;
   try {
-    if (mode.startsWith('pending-')) {
+    if (mode.startsWith('pending-') || mode === 'mcp-pending-close') {
       await until(() => releaseRead);
-      if (mode === 'pending-close') lifetime.dispose(); else invalidateGatewayUserSession(0);
+      if (mode === 'pending-close' || mode === 'mcp-pending-close') lifetime.dispose(); else invalidateGatewayToken(0);
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
       return { requests, aborted, rows: picker.items.map(item => ({ id: item.id, label: item.label })), errors };
     }
-    await until(() => !picker.busy && picker.items.length === (mode === 'empty-title' ? 2 : 4));
+    await until(() => !picker.busy && picker.items.length === (mode === 'empty-title' ? 2 : mode.startsWith('mcp-') ? 6 : 4));
     const rows = picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail }));
     const discoveryCount = requests.length;
-    if (mode === 'empty-title' || mode === 'id-search') {
+    if (mode.startsWith('mcp-')) {
+      if (mode !== 'mcp-mismatch') {
+        const selected = picker.items.find(item => item.id.includes(owners[1].gatewayId) && item.id.endsWith('/mcp/Needle MCP'));
+        if (mode === 'mcp-options') selected.trigger(0, picker.keyMods);
+        else {
+          if (mode === 'mcp-identity') invalidateGatewayToken(0);
+          try { selected.accept(picker.keyMods, { inBackground: false }); }
+          catch (cause) { errors.push(String(cause)); }
+        }
+        await until(() => mcpOpened.length || mcpOptions.length || errors.length);
+      }
+    } else if (mode === 'empty-title' || mode === 'id-search') {
       picker.value = 'resource browser_same'; changes.fire(picker.value); await until(() => !picker.busy && picker.items.length === 2);
       result = picker.items.map(item => ({ id: item.id, label: item.label, highlights: item.highlights }));
       lifetime.dispose();
     } else if (['browse', 'parallel', 'mismatch'].includes(mode)) {
       picker.value = 'resource 同名'; changes.fire(picker.value); await until(() => !picker.busy);
       lifetime.dispose();
+    } else if (mode === 'focus' || mode === 'focus-browser') {
+      picker.selectedItems = picker.activeItems = [picker.items[mode === 'focus' ? 2 : 3]];
+      accepts.fire({ inBackground: false });
+      await until(() => focuses.length || errors.length);
     } else if (['action-cancel', 'identity', 'picker-attach', 'accepted-close'].includes(mode)) {
-      picker.selectedItems = picker.activeItems = [picker.items[2]]; accepts.fire({ inBackground: false });
-      if (mode === 'identity') { await until(() => releaseChoice); invalidateGatewayUserSession(0); releaseChoice(); }
+      picker.items[2].trigger(0, picker.keyMods);
+      if (mode === 'identity') { await until(() => releaseChoice); invalidateGatewayToken(0); releaseChoice(); }
       if (mode === 'accepted-close') { await until(() => releaseWrite); lifetime.dispose(); cancellation.cancel(); releaseWrite(); }
       await until(() => errors.length || shows.length || notices.includes('pending-closed'));
     } else {
@@ -147,9 +186,9 @@ export async function runtimeActionContract(mode) {
       }
       result = await operation;
     }
-    return { requests, rows, choices, shows, errors, notices, confirmations, sourceCalls, result, discoveryCount, aborted, records, maximum };
+    return { requests, rows, choices, shows, errors, notices, confirmations, sourceCalls, focuses, mcpOpened, mcpOptions, result, discoveryCount, aborted, records, maximum };
   } finally {
-    lifetime.dispose(); cancellation.dispose(true); provider.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose();
+    lifetime.dispose(); cancellation.dispose(true); provider.dispose(); mcpService.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(previous);
   }
 }

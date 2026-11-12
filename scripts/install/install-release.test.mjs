@@ -55,7 +55,7 @@ describe("发布版安装入口", () => {
       prefix: fixtureInstallPrefix,
     });
 
-    expect(command.command).toBe("npm.cmd");
+    expect(command.command).toBe("npm");
     expect(command.args).toEqual([
       "install",
       "--global",

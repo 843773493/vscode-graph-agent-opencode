@@ -14,7 +14,7 @@ import {
   apiErrorResponse,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
-  testGatewayUserAccess,
+
   TEST_GATEWAY_WORKSPACE_KEY,
   TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
   withDefaultGatewayApiResponses,
@@ -144,7 +144,7 @@ async function mountPendingParent(options: {
   }));
   const runtime = createSessionCatalogOutboxRuntime({
     apiPort: 49_459, openPersistence: async () => persistence,
-    reconcileIntervalMs: 60_000, onError: (message) => errors.push(message),
+    observeChanges: async () => {}, onError: (message) => errors.push(message),
     adapter: {
       enqueue: async (_port, target, intents) => {
         const accepted = intents.map((intent) => {
@@ -174,8 +174,7 @@ async function mountPendingParent(options: {
       }),
     },
   });
-  const access = testGatewayUserAccess();
-  runtime.activatePrincipal(access);
+
   cleanup.push(() => runtime.dispose());
 
   const workspaces = [{ ...TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, name: "待提交父目录工作区" }] as GatewayWorkspace[];
@@ -188,13 +187,12 @@ async function mountPendingParent(options: {
     const snapshot = heldSnapshot ?? liveSnapshot;
     explorer = useSessionResourceExplorer({ ...createSessionResourceExplorerProps({
       sessionCatalogOutboxRuntime: runtime, sessionCatalogOutboxSnapshot: snapshot,
-      gatewayUserAccess: access,
     }) });
     actions = useSessionCatalogActions({
       apiPort: 49_459, activeGatewayWorkspaceId: TEST_GATEWAY_WORKSPACE_KEY, activeSessionId: null,
       sessionsByWorkspace: sessions, gatewayWorkspaces: workspaces,
       confirm: async () => true, setStatus: (message) => statuses.push(message), onError: (message) => errors.push(message),
-      sessionCatalogOutboxRuntime: runtime, gatewayUserAccess: access,
+      sessionCatalogOutboxRuntime: runtime,
       activateGatewayWorkspace: async () => undefined, createSession: async () => { throw new Error("不应创建会话"); },
       openWorkspaceSession: async () => undefined, removeGatewayWorkspace: async () => undefined,
       deleteSession: async () => undefined, renameSession: async () => undefined,
@@ -206,7 +204,7 @@ async function mountPendingParent(options: {
   let renderer!: ReactTestRenderer;
   await act(async () => { renderer = create(<Harness />); await flushReactEffects(); });
   cleanup.push(() => act(() => renderer.unmount()));
-  const handle = await runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, access);
+  const handle = await runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET);
   return {
     explorer: () => explorer, actions: () => actions, handle, receipts, nodes, errors, statuses, childQueries, refreshReads,
     releaseAcceptance: () => releaseAcceptance(),
@@ -478,7 +476,7 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       catalogOutboxPartitionKey, catalogOutboxBatchToIntents, createCatalogOutbox, markCatalogOutboxOperationPersisted } =
       await import('../../state/session/sessionCatalogOutbox');
     const ids = ['a', 'b', 'd', 'c'].map((suffix) => 'op_' + suffix.repeat(32));
-    const partition = { gatewayId: 'gateway-test', workspaceId: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id!, principal: 'guest' };
+    const partition = { gatewayId: 'gateway-test', workspaceId: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id!, principal: 'local' };
     let seed = createCatalogOutbox(partition);
     const intents = [
       { kind: 'rename_node' as const, targetNodeId: 'cnode_a', name: 'A已提交' },
@@ -562,7 +560,7 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
     let explorer!: ReturnType<typeof useSessionResourceExplorer>;
     const dispatchedFacts: Array<{ intents: unknown; names: string[]; removed: string[][] }> = [];
     const runtime = createSessionCatalogOutboxRuntime({ apiPort: 49_459,
-      openPersistence: async () => persistence, reconcileIntervalMs: 60_000,
+      openPersistence: async () => persistence, observeChanges: async () => {},
       onError: (message) => errors.push(message), adapter: {
         queryStatus: async (_port, target) => {
           await statusGate;
@@ -579,20 +577,19 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
             receipts: [receipt(3, 'queued')], created_node_ids: {} };
         },
       } });
-    const access = testGatewayUserAccess();
-    runtime.activatePrincipal(access);
+
     let renderer!: ReactTestRenderer;
 
     function Harness() {
       const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot);
       explorer = useSessionResourceExplorer({ ...createSessionResourceExplorerProps({ sessionCatalogOutboxRuntime: runtime,
-        sessionCatalogOutboxSnapshot: snapshot, gatewayUserAccess: access }) });
+        sessionCatalogOutboxSnapshot: snapshot, }) });
       return null;
     }
     try {
       await act(async () => { renderer = create(<Harness />); await flushReactEffects(); });
       await act(async () => { await explorer.loadBranch(TEST_GATEWAY_WORKSPACE_KEY); });
-      const handle = await runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, access);
+      const handle = await runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET);
       await act(async () => { explorer.toggleExpanded(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:cnode_external`); });
       const expandedBefore = [...explorer.expandedIds];
       expect(expandedBefore).toContain(`catalog:${TEST_GATEWAY_WORKSPACE_KEY}:cnode_external`);

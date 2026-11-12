@@ -26,7 +26,6 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -128,7 +127,6 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text
             gateway_id = health.json()["data"]["gateway_id"]

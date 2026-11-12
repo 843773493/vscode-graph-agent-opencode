@@ -32,13 +32,13 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 )
 
 _CARRIERS_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "sql/internal_history/carriers.sql",
-) + load_sql("app.services.infrastructure.rollout_context.storage", "sql/content_carrier_replacements.sql")
+    "app.services.infrastructure.rollout_context.storage", "migrations/internal_history/carriers.sql",
+) + load_sql("app.services.infrastructure.rollout_context.storage", "migrations/content_carrier_replacements.sql")
 _INVALID_SCOPE_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "sql/internal_history/invalid_scope.sql",
+    "app.services.infrastructure.rollout_context.storage", "migrations/internal_history/invalid_scope.sql",
 )
 _SURVIVOR_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "sql/internal_history/survivor.sql",
+    "app.services.infrastructure.rollout_context.storage", "migrations/internal_history/survivor.sql",
 )
 
 

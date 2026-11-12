@@ -17,7 +17,6 @@ from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -68,7 +67,6 @@ async def test_duplicate_native_uuid_registration_keeps_original_binding(
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=45,
         ) as client:
-            await acquire_gateway_guest(client)
             listed = (await client.get("/api/gateway/workspaces", params={"check_health": False})).raise_for_status().json()
             original, = listed["data"]["items"]
             identity = primary / ".boxteam/workspace-identity.json"
@@ -135,7 +133,6 @@ async def test_known_root_reregistration_preserves_missing_or_changed_identity(
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=45,
         ) as client:
-            await acquire_gateway_guest(client)
             initial = (await client.get("/api/gateway/workspaces", params={"check_health": False})).raise_for_status().json()
             original, = initial["data"]["items"]
             identity = root / ".boxteam/workspace-identity.json"
@@ -212,7 +209,6 @@ async def test_identity_cli_failure_is_path_free_and_recovery_preserves_binding(
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=120,
         ) as client:
-            await acquire_gateway_guest(client)
             registered = await client.post(
                 "/api/gateway/workspaces/local", json={"root_path": str(target), "name": "identity-test"},
             )

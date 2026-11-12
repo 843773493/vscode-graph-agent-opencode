@@ -269,30 +269,11 @@ async function waitUntil(predicate, label, timeout = 30_000) {
   throw new Error(`等待${label}超时`);
 }
 
-async function ensureGuest(page, url = baseUrl) {
+async function openWorkbenchPage(page, url = baseUrl) {
   await page.controlledRestartCdpSetup;
   await drainPageResponseBodies(page);
   const target = new URL(url);
   await page.goto(target.href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  const current = await page.evaluate(async () => {
-    const response = await fetch("/api/gateway/users/current");
-    return { status: response.status, body: await response.text() };
-  });
-  if (current.status === 401) {
-    await api(page, "/api/gateway/users/guest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tracking: { source: "basic-chat-tool-loop-e2e" } }),
-    });
-    await drainPageResponseBodies(page);
-    await page.reload({ waitUntil: "domcontentloaded" });
-  } else if (current.status !== 200) {
-    throw new Error(`检查游客访问失败: ${current.status} ${current.body}`);
-  }
-  // 原版编辑器恢复不等待主题；本装具默认浅色主题的最后一个 include 下载完成后才能再次导航。
-  await page.waitForFunction(() => performance.getEntriesByName("code/didRestoreEditors", "mark").length > 0
-    && performance.getEntriesByName(new URL("/extensions/theme-defaults/themes/light_vs.json", location.href).href,
-      "resource").some(entry => entry.responseEnd > 0));
 }
 
 function isSessionMessageRequest(request) {
@@ -4839,7 +4820,7 @@ async function runNavigationOptimism(surfaces) {
     const peerPage = await browserStartup("navigation_peer_page", () => peerContext.newPage());
     await installPageDiagnostics(peerPage);
     attachWire(peerPage);
-    await ensureGuest(peerPage, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
+    await openWorkbenchPage(peerPage, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
     const peer = { ...surface, page: peerPage };
     await openCatalogWorkspace(peer);
     const conflicting = await match("navigation.before_commit", { kind: "delete_folder", target_node_id: host.nodeId }, "conflicting-delete");
@@ -5302,7 +5283,7 @@ async function runNavigationDates(surfaces) {
     }, "目录场景 child 初始化完成", 120_000);
     childPage = await browserStartup("navigation_child_page", () => surface.page.context().newPage());
     await installPageDiagnostics(childPage);
-    await ensureGuest(childPage, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
+    await openWorkbenchPage(childPage, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
     const child = { ...first, page: childPage, threadId: childThread, child: true };
     const fork = await forkOwner(first, { mode: "last_completed_turn_fork" });
     const forkNode = await sessionCatalogNode(fork.owner);
@@ -7076,7 +7057,7 @@ async function readCopyTargetControl(surface, capture, query, parameters = []) {
 async function copyRequestSurface(source) {
   const page = await browserStartup("copy_source_page", () => source.page.context().newPage());
   await installPageDiagnostics(page);
-  await ensureGuest(page, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[source.name].base_url);
+  await openWorkbenchPage(page, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[source.name].base_url);
   await page.waitForFunction(() => performance.getEntriesByName("code/didRestoreEditors", "mark").length > 0);
   await waitUntil(() => [...page.diagnosticObservationRequests.values()].some((request) =>
     request.body?.subscriptions?.length && controlledRestartResponses.some((response) =>
@@ -9388,7 +9369,7 @@ async function replaceNodePage(surface, owners, restartWindow = null) {
       await bindControlledRestartPage(restartWindow, surface.page, "foreground-after-restart");
     }
     try {
-      await ensureGuest(surface.page, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
+      await openWorkbenchPage(surface.page, JSON.parse(requiredEnvironment("BOXTEAM_BROWSER_NODES"))[surface.name].base_url);
       for (const owner of owners) owner.page = surface.page;
     } finally {
       if (restartWindow) {
@@ -10716,7 +10697,7 @@ async function runTeamActivation(surface, boundary, foreign) {
   const operatorPage = await browserStartup("team_operator_page", () => owner.page.context().newPage());
   await installPageDiagnostics(operatorPage);
   try {
-    await ensureGuest(operatorPage, new URL(owner.page.url()).origin);
+    await openWorkbenchPage(operatorPage, new URL(owner.page.url()).origin);
     const coordinator = { ...owner, page: operatorPage };
     const calls = await planChatCalls(owner.sessionId, reviewer.threadId, [
       toolResponse(`${boundary}-first-read`, "read_file", { path: "README.md" }), finalResponse(`${boundary}-first-final`, "第一条工作完成。"),
@@ -11490,7 +11471,7 @@ async function runSection8Product(browser, primaryPage) {
       if (peerContext) contexts.push(peerContext);
       const page = peerContext ? await browserStartup(`browser_page_${name}`, () => peerContext.newPage()) : primaryPage;
       if (peerContext) await installPageDiagnostics(page);
-      await ensureGuest(page, node.base_url);
+      await openWorkbenchPage(page, node.base_url);
       const health = await api(page, "/api/gateway/health");
       assert.equal(health.data.gateway_id, node.gateway_id);
       const workspaces = await api(page, "/api/gateway/workspaces");
@@ -12224,7 +12205,7 @@ async function installPageDiagnostics(page) {
       pageBinding.documentIds.push(page.diagnosticDocumentId);
     }
   });
-  let expectedUnauthorizedProbeCount = 0;
+
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   page.on("console", (message) => {
   if (message.type() === "debug" && message.text().startsWith(WORKBENCH_LIFECYCLE_MARKER)) {
@@ -12239,13 +12220,6 @@ async function installPageDiagnostics(page) {
     // 网络日志提供精确 request ID；另一采集源逐页/文档核数量，缺漏或重复都不能通过。
     badGatewayConsoleAudit.push({ source: "playwright", text, url: message.location().url,
       pageId: page.diagnosticId, documentId: page.diagnosticDocumentId });
-    return;
-  }
-  if (
-    expectedUnauthorizedProbeCount > 0
-    && text === "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
-  ) {
-    expectedUnauthorizedProbeCount -= 1;
     return;
   }
   const restartWindow = page.controlledRestartWindow;
@@ -12287,12 +12261,6 @@ page.on("request", (request) => {
         subscriptions: requestDocument.body?.subscriptions ?? [], bound: false });
       bindObservationRequest();
     }
-  }
-  if (
-    request.method() === "GET"
-    && new URL(request.url()).pathname === "/api/gateway/users/current"
-  ) {
-    expectedUnauthorizedProbeCount += 1;
   }
 });
 page.on("requestfinished", (request) => {
@@ -12525,13 +12493,6 @@ page.on("response", (response) => {
       .catch((error) => { fact.bodyError = String(error); });
     trackDiagnosticResponseBody(page, read, fact);
     }
-  }
-  if (
-    response.status() !== 401
-    && new URL(response.url()).pathname === "/api/gateway/users/current"
-    && expectedUnauthorizedProbeCount > 0
-  ) {
-    expectedUnauthorizedProbeCount -= 1;
   }
 });
   await page.addInitScript(observeNativeShutdown, WORKBENCH_LIFECYCLE_MARKER);
@@ -12784,7 +12745,7 @@ try {
   const startupEvents = await testControl({ action: "events" });
   assert.deepEqual(startupEvents.filter((event) => event.phase === "agent.graph.compiled" && event.details?.owns_thread === true), [], "backend 启动不能构建 durable thread compiled Agent graph");
   result.startupGraphEvents = startupEvents.filter((event) => GRAPH_PHASES.has(event.phase));
-  await ensureGuest(page);
+  await openWorkbenchPage(page);
   const workspaces = await api(page, "/api/gateway/workspaces");
   assert.deepEqual(workspaces?.data?.active_workspace,
     { gateway_id: expectedGatewayId, workspace_id: expectedWorkspaceId }, "active workspace owner 不一致");

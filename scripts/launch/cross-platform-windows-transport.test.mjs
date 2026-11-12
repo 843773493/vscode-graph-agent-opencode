@@ -1,6 +1,9 @@
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { Readable, Writable } from "node:stream";
 import { runTargetAction } from "../../tools/cross-platform-development-targets/ssh-target.mjs";
 
 const root = path.resolve("out/tests/scripts/launch/cross-platform-windows-transport/workspace");
@@ -18,13 +21,16 @@ test("Windows 动作使用单帧 UTF-8 脚本，参数不经过远端命令行�
   };
   const args = ["C:/目录 含空格/引号'与$符号.txt"];
   let transport;
-  const spawn = spyOn(Bun, "spawn").mockImplementation((command, options) => {
-    transport = { command, input: options.stdin === "pipe" ? "" : options.stdin.toString("utf8") };
-    return {
-      exited: Promise.resolve(0), signalCode: null,
-      stdin: { write(input) { transport.input += input; }, end() {} },
-      stdout: new Response("中文结果\n").body, stderr: new Response("").body,
-    };
+  const spawn = spyOn(childProcess, "spawn").mockImplementation((command, args) => {
+    transport = { command: [command, ...args], input: "" };
+    const child = new EventEmitter();
+    child.stdin = new Writable({
+      write(input, encoding, callback) { transport.input += input.toString("utf8"); callback(); },
+      final(callback) { callback(); queueMicrotask(() => child.emit("close", 0, null)); },
+    });
+    child.stdout = Readable.from(["中文结果\n"]);
+    child.stderr = Readable.from([]);
+    return child;
   });
   try {
     expect(await runTargetAction({ target, projectRoot: process.cwd(), action: "hash-file", args })).toEqual({

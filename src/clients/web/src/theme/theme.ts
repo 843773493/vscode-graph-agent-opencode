@@ -1,95 +1,38 @@
 import { errorMessage } from "../utils/errorMessage";
 
-export const BOXTEAM_THEME_EVENT = "boxteam:theme-change";
+export const BACKGROUND_SETTING = "boxteam.appearance.background";
 export const DEFAULT_THEME_BACKGROUND_OVERLAY = "linear-gradient(180deg, rgb(17 19 24 / 0.08) 0%, rgb(17 19 24 / 0.16) 54%, rgb(17 19 24 / 0.44) 100%)";
 
-export type BoxTeamThemeToken = `--bt-${string}`;
-
-export interface BoxTeamThemeConfig {
-  id?: string;
-  colorScheme?: "light" | "dark";
-  tokens?: Partial<Record<BoxTeamThemeToken, string>>;
-  backgroundImage?: string | null;
+/** 当前 Workbench profile 的展示配置，不属于 Gateway 业务协议。 */
+export interface AppearanceBackground {
+  image: string;
+  position: string;
+  size: string;
+  repeat: "no-repeat" | "repeat" | "repeat-x" | "repeat-y" | "space" | "round";
+  overlay: string;
 }
 
-export interface GatewayResolvedThemeConfig {
-  id: string;
-  color_scheme: "light" | "dark";
-  tokens: Record<BoxTeamThemeToken, string>;
-  background_image_url?: string | null;
-}
+export const DEFAULT_BACKGROUND: AppearanceBackground = {
+  image: "", position: "center", size: "cover", repeat: "no-repeat", overlay: DEFAULT_THEME_BACKGROUND_OVERLAY,
+};
 
-declare global {
-  interface Window {
-    __BOXTEAM_THEME__?: BoxTeamThemeConfig;
-  }
-}
-
-// 已应用 token 必须按 root 分片：主窗口与扩展窗口是不同的文档根节点，
-// 共用一个 Set 会让后一次应用把 token 从另一个 root 上误删。
-const appliedTokensByRoot = new WeakMap<HTMLElement, Set<BoxTeamThemeToken>>();
-
-function backgroundImageValue(url: string | null | undefined): string {
-  if (!url) return "none";
-  return `url(${JSON.stringify(url)})`;
-}
-
-export function applyBoxTeamTheme(
-  config: BoxTeamThemeConfig,
-  root: HTMLElement = document.documentElement,
-): void {
-  const entries = Object.entries(config.tokens ?? {}).map(([rawToken, rawValue]) => {
-    if (!rawToken.startsWith("--bt-")) {
-      throw new Error(`主题变量必须使用 --bt- 前缀：${rawToken}`);
+export function readAppearanceBackground(value: unknown): AppearanceBackground {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${BACKGROUND_SETTING} 必须是对象`);
+  const background = { ...DEFAULT_BACKGROUND, ...value };
+  for (const key of Object.keys(background)) {
+    if (!Object.hasOwn(DEFAULT_BACKGROUND, key) || typeof background[key as keyof AppearanceBackground] !== "string") {
+      throw new Error(`${BACKGROUND_SETTING}.${key} 必须是已声明的字符串设置`);
     }
-    if (typeof rawValue !== "string") {
-      throw new TypeError(`主题变量 ${rawToken} 的值必须是字符串`);
-    }
-    const token = rawToken as BoxTeamThemeToken;
-    return [token, rawValue.trim()] as const;
-  });
-
-  const previousTokens = appliedTokensByRoot.get(root);
-  const appliedTokens = new Set<BoxTeamThemeToken>();
-  appliedTokensByRoot.set(root, appliedTokens);
-  for (const token of previousTokens ?? []) {
-    root.style.removeProperty(token);
   }
-
-  root.dataset.boxteamTheme = config.id?.trim() || "warm";
-  root.style.colorScheme = config.colorScheme ?? "light";
-  for (const [token, value] of entries) {
-    if (!value) continue;
-    root.style.setProperty(token, value);
-    appliedTokens.add(token);
+  if (background.image) {
+    const url = new URL(background.image);
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error("背景图片必须使用带明确目标地址的 HTTP(S) URL");
   }
-  root.style.setProperty(
-    "--bt-background-image",
-    backgroundImageValue(config.backgroundImage),
-  );
-  const themeColor = config.tokens?.["--bt-page-background"];
-  // 非浏览器环境没有 document（例如纯 Node 单测传 stub root）；
-  // 整段 meta 同步因此整体跳过，不能只在取值处做半截守卫。
-  if (typeof document !== "undefined" && themeColor) {
-    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-    if (meta) meta.content = themeColor;
-  }
-}
-
-export function applyResolvedGatewayTheme(
-  theme: GatewayResolvedThemeConfig,
-  root?: HTMLElement,
-): void {
-  applyBoxTeamTheme({
-    id: theme.id,
-    colorScheme: theme.color_scheme,
-    tokens: theme.tokens,
-    backgroundImage: theme.background_image_url,
-  }, root);
+  return background;
 }
 
 export function preloadThemeBackground(
-  url: string | null | undefined,
+  url: string,
   createImage: () => HTMLImageElement = () => new Image(),
 ): Promise<void> {
   if (!url) return Promise.resolve();
@@ -101,47 +44,28 @@ export function preloadThemeBackground(
   });
 }
 
-export interface ThemeApplicationResult {
-  /** 背景图加载失败时的可见警告文本；核心主题已经成功应用，调用方不得据此
-   * 判定主题失败，只需把这个非致命提示展示给用户。 */
-  backgroundWarning: string | null;
+export function applyBackground(background: AppearanceBackground, root: HTMLElement): void {
+  root.style.setProperty("--bt-background-image", background.image ? `url(${JSON.stringify(background.image)})` : "none");
+  for (const key of ["position", "size", "repeat", "overlay"] as const) {
+    if (background.image) root.style.setProperty(`--bt-background-${key}`, background[key]);
+    else root.style.removeProperty(`--bt-background-${key}`);
+  }
 }
 
-/**
- * 应用 Gateway 已解析主题：核心 token 与配色模式是主题的必需部分，应用失败即抛出；
- * 背景图是纯装饰画布，加载失败只降级为可见警告并回退为无背景图，绝不把一次背景图
- * 404/断网升级成整个工作区初始化失败。
- *
- * root 与 createImage 是测试注入点，生产调用一律省略并使用浏览器默认值。
- */
-export async function loadAndApplyResolvedGatewayTheme(
-  theme: GatewayResolvedThemeConfig,
-  options: { root?: HTMLElement; createImage?: () => HTMLImageElement; signal?: AbortSignal } = {},
-): Promise<ThemeApplicationResult> {
+/** 只发布当前配置的图片；配色和 color-scheme 始终由 Workbench 决定。 */
+export async function loadAndApplyBackground(
+  background: AppearanceBackground,
+  options: { root: HTMLElement; createImage?: () => HTMLImageElement; signal?: AbortSignal },
+): Promise<{ backgroundWarning: string | null }> {
   options.signal?.throwIfAborted();
   try {
-    await preloadThemeBackground(theme.background_image_url, options.createImage);
+    await preloadThemeBackground(background.image, options.createImage);
   } catch (error) {
     options.signal?.throwIfAborted();
-    applyResolvedGatewayTheme({ ...theme, background_image_url: null }, options.root);
-    return {
-      backgroundWarning: `主题背景图加载失败，已回退为无背景图：${errorMessage(error)}`,
-    };
+    applyBackground({ ...background, image: "" }, options.root);
+    return { backgroundWarning: `背景图加载失败，已清除展示图片，配置仍保留：${errorMessage(error)}` };
   }
   options.signal?.throwIfAborted();
-  applyResolvedGatewayTheme(theme, options.root);
+  applyBackground(background, options.root);
   return { backgroundWarning: null };
-}
-
-export function installBoxTeamThemeRuntime(): () => void {
-  applyBoxTeamTheme(window.__BOXTEAM_THEME__ ?? { id: "warm" });
-  const handleThemeChange = (event: Event) => {
-    const config = (event as CustomEvent<BoxTeamThemeConfig>).detail;
-    if (!config) {
-      throw new Error(`${BOXTEAM_THEME_EVENT} 事件缺少主题配置`);
-    }
-    applyBoxTeamTheme(config);
-  };
-  window.addEventListener(BOXTEAM_THEME_EVENT, handleThemeChange);
-  return () => window.removeEventListener(BOXTEAM_THEME_EVENT, handleThemeChange);
 }

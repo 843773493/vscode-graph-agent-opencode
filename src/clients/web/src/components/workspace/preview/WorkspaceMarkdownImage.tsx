@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getWorkspaceRawFileBlob } from "../../../api";
-import { onGatewayUserSessionInvalidated } from "../../../api/http";
+import { onGatewayTokenInvalidated } from "../../../api/http";
 import {
   resolveWorkspaceMarkdownTarget,
   type WorkspaceMarkdownTarget,
@@ -59,11 +59,11 @@ function WorkspaceFileMarkdownImage({
       objectUrl = null;
     };
     // 下载完成后仍由展示组件持有身份订阅，撤销已显示和等待浏览器解码的图片。
-    const releaseIdentity = onGatewayUserSessionInvalidated(apiPort, () => {
+    const releaseIdentity = onGatewayTokenInvalidated(apiPort, () => {
       controller.abort();
       releaseObjectUrl();
       setResolvedSrc(null);
-      setError("Gateway 或用户身份已改变，请重新打开图片");
+      setError("Gateway 或访问凭据已改变，请重新打开图片");
     });
     void getWorkspaceRawFileBlob(
       apiPort,

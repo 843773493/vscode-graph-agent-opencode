@@ -139,9 +139,6 @@ def make_app(output_root: Path) -> FastAPI:
     async def credential(request: Request):
         return envelope(request, {"token": "controlled-browser-token"})
 
-    @app.get("/api/gateway/users/current")
-    async def user(request: Request):
-        return envelope(request, {"kind": "guest", "user_id": None})
 
     @app.get("/api/gateway/health")
     async def health(request: Request):

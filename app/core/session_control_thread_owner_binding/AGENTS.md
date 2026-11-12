@@ -17,7 +17,7 @@
 
 # 规范
 
-- 静态结构 SQL 位于同包 `sql/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
+- 静态结构 SQL 位于同包 `migrations/`，所属 Python 模块只加载和协调原执行顺序；SQL 资产不自行提交事务，不保留内联结构副本。
 
 - `ThreadOwnerBindingMixin` 只依赖宿主类提供的 `database_path`、`_connection`、`_ensure_open()` 与 `_write_transaction()`；不得假设 `SessionControlStore` 的其它方法存在。
 - `SHA256_HEX_PATTERN` 已提升到中立位置 `app/core/session_control_primitives.py`（session-control 各族的共同形态约束：owner binding stable prefix、lease preimage、artifact manifest、通信 payload），本模块只从该处导入使用，不再自行定义也不再列入本模块 `__all__`；禁止在任何子包内复制该正则。

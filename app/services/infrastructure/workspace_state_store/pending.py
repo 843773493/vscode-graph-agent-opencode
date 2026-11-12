@@ -176,6 +176,14 @@ class WorkspaceStateStorePendingMixin:
             validate_state_transition("none", state)
         with closing(cast("WorkspaceStateStore", self)._database.connection()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
+            apply_claim = connection.execute(
+                "SELECT 1 FROM config_apply_claim WHERE config_domain=?",
+                (config_domain,),
+            ).fetchone()
+            if apply_claim is not None:
+                raise ConfigConflictError(
+                    "已有配置 apply claim，禁止创建或更新 pending candidate"
+                )
             existing = connection.execute(
                 """
                 SELECT candidate_id, payload_json, candidate_digest, state,

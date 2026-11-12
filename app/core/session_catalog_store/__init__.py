@@ -23,9 +23,10 @@ subtree delete journal 与空 folder 删除（``subtree_delete.py``）、只读�
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -144,6 +145,7 @@ class SessionCatalogStore(
         # R17 审查 §E6 与实测复现）。所有连接访问统一在锁内串行；RLock
         # 可重入（同线程事务体内再走本类方法/锁内取 connection 属性），
         # 单线程行为与此前逐行等价。SQLite 操作短，串行化代价可忽略。
+        self._commit_listeners: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
         self._connection_lock = threading.RLock()
         self._connection = self._connect()
         try:
@@ -337,6 +339,28 @@ class SessionCatalogStore(
                 # bump 和 COMMIT 也属于同一事务；清理失败不能覆盖首个业务异常。
                 self._rollback_transaction_or_close(error)
                 raise
+
+            # 只在 COMMIT 成功后通知；回滚与读取不产生通知，慢消费者合并为一次失效。
+            for loop, changed in self._commit_listeners:
+                loop.call_soon_threadsafe(changed.set)
+
+    async def changes(self) -> AsyncIterator[None]:
+        """订阅当前 catalog owner 的提交；先登记再首读，不丢订阅建立期间的写入。"""
+        loop, changed = asyncio.get_running_loop(), asyncio.Event()
+        listener = (loop, changed)
+        with self._connection_lock:
+            self._ensure_open()
+            self._commit_listeners.add(listener)
+        changed.set()
+        try:
+            while True:
+                await changed.wait()
+                changed.clear()
+                self._ensure_open()
+                yield None
+        finally:
+            with self._connection_lock:
+                self._commit_listeners.remove(listener)
 
     @staticmethod
     def _bump_generation(connection: sqlite3.Connection) -> None:

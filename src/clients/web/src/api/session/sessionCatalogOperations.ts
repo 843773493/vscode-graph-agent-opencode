@@ -1,3 +1,5 @@
+import { consumeWorkspaceObservation } from "../stream/workspaceObservation";
+import { decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import type { APIResponse } from "../../types/backend";
 import {
   gatewayWorkspaceRequestHeaders,
@@ -223,4 +225,23 @@ export async function listSessionCatalogNavigationEvents(
     `${NAVIGATION_EVENTS_PATH}?${query.toString()}`,
     { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
+}
+
+/** 目录版本通知复用同工作区的物理 SSE；每次连接先发布当前快照。 */
+export function streamSessionCatalogSnapshots(
+  port: number,
+  workspaceTarget: GatewayWorkspaceRequestTarget,
+  options: { signal: AbortSignal; onSnapshot: (snapshot: SessionCatalogSnapshot) => void },
+): Promise<void> {
+  return consumeWorkspaceObservation(port, gatewayWorkspaceRequestHeaders(workspaceTarget), () => ({
+    kind: "session_navigation", paths: [],
+  }), {
+    signal: options.signal,
+    events: {
+      session_navigation: defineSseEvent(
+        (data, frame) => decodeJsonSseData(data, frame) as SessionCatalogSnapshot,
+        options.onSnapshot,
+      ),
+    },
+  });
 }

@@ -13,6 +13,7 @@ from pydantic import JsonValue, Secret
 from app.core import file_permissions
 from app.services.infrastructure.config.plugin_private_inputs import (
     PluginPrivateInputStore,
+    private_input_references,
     validate_plugin_parameters,
     validate_private_input,
 )
@@ -74,6 +75,29 @@ def test_nested_private_json_roundtrip_and_immutable_versions(private_inputs):
     ]
     if os.name != "nt":
         assert (store.directory / f"{reference.version}.json").stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize("retained_owner", ["source", "active", "pending", None])
+def test_released_private_version_is_removed_only_when_no_owner_retains_it(private_inputs, retained_owner):
+    store = private_inputs
+    old = store.write(package_id="probe.tools", plugin_id="probe", parameter_pointer="/credential",
+                      value=Secret("old-private-value"))
+    replacement = store.write(package_id="probe.tools", plugin_id="probe", parameter_pointer="/credential",
+                              value=Secret("new-private-value"))
+    old_path = store.directory / f"{old.version}.json"
+    replacement_path = store.directory / f"{replacement.version}.json"
+
+    retained = (old,) if retained_owner is not None else (replacement,)
+    removed = store.remove_unreferenced(candidates=(old,), retained=retained)
+
+    assert removed == (() if retained_owner is not None else (old.version,))
+    assert old_path.exists() is (retained_owner is not None)
+    assert replacement_path.is_file()
+
+
+def test_private_reference_collection_rejects_malformed_reference():
+    with pytest.raises(ValueError, match="PluginPrivateInputReference"):
+        private_input_references({"kind": "plugin_private_file", "version": "invalid"})
 
 
 @pytest.mark.parametrize(

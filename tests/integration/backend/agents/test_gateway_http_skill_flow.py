@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,10 +27,10 @@ from tests.integration.backend.agents.test_gateway_skill_source_flow import (
 from tests.integration.backend.agents.test_gateway_skill_source_flow import (
     scripted_model as scripted_model,  # noqa: PLC0414 - pytest 通过重导出的 fixture 注入。
 )
+from tests.support.http_server import running_http_server
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -74,15 +73,8 @@ def http_skill_server(request: pytest.FixtureRequest) -> Iterator[HttpSkillServe
         def log_message(self, _format: str, *args: object) -> None:
             pass  # 来源请求以结构化事实留在本测试收据中。
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", port), Handler)):
         yield state
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 async def test_gateway_shared_http_skill_is_fetched_once_and_frozen_per_workspace(
@@ -111,7 +103,6 @@ async def test_gateway_shared_http_skill_is_fetched_once_and_frozen_per_workspac
     )
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             assert (await client.get("/api/v1/workspace")).status_code == 200
             health = await client.get("/api/gateway/health")
             assert health.status_code == 200, health.text

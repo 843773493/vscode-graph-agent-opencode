@@ -46,11 +46,12 @@ try {
     return payload.data;
   }, { path, owner, body });
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
-  const health = await api('/api/gateway/health'), registered = await api('/api/gateway/workspaces?check_health=false'), a = registered.active_workspace;
-  expect(a.gateway_id).toBe(health.gateway_id); expect((await api('/api/v1/workspace', a)).workspace_id).toBe(a.workspace_id);
+  const health = await api('/api/gateway/health'), registered = await api('/api/gateway/workspaces?check_health=false');
   await phase('prepare');
-  const managed = await api('/api/gateway/managed-workspaces', undefined, { root_path: required('BOXTEAM_SOURCE_OTHER_WORKSPACE'), name: 'Runtime B' });
-  const b = managed.items.find(item => item.name === 'Runtime B'); expect(b?.workspace_id).toBeTruthy();
+  const a = registered.items.find(item => item.workspace_id === required('BOXTEAM_SOURCE_WORKSPACE_A_ID'));
+  const b = registered.items.find(item => item.workspace_id === required('BOXTEAM_SOURCE_OTHER_WORKSPACE_ID'));
+  expect(a?.gateway_id).toBe(health.gateway_id); expect(b?.gateway_id).toBe(health.gateway_id);
+  expect((await api('/api/v1/workspace', a)).workspace_id).toBe(a.workspace_id);
   const sessions = await Promise.all([a, b].map(async owner => {
     const session = await api('/api/v1/sessions', owner, { title: '运行资源来源', agent_id: 'default' });
     const main = await api(`/api/v1/sessions/${session.session_id}/main-thread`, owner);
@@ -65,12 +66,20 @@ try {
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   const camel = owner => ({ gatewayId: owner.gateway_id, workspaceId: owner.workspace_id });
   const rows = id => quick.locator('.monaco-list-row').filter({ hasText: id });
-  const show = async (owner, id) => {
+  const find = async (owner, id) => {
     await command('boxteam.quickAccess.resources', camel(owner));
     await expect(input).toHaveValue('resource '); await input.fill(`resource ${id}`); await expect(rows(id)).toBeVisible();
-    await rows(id).click(); await expect(quick).toContainText('资源动作 ·');
   };
-  const writes = value => result.requests.filter(item => item.phase === value && item.method === 'POST');
+  const show = async (owner, id) => {
+    await find(owner, id);
+    await rows(id).hover();
+    const actions = rows(id).getByRole('button', { name: '更多资源动作' });
+    await expect(actions).toBeVisible();
+    await actions.evaluate(element => element.click());
+    await expect(quick.getByText('资源动作 ·')).toBeVisible();
+  };
+  const resourceActions = value => result.requests.filter(item => item.phase === value && item.method === 'POST'
+    && /\/(promote|attach|detach|stop|delete)$/.test(item.path));
   const current = (owner, id) => api(`/api/v1/resources/${id}`, owner);
   const settle = async (id, action, trigger) => {
     const received = page.waitForResponse(response => response.request().method() === 'POST'
@@ -82,13 +91,43 @@ try {
   };
   await phase('browse'); await command('boxteam.quickAccess.resources', camel(a));
   await input.fill('resource Needle'); await expect(rows(terminals[0].resource_id)).toBeVisible();
-  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Escape'); expect(writes(result.phase)).toEqual([]); result.browseOnly = true;
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Escape'); expect(resourceActions(result.phase)).toEqual([]); result.browseOnly = true;
+  const focus = async (owner, resourceId) => {
+    await find(owner, resourceId);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+  };
+  await phase('focus-B'); await focus(b, terminals[1].resource_id);
+  const terminalPanel = page.locator('.native-workspace-panel[data-panel-kind="terminal"]:visible');
+  await expect(terminalPanel).toHaveAttribute('data-workspace-id', b.workspace_id);
+  await expect(terminalPanel.locator(`iframe[src*="workspaceId=${b.workspace_id}"][src*="terminalId=${terminals[1].resource_id}"]`)).toBeVisible();
+  expect((await api('/api/gateway/workspaces?check_health=false')).active_workspace).toEqual({ gateway_id: b.gateway_id, workspace_id: b.workspace_id });
+  expect(resourceActions(result.phase)).toEqual([]);
+  expect((await current(b, terminals[1].resource_id)).thread_associations).toEqual([sessions[1]]);
+  expect((await current(b, terminals[1].resource_id)).status).toBe('running'); result.focusOtherWorkspace = true;
+  await phase('focus-A'); await focus(a, terminals[0].resource_id);
+  await expect(terminalPanel).toHaveAttribute('data-workspace-id', a.workspace_id);
+  await expect(terminalPanel.locator(`iframe[src*="workspaceId=${a.workspace_id}"][src*="terminalId=${terminals[0].resource_id}"]`)).toBeVisible();
+  expect(resourceActions(result.phase)).toEqual([]);
+  expect((await current(a, terminals[0].resource_id)).thread_associations).toEqual([sessions[0]]);
+  expect((await current(a, terminals[0].resource_id)).status).toBe('running'); result.focusExactTerminal = true;
+  await phase('focus-browser'); await focus(a, browserResource.resource_id);
+  const selectedBrowser = page.locator('.native-workspace-panel[data-panel-kind="browser"]:visible .resource-tree-item.is-selected');
+  await expect(selectedBrowser).toHaveCount(1);
+  const browserDetails = selectedBrowser.locator('.resource-tree-chevron');
+  if (await browserDetails.getAttribute('aria-expanded') !== 'true') await browserDetails.click();
+  const browserMetadata = selectedBrowser.locator('details.resource-details');
+  if (await browserMetadata.getAttribute('open') === null) await browserMetadata.locator('summary').click();
+  await expect(selectedBrowser.locator(`[title="${browserResource.resource_id}"]`)).toBeVisible();
+  await expect(page.locator('.native-workspace-panel[data-panel-kind="browser"]:visible iframe')).toHaveCount(0);
+  expect((await current(a, browserResource.resource_id)).thread_associations).toEqual([sessions[0]]);
+  expect(resourceActions(result.phase)).toEqual([]); result.focusBrowserWithoutAttach = true;
   await phase('cancel'); await show(a, terminals[0].resource_id); await page.keyboard.press('Escape');
-  await expect(input).toHaveValue(`resource ${terminals[0].resource_id}`); await page.keyboard.press('Escape'); expect(writes(result.phase)).toEqual([]); result.cancelOnly = true;
+  await expect(input).toHaveValue(`resource ${terminals[0].resource_id}`); await page.keyboard.press('Escape'); expect(resourceActions(result.phase)).toEqual([]); result.cancelOnly = true;
   await phase('stop'); await show(a, terminals[0].resource_id);
   expect((await settle(terminals[0].resource_id, 'stop', () => quick.getByText('停止资源', { exact: true }).click())).status).toBe('terminated');
   expect((await current(a, terminals[0].resource_id)).status).toBe('terminated');
-  expect(writes(result.phase)).toHaveLength(1); expect(writes(result.phase)[0].body).toEqual({ expected_revision: terminals[0].owner_revision });
+  expect(resourceActions(result.phase)).toHaveLength(1); expect(resourceActions(result.phase)[0].body).toEqual({ expected_revision: terminals[0].owner_revision });
   expect((await current(a, terminals[0].resource_id)).thread_associations).toEqual([sessions[0]]);
   expect((await current(b, terminals[1].resource_id)).status).toBe('running'); result.directStop = true;
   await phase('detach'); await show(a, terminals[0].resource_id); await quick.getByText('解除关联', { exact: true }).click();
@@ -96,35 +135,47 @@ try {
   expect((await settle(terminals[0].resource_id, 'detach', () => quick.getByText(sessions[0].thread_id, { exact: true }).click())).thread_associations).toEqual([]);
   expect((await current(a, terminals[0].resource_id)).thread_associations).toEqual([]);
   expect((await current(a, terminals[0].resource_id)).status).toBe('terminated');
-  expect(writes(result.phase)).toHaveLength(1); expect(writes(result.phase)[0].body.thread).toEqual(sessions[0]); result.detachedWithoutDelete = true;
+  expect(resourceActions(result.phase)).toHaveLength(1); expect(resourceActions(result.phase)[0].body.thread).toEqual(sessions[0]); result.detachedWithoutDelete = true;
   await phase('delete'); await show(a, terminals[0].resource_id); await quick.getByText('删除资源', { exact: true }).click();
   const dialog = page.locator('.monaco-dialog-box'); await expect(dialog).toBeVisible();
   expect((await settle(terminals[0].resource_id, 'delete', () => dialog.getByRole('button', { name: '删除资源', exact: true }).click())).status).toBe('deleted');
   expect((await current(a, terminals[0].resource_id)).status).toBe('deleted');
-  expect(writes(result.phase)).toHaveLength(1); result.deletedSeparately = true;
+  expect(resourceActions(result.phase)).toHaveLength(1); result.deletedSeparately = true;
   await phase('react'); await command('boxteam.browser.focus');
   const panel = page.locator('.native-workspace-panel[data-panel-kind="browser"]:visible');
   const browserRows = panel.locator('.resource-tree-item[data-resource-kind="browser"]');
   await expect(browserRows).toHaveCount(1);
   // 原资源ID位于展开详情，先只展开展示，再核精确ID后执行管理动作。
-  await browserRows.locator('.resource-tree-chevron').click();
+  const details = browserRows.locator('.resource-tree-chevron');
+  if (await details.getAttribute('aria-expanded') !== 'true') await details.click();
+  const metadata = browserRows.locator('details.resource-details');
+  if (await metadata.getAttribute('open') === null) await metadata.locator('summary').click();
   const row = browserRows.filter({ has: page.locator(`[title="${browserResource.resource_id}"]`) });
-  await expect(row).toBeVisible();
+  await expect(row.locator(`[title="${browserResource.resource_id}"]`)).toBeVisible();
   expect((await settle(browserResource.resource_id, 'promote', () => row.getByRole('button', { name: '保留到工作区', exact: true }).click())).retention_scope).toBe('workspace');
   expect((await current(a, browserResource.resource_id)).retention_scope).toBe('workspace');
-  expect(writes(result.phase)).toHaveLength(1); expect(writes(result.phase)[0].path).toBe(`/api/v1/resources/${browserResource.resource_id}/promote`); result.originalReact = true;
+  expect(resourceActions(result.phase)).toHaveLength(1); expect(resourceActions(result.phase)[0].path).toBe(`/api/v1/resources/${browserResource.resource_id}/promote`); result.originalReact = true;
   await phase('conflict'); const before = await current(a, browserResource.resource_id);
   await show(a, browserResource.resource_id);
-  await api(`/api/v1/resources/${browserResource.resource_id}/stop`, a, { expected_revision: before.owner_revision });
+  const stopPath = `/api/v1/resources/${browserResource.resource_id}/stop`;
+  await page.route(`**${stopPath}`, async route => {
+    expect(route.request().postDataJSON()).toEqual({ expected_revision: before.owner_revision });
+    await api(`/api/v1/resources/${browserResource.resource_id}/detach`, a,
+      { expected_revision: before.owner_revision, thread: sessions[0] });
+    const detached = await current(a, browserResource.resource_id);
+    expect(detached.status).toBe('running'); expect(detached.thread_associations).toEqual([]);
+    expect(detached.owner_revision).toBeGreaterThan(before.owner_revision);
+    await route.continue();
+  });
   await quick.getByText('停止资源', { exact: true }).click();
   await expect.poll(() => result.receipts.some(item => item.phase === 'conflict' && item.status === 409)).toBe(true);
-  expect(writes(result.phase)).toHaveLength(2); expect(writes(result.phase)[1].body.expected_revision).toBe(before.owner_revision);
+  expect(resourceActions(result.phase)).toHaveLength(2); expect(resourceActions(result.phase)[1].body.expected_revision).toBe(before.owner_revision);
   await expect(page.locator('.notification-list-item-message').filter({ hasText: /版本|revision/ }).first()).toBeVisible(); result.revisionConflict = true;
   await phase('owner-B'); await show(b, terminals[1].resource_id);
   expect((await settle(terminals[1].resource_id, 'stop', () => quick.getByText('停止资源', { exact: true }).click())).status).toBe('terminated');
   expect((await current(b, terminals[1].resource_id)).status).toBe('terminated');
-  expect(writes(result.phase)).toHaveLength(1); expect(writes(result.phase)[0].owner).toEqual({ gateway_id: b.gateway_id, workspace_id: b.workspace_id });
-  expect((await api('/api/gateway/workspaces?check_health=false')).active_workspace).toEqual(a); result.ownerB = true;
+  expect(resourceActions(result.phase)).toHaveLength(1); expect(resourceActions(result.phase)[0].owner).toEqual({ gateway_id: b.gateway_id, workspace_id: b.workspace_id });
+  expect((await api('/api/gateway/workspaces?check_health=false')).active_workspace).toEqual({ gateway_id: a.gateway_id, workspace_id: a.workspace_id }); result.ownerB = true;
   await Promise.all(pending); expect(collectionErrors).toEqual([]); expect(result.pageErrors).toEqual([]); expect(result.forbiddenWrites).toEqual([]);
   expect(result.receipts.every(item => item.request_id && item.header === item.request_id)).toBe(true);
   await phase('complete');

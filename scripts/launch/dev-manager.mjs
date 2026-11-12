@@ -24,8 +24,8 @@ const STATUS_GATEWAY_TIMEOUT_MS = 2_000;
 const OPERATION_LOCK_TIMEOUT_MS = MANAGER_START_TIMEOUT_MS * 2 + 30_000;
 const PROCESS_POLL_INTERVAL_MS = 100;
 
-function createManagerLayout(environment = process.env, cwd = process.cwd()) {
-  const layout = resolveDevelopmentLayout({ environment, cwd });
+function createManagerLayout(environment = process.env, cwd = process.cwd(), args = []) {
+  const layout = resolveDevelopmentLayout({ environment, cwd, args });
   const runtimeRoot = path.join(layout.projectRoot, "out", "development-runtime");
   return {
     ...layout,
@@ -260,6 +260,7 @@ function removeReadyRecord(layout, expectedRecord) {
 function printManagerReady(layout, pid, state) {
   process.stdout.write(
     `[dev-manager] ${state}: pid=${pid} frontend=${layout.frontendUrl} ` +
+      `frontend_root=${layout.frontendRoot} backend_root=${layout.projectRoot} ` +
       `boxteam_home=${layout.boxteamHome}\n`,
   );
 }
@@ -276,14 +277,15 @@ async function startPortable(layout) {
 
     const command = [
       process.execPath,
-      path.join(layout.projectRoot, "scripts", "launch", "dev.mjs"),
+      path.join(layout.frontendRoot, "scripts", "launch", "dev.mjs"),
       "--only-launch",
     ];
     const result = Bun.spawnSync(command, {
-      cwd: layout.projectRoot,
+      cwd: layout.frontendRoot,
       env: {
         ...process.env,
         BOXTEAM_PROJECT_ROOT: layout.projectRoot,
+        BOXTEAM_FRONTEND_ROOT: layout.frontendRoot,
         BOXTEAM_HOME: layout.boxteamHome,
       },
       stdout: "pipe",
@@ -429,6 +431,8 @@ async function statusPortable(layout) {
     gateway_ready: gatewayReady,
     gateway_detail: observation.detail,
     frontend: layout.frontendUrl,
+    frontend_root: layout.frontendRoot,
+    backend_root: layout.projectRoot,
     boxteam_home: layout.boxteamHome,
   })}\n`);
   if (!gatewayReady) process.exitCode = 1;
@@ -444,7 +448,7 @@ export async function main(args = process.argv.slice(2)) {
     await systemdMain(args);
     return;
   }
-  const layout = createManagerLayout();
+  const layout = createManagerLayout(process.env, process.cwd(), args.slice(1));
   if (action === "start") await startPortable(layout);
   if (action === "stop") await stopPortable(layout);
   if (action === "status") await statusPortable(layout);

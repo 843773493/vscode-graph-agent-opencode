@@ -44,9 +44,6 @@ describe("工作区会话列表快照", () => {
       if (url.includes("/api/gateway/auth/local-credential")) {
         return apiResponse({ token: "local-test-token" });
       }
-      if (url.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
       if (url.includes("/api/v1/sessions?") || url.endsWith("/api/v1/sessions")) {
         return apiResponse({ items: [], next_cursor: null, has_more: false });
       }
@@ -77,9 +74,6 @@ describe("工作区会话列表快照", () => {
       if (url.includes("/api/gateway/auth/local-credential")) {
         return apiResponse({ token: "local-coalesce-token" });
       }
-      if (url.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
-      }
       if (url.includes("/api/v1/sessions")) {
         sessionListRequestCount += 1;
         await listRequestReleased;
@@ -107,9 +101,6 @@ describe("工作区会话列表快照", () => {
       const url = input instanceof Request ? input.url : String(input);
       if (url.includes("/api/gateway/auth/local-credential")) {
         return apiResponse({ token: "local-force-token" });
-      }
-      if (url.includes("/api/gateway/users/current")) {
-        return apiResponse({ kind: "guest", user_id: null });
       }
       if (url.includes("/api/v1/sessions")) {
         sessionListRequestCount += 1;

@@ -17,7 +17,7 @@ src/
 │   ├── jobs.ts, nodeDebug.ts     作业与 Node 调试请求
 │   ├── mcpConnections.ts        工作区 MCP 操作与私有回调 API
 │   ├── toolTesting.ts            工具测试请求
-│   ├── gateway/                  Gateway 会话连接、用户访问与视图状态
+│   ├── gateway/                  Gateway 会话连接与控制面请求
 │   ├── session/                  会话、目录、消息、目标、资源及活动订阅
 │   ├── stream/                   消息、Trace、文件事件与共享观察流编排
 │   └── tests/                    跨 API 模块的契约测试与 AGENTS.md 边界说明

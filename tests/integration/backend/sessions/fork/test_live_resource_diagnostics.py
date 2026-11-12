@@ -101,13 +101,13 @@ async def test_public_fork_native_failure_preserves_live_resource_facts(
     monkeypatch.setattr(owner._transport, "get_resource", get_resource)
     monkeypatch.setattr(owner._transport, "list_resources", list_resources)
     monkeypatch.setattr(owner_module, "observe_phase", arm)
-    async with main.lifespan(main.app) as _main_lifespan_state_104, httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": source.workspace_id,
                  "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84",
                  "X-Request-ID": "fork-live-diagnostics"},
     ) as client:
-        await _main_lifespan_state_104["after_http_startup"]()
+        await _main_lifespan_state["after_http_startup"]()
         try:
             response = await client.post(f"/api/v1/sessions/{source.session_id}/fork-context", json=request.model_dump(mode="json"))
             assert response.status_code == 200, response.text

@@ -15,7 +15,6 @@ import type {
   TurnResponsePart,
   WebUiSettings,
   DeliveryPolicy,
-  GatewayUserAccess,
   JobStatus,
 } from "./backend";
 import type { SessionTurnTimeline } from "../state/session/turnTimeline";
@@ -175,13 +174,10 @@ export interface AppState {
    * 的会话列表读取失败时置真，UI 不得把这份数据当作当前权威结构展示。 */
   gatewayWorkspacesStale: boolean;
   browserViewScope?: string;
-  gatewayUserAccess: GatewayUserAccess | null;
-  gatewayUserViewStates: Map<string, SessionViewState>;
+
+  sessionViewStates: Map<string, SessionViewState>;
   uiSettings: WebUiSettings;
   uiSettingsLoaded: boolean;
-  /** 主题背景图（纯装饰画布）加载失败时的可见警告；核心主题已正常应用，
-   * 该字段非空不表示初始化失败，只用于在状态栏给出非致命提示。 */
-  themeBackgroundWarning: string | null;
   workspaceName: string | null;
   agents: Agent[];
   sessions: Session[];

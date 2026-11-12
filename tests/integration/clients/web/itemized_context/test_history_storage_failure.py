@@ -41,8 +41,6 @@ async def test_real_lock_permission_failure_is_visible_and_retry_preserves_histo
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "历史故障 Web 验收需要真实 Chromium"
     async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60) as client:
-        guest = await client.post("/api/gateway/users/guest", json={"tracking": {"source": "history-storage-failure"}})
-        assert guest.status_code == 200, guest.text
         registry = await client.get("/api/gateway/workspaces")
         assert registry.status_code == 200, registry.text
         active_owner = registry.json()["data"]["active_workspace"]
@@ -90,7 +88,7 @@ async def test_real_lock_permission_failure_is_visible_and_retry_preserves_histo
         (artifacts / "browser.log").open("x", encoding="utf-8") as output,
         capture_test_processes(),
     ):
-        process = await asyncio.to_thread(subprocess.Popen, command, env=environment | temporary, stdout=output, stderr=subprocess.STDOUT,
+        process = subprocess.Popen(command, env=environment | temporary, stdout=output, stderr=subprocess.STDOUT,
             text=True, start_new_session=True)
         managed = ManagedProcess(process=process, log_file=output)
         register_test_process(managed, managed.close)

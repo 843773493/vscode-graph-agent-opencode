@@ -41,25 +41,3 @@ describe("浏览器视图 IndexedDB", () => {
     expect(await readBrowserView<string>(settings)).toBe("保留设置");
   });
 });
-
-test("旧草稿只迁移当前身份，保留原件且不覆盖已经存在的本地输入", async () => {
-  const { migrateComposerDrafts, readComposerDraft } = await import("./composerDrafts/storage");
-  const previous = Object.getOwnPropertyDescriptor(globalThis, "window");
-  const storage = new Map([["boxteam.web.composerDrafts", JSON.stringify({
-    "user:a::workspace::session::thread:a": "原草稿", "user:b::workspace::session::thread:a": "其他用户的草稿",
-  })]]);
-  Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: {
-    getItem: (key: string) => storage.get(key) ?? null, removeItem: (key: string) => storage.delete(key),
-  } } });
-  try {
-    await updateBrowserView("draft:migration-gateway::workspace::session::thread:a", () => "本地新草稿");
-    await migrateComposerDrafts("migration-gateway", "a");
-    expect(await readComposerDraft("migration-gateway::workspace::session::thread:a")).toBe("本地新草稿");
-    expect(await readBrowserView<Record<string, string>>("legacy-drafts:migration-gateway")).toEqual({
-      "user:a::workspace::session::thread:a": "原草稿", "user:b::workspace::session::thread:a": "其他用户的草稿",
-    });
-    expect(storage.has("boxteam.web.composerDrafts")).toBe(false);
-  } finally {
-    if (previous) Object.defineProperty(globalThis, "window", previous); else Reflect.deleteProperty(globalThis, "window");
-  }
-});

@@ -20,7 +20,7 @@
 
 # 规范
 
-- 通过正式 `package:electron` 入口构建；使用 `--output-root` 将全部产物放入本测试镜像的 runtime，校验归档摘要后解压启动。
+- 通过 `package:electron --development` 入口验证当前源码，不登记正式发布；使用 `--output-root` 将全部产物放入本测试镜像的 runtime，校验归档摘要后解压启动。
 - Electron 使用独立 cwd、空 PATH 和独立 BOXTEAM_HOME；不读取其它测试的会话或应用 bundle。已有官方 Electron 下载缓存可以复制加速，仍由打包器校验固定版本摘要。
 - 首窗口句柄不代表根文档就绪；先按现有页面操作预算等待默认根 URL 的 DOMContentLoaded，再执行控件断言。最终独立 HTTP 历史审计使用正常 Gateway 用户认证，不能用本地凭据替代用户会话。
 - 通过真实 Gateway、Backend、Agent 和精确模型回放验证业务，分类为 Integration；HTTP 延迟代理只转发真实响应。

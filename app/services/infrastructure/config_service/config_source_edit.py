@@ -254,7 +254,15 @@ class ConfigSourceEditMixin:
                 raise ConfigConflictError("来源编辑幂等键已绑定其它请求")
             if pending.state != "candidate_validated" or store.get_config_apply_claim(config_domain=service._CONFIG_DOMAIN) is not None:
                 return self.get_source_document(source_key=source_key, gateway_id=gateway_id, idempotency_key=request.idempotency_key)
+        path, _, _ = self._source_target(source_key)
+        if path is None:
+            raise ValueError("Workspace 来源没有可编辑文件")
+        previous_file = read_stable_config_file(path)
+        previous_source = parse_source_text(
+            previous_file.raw_bytes.decode("utf-8") if previous_file.raw_bytes is not None else "{}\n"
+        )
         text, candidate = self._preflight_source_edit(source_key, gateway_id, request, pending)
+        verify_stable_config_file(previous_file)
 
         def require_plugin_permission() -> None:
             current = service._require_snapshot().to_dict()
@@ -298,6 +306,7 @@ class ConfigSourceEditMixin:
                 verify_stable_config_file(file)
                 if file.digest != intent["file_digest"]:
                     atomic_write_bytes(file.path, text.encode("utf-8"))
+                service._remove_released_plugin_private_inputs(previous_source)
                 return True
 
         try:

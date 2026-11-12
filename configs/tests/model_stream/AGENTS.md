@@ -17,4 +17,4 @@
 
 - 每个 model-stream 配置必须通过同目录的 `model_stream_schema.jsonc` 校验。
 - `fixture_root` 可省略；省略时由 loader 使用 `tests/fixtures/model_stream/`，只有独立 fixture 集合才显式覆盖。
-- 临时录制和诊断产物必须落到 `out/tests/` 或 `out/tests/temp/` 对应路径。
+- 临时录制和诊断产物必须落到 `out/tests/` 或 `out/tests/temp/YYYY/MM/DD/<task_name>/` 对应路径。

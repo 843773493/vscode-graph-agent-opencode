@@ -59,6 +59,7 @@ function simulateWindowsNpmInvocation({ fixtureRoot, globalRoot }) {
   const runtimeTarball = path.join(fixtureRoot, "runtime & assets.tgz");
   writeFileSync(launcherTarball, "launcher");
   writeFileSync(runtimeTarball, "runtime");
+  writeFileSync(path.join(fixtureRoot, "npm.cmd"), "@echo off\r\n");
   const source = `
     import childProcess from "node:child_process";
     import { syncBuiltinESMExports } from "node:module";
@@ -71,6 +72,8 @@ function simulateWindowsNpmInvocation({ fixtureRoot, globalRoot }) {
       runtimeTarball,
     ] = JSON.parse(process.argv[1]);
     Object.defineProperty(process, "platform", { value: "win32" });
+    process.env.PATHEXT = ".cmd";
+    const environment = { ...process.env, PATH: workingDirectory };
     const calls = [];
     childProcess.spawnSync = (command, args, options) => {
       calls.push({
@@ -89,7 +92,7 @@ function simulateWindowsNpmInvocation({ fixtureRoot, globalRoot }) {
     syncBuiltinESMExports();
     const { runReleaseInstall, verifyInstalledRelease } = await import(moduleUrl);
     runReleaseInstall({
-      command: "npm.cmd",
+      command: "npm",
       args: [
         "install",
         "--global",
@@ -99,16 +102,17 @@ function simulateWindowsNpmInvocation({ fixtureRoot, globalRoot }) {
         runtimeTarball,
       ],
       cwd: workingDirectory,
+      environment,
     });
     verifyInstalledRelease({
       command: {
-        command: "npm.cmd",
+        command: "npm",
         prefix: installPrefix,
         targetPlatform: "windows-x64",
         version: "${packageVersion}",
       },
       cwd: workingDirectory,
-      environment: process.env,
+      environment,
     });
     console.log(JSON.stringify(calls));
   `;
@@ -150,11 +154,11 @@ test("Windows install 和 root 核验都经 cross-spawn 转义 cmd 参数", () =
     expect(call.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
     expect(call.windowsVerbatimArguments).toBe(true);
   }
-  expect(calls[0].args[3]).toContain('npm.cmd ^"install^"');
+  expect(calls[0].args[3]).toContain('npm ^"install^"');
   expect(calls[0].args[3]).toContain(escapeWindowsArgument(installPrefix));
   expect(calls[0].args[3]).toContain(escapeWindowsArgument(launcherTarball));
   expect(calls[0].args[3]).toContain(escapeWindowsArgument(runtimeTarball));
-  expect(calls[1].args[3]).toContain('npm.cmd ^"root^" ^"--global^"');
+  expect(calls[1].args[3]).toContain('npm ^"root^" ^"--global^"');
   expect(calls[1].args[3]).toContain(escapeWindowsArgument(installPrefix));
 });
 
@@ -172,6 +176,7 @@ if (process.platform === "win32") {
     writeFileSync(runtimeTarball, "runtime");
     const environment = {
       ...process.env,
+      PATH: `${fixtureRoot}${path.delimiter}${process.env.PATH ?? ""}`,
       BOXTEAM_NPM_TEST_ROOT: globalRoot,
       BOXTEAM_NPM_TEST_CALLS: markerPath,
     };
@@ -196,7 +201,7 @@ if (process.platform === "win32") {
     );
 
     runReleaseInstall({
-      command: commandPath,
+      command: "npm",
       args: [
         "install",
         "--global",
@@ -210,7 +215,7 @@ if (process.platform === "win32") {
     });
     verifyInstalledRelease({
       command: {
-        command: commandPath,
+        command: "npm",
         prefix: installPrefix,
         targetPlatform: "windows-x64",
         version: packageVersion,

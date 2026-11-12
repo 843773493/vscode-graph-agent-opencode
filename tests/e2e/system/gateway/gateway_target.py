@@ -11,6 +11,7 @@ from typing import Literal
 
 from app.core.identifier import validate_gateway_id
 from app.core.workspace_identity import validate_workspace_id
+from app.gateway.ssh_command import ssh_path_option
 from configs.boxteam import SSH_KEY_NAME, install_gateway_development_assets
 
 READY_TIMEOUT_SECONDS = 60
@@ -487,8 +488,8 @@ def ssh_command(target: GatewaySshTarget, remote_command: str) -> list[str]:
     target.known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
     return [
         "ssh",
-        "-i",
-        str(target.private_key),
+        "-o",
+        ssh_path_option("IdentityFile", str(target.private_key)),
         "-p",
         str(target.ssh_port),
         "-o",
@@ -498,7 +499,7 @@ def ssh_command(target: GatewaySshTarget, remote_command: str) -> list[str]:
         "-o",
         "StrictHostKeyChecking=yes",
         "-o",
-        f"UserKnownHostsFile={target.known_hosts_path}",
+        ssh_path_option("UserKnownHostsFile", str(target.known_hosts_path)),
         f"{target.username}@{target.host}",
         remote_command,
     ]

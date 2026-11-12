@@ -12,10 +12,10 @@ from app.services.infrastructure.rollout_context.storage.catalog.turn_projection
 )
 
 _CARRIERS_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "sql/history_message_carriers.sql",
-) + load_sql("app.services.infrastructure.rollout_context.storage", "sql/content_carrier_replacements.sql")
+    "app.services.infrastructure.rollout_context.storage", "migrations/history_message_carriers.sql",
+) + load_sql("app.services.infrastructure.rollout_context.storage", "migrations/content_carrier_replacements.sql")
 _SURVIVOR_SQL = load_sql(
-    "app.services.infrastructure.rollout_context.storage", "sql/internal_history/survivor.sql",
+    "app.services.infrastructure.rollout_context.storage", "migrations/internal_history/survivor.sql",
 )
 
 
@@ -66,6 +66,46 @@ def message_search_candidates(
     except sqlite3.OperationalError as error:
         if expired:
             raise TimeoutError("消息查询达到 SQLite 读取期限") from error
+        raise
+    finally:
+        connection.set_progress_handler(None, 0)
+        connection.create_function("search_tool_call_id", 2, None)
+
+
+def tool_result_metadata(
+    connection: sqlite3.Connection, view_id: str, *, after: int, limit: int,
+    deadline: float, item_id: str | None = None,
+) -> list[tuple[int, str, str, str, str | None, str, str]]:
+    """共用正文搜索的可见载体选择；第二条查询只读原调用索引和版本元数据。"""
+    candidates = message_search_candidates(connection, view_id, lower_ordinal=after + 1,
+        limit=limit, deadline=deadline, item_id=item_id, category="tool_result")
+    if not candidates:
+        return []
+    placeholders = ",".join("?" for _ in candidates)
+    connection.create_function("search_tool_call_id", 2, lambda model, call:
+        provider_tool_call_id(ItemProjectionIdentity(model_call_id=model), call))
+    connection.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
+    try:
+        rows = connection.execute(
+            "SELECT item.item_id,item.turn_id,item.tool_call_id,"
+            "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id'),"
+            "item.status,COALESCE((SELECT call.tool_name FROM tool_calls call "
+            "JOIN messages assistant ON assistant.message_sequence=call.assistant_message_sequence "
+            "JOIN item_catalog source ON source.jsonl_offset=assistant.jsonl_offset AND source.jsonl_length=assistant.jsonl_length "
+            "WHERE assistant.turn_id=item.turn_id AND "
+            "json_extract(source.projection_manifest_json,'$.projection_identity.model_call_id') IS "
+            "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id') "
+            "AND search_tool_call_id(json_extract(source.projection_manifest_json,'$.projection_identity.model_call_id'),call.tool_call_id)="
+            "search_tool_call_id(json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id'),item.tool_call_id) "
+            "ORDER BY call.assistant_message_sequence LIMIT 1),item.tool_call_id) "
+            f"FROM item_catalog item WHERE item.item_id IN ({placeholders})",
+            [row[1] for row in candidates],
+        ).fetchall()
+        by_id = {row[0]: row for row in rows}
+        return [(ordinal, *by_id[candidate_id]) for ordinal, candidate_id, _turn, _length in candidates]
+    except sqlite3.OperationalError as error:
+        if monotonic() >= deadline:
+            raise TimeoutError("工具结果目录达到 SQLite 读取期限") from error
         raise
     finally:
         connection.set_progress_handler(None, 0)

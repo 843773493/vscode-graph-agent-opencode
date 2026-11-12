@@ -122,22 +122,35 @@ async def test_existing_media_set_is_complete_not_utf8_decoded(read_case, synchr
 
 
 @pytest.mark.asyncio
-async def test_real_read_image_result_keeps_provider_projection(read_case):
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("vision", [False, True])
+async def test_real_read_image_result_keeps_provider_projection(read_case, synchronous, vision):
     workspace, owner, tools = read_case
-    (workspace / "image %.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    raw = b"\x89PNG\r\n\x1a\n"
+    (workspace / "image %.png").write_bytes(raw)
     uri = owner.input_uri("image %.png")
-    result = await _read(tools, uri, False)
-    for vision in (False, True):
-        model = BoxteamLiteLLMChatModel(model="openai/test-model", api_key="test-key",
-            api_base="https://example.com/v1", provider_id="read-projection", image_input_replay=vision)
-        wire, = model._convert_messages_to_dicts([result])
-        assert wire["tool_call_id"] == result.tool_call_id
+    result = await _read(tools, uri, synchronous)
+    original = result.model_copy(deep=True)
+    model = BoxteamLiteLLMChatModel(model="openai/test-model", api_key="test-key",
+        api_base="https://example.com/v1", provider_id="read-projection", image_input_replay=vision)
+    messages = model._convert_messages_to_dicts([result])
+    wire = messages[0]
+    assert wire["role"] == "tool" and wire["tool_call_id"] == result.tool_call_id
+    if vision:
+        tool, media = messages
+        assert tool["content"] == "[工具返回媒体，见后续数据消息]"
+        assert media["role"] == "user"
+        source, image = media["content"]
+        assert source["type"] == "text" and result.tool_call_id in source["text"]
+        assert image == {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64," + base64.b64encode(raw).decode()},
+        }
+    else:
+        assert len(messages) == 1
         block, = wire["content"]
-        if vision:
-            assert block == {"type": "image", "base64": base64.b64encode((workspace / "image %.png").read_bytes()).decode(), "mime_type": "image/png"}
-        else:
-            assert block["type"] == "text" and uri in block["text"]
-    assert result.content_blocks[0]["type"] == "image"
+        assert block["type"] == "text" and uri in block["text"]
+    assert result == original
 
 
 @pytest.mark.asyncio

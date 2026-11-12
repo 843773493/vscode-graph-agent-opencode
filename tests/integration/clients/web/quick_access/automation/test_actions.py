@@ -56,7 +56,7 @@ async def test_find_manage_and_inspect_persistent_tasks(
     result_path = context.artifacts_dir / "automation-actions.json"
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "150", "--",
-               "bun", "tests/integration/clients/web/quick_access/automation/actions.mjs"]
+               "node", "tests/integration/clients/web/quick_access/automation/actions.mjs"]
     with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
         completed = await asyncio.to_thread(
             subprocess.run, command, cwd=context.project_root,

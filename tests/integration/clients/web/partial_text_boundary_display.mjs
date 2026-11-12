@@ -64,23 +64,9 @@ async function waitUntil(predicate, label, timeout = 30_000) {
   throw new Error(`等待${label}超时`);
 }
 
-async function ensureGuest(page) {
+async function openWorkbenchPage(page) {
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
-  const current = await page.evaluate(async () => {
-    const response = await fetch("/api/gateway/users/current");
-    return { status: response.status, body: await response.text() };
-  });
-  if (current.status === 401) {
-    await api(page, "/api/gateway/users/guest", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tracking: { source: "partial-text-boundary-browser" } }),
-    });
-    await page.reload({ waitUntil: "domcontentloaded" });
-  } else if (current.status !== 200) {
-    throw new Error(`检查游客访问失败: ${current.status} ${current.body}`);
-  }
 }
 
 const runContext = TestRunContext.fromTestFile(fileURLToPath(import.meta.url));
@@ -98,7 +84,7 @@ try {
   runContext.addCleanup("边界展示 context", () => context.close());
   page = await context.newPage();
   page.on("pageerror", (error) => pageErrors.push(String(error)));
-  await ensureGuest(page);
+  await openWorkbenchPage(page);
   const history = await api(
     page,
     `/api/v1/sessions/${sessionId}/history`,

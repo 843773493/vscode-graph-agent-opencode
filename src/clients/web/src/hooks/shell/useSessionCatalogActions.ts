@@ -9,7 +9,7 @@ import { buildSessionCatalogSyncKeys } from "../sessionResourceExplorer/resource
 import { errorMessage, isErrorReported } from "../../utils/errorMessage";
 import { listGatewayWorkspaces } from "../../gatewayApi";
 import { HttpRequestError } from "../../api/http";
-import type { GatewayRuntimeGroupRequest, GatewayUserAccess, GatewayWorkspace, Session } from "../../types/backend";
+import type { GatewayRuntimeGroupRequest, GatewayWorkspace, Session } from "../../types/backend";
 import type { SessionCatalogOutboxRuntime } from "../session/sessionCatalogOutboxRuntime";
 import { requireGatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
 import { useSessionForkDialog, type SessionForkDialogInput } from "./useSessionForkDialog";
@@ -38,7 +38,7 @@ interface SessionCatalogActionsInput extends Pick<
   setStatus: (text: string) => void;
   onError: (message: string) => void;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime;
-  gatewayUserAccess?: GatewayUserAccess | null;
+
   activateGatewayWorkspace: (
     workspaceId: string,
     preferredSessionId?: string | null,
@@ -77,7 +77,7 @@ export function useSessionCatalogActions({
   setStatus,
   onError,
   sessionCatalogOutboxRuntime,
-  gatewayUserAccess,
+
   activateGatewayWorkspace,
   createSession,
   openWorkspaceSession,
@@ -156,20 +156,17 @@ export function useSessionCatalogActions({
     name: string,
   ) => {
     const runtime = sessionCatalogOutboxRuntime;
-    const access = gatewayUserAccess;
-    if (!runtime || !access) {
+    if (!runtime) {
       throw new Error("Gateway 认证状态尚未就绪，不能新建会话文件夹");
     }
     const workspaceTarget = requireGatewayWorkspaceRequestTarget(gatewayWorkspaces, workspaceId);
     const handle = await runtime.openWorkspace(
       workspaceTarget,
-      access,
     );
     const parent = catalogOutboxParentCreation(handle.driver.current(), parentNodeId);
     const catalog = await fetchSessionCatalogSnapshot(apiPort, workspaceTarget);
     const submitted = await runtime.submit(
       workspaceTarget,
-      access,
       { kind: "create_folder", name, parentNodeId: parent ? parent.parentNodeId : parentNodeId,
         parentCreatedByOperationId: parent?.createdBy },
       { baseCatalogRevision: catalog.catalog_revision },

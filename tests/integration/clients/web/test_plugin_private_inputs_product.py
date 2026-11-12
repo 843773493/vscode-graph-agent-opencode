@@ -167,9 +167,10 @@ async def test_plugin_private_inputs_gateway_and_workspace_product_flow(
         assert result["instance_logs_gateway"] and result["instance_logs_workspace"] and result["stopped_instance_logs"]
         assert result["structured_private_input"] and result["structured_private_cleared"]
         assert result["private_source_inheritance"]
-        # 清除来源覆盖不等于擦除私有正文；原引用仍由各自 owner 保存。
-        for reference in result["cleared_overlay"].values():
-            private_file = context.boxteam_home_for_node(request.node.nodeid) / "credentials/plugins" / f"{reference['version']}.json"
-            assert private_file.is_file()
+        private_directory = context.boxteam_home_for_node(request.node.nodeid) / "credentials/plugins"
+        assert (private_directory / f"{result['cleared_overlay']['lower']['version']}.json").is_file()
+        assert not (private_directory / f"{result['cleared_overlay']['upper']['version']}.json").exists()
+        workspace_private_directory = workspace_root / ".boxteam/credentials/plugins"
+        assert not (workspace_private_directory / f"{result['structured_reference']['version']}.json").exists()
     finally:
         close_gateway_process(gateway)

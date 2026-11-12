@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-- 草稿 IndexedDB 存储、旧 localStorage 一次性迁移与作用域键处理。
+- 草稿 IndexedDB 存储与作用域键处理；旧账户 localStorage 原件不自动导入或删除。
 - 草稿数量和文本大小限制。
 
 # 不可修改内容

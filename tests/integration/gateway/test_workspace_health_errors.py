@@ -21,7 +21,6 @@ from tests.harness.python.run_context import TestRunContext
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -90,7 +89,6 @@ async def test_health_identity_failure_does_not_publish_or_persist_response_valu
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             response = await client.get("/api/gateway/workspaces")
             assert response.status_code == 200, response.text
             item, = response.json()["data"]["items"]
@@ -164,7 +162,6 @@ async def test_gateway_workspace_control_ignores_model_proxy_environment(
             base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS,
             timeout=10, trust_env=False,
         ) as client:
-            await acquire_gateway_guest(client)
             listed = await client.get("/api/gateway/workspaces")
             assert listed.status_code == 200, listed.text
             target, = listed.json()["data"]["items"]
@@ -200,7 +197,6 @@ async def test_unknown_target_and_diagnostic_selectors_keep_registry_and_allow_r
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=20, trust_env=False,
         ) as client:
-            await acquire_gateway_guest(client)
             listed = await client.get("/api/gateway/workspaces")
             assert listed.status_code == 200, listed.text
             target, = listed.json()["data"]["items"]

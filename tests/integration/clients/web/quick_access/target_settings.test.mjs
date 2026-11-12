@@ -142,7 +142,7 @@ for (const mode of ['retry', 'discard', 'discard-conflict']) test(`${mode} 操�
 
 for (const mode of ['identity', 'gateway', 'offline']) test(`${mode} 原目标失效拒绝执行，不请求替代工作区`, async () => {
   const result = await exercise(mode);
-  expect(result.commandError).toContain(mode === 'offline' ? '离线' : '身份');
+  expect(result.commandError).toContain(mode === 'offline' ? '离线' : '访问凭据');
   expect(writes(result)).toEqual([]);
   if (mode !== 'offline') expect(result.inputs[0].cancelled).toBe(true);
 });

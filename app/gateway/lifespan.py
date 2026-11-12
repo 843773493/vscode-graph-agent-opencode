@@ -37,9 +37,6 @@ from app.gateway.control.catalog_search import GatewaySessionCatalogSearchServic
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.control.navigation import WorkspaceNavigationStore
 from app.gateway.control.resource_catalog import GatewayResourceCatalogService
-from app.gateway.control.user_access import UserAccessService
-from app.gateway.control.user_profile import UserProfileStore
-from app.gateway.control.view_state import UserViewStateStore
 from app.gateway.credentials import (
     FederationCredentialStore,
     load_or_create_gateway_id,
@@ -81,7 +78,6 @@ from app.gateway.runtime.service_plugins.runtime import plugin_runtime_lifespan
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.gateway.runtime_proof import (
     _apply_gateway_runtime_config,
-    _cleanup_user_access_periodically,
     _gateway_federation_policy_payload,
     _gateway_pending_consumer_health_digests,
     _gateway_pending_runtime_consumer_stages,
@@ -118,11 +114,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
     gateway_id = load_or_create_gateway_id(_gateway_root() / "identity.json")
     app.state.gateway_state = gateway_state
     app.state.gateway_id = gateway_id
-    app.state.user_access_service = UserAccessService(state=gateway_state)
-    app.state.user_profile_store = UserProfileStore(gateway_root=_gateway_root())
-    app.state.user_view_state_store = UserViewStateStore(state=gateway_state)
-    app.state.user_access_service.cleanup_expired()
-    app.state.user_view_state_store.cleanup_expired()
     startup_generation = (
         os.environ.get("BOXTEAM_CONFIG_GENERATION") or f"gateway_runtime_{os.getpid()}"
     )
@@ -188,6 +179,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
         gateway_id=gateway_id,
         on_committed_config=apply_committed_config,
     )
+    from app.services.infrastructure.config.plugin_private_inputs import (
+        private_input_references,
+    )
+
+    def remove_released_gateway_plugin_inputs(candidates: object) -> None:
+        references = private_input_references(candidates)
+        if not references:
+            return
+        source_payloads: dict[str, dict[str, object]] = {}
+        app.state.gateway_config_reload._source_config(payloads=source_payloads)
+        active = gateway_state.get_active_config_snapshot("gateway")
+        pending = gateway_state.list_pending_config_candidates(config_domain="gateway")
+        retained_values: list[object] = [app.state.gateway_config_reload.config.payload]
+        retained_values.extend(source_payloads.values())
+        if active is not None:
+            retained_values.append(active.payload)
+        retained_values.extend(record.payload for record in pending)
+        owner = app.state.service_plugins.private_inputs
+        owner.remove_unreferenced(candidates=references, retained=tuple(
+            reference for value in retained_values for reference in private_input_references(value)
+        ))
+
+    gateway_config_reload._remove_released_plugin_private_inputs = remove_released_gateway_plugin_inputs
     app.state.gateway_config_reload = gateway_config_reload
     federation_policy = FederationPolicyStore(
         initial=_gateway_federation_policy_payload(gateway_config)
@@ -352,12 +366,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             http_client=app.state.http_client,
         )
         catalog_search_started = False
-        user_access_cleanup_task = asyncio.create_task(
-            _cleanup_user_access_periodically(
-                app.state.user_access_service,
-                app.state.user_view_state_store,
-            )
-        )
         default_workspace_id = next(
             (target.workspace_id for target in registry.targets() if target.system_default),
             "",
@@ -576,7 +584,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
                             service_plugins=service_plugins,
                         ).stage(), *_gateway_pending_runtime_consumer_stages(
                             app, generation=startup_generation,
-                            fencing_token_digest=runtime_fencing_token_digest(claim.fencing_token) or "",
+                            fencing_token_digest=runtime_fencing_token_digest(pending_apply_claim.fencing_token) or "",
                             fence_check=assert_pending_apply_claim,
                         ))
                     )
@@ -783,8 +791,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             if active_runtime_restore_task is not None:
                 restore_tasks.append(active_runtime_restore_task)
             await asyncio.gather(*restore_tasks, return_exceptions=True)
-            user_access_cleanup_task.cancel()
-            await asyncio.gather(user_access_cleanup_task, return_exceptions=True)
             if catalog_search_started:
                 logger.info("Gateway 正在停止会话目录索引同步器")
                 await app.state.session_catalog_search_service.stop()

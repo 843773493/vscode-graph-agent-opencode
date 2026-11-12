@@ -60,7 +60,7 @@ def logging_case(
     ]
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     with model_stream_replay(
-        context.output_root, runtime_root=runtime, business_assertion=request.node.nodeid,
+        context.artifacts_dir, runtime_root=runtime, business_assertion=request.node.nodeid,
     ) as replay:
         gateway = start_gateway_process(
             workspace_root=workspace, default_backend_url=None, port=port,
@@ -73,7 +73,6 @@ def logging_case(
         try:
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=LOCAL_TOKEN_HEADERS,
                               timeout=10, trust_env=False) as client:
-                client.post("/api/gateway/users/guest", json={"tracking": {"test": True}}).raise_for_status()
                 gateway_id = client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]
                 deadline = time.monotonic() + 30
                 slots: list[dict] = []

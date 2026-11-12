@@ -4,11 +4,12 @@
 
 ```text
 harness/
-├── test_browser_manager_addressing.py       Browser 监听、访问 URL 与端口冲突接线
 ├── test_boundary_display_fixture_lifetime.py 历史边界展示及聊天装具的准备、诊断及清理失败回收
 ├── test_catalog_fixture_lifetime.py          Catalog 根路径、owner 复用与隔离释放
+├── test_chromium_temporary_environment.py    Windows 长路径的短 junction 归属与中断清理
 ├── test_gateway_launcher_control_endpoint.py 原生控制端点的监听、身份与清理
 ├── test_gateway_readiness.py                 Gateway 就绪探针的认证与 HTTP 拒绝
+├── test_http_server_lifetime.py              公共HTTP服务、generation协议与manifest准备失败回收
 ├── test_inprocess_model_replay.py            同一事件循环的 owner 重建与真实 SDK client 隔离
 ├── test_integration_gate.py                  两个真实worktree、pytest排队、强杀与xdist名额
 ├── test_manual_browser_fixture_lifetime.py   手动连接装具的 Chromium/context/page 逆序释放
@@ -27,6 +28,7 @@ harness/
 ├── test_windows_target_process_guard.py        Windows Job Object 进程树保护
 ├── test_windows_target_stop.py                 Windows 目标停止与进程回收
 ├── test_workspace_readiness.py                工作区身份、HTTP 状态及并行启动失败回收
+├── test_workspace_cleanup.py                  Windows junction目标原件与权限保护
 ├── dev_gateway_readiness.test.mjs              外层 Gateway 等待的 HTTP 期限与 manager 身份
 ├── dev_service_readiness.test.mjs              开发服务 HTTP 与 detached 就绪记录观察预算
 └── e2e_control_client.test.mjs                 JS 控制端口的 TCP 分块、回执与并发隔离
@@ -39,10 +41,6 @@ harness/
 开发 Gateway 等待测试使用真实本地 HTTP、隔离就绪文件和明确的 systemctl 状态替身，覆盖挂起、迟到、重试和 manager 替换；不启动或操作用户的 systemd unit，不作为完整开发栈启动验收。
 
 各服务就绪测试直接调用启动器使用的同一等待模块，使用真实隔离HTTP端点与就绪文件；进程状态和系统校时为显式替身。覆盖挂起请求取消、迟到200拒绝、轮询预算、请求头、请求期间进程退出及未消费正文释放；detached记录核对PID、部分JSON和退出诊断。缩短的是本用例的观察预算，生产默认90/120秒保持；不启动开发栈或操作已有服务，不以Linux上的可移植API测试代替Windows/macOS原生验收。
-
-辅助静态服务绑定测试从完整fixture工作区启动真实Browser/Terminal attach HTTP入口，分别核对IPv4/IPv6的健康、配置和首页，并由fixture释放进程。它区分Node监听主机与URL authority，不启动业务后端或操作用户服务；宿主无法绑定IPv6回环时明确跳过相应场景，不能报告为IPv6已验证。
-
-Browser地址接线测试通过组合装具启动真实Browser后端和attach前端，覆盖IPv4、IPv6、通配监听与localhost；核对后端PID、工作区身份、前端配置及清理，未创建页面或启动Chromium。占用场景保留真实监听者，先确认装具在创建进程前拒绝，再检查原端点仍可连接；不能用端口探针成功宣称端口已预留。
 
 JS 控制客户端测试使用本用例创建的 TCP 服务替身，覆盖跨 UTF-8 字节的分块、合法假值、错误回执、不完整回执及并发请求。它验证传输合同，不调用后端进程控制或启动 fork watchdog，也不把真实 TCP 当成完整业务验收。
 
@@ -74,8 +72,6 @@ JS 控制客户端测试使用本用例创建的 TCP 服务替身，覆盖跨 UT
 - 只操作本用例创建的进程；端口被占用时保留原所有者并明确失败。
 - `test_process_ownership.py` 的 Windows 原生服务器用例经当前 venv 启动真实 Uvicorn，验证普通停止和硬退出均等待实际解释器退出后才能立即复用端口；Linux 跳过不计作 Windows 通过。
 - 归属验证中自建的 listener/idle 子进程创建后立即交给 fixture 的 ExitStack，覆盖就绪中断及后续进程启动失败；该栈与被测嵌套 process scope 分开，防止把替代端口所有者也算成被测进程。
-- 高输出接线用例可用真实 HTTP 子进程替换被启动的程序，但保留装具实际输出载体和就绪路径；它证明 Browser、Terminal 装具日志不会阻塞，不证明相应产品行为。
-- 辅助服务高输出接线同时使用嵌套工作区和显式正式产物根，验证日志归属跟随调用测试，不随工作区深度改变；同一测试的多个服务共用产物根并以唯一日志名区分。
 - 工作区、日志和运行数据写入镜像路径 `out/tests/integration/harness/<测试名>/`。
 - `test_web_diagnostic_response_lifetime.py` 与正式驱动统一用Node／`--expose-gc`，以真实 Chromium 调用正式聊天诊断入口，使用显式 HTTP 正文检验读取后释放；负例仅通过Node模块resolve hook把精确驱动的正文读取替换为旧Playwright缓存读取，证明同一检查会拒绝累积正文，不修改产品或全局原型。同时读取等量成功静态资源，核对已完成请求释放且诊断响应仅保留业务 API。不替代真实 Gateway 完整聊天回归。
 

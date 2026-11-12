@@ -1,4 +1,4 @@
-import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
+import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
 import type { SessionViewState } from "../../state/sessionViewState";
 import React from "react";
 import { Virtuoso } from "react-virtuoso";
@@ -29,7 +29,6 @@ import { useTurnVirtualScroller, type TurnViewportController } from "../chat/use
 import { errorMessage } from "../../utils/errorMessage";
 import type { ChatTurnHandlers, LoadToolDetails, LoadTurnDetails } from "../chat/turn/types";
 import { MessageSearchLocationContext } from "../chat/messageSearchLocation";
-import type { TurnMessageMatchDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 interface ChatPanelRenderState extends ChatTurnHandlers {
   apiPort: number;
@@ -247,7 +246,7 @@ export default function ChatPanel({
     follow_latest: boolean;
   }) => void;
   onViewStateRestoreStatus?: (message: string) => void;
-  messageNavigation?: TurnMessageMatchDTO;
+  messageNavigation?: TurnNavigationTarget;
   onViewportReady?: (controller: TurnViewportController | undefined) => void;
 } & ChatTurnHandlers): React.ReactNode {
   const [pendingActionError, setPendingActionError] = React.useState<string | null>(null);
@@ -281,6 +280,7 @@ export default function ChatPanel({
     showJumpToLatest,
     streamRef,
     locatedMessage,
+    locatedTool,
     cancelMessageNavigation,
   } = useTurnVirtualScroller({
     items: transcriptItems,
@@ -302,6 +302,16 @@ export default function ChatPanel({
   const sessionBusy = conversations.some(
     (conversation) => isLiveConversationView(conversation)
       && (conversation.status === "running" || conversation.status === "queued"),
+  );
+  // 等待事件及其恢复快照是入口；普通会话不查询工具确认。
+  const approvalWaits = conversations.flatMap((conversation) =>
+    conversation.sessionId === sessionId && conversation.threadId === threadId
+      && isLiveConversationView(conversation) && conversation.status === "running"
+      ? (conversation.messageStream?.activities ?? [])
+        .filter((activity) => activity.kind === "approval.wait"
+          && (activity.status === "running" || activity.status === "waiting"))
+        .map((activity) => [conversation.jobId, activity.activity_id])
+      : [],
   );
   const pendingRequests = conversations
     .filter((conversation) =>
@@ -400,9 +410,9 @@ export default function ChatPanel({
   };
 
   return (
-    <MessageSearchLocationContext.Provider value={{ message: locatedMessage, close: cancelMessageNavigation, onMount: scheduleAnchorAlignment }}><section className="chat-stream-shell">
+    <MessageSearchLocationContext.Provider value={{ message: locatedMessage, tool: locatedTool, close: cancelMessageNavigation, onMount: scheduleAnchorAlignment }}><section className="chat-stream-shell">
       {navigation ? <p className="chat-history-notice" role={navigation.phase === "error" ? "alert" : "status"}>{navigation.message}</p> : null}
-      {hasActiveSession && sessionId && threadId ? <ToolApprovalPanel key={JSON.stringify([apiPort, workspaceId, sessionId, threadId])}
+      {hasActiveSession && sessionId && threadId && approvalWaits.length > 0 ? <ToolApprovalPanel key={JSON.stringify([apiPort, workspaceId, sessionId, threadId, approvalWaits])}
         apiPort={apiPort} workspaceId={workspaceId} sessionId={sessionId} threadId={threadId} /> : null}
       <section
         data-expand-details={String(expandDetails)}

@@ -17,7 +17,6 @@ import {
   renameWorkspaceNavigationFolder,
 } from "../../gatewayApi";
 import type {
-  GatewayUserAccess,
   SessionCatalogExport,
   SessionCatalogNode,
   SessionCatalogPage,
@@ -205,7 +204,6 @@ export function useSessionResourceExplorer({
   catalogRefreshVersions,
   sessionCatalogOutboxRuntime,
   sessionCatalogOutboxSnapshot,
-  gatewayUserAccess,
 }: {
   apiPort: number;
   workspaces: readonly GatewayWorkspaceRequestTarget[];
@@ -219,7 +217,7 @@ export function useSessionResourceExplorer({
   catalogRefreshVersions: ReadonlyMap<string, number>;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
-  gatewayUserAccess?: GatewayUserAccess | null;
+
 }) {
   const [navigation, setNavigation] = useState<WorkspaceNavigationTree | null>(null);
   const navigationRef = useRef(navigation);
@@ -320,20 +318,19 @@ export function useSessionResourceExplorer({
   );
 
   const openCatalogOutbox = useCallback(async (workspaceId: string) => {
-    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) {
+    if (!sessionCatalogOutboxRuntime) {
       throw new Error("Gateway 认证状态尚未就绪，不能编辑会话目录");
     }
     return await sessionCatalogOutboxRuntime.openWorkspace(
       workspaceRequestTarget(workspaceId),
-      gatewayUserAccess,
-    );
-  }, [gatewayUserAccess, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
+      );
+  }, [sessionCatalogOutboxRuntime, workspaceRequestTarget]);
 
   const readCatalogOutbox = useCallback((workspaceId: string) => {
-    if (!gatewayUserAccess || !sessionCatalogOutboxSnapshot) return null;
-    const key = sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess);
+    if (!sessionCatalogOutboxSnapshot) return null;
+    const key = sessionCatalogOutboxScopeKey(workspaceId);
     return sessionCatalogOutboxSnapshot.get(key)?.outbox ?? null;
-  }, [gatewayUserAccess, sessionCatalogOutboxSnapshot]);
+  }, [sessionCatalogOutboxSnapshot]);
 
   const catalogRevisionFor = useCallback(async (workspaceId: string): Promise<number> => {
     const prefix = `${workspaceId}:`;
@@ -370,7 +367,7 @@ export function useSessionResourceExplorer({
     intent: CatalogOutboxIntent,
     options: { expectedRevision?: number | null },
   ) => {
-    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess) {
+    if (!sessionCatalogOutboxRuntime) {
       throw new Error("Gateway 认证状态尚未就绪，不能编辑会话目录");
     }
     await openCatalogOutbox(workspaceId);
@@ -383,12 +380,11 @@ export function useSessionResourceExplorer({
     };
     const submitted = await sessionCatalogOutboxRuntime.submit(
       workspaceRequestTarget(workspaceId),
-      gatewayUserAccess,
-      intent,
+        intent,
       intentOptions,
     );
     return submitted;
-  }, [catalogRevisionFor, gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
+  }, [catalogRevisionFor, openCatalogOutbox, sessionCatalogOutboxRuntime, workspaceRequestTarget]);
 
   const refreshNavigation = useCallback(async () => {
     const requestId = navigationRequestRef.current + 1;
@@ -413,18 +409,14 @@ export function useSessionResourceExplorer({
     confirmedRead: { minimumCatalogRevision?: number; signal?: AbortSignal; refreshRoot?: boolean } = {},
   ): Promise<SessionCatalogPage | undefined> => {
     confirmedRead.signal?.throwIfAborted();
-    if (sessionCatalogOutboxRuntime && gatewayUserAccess) {
+    if (sessionCatalogOutboxRuntime) {
       void openCatalogOutbox(workspaceId).catch((error: unknown) => {
         sessionCatalogOutboxRuntime.reportError(
           `恢复会话目录 outbox 失败 (${workspaceId}): ${errorMessage(error)}`,
         );
       });
     }
-    const outbox = gatewayUserAccess
-      ? sessionCatalogOutboxRuntime?.getSnapshot().get(
-          sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess),
-        )?.outbox
-      : null;
+    const outbox = sessionCatalogOutboxRuntime?.getSnapshot().get(sessionCatalogOutboxScopeKey(workspaceId))?.outbox;
     const parent = outbox ? catalogOutboxParentCreation(outbox, parentNodeId ?? null) : null;
     // acceptance 只预留 ID；提交前的子项全部由本地依赖投影，不请求尚不存在的节点。
     if (parent?.createdBy) return undefined;
@@ -528,14 +520,14 @@ export function useSessionResourceExplorer({
     })();
     trackInFlightRequest(branchInFlightRequestsRef.current, requestKey, request);
     return request;
-  }, [apiPort, gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime, updateBranches, workspaceRequestTarget]);
+  }, [apiPort, openCatalogOutbox, sessionCatalogOutboxRuntime, updateBranches, workspaceRequestTarget]);
 
   const pruneOutboxAfterBranchRefresh = useCallback(async (
     workspaceId: string,
     pages: readonly SessionCatalogPage[],
     operationIds?: readonly string[],
   ) => {
-    if (!sessionCatalogOutboxRuntime || !gatewayUserAccess
+    if (!sessionCatalogOutboxRuntime
       || pages.length === 0 || operationIds?.length === 0) return;
     const handle = await openCatalogOutbox(workspaceId);
     const operations = handle.driver.current().operations;
@@ -561,7 +553,7 @@ export function useSessionResourceExplorer({
       setExpandedIds((previous) => migrateCatalogExpandedIds(previous, workspaceId, outbox));
       await handle.driver.prune(maximumRevision, pruneableOperationIds);
     }
-  }, [gatewayUserAccess, openCatalogOutbox, sessionCatalogOutboxRuntime]);
+  }, [openCatalogOutbox, sessionCatalogOutboxRuntime]);
 
   const reconcileCatalogBranches = useCallback(async (
     workspaceId: string,
@@ -737,9 +729,7 @@ export function useSessionResourceExplorer({
       ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal;
     signal.throwIfAborted();
     const parentNodeIds = new Set<string | null>();
-    const scopedSnapshotKey = gatewayUserAccess
-      ? sessionCatalogOutboxScopeKey(workspaceId, gatewayUserAccess)
-      : null;
+    const scopedSnapshotKey = sessionCatalogOutboxScopeKey(workspaceId);
     const currentOutbox = options.outbox ?? (scopedSnapshotKey
       ? sessionCatalogOutboxRuntime?.getSnapshot().get(scopedSnapshotKey)?.outbox
       : null);
@@ -860,7 +850,6 @@ export function useSessionResourceExplorer({
   }, [
     activeWorkspaceId,
     apiPort,
-    gatewayUserAccess,
     reconcileCatalogBranches,
     sessionCatalogOutboxRuntime,
     updateBranches,
@@ -911,14 +900,8 @@ export function useSessionResourceExplorer({
     setCatalogViewVersion((previous) => previous + 1);
   };
 
-  // 心跳和工作区刷新会返回新的 access DTO；相同认证主体不撤销正在对账的目录 owner。
-  const failureOwnerAccessRef = useRef(gatewayUserAccess);
-  failureOwnerAccessRef.current = gatewayUserAccess;
-  const failureOwnerKind = gatewayUserAccess?.kind;
-  const failureOwnerUserId = gatewayUserAccess?.user_id;
   useEffect(() => {
-    const access = failureOwnerAccessRef.current;
-    if (!sessionCatalogOutboxRuntime || !access) return;
+    if (!sessionCatalogOutboxRuntime) return;
     const controllers = new Set<AbortController>();
     let active = true;
     const owner: SessionCatalogFailureOwner = {
@@ -960,17 +943,17 @@ export function useSessionResourceExplorer({
         });
       },
     };
-    const unregister = sessionCatalogOutboxRuntime.registerFailureOwner(access, owner);
+    const unregister = sessionCatalogOutboxRuntime.registerFailureOwner(owner);
     return () => {
       active = false;
       unregister();
       for (const controller of controllers) controller.abort();
       for (const check of [...projectionWaitersRef.current]) check();
     };
-  }, [failureOwnerKind, failureOwnerUserId, sessionCatalogOutboxRuntime]);
+  }, [sessionCatalogOutboxRuntime]);
 
   const refreshResourceTree = useCallback(async () => {
-    if (activeWorkspaceId && sessionCatalogOutboxRuntime && gatewayUserAccess) {
+    if (activeWorkspaceId && sessionCatalogOutboxRuntime) {
       void openCatalogOutbox(activeWorkspaceId).catch((error: unknown) => {
         sessionCatalogOutboxRuntime.reportError(
           `恢复会话目录 outbox 失败 (${activeWorkspaceId}): ${errorMessage(error)}`,
@@ -988,7 +971,6 @@ export function useSessionResourceExplorer({
     return nextNavigation;
   }, [
     activeWorkspaceId,
-    gatewayUserAccess,
     openCatalogOutbox,
     refreshCatalogWorkspace,
     refreshNavigation,
@@ -1490,11 +1472,11 @@ export function useSessionResourceExplorer({
   }, [branches, readCatalogOutbox]);
 
   useLayoutEffect(() => {
-    if (sessionCatalogOutboxSnapshot && gatewayUserAccess) {
+    if (sessionCatalogOutboxSnapshot) {
       setExpandedIds((previous) => {
         let migrated = previous;
         for (const [scopeKey, entry] of sessionCatalogOutboxSnapshot) {
-          if (scopeKey !== sessionCatalogOutboxScopeKey(entry.gatewayWorkspaceId, gatewayUserAccess)) continue;
+          if (scopeKey !== sessionCatalogOutboxScopeKey(entry.gatewayWorkspaceId)) continue;
           migrated = migrateCatalogExpandedIds(migrated, entry.gatewayWorkspaceId, entry.outbox);
         }
         return migrated;
@@ -1502,7 +1484,7 @@ export function useSessionResourceExplorer({
     }
     projectionCommitRef.current = { branches, snapshot: sessionCatalogOutboxSnapshot };
     for (const check of [...projectionWaitersRef.current]) check();
-  }, [branches, expandedIds, gatewayUserAccess, projectedBranches, sessionCatalogOutboxSnapshot]);
+  }, [branches, expandedIds, projectedBranches, sessionCatalogOutboxSnapshot]);
 
   useEffect(() => {
     void refreshNavigation().catch(() => {
@@ -1537,12 +1519,11 @@ export function useSessionResourceExplorer({
 
   useEffect(() => {
     const nextSyncKeys = new Map<string, string>();
-    if (sessionCatalogOutboxSnapshot && gatewayUserAccess) {
+    if (sessionCatalogOutboxSnapshot) {
       for (const [scopeKey, entry] of sessionCatalogOutboxSnapshot) {
         if (scopeKey !== sessionCatalogOutboxScopeKey(
           entry.gatewayWorkspaceId,
-          gatewayUserAccess,
-        )) {
+              )) {
           continue;
         }
         const terminalOperations = entry.outbox.operations.filter((operation) =>
@@ -1580,7 +1561,6 @@ export function useSessionResourceExplorer({
     }
     terminalOutboxSyncKeysRef.current = nextSyncKeys;
   }, [
-    gatewayUserAccess,
     refreshCatalogWorkspace,
     sessionCatalogOutboxRuntime,
     sessionCatalogOutboxSnapshot,

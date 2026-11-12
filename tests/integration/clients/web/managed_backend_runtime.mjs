@@ -91,7 +91,6 @@ try {
     return { expected_backend_generation: snapshot.backend_generation, expected_workspace_ids: snapshot.affected_workspace_ids };
   }
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await api("/api/gateway/users/guest", { method: "POST", body: { tracking: { source: "managed-backend-workbench" } } });
   await page.reload({ waitUntil: "domcontentloaded" });
   await openRuntime();
   await primaryArticle().getByRole("button", { name: "安全重启", exact: true }).waitFor({ state: "visible" });

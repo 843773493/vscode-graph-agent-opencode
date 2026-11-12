@@ -13,7 +13,7 @@ import { DefaultQuickAccessFilterValue, Extensions, type IQuickAccessRegistry } 
 import { IQuickInputService, type IQuickPick } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
 import { discoverGatewayWorkspaces } from '../../../web/src/api/gateway/catalogSearch.js';
-import { HttpRequestError, onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { chooseSearchOwners } from './quickAccessScope.js';
@@ -53,10 +53,10 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
     const invalidate = () => {
       run.invalidated = true; access.cancel();
       picker.activeItems = picker.selectedItems = [];
-      picker.items = [{ id: 'workspace-identity-invalidated', label: 'Gateway 或用户身份已改变，请重新选择工作区' }];
+      picker.items = [{ id: 'workspace-identity-invalidated', label: 'Gateway 或访问凭据已改变，请重新选择工作区' }];
       picker.busy = false;
     };
-    lifetime.add(toDisposable(onGatewayUserSessionInvalidated(0, invalidate)));
+    lifetime.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
     lifetime.add(toDisposable(workspaceContext.subscribe(() => {
       if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidate();
     })));
@@ -125,7 +125,7 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
   }
 
   private assertAccess(run: WorkspaceRun): void {
-    if (run.invalidated || !run.gatewayId || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error('Gateway 或用户身份不可用，请重新选择工作区');
+    if (run.invalidated || !run.gatewayId || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error('Gateway 或访问凭据不可用，请重新选择工作区');
   }
 
   private restore(run: WorkspaceRun, value: string, activeId?: string): void {
@@ -145,10 +145,10 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
     const value = run.picker.value, activeId = run.picker.activeItems[0]?.id;
     run.picker.hide();
     let invalidated = false;
-    const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+    const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
     try {
       const selected = await chooseSearchOwners(this.quickInput, run.owners);
-      if (invalidated) throw new Error('用户身份已改变，请重新选择搜索范围');
+      if (invalidated) throw new Error('访问凭据已改变，请重新选择搜索范围');
       if (selected) this.search(run, selected); else this.restore(run, value, activeId);
     } finally { release(); }
   }
@@ -163,10 +163,10 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
     if (target.connection_kind === 'remote_gateway') choices.push({ label: '连接工作区 Gateway', action: 'reconnect' });
     if (target.managed && target.status !== 'ready') choices.push({ label: '启动工作区 Backend', description: '同一 Backend 的工作区将一起启动', action: 'start' });
     let invalidated = false;
-    const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+    const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
     try {
       const selected = await this.quickInput.pick(choices, { title: `工作区动作 · ${name}`, placeHolder: `${owner.gatewayId} · ${owner.workspaceId}` });
-      if (invalidated) throw new Error('用户身份已改变，请重新选择工作区动作');
+      if (invalidated) throw new Error('访问凭据已改变，请重新选择工作区动作');
       this.assertAccess(run);
       if (!selected) { this.restore(run, value, gatewayWorkspaceKey(owner)); return; }
       if (selected.action === 'search') this.search(run, [owner]);

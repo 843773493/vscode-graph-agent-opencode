@@ -152,7 +152,7 @@ test("显式升级旧 selection、会话视图、设置和草稿；历史正文�
   await updateBrowserView(selection, () => ({ workspace_id: alias, session_id: "ses" }));
   await updateBrowserView(oldView, () => view);
   await updateBrowserView(settingsKey, () => ({ session_sidebar: { collapsed_workspace_ids: [alias], expanded_root_tree_ids: [`workspace:${alias}`, "folder:unchanged"], collapsed_session_ids: ["ses"] },
-    workspace_file_tree: { expanded_paths_by_workspace: { [alias]: [root] } }, theme: { theme_id: "unchanged" } }));
+    workspace_file_tree: { expanded_paths_by_workspace: { [alias]: [root] } } }));
   const oldDraft = `draft:${registry}::${alias}::ses::thread:thread`;
   await updateBrowserView(oldDraft, () => "草稿正文 gw_remote 不替换");
   await updateBrowserView(other, () => ({ workspace_id: "gw_unknown", session_id: "other" }));

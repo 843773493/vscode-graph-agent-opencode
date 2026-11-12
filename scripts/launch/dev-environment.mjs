@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import { createServer } from "node:net";
 import path from "node:path";
+import { parseArgs } from "node:util";
 
 export const DEVELOPMENT_BASE_PORTS = Object.freeze({
   backend: 8010,
@@ -23,9 +25,19 @@ export function parseDevelopmentPortOffset(rawValue) {
 export function resolveDevelopmentLayout({
   environment = process.env,
   cwd = process.cwd(),
+  args = [],
 } = {}) {
+  const { values } = parseArgs({ args, strict: false, allowPositionals: true,
+    options: {
+      "backend-root": { type: "string" },
+    } });
+  if (values["backend-root"] !== undefined && !values["backend-root"].trim()) {
+    throw new Error("--backend-root 必须指定后端源码目录");
+  }
+  const frontendRoot = path.resolve(cwd,
+    environment.BOXTEAM_FRONTEND_ROOT?.trim() || environment.BOXTEAM_PROJECT_ROOT?.trim() || cwd);
   const projectRoot = path.resolve(
-    environment.BOXTEAM_PROJECT_ROOT?.trim() || cwd,
+    cwd, values["backend-root"] ?? (environment.BOXTEAM_PROJECT_ROOT?.trim() || cwd),
   );
   const portOffset = parseDevelopmentPortOffset(
     environment.BOXTEAM_DEV_PORT_OFFSET,
@@ -48,6 +60,7 @@ export function resolveDevelopmentLayout({
   );
   return {
     projectRoot,
+    frontendRoot,
     boxteamHome,
     defaultWorkspaceRoot,
     portOffset,
@@ -68,8 +81,8 @@ export function developmentSystemdUnitName(layout) {
 }
 
 /**
- * 计算清理后仍未释放的开发端口。启动前必须据此响亮失败，禁止把端口占用
- * 拖成服务就绪超时。listenerPids 返回给定端口的监听 PID 列表。
+ * 计算当前仍被占用的开发端口。启动前必须据此响亮失败，禁止将未经确认
+ * 归属的监听进程当作本实例回收。listenerPids 返回给定端口的监听 PID 列表。
  */
 export function remainingOccupiedPorts(targetPorts, listenerPids) {
   const occupied = [];
@@ -78,6 +91,38 @@ export function remainingOccupiedPorts(targetPorts, listenerPids) {
     if (pids.length > 0) occupied.push({ port, pids });
   }
   return occupied;
+}
+
+export async function assertDevelopmentPortsBindable(targetPorts, host = "127.0.0.1") {
+  const failures = [];
+  for (const port of targetPorts) {
+    const server = createServer();
+    let failure = null;
+    try {
+      await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen({ host, port, exclusive: true }, () => {
+          server.removeAllListeners("error");
+          server.close((error) => error ? reject(error) : resolve());
+        });
+      });
+    } catch (error) {
+      failure = error;
+      server.removeAllListeners("error");
+      if (server.listening) {
+        await new Promise((resolve, reject) => server.close((closeError) => closeError ? reject(closeError) : resolve()));
+      }
+    }
+    if (failure) {
+      failures.push({ port, code: failure.code ?? "UNKNOWN", message: failure.message });
+    }
+  }
+  if (failures.length) {
+    throw new Error(
+      `开发服务无法绑定监听地址 host=${host}: ` +
+        failures.map(({ port, code, message }) => `port=${port} code=${code} detail=${message}`).join("; "),
+    );
+  }
 }
 
 /** 直接消费 Workspace 唯一 CLI 的一行 UUID；不要另设 JSON 输出链路。 */

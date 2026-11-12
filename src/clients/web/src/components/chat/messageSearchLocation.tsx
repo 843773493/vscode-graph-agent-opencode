@@ -1,8 +1,9 @@
 import React from "react";
-import type { TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { TurnMessageLocationDTO, TurnToolResultDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 export const MessageSearchLocationContext = React.createContext<{
   message?: TurnMessageLocationDTO;
+  tool?: TurnToolResultDTO;
   close: () => void;
   onMount: () => void;
 }>({ close: () => {}, onMount: () => {} });

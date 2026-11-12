@@ -218,12 +218,6 @@ describe("文件树右键菜单", () => {
           data: { token: "local-menu-test-token" },
         });
       }
-      if (url.pathname === "/api/gateway/users/current") {
-        return Response.json({
-          code: 0, message: "ok", request_id: "req-menu-user",
-          data: { kind: "guest", user_id: null },
-        });
-      }
       expect(url.pathname.startsWith("/api/v1/sessions/ses_1/")).toBe(true);
       assertOwner(init);
       calls.push(url.pathname);
@@ -284,9 +278,6 @@ describe("文件树右键菜单", () => {
       const url = new URL(input instanceof Request ? input.url : String(input), "http://127.0.0.1");
       if (url.pathname === "/api/gateway/auth/local-credential") {
         return Response.json({ code: 0, message: "ok", request_id: "req-up", data: { token: "t" } });
-      }
-      if (url.pathname === "/api/gateway/users/current") {
-        return Response.json({ code: 0, message: "ok", request_id: "req-up", data: { kind: "guest", user_id: null } });
       }
       assertOwner(init);
       businessPaths.push(url.pathname);

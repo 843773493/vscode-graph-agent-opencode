@@ -41,16 +41,12 @@ async def test_asset_manifest_errors_keep_identity_and_recover_through_gateway(
         gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=ports.port(0), artifacts_dir=context.artifacts_dir)
         processes.callback(close_gateway_process, gateway)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
-            created = await client.post("/api/gateway/users", json={"user_id": "theme-user", "display_name": "图片用户"})
-            assert created.status_code == 200, created.text
-            acquired = await client.post("/api/gateway/users/theme-user/access", json={"client_label": "theme-test"})
-            assert acquired.status_code == 200, acquired.text
             upload = await client.post("/api/gateway/ui-assets", files={"file": ("background.png", theme_image_bytes, "image/png")})
             assert upload.status_code == 200, upload.text
             asset = upload.json()["data"]
             asset_id = asset["asset_id"]
-            profile_root = context.boxteam_home / "state/gateway/users/theme-user"
-            root = profile_root / "themes/assets/ui-assets"
+            gateway_root = context.boxteam_home / "state/gateway"
+            root = gateway_root / "themes/assets/ui-assets"
             manifest = root / "manifest.json"
             image_path = root / asset_id / "original.png"
             original = manifest.read_bytes()
@@ -65,9 +61,9 @@ async def test_asset_manifest_errors_keep_identity_and_recover_through_gateway(
                 ("shape", b"[]"), ("json", b'{"native":"/private/theme-secret.png",}'),
                 ("utf8", b'\xff/private/theme-secret.png'), ("filename", json.dumps(bad_filename).encode()),
             ]
-            for field in ("content_type", "size", "imported_at", "referenced_theme_ids"):
+            for field in ("content_type", "size", "imported_at"):
                 damaged = json.loads(original)
-                damaged[asset_id][field] = [unsafe] if field == "referenced_theme_ids" else unsafe
+                damaged[asset_id][field] = unsafe
                 corruptions.append((field, json.dumps(damaged).encode()))
             for kind, content in corruptions:
                 manifest.write_bytes(content)
@@ -91,14 +87,6 @@ async def test_asset_manifest_errors_keep_identity_and_recover_through_gateway(
                 assert duplicate.status_code == 200 and duplicate.json()["data"] == asset
                 assert manifest.read_bytes() == original
 
-            profile = profile_root / "profile.jsonc"
-            old_profile = profile.read_bytes()
-            bad_background = await client.put("/api/gateway/ui-settings", json={"theme": {"background": {"type": "remote", "url": "file:///private/theme-secret.png"}}})
-            assert bad_background.status_code == 409, bad_background.text
-            assert "scheme=file" in bad_background.json()["detail"]
-            assert "theme-secret" not in bad_background.text and profile.read_bytes() == old_profile
-            evidence["file-url"] = bad_background.json()
-
             image_path.unlink()
             missing = await client.get(asset["url"])
             assert missing.status_code == 409 and str(root) not in missing.text
@@ -110,64 +98,5 @@ async def test_asset_manifest_errors_keep_identity_and_recover_through_gateway(
             assert not image_path.exists() and json.loads(manifest.read_bytes()) == {}
             evidence["deleted"] = deleted.json()
         logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
-        assert str(manifest) in logs and "file:///private/theme-secret.png" in logs
+        assert str(manifest) in logs
         (context.artifacts_dir / "theme-asset-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")
-
-
-async def test_theme_semantic_errors_keep_profile_and_recover_through_gateway(
-    request: pytest.FixtureRequest, integration_workspace_root_path: str,
-) -> None:
-    context = TestRunContext.from_test_file(Path(__file__)).prepare()
-    workspace = Path(integration_workspace_root_path)
-    reset_gateway_persistent_state(workspace_root=workspace)
-    ports = integration_port_block_for_file(Path(request.node.fspath))
-    evidence = []
-    with ExitStack() as processes:
-        gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=ports.port(0), artifacts_dir=context.artifacts_dir)
-        processes.callback(close_gateway_process, gateway)
-        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
-            created = await client.post("/api/gateway/users", json={"user_id": "theme-rules", "display_name": "主题规则"})
-            assert created.status_code == 200, created.text
-            acquired = await client.post("/api/gateway/users/theme-rules/access", json={"client_label": "theme-rules-test"})
-            assert acquired.status_code == 200, acquired.text
-            profile = context.boxteam_home / "state/gateway/users/theme-rules/profile.jsonc"
-            original = profile.read_bytes()
-            baseline = await client.get("/api/gateway/themes")
-            assert baseline.status_code == 200, baseline.text
-            for native_path in ("/private/theme-secret", r"C:\private\theme-secret", r"\\host\private\theme-secret"):
-                for kind, fields in {
-                    "unknown-token": {"tokens": {native_path: "red"}},
-                    "color": {"tokens": {"--bt-accent": native_path}},
-                    "length": {"tokens": {"--bt-radius-large": native_path}},
-                    "repeat": {"tokens": {"--bt-background-repeat": native_path}},
-                    "layout": {"tokens": {"--bt-background-size": native_path + "?invalid"}},
-                    "filter": {"tokens": {"--bt-surface-backdrop-filter": native_path}},
-                    "background-type": {"background": {"type": native_path}},
-                    "background-appearance": {"background": {"type": "remote", "url": "https://example.test/background.png", "appearance": native_path}},
-                }.items():
-                    damaged = json.loads(original)
-                    damaged["custom_themes"] = [{"id": "custom", "label": "自定义", "extends": "warm", **fields}]
-                    content = json.dumps(damaged).encode()
-                    profile.write_bytes(content)
-                    for method, route, options in [
-                        ("GET", "/api/gateway/themes", {}),
-                        ("GET", "/api/gateway/ui-settings", {}),
-                        ("PUT", "/api/gateway/ui-settings", {"json": {"theme": {"theme_id": "blue"}}}),
-                    ]:
-                        response = await client.request(method, route, **options)
-                        assert response.status_code == 409, response.text
-                        assert response.json()["request_id"] == response.headers["X-Request-ID"]
-                        assert "theme-secret" not in response.text and str(profile) not in response.text
-                        assert "stage=theme-validate" in response.json()["detail"]
-                        assert profile.read_bytes() == content
-                        evidence.append({"kind": kind, "method": method, "route": route, "response": response.json()})
-                    profile.write_bytes(original)
-                    reopened = await client.get("/api/gateway/themes")
-                    assert reopened.status_code == 200 and reopened.json()["data"] == baseline.json()["data"]
-            switched = await client.put("/api/gateway/ui-settings", json={"theme": {"theme_id": "blue"}})
-            assert switched.status_code == 200, switched.text
-            assert switched.json()["data"]["theme"]["theme_id"] == "blue"
-            assert (await client.get("/api/gateway/themes")).json()["data"]["current_theme_id"] == "blue"
-        logs = (context.artifacts_dir / "gateway.stderr.log").read_text()
-        assert "theme-secret" in logs and "theme-validate" in logs
-        (context.artifacts_dir / "theme-validation-errors.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n")

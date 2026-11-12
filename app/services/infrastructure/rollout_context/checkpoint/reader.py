@@ -12,6 +12,7 @@ from langchain_core.messages import BaseMessage
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.storage.catalog.message_search import (
     message_search_candidates,
+    tool_result_metadata,
 )
 from app.services.infrastructure.rollout_context.storage.primitives import (
     ContextTurnItemWindow,
@@ -166,6 +167,13 @@ class RolloutContextReader:
             lower_ordinal=lower_ordinal, limit=limit, deadline=deadline, item_id=item_id,
             category=category,
         )
+
+    def read_tool_result_metadata(
+        self, snapshot: RolloutReadSnapshot, chain: ContextChain, *, after: int,
+        limit: int, deadline: float, item_id: str | None = None,
+    ) -> list[tuple[int, str, str, str, str | None, str, str]]:
+        return tool_result_metadata(self._storage.storage._snapshot_connection(snapshot),
+            self.context_view_id(chain), after=after, limit=limit, deadline=deadline, item_id=item_id)
 
     def resolve_turn_anchor(
         self,

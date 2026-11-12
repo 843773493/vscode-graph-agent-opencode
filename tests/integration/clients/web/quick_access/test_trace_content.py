@@ -52,7 +52,7 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
             deltas=[{"role": "assistant", "content": text}], finish_reason="stop")).raw["interactions"])[0]
         for index, text in enumerate(texts)]
     result_path = context.artifacts_dir / "trace-content.json"
-    command = ["bun", "tests/integration/clients/web/quick_access/trace_content.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/trace_content.mjs"]
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,

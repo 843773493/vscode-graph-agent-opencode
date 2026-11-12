@@ -33,7 +33,7 @@ import { getCodeEditor } from '../../upstream/src/vs/editor/browser/editorBrowse
 import { IQuickChatService } from '../../upstream/src/vs/workbench/contrib/chat/browser/chat.js';
 import { ASK_QUICK_QUESTION_ACTION_ID } from '../../upstream/src/vs/workbench/contrib/chat/browser/actions/chatQuickInputActions.js';
 import type { WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
-import { onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
@@ -137,7 +137,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       access.cancel();
       run.globalPicks = undefined;
       picker.activeItems = picker.selectedItems = [];
-      picker.items = [{ id: 'identity-invalidated', label: 'Gateway 或用户身份已改变，请重新打开快速访问' }];
+      picker.items = [{ id: 'identity-invalidated', label: 'Gateway 或访问凭据已改变，请重新打开快速访问' }];
       picker.busy = false;
     };
     this.watchIdentity(lifetime, invalidate);
@@ -179,7 +179,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   protected override _getPicks(original: string, disposables: DisposableStore, token: CancellationToken) {
     const run = this.run!;
-    if (run.invalidated) return [{ id: 'identity-invalidated', label: 'Gateway 或用户身份已改变，请重新打开快速访问' }];
+    if (run.invalidated) return [{ id: 'identity-invalidated', label: 'Gateway 或访问凭据已改变，请重新打开快速访问' }];
     if (run.options.searchRestore?.query !== run.picker.value) run.restoreId = undefined;
     const previousFilter = run.normalized;
     const openLink = !this.contentMode && !this.category && !run.options.filesOnly && !run.options.fileSearchDelegate
@@ -502,7 +502,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private watchIdentity(lifetime: DisposableStore, invalidate: () => void): void {
-    lifetime.add(toDisposable(onGatewayUserSessionInvalidated(0, invalidate)));
+    lifetime.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
     const gatewayId = workspaceContext.getSnapshot().gatewayId;
     lifetime.add(toDisposable(workspaceContext.subscribe(() => {
       const current = workspaceContext.getSnapshot().gatewayId;
@@ -511,7 +511,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private assertAccess(run: AccessRun): void {
-    if (run.invalidated) throw new Error('Gateway 或用户身份已改变，请重新选择目标');
+    if (run.invalidated) throw new Error('Gateway 或访问凭据已改变，请重新选择目标');
   }
 
   private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, group = this.targetGroup(run, mods, side), selection?: IRange, requestLog?: LLMRequestLogMatchDTO): Promise<void> {

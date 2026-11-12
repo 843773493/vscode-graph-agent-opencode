@@ -104,7 +104,6 @@ async def test_local_proxy_validates_and_forwards_canonical_workspace_identity(
             f"workspaces/{WORKSPACE_ID}/workspace",
             matching_request,
             auth=None,
-            user_access=None,
             include_credentials=False,
         )
         assert response.status_code == 200
@@ -130,7 +129,6 @@ async def test_local_proxy_validates_and_forwards_canonical_workspace_identity(
                 f"workspaces/{WORKSPACE_ID}/workspace",
                 mismatching_request,
                 auth=None,
-                user_access=None,
                 include_credentials=False,
             )
         assert error.value.status_code == 400
@@ -193,7 +191,6 @@ async def test_remote_credential_failure_releases_route_reference(
                 "workspace",
                 request,
                 auth=None,
-                user_access=None,
                 include_credentials=True,
             )
     finally:
@@ -259,7 +256,6 @@ async def test_message_stream_retry_resolve_failure_releases_route_reference(
                 "sessions/ses_1/turns/job_1/message-stream",
                 request,
                 auth=None,
-                user_access=None,
                 include_credentials=False,
             )
     finally:
@@ -319,7 +315,6 @@ async def test_client_disconnect_releases_route_reference(
                     "workspace",
                     request,
                     auth=None,
-                    user_access=None,
                     include_credentials=False,
                 ),
                 timeout=0.2,

@@ -1,7 +1,7 @@
 import json
 import sys
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 
@@ -98,12 +98,3 @@ def openapi_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Callable[
                 )
 
     return export
-
-
-def pytest_collection_modifyitems(
-    config: pytest.Config,
-    items: Sequence[pytest.Item],
-) -> None:
-    del config
-    for item in items:
-        item.add_marker(pytest.mark.contract)

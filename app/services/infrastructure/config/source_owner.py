@@ -42,7 +42,7 @@ class WorkspaceSourceOwner:
     ``BEGIN IMMEDIATE`` 和 source_generation CAS 提供。
     """
 
-    _SCHEMA = load_sql(__package__, "sql/source_owner.sql")
+    _SCHEMA = load_sql(__package__, "migrations/source_owner.sql")
 
     _VALID_FANOUT_STATUSES = frozenset(
         {"pending", "applying", "applied", "superseded", "conflict", "failed", "blocked"}
@@ -103,7 +103,7 @@ class WorkspaceSourceOwner:
         connection.executescript(
             "PRAGMA foreign_keys = OFF;\n"
             "BEGIN IMMEDIATE;\n"
-            f"{load_sql(__package__, 'sql/source_owner_uri_migration.sql')}\n"
+            f"{load_sql(__package__, 'migrations/source_owner_uri_migration.sql')}\n"
             "COMMIT;\n"
             "PRAGMA foreign_keys = ON;"
         )

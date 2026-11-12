@@ -13,6 +13,7 @@ from app.schemas.internal_v2.turn import (
     TurnJobSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
 )
@@ -136,6 +137,15 @@ class SessionTurnHistoryService:
                     policy=history_loading,
                 )
             return page.model_copy(update={"thread_id": thread_id})
+
+    async def list_tool_results(self, session_id: str, thread_id: str, *, after: int = 0,
+                                limit: int = 100, view_id: str | None = None,
+                                view_revision: int | None = None) -> ThreadToolResultListDTO:
+        async with self._session_service.session_read_admission(session_id):
+            thread_id = await self._session_service.resolve_thread(session_id, thread_id)
+            async with self._checkpointer.history_read_lease(session_id, thread_id):
+                return self._checkpointer.list_history_tool_results(session_id, thread_id, after=after,
+                    limit=limit, view_id=view_id, view_revision=view_revision)
 
     async def search_messages(
         self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,

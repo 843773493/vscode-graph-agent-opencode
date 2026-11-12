@@ -290,7 +290,7 @@ def browser_backend(
     assert Path(integration_workspace_config_path).is_file()
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
-        context.output_root, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="read-only-128-turn-progressive-history",
     ) as replay:
         backend = start_backend_process(
@@ -427,11 +427,6 @@ async def test_rollout_history_around_loading_real_web_chain(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            guest = await client.post(
-                "/api/gateway/users/guest",
-                json={"tracking": {"source": "rollout-history-browser-test"}},
-            )
-            assert guest.status_code == 200, guest.text
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
             owner = workspaces.json()["data"]["active_workspace"]

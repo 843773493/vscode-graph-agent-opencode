@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import shutil
 from collections.abc import Iterator
 from contextlib import ExitStack
 from pathlib import Path
@@ -21,7 +19,6 @@ from tests.e2e.system.workspace_services.terminal.terminal_process_helpers impor
     terminal_ports_with_offset,
     wait_process_gone,
 )
-from tests.harness.python.process_output import spawn_logged_process
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import (
     TerminalPluginService,
@@ -75,14 +72,6 @@ async def test_two_terminal_mounts_require_identity_for_empty_lists_http_and_web
             headers=service_b.headers,
         ) as client_b,
     ):
-        for identity, port in ((owner_a, port_a), (owner_b, port_b)):
-            frontend_health = (
-                await client_a.get(f"http://127.0.0.1:{port + 1}/health")
-            ).json()
-            assert frontend_health["workspace_id"] == identity
-            assert "workspace_root" not in frontend_health
-            config = (await client_a.get(f"http://127.0.0.1:{port + 1}/config.js")).text
-            assert f'window.BOXTEAM_WORKSPACE_ID = "{identity}"' in config
         for client in (client_a, client_b):
             empty = await client.get("/api/terminals")
             assert empty.status_code == 200 and empty.json()["data"] == []

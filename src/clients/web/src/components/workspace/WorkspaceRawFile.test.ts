@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { getWorkspaceRawFileBlob } from "../../api";
-import { invalidateGatewayUserSession } from "../../api/http";
+import { invalidateGatewayToken } from "../../api/http";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { awaitWithAbort } from "../../utils/abortable";
 import {
   businessRequest,
-  GATEWAY_CURRENT_USER_PATH,
+
   installWorkspaceFileFetchMock,
   type RecordedRequest,
 } from "./workspaceFileRequestMock";
@@ -52,11 +52,10 @@ describe("工作区原始文件 API", () => {
     expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(RAW_OWNER.workspaceId);
     expect(blob.type).toBe("image/png");
     expect(blob.size).toBe(4);
-    // 二进制下载显式跳过用户会话屏障，这正是本文件不受下标漂移影响的根因：
-    // 序列只有「本地凭据 → raw」两条，requests[1] 恰好是业务请求。
+    // 原生文件读取直接复用本机凭据，不创建其它访问身份。
     expect(
       requests.some(
-        (entry) => new URL(entry.url).pathname === GATEWAY_CURRENT_USER_PATH,
+        (entry) => new URL(entry.url).pathname === "/api/gateway/users/current",
       ),
     ).toBe(false);
   });
@@ -171,10 +170,10 @@ describe("普通文件真实 HTTP 正文的取消与身份", () => {
       try {
         await awaitWithAbort(context.started, AbortSignal.timeout(1_000));
         expect(context.request().signal.aborted).toBe(false);
-        if (invalidated) invalidateGatewayUserSession(context.port);
+        if (invalidated) invalidateGatewayToken(context.port);
         else controller.abort(reason);
         const error = await awaitWithAbort(outcome, AbortSignal.timeout(1_000));
-        if (invalidated) expect(error).toMatchObject({ name: "AbortError", message: "Gateway 或用户身份已改变，请重新读取文件" });
+        if (invalidated) expect(error).toMatchObject({ name: "AbortError", message: "Gateway 或访问凭据已改变，请重新读取文件" });
         else expect(error).toBe(reason);
         expect(context.request().signal.aborted).toBe(true);
         await awaitWithAbort(context.disconnected, AbortSignal.timeout(1_000));
@@ -190,12 +189,12 @@ describe("普通文件真实 HTTP 正文的取消与身份", () => {
     await withPendingRawBody(async context => {
       const reading = getWorkspaceRawFileBlob(context.port, path, gatewayWorkspaceKey(owner));
       await awaitWithAbort(context.started, AbortSignal.timeout(1_000));
-      invalidateGatewayUserSession(context.port + 1);
+
       expect(context.request().signal.aborted).toBe(false);
       context.complete();
       const blob = await reading;
       expect(Array.from(new Uint8Array(await blob.arrayBuffer()))).toEqual([1, 2]);
-      invalidateGatewayUserSession(context.port);
+
       expect(context.request().signal.aborted).toBe(false);
     });
   });

@@ -97,7 +97,7 @@ def test_unknown_builtin_error_never_becomes_public_text_or_loses_its_lease(
 
 def test_known_transport_timeout_keeps_recovery_message_when_diagnostics_fail(
     browser_resource_api_client: TestClient, browser_owner_bundle: BrowserOwnerFixture,
-    monkeypatch: pytest.MonkeyPatch, resource_http,
+    browser_manager_client: BrowserManagerClient, monkeypatch: pytest.MonkeyPatch, resource_http,
     resource_failure_sink: tuple[Path, list[BaseException]] | None,
 ) -> None:
     created = browser_resource_api_client.post("/api/v1/resources/browsers", json={"session_id": SESSION_A})
@@ -112,8 +112,7 @@ def test_known_transport_timeout_keeps_recovery_message_when_diagnostics_fail(
         raise cause
 
     resource_http(timeout)
-    transport = BrowserManagerClient(workspace_id=WORKSPACE_ID, backend_url="http://browser.test")
-    monkeypatch.setattr(browser_owner_bundle.transport, "perform", transport.perform)
+    monkeypatch.setattr(browser_owner_bundle.transport, "perform", browser_manager_client.perform)
     command = {"action": "run", "payload": {"timeoutMs": 25},
                "expected_revision": resource["owner_revision"], "thread": resource["source_thread"]}
     failed = browser_resource_api_client.post(f"/api/v1/resources/{rid}/browser-operation", json=command)
@@ -131,4 +130,4 @@ def test_known_transport_timeout_keeps_recovery_message_when_diagnostics_fail(
     assert current["error"] == detail and current["reconciliation_status"] == "unknown"
     pending, = browser_owner_bundle.leases.leases_for_resource(rid)
     assert pending.status == "reconcile_required"
-    assert attempts == [f"http://browser.test/api/browsers/{rid}/run"]
+    assert attempts == [f"http://browser.test/api/gateway/service-plugins/boxteam.developer-tools/browser/services/http/api/browsers/{rid}/run?package_version=0.1.0&workspace_id={WORKSPACE_ID}"]

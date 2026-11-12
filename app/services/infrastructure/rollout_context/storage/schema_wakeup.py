@@ -2,4 +2,4 @@
 
 from app.core.sqlite_state import load_sql
 
-RUNTIME_WAKEUP_SCHEMA_SQL = load_sql(__package__, "sql/runtime_wakeup.sql")
+RUNTIME_WAKEUP_SCHEMA_SQL = load_sql(__package__, "migrations/runtime_wakeup.sql")

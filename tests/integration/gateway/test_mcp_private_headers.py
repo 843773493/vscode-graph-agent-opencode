@@ -26,7 +26,6 @@ from tests.support.model_stream.config import ModelStreamReplay, model_stream_re
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -110,7 +109,6 @@ async def private_header_case(request: pytest.FixtureRequest, http_schema_endpoi
             try:
                 async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}",
                     headers=LOCAL_TOKEN_HEADERS, timeout=60, trust_env=False) as client:
-                    await acquire_gateway_guest(client)
                     case = PrivateHeaderCase(client, context, workspaces, replay, endpoint.url, changed.url,
                         private_values, requests=requests, calls=calls, changed_requests=changed_requests)
                     yield case

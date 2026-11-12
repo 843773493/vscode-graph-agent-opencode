@@ -32,7 +32,9 @@ from app.core.logging_contract import get_runtime_log_root
 from app.core.path_utils import get_gateway_root
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
+    LOCAL_TOKEN_COOKIE_NAME,
     GatewayAuthContext,
+    get_gateway_local_token,
     verify_gateway_access,
 )
 from app.gateway.config import (
@@ -829,3 +831,14 @@ async def gateway_config_event_stream(
         media_type="text/event-stream",
         headers=SSE_NO_CACHE_HEADERS,
     )
+
+
+@router.get("/api/gateway/auth/local-credential")
+async def local_credential(request: Request, response: Response, request_id: Annotated[str, Depends(get_request_id)]):
+    if request.headers.get("sec-fetch-site") not in {None, "same-origin", "same-site"}:
+        raise HTTPException(403, "Gateway 本地凭据只允许同站点 Web UI 获取")
+    token = get_gateway_local_token()
+    response.set_cookie(LOCAL_TOKEN_COOKIE_NAME, token, httponly=True, samesite="strict",
+                        secure=request.url.scheme == "https", path="/api/gateway")
+    response.headers["Cache-Control"] = "no-store"
+    return APIResponse(data={"token": token}, request_id=request_id)

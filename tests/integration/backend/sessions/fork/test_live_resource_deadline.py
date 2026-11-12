@@ -82,13 +82,13 @@ async def test_published_fork_lock_timeout_and_same_key_retry(
 
     monkeypatch.setattr(fork_module, "observe_phase", hold)
     monkeypatch.setattr(owner_module, "timeout", capture)
-    async with main.lifespan(main.app) as _main_lifespan_state_85, httpx.AsyncClient(
+    async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main.app), base_url="http://workspace",
         headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": source.workspace_id,
                  "X-BoxTeam-Gateway-Id": "gateway_6c8b2f9317a5a2c6c4569958b1e23d84",
                  "X-Request-ID": "fork-live-deadline"},
     ) as client:
-        await _main_lifespan_state_85["after_http_startup"]()
+        await _main_lifespan_state["after_http_startup"]()
         post = asyncio.create_task(client.post(f"/api/v1/sessions/{source.session_id}/fork-context",
                                               json=request.model_dump(mode="json")))
         try:

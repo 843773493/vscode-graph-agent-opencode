@@ -16,7 +16,7 @@ from app.services.infrastructure.rollout_context.storage.transaction import (
 
 RESOURCE_ACTIVATION_SCHEMA_VERSION = 4
 
-RESOURCE_ACTIVATION_SCHEMA_SQL = load_sql(__package__, "sql/resource_activation.sql")
+RESOURCE_ACTIVATION_SCHEMA_SQL = load_sql(__package__, "migrations/resource_activation.sql")
 
 RESOURCE_ACTIVATION_TABLES = (
     "resource_activation_schema_state",

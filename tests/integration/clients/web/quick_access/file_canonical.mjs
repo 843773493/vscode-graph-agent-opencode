@@ -78,7 +78,6 @@ export async function runFileCanonical({ run, launch }) {
     }, { path, init }), { path, method: init.method ?? 'GET' });
     const headers = target => ({ 'X-BoxTeam-Target-Gateway-Id': target.gateway_id, 'X-BoxTeam-Workspace-Id': target.workspace_id });
     await observe('gateway.health.navigation', () => page.goto(new URL('/api/gateway/health', baseUrl).href));
-    await api('/api/gateway/users/guest', { method: 'POST', body: JSON.stringify({ tracking: { source: 'file-canonical' } }) });
     const health = await api('/api/gateway/health'), listing = await api('/api/gateway/workspaces');
     const active = listing.active_workspace;
     expect(active.gateway_id).toBe(health.gateway_id);

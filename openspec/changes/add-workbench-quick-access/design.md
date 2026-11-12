@@ -204,7 +204,7 @@ Provider 由现有工作区服务装配／依赖注入持有，注册返回可�
 
 首批有效命中尽快刷新，后续按有界条数／字节／等待时间批量发送，分支结束前刷新最后一批，不逐命中无限排队。慢消费者的缓冲必须有上限，不能以生产者已结束为由无限驻留内存；达到上限则等待可写、取消或期限结算，必要时明确结果交付受限，不能丢包后称成功。Gateway 不提前截断 owner 页再沿页尾 cursor 跳过未交付命中：分发前分配本页结果配额，协调器保留有界整页或 owner 提供合法续点；无法交付的页明确重查／重放该页，不能产生漏项 cursor。
 
-已实现的名称联邦入口为 `POST /api/gateway/search`，同一请求内部解析范围，无需先调用 resolve。联邦请求／事件属于 `boxteam.search.v1`，显式引用 Gateway 范围及原 WorkspaceSearchResultDTO；Gateway 控制面 proto 不导入工作区业务协议。调用需要原本地凭据及原 UserAccess，目标只来自当前已登记范围，不自动连接或启动。
+已实现的名称联邦入口为 `POST /api/gateway/search`，同一请求内部解析范围，无需先调用 resolve。联邦请求／事件属于 `boxteam.search.v1`，显式引用 Gateway 范围及原 WorkspaceSearchResultDTO；Gateway 控制面 proto 不导入工作区业务协议。调用校验既有本机或联邦凭据及目标权限，不依赖用户／游客租约；目标只来自当前已登记范围，不自动连接或启动。
 
 当前每次最多 8 类查询、128 个 owner／类别／操作分支，并发 3 页；名称输出总配额默认 200、合法范围 0～1000，每个分支再取原请求上限与按固定顺序均分配额的较小值。目录先于 Thread，范围沿冻结顺序，未知类别按确定名称顺序分派并由 owner 拒绝未提供能力。分配为 0 的分支不分发，明确 output_limit、保留原 cursor；这表示尚未查询，不证明其能力或选项已核验。不会为了填满配额自动再读一页。接收领域响应总预算为 8 MiB，分发前按分支预留；超限不交付半页、不推进 cursor。业务事件输出另受 8 MiB 总预算约束，UTF-8 编码的 scope、领域页、游标、诊断、分支终态、汇总和 SSE 信封均计入，心跳注释不计业务输出。编码边界只编码一次整页，并预留每个分支唯一终态及最终汇总；整页放不下时返回 limited/output_bytes，保留原输入 cursor、零交付计数，不发布半页。范围与输入续点本身无法容纳时，在分发前返回 413/output_bytes。状态不占资源／匹配条数，其他领域计量与边界验收继续由 16.17 追踪。
 
@@ -261,7 +261,7 @@ Agent 搜索工具与脚本显式接收当前／指定集合／all 的同一范�
 
 已接入 `discover_workspaces` 与 `search_resources` 扩展工具及 Python 客户端：前者仅发现控制面元数据，后者直接消费原领域查询和联邦事件，不另作跨工作区调度。省略工具范围时取调用所属稳定 Gateway／工作区；显式集合、all 及冻结续查沿原合同，不借活动导航推断。Python 客户端复用原上下文 transport 的 HTTP 连接、凭据、配置及关闭生命周期，使用 httpx-sse 解码和同一十五秒总期限，取消或显式关闭释放原响应。
 
-具名机器入口 `POST /api/gateway/search/agent` 使用既有本机私有凭据，不需要浏览器 Cookie、不创建游客；与普通浏览器入口注册同一个处理函数、请求、编码器和调度。普通入口继续校验访问租约，正式授权边界登记在本 change 的 `gateway-user-access` delta。原有效上下文、inventory 与精确读取仍沿既有 owner；`search_context` 的 Gateway inventory 搜索已迁入同一个 GatewaySearchService，返回 scope／page／branch／end 事件，显式范围和冻结续查沿联邦合同。跨 Gateway 继续使用原 context read grant，不扩大到其它搜索类别；精确资源的输入、响应和独立 revision／cursor 保持原合同。旧 Semaphore／全工作区 gather、跨库 hash、全局 offset 与聚合总数已删除，原来源及预算不由 canonical 消息搜索替代。
+具名机器入口 `POST /api/gateway/search/agent` 使用既有本机私有凭据，不需要浏览器 Cookie、不创建游客；与普通浏览器入口注册同一个处理函数、请求、编码器和调度。普通入口同样校验既有本机或联邦凭据，不要求用户租约，正式授权边界登记在本 change 的 `gateway-user-access` delta。原有效上下文、inventory 与精确读取仍沿既有 owner；`search_context` 的 Gateway inventory 搜索已迁入同一个 GatewaySearchService，返回 scope／page／branch／end 事件，显式范围和冻结续查沿联邦合同。跨 Gateway 继续使用原 context read grant，不扩大到其它搜索类别；精确资源的输入、响应和独立 revision／cursor 保持原合同。旧 Semaphore／全工作区 gather、跨库 hash、全局 offset 与聚合总数已删除，原来源及预算不由 canonical 消息搜索替代。
 
 #### 2026-11-03：两级搜索的迁移与删除清单（16.1）
 
@@ -366,6 +366,9 @@ scope 跟随原 Input 的 configuration model，原 JSON serializer 的 config �
 直接打开配置 URI 同样先由唯一寻址 parser 确认归属，再匹配原来源目录公布的 URI／source_key。远端 reference 由同一 parser 在原生目标上下文归一；inline 未携配置域时只查询目标 Gateway 与同 Gateway 的明确发起工作区，要求唯一匹配。不从 URI 文件名猜 source_key，不复用普通只读正文 Provider，也不建立第二套配置映射或 writer。
 
 附件候选只查询本次发起 Thread 在明确入选工作区中的受管附件目录。原 catalog 联结关联和不可变原件元数据，按独立上传身份分页；released 工作副本仍保留来源，发现不重建目录或读取原件。显式续页按钮一次读取下一页，关闭与身份失效撤销发布。接受将原引用和 MIME 交同一 Thread 附件预览，不强制转为文本；选中引用纳入原 ThreadInput 展示态，分屏复制与恢复不保存正文，不建立第二附件索引。
+
+工具结果名称发现限定发起 Thread 与明确入选工作区，直接消费同一历史 view 的可见载体选择及既有 tool_calls 元数据，不读取 canonical／完整输出正文。目录以逻辑 ordinal 有界续页，后续请求绑定原 view_id／revision；历史改变明确返回原失效游标错误。候选保留 canonical item、Turn 与 ModelCall 限定调用身份；接受通过原 around 请求的独立 anchor_tool_result 核验同一可见结果，仅补载原 ToolRow，沿既有滚动／取消和编辑器组选项打开。不伪造消息命中区间、hash 或 URI，不新增工具目录索引、正文缓存或执行链。
+
 
 会话变更候选限定本次发起 Thread 所属 Session，且工作区必须入选；没有 Session 不扫描其它会话补目录。发现只消费原 changeset 摘要，接受将领域 changeset 身份交同一 Thread 更改面板，原按钮与 Quick Access 共用 loader、只读 Diff 和完整补丁。选定范围属于各组 ThreadInput 的展示态，随原复制／恢复保留；不造变更公开 URI、不提前读预览或标记审阅。
 
@@ -616,7 +619,7 @@ Quick Access 不拥有索引，也不要求跨 owner 原始数据汇入全局搜
 
 ### 历史与缓存保持展示用途
 
-最近打开的资源／编辑器历史、最近命令、输入记忆与会话消息历史缓存是不同数据。复用现有 Workbench 存储与浏览器展示态存储，按 Gateway／工作区／用户身份边界隔离；不再为快速访问建立业务数据库。缓存允许先显示但要区分历史与当前事实，实际操作重新核验目标；从历史移除不删除会话，关闭 Tab 也不删除任务。输入记忆按模式保留，范围／凭据／接收者不随输入恢复；历史记录不得持久化 token 或临时 endpoint。Web 使用已有浏览器存储，Electron 使用既有固定 profile 存储，不增加 IPC；同一浏览器改连另一个 Gateway 或身份失效时，旧结果和动作立即失效。旧编辑器恢复数据通过一次明确格式升级读取稳定身份并重解路由，只保存新格式；旧数据不能恢复时明确提示并允许移除，不保留双写或长期两套解析。
+最近打开的资源／编辑器历史、最近命令、输入记忆与会话消息历史缓存是不同数据。复用现有 Workbench 存储与浏览器展示态存储，按 浏览器／Gateway／工作区归属隔离；不再为快速访问建立业务数据库。缓存允许先显示但要区分历史与当前事实，实际操作重新核验目标；从历史移除不删除会话，关闭 Tab 也不删除任务。输入记忆按模式保留，范围／凭据／接收者不随输入恢复；历史记录不得持久化 token 或临时 endpoint。Web 使用已有浏览器存储，Electron 使用既有固定 profile 存储，不增加 IPC；同一浏览器改连另一个 Gateway 或身份失效时，旧结果和动作立即失效。旧编辑器恢复数据通过一次明确格式升级读取稳定身份并重解路由，只保存新格式；旧数据不能恢复时明确提示并允许移除，不保留双写或长期两套解析。
 
 ### 缓存后续范围独立交付
 
@@ -714,7 +717,7 @@ Quick Access 不拥有索引，也不要求跨 owner 原始数据汇入全局搜
 
 性能验收同时遵守[交互总延迟预算](../enforce-interactive-latency-budgets/design.md)：普通导航、查询和打开必须统计真实入口到完整结果／可用UI的总耗时，不以Provider局部耗时、loading出现或进程timeout替代。权限、归属和版本检查保留；不在暖查询无条件重复全历史／全库审计，不增加另一套性能监控。
 
-目标感知的 MCP 安装、Web／多目标 Node 扩展宿主及配置编辑归属由独立变更 [add-target-aware-extension-management](../add-target-aware-extension-management/design.md) 定义。快速访问继续沿本稿 Registry／Command／Opener 和查询合同消费能力；完整安装、宿主与设置验收归该变更，当前入口的条件复用不作为其完成证据。两个变更均保持 Electron 仅承担窗口、生命周期与固定 profile 的边界。
+自有插件的声明式贡献、运行期 Provider、受管服务及配置编辑归属由独立变更 [add-target-aware-extension-management](../add-target-aware-extension-management/design.md) 定义，D12–D15 明确原注册接缝、首批开放集合与未开放 Provider。插件命令进入原 `>`，沿该变更的稳定命令 ID／明确插件目标／插件开关驱动启停／释放合同调用；当前自有搜索与 Quick Access 查询仍由本稿原业务 owner 提供，不因插件可贡献命令就开放任意查询 Provider。它已取消 VSIX、VS Code 用户扩展 API／宿主和第三方市场；Registry／Command／Opener 继续复用，不增加旧格式适配或扩展宿主依赖。原用户扩展的历史测试只说明旧合同，相关入口须随该变更迁齐；完整安装、贡献注册、生命周期与设置验收归该变更，当前入口的条件复用不作为完成证据。两个变更均保持 Electron 仅承担窗口、生命周期与固定 profile 的边界。
 
 ## 后续细化边界（不表示实施顺序）
 

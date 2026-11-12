@@ -41,7 +41,6 @@ from tests.support.plugin_package import install_plugin_async
 from tests.support.ports import TestFilePortBlock, integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     reset_gateway_persistent_state,
 )
 from tests.support.processes.scope import capture_test_processes, register_test_process
@@ -192,7 +191,8 @@ def section8_model_stream_runtime_config_path(
     section8_control.bind_cassette(cassette_path)
     return str(prepare_e2e_model_stream_config(
         section8_model_stream_config_path,
-        output_root=section8_context.artifacts_dir.parent,
+        runtime_root=section8_runtime,
+        artifacts_dir=section8_context.artifacts_dir,
         mode="replay", exact_fixture_root=fixture_root,
     ))
 
@@ -391,7 +391,6 @@ async def test_conversation_lifecycle_through_real_workbench(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=60,
         ) as client:
-            await acquire_gateway_guest(client)
             workspaces = await client.get("/api/gateway/workspaces")
             assert workspaces.status_code == 200, workspaces.text
             active_workspace = workspaces.json()["data"]["active_workspace"]

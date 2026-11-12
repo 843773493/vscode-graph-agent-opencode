@@ -14,7 +14,9 @@ import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspa
 import { getSession } from '../../../web/src/api.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import type { Session } from '../../../web/src/types/backend.js';
-import type { GatewayResolvedThemeConfig } from '../../../web/src/theme/theme.js';
+import { BACKGROUND_SETTING, DEFAULT_BACKGROUND, type AppearanceBackground } from '../../../web/src/theme/theme.js';
+import { readWorkbenchBackground } from '../theme.js';
+import { IConfigurationService, ConfigurationTarget } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
 import { IEditorService, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { EditorsOrder, type IEditorIdentifier } from '../../upstream/src/vs/workbench/common/editor.js';
 import type { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
@@ -25,6 +27,7 @@ import { DeferredPromise } from '../../upstream/src/vs/base/common/async.js';
 import { ThreadInput } from '../threadInput.js';
 import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
+import { notifyPluginCommandGatewayReconnected } from '../extensions/pluginCommands.js';
 import { ReactSurface } from './surface.js';
 import { productStyles } from './productStyles.js';
 import { useNavigationRuntime } from './useNavigationRuntime.js';
@@ -35,12 +38,12 @@ import type { CatalogRevealRequest } from '../../../web/src/hooks/sessionResourc
 import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { workspaceActionCommands, type WorkspaceAction, type WorkspaceActionHandlers } from '../search/workspaceActions.js';
 
-function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, onTheme, catalogReveal, diagnosticLocation }: {
+function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, configuration, catalogReveal, diagnosticLocation }: {
   editors: IEditorService; groups: IEditorGroupsService; notifications: INotificationService;
   storage: IStorageService;
   commands: ICommandService;
   bindWorkspaceActions: (actions?: WorkspaceActionHandlers) => void;
-  onTheme: (theme: GatewayResolvedThemeConfig) => void;
+  configuration: IConfigurationService;
   catalogReveal?: CatalogRevealRequest;
   diagnosticLocation?: GatewayDiagnosticLogLocateRequest;
 }) {
@@ -143,11 +146,20 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     const listener = editors.onDidActiveEditorChange(update);
     return () => listener.dispose();
   }, [editors, groups, setActiveSession, clearActiveSession, reportError]);
-  useEffect(() => { if (state.uiSettings.theme.resolved_theme) onTheme(state.uiSettings.theme.resolved_theme); }, [onTheme, state.uiSettings]);
+  const [background, setBackground] = useState<AppearanceBackground>(DEFAULT_BACKGROUND);
+  useEffect(() => {
+    const read = () => {
+      try { setBackground(readWorkbenchBackground(configuration.getValue(BACKGROUND_SETTING))); }
+      // 非法配置由唯一外观贡献报告；设置页清除旧镜像，避免重复通知。
+      catch { setBackground(DEFAULT_BACKGROUND); }
+    };
+    read();
+    const listener = configuration.onDidChangeConfiguration(event => { if (event.affectsConfiguration(BACKGROUND_SETTING)) read(); });
+    return () => listener.dispose();
+  }, [configuration]);
   const actions = useSessionCatalogActions({ apiPort: 0, activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
     activeSessionId: state.currentSession?.session_id ?? null, sessionsByWorkspace: state.sessionsByWorkspace,
-    gatewayWorkspaces: state.gatewayWorkspaces, confirm, setStatus, onError: reportError, sessionCatalogOutboxRuntime: runtime.catalog,
-    gatewayUserAccess: state.gatewayUserAccess, activateGatewayWorkspace: runtime.activateGatewayWorkspace,
+    gatewayWorkspaces: state.gatewayWorkspaces, confirm, setStatus, onError: reportError, sessionCatalogOutboxRuntime: runtime.catalog, activateGatewayWorkspace: runtime.activateGatewayWorkspace,
     createSession: runtime.createSession, openWorkspaceSession: openSession, removeGatewayWorkspace: runtime.removeGatewayWorkspace,
     deleteSession: runtime.deleteSession, renameSession: runtime.renameSession, forkSessionContext: runtime.forkSessionContext,
     readSessionSelectionIntent: () => runtime.selectionIntentRef.current, setSessionParent: runtime.setSessionParent,
@@ -181,7 +193,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
         await runtime.refreshGatewayWorkspaceSessions(workspaceKey); actions.invalidateSessionCatalog(workspaceKey);
       }} onInvalidateSessionCatalog={actions.invalidateSessionCatalog} catalogSyncKeys={actions.sessionCatalogSyncKeys}
       catalogRefreshVersions={actions.sessionCatalogRefreshVersions} sessionCatalogOutboxRuntime={runtime.catalog}
-      sessionCatalogOutboxSnapshot={runtime.catalogSnapshot} gatewayUserAccess={state.gatewayUserAccess} flexRatio={1}
+      sessionCatalogOutboxSnapshot={runtime.catalogSnapshot} flexRatio={1}
       preferences={resolveAgentSessionsPreferences(state.uiSettings)} onPreferencesChange={updater => {
         void runtime.updateUiSettings(current => ({ session_sidebar: updater(current.session_sidebar) })).catch(cause => reportError(String(cause)));
       }} />
@@ -192,9 +204,11 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       <button type="button" className="sidebar-icon-button" aria-label="关闭 Gateway 控制中心" onClick={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }}><span className="codicon codicon-close" /></button>
       <GatewayControlCenter apiPort={0} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
         onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
+        onRemoteGatewayReconnected={notifyPluginCommandGatewayReconnected}
         onStart={startWorkspace} onStop={backendActions.stop}
         onSafeRestart={backendActions.safeRestart} onForceRestart={backendActions.forceRestart}
-        uiSettings={state.uiSettings} onUpdateUiSettings={runtime.updateUiSettings}
+        background={background} onUpdateBackground={value => configuration.updateValue(BACKGROUND_SETTING, readWorkbenchBackground(value), {}, ConfigurationTarget.USER, { donotNotifyError: true })}
+        onSelectColorTheme={async () => { setGatewayOpen(false); await commands.executeCommand('workbench.action.selectTheme'); }}
         diagnosticLocation={logLocation} onCloseDiagnosticLocation={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }} />
     </div> : null}
     {diagnostic ? <div className="native-navigation-dialog" role="dialog" aria-label={diagnostic.title}>
@@ -210,15 +224,15 @@ export class NavigationSurface {
   private reveal?: AbortController;
   private workspaceActions?: WorkspaceActionHandlers;
   private actionsReady?: DeferredPromise<WorkspaceActionHandlers>;
-  constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService, commands: ICommandService) {
+  constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService, commands: ICommandService, configuration: IConfigurationService) {
     this.surface = new ReactSurface(container, [...productStyles, style]);
     const bindWorkspaceActions = (actions?: WorkspaceActionHandlers) => {
       this.workspaceActions = actions;
       if (actions && this.actionsReady) { void this.actionsReady.complete(actions); this.actionsReady = undefined; }
     };
     this.render = (catalogReveal, diagnosticLocation) => this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
-      notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} catalogReveal={catalogReveal}
-      onTheme={theme => this.surface.applyTheme(theme, notifications)} diagnosticLocation={diagnosticLocation} /></WarmConfirmProvider>);
+      notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} catalogReveal={catalogReveal} diagnosticLocation={diagnosticLocation}
+      configuration={configuration} /></WarmConfirmProvider>);
     this.render();
   }
   focus(): void { this.surface.focus('.session-resource-main-action, button'); }

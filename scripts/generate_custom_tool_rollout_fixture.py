@@ -35,11 +35,8 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.harness.performance.record import stage
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
-from tests.support.custom_tool_test_workspace import (
-    FixtureStageObserver,
-    timed_fixture_stage,
-)
 from tests.support.model_stream.frozen_provider import (
     create_frozen_provider_activation,
     create_frozen_provider_prepare,
@@ -450,12 +447,9 @@ def _create_session(
     sparse_tool_fixture: bool = False,
     large_tool_payloads: bool = False,
     checkpoint_prefix: str = "checkpoint",
-    observer: FixtureStageObserver | None = None,
 ) -> None:
     fixture_kind = "fork" if fork_source is not None else "normal"
-    with timed_fixture_stage(
-        observer,
-        "generator.session_bootstrap",
+    with stage("generator.session_bootstrap",
         session_id=session_id,
         fixture_kind=fixture_kind,
         turn_count=turn_count,
@@ -477,8 +471,8 @@ def _create_session(
         saver = RolloutCheckpointSaver(sessions_dir)
         prepare_execution = create_frozen_provider_prepare(
             frozen_provider_wire,
-            create_frozen_provider_activation(observer=observer),
-            observer=observer,
+            create_frozen_provider_activation(),
+
         )
         if fork_source is not None:
             source_session_id, source_checkpoint_id = fork_source
@@ -494,16 +488,12 @@ def _create_session(
                 anchor_item_id = connection.execute(
                     "SELECT final_item_id FROM turn_records WHERE turn_id=?", (f"job-{turn_count:04d}",),
                 ).fetchone()[0]
-            with timed_fixture_stage(
-                observer,
-                "generator.fork_total",
+            with stage("generator.fork_total",
                 session_id=session_id,
                 fixture_kind="fork",
                 turn_count=turn_count,
             ):
-                with timed_fixture_stage(
-                    observer,
-                    "generator.fork_preflight",
+                with stage("generator.fork_preflight",
                     session_id=session_id,
                     fixture_kind="fork",
                     turn_count=turn_count,
@@ -514,9 +504,7 @@ def _create_session(
                         source_view_revision=source_revision, anchor_item_id=anchor_item_id,
                     ))
                 # 分支示例必须经过同一冻结复制入口，不能用伪造 origin 冒充历史复制。
-                with timed_fixture_stage(
-                    observer,
-                    "generator.fork_copy",
+                with stage("generator.fork_copy",
                     session_id=session_id,
                     fixture_kind="fork",
                     turn_count=turn_count,
@@ -549,9 +537,7 @@ def _create_session(
             segment_has_large_tool_payload |= (
                 large_tool_payloads and turn_index % 11 == 0
             )
-            with timed_fixture_stage(
-                observer,
-                "generator.normal_turn",
+            with stage("generator.normal_turn",
                 session_id=session_id,
                 fixture_kind="normal",
                 turn_index=turn_index,
@@ -569,9 +555,7 @@ def _create_session(
                 )
                 messages.extend(latest_turn_messages)
                 turn_id = f"job-{turn_index:04d}"
-                with timed_fixture_stage(
-                    observer,
-                    "generator.accept_turn",
+                with stage("generator.accept_turn",
                     session_id=session_id,
                     turn_id=turn_id,
                     turn_index=turn_index,
@@ -588,9 +572,7 @@ def _create_session(
                         root_item_id=f"item-user-{turn_index:04d}",
                         initial_execution_id=f"execution-{turn_index:04d}",
                     )
-                with timed_fixture_stage(
-                    observer,
-                    "generator.execution_admission",
+                with stage("generator.execution_admission",
                     session_id=session_id,
                     turn_id=turn_id,
                     turn_index=turn_index,
@@ -634,9 +616,7 @@ def _create_session(
                     else latest_turn_messages
                 )
                 with execution_admission_scope(admission, langgraph_thread_id=thread_id):
-                    with timed_fixture_stage(
-                        observer,
-                        "generator.prepare_execution",
+                    with stage("generator.prepare_execution",
                         session_id=session_id,
                         turn_id=turn_id,
                         turn_index=turn_index,
@@ -644,9 +624,7 @@ def _create_session(
                         plan_key=f"fixture-create:{turn_id}",
                     ):
                         prepare_execution(saver, key=f"fixture-create:{turn_id}")
-                    with timed_fixture_stage(
-                        observer,
-                        "generator.terminal_convergence",
+                    with stage("generator.terminal_convergence",
                         session_id=session_id,
                         turn_id=turn_id,
                         turn_index=turn_index,
@@ -665,9 +643,7 @@ def _create_session(
                                     thread_id=thread_id,
                                 )
                         commit_fixture_output(saver, messages=latest_turn_messages)
-                    with timed_fixture_stage(
-                        observer,
-                        "generator.saver_put",
+                    with stage("generator.saver_put",
                         session_id=session_id,
                         turn_id=turn_id,
                         turn_index=turn_index,
@@ -701,7 +677,6 @@ def _write_fixture(
     workspace_root: Path,
     *,
     clean: bool,
-    observer: FixtureStageObserver | None = None,
 ) -> None:
     if clean:
         for relative_path in (
@@ -749,7 +724,7 @@ def _write_fixture(
         long_fixture=True,
         compaction_points=(64,),
         sparse_tool_fixture=True,
-        observer=observer,
+
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -763,7 +738,7 @@ def _write_fixture(
         sparse_tool_fixture=True,
         large_tool_payloads=True,
         checkpoint_prefix="real-checkpoint",
-        observer=observer,
+
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -772,7 +747,7 @@ def _write_fixture(
         turn_count=128,
         long_fixture=True,
         sparse_tool_fixture=True,
-        observer=observer,
+
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -780,7 +755,7 @@ def _write_fixture(
         title="上下文压缩与摘要示例",
         turn_count=24,
         compaction_points=(8, 16),
-        observer=observer,
+
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -788,7 +763,7 @@ def _write_fixture(
         title="多工具调用和大输出示例",
         turn_count=12,
         compaction_points=(6,),
-        observer=observer,
+
     )
     _create_session(
         sessions_dir=sessions_dir,
@@ -796,7 +771,7 @@ def _write_fixture(
         title="独立历史分支示例",
         turn_count=7,
         fork_source=(STATIC_LONG_SESSION_ID, "checkpoint-0064"),
-        observer=observer,
+
     )
     migrations_dir = workspace_root / ".boxteam" / "migrations"
     if migrations_dir.exists():
@@ -895,8 +870,6 @@ def _write_static_long_session(workspace_root: Path) -> None:
 
 def generate_custom_tool_rollout_fixture(
     workspace_root: Path,
-    *,
-    observer: FixtureStageObserver | None = None,
 ) -> None:
     """在明确传入的工作区中重建 canonical 静态 Session 与 rollout。"""
 
@@ -909,15 +882,13 @@ def generate_custom_tool_rollout_fixture(
     with (
         registry,
         catalog_provider_scope(registry),
-        timed_fixture_stage(
-            observer,
-            "generator.total",
+        stage("generator.total",
             total_turns=427,
             normal_turns=420,
             fork_turns=7,
         ),
     ):
-        _write_fixture(workspace_root, clean=True, observer=observer)
+        _write_fixture(workspace_root, clean=True)
 
 
 def main() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from time import monotonic
 
 from langchain_core.messages import BaseMessage
 
@@ -25,6 +26,7 @@ from app.schemas.internal_v2.turn import (
     TurnSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
 )
@@ -56,6 +58,7 @@ from app.services.infrastructure.turn_history.load_plan import (
 )
 from app.services.infrastructure.turn_history.models import (
     InvalidTurnCursorError,
+    StaleTurnCursorError,
     StaleTurnReferenceError,
 )
 from app.services.mapping.itemized.history_turns.detail import build_detail
@@ -63,6 +66,7 @@ from app.services.mapping.itemized.history_turns.projection import (
     project_detail,
     summary,
 )
+from app.services.mapping.itemized.history_turns.tools import tool_result_metadata_dto
 from app.services.mapping.turn_response_parts import (
     response_part_order,
     response_parts_from_internal_item,
@@ -107,6 +111,33 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             )
         try:
             return search_messages(self._context_reader, indexed, request, budget=budget, tool_outputs=self._tool_outputs)
+        finally:
+            indexed.snapshot.close()
+
+    def list_tool_results(self, session_id: str, thread_id: str, *, after: int = 0,
+                          limit: int = 100, view_id: str | None = None,
+                          view_revision: int | None = None) -> ThreadToolResultListDTO:
+        indexed = self._snapshots.read(session_id, thread_id)
+        if indexed is None or indexed.view_id is None:
+            if indexed is not None:
+                indexed.snapshot.close()
+            if view_id is not None:
+                raise InvalidTurnCursorError("当前 Thread 没有可续查的历史视图")
+            return ThreadToolResultListDTO(session_id=session_id, thread_id=thread_id, items=[],
+                source_view_id=None, source_view_revision=0)
+        try:
+            if view_id is not None and (indexed.view_id != view_id or
+                    indexed.snapshot.manifest.history_view_revision != view_revision):
+                raise StaleTurnCursorError(session_id=session_id,
+                    cursor_epoch=indexed.projection_epoch, current_epoch=indexed.projection_epoch,
+                    cursor_history_view_revision=view_revision,
+                    current_history_view_revision=indexed.snapshot.manifest.history_view_revision)
+            rows = self._context_reader.read_tool_result_metadata(indexed.snapshot, indexed.chain,
+                after=after, limit=limit + 1, deadline=monotonic() + 1.0)
+            return ThreadToolResultListDTO(session_id=session_id, thread_id=thread_id,
+                items=[tool_result_metadata_dto(row) for row in rows[:limit]],
+                next_after=rows[limit - 1][0] if len(rows) > limit else None,
+                source_view_id=indexed.view_id, source_view_revision=indexed.snapshot.manifest.history_view_revision)
         finally:
             indexed.snapshot.close()
 
@@ -225,14 +256,21 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                                          tool_outputs=self._tool_outputs)
                 if request.anchor_message is not None else None
             )
+            located_tool = None
+            if request.anchor_tool_result is not None:
+                rows = self._context_reader.read_tool_result_metadata(indexed.snapshot, indexed.chain,
+                    after=0, limit=1, deadline=monotonic() + 1.0, item_id=request.anchor_tool_result)
+                if not rows or rows[0][2] != request.anchor_turn_id:
+                    raise StaleTurnReferenceError(session_id=session_id, turn_ids=[request.anchor_turn_id])
+                located_tool = tool_result_metadata_dto(rows[0])
             page = self._load_indexed_history(
                 session_id,
                 request,
                 indexed,
                 policy=policy,
-                located_tool_call_id=located.tool_call_id if located is not None else None,
+                located_tool_call_id=located.tool_call_id if located is not None else located_tool.tool_call_id if located_tool else None,
             )
-            return page.model_copy(update={"located_message": located})
+            return page.model_copy(update={"located_message": located, "located_tool_result": located_tool})
         finally:
             indexed.snapshot.close()
 

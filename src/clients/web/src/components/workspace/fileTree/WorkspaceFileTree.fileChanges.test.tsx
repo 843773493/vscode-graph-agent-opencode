@@ -100,9 +100,6 @@ async function mountTree(port: number): Promise<Harness> {
       return apiResponse({ token: "token" });
     }
     if (url.pathname === "/api/v1/workspace/files/roots") return apiResponse({ workspace_uri: ROOT, filesystem_uri: FILESYSTEM, filesystem_label: "/" });
-    if (url.pathname === "/api/gateway/users/current") {
-      return apiResponse({ kind: "guest", user_id: null });
-    }
     if (url.pathname !== "/api/v1/workspace/files") {
       throw new Error("未声明请求: " + url.pathname);
     }

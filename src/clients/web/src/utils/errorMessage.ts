@@ -31,12 +31,11 @@ export function errorMessage(error: unknown): string {
 function httpStatusHint(error: unknown): string | null {
   if (!(error instanceof HttpRequestError)) return null;
   switch (error.status) {
-    // 401 在 Gateway 只表示本地访问凭据失效或被接管（user_session_required /
-    // invalid local token）；刷新重试都已在上游尝试过，走到展示层就是需要重新登录。
+    // 本机或联邦凭据失效时保留服务端原因；界面不再提供用户选择或登录。
     case 401:
-      return "当前访问凭据已失效，请在用户菜单中重新选择或登录用户后重试";
+      return "当前访问凭据无效，请刷新页面或检查 Gateway 连接凭据后重试";
     case 403:
-      return "没有访问权限，请检查文件系统权限或切换当前登录用户";
+      return "没有访问权限，请检查目标文件系统权限或 Gateway 授权";
     case 404:
       return "目标不存在，可能已被移动或删除，请刷新后重试";
     case 409:

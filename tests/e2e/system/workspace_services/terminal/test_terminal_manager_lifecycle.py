@@ -13,7 +13,6 @@ from typing import NamedTuple
 
 import pytest
 
-from app.core.workspace_identity import load_or_create_workspace_id
 from tests.e2e.system.workspace_services.terminal.terminal_process_helpers import (
     create_long_running_terminal,
     create_terminal_scenario_workspace,
@@ -189,14 +188,14 @@ def test_terminal_manager_sigterm_preserves_registered_owner_for_reconciliation(
     original = None
     try:
         terminal = create_long_running_terminal(
-            backend_port=backend_port, workspace_root=root, title="sigterm preserve"
+            plugin=plugin, workspace_root=root, title="sigterm preserve"
         )
         terminal_id = str(terminal["terminal_id"])
         wait_terminal_process_metadata(plugin, terminal_id)
         workspace_id = plugin.workspace_id
         original = terminal_state_record(root, terminal_id)
-        process.terminate()
-        assert process.wait(timeout=10) == 128 + signal.SIGTERM
+        plugin.process.terminate()
+        assert plugin.process.wait(timeout=10) == 128 + signal.SIGTERM
         record = _assert_preserved_transport(root, original, workspace_id)
         assert record["release_reason"] == "terminal_manager_sigterm"
         assert _registered_process_snapshot(original) is not None
@@ -222,7 +221,7 @@ def test_terminal_manager_restart_preserves_identity_without_claiming_pty_recove
     original = None
     try:
         terminal = create_long_running_terminal(
-            backend_port=backend_port, workspace_root=root, title="restart preserve"
+            plugin=plugin, workspace_root=root, title="restart preserve"
         )
         terminal_id = str(terminal["terminal_id"])
         wait_terminal_process_metadata(plugin, terminal_id)

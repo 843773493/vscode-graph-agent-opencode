@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +23,8 @@ class UserSshHost:
 
 
 def _split_config_line(raw_line: str) -> list[str]:
+    # OpenSSH 允许关键字后带等号；参数里的等号仍属于原值。
+    raw_line = re.sub(r"^(\s*[A-Za-z][A-Za-z0-9]*)\s*=\s*", r"\1 ", raw_line)
     lexer = shlex.shlex(raw_line, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = "#"

@@ -49,6 +49,8 @@ app/runtime/
 
 # 规范
 
+- 受管 Backend 仅在 listener ready 后开始 MCP 与其余工作区业务启动；普通工作区请求等待所属生命周期 ready。
+
 - 依赖提供协议优先于直接 import 具体实现；新增外部依赖时同步在协议与 `app/container.py` 装配处补齐，并移除旧的兼容分支（发现 `hasattr` / TODO 兼容分支应尽快消除）。
 - 懒加载：需要重依赖的模块只在运行时真正使用时导入，不要提到模块顶层。
 - Windows文件系统的pywin32依赖只在`windows_fs.py`函数执行时加载；目录句柄与ACL错误保留公共文件系统的OSError子类及Windows错误码，不回退到外部权限命令或吞掉查询失败。

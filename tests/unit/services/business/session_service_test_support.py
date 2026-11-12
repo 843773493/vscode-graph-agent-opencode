@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
 from pathlib import Path
 
 from tests.harness.python.run_context import TestRunContext
@@ -18,19 +16,13 @@ def prepare_session_test_workspace(
 ) -> tuple[TestRunContext, Path, Path]:
     """在正式测试输出树内创建节点隔离工作区，可只复制需要的模板项。"""
     context = TestRunContext.from_test_file(test_file).prepare()
-    node_key = hashlib.sha1(node_id.encode("utf-8")).hexdigest()[:12]
-    workspace_fixture_root = context.workspace_root / f"run-{os.getpid()}-node-{node_key}"
+    workspace_fixture_root = context.runtime_root_for_node(node_id)
     workspace_root = workspace_fixture_root / "workspace"
     template_root = context.project_root / "tests" / "fixtures" / "workspaces" / "default_test_workspace"
-    selected_template_items = (
-        tuple(item.name for item in template_root.iterdir())
-        if template_items is None
-        else template_items
-    )
     prepare_test_workspace(
         workspace_root=workspace_root,
         template_root=template_root,
-        template_items=selected_template_items,
+        template_items=template_items,
     )
     return context, workspace_fixture_root, workspace_root
 

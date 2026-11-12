@@ -43,9 +43,6 @@ async function selectSession(session) {
 
 try {
   token = (await api("/api/gateway/auth/local-credential")).token;
-  const user = await api("/api/gateway/users", "POST", { display_name: "Goal 侧边栏测试" });
-  await api(`/api/gateway/users/${user.user_id}/access`, "POST", { client_label: "Goal E2E" });
-  await api("/api/gateway/health");
   await api("/api/gateway/workspaces");
   await api("/api/v1/workspace");
   const first = await api("/api/v1/sessions", "POST", { title: "Goal 管理验证" });

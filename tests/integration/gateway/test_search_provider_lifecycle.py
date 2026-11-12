@@ -32,7 +32,6 @@ from tests.support.model_stream.config import ModelStreamReplay, model_stream_re
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -194,7 +193,6 @@ async def test_canonical_provider_close_and_version_handover(lifecycle_network: 
     sessions: list[str] = []
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{network.gateway_port}", headers=LOCAL_TOKEN_HEADERS,
                                  timeout=30, trust_env=False) as client:
-        await acquire_gateway_guest(client)
         client.headers["X-BoxTeam-Target-Gateway-Id"] = network.gateway_id
 
         async def search(selected: list[dict], request_id: str, *, version: int = 1,

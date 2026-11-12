@@ -100,7 +100,7 @@ def source_owner(tmp_path: Path) -> Iterator[SourceOwner]:
     config_root = tmp_path / "config"
     config_root.mkdir()
     path, local = config_root / "gateway.jsonc", config_root / "gateway_local.jsonc"
-    path.write_text('{"config_version":4,"ui":{"theme":{"default_theme_id":"warm"}}}\n')
+    path.write_text('{"config_version":5,"logging":{"runtime":{"level":"info"}}}\n')
     schema = Path.cwd() / "configs/gateway_schema.jsonc"
     with GatewayStateStore(path=tmp_path / "gateway.sqlite") as store:
         config = load_gateway_config(config_path=path, local_config_path=local, schema_path=schema, state_store=store)
@@ -124,11 +124,11 @@ def source_owner(tmp_path: Path) -> Iterator[SourceOwner]:
 
 def test_get_and_preflight_are_pure_even_for_already_imported_digest(source_owner: SourceOwner) -> None:
     case = source_owner
-    request = case.request('{ // 保留注释\n "config_version":4,"ui":{"theme":{"default_theme_id":"blue"}}}\n')
+    request = case.request('{ // 保留注释\n "config_version":5,"logging":{"runtime":{"level":"debug"}}}\n')
     before = case.snapshot()
     preview = case.service.preflight_source_edit(source_key=SOURCE, request=request)
-    assert preview.changed_paths == ["/ui/theme/default_theme_id"]
-    assert preview.document.effective["ui"] != preview.candidate["ui"]
+    assert preview.changed_paths == ["/logging/runtime/level"]
+    assert preview.document.effective["logging"] != preview.candidate["logging"]
     assert case.service.get_source_document(source_key=SOURCE).jsonc == case.path.read_text()
     assert case.snapshot() == before
     assert not case.calls
@@ -144,7 +144,7 @@ async def test_each_target_and_cas_conflict_writes_nothing(
     source_owner: SourceOwner, field_name: str, value: object,
 ) -> None:
     case = source_owner
-    request = case.request('{"ui":{"theme":{"default_theme_id":"blue"}}}')
+    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
     request = GatewayConfigSourceEditRequest.model_validate({**request.model_dump(), field_name: value})
     before = case.snapshot()
     with pytest.raises(ConfigConflictError):
@@ -170,27 +170,27 @@ async def test_inline_is_readonly_and_unknown_source_is_rejected(source_owner: S
 
 async def test_user_and_local_share_writer_and_removing_local_reveals_user(source_owner: SourceOwner) -> None:
     case = source_owner
-    request = case.request('{"ui":{"theme":{"default_theme_id":"green"}}}', source=LOCAL, key="local")
+    request = case.request('{"logging":{"runtime":{"level":"warning"}}}', source=LOCAL, key="local")
     local = await case.service.save_source_edit(source_key=LOCAL, request=request)
     assert local.edit is not None and local.edit.state == "active"
     assert local.layer == "user_local" and local.file_presence == "present"
     before_active, before_calls = local.active_revision, len(case.calls)
-    request = case.request('{ // 被 local 遮蔽\n"ui":{"theme":{"default_theme_id":"blue"}}}\n', key="shadowed")
+    request = case.request('{ // 被 local 遮蔽\n"logging":{"runtime":{"level":"debug"}}}\n', key="shadowed")
     saved = await case.service.save_source_edit(source_key=SOURCE, request=request)
     assert saved.edit is not None and saved.edit.state == "active" and saved.edit.layer_imported
     assert saved.active_revision == before_active and len(case.calls) == before_calls
-    origin = next(item for item in saved.origins if item.path == "/ui/theme/default_theme_id")
+    origin = next(item for item in saved.origins if item.path == "/logging/runtime/level")
     assert origin.source_key == LOCAL and SOURCE in origin.shadowed_sources
     request = case.request("{}\n", source=LOCAL, key="remove-local")
     cleared = await case.service.save_source_edit(source_key=LOCAL, request=request)
-    assert cleared.effective["ui"] == {"theme": {"default_theme_id": "blue", "custom_themes": []}}
+    assert cleared.effective["logging"]["runtime"]["level"] == "debug"
     assert len(case.calls) == before_calls + 1
     assert len(case.service.list_events()) == 2
 
 
 async def test_comment_only_save_preserves_bytes_and_does_not_promote(source_owner: SourceOwner) -> None:
     case = source_owner
-    text = '{ // 只修改注释、空白与尾逗号\n "config_version":4,"ui":{"theme":{"default_theme_id":"warm"}},\n}\n'
+    text = '{ // 只修改注释、空白与尾逗号\n "config_version":5,"logging":{"runtime":{"level":"info"}},\n}\n'
     request = case.request(text)
     active = case.store.get_active_config_snapshot("gateway")
     saved = await case.service.save_source_edit(source_key=SOURCE, request=request)
@@ -274,7 +274,7 @@ async def test_only_v1_missing_id_that_would_rewrite_file_is_rejected(source_own
 
 async def test_same_key_concurrency_and_watcher_apply_once(source_owner: SourceOwner) -> None:
     case = source_owner
-    request = case.request('{"ui":{"theme":{"default_theme_id":"blue"}}}')
+    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
     case.blocked = True
     first = asyncio.create_task(case.service.save_source_edit(source_key=SOURCE, request=request))
     await asyncio.wait_for(case.entered.wait(), 2)
@@ -306,7 +306,7 @@ async def test_rebuilt_owner_real_watcher_start_recovers_original_source_candida
     from app.gateway.config import source_edit
 
     case = source_owner
-    text = {"hot": '{"ui":{"theme":{"default_theme_id":"blue"}}}',
+    text = {"hot": '{"logging":{"runtime":{"level":"debug"}}}',
             "unchanged": case.path.read_text() + "// 仅注释\n",
             "restart": '{"runtime":{"gateway":{"process":{"health":{"request_timeout_seconds":3}}}}}'}[change]
     request = case.request(text)
@@ -350,7 +350,7 @@ async def test_unsaved_intent_does_not_block_unrelated_external_source(source_ow
     from app.gateway.config import source_edit
 
     case = source_owner
-    request = case.request('{"ui":{"theme":{"default_theme_id":"blue"}}}')
+    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
 
     def fail(_path: Path, _data: bytes) -> None:
         raise RuntimeError("模拟未落盘")
@@ -359,7 +359,7 @@ async def test_unsaved_intent_does_not_block_unrelated_external_source(source_ow
         patch.setattr(source_edit, "atomic_write_bytes", fail)
         with pytest.raises(RuntimeError, match="未落盘"):
             await case.service.save_source_edit(source_key=SOURCE, request=request)
-    case.path.write_text('{"config_version":4,"logging":{"runtime":{"level":"debug"}}}')
+    case.path.write_text('{"config_version":5,"logging":{"runtime":{"level":"debug"}}}')
     await case.service.reload()
     assert len(case.calls) == 1
     event, = case.service.list_events()
@@ -372,7 +372,7 @@ async def test_source_mutations_require_both_permissions_before_owner(
 ) -> None:
     case = source_owner
     case.allow(*capabilities)
-    request = case.request('{"ui":{"theme":{"default_theme_id":"blue"}}}')
+    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
     before = case.snapshot()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://test") as client:
         for method, suffix in (("POST", "/preflight"), ("PUT", "")):
@@ -384,7 +384,7 @@ async def test_source_mutations_require_both_permissions_before_owner(
 async def test_permissions_rechecked_after_waiting_for_reload_lock(source_owner: SourceOwner) -> None:
     case = source_owner
     case.allow("configuration_read", "configuration_write")
-    request = case.request('{"ui":{"theme":{"default_theme_id":"blue"}}}')
+    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
     before = case.snapshot()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://test") as client:
         async with case.service._reload_lock:
@@ -401,7 +401,7 @@ async def test_read_revocation_during_apply_prevents_response_disclosure(source_
     case = source_owner
     case.allow("configuration_read", "configuration_write")
     case.blocked = True
-    request = case.request('{"ui":{"theme":{"default_theme_id":"blue"}}}')
+    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=case.app), base_url="http://test") as client:
         writing = asyncio.create_task(client.put("/api/gateway/config/sources/" + SOURCE, json=request.model_dump()))
         await asyncio.wait_for(case.entered.wait(), 2)
@@ -426,11 +426,11 @@ async def test_start_and_noop_keep_real_runtime_snapshot_identity_before_hot_sav
         assert saved.edit is not None and saved.edit.state == "active"
         assert case.app.state.gateway_config is initial and case.service.config is initial
         assert not case.service.list_events()
-        request = case.request('{"ui":{"theme":{"default_theme_id":"green"}}}', source=LOCAL, key="hot-runtime")
+        request = case.request('{"permissions":{"federation":{"default_effect":"deny"}}}', source=LOCAL, key="hot-runtime")
         applied = await case.service.save_source_edit(source_key=LOCAL, request=request)
         assert applied.edit is not None and applied.edit.state == "active"
         assert case.app.state.gateway_config is case.service.config
-        assert case.service.config.default_theme_id == "green"
+        assert case.service.config.payload["permissions"]["federation"]["default_effect"] == "deny"
         assert len(case.service.list_events()) == 1
     finally:
         await case.service.stop()
@@ -448,7 +448,7 @@ async def test_recovery_required_source_is_observed_without_reapplying(source_ow
         raise RuntimeError("模拟外部副作用未完成，必须由原恢复入口处理")
 
     case.service._on_runtime_config = fail
-    request = case.request('{"ui":{"theme":{"default_theme_id":"blue"}}}')
+    request = case.request('{"logging":{"runtime":{"level":"debug"}}}')
     with pytest.raises(RuntimeError, match="runtime_apply"):
         await case.service.save_source_edit(source_key=SOURCE, request=request)
     pending = case.store.get_pending_config_candidate(config_domain="gateway", idempotency_key=request.idempotency_key)

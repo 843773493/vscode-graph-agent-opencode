@@ -14,7 +14,7 @@ workspace_state_store/
 ├── restart.py           重启状态
 ├── snapshot.py          active snapshot
 ├── sql_statements.py    共享 SQL
-└── workspace_state_sql/ 静态 schema 迁移
+└── migrations/ 静态 schema 迁移
 ```
 
 ```text

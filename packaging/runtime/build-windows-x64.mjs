@@ -1,13 +1,17 @@
 import {
   cpSync,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
+import { extract as extractTar } from "tar";
+import { createZipArchive, extractZipArchive } from "./archives/zip.mjs";
 
 import {
   BOXTEAM_VERSION,
@@ -23,6 +27,7 @@ import {
   writeRuntimeSizeReport,
 } from "./runtime-release-assets.mjs";
 import { installWindowsPythonDependencies } from "./windows-python-dependencies.mjs";
+import { rebuildWindowsNodePty } from "./windows-node-pty-build.mjs";
 import {
   downloadPinnedWindowsPython,
   downloadPinnedWindowsNode,
@@ -57,16 +62,13 @@ const tarballRoot = path.join(outputRoot, "tarballs");
 const releaseAssetRoot = path.join(outputRoot, "release-assets");
 const standaloneRoot = path.join(outputRoot, "standalone");
 const installerRoot = path.join(outputRoot, "installer");
-const standaloneStageRoot = path.join(stageRoot, "standalone");
 const standaloneDirectoryName = `boxteam-windows-x64-${BOXTEAM_VERSION}`;
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const crossBuild = process.argv.includes("--cross");
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const result = crossSpawn.sync(command, args, {
     cwd: options.cwd ?? projectRoot,
     env: options.env ?? process.env,
     encoding: "utf8",
-    shell: options.shell ?? false,
     stdio: options.capture ? "pipe" : "inherit",
   });
   if (result.error) throw result.error;
@@ -110,7 +112,7 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
   );
   const installArguments = ["install", "--production", "--exact", "--ignore-scripts"];
   if (crossBuild) {
-    // Bun 只负责解析和下载目标平台依赖；node-pty 的 Windows prebuild 已随 npm 包提供，不执行 Linux 安装脚本。
+    // 这里只准备目标依赖；完整插件原生制品仍由 packer 校验，不能用 Linux 构建代替。
     installArguments.push("--os", "win32", "--cpu", "x64");
   }
   run("bun", installArguments, {
@@ -122,8 +124,13 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
   });
   if (!crossBuild) {
     // Windows 原生构建只运行受控 node-gyp，不允许任何依赖安装 hook。
-    run(nodeExecutable, [path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
-      cwd: path.join(applicationRoot, "node_modules/node-pty"),
+    // 把应用目录映射到短盘符，避免 MSVC 在深层 staging 中创建中间文件失败。
+    rebuildWindowsNodePty({
+      applicationRoot,
+      nodeExecutable,
+      pythonExecutable: path.join(runtimePackageRoot, "python", "python.exe"),
+      nodeGypEntrypoint: path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"),
+      run,
     });
     run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
       cwd: applicationRoot,
@@ -148,9 +155,6 @@ async function installChromium(applicationRoot, chromiumRoot, nodeExecutable) {
   let environment = baseEnvironment;
   let lastError = null;
   for (let attempt = 1; attempt <= 5; attempt += 1) {
-    if (ownsChromiumCache) {
-      rmSync(chromiumCacheRoot, { recursive: true, force: true });
-    }
     mkdirSync(chromiumCacheRoot, { recursive: true });
     const downloadHost =
       attempt % 2 === 0
@@ -266,9 +270,9 @@ function writeRuntimeMetadata({
 
 function npmPack(packageRoot, destinationRoot) {
   const filename = run(
-    npmCommand,
+    "npm",
     ["pack", "--silent", "--pack-destination", destinationRoot],
-    { cwd: packageRoot, capture: true, shell: true },
+    { cwd: packageRoot, capture: true },
   );
   const outputLines = filename.split(/\r?\n/).filter(Boolean);
   if (outputLines.length !== 1 || !outputLines[0].endsWith(".tgz")) {
@@ -316,59 +320,49 @@ function writeStandaloneLauncherScripts(packageRoot) {
   );
 }
 
-function stageStandalonePackage() {
-  const packageRoot = path.join(standaloneStageRoot, standaloneDirectoryName);
+async function stageStandalonePackage() {
+  // NSIS 无法读取超过 Windows MAX_PATH 的递归输入，独立包直接生成到短的物理临时目录。
+  const physicalProjectRoot = realpathSync.native(projectRoot);
+  const packageStageRoot = mkdtempSync(path.join(path.parse(physicalProjectRoot).root, "bt-"));
+  const packageRoot = path.join(packageStageRoot, standaloneDirectoryName);
   const runtimeRoot = path.join(packageRoot, "runtime");
   const launcherRoot = path.join(packageRoot, "launcher");
   const standaloneArchive = path.join(
     standaloneRoot,
     `${standaloneDirectoryName}.zip`,
   );
-  rmSync(packageRoot, { recursive: true, force: true });
-  rmSync(standaloneArchive, { force: true });
-  mkdirSync(standaloneRoot, { recursive: true });
-  cpSync(runtimePackageRoot, runtimeRoot, { recursive: true });
+  try {
+    rmSync(packageRoot, { recursive: true, force: true });
+    rmSync(standaloneArchive, { force: true });
+    mkdirSync(standaloneRoot, { recursive: true });
+    cpSync(runtimePackageRoot, runtimeRoot, { recursive: true });
 
-  const npmManifest = JSON.parse(
-    readFileSync(path.join(runtimePackageRoot, "runtime-manifest.json"), "utf8"),
-  );
-  writeRuntimeMetadata({
-    runtimeRoot,
-    chromiumExecutableRelative: npmManifest.chromium_executable,
-    distribution: "standalone",
-  });
-  cpSync(launcherPackageRoot, launcherRoot, { recursive: true });
-  // 便携版已有内置 runtime，仅安装 Launcher 依赖及其 Windows 原生预构建。
-  const launcherManifestPath = path.join(launcherRoot, "package.json");
-  const launcherManifest = JSON.parse(readFileSync(launcherManifestPath, "utf8"));
-  delete launcherManifest.optionalDependencies;
-  writeFileSync(launcherManifestPath, `${JSON.stringify(launcherManifest, null, 2)}\n`);
-  run("bun", ["install", "--production", "--ignore-scripts", "--os", "win32", "--cpu", "x64"], { cwd: launcherRoot });
-  const windowsLauncher = buildWindowsLauncher();
-  cpSync(windowsLauncher, path.join(packageRoot, "BoxTeam.exe"));
-  cpSync(windowsLauncher, path.join(packageRoot, "BoxTeamDoctor.exe"));
-  writeStandaloneLauncherScripts(packageRoot);
-
-  if (crossBuild) {
-    run("zip", ["-q", "-r", standaloneArchive, standaloneDirectoryName], {
-      cwd: standaloneStageRoot,
+    const npmManifest = JSON.parse(
+      readFileSync(path.join(runtimePackageRoot, "runtime-manifest.json"), "utf8"),
+    );
+    writeRuntimeMetadata({
+      runtimeRoot,
+      chromiumExecutableRelative: npmManifest.chromium_executable,
+      distribution: "standalone",
     });
-  } else {
-    // TODO: Windows 旧版 tar.exe 可能不支持按扩展名生成 ZIP；当前支持矩阵为 Windows 10/11 与 Server 2022。
-    run("tar", [
-      "-a",
-      "-c",
-      "-f",
-      standaloneArchive,
-      "-C",
-      standaloneStageRoot,
-      standaloneDirectoryName,
-    ]);
+    cpSync(launcherPackageRoot, launcherRoot, { recursive: true });
+    // 便携版已有内置 runtime，仅安装 Launcher 依赖及其 Windows 原生预构建。
+    const launcherManifestPath = path.join(launcherRoot, "package.json");
+    const launcherManifest = JSON.parse(readFileSync(launcherManifestPath, "utf8"));
+    delete launcherManifest.optionalDependencies;
+    writeFileSync(launcherManifestPath, `${JSON.stringify(launcherManifest, null, 2)}\n`);
+    run("bun", ["install", "--production", "--ignore-scripts", "--os", "win32", "--cpu", "x64"], { cwd: launcherRoot });
+    const windowsLauncher = buildWindowsLauncher();
+    cpSync(windowsLauncher, path.join(packageRoot, "BoxTeam.exe"));
+    cpSync(windowsLauncher, path.join(packageRoot, "BoxTeamDoctor.exe"));
+    writeStandaloneLauncherScripts(packageRoot);
+
+    await createZipArchive(packageRoot, standaloneArchive);
+    return { standaloneArchive, packageRoot, packageStageRoot };
+  } catch (error) {
+    rmSync(packageStageRoot, { recursive: true, force: true });
+    throw error;
   }
-  if (!existsSync(standaloneArchive)) {
-    throw new Error(`便携版 ZIP 未生成: ${standaloneArchive}`);
-  }
-  return standaloneArchive;
 }
 
 function buildWindowsLauncher() {
@@ -378,6 +372,10 @@ function buildWindowsLauncher() {
   const launcherOutputRoot = path.join(stageRoot, "windows-launcher");
   const launcherOutput = path.join(launcherOutputRoot, "BoxTeam.exe");
   mkdirSync(launcherOutputRoot, { recursive: true });
+  const compilerPath = path.dirname(compiler);
+  const compilerEnvironment = path.isAbsolute(compiler)
+    ? { ...process.env, PATH: `${compilerPath}${path.delimiter}${process.env.PATH ?? ""}` }
+    : process.env;
   run(compiler, [
     "-municode",
     "-mconsole",
@@ -386,7 +384,7 @@ function buildWindowsLauncher() {
     path.join(projectRoot, "packaging", "runtime", "windows-launcher.c"),
     "-o",
     launcherOutput,
-  ]);
+  ], { env: compilerEnvironment });
   if (!existsSync(launcherOutput)) {
     throw new Error(`Windows 原生启动器未生成: ${launcherOutput}`);
   }
@@ -405,8 +403,8 @@ function buildWindowsInstaller(packageRoot) {
   mkdirSync(installerRoot, { recursive: true });
   run(nsisCommand, [
     `-DVERSION=${BOXTEAM_VERSION}`,
-    `-DINPUTDIR=${packageRoot.split(path.sep).join("/")}`,
-    `-DOUTPUT=${installerArchive.split(path.sep).join("/")}`,
+    `-DINPUTDIR=${packageRoot}`,
+    `-DOUTPUT=${installerArchive}`,
     path.join(projectRoot, "packaging", "runtime", "boxteam-installer.nsi"),
   ], {
     env: nsisEnvironment,
@@ -443,8 +441,7 @@ async function main() {
 
   const pythonArchive = await downloadPinnedWindowsPython(pythonDownloadRoot);
   const nodeArchive = await downloadPinnedWindowsNode(nodeDownloadRoot);
-  // TODO: Windows 目标依赖系统提供的 tar.exe；若未来支持没有 tar.exe 的旧版 Windows，需改为内置解压实现。
-  run("tar", ["-xzf", pythonArchive, "-C", runtimePackageRoot]);
+  await extractTar({ file: pythonArchive, cwd: runtimePackageRoot, strict: true });
   const pythonExecutable = path.join(
     runtimePackageRoot,
     "python",
@@ -452,21 +449,6 @@ async function main() {
   );
   if (!existsSync(pythonExecutable)) {
     throw new Error(`解压后缺少 Windows Python: ${pythonExecutable}`);
-  }
-  const nodeExtractRoot = path.join(stageRoot, "build-node");
-  mkdirSync(nodeExtractRoot, { recursive: true });
-  if (crossBuild) {
-    run("unzip", ["-q", nodeArchive, "-d", nodeExtractRoot]);
-  } else {
-    run("tar", ["-xf", nodeArchive, "-C", nodeExtractRoot]);
-  }
-  const extractedNodeExecutable = path.join(
-    nodeExtractRoot,
-    `node-v${NODE_RUNTIME_WINDOWS_X64.version}-win-x64`,
-    "node.exe",
-  );
-  if (!existsSync(extractedNodeExecutable)) {
-    throw new Error(`Windows Node 压缩包缺少 node.exe: ${nodeArchive}`);
   }
 
   const applicationRoot = path.join(runtimePackageRoot, "application");
@@ -480,6 +462,11 @@ async function main() {
   //   在普通 Windows 机器上冷启动可能超过 120 秒，导致 Gateway 等待后端就绪超时退出。
   // - 这里提前用 compileall 生成字节码缓存并打进安装包，显著缩短用户首次启动时间。
   precompilePythonBytecode(pythonExecutable, applicationRoot);
+  const nodeExtractRoot = path.join(stageRoot, "build-node");
+  mkdirSync(nodeExtractRoot, { recursive: true });
+  await extractZipArchive(nodeArchive, { dir: nodeExtractRoot });
+  const extractedNodeExecutable = path.join(nodeExtractRoot, `node-v${NODE_RUNTIME_WINDOWS_X64.version}-win-x64`, "node.exe");
+  if (!existsSync(extractedNodeExecutable)) throw new Error(`Windows Node 压缩包缺少 node.exe: ${nodeArchive}`);
   const bundledNodeRoot = path.join(runtimePackageRoot, "node");
   mkdirSync(bundledNodeRoot, { recursive: true });
   cpSync(extractedNodeExecutable, path.join(bundledNodeRoot, "node.exe"));
@@ -487,42 +474,19 @@ async function main() {
   const nodeExecutable = path.join(bundledNodeRoot, "node.exe");
   const bunExecutable = Bun.which("bun");
   const uvExecutable = Bun.which("uv");
-  if (!bunExecutable || !uvExecutable) {
-    throw new Error("发布构建需要明确的 Bun 和 uv 构建工具");
-  }
+  if (!bunExecutable || !uvExecutable) throw new Error("发布构建需要明确的 Bun 和 uv 构建工具");
   installNodeDependencies(applicationRoot, nodeExecutable);
   const pluginBuild = {
-    projectRoot,
-    nodeExecutable,
-    bunExecutable,
-    uvExecutable,
-    pythonExecutable,
-    nodeGypEntrypoint: path.join(
-      projectRoot,
-      "node_modules/node-gyp/bin/node-gyp.js",
-    ),
+    projectRoot, nodeExecutable, bunExecutable, uvExecutable, pythonExecutable,
+    nodeGypEntrypoint: path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"),
     target: {
-      os: "windows",
-      architecture: "x64",
-      system_baseline: "windows-10.0.19041",
-      node: {
-        version: NODE_RUNTIME_WINDOWS_X64.version,
-        abi: NODE_RUNTIME_WINDOWS_X64.abi,
-      },
-      python: {
-        version: PYTHON_RUNTIME_WINDOWS_X64.version,
-        abi: "cp312",
-      },
+      os: "windows", architecture: "x64", system_baseline: "windows-10.0.19041",
+      node: { version: NODE_RUNTIME_WINDOWS_X64.version, abi: NODE_RUNTIME_WINDOWS_X64.abi },
+      python: { version: PYTHON_RUNTIME_WINDOWS_X64.version, abi: "cp312" },
     },
   };
-  await packDeveloperTools({
-    ...pluginBuild,
-    output: path.join(applicationRoot, "resources/plugins/developer-tools.zip"),
-  });
-  await packMcpStdio({
-    ...pluginBuild,
-    output: path.join(applicationRoot, "resources/plugins/mcp-stdio.zip"),
-  });
+  await packDeveloperTools({ ...pluginBuild, output: path.join(applicationRoot, "resources/plugins/developer-tools.zip") });
+  await packMcpStdio({ ...pluginBuild, output: path.join(applicationRoot, "resources/plugins/mcp-stdio.zip") });
 
   run("bun", ["run", "build"], {
     cwd: path.join(projectRoot, "src", "clients", "workbench"),
@@ -559,10 +523,13 @@ async function main() {
     npmPack(downloader.packageRoot, tarballRoot),
     npmPack(launcherPackageRoot, tarballRoot),
   ];
-  const standaloneArchive = stageStandalonePackage();
-  const installerArchive = buildWindowsInstaller(
-    path.join(standaloneStageRoot, standaloneDirectoryName),
-  );
+  const { standaloneArchive, packageRoot, packageStageRoot } = await stageStandalonePackage();
+  let installerArchive;
+  try {
+    installerArchive = buildWindowsInstaller(packageRoot);
+  } finally {
+    rmSync(packageStageRoot, { recursive: true, force: true });
+  }
   const releaseAssets = [
     {
       filename: path.basename(fullRuntimeTarball),

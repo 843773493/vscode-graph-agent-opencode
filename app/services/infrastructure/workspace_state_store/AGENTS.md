@@ -10,7 +10,7 @@ workspace_state_store/
 ├── restart.py           重启状态和恢复边界
 ├── snapshot.py          active config snapshot 生命周期
 ├── sql_statements.py    多个职责族共享的 SQL 语句
-└── workspace_state_sql/
+└── migrations/
     ├── 001.sql–013.sql  有序 schema 迁移
     ├── 015.sql          MCP 连接操作及幂等 alias；第14次为 Python 来源合并
     ├── 016.sql          持久任务定义版本与运行账本
@@ -25,13 +25,13 @@ workspace_state_store/
     └── legacy_config/   仅供一次性旧表迁移的 SQL
 ```
 
-外部代码通过 `app.services.infrastructure.workspace_state_store` 导入公开 store 与 DTO。职责模块只由本包装配；`workspace_state_sql/` 是唯一静态迁移来源，迁移顺序由 `__init__.py` 显式维护。
+外部代码通过 `app.services.infrastructure.workspace_state_store` 导入公开 store 与 DTO。职责模块只由本包装配；`migrations/` 是唯一静态迁移来源，迁移顺序由 `__init__.py` 显式维护。
 
 # 可修改内容
 
 - 可以按配置生命周期职责维护 `apply.py`、`pending.py`、`restart.py` 与 `snapshot.py`。
 - 可以维护 store 装配、schema 顺序和 `sql_statements.py` 中被多个职责族共用的语句。
-- 可以维护 `workspace_state_sql/` 下的版本迁移及 `legacy_config/` 的一次性迁移 SQL。
+- 可以维护 `migrations/` 下的版本迁移及 `legacy_config/` 的一次性迁移 SQL。
 
 # 不可修改内容
 

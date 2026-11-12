@@ -6,7 +6,7 @@ import type {
   TurnHistoryLoadRequest,
   TurnHistoryPage,
 } from "../../types/backend";
-import type { TurnMessageSearchRequest, TurnMessageSearchResultsDTO, TurnMessageReferenceDTO, TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { TurnMessageSearchRequest, TurnMessageSearchResultsDTO, TurnMessageReferenceDTO, TurnMessageLocationDTO, TurnToolResultDTO, TurnMessageMatchDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import {
   HttpRequestError,
   requestJson,
@@ -16,7 +16,8 @@ import {
 
 const SESSION_TURN_HISTORY_TIMEOUT_MS = 10_000;
 
-export type LoadAroundTurn = (turnId: string, signal?: AbortSignal, message?: TurnMessageReferenceDTO) => Promise<TurnMessageLocationDTO | void>;
+export type TurnNavigationTarget = TurnMessageMatchDTO | TurnToolResultDTO;
+export type LoadAroundTurn = (turnId: string, signal?: AbortSignal, message?: TurnMessageReferenceDTO, toolResultId?: string) => Promise<TurnMessageLocationDTO | TurnToolResultDTO | void>;
 
 export async function searchThreadHistoryMessages(
   apiPort: number, sessionId: string, threadId: string,

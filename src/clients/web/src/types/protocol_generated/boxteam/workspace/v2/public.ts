@@ -2704,6 +2704,24 @@ export interface TurnDetailDTO {
   tool_summary_truncated?: boolean | undefined;
 }
 
+/** 原历史视图的工具结果元数据；发现不读 canonical 正文。 */
+export interface TurnToolResultDTO {
+  item_id: string;
+  turn_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  status: string;
+}
+
+export interface ThreadToolResultListDTO {
+  session_id: string;
+  thread_id: string;
+  items: TurnToolResultDTO[];
+  next_after?: number | undefined;
+  source_view_id?: string | undefined;
+  source_view_revision: number;
+}
+
 /** 精确 SessionThread 的字面量正文搜索；cursor 仅由历史 owner 解释。 */
 export interface TurnMessageSearchRequest {
   query: string;
@@ -2787,6 +2805,7 @@ export interface TurnHistoryLoadRequest {
   execution_id?: string | undefined;
   tool_call_ids: string[];
   anchor_message?: TurnMessageReferenceDTO | undefined;
+  anchor_tool_result?: string | undefined;
 }
 
 export interface TurnHistoryPageDTO {
@@ -2804,6 +2823,7 @@ export interface TurnHistoryPageDTO {
   source_view_id?: string | undefined;
   source_view_revision?: number | undefined;
   located_message?: TurnMessageLocationDTO | undefined;
+  located_tool_result?: TurnToolResultDTO | undefined;
 }
 
 export interface InternalExecutionHistoryDTO {
@@ -20517,6 +20537,118 @@ export const TurnDetailDTO: MessageFns<TurnDetailDTO> = {
   },
 };
 
+function createBaseTurnToolResultDTO(): TurnToolResultDTO {
+  return { item_id: "", turn_id: "", tool_call_id: "", tool_name: "", status: "" };
+}
+
+export const TurnToolResultDTO: MessageFns<TurnToolResultDTO> = {
+  fromJSON(object: any): TurnToolResultDTO {
+    return {
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : "",
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : "",
+      tool_call_id: isSet(object.tool_call_id) ? globalThis.String(object.tool_call_id) : "",
+      tool_name: isSet(object.tool_name) ? globalThis.String(object.tool_name) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+    };
+  },
+
+  toJSON(message: TurnToolResultDTO): unknown {
+    const obj: any = {};
+    if (message.item_id !== "") {
+      obj.item_id = message.item_id;
+    }
+    if (message.turn_id !== "") {
+      obj.turn_id = message.turn_id;
+    }
+    if (message.tool_call_id !== "") {
+      obj.tool_call_id = message.tool_call_id;
+    }
+    if (message.tool_name !== "") {
+      obj.tool_name = message.tool_name;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TurnToolResultDTO>, I>>(base?: I): TurnToolResultDTO {
+    return TurnToolResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TurnToolResultDTO>, I>>(object: I): TurnToolResultDTO {
+    const message = createBaseTurnToolResultDTO();
+    message.item_id = object.item_id ?? "";
+    message.turn_id = object.turn_id ?? "";
+    message.tool_call_id = object.tool_call_id ?? "";
+    message.tool_name = object.tool_name ?? "";
+    message.status = object.status ?? "";
+    return message;
+  },
+};
+
+function createBaseThreadToolResultListDTO(): ThreadToolResultListDTO {
+  return {
+    session_id: "",
+    thread_id: "",
+    items: [],
+    next_after: undefined,
+    source_view_id: undefined,
+    source_view_revision: 0,
+  };
+}
+
+export const ThreadToolResultListDTO: MessageFns<ThreadToolResultListDTO> = {
+  fromJSON(object: any): ThreadToolResultListDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      items: globalThis.Array.isArray(object?.items)
+        ? object.items.map((e: any) => TurnToolResultDTO.fromJSON(e))
+        : [],
+      next_after: isSet(object.next_after) ? globalThis.Number(object.next_after) : undefined,
+      source_view_id: isSet(object.source_view_id) ? globalThis.String(object.source_view_id) : undefined,
+      source_view_revision: isSet(object.source_view_revision) ? globalThis.Number(object.source_view_revision) : 0,
+    };
+  },
+
+  toJSON(message: ThreadToolResultListDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => TurnToolResultDTO.toJSON(e));
+    }
+    if (message.next_after !== undefined) {
+      obj.next_after = Math.round(message.next_after);
+    }
+    if (message.source_view_id !== undefined) {
+      obj.source_view_id = message.source_view_id;
+    }
+    if (message.source_view_revision !== 0) {
+      obj.source_view_revision = Math.round(message.source_view_revision);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ThreadToolResultListDTO>, I>>(base?: I): ThreadToolResultListDTO {
+    return ThreadToolResultListDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThreadToolResultListDTO>, I>>(object: I): ThreadToolResultListDTO {
+    const message = createBaseThreadToolResultListDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.items = object.items?.map((e) => TurnToolResultDTO.fromPartial(e)) || [];
+    message.next_after = object.next_after ?? undefined;
+    message.source_view_id = object.source_view_id ?? undefined;
+    message.source_view_revision = object.source_view_revision ?? 0;
+    return message;
+  },
+};
+
 function createBaseTurnMessageSearchRequest(): TurnMessageSearchRequest {
   return { query: "", limit: 0, cursor: undefined, category: undefined };
 }
@@ -20967,6 +21099,7 @@ function createBaseTurnHistoryLoadRequest(): TurnHistoryLoadRequest {
     execution_id: undefined,
     tool_call_ids: [],
     anchor_message: undefined,
+    anchor_tool_result: undefined,
   };
 }
 
@@ -20990,6 +21123,7 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
       anchor_message: isSet(object.anchor_message)
         ? TurnMessageReferenceDTO.fromJSON(object.anchor_message)
         : undefined,
+      anchor_tool_result: isSet(object.anchor_tool_result) ? globalThis.String(object.anchor_tool_result) : undefined,
     };
   },
 
@@ -21028,6 +21162,9 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     if (message.anchor_message !== undefined) {
       obj.anchor_message = TurnMessageReferenceDTO.toJSON(message.anchor_message);
     }
+    if (message.anchor_tool_result !== undefined) {
+      obj.anchor_tool_result = message.anchor_tool_result;
+    }
     return obj;
   },
 
@@ -21049,6 +21186,7 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     message.anchor_message = (object.anchor_message !== undefined && object.anchor_message !== null)
       ? TurnMessageReferenceDTO.fromPartial(object.anchor_message)
       : undefined;
+    message.anchor_tool_result = object.anchor_tool_result ?? undefined;
     return message;
   },
 };
@@ -21069,6 +21207,7 @@ function createBaseTurnHistoryPageDTO(): TurnHistoryPageDTO {
     source_view_id: undefined,
     source_view_revision: undefined,
     located_message: undefined,
+    located_tool_result: undefined,
   };
 }
 
@@ -21096,6 +21235,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
         : undefined,
       located_message: isSet(object.located_message)
         ? TurnMessageLocationDTO.fromJSON(object.located_message)
+        : undefined,
+      located_tool_result: isSet(object.located_tool_result)
+        ? TurnToolResultDTO.fromJSON(object.located_tool_result)
         : undefined,
     };
   },
@@ -21144,6 +21286,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     if (message.located_message !== undefined) {
       obj.located_message = TurnMessageLocationDTO.toJSON(message.located_message);
     }
+    if (message.located_tool_result !== undefined) {
+      obj.located_tool_result = TurnToolResultDTO.toJSON(message.located_tool_result);
+    }
     return obj;
   },
 
@@ -21168,6 +21313,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     message.source_view_revision = object.source_view_revision ?? undefined;
     message.located_message = (object.located_message !== undefined && object.located_message !== null)
       ? TurnMessageLocationDTO.fromPartial(object.located_message)
+      : undefined;
+    message.located_tool_result = (object.located_tool_result !== undefined && object.located_tool_result !== null)
+      ? TurnToolResultDTO.fromPartial(object.located_tool_result)
       : undefined;
     return message;
   },

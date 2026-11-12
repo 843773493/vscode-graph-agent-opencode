@@ -24,17 +24,12 @@ export type ActivateGatewayWorkspaceResultDTO = Omit<OptionalFields<GatewayProto
 export type AddLocalWorkspaceRequest = OptionalFields<GatewayProtocol.AddLocalWorkspaceRequest>;
 export type AddRemoteGatewayRequest = OptionalFields<GatewayProtocol.AddRemoteGatewayRequest>;
 export type CreateFederationManagedWorkspaceRequest = OptionalFields<GatewayProtocol.CreateFederationManagedWorkspaceRequest>;
-export type CreateGatewayGuestRequest = OptionalFields<GatewayProtocol.CreateGatewayGuestRequest>;
 export type CreateGatewayManagedWorkspaceRequest = Omit<
   OptionalFields<GatewayProtocol.CreateGatewayManagedWorkspaceRequest>,
   "name" | "gateway_connection_id"
 > & {
   name?: string | null;
   gateway_connection_id?: string | null;
-};
-export type CreateGatewayUserRequest = OptionalFields<GatewayProtocol.CreateGatewayUserRequest>;
-export type AcquireGatewayUserRequest = Omit<OptionalFields<GatewayProtocol.AcquireGatewayUserRequest>, "client_label"> & {
-  client_label?: string | null;
 };
 export type CreatePortForwardRequest = Omit<OptionalFields<GatewayProtocol.CreatePortForwardRequest>, "local_port" | "label"> & {
   local_port?: number | null;
@@ -127,41 +122,9 @@ export type GatewayRuntimeBlockerDTO = OptionalFields<GatewayProtocol.GatewayRun
 export type GatewayRuntimeRestartResultDTO = OptionalFields<GatewayProtocol.GatewayRuntimeRestartResultDTO>;
 export type GatewayRuntimeStateResultDTO = OptionalFields<GatewayProtocol.GatewayRuntimeStateResultDTO>;
 export type GatewayServiceStatusDTO = OptionalFields<GatewayProtocol.GatewayServiceStatusDTO>;
-export type GatewayThemeBackgroundDTO = Omit<OptionalFields<GatewayProtocol.GatewayThemeBackgroundDTO>, "type" | "url" | "asset_id" | "repeat" | "appearance"> & {
-  type: "remote" | "gateway_asset";
-  url?: string | null;
-  asset_id?: string | null;
-  repeat?: "no-repeat" | "repeat" | "repeat-x" | "repeat-y" | "space" | "round";
-  appearance?: "immersive" | "theme";
-};
-export type GatewayThemeCatalogDTO = Omit<OptionalFields<GatewayProtocol.GatewayThemeCatalogDTO>, "items" | "current_theme"> & {
-  items: GatewayThemeOptionDTO[];
-  current_theme: ResolvedGatewayThemeDTO;
-};
-export type GatewayThemeOptionDTO = Omit<OptionalFields<GatewayProtocol.GatewayThemeOptionDTO>, "extends" | "source" | "preview_tokens" | "background_image_url"> & {
-  extends: "warm" | "green" | "blue";
-  source: "builtin" | "gateway_config";
-  preview_tokens: Record<string, string>;
-  background_image_url?: string | null;
-};
 export type GatewayUIAssetDTO = OptionalFields<GatewayProtocol.GatewayUIAssetDTO>;
 export type GatewayUIAssetListDTO = Omit<OptionalFields<GatewayProtocol.GatewayUIAssetListDTO>, "items"> & {
   items?: GatewayUIAssetDTO[];
-};
-export type GatewayUserAccessDTO = OptionalFields<GatewayProtocol.GatewayUserAccessDTO>;
-export type GatewayUserDTO = OptionalFields<GatewayProtocol.GatewayUserDTO>;
-export type GatewayUserLeaseDTO = OptionalFields<GatewayProtocol.GatewayUserLeaseDTO>;
-export type GatewayUserListDTO = OptionalFields<GatewayProtocol.GatewayUserListDTO>;
-/** Gateway 视图状态 JSON DTO；turn_anchor 为空表示无具体锚点，Web 恢复到会话最新尾部。 */
-export type GatewayUserViewStateDTO = Omit<
-  OptionalFields<GatewayProtocol.GatewayUserViewStateDTO>,
-  "turn_anchor"
-> & {
-  turn_anchor?: string | null;
-};
-/** PUT 完整替换视图状态；省略字段使用服务端默认值，null 锚点用于清除具体锚点。 */
-export type GatewayUserViewStateUpdateRequest = Omit<OptionalFields<GatewayProtocol.GatewayUserViewStateUpdateRequest>, "turn_anchor"> & {
-  turn_anchor?: string | null;
 };
 export type GatewayWorkspaceDTO = Omit<OptionalFields<GatewayProtocol.GatewayWorkspaceDTO>, "backend_generation" | "parent_workspace" | "connection_kind" | "status" | "runtime_action" | "remote_gateways"> & {
   backend_generation?: string | null;
@@ -195,11 +158,6 @@ export type PortForwardListDTO = Omit<OptionalFields<GatewayProtocol.PortForward
   items: PortForwardDTO[];
 };
 export type ReorderGatewayWorkspacesRequest = OptionalFields<GatewayProtocol.ReorderGatewayWorkspacesRequest>;
-export type ResolvedGatewayThemeDTO = Omit<OptionalFields<GatewayProtocol.ResolvedGatewayThemeDTO>, "color_scheme" | "tokens" | "background_image_url"> & {
-  color_scheme: "light" | "dark";
-  tokens: Record<string, string>;
-  background_image_url?: string | null;
-};
 export type SshConnectionOptionDTO = OptionalFields<GatewayProtocol.SshConnectionOptionDTO>;
 export type SshConnectionOptionListDTO = OptionalFields<GatewayProtocol.SshConnectionOptionListDTO>;
 export type UpdateGatewayWorkspaceRequest = Omit<OptionalFields<GatewayProtocol.UpdateGatewayWorkspaceRequest>, "name" | "parent_workspace"> & {
@@ -247,14 +205,7 @@ export type WebUISessionSidebarSettingsDTO = Omit<
 };
 export type WebUISettingsDTO = OptionalFields<GatewayProtocol.WebUISettingsDTO>;
 export type WebUISettingsUpdateDTO = OptionalFields<GatewayProtocol.WebUISettingsUpdateDTO>;
-export type WebUIThemeSettingsDTO = Omit<OptionalFields<GatewayProtocol.WebUIThemeSettingsDTO>, "background" | "resolved_theme"> & {
-  background?: GatewayThemeBackgroundDTO | null;
-  resolved_theme?: ResolvedGatewayThemeDTO | null;
-};
 export type WebUISettingsUpdate = WebUISettingsUpdateDTO;
-export type WebUIThemeSettingsUpdateDTO = Omit<OptionalFields<GatewayProtocol.WebUIThemeSettingsUpdateDTO>, "background"> & {
-  background?: GatewayThemeBackgroundDTO | null;
-};
 export type WebUIWorkspaceFileTreeSettingsDTO = OptionalFields<GatewayProtocol.WebUIWorkspaceFileTreeSettingsDTO>;
 
 export type GatewayResourceDTO = OptionalFields<GatewayProtocol.GatewayResourceDTO>;

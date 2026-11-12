@@ -28,7 +28,6 @@ from app.gateway.registry import (
 from app.gateway.registry.owners import workspace_owner
 from app.gateway.routes.search import router
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.gateway.server.workspace_proxy import verify_user_access_for_proxy
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
 from app.schemas.internal_v2.session_navigation import (
@@ -141,7 +140,6 @@ async def search_http(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
     application.state.workspace_navigation_store = WorkspaceNavigationStore(storage_path=tmp_path / "navigation.json")
     application.state.gateway_id = GATEWAY
     # 此装具的授权边界是明确替身；实网验收另走真实 guest 登录。
-    application.dependency_overrides[verify_user_access_for_proxy] = lambda: None
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://gateway.test",
                                  headers={"X-Local-Token": "test-search-token", "X-Request-ID": "req_search"}) as client:
         fixture = SearchHTTP(client, registry)

@@ -1,4 +1,4 @@
-import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
+import type { LoadAroundTurn, TurnNavigationTarget } from "../../api/session/sessionTurnHistory";
 import React from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
@@ -8,7 +8,6 @@ import {
 import type { ChatTranscriptItem } from "./transcriptItems";
 import { errorMessage } from "../../utils/errorMessage";
 import { useTurnAnchorNavigation, type TurnViewportPosition } from "./useTurnAnchorNavigation";
-import type { TurnMessageMatchDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 const SCROLL_POSITION_CHANGE_TOLERANCE_PX = 0.5;
 const NATIVE_SCROLLBAR_HIT_WIDTH_PX = 24;
@@ -87,7 +86,7 @@ export function useTurnVirtualScroller({
   viewState?: TurnViewportPosition | null;
   onViewStateChange?: (payload: TurnViewportPosition) => void;
   onViewStateRestoreStatus?: (message: string) => void;
-  messageNavigation?: TurnMessageMatchDTO;
+  messageNavigation?: TurnNavigationTarget;
   onViewportReady?: (controller: TurnViewportController | undefined) => void;
 }) {
   const streamRef = React.useRef<VirtuosoHandle | null>(null);
@@ -147,7 +146,7 @@ export function useTurnVirtualScroller({
     : `${item.key}:${item.displayPart.text}`).join("|"), [items]);
 
   const {
-    anchorRef, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage,
+    anchorRef, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage, locatedTool,
     scheduleAnchorAlignment, scrollToLatest,
   } = useTurnAnchorNavigation({
     items, scopeKey, streamRef, scrollerRef, followsLatestRef,
@@ -453,6 +452,7 @@ export function useTurnVirtualScroller({
     handleStartReached,
     navigateToTurn: navigateFromUser,
     locatedMessage,
+    locatedTool,
     cancelMessageNavigation: closeMessageNavigation,
     navigation,
     scheduleAnchorAlignment,

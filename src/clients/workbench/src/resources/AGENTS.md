@@ -21,3 +21,5 @@
 会话变更只发现本次发起 Thread 所属 Session 的 changeset 摘要，且其工作区须在明确范围内；没有明确 Session 不扫描其它会话。接受把原 changeset 身份交同一个 Thread 更改面板，Diff／完整补丁继续由原更改 owner 读取，浏览不读取预览正文、不标记审阅或改写文件。
 
 附件只发现发起 Thread 在入选工作区内的原 catalog 元数据；显式续页按钮一次读取一页，筛选不重复查询。关闭或身份失效取消原请求，迟到续页不发布；接受冻结原附件引用并进入同一个 Thread 预览，MIME／原件／重建继续归原附件 owner，不伪造普通文本文件。
+
+工具结果候选仅发现发起 Thread 的原历史元数据，续页携原 view 与 revision；接受复用原 around／ToolRow 的 typed 定位，浏览不读正文或重放工具，不伪造资源地址。

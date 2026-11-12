@@ -31,10 +31,6 @@ message GatewayResourceAddressDTO {
 }
 // WorkspaceResource 等业务对象通过 Struct 作为 Gateway 快照边界传递。
 
-message AcquireGatewayUserRequest {
-  optional string client_label = 1;
-}
-
 // 同机认证控制链专用，不作为普通文件响应或联邦资源投影。
 message NativeDirectoryBindRequest {
   string native_root = 1;
@@ -86,20 +82,11 @@ message CreateFederationManagedWorkspaceRequest {
   optional bool create_directory = 3;
 }
 
-message CreateGatewayGuestRequest {
-  optional google.protobuf.Struct tracking = 1;
-}
-
 message CreateGatewayManagedWorkspaceRequest {
   string root_path = 1;
   optional string name = 2;
   optional bool create_directory = 3;
   optional string gateway_connection_id = 4;
-}
-
-message CreateGatewayUserRequest {
-  string display_name = 1;
-  optional string user_id = 2;
 }
 
 message CreatePortForwardRequest {
@@ -737,31 +724,8 @@ message GatewaySearchScopeResolutionDTO {
   repeated GatewaySearchScopeBranchDTO branches = 2;
 }
 
-message GatewayThemeBackgroundDTO {
-  string type = 1;
-  optional string url = 2;
-  optional string asset_id = 3;
-  optional string position = 4;
-  optional string size = 5;
-  optional string repeat = 6;
-  optional string appearance = 7;
-  optional string overlay = 8;
-}
 
-message GatewayThemeCatalogDTO {
-  string current_theme_id = 1;
-  repeated GatewayThemeOptionDTO items = 2;
-  ResolvedGatewayThemeDTO current_theme = 3;
-}
 
-message GatewayThemeOptionDTO {
-  string id = 1;
-  string label = 2;
-  string extends = 3;
-  string source = 4;
-  google.protobuf.Struct preview_tokens = 5;
-  optional string background_image_url = 6;
-}
 
 message GatewayUIAssetDTO {
   string asset_id = 1;
@@ -771,67 +735,28 @@ message GatewayUIAssetDTO {
   string sha256 = 5;
   string imported_at = 6;
   string url = 7;
-  repeated string referenced_theme_ids = 8;
+  reserved 8;
+  reserved "referenced_theme_ids";
 }
 
 message GatewayUIAssetListDTO {
   repeated GatewayUIAssetDTO items = 1;
 }
 
-message GatewayUserAccessDTO {
-  string kind = 1;
-  optional string user_id = 2;
-  int64 lease_generation = 3;
-  optional string expires_at = 4;
-  optional bool takeover = 5;
-}
-
-message GatewayUserDTO {
-  string user_id = 1;
-  string display_name = 2;
-  string created_at = 3;
-  optional GatewayUserLeaseDTO lease = 4;
-}
-
-message GatewayUserLeaseDTO {
-  optional bool occupied = 1;
-  optional string client_label = 2;
-  optional string heartbeat_at = 3;
-  optional string expires_at = 4;
-}
-
-message GatewayUserListDTO {
-  repeated GatewayUserDTO items = 1;
-}
-
 // 视图状态按用户、Gateway、工作区与 Session 归属，仅用于主聊天 main thread。
 // 无锚点时 writer 记录当前 scrollTop，恢复忽略该像素偏移并回到最新尾部。
-message GatewayUserViewStateDTO {
-  string user_id = 1;
-  string workspace_id = 2;
-  string session_id = 3;
-  // 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。
-  optional string turn_anchor = 4;
-  // 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。
-  double scroll_offset = 5;
-  // 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。
-  optional bool follow_latest = 6;
-  int64 projection_version = 7;
-  optional bool tool_details_expanded = 8;
-  string updated_at = 9;
-  string gateway_id = 10;
+// PUT 请求完整替换当前用户、工作区和会话范围的视图状态；未提供字段采用服务端默认值。
+message GatewayManagementTargetDTO {
+  string gateway_id = 1;
+  string name = 2;
+  string connection_kind = 3;
+  optional string gateway_connection_id = 4;
+  optional string connection_error = 5;
 }
 
-// PUT 请求完整替换当前用户、工作区和会话范围的视图状态；未提供字段采用服务端默认值。
-message GatewayUserViewStateUpdateRequest {
-  // 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。
-  optional string turn_anchor = 1;
-  // 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。
-  optional double scroll_offset = 2;
-  // 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。
-  optional bool follow_latest = 3;
-  optional int64 projection_version = 4;
-  optional bool tool_details_expanded = 5;
+message GatewayManagementDirectoryDTO {
+  string local_gateway_id = 1;
+  repeated GatewayManagementTargetDTO items = 2;
 }
 
 message GatewayWorkspaceDTO {
@@ -892,13 +817,6 @@ message ReorderGatewayWorkspacesRequest {
   repeated GatewaySearchWorkspaceOwnerDTO workspaces = 2;
 }
 
-message ResolvedGatewayThemeDTO {
-  string id = 1;
-  string label = 2;
-  string color_scheme = 3;
-  google.protobuf.Struct tokens = 4;
-  optional string background_image_url = 5;
-}
 
 message SshConnectionOptionDTO {
   reserved 7;
@@ -974,7 +892,8 @@ message WebUISettingsDTO {
   optional WebUISessionSidebarSettingsDTO session_sidebar = 2;
   optional WebUIWorkspaceFileTreeSettingsDTO workspace_file_tree = 3;
   optional WebUIGatewayConsoleSettingsDTO gateway_console = 4;
-  optional WebUIThemeSettingsDTO theme = 5;
+  reserved 5;
+  reserved "theme";
 }
 
 message WebUISettingsUpdateDTO {
@@ -984,19 +903,11 @@ message WebUISettingsUpdateDTO {
   optional WebUISessionSidebarSettingsDTO session_sidebar = 2;
   optional WebUIWorkspaceFileTreeSettingsDTO workspace_file_tree = 3;
   optional WebUIGatewayConsoleSettingsDTO gateway_console = 4;
-  optional WebUIThemeSettingsUpdateDTO theme = 5;
+  reserved 5;
+  reserved "theme";
 }
 
-message WebUIThemeSettingsDTO {
-  optional string theme_id = 1;
-  optional GatewayThemeBackgroundDTO background = 2;
-  optional ResolvedGatewayThemeDTO resolved_theme = 3;
-}
 
-message WebUIThemeSettingsUpdateDTO {
-  optional string theme_id = 1;
-  optional GatewayThemeBackgroundDTO background = 2;
-}
 
 message WebUIWorkspaceBottomPanelSettingsDTO {
   optional bool visible = 1;
@@ -1052,17 +963,4 @@ message WorkspaceNavigationReorderRequest {
 message WorkspaceNavigationTreeDTO {
   string revision = 1;
   repeated WorkspaceNavigationNodeDTO nodes = 2;
-}
-// 当前 registry 的入口投影，包括未投影任何工作区的远端连接。
-message GatewayManagementTargetDTO {
-  string gateway_id = 1;
-  string name = 2;
-  string connection_kind = 3;
-  optional string gateway_connection_id = 4;
-  optional string connection_error = 5;
-}
-
-message GatewayManagementDirectoryDTO {
-  string local_gateway_id = 1;
-  repeated GatewayManagementTargetDTO items = 2;
 }

@@ -122,7 +122,7 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     monkeypatch.setattr(gateway_lifespan, "_refresh_federation_workspace_ports", Mock())
     monkeypatch.setattr(gateway_lifespan, "SshPortForwardManager", Mock(return_value=port_forward))
     for name in (
-        "UserAccessService", "UserProfileStore", "UserViewStateStore", "FederationCredentialStore",
+        "FederationCredentialStore",
         "GatewayWorkspaceRuntimeController", "WorkspaceNavigationStore",
         "GatewayResourceCatalogService",
     ):
@@ -135,7 +135,6 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     monkeypatch.setattr(
         gateway_lifespan, "WorkspacePluginBindings", Mock(return_value=workspace_plugin_bindings),
     )
-    monkeypatch.setattr(gateway_lifespan, "_cleanup_user_access_periodically", AsyncMock())
     monkeypatch.setattr(gateway_lifespan, "_restore_managed_local_runtimes", AsyncMock())
     monkeypatch.setattr(gateway_lifespan, "_should_preserve_gateway_generation_for_handoff", Mock(return_value=False))
     monkeypatch.setattr(gateway_lifespan.httpx, "AsyncClient", client_factory)

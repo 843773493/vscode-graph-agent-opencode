@@ -29,7 +29,7 @@ function resource(overrides: Partial<WorkspaceResourceDTO> = {}): WorkspaceResou
   };
 }
 
-function mount(item: WorkspaceResourceDTO, thread: ResourceThreadRef | null = currentThread) {
+function mount(item: WorkspaceResourceDTO, thread: ResourceThreadRef | null = currentThread, selectedId: string | null = null) {
   const calls: Array<{ resource: WorkspaceResourceDTO; action: ResourceAction; thread?: ResourceThreadRef }> = [];
   const controller: WorkspaceResourcesController = {
     items: [item], loading: false, mutating: false, error: null,
@@ -42,7 +42,7 @@ function mount(item: WorkspaceResourceDTO, thread: ResourceThreadRef | null = cu
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(<WarmConfirmProvider><BrowserContent controller={controller} workspaceId="gateway-workspace"
-      currentThread={thread} renderToolbar={tools => <header>{tools}</header>} /></WarmConfirmProvider>);
+      currentThread={thread} selectedId={selectedId} onSelect={() => {}} renderToolbar={tools => <header>{tools}</header>} /></WarmConfirmProvider>);
   });
   renderers.push(renderer);
   act(() => renderer.root.findByProps({ className: "resource-tree-chevron" }).props.onClick());
@@ -98,6 +98,22 @@ describe("工作区 Browser 的复制入口", () => {
 });
 
 describe("工作区 Browser 的精确 Thread 关联", () => {
+  test("明确选择的 Browser 消失后报告原 ID，不连接其它 Browser", () => {
+    const mounted = mount(resource(), currentThread, "browser_deleted");
+    expect(mounted.renderer.root.findByProps({ role: "alert" }).props.children.join(""))
+      .toContain("browser_deleted");
+    expect(mounted.renderer.root.findAllByType("iframe")).toHaveLength(0);
+    expect(mounted.calls).toEqual([]);
+  });
+
+  test("定位临时 Browser 不借用其它 Session 的同名 Thread，也不自动关联", () => {
+    const item = resource({ retention_scope: "thread", thread_associations: [{ session_id: "ses_other", thread_id: currentThread.thread_id }] });
+    const mounted = mount(item, currentThread, item.resource_id);
+    expect(mounted.renderer.root.findAllByType("iframe")).toHaveLength(0);
+    expect(mounted.renderer.root.findByProps({ role: "status" }).props.children).toContain("已关联");
+    expect(mounted.calls).toEqual([]);
+  });
+
   test.each([
     { label: "其它 Session 的相同 Thread ID", retention_scope: "workspace", association: { session_id: "ses_other", thread_id: currentThread.thread_id } },
     { label: "当前 Session 已关联的 child", retention_scope: "thread", association: { session_id: currentThread.session_id, thread_id: "thr_child" } },

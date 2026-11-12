@@ -153,7 +153,10 @@ def single_workspace_graph(tmp_path: Path, managed_backend_factory, process_boun
         backend_url="http://127.0.0.1:41000", connection_kind="local",
          managed=True,
     )
-    graph = managed_backend_factory((target,), backend_url=target.backend_url, process=ProcessProbe("old"))
+    graph = managed_backend_factory(
+        (target,), backend_url=target.backend_url, process=ProcessProbe("old"),
+        auxiliary_processes={"00000000-0000-4000-8000-000000000001": {"auxiliary": ProcessProbe("auxiliary")}},
+    )
     registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID,
         storage_path=tmp_path / "single-workspace-registry.json"
     )
@@ -194,7 +197,10 @@ def workspace_runtime_controller_case(tmp_path: Path, managed_backend_factory, p
     registry = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "gateway.json", state_store=controller_registry_store)
     for target in targets:
         registry.upsert(target, activate=False)
-    graph = managed_backend_factory(tuple(targets), backend_url=targets[0].backend_url, process=ProcessProbe("old"))
+    graph = managed_backend_factory(
+        tuple(targets), backend_url=targets[0].backend_url, process=ProcessProbe("old"),
+        auxiliary_processes={target.workspace_id: {"auxiliary": ProcessProbe("auxiliary")} for target in targets},
+    )
     graph.publish(registry)
     process_boundary.register(graph, registry)
     controller = GatewayWorkspaceRuntimeController(
@@ -815,6 +821,23 @@ def test_workspace_config_proof_expectation_redacts_fencing_token() -> None:
 
 
 @pytest.mark.asyncio
+async def test_backend_restart_preserves_runtime_auxiliary_processes(single_workspace_graph, process_boundary, tmp_path, single_workspace_registry) -> None:
+    owner = single_workspace_graph.owner
+    old_handle = owner.process
+    runtime = single_workspace_graph.runtimes["00000000-0000-4000-8000-000000000001"]
+    auxiliary_handles = dict(runtime.processes)
+    contract, runtimes = await rebuild_managed_backend_runtime(
+        owner=owner, registry=single_workspace_registry, desired_members=owner.contract.members, runtimes=single_workspace_graph.runtimes,
+        project_root=tmp_path, log_dir=tmp_path / "logs",
+    )
+    assert old_handle.closed and owner.process is process_boundary.handles[0]
+    assert runtime.processes == auxiliary_handles and all(not handle.closed for handle in auxiliary_handles.values())
+    assert runtimes["00000000-0000-4000-8000-000000000001"] is runtime
+    assert contract.generation != owner.contract.generation
+    assert "workspace_api" not in runtime.processes
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("http_drain_seconds", [0.25, 2])
 async def test_backend_restart_keeps_process_exit_budget_separate_from_http_drain(
     single_workspace_graph, process_boundary, tmp_path, single_workspace_registry,
@@ -966,8 +989,6 @@ async def test_managed_runtime_replaces_default_backend_when_adoption_is_disable
     await start_managed_backend_runtime(owner=single_workspace_graph.owner, registry=single_workspace_registry, project_root=tmp_path, log_dir=tmp_path / "logs",
                                         preferred_backend_port=8010, adopt_existing_backend=False)
     assert stale.closed and process_boundary.starts[0]["port"] == 8010
-
-
 @pytest.mark.asyncio
 async def test_full_health_proof_requires_all_mounts_same_process(
     workspace_runtime_controller_case,
@@ -1122,6 +1143,39 @@ async def test_commit_observer_error_keeps_published_contract_and_running_unique
 
 
 @pytest.mark.asyncio
+async def test_auxiliary_stop_failure_keeps_failed_handle_and_whole_group_intent_then_start_repairs(
+    workspace_runtime_controller_case, process_boundary, caplog,
+) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime = graph.runtimes["00000000-0000-4000-8000-000000000002"]
+    failed = runtime.processes["auxiliary"]
+    failed.failure = RuntimeError("辅助进程清理失败")
+    try:
+        with pytest.raises(RuntimeError, match="stage=backend_member_stop, error=RuntimeError") as stopped_error:
+            registry.stop_backend_owner(graph.owner)
+    finally:
+        failed.failure = None
+    assert isinstance(stopped_error.value.__cause__, ExceptionGroup)
+    original_error, = stopped_error.value.__cause__.exceptions
+    assert isinstance(original_error, RuntimeError) and "辅助进程清理失败" in str(original_error)
+    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
+    assert graph.owner.process is None
+    assert not registry.has_runtime("00000000-0000-4000-8000-000000000001")
+    assert registry.managed_runtime("00000000-0000-4000-8000-000000000002") is runtime
+    assert runtime.processes == {"auxiliary": failed}
+    assert all(not registry.resolve(member_id).desired_running for member_id in graph.owner.contract.workspace_ids)
+    assert all(registry.resolve(member_id).connection_error for member_id in graph.owner.contract.workspace_ids)
+    failed.failure = None
+    result = await controller.start_managed_backend("00000000-0000-4000-8000-000000000001", request_id="repair-aux", group_request=graph.group_request)
+    assert result.status == "started" and len(process_boundary.starts) == 1
+    assert all(registry.resolve(member_id).desired_running for member_id in graph.owner.contract.workspace_ids)
+    assert all(registry.resolve(member_id).connection_error is None for member_id in graph.owner.contract.workspace_ids)
+    assert set(runtime.processes) == {"auxiliary"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("forced", [False, True])
 async def test_empty_desired_releases_owner_once_without_empty_backend(workspace_runtime_controller_case, process_boundary, forced) -> None:
     registry = workspace_runtime_controller_case.registry
@@ -1171,6 +1225,31 @@ async def test_initiator_can_exit_while_sibling_keeps_unique_owner(workspace_run
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["job", "tool", "background_task"])
+async def test_safe_exit_blockers_preserve_complete_contract_intents_and_auxiliary_services(workspace_runtime_controller_case, process_boundary, kind) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
+    lifecycle_states = workspace_runtime_controller_case.lifecycle_states
+    blockers_by_workspace = workspace_runtime_controller_case.blockers_by_workspace
+    contract = graph.owner.contract
+    process = graph.owner.process
+    runtimes = dict(graph.runtimes)
+    auxiliaries = [handle for runtime in runtimes.values() for handle in runtime.processes.values()]
+    blockers_by_workspace["00000000-0000-4000-8000-000000000002"] = [{"kind": kind, "resource_id": "active", "session_id": "session-b", "status": "running"}]
+    result = await controller.safe_restart_managed_backend(
+        "00000000-0000-4000-8000-000000000001", request_id="blocked-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
+    )
+    assert result.status == "blocked" and result.blockers[0].workspace_id == "00000000-0000-4000-8000-000000000002"
+    assert graph.owner.contract is contract and graph.owner.process is process
+    assert not process.closed and not process_boundary.starts
+    assert all(not handle.closed for handle in auxiliaries)
+    assert all(registry.resolve(identity).desired_running and registry.managed_runtime(identity) is runtime for identity, runtime in runtimes.items())
+    assert set(lifecycle_states.values()) == {"ready"}
+    assert {identity for identity, path in runtime_actions if path.endswith("/cancel")} == {"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
+
+
 @pytest.mark.asyncio
 async def test_default_exit_and_duplicate_mount_identity_reject_before_drain(workspace_runtime_controller_case, process_boundary) -> None:
     registry = workspace_runtime_controller_case.registry
@@ -1234,18 +1313,30 @@ async def test_force_exit_failed_durable_ack_never_closes_owner(workspace_runtim
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["publication"])
+@pytest.mark.parametrize("failure", ["auxiliary", "publication"])
 async def test_exit_failure_recovers_complete_old_group(workspace_runtime_controller_case, process_boundary, monkeypatch, failure) -> None:
     registry = workspace_runtime_controller_case.registry
     graph = workspace_runtime_controller_case.graph
     controller = workspace_runtime_controller_case.controller
     old_contract = graph.owner.contract
-    original = registry._save
-    def fail_exit(**kwargs):
-        if kwargs.get("backend_contracts") == ():
-            raise RuntimeError("exit publication CAS 失败")
-        return original(**kwargs)
-    monkeypatch.setattr(registry, "_save", fail_exit)
+    if failure == "auxiliary":
+        handle = graph.runtimes["00000000-0000-4000-8000-000000000002"].processes["auxiliary"]
+        original = handle.close
+        attempts = 0
+        def close_once(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("auxiliary exit 失败")
+            original(**kwargs)
+        monkeypatch.setattr(handle, "close", close_once)
+    else:
+        original = registry._save
+        def fail_exit(**kwargs):
+            if kwargs.get("backend_contracts") == ():
+                raise RuntimeError("exit publication CAS 失败")
+            return original(**kwargs)
+        monkeypatch.setattr(registry, "_save", fail_exit)
     with pytest.raises(RuntimeError, match="exit"):
         await controller.safe_restart_managed_backend(
             "00000000-0000-4000-8000-000000000001", request_id="recover-exit", group_request=graph.group_request.model_copy(update={"desired_workspace_ids": []}),
@@ -1253,6 +1344,7 @@ async def test_exit_failure_recovers_complete_old_group(workspace_runtime_contro
     assert graph.owner.contract == old_contract and graph.owner.error is None
     assert len(process_boundary.starts) == 1 and graph.owner.process is process_boundary.handles[-1]
     assert all(registry.backend_owner(identity) is graph.owner and registry.resolve(identity).desired_running for identity in old_contract.workspace_ids)
+    assert all(set(registry.managed_runtime(identity).processes) == {"auxiliary"} for identity in old_contract.workspace_ids)
     assert GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path).backend_owner("00000000-0000-4000-8000-000000000001").contract == old_contract
 
 
@@ -1622,10 +1714,67 @@ async def test_stopped_force_unreleased_route_keeps_old_generation_and_registrat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
+@pytest.mark.parametrize("failure_kind", ["remaining_auxiliary", "unpublished", "cas"])
+async def test_stopped_delete_cleanup_or_cas_failure_preserves_old_contract_then_retries(
+    workspace_runtime_controller_case, process_boundary, monkeypatch, failure_kind,
+) -> None:
+    registry = workspace_runtime_controller_case.registry
+    graph = workspace_runtime_controller_case.graph
+    controller = workspace_runtime_controller_case.controller
+    runtime_actions = workspace_runtime_controller_case.runtime_actions
+    previous = graph.owner.contract
+    failure = RuntimeError(f"offline-{failure_kind}-failure")
+    failed_handle = None
+    if failure_kind == "remaining_auxiliary":
+        failed_handle = graph.runtimes["00000000-0000-4000-8000-000000000002"].processes["auxiliary"]
+        failed_handle.failure = failure
+        with pytest.raises(RuntimeError, match="成员辅助服务关闭失败"):
+            await controller.stop_managed_backend("00000000-0000-4000-8000-000000000001", request_id="partial-stop", group_request=graph.group_request)
+    else:
+        await controller.stop_managed_backend("00000000-0000-4000-8000-000000000001", request_id="full-stop", group_request=graph.group_request)
+    runtime_actions.clear()
+    if failure_kind == "unpublished":
+        failed_handle = ProcessProbe("unpublished", failure=failure)
+        graph.owner.unpublished_runtimes["00000000-0000-4000-8000-000000000001"] = WorkspaceRuntime(service_urls={}, processes={"auxiliary": failed_handle})
+    original_save = registry._save
+    if failure_kind == "cas":
+        def fail_candidate(**kwargs):
+            contracts = kwargs.get("backend_contracts")
+            if contracts is not None and any(contract.owner_id == previous.owner_id and contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",) for contract in contracts):
+                raise failure
+            return original_save(**kwargs)
+        monkeypatch.setattr(registry, "_save", fail_candidate)
+    targets = {identity: registry.resolve(identity) for identity in previous.workspace_ids}
+    leases = {identity: target.runtime_lease_id for identity, target in targets.items()}
+    request = graph.group_request.model_copy(update={"desired_workspace_ids": ["00000000-0000-4000-8000-000000000002"]})
+    try:
+        with pytest.raises(RuntimeError, match=f"offline-{failure_kind}-failure"):
+            await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="offline-failed", group_request=request)
+        assert graph.owner.contract is previous and graph.owner.process is None
+        assert all(registry.resolve(identity) is target and not target.desired_running and target.runtime_lease_id == leases[identity] for identity, target in targets.items())
+        assert GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=registry._storage_path, state_store=registry._state_store).backend_owner("00000000-0000-4000-8000-000000000001").contract == previous
+        if failure_kind == "remaining_auxiliary":
+            assert registry.managed_runtime("00000000-0000-4000-8000-000000000002") is graph.runtimes["00000000-0000-4000-8000-000000000002"] and not failed_handle.closed
+        if failure_kind == "unpublished":
+            assert graph.owner.unpublished_runtimes["00000000-0000-4000-8000-000000000001"].processes["auxiliary"] is failed_handle
+        assert not process_boundary.starts and not runtime_actions
+    finally:
+        if failed_handle is not None:
+            failed_handle.failure = None
+        monkeypatch.setattr(registry, "_save", original_save)
+    result = await controller.remove_managed_workspace("00000000-0000-4000-8000-000000000001", request_id="offline-retry", group_request=request)
+    assert result.status == "stopped" and graph.owner.contract.workspace_ids == ("00000000-0000-4000-8000-000000000002",)
+    assert graph.owner.contract.generation != previous.generation and graph.owner.error is None
+    assert not graph.owner.unpublished_runtimes and not registry.has_runtime("00000000-0000-4000-8000-000000000002") and not process_boundary.starts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("controller_registry_store", [True], indirect=True)
 @pytest.mark.parametrize("native_location", ["/private/group-failure", r"C:\private\group-failure", r"\\server\private\group-failure"])
 @pytest.mark.parametrize("sink_fails", [False, True])
 @pytest.mark.parametrize(("fault", "path"), [
     ("start", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/start"),
+    ("stop", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/stop"),
     ("restart", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/restart-safe"),
     ("restart", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/restart-force"),
     ("offline-exit", "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001"),
@@ -1647,6 +1796,8 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
     sink = OSError(5, "diagnostic sink failed", native_location)
     request = graph.group_request.model_dump(mode="json")
     original_save = registry._save
+    failed_handle = graph.runtimes["00000000-0000-4000-8000-000000000002"].processes["auxiliary"]
+    assert isinstance(failed_handle, ProcessProbe)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=deletion_http_application), base_url="http://gateway") as client:
         if fault in {"start", "offline-exit"}:
             stopped = await client.post("/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/stop", json=request)
@@ -1655,6 +1806,8 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
             process_boundary.backend_outcomes[:] = [primary]
         elif fault == "restart":
             process_boundary.backend_outcomes[:] = [primary, recovery]
+        elif fault == "stop":
+            failed_handle.failure = primary
         else:
             request["desired_workspace_ids"] = ["00000000-0000-4000-8000-000000000002"]
 
@@ -1670,10 +1823,13 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
                 raise sink
 
             monkeypatch.setattr(failures.logger, "error", reject_log)
-        response = await client.request(
-            "DELETE" if fault == "offline-exit" else "POST", path, json=request,
-            headers={"X-Request-ID": "group-request-01"},
-        )
+        try:
+            response = await client.request(
+                "DELETE" if fault == "offline-exit" else "POST", path, json=request,
+                headers={"X-Request-ID": "group-request-01"},
+            )
+        finally:
+            failed_handle.failure = None
         assert response.status_code == 502, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "group-request-01"
         assert "group-failure" not in response.text
@@ -1689,10 +1845,13 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
         else:
             assert "stage=backend_group_action" in graph.owner.error
         if not sink_fails:
-            assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
+            if fault == "stop":
+                assert str(primary) in caplog.text
+            else:
+                assert any(record.exc_info and record.exc_info[1] is primary for record in caplog.records)
             if fault == "restart":
                 assert any(record.exc_info and record.exc_info[1] is recovery for record in caplog.records)
-        else:
+        elif fault != "stop":
             assert any(str(sink) in note for note in primary.__notes__)
         if fault == "restart":
             assert any(str(recovery) in note for note in primary.__notes__)
@@ -1711,6 +1870,7 @@ async def test_group_failure_facts_reach_http_sqlite_and_original_retry(
         assert len(process_boundary.starts) == (2 if fault == "restart" else 1 if fault == "start" else 0)
         assert all(handle.closed for handle in process_boundary.handles)
         # 修复原边界，再从原公开入口重试，不能手工清掉owner.error或写入成功状态。
+        failed_handle.failure = None
         monkeypatch.setattr(registry, "_save", original_save)
         process_boundary.backend_outcomes.clear()
         retry = await client.request("DELETE" if fault == "offline-exit" else "POST", path if fault in {"start", "offline-exit"} else "/api/gateway/workspaces/00000000-0000-4000-8000-000000000001/runtime/start", json=request)
@@ -1977,7 +2137,7 @@ async def test_stopped_publication_online_null_member_runtime_fails_before_commi
     previous = graph.owner.contract
     held_targets = {identity: registry.resolve(identity) for identity in previous.workspace_ids}
     committed = registry._state_store.load_workspace_registry()
-    with pytest.raises(AttributeError, match="workspace_id"):
+    with pytest.raises(AttributeError, match="service_urls"):
         registry.publish_backend_runtime(graph.owner, previous, {identity: None for identity in previous.workspace_ids})
     assert graph.owner.contract is previous and registry._state_store.load_workspace_registry() == committed
     assert all(registry.resolve(identity) is target for identity, target in held_targets.items())

@@ -119,9 +119,6 @@ async function mountTree(port: number, promptValue: string | null = null): Promi
       return apiResponse({ token: "token" });
     }
     if (url.pathname === "/api/v1/workspace/files/roots") return apiResponse({ workspace_uri: ROOT, filesystem_uri: FILESYSTEM, filesystem_label: "/" });
-    if (url.pathname === "/api/gateway/users/current") {
-      return apiResponse({ kind: "guest", user_id: null });
-    }
     if (url.pathname === "/api/v1/workspace") return apiResponse({ workspace_id: OWNER.workspaceId, root_path: ROOT });
     if (url.pathname === "/api/v1/workspace/files/operations") {
       expect(url.searchParams.get("expected_workspace_id")).toBe(OWNER.workspaceId);

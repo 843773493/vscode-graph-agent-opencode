@@ -23,7 +23,7 @@
 
 ## 扩展工具
 
-产品级扩展工具 skill 的唯一源码位于项目根目录 `resources/skills/`。E2E 测试在创建隔离工作区时把这些共享 skill 复制到目标工作区的 `.boxteam/skills/`，因此本模板不再重复维护产品 skill 文件。模板内只保留测试专用 skill；扩展工具不会直接出现在模型的 tools 列表中，模型应先根据用户提到的扩展工具名称调用 `skill_load(name=...)` 加载对应 skill；Skill 正文由系统注入，不应使用 `read_file` 读取内部路径。
+产品级扩展工具 Skill 由各来源 owner 提供：Browser／Debug 说明随 `developer-tools` 插件发布，`gateway-context` 等独立资源按其既有来源发布。不要把产品 Skill 复制进测试工作区；本模板只保留测试专用 Skill。扩展工具不会直接出现在模型的 tools 列表中，模型应先根据用户意图调用 `skill_load(name=...)` 加载对应说明；Skill 正文由系统注入，不应使用 `read_file` 绕过来源 owner。
 
 - 当用户要求调用 `test_tool_2` 时，调用 `skill_load(name="test-tool-2")`。
 - 当用户要求调用 `large_test_output` 或验证大工具输出落盘时，调用 `skill_load(name="large-test-output")`。

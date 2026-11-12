@@ -21,7 +21,6 @@ tests/unit/gateway/
     │   ├── test_control_plane_auth.py、test_device_connections.py
     │   ├── test_private_credentials.py、test_gateway_route_credential_coverage.py
     │   ├── test_request_id.py
-    │   └── test_user_access.py、test_user_profile.py
     ├── 工作区目标
     │   ├── test_registry.py、test_managed_workspaces.py、test_gateway_docker.py
     │   └── test_workspace_*.py
@@ -34,9 +33,8 @@ tests/unit/gateway/
     ├── API 组装
     │   ├── test_lifespan_http_pool.py、test_route_registration_order.py
     │   ├── test_runtime_consumer_health.py
-    │   └── test_user_routes.py
     └── 展示与诊断
-        └── test_diagnostics.py、test_themes.py、test_ui_settings.py、test_view_state.py
+        └── test_diagnostics.py、test_themes.py、test_ui_settings.py
 ```
 
 新增文件优先放到对应 owner 子目录；只有测试确实跨越多个边界时才留在根目录。成组移动测试时要同时迁移测试矩阵 suite 标识及 `out/tests/` 镜像产物路径，并检查相对导入和本地 fixture 查找。

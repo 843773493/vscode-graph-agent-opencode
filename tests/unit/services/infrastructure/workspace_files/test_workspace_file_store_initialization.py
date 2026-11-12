@@ -73,7 +73,7 @@ def test_initialization_failure_closes_connection_without_gc_and_allows_repair(
     missing_asset = case.workspace / "private-sql-assets/missing.sql"
 
     def load_asset(package, resource):
-        if resource == "sql/events.sql":
+        if resource == "migrations/events.sql":
             return missing_asset.read_text(encoding="utf-8")
         return load_sql(package, resource)
 

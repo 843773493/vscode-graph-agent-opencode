@@ -6,7 +6,7 @@ import { useSessionLifecycleActions } from "../../../hooks/session/useSessionLif
 import { useSessionRunActions } from "../../../hooks/session/useSessionRunActions";
 import { createAppStateMirror } from "./appState";
 import {
-  testGatewayUserAccess,
+
   testWorkspaceRequestTargetsFor,
 } from "./gatewayEnvironment";
 import { createSessionCatalogOutboxTestRuntime } from "./sessionCatalogOutbox";
@@ -43,7 +43,6 @@ export function mountSessionRunActions(options: {
       abortCurrentStream: () => undefined,
       invalidateAgentState: () => undefined,
       sessionCatalogOutboxRuntime,
-      gatewayUserAccess: testGatewayUserAccess(),
       selectionIntentRef,
       workspaceRequestTargets: testWorkspaceRequestTargetsFor(gatewayWorkspaceId),
     });

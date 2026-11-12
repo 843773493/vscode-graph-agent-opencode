@@ -44,13 +44,13 @@ describe("errorDisplayMessage 按状态码补可执行提示", () => {
     expect(errorDisplayMessage(error)).not.toContain("没有访问权限");
   });
 
-  test("401 前置可执行的重新登录提示并保留原始异常文本", () => {
+  test("401 提示刷新或核对凭据并保留原始异常文本", () => {
     const text = errorDisplayMessage(
-      httpError(401, "Unauthorized", "user_session_required"),
+      httpError(401, "Unauthorized", "invalid local token"),
     );
-    expect(text).toContain("登录");
+    expect(text).toContain("刷新页面");
     expect(text).toContain("请求失败 401 Unauthorized");
-    expect(text).toContain("user_session_required");
+    expect(text).toContain("invalid local token");
   });
 
   test("非 HttpRequestError 不带状态码，退化为原始异常文本", () => {

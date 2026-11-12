@@ -57,6 +57,7 @@ async def terminal_runtime(
     request: pytest.FixtureRequest,
     terminal_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
+    prepared_developer_tools_package: Path,
 ) -> AsyncIterator[WorkspaceToolRuntime]:
     root = Path(terminal_workspace_root_path)
     startup_mode = getattr(request, "param", None)
@@ -84,6 +85,7 @@ async def terminal_runtime(
         async with terminal_plugin_gateway_for_workspace(
             workspace_root=root, artifacts_dir=run.artifacts_dir,
             gateway_port=port, boxteam_home=home,
+            prepared_package_root=prepared_developer_tools_package,
         ) as plugin:
             monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
             async with workspace_tool_runtime(root) as runtime:
@@ -457,6 +459,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
     request: pytest.FixtureRequest,
     terminal_workspace_root_path: str,
     monkeypatch: pytest.MonkeyPatch,
+    prepared_developer_tools_package: Path,
 ) -> None:
     from app.container import WorkspaceContainerRegistry
     from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
@@ -495,6 +498,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
     monkeypatch.setenv("BOXTEAM_HOME", str(home))
     async with terminal_plugin_gateway_for_workspace(
         workspace_root=root, artifacts_dir=run.artifacts_dir, gateway_port=port, boxteam_home=home,
+        prepared_package_root=prepared_developer_tools_package,
     ) as plugin:
         monkeypatch.setenv("BOXTEAM_GATEWAY_URL", plugin.gateway_url)
         crashed = await asyncio.to_thread(

@@ -6,7 +6,7 @@
 
 ```text
 api/
-├── http.ts                         Gateway 身份屏障、HTTP 请求与 JSON 解包
+├── http.ts                         Gateway 本机凭据、HTTP 请求与 JSON 解包
 ├── workspace.ts                    工作区信息与默认模型设置
 ├── workspaceIdentity.ts            Gateway 工作区目标和身份头
 ├── workspaceFilesystem.ts          工作区文件查询、变更、上传和下载
@@ -20,9 +20,7 @@ api/
 ├── workspace*.test.ts               工作区 API 契约测试
 ├── nodeDebug.test.ts                Node 调试 API 契约测试
 ├── gateway/
-│   ├── sessionConnections.ts       Gateway 会话连接请求
-│   ├── userAccess.ts                Gateway 用户访问请求
-│   └── userViewState.ts             Gateway 用户视图状态请求
+│   └── sessionConnections.ts       Gateway 会话连接请求
 ├── session/
 │   ├── sessions.ts                  会话列表、详情、线程和 fork 请求
 │   ├── sessionCatalog*.ts           会话目录查询与变更请求

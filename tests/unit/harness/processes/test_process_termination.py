@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import psutil
 import pytest
@@ -18,7 +18,9 @@ def process_tree(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     owner = Mock(spec=psutil.Process)
     owner.children.return_value = [child]
     events: list[str] = []
-    owner.children.side_effect = lambda **_kwargs: events.append("capture") or [child]
+    owner.children.side_effect = lambda **kwargs: events.append(
+        "capture-descendants" if kwargs.get("recursive") else "capture-servers"
+    ) or [child]
     process.terminate.side_effect = lambda: events.append("terminate")
     process.kill.side_effect = lambda: events.append("kill")
     process.wait.side_effect = lambda **_kwargs: events.append("launcher-exited")
@@ -38,10 +40,11 @@ def test_windows_stop_waits_for_captured_children_after_launcher_exit(process_tr
     workspace.terminate_process(tree.process, force=force)
 
     assert tree.events == [
-        "capture", *(["child-kill", "kill"] if force else ["terminate"]),
+        "capture-servers", "capture-descendants",
+        *( ["child-kill", "kill"] if force else ["terminate"] ),
         "launcher-exited", "children-exited",
     ]
-    tree.owner.children.assert_called_once_with(recursive=True)
+    assert tree.owner.children.call_args_list == [call(), call(recursive=True)]
     tree.wait.assert_called_once_with([tree.child], timeout=10)
 
 
@@ -59,6 +62,13 @@ def test_explicit_gateway_budget_reaches_launcher_and_captured_server(process_tr
     workspace.terminate_process(tree.process, timeout_seconds=150)
     tree.process.wait.assert_called_once_with(timeout=150)
     tree.wait.assert_called_once_with([tree.child], timeout=150)
+
+
+def test_windows_stop_accepts_child_exit_between_capture_and_cleanup(process_tree) -> None:
+    tree = process_tree
+    tree.child.kill.side_effect = psutil.NoSuchProcess(tree.child.pid)
+    workspace.terminate_process(tree.process)
+    tree.wait.assert_called_once_with([tree.child], timeout=10)
 
 
 def test_windows_stop_still_waits_children_if_launcher_disappears_during_termination(process_tree) -> None:

@@ -39,7 +39,7 @@ export class SessionNavigation extends ViewPane {
   ) { super(options, keybindings, menus, configuration, contexts, views, instantiation, opener, themes, hover); }
   protected override renderBody(container: HTMLElement): void {
     super.renderBody(container);
-    this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage, this.commands);
+    this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage, this.commands, this.configurationService);
   }
   override focus(): void { this.surface?.focus(); }
   runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void): Promise<void> {

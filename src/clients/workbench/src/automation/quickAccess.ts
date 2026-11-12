@@ -11,7 +11,7 @@ import { PickerQuickAccessProvider, type IPickerQuickAccessItem } from '../../up
 import { Extensions, type IQuickAccessRegistry } from '../../upstream/src/vs/platform/quickinput/common/quickAccess.js';
 import { IQuickInputService, type IQuickPick } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { Registry } from '../../upstream/src/vs/platform/registry/common/platform.js';
-import { HttpRequestError, onGatewayUserSessionInvalidated } from '../../../web/src/api/http.js';
+import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { listPersistentTasks, type PersistentTaskDTO } from '../../../web/src/api/persistentTasks.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { taskActionLabels } from '../../../web/src/hooks/persistentTasks/taskActions.js';
@@ -49,9 +49,9 @@ export class AutomationQuickAccess extends PickerQuickAccessProvider<TaskPick> {
       run.invalidated = true;
       access.cancel();
       picker.activeItems = picker.selectedItems = [];
-      picker.items = [{ id: 'task-access-invalidated', label: 'Gateway 或用户身份已改变，请重新查找任务' }];
+      picker.items = [{ id: 'task-access-invalidated', label: 'Gateway 或访问凭据已改变，请重新查找任务' }];
     };
-    lifetime.add(toDisposable(onGatewayUserSessionInvalidated(0, invalidate)));
+    lifetime.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
     lifetime.add(toDisposable(workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidate(); })));
     const scope = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择任务所属工作区' };
     picker.buttons = [...picker.buttons, scope];
@@ -61,11 +61,11 @@ export class AutomationQuickAccess extends PickerQuickAccessProvider<TaskPick> {
       const value = picker.value;
       this.report((async () => {
         let invalidated = false;
-        const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+        const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
         try {
           picker.hide();
           const owners = await chooseSearchOwners(this.quick, run.owners);
-          if (invalidated) throw new Error('用户身份已改变，请重新选择任务所属工作区');
+          if (invalidated) throw new Error('访问凭据已改变，请重新选择任务所属工作区');
           this.assertAccess(run);
           const providerOptions: SearchInvocationOptions = { ...options, searchOwners: owners ?? run.owners };
           this.quick.quickAccess.show(value, { providerOptions });
@@ -118,18 +118,18 @@ export class AutomationQuickAccess extends PickerQuickAccessProvider<TaskPick> {
     }
   }
   private assertAccess(run: TaskRun): void {
-    if (run.invalidated || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error('Gateway 或用户身份已改变，请重新查找任务');
+    if (run.invalidated || workspaceContext.getSnapshot().gatewayId !== run.gatewayId) throw new Error('Gateway 或访问凭据已改变，请重新查找任务');
   }
   private async chooseAction(run: TaskRun, owner: WorkspaceOwner, task: PersistentTaskDTO, name: string): Promise<void> {
     const value = run.picker.value;
     let invalidated = false;
-    const release = onGatewayUserSessionInvalidated(0, () => { invalidated = true; });
+    const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
     try {
       this.assertAccess(run);
       const selected = await this.quick.pick(automationActions(task).map(action => ({ action, label: taskActionLabels[action],
         description: action === 'checkOnly' ? '实际执行条件脚本或判断模型；不执行后续工作动作' : undefined })),
         { title: `任务动作 · ${name}`, placeHolder: `${owner.gatewayId} · ${owner.workspaceId} · revision ${task.revision}` });
-      if (invalidated) throw new Error('用户身份已改变，请重新查找任务');
+      if (invalidated) throw new Error('访问凭据已改变，请重新查找任务');
       this.assertAccess(run);
       if (!selected) {
         const providerOptions: SearchInvocationOptions = { ...run.options, searchOwners: run.owners };

@@ -17,8 +17,8 @@
 # 规范
 
 - 一个子目录对应一个稳定 Skill 名称，目录名必须与 frontmatter 的 `name` 一致。
-- 每个 Skill 必须包含 `SKILL.md`，frontmatter 必须声明 `name`、`description`；本项目额外使用 `allowed-tools` 映射隐藏扩展工具，因此不能删除、改名为 `allowed_tools` 或写入工具正文。
-- Skill 只能描述已经由 Workspace 配置启用的工具；工具调用必须遵守固定入口和参数约定。
+- 每个 Skill 必须包含 `SKILL.md`，frontmatter 必须声明 `name`、`description`；`allowed-tools` 仅作说明，不注册或授权工具。插件工具关联由其 manifest 声明。
+- Skill 只能描述正式支持的工具；是否可执行由原工具策略决定，读取说明不启用工具。
 - 隐藏扩展工具的参数契约必须使用 JSON Schema 描述对象：每个目标工具声明 `tool_name` 和 `arguments_schema`；不要用 Markdown 表格作为规范格式。
 - `invoke_extension_tool` 的固定外层 schema 已由模型工具定义提供，Skill 不重复展开；Skill 只补充目标工具的 `arguments_schema` 和语义约束，不添加冗余的完整调用示例。
 - 默认启用列表由 `configs/gateway_inline.jsonc` 的 Workspace runtime 配置控制，不在 Skill 文件中自行声明启用状态。

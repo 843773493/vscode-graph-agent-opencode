@@ -275,13 +275,13 @@ try {
   const expire = async route => {
     if (searchRequest(route.request())?.query !== 'identityfail') { await route.continue(); return; }
     await route.fulfill({ status: 401, contentType: 'application/json', headers: { 'X-Request-ID': 'req-injected-identity' },
-      body: JSON.stringify({ request_id: 'req-injected-identity', detail: { code: 'user_session_required' } }) });
+      body: JSON.stringify({ request_id: 'req-injected-identity', detail: '缺少 Gateway 访问凭据' }) });
   };
   const identityPattern = '**/api/gateway/search';
   await page.route(identityPattern, expire);
   try {
     await input.fill('identityfail');
-    await expect(quick).toContainText('Gateway 或用户身份已改变，请重新打开快速访问');
+    await expect(quick).toContainText('Gateway 或访问凭据已改变，请重新打开快速访问');
     await inactive();
     const before = result.requests.length;
     await input.fill('branchscope');

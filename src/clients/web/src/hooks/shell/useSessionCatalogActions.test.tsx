@@ -612,7 +612,7 @@ describe("托管工作区删除的完整组确认", () => {
     });
     await mounted.mount();
     await act(async () => { mounted.hook().removeWorkspace(workspaceKey("ws-a"), "A"); });
-    expect(mounted.removalRequests.map(([, , force]) => force)).toEqual([undefined, true]);
+    expect(mounted.removalRequests.map(([, force]) => force)).toEqual([undefined, true]);
     expect(mounted.statuses).toEqual([]);
   });
   test("阻塞回执重复成员时拒绝 force 确认", async () => {

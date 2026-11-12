@@ -17,6 +17,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
+from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
@@ -24,7 +25,6 @@ from tests.support.model_stream.config import ModelStreamReplay, model_stream_re
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -32,9 +32,9 @@ from tests.support.session_navigation.http_operations import submit_navigation_o
 
 
 @pytest.fixture(scope="module")
-def generation_replay(integration_workspace_root_path: str) -> Iterator[ModelStreamReplay]:
-    output = Path(integration_workspace_root_path).parent
-    with model_stream_replay(output, runtime_root=output / "runtime", business_assertion="session-generation") as replay:
+def generation_replay(request: pytest.FixtureRequest) -> Iterator[ModelStreamReplay]:
+    context = TestRunContext.from_test_file(Path(request.node.path))
+    with model_stream_replay(context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid), business_assertion="session-generation") as replay:
         yield replay
 
 
@@ -87,7 +87,6 @@ async def generation_client(
         headers=LOCAL_TOKEN_HEADERS,
         timeout=30,
     ) as client:
-        await acquire_gateway_guest(client)
         workspaces = await client.get("/api/gateway/workspaces")
         assert workspaces.status_code == 200, workspaces.text
         health = await client.get("/api/gateway/health")

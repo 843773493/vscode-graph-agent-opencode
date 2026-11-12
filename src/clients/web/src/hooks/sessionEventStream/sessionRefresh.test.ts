@@ -29,7 +29,6 @@ for (const hasMore of [true, false]) {
       urls.push(url);
       const path = new URL(url, "http://workspace").pathname;
       const data = path === "/api/gateway/auth/local-credential" ? { token: "page-test-token" }
-        : path === "/api/gateway/users/current" ? { kind: "guest", user_id: null }
           : path === "/api/v1/sessions" ? { items: page, next_cursor: hasMore ? "page-2" : null, has_more: hasMore }
             : undefined;
       if (data === undefined) throw new Error(`未声明请求: ${url}`);
@@ -76,7 +75,6 @@ for (const currentWorkspace of ["active", "other", "implicit"] as const) {
         });
       }
       const data = path === "/api/gateway/auth/local-credential" ? { token: "owner-test-token" }
-        : path === "/api/gateway/users/current" ? { kind: "guest", user_id: null }
           : undefined;
       if (data === undefined) throw new Error(`未声明请求: ${url}`);
       return Response.json({ code: 0, message: "ok", data, request_id: "owner-request" });

@@ -113,7 +113,6 @@ export async function streamSessionMessageEvents(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/message-stream?${params.toString()}`,
       {
         signal: options.signal,
-        skipGatewayUserSession: true,
         headers: {
           accept: "text/event-stream",
           ...workspaceHeader(options.workspaceId),

@@ -671,8 +671,8 @@
 
 ### 2026-11-03：无浏览器工具与脚本资源搜索（16.12 部分）
 
-- 新增只读 `discover_workspaces`／`search_resources` 扩展工具并登记原内置配置；工具及 Python 客户端复用既有 Gateway transport、认证、领域请求、独立续点及联邦事件。机器入口与普通入口共用唯一 handler／编码／调度，原浏览器访问租约不变，机器入口不创建游客。SSE 由直接依赖 httpx-sse 解码；取消、总期限及显式关闭释放同一响应。
-- 原551项单元回归通过；最终客户端及工具定向407项通过（有重叠，不相加），新增拒绝断言核status／code／原因。真实双Backend＋Gateway脚本验收覆盖只A、A+B、all含停止C、工作区发现、Gateway重启后只继续B，后端日志按request_id证明实际请求分别为无正文、A、A+B、A+B、B；无Cookie，普通入口无租约与机器入口错误凭据均401。
+- 新增只读 `discover_workspaces`／`search_resources` 扩展工具并登记原内置配置；工具及 Python 客户端复用既有 Gateway transport、认证、领域请求、独立续点及联邦事件。机器入口与普通入口共用唯一 handler／编码／调度，浏览器与机器入口均使用既有凭据，不创建游客或用户访问租约。SSE 由直接依赖 httpx-sse 解码；取消、总期限及显式关闭释放同一响应。
+- 原551项单元回归通过；最终客户端及工具定向407项通过（有重叠，不相加），新增拒绝断言核status／code／原因。真实双Backend＋Gateway脚本验收覆盖只A、A+B、all含停止C、工作区发现、Gateway重启后只继续B，后端日志按request_id证明实际请求分别为无正文、A、A+B、A+B、B；当时的历史验证为无Cookie、普通入口无租约与机器入口错误凭据均401；当前合同已改为普通入口同样接受本机凭据，旧租约体系退役。
 - 真实产品消息入口经统一model_stream三轮执行发现、资源搜索及最终回答，job完成，两个扩展结果进入实际模型wire；范围绑定调用owner、只命中目标Session，两个Gateway请求ID独立且搜索事件沿原ID。定向1 passed／60.02秒；脚本原件为 `out/tests/integration/gateway/test_resource_search_tools/runs/run-a58ef7e308b0/`，模型原件为同目录 `runs/run-8600e4026484/`。关键Session由产品API生成，不手工准备执行状态。
 - 实网测试揭露容器未将启动Gateway URL传给原上下文transport，已沿原装配显式传入；另一失败为日志解析未接受GET查询参数，已用原日志证明并修正，保留两个不同请求ID和精确搜索ID断言。失败及通过原件均保留。Ruff、11份核心／测试Pyright、生成一致性、OpenAPI真实结构及OpenSpec strict通过；无前端／公开DTO字段变化，不重复Web构建或Electron验收。准确命令、源码指纹、日志和退出码见 `out/tests/temp/resource_search_20261103/artifacts/`。
 - 旧 `search_context` 的有效上下文／本地来源、inventory及精确单资源读取仍保留原语义；跨目标gather和全局offset迁移尚未完成，代码附具名TODO。16.12／16.15及完整Quick Access保持未勾选，本批不以普通canonical消息搜索代替上下文验收。
@@ -1032,8 +1032,15 @@
 - Provider／Opener 合同37项244断言、原来源回归56项416断言及172份实际转换源码类型检查通过。真实Gateway／Backend／Workbench／Chromium 1 passed／95.73秒，覆盖Gateway与Workspace配置URI、侧开、只读及原CAS冲突／未知保存零重放；pageErrors为空。最终正式79扩展构建通过，远端解析另经真实A/B parser入口核对。
 - 最小复审保留原parser、来源目录、命令与writer，无第二配置映射、正文缓存或语法实现。真实跨机／Windows／Electron配置URI页面未验，2.2与11.2保持未完成；准确指纹、命令及原件见 `out/tests/temp/2026/11/11/config_uri_opener/artifacts/verification.json` 和 `web-build-final-01/`。
 
+
 ### 2026-11-12：Thread 附件快速访问（11.2 部分）
 
 - 原附件 catalog 以单 SQL 返回精确 SessionThread 的原件元数据与有界续页；不扫描历史正文、不读取或重建原件。`resource ` 仅在发起 Thread 的工作区入选时发现附件，显式续页，关闭与身份失效取消读取；接受冻结原附件引用，复用同一 Thread 附件预览及 MIME，展示态随原 ThreadInput 复制与恢复。
 - 43项客户端合同／321条断言、6项后端入口与 catalog 检查、172份实际转换源码类型检查和协议生成一致性通过。真实 Gateway／Backend／Workbench／Chromium 1 passed／81.83秒，产品消息入口生成101个附件，核100+1分页、owner／request_id、浏览筛选取消与分页零原件读取、文本及PDF接受、侧开和刷新恢复；正式79扩展构建通过。
 - 后置Python媒体页断言按精确file_id所在页严格推导1或2次读取，并核第二页after等于原next_after；两分支使用保存原件补验，未为纯断言修正重复长页面。精确候选后端通过，候选客户端3项受HEAD既有认证fixture错配影响、候选生成检查受HEAD既有未登记SSE DTO阻断；当前共享树对应检查已通过，不将他人的修复夹入本片。未验Windows／真实远端／Electron，11.2保持未完成；命令、源码指纹、原输出与适用边界见 `out/tests/temp/2026/11/11/attachment_resource_quick_access/artifacts/verification.json` 和 `page/commands-and-evidence.txt`。
+
+### 2026-11-12：工具结果元数据快速访问（11.2 部分）
+
+精确 Thread 的资源候选沿原历史 view／tool_calls 索引返回工具名称、canonical item、Turn 和调用身份；浏览不读取 canonical／完整结果正文，续页绑定原 view／revision，接受通过原 around 入口核验并补载精确 ToolRow。附件与工具结果共用原单次续页处理，消息与工具导航共用一个已核验结果状态；不伪造消息区间或 URI，不新增目录索引、正文缓存或执行入口。
+
+真实产品执行生成历史的后端检查 3 passed；导航与附件／变更合同 87 passed／391 断言，最终导航状态简化后补验 56 passed／250 断言。172 份实际 sourceTransform 源码类型检查、协议生成一致性、公开 OpenAPI 导出和新增 proto 格式／breaking 检查通过；完整 Workbench 页面、Windows、真实远端及 Electron 工具结果入口尚未验收，11.2 保持未勾选。原始输出位于 `out/tests/temp/2026/11/12/tool_result_resource_quick_access/artifacts/`。本次按用户要求在工作区统一提交／同步边界收口，完整页面验收仍待后续继续。

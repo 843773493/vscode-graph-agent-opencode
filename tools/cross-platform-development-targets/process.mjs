@@ -1,12 +1,23 @@
-export function decodeOutput(value) {
-  return value ? new TextDecoder().decode(value).trim() : "";
-}
+import { once } from "node:events";
+import { Readable } from "node:stream";
+import { text } from "node:stream/consumers";
+import { pipeline } from "node:stream/promises";
+import crossSpawn from "cross-spawn";
 
-export function commandForCurrentPlatform(command, platform = process.platform) {
-  if (platform !== "win32") return command;
-  const executable = command[0];
-  const name = executable.slice(Math.max(executable.lastIndexOf("/"), executable.lastIndexOf("\\")) + 1);
-  return name.includes(".") ? command : [`${executable}.exe`, ...command.slice(1)];
+function checkedResult(label, { status, signal, stdout, stderr }, inputError) {
+  const standardOutput = stdout?.toString("utf8").trim() ?? "";
+  const errorOutput = stderr?.toString("utf8").trim() ?? "";
+  if (status !== 0 || signal) {
+    const termination = signal ? `exit=${status}, signal=${signal}` : `exit=${status}`;
+    throw new Error(
+      `${label}失败(${termination})` +
+        `${standardOutput ? `\nstdout:\n${standardOutput}` : ""}` +
+        `${errorOutput ? `\nstderr:\n${errorOutput}` : ""}`,
+      inputError ? { cause: inputError } : undefined,
+    );
+  }
+  if (inputError) throw new Error(`${label}输入失败: ${inputError.message}`, { cause: inputError });
+  return { stdout: standardOutput, stderr: errorOutput, exitCode: status };
 }
 
 export function runChecked(command, {
@@ -18,34 +29,18 @@ export function runChecked(command, {
 } = {}) {
   let result;
   try {
-    result = Bun.spawnSync(commandForCurrentPlatform(command), {
+    result = crossSpawn.sync(command[0], command.slice(1), {
       cwd,
       env: environment,
-      stdout,
-      stderr,
+      stdio: ["ignore", stdout, stderr],
+      maxBuffer: Infinity,
     });
+    if (result.error) throw result.error;
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new Error(`${label}启动失败: ${detail}`, { cause });
   }
-  const signaled = result.signalCode !== null && result.signalCode !== undefined;
-  if (result.exitCode !== 0 || signaled) {
-    const errorOutput = decodeOutput(result.stderr);
-    const standardOutput = decodeOutput(result.stdout);
-    const termination = signaled
-      ? `exit=${result.exitCode}, signal=${result.signalCode}`
-      : `exit=${result.exitCode}`;
-    throw new Error(
-      `${label}失败(${termination})` +
-        `${standardOutput ? `\nstdout:\n${standardOutput}` : ""}` +
-        `${errorOutput ? `\nstderr:\n${errorOutput}` : ""}`,
-    );
-  }
-  return {
-    stdout: decodeOutput(result.stdout),
-    stderr: decodeOutput(result.stderr),
-    exitCode: result.exitCode,
-  };
+  return checkedResult(label, result);
 }
 
 export async function runCheckedWithInput(command, input, {
@@ -53,37 +48,28 @@ export async function runCheckedWithInput(command, input, {
   environment = process.env,
   label = command[0],
 } = {}) {
-  let child;
+  let result;
   try {
-    child = Bun.spawn(commandForCurrentPlatform(command), {
+    const child = crossSpawn(command[0], command.slice(1), {
       cwd,
       env: environment,
-      stdin: Buffer.from(input, "utf8"),
-      stdout: "pipe",
-      stderr: "pipe",
+      stdio: "pipe",
     });
+    result = await Promise.all([
+      once(child, "close"),
+      text(child.stdout),
+      text(child.stderr),
+      // 先收齐退出码和诊断；提前关闭stdin时，写入错误不能覆盖命令的真实失败。
+      pipeline(Readable.from([Buffer.from(input, "utf8")]), child.stdin)
+        .then(() => undefined, (error) => error),
+    ]);
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new Error(`${label}启动失败: ${detail}`, { cause });
   }
 
-  const [exitCode, standardOutput, errorOutput] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  const signaled = child.signalCode !== null && child.signalCode !== undefined;
-  if (exitCode !== 0 || signaled) {
-    const termination = signaled
-      ? `exit=${exitCode}, signal=${child.signalCode}`
-      : `exit=${exitCode}`;
-    throw new Error(
-      `${label}失败(${termination})` +
-        `${standardOutput.trim() ? `\nstdout:\n${standardOutput.trim()}` : ""}` +
-        `${errorOutput.trim() ? `\nstderr:\n${errorOutput.trim()}` : ""}`,
-    );
-  }
-  return { exitCode, stdout: standardOutput.trim(), stderr: errorOutput.trim() };
+  const [[status, signal], stdout, stderr, inputError] = result;
+  return checkedResult(label, { status, signal, stdout, stderr }, inputError);
 }
 
 export function shellQuote(value) {

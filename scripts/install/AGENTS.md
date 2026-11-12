@@ -2,7 +2,7 @@
 
 `scripts/install/` 存放本地发布包安装和运行时安装后处理入口。
 
-安装命令测试区分“目标发布平台”和“运行主机路径”：前者决定平台包名及npm/npm.cmd，项目根、tarball和prefix的真实路径仍遵循宿主`node:path`规则。纯命令测试使用正式输出镜像路径下的中文、空格路径作为输入，不创建安装目录；通过注入spawn结果检查命令，不执行安装或打包。`windows-npm-execution.test.mjs`验证安装和安装后核验共用`cross-spawn`处理`.cmd`及参数转义；在Windows宿主上还会执行隔离的`npm.cmd`替身，实际验证命令解释器链路，不安装真实包。
+安装命令测试区分“目标发布平台”和“运行主机路径”：前者决定平台包名，项目根、tarball和prefix的真实路径仍遵循宿主`node:path`规则。所有平台使用`npm`命令，Windows扩展名解析与参数转义统一交给`cross-spawn`。纯命令测试使用正式输出镜像路径下的中文、空格路径作为输入，不创建安装目录；通过注入spawn结果检查命令，不执行安装或打包。`windows-npm-execution.test.mjs`验证安装和安装后核验共用`cross-spawn`处理`.cmd`及参数转义；在Windows宿主上还会执行隔离的`npm.cmd`替身，实际验证命令解释器链路，不安装真实包。
 
 ```text
 安装入口

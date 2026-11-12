@@ -21,7 +21,7 @@ mcp/
 # 不可修改内容
 
 - 不放生产 MCP 实现或测试用例。
-- 不把真实 MCP stdio server 移入本目录；其入口位于 `../e2e_control/mcp_stdio_server.py`。
+- 不在本目录创建替代 MCP Server；外部 MCP 子进程只由 Gateway 托管的正式插件桥接。
 - 不复制 MCP wire protocol 或 `schema_server.py` 的 handler。
 
 # 规范

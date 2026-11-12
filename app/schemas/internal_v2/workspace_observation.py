@@ -11,7 +11,7 @@ class WorkspaceObservationSubscription(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subscription_id: str = Field(min_length=1)
-    kind: Literal["session_activity", "session_trace", "workspace_files"]
+    kind: Literal["session_activity", "session_trace", "workspace_files", "session_navigation"]
     session_id: CanonicalSessionId | None = None
     thread_id: CanonicalThreadId | None = None
     activity_after: int | None = Field(default=None, ge=0)

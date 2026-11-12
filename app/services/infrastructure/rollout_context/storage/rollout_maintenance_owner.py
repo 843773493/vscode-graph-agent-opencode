@@ -268,7 +268,7 @@ class RolloutMaintenanceOwner(
                         migrate_assembly_content(connection)
                     if (current_version, to_version) == (22, 23):
                         migrate_members(connection)
-                        execute_atomic_schema_sql(connection, load_sql(__package__, "sql/view_membership_022_023_finish.sql"))
+                        execute_atomic_schema_sql(connection, load_sql(__package__, "migrations/view_membership_022_023_finish.sql"))
                     meta_result = connection.execute(
                         "UPDATE database_meta SET schema_version = ?, updated_at = ? "
                         "WHERE singleton_id = 1",

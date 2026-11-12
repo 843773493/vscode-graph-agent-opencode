@@ -118,7 +118,6 @@ class WorkspaceObservationTransport {
         const response = await requestGatewayResponse(this.port, STREAM_PATH, {
           method: "POST",
           signal: controller.signal,
-          skipGatewayUserSession: true,
           headers: { ...Object.fromEntries(this.targetHeaders), accept: "text/event-stream", "Content-Type": "application/json" },
           body: JSON.stringify({ subscriptions: subscribers.map((subscriber) => ({
             ...subscriber.subscription(), subscription_id: subscriber.id,

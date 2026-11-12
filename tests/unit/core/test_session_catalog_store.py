@@ -3879,3 +3879,43 @@ def test_transaction_closes_store_when_rollback_fails(
     finally:
         if close_fails:
             connection.close()
+
+
+async def test_catalog_changes_only_publish_commits_and_release_subscription(store: SessionCatalogStore) -> None:
+    """读、回滚不唤醒；真实线程中的提交可到达订阅，关闭后释放监听。"""
+    changes = store.changes()
+    await anext(changes)
+    pending = asyncio.create_task(anext(changes))
+    try:
+        await asyncio.sleep(0)
+        with store.read_transaction() as connection:
+            connection.execute("SELECT 1").fetchone()
+        with pytest.raises(ValueError, match="撤销"), store.write_transaction():
+            raise ValueError("撤销")
+        done, _ = await asyncio.wait({pending}, timeout=0.02)
+        assert not done
+
+        def commit() -> None:
+            with store.write_transaction() as connection:
+                connection.execute("SELECT 1").fetchone()
+        await asyncio.to_thread(commit)
+        await asyncio.wait_for(pending, timeout=1)
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await changes.aclose()
+    assert not store._commit_listeners
+
+
+async def test_catalog_changes_subscribe_before_first_snapshot_and_coalesce(store: SessionCatalogStore) -> None:
+    changes = store.changes()
+    try:
+        await anext(changes)
+        for _ in range(3):
+            with store.write_transaction():
+                pass
+        await asyncio.sleep(0)
+        await asyncio.wait_for(anext(changes), timeout=1)
+        assert store.current_generation() == 3
+    finally:
+        await changes.aclose()

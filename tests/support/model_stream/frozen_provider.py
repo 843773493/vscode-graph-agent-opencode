@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from contextvars import copy_context
 from uuid import UUID
 
@@ -33,80 +31,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
-from tests.support.custom_tool_test_workspace import (
-    FixtureStageObserver,
-    timed_fixture_stage,
-)
-
-
-@contextmanager
-def _observe_saver_reads(
-    saver: RolloutCheckpointSaver,
-    observer: FixtureStageObserver | None,
-    *,
-    session_id: str,
-    thread_id: str,
-    turn_id: str | None,
-) -> Iterator[None]:
-    if observer is None:
-        yield
-        return
-
-    method_names = (
-        "find_sealed_context_for_provider_creation",
-        "load_context_source_control_states",
-        "load_context_source_rebuild_state",
-        "get_context_plan_registration",
-    )
-    instance_attributes = vars(saver)
-    patched: list[tuple[str, object, bool]] = []
-    try:
-        for method_name in method_names:
-            original = getattr(saver, method_name)
-            had_instance_override = method_name in instance_attributes
-            previous_instance_value = instance_attributes.get(method_name)
-
-            def observe(
-                *args: object,
-                _name: str = method_name,
-                _original: Callable[..., object] = original,
-                **kwargs: object,
-            ) -> object:
-                caller = sys._getframe(1)
-                with timed_fixture_stage(
-                    observer,
-                    f"provider.read.{_name}",
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    callsite_module=caller.f_globals.get("__name__", ""),
-                    callsite_function=caller.f_code.co_name,
-                ) as result_fields:
-                    result = _original(*args, **kwargs)
-                    if result_fields is not None:
-                        if _name == "find_sealed_context_for_provider_creation":
-                            result_fields["hit"] = result is not None
-                        elif _name == "load_context_source_control_states":
-                            result_fields["returned_rows"] = len(result) if isinstance(result, tuple) else 0
-                        elif _name == "load_context_source_rebuild_state":
-                            states = getattr(result, "states", ())
-                            result_fields["pending_present"] = result is not None
-                            result_fields["returned_rows"] = len(states) if isinstance(states, tuple) else 0
-                        else:
-                            plan_state = getattr(result, "plan_state", None)
-                            result_fields["hit"] = result is not None
-                            result_fields["plan_state"] = plan_state if isinstance(plan_state, str) else None
-                    return result
-
-            setattr(saver, method_name, observe)
-            patched.append((method_name, previous_instance_value, had_instance_override))
-        yield
-    finally:
-        for method_name, previous_instance_value, had_instance_override in reversed(patched):
-            if had_instance_override:
-                setattr(saver, method_name, previous_instance_value)
-            else:
-                delattr(saver, method_name)
+from tests.harness.performance.observers import observe_calls
+from tests.harness.performance.record import stage
 
 
 def frozen_provider_wire(model: str, target_format: str) -> dict[str, object]:
@@ -128,9 +54,7 @@ def frozen_provider_wire(model: str, target_format: str) -> dict[str, object]:
     }
 
 
-def create_frozen_provider_activation(
-    observer: FixtureStageObserver | None = None,
-) -> Callable[..., dict[str, object]]:
+def create_frozen_provider_activation() -> Callable[..., dict[str, object]]:
     """在真实 admission 下 freeze_execution→capture→commit 的参数工厂。
 
     admission 的归属和状态仍由 execution owner 管理。
@@ -147,9 +71,7 @@ def create_frozen_provider_activation(
         policy: ResourceActivationPolicySnapshot | None = None,
     ) -> dict[str, object]:
         admission = require_current_execution_admission()
-        with timed_fixture_stage(
-            observer,
-            "provider.activation",
+        with stage("provider.activation",
             session_id=admission.session_id,
             thread_id=admission.thread_id,
             turn_id=admission.turn_id,
@@ -166,9 +88,7 @@ def create_frozen_provider_activation(
                 UUID(sealed.model_call_id)
                 if model_call_id is not None and model_call_id != sealed.model_call_id:
                     raise ValueError("测试 sealed retry 必须复用原 model-call UUID")
-                with timed_fixture_stage(
-                    observer,
-                    "provider.activation.load_sealed_resource_activation",
+                with stage("provider.activation.load_sealed_resource_activation",
                     session_id=admission.session_id,
                     thread_id=admission.thread_id,
                     turn_id=admission.turn_id,
@@ -211,9 +131,7 @@ def create_frozen_provider_activation(
             # 同步/异步消费者共用真实 async Coordinator；复制原 scope，收敛线程并透传异常。
             context = copy_context()
             with (
-                timed_fixture_stage(
-                    observer,
-                    "provider.activation.freeze_capture_commit",
+                stage("provider.activation.freeze_capture_commit",
                     session_id=admission.session_id,
                     thread_id=admission.thread_id,
                     turn_id=admission.turn_id,
@@ -229,7 +147,6 @@ def create_frozen_provider_activation(
 def create_frozen_provider_prepare(
     wire: Callable[[str, str], dict[str, object]],
     activation: Callable[..., dict[str, object]],
-    observer: FixtureStageObserver | None = None,
 ) -> Callable[..., ContextAssemblySnapshot]:
     """要求当前真实 admission；key 就是 plan_creation_idempotency_key。
 
@@ -242,31 +159,23 @@ def create_frozen_provider_prepare(
         admission = require_current_execution_admission()
         session, thread = admission.session_id, admission.thread_id
         with (
-            _observe_saver_reads(
-                saver,
-                observer,
-                session_id=session,
-                thread_id=thread,
-                turn_id=admission.turn_id,
-            ),
-            timed_fixture_stage(
-                observer,
-                "provider.prepare_total",
+            observe_calls(saver, ("find_sealed_context_for_provider_creation", "load_context_source_control_states", "load_context_source_rebuild_state", "get_context_plan_registration")),
+            stage("provider.prepare_total",
                 session_id=session,
                 thread_id=thread,
                 turn_id=admission.turn_id,
                 execution_id=admission.execution_id,
                 plan_key=key,
-            ),
+            ) as preparation,
         ):
             registered = saver.find_sealed_context_for_provider_creation(
                 session, thread, plan_creation_idempotency_key=key,
             )
             snapshot = None if registered is None else registered.sealed_snapshot
+            preparation["plan_registration_present"] = registered is not None
+            preparation["sealed_snapshot_reused"] = snapshot is not None
             if snapshot is None:
-                with timed_fixture_stage(
-                    observer,
-                    "provider.context_source_manager",
+                with stage("provider.context_source_manager",
                     session_id=session,
                     thread_id=thread,
                     turn_id=admission.turn_id,
@@ -280,9 +189,7 @@ def create_frozen_provider_prepare(
                     saver,
                     plan_creation_idempotency_key=key,
                 )
-                with timed_fixture_stage(
-                    observer,
-                    "provider.prepare_context_for_provider",
+                with stage("provider.prepare_context_for_provider",
                     session_id=session,
                     thread_id=thread,
                     turn_id=admission.turn_id,
@@ -310,9 +217,7 @@ def create_frozen_provider_prepare(
                 )
                 if dispatched is None or dispatched["assembly_id"] != snapshot.assembly_id:
                     raise AssertionError("历史 fixture 缺少同一 assembly 的派发 handle")
-            with timed_fixture_stage(
-                observer,
-                "provider.register_model_call",
+            with stage("provider.register_model_call",
                 session_id=session,
                 thread_id=thread,
                 turn_id=admission.turn_id,

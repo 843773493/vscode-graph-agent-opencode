@@ -58,6 +58,11 @@ class WorkspacePluginBindings:
         if {key: self._signature(target) for key, target in self._targets().items()} != self._signatures:
             self._changed.set()
 
+    def _set_state(self, state: WorkspacePluginConfigurationDTO) -> None:
+        if self.states.get(state.workspace_id) != state:
+            self.states[state.workspace_id] = state
+            self.runtime._publish()
+
     def request_refresh(self, workspace_id: str) -> WorkspacePluginConfigurationDTO:
         target = self.registry.resolve((self.registry.gateway_id, workspace_id))
         if target.connection_kind != "local":
@@ -65,8 +70,10 @@ class WorkspacePluginBindings:
         self._pending.add(workspace_id)
         self._changed.set()
         previous = self.snapshots.get(workspace_id)
-        return WorkspacePluginConfigurationDTO(workspace_id=workspace_id, state="waiting",
+        state = WorkspacePluginConfigurationDTO(workspace_id=workspace_id, state="waiting",
             revision=previous.revision if previous else None)
+        self._set_state(state)
+        return state
 
     async def refresh_startup(self, workspace_id: str, backend_generation: str) -> WorkspacePluginConfigurationDTO:
         """原 Backend 开放内部入口后交接；不等待它尚未就绪的 MCP 业务。"""
@@ -144,8 +151,8 @@ class WorkspacePluginBindings:
                 try:
                     await self._initialize_creation(target, WorkspacePluginCreation.model_validate(target.plugin_creation))
                 except (httpx.HTTPError, LookupError, ValueError, RuntimeError) as error:
-                    self.states[workspace_id] = WorkspacePluginConfigurationDTO(
-                        workspace_id=workspace_id, state="failed", error=str(error))
+                    self._set_state(WorkspacePluginConfigurationDTO(
+                        workspace_id=workspace_id, state="failed", error=str(error)))
                     failed_initializations.add(workspace_id)
                     logger.exception("新建工作区插件初始化失败: workspace_id=%s", workspace_id)
             async with self.registry.backend_topology_lock:
@@ -158,7 +165,8 @@ class WorkspacePluginBindings:
                     if self._stop_failure(workspace_id, revision="workspace-removed"):
                         continue
                     self.snapshots.pop(workspace_id, None)
-                    self.states.pop(workspace_id, None)
+                    if self.states.pop(workspace_id, None) is not None:
+                        self.runtime._publish()
                     self._pending.discard(workspace_id)
                 signatures = {key: self._signature(target) for key, target in targets.items()}
                 for workspace_id, signature in signatures.items():
@@ -186,22 +194,22 @@ class WorkspacePluginBindings:
             await self.runtime.apply_scope([], revision=revision or "workspace-stopped", workspace_id=workspace_id)
             if self._stop_failure(workspace_id, revision=revision):
                 return
-            self.states[workspace_id] = WorkspacePluginConfigurationDTO(
-                workspace_id=workspace_id, state="stopped", revision=revision)
+            self._set_state(WorkspacePluginConfigurationDTO(
+                workspace_id=workspace_id, state="stopped", revision=revision))
             return
         try:
             snapshot = await self.read(target, startup_generation=startup_generation)
         except (httpx.RequestError, LookupError) as error:
             # owner 暂不可达不代表停用；保留已接管实例，等原提交／显式交接。
-            self.states[workspace_id] = WorkspacePluginConfigurationDTO(
-                workspace_id=workspace_id, state="waiting", revision=revision, error=str(error))
+            self._set_state(WorkspacePluginConfigurationDTO(
+                workspace_id=workspace_id, state="waiting", revision=revision, error=str(error)))
             logger.warning("Workspace 插件等待配置交接: workspace_id=%s error=%s", workspace_id, error)
             if startup_generation is not None:
                 raise
             return
         except (httpx.HTTPStatusError, ValueError, RuntimeError) as error:
-            self.states[workspace_id] = WorkspacePluginConfigurationDTO(
-                workspace_id=workspace_id, state="failed", revision=revision, error=str(error))
+            self._set_state(WorkspacePluginConfigurationDTO(
+                workspace_id=workspace_id, state="failed", revision=revision, error=str(error)))
             logger.exception("Workspace 插件配置交接失败: workspace_id=%s", workspace_id)
             if startup_generation is not None:
                 raise
@@ -212,8 +220,8 @@ class WorkspacePluginBindings:
             await self.runtime.apply_scope(snapshot.bindings, revision=snapshot.revision, workspace_id=workspace_id,
                                            parameters=snapshot.parameters)
         except (ValueError, RuntimeError) as error:
-            self.states[workspace_id] = WorkspacePluginConfigurationDTO(
-                workspace_id=workspace_id, state="failed", revision=snapshot.revision, error=str(error))
+            self._set_state(WorkspacePluginConfigurationDTO(
+                workspace_id=workspace_id, state="failed", revision=snapshot.revision, error=str(error)))
             logger.exception("Workspace 插件绑定应用失败: workspace_id=%s", workspace_id)
             if startup_generation is not None:
                 raise
@@ -237,19 +245,19 @@ class WorkspacePluginBindings:
                     )
             if failures:
                 error = "; ".join(failures)
-                self.states[workspace_id] = WorkspacePluginConfigurationDTO(
-                    workspace_id=workspace_id, state="failed", revision=snapshot.revision, error=error)
+                self._set_state(WorkspacePluginConfigurationDTO(
+                    workspace_id=workspace_id, state="failed", revision=snapshot.revision, error=error))
                 logger.error("Workspace 插件启动交接未就绪: workspace_id=%s error=%s", workspace_id, error)
                 return
-        self.states[workspace_id] = WorkspacePluginConfigurationDTO(
-            workspace_id=workspace_id, state="ready", revision=snapshot.revision)
+        self._set_state(WorkspacePluginConfigurationDTO(
+            workspace_id=workspace_id, state="ready", revision=snapshot.revision))
 
     def _stop_failure(self, workspace_id: str, *, revision: str | None) -> bool:
         errors = [slot.error or slot.state for slot in self.runtime.slots.values()
                   if slot.binding.workspace_id == workspace_id]
         if errors:
-            self.states[workspace_id] = WorkspacePluginConfigurationDTO(workspace_id=workspace_id,
-                state="failed", revision=revision, error="; ".join(errors))
+            self._set_state(WorkspacePluginConfigurationDTO(workspace_id=workspace_id,
+                state="failed", revision=revision, error="; ".join(errors)))
         return bool(errors)
 
     async def _initialize_creation(self, target: WorkspaceTarget, creation: WorkspacePluginCreation) -> None:

@@ -13,7 +13,7 @@ from app.domain.itemized.hashing import canonical_json_bytes
 if TYPE_CHECKING:
     from app.core.session_control_store import SessionControlStore
 
-COPY_ATTACHMENT_SETTLEMENT_DDL = load_sql(__package__, "sql/copy_attachment_settlements.sql")
+COPY_ATTACHMENT_SETTLEMENT_DDL = load_sql(__package__, "migrations/copy_attachment_settlements.sql")
 
 
 @dataclass(frozen=True, slots=True)

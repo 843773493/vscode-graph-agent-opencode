@@ -35,7 +35,6 @@ try {
     return payload.data;
   }, { path, body });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await api('/api/gateway/users/guest', { tracking: { source: 'trace-content' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const health = await api('/api/gateway/health'), workspace = await api('/api/v1/workspace');

@@ -10,11 +10,11 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
     require_historical_scope,
 )
 
-CHANNEL_VALUES_SCHEMA_SQL = load_sql(__package__, "sql/checkpoint_state_values.sql") + load_sql(__package__, "sql/checkpoint_channels.sql")
+CHANNEL_VALUES_SCHEMA_SQL = load_sql(__package__, "migrations/checkpoint_state_values.sql") + load_sql(__package__, "migrations/checkpoint_channels.sql")
 CHANNEL_VALUES_MIGRATION_SQL = (
-    load_sql(__package__, "sql/checkpoint_channels_019_020_prepare.sql")
+    load_sql(__package__, "migrations/checkpoint_channels_019_020_prepare.sql")
     + CHANNEL_VALUES_SCHEMA_SQL
-    + load_sql(__package__, "sql/checkpoint_channels_019_020.sql")
+    + load_sql(__package__, "migrations/checkpoint_channels_019_020.sql")
 )
 
 

@@ -55,7 +55,6 @@ try {
     return response.data;
   };
   await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await api('/api/gateway/users/guest', undefined, { tracking: { source: 'thread-outline' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const health = await api('/api/gateway/health'), targets = await api('/api/gateway/workspaces');

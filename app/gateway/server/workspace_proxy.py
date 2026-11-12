@@ -29,11 +29,6 @@ from app.core.history_loading import HistoryLoadingConfig
 from app.core.resource_uri import ResourceUriGrammarError
 from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
-from app.gateway.control.user_access import (
-    USER_ACCESS_COOKIE_NAME,
-    UserAccessContext,
-    UserAccessService,
-)
 from app.gateway.federation.errors import FederationError
 from app.gateway.federation.grants import ContextGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
@@ -154,52 +149,17 @@ def _is_retryable_message_stream(
     return method == "GET" and path.endswith("/message-stream")
 
 
-def _user_access_service(request: Request) -> UserAccessService:
-    service = getattr(request.app.state, "user_access_service", None)
-    if not isinstance(service, UserAccessService):
-        raise RuntimeError("Gateway 用户访问服务尚未初始化")
-    return service
 
 
-def verify_user_access_for_proxy(
-    request: Request,
-    auth: GatewayAuthContext = Depends(verify_gateway_access),
-) -> UserAccessContext | None:
-    # 联邦请求已经由上游 Gateway 持有并校验用户访问租约，不能把浏览器 Cookie
-    # 传播到下游 Gateway 或 Workspace Backend。
-    if auth.kind == "federation":
-        return None
-    context = _user_access_service(request).resolve_cookie(
-        request.cookies.get(USER_ACCESS_COOKIE_NAME)
-    )
-    if context is None:
-        raise HTTPException(status_code=401, detail="user_session_required")
-    return context
 
 
-def _navigation_actor(
-    auth: GatewayAuthContext | None,
-    user_access: UserAccessContext | None,
-) -> str | None:
-    """从本跳已验证身份构造导航 operation 的幂等 actor。"""
+def _navigation_actor(auth: GatewayAuthContext | None) -> str | None:
+    """导航幂等主体直接来自本跳验证的 Gateway 凭据。"""
     if auth is None:
         return None
     if auth.kind == "federation":
-        peer_gateway_id = auth.peer_gateway_id
-        if not isinstance(peer_gateway_id, str) or not peer_gateway_id:
-            raise RuntimeError("Gateway federation 凭据缺少已验证的 peer_gateway_id")
-        return f"federation:{peer_gateway_id}"
-    if auth.kind != "local":
-        raise RuntimeError(f"Gateway 认证类型不受支持: {auth.kind!r}")
-    if user_access is None:
-        raise RuntimeError("本地 Gateway API 代理缺少已验证的 UserAccess")
-    if user_access.kind == "user":
-        if not isinstance(user_access.user_id, str) or not user_access.user_id:
-            raise RuntimeError("Gateway 已验证的 UserAccess 缺少 user_id")
-        return f"user:{user_access.user_id}"
-    if user_access.kind == "guest":
-        return "guest"
-    raise RuntimeError(f"Gateway UserAccess 类型不受支持: {user_access.kind!r}")
+        return f"federation:{auth.peer_gateway_id}"
+    return "local"
 
 
 def _proxy_headers(
@@ -264,30 +224,19 @@ def _set_authoritative_header(
 async def _stream_proxy_response(
     response: httpx.Response,
     route_lease: WorkspaceRouteLease,
-    user_access: UserAccessContext | None,
     on_close: Callable[[], None] | None = None,
     can_disclose: Callable[[], bool] | None = None,
 ) -> AsyncIterator[bytes]:
     iterator = response.aiter_bytes()
     next_chunk = asyncio.create_task(anext(iterator))
     route_changed = asyncio.create_task(route_lease.invalidated.wait())
-    user_session_changed = (
-        asyncio.create_task(user_access.invalidated.wait())
-        if user_access is not None
-        else None
-    )
     try:
         while True:
             wait_tasks = {next_chunk, route_changed}
-            if user_session_changed is not None:
-                wait_tasks.add(user_session_changed)
             completed, _ = await asyncio.wait(
                 wait_tasks,
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            if user_session_changed is not None and user_session_changed in completed:
-                yield b": user-session-invalidated\n\n"
-                return
             if route_changed in completed:
                 yield b": gateway-route-invalidated\n\n"
                 return
@@ -303,14 +252,12 @@ async def _stream_proxy_response(
             yield chunk
             next_chunk = asyncio.create_task(anext(iterator))
     finally:
-        for task in (next_chunk, route_changed, user_session_changed):
+        for task in (next_chunk, route_changed):
             if task is None:
                 continue
             if not task.done():
                 task.cancel()
         pending_tasks = [next_chunk, route_changed]
-        if user_session_changed is not None:
-            pending_tasks.append(user_session_changed)
         await run_cleanup_shielded(
             partial(close_upstream_response, response, pending_tasks, on_close)
         )
@@ -373,7 +320,6 @@ async def _proxy_workspace_request(
     request: Request,
     *,
     auth: GatewayAuthContext | None,
-    user_access: UserAccessContext | None,
     include_credentials: bool,
     target_workspace_id: WorkspaceSelector | None = None,
     request_body: bytes | None = None,
@@ -422,8 +368,7 @@ async def _proxy_workspace_request(
     if connection_id is not None and (not connection_id or target.connection_kind != "remote_gateway" or auth is None or auth.kind == "federation"):
         raise HTTPException(400, "明确 Gateway 连接只允许当前页面选择已关联的远端工作区")
     segments = _workspace_path_segments(path)
-    private_input_request = len(segments) >= 2 and segments[0] == "mcp" and (
-        segments[1] == "private-headers")
+    private_input_request = request.method == "POST" and segments == ["mcp", "private-headers"]
     configuration_request = (bool(segments) and segments[0] == "config") or private_input_request
     if configuration_request:
         if auth is None:
@@ -442,7 +387,7 @@ async def _proxy_workspace_request(
     )
     # 认证主体与导航幂等 scope 分离；只有已解析的两条 operation 路由消费 actor。
     navigation_actor = (
-        _navigation_actor(auth, user_access)
+        _navigation_actor(auth)
         if (request.method, path) in {
             ("POST", "session-catalog/operations:enqueue"),
             ("GET", "session-catalog/operations"),
@@ -655,8 +600,6 @@ async def _proxy_workspace_request(
                 await response.aclose()
             assert auth is not None
             require_federation_capability(request, auth, "configuration_read")
-            if private_input_request:
-                require_federation_capability(request, auth, "configuration_write")
             return Response(content=body, status_code=response.status_code,
                             headers=_response_headers(response), media_type=media_type)
         if navigation_deadline_at is not None:
@@ -687,7 +630,6 @@ async def _proxy_workspace_request(
                 _stream_proxy_response(
                     response,
                     route_lease,
-                    user_access,
                     release_route_reference,
                     (
                         partial(federation_capability_allowed, request, auth, "configuration_read")
@@ -730,7 +672,6 @@ async def _proxy_context_request(
     query: SessionContextReadRequest | SessionContextSearchRequest,
     *,
     auth: GatewayAuthContext,
-    user_access: UserAccessContext | None,
 ) -> Response:
     """结构化 URI 由原 registry 选归属路由，目标上下文 owner 决定内容。"""
     search = isinstance(query, SessionContextSearchRequest)
@@ -754,7 +695,7 @@ async def _proxy_context_request(
                 raise RuntimeError("多个本地 Gateway route 指向同一上下文 workspace")
             return await _proxy_workspace_request(
                 "context/search" if search else "context/read", request,
-                auth=auth, user_access=user_access, include_credentials=True,
+                auth=auth, include_credentials=True,
                 target_workspace_id=targets[0].workspace_id,
                 request_body=query.model_dump_json().encode("utf-8"),
             )
@@ -795,9 +736,8 @@ async def proxy_context_read(
     payload: SessionContextReadRequest,
     request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
-    user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> Response:
-    return await _proxy_context_request(request, payload, auth=auth, user_access=user_access)
+    return await _proxy_context_request(request, payload, auth=auth, )
 
 
 @router.api_route("/api/v1/context/search", methods=["POST"])
@@ -805,9 +745,8 @@ async def proxy_context_search(
     payload: SessionContextSearchRequest,
     request: Request,
     auth: Annotated[GatewayAuthContext, Depends(verify_gateway_access)],
-    user_access: Annotated[UserAccessContext | None, Depends(verify_user_access_for_proxy)],
 ) -> Response:
-    return await _proxy_context_request(request, payload, auth=auth, user_access=user_access)
+    return await _proxy_context_request(request, payload, auth=auth, )
 
 
 @router.api_route(
@@ -818,13 +757,11 @@ async def proxy_workspace_api(
     path: str,
     request: Request,
     auth: GatewayAuthContext = Depends(verify_gateway_access),
-    user_access: UserAccessContext | None = Depends(verify_user_access_for_proxy),
 ) -> Response:
     return await _proxy_workspace_request(
         path,
         request,
         auth=auth,
-        user_access=user_access,
         include_credentials=True,
     )
 

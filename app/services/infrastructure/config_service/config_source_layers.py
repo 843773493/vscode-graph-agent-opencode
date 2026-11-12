@@ -42,7 +42,6 @@ from app.services.infrastructure.config_service.config_service_common import (
     _SOURCE_LAYER_AUTHORITY,
     release_inline_config_uri_for_file,
 )
-from configs.layout_migrations import migrate_legacy_workspace_configuration
 from configs.runtime import (
     merge_json_objects,
     read_jsonc_object,
@@ -199,10 +198,14 @@ class ConfigSourceLayersMixin:
         schema_path: Path | None = None
         if self._workspace_root is not None:
             schema_path = self._resolve_schema_path(source_configs=source_configs)
-            if import_sources:
-                migrate_legacy_workspace_configuration(
-                    workspace_root=self._workspace_root,
-                    workspace_schema_path=schema_path,
+            legacy_workspace_path = (
+                self._workspace_root / ".boxteam" / "boxteam.jsonc"
+            )
+            if legacy_workspace_path.is_file():
+                raise RuntimeError(
+                    "发现旧版工作区配置；普通配置读取不会自动迁移。请显式运行 "
+                    "`python -m configs.boxteam migrate --workspace "
+                    f"{self._workspace_root}`。文件: {legacy_workspace_path}"
                 )
             workspace_path = get_workspace_config_path(self._workspace_root)
             workspace_override = read_override(

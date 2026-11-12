@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object", "additionalProperties": false,
+  "required": ["config_version", "runtime"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "config_version": {"const": 1},
+    "runtime": {
+      "type": "object", "additionalProperties": false, "required": ["worktrees"],
+      "properties": {
+        "worktrees": {
+          "type": "object", "additionalProperties": false,
+          "required": ["local_config_patterns", "setup_scopes", "dev_port_offset", "experiment_port_offset_start", "experiment_port_stride"],
+          "properties": {
+            "local_config_patterns": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+            "setup_scopes": {"type": "array", "uniqueItems": true, "items": {"enum": ["python", "root", "web", "workbench"]}},
+            "dev_port_offset": {"type": "integer", "minimum": 20, "maximum": 57000},
+            "experiment_port_offset_start": {"type": "integer", "minimum": 20, "maximum": 57000},
+            "experiment_port_stride": {"type": "integer", "minimum": 20, "maximum": 1000}
+          }
+        }
+      }
+    }
+  }
+}

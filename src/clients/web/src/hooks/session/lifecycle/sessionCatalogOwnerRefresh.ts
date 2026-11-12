@@ -25,9 +25,7 @@ export async function refreshCurrentSessionCatalogOwner(
   const stillCurrent = (state: AppState) => !signal.aborted
     && state.currentSession?.session_id === sessionId
     && (state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId) === workspaceId
-    && state.apiPort === before.apiPort
-    && state.gatewayUserAccess?.kind === before.gatewayUserAccess?.kind
-    && state.gatewayUserAccess?.user_id === before.gatewayUserAccess?.user_id;
+    && state.apiPort === before.apiPort;
   let updatedSession: Session | null = null;
   try {
     updatedSession = await apiGetSession(apiPort, sessionId, workspaceId, { signal });

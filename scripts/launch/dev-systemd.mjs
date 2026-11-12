@@ -32,8 +32,9 @@ export function buildTransientDevelopmentUnit({
   environment = process.env,
   cwd = process.cwd(),
   bunExecutable = process.execPath,
+  args = [],
 } = {}) {
-  const layout = resolveDevelopmentLayout({ environment, cwd });
+  const layout = resolveDevelopmentLayout({ environment, cwd, args });
   const unitName = developmentSystemdUnitName(layout);
   const serviceName = `${unitName}.service`;
   const readyFile = path.join(
@@ -43,6 +44,7 @@ export function buildTransientDevelopmentUnit({
   );
   const serviceEnvironment = {
     BOXTEAM_PROJECT_ROOT: layout.projectRoot,
+    BOXTEAM_FRONTEND_ROOT: layout.frontendRoot,
     BOXTEAM_HOME: layout.boxteamHome,
     BOXTEAM_DEV_PORT_OFFSET: String(layout.portOffset),
     BOXTEAM_DEV_LOCAL_ONLY: normalizeLocalOnly(environment),
@@ -54,7 +56,7 @@ export function buildTransientDevelopmentUnit({
   }
   const command = [
     path.resolve(bunExecutable),
-    path.join(layout.projectRoot, "scripts", "launch", "dev.mjs"),
+    path.join(layout.frontendRoot, "scripts", "launch", "dev.mjs"),
   ];
   const systemdRunArguments = [
     "--user",
@@ -65,7 +67,7 @@ export function buildTransientDevelopmentUnit({
     "--property=Restart=no",
     "--property=KillMode=control-group",
     `--property=TimeoutStopSec=${GATEWAY_SHUTDOWN_TIMEOUT_MS / 1000 + 30}`,
-    `--working-directory=${layout.projectRoot}`,
+    `--working-directory=${layout.frontendRoot}`,
     ...Object.entries(serviceEnvironment).map(
       ([name, value]) => `--setenv=${name}=${value}`,
     ),
@@ -104,7 +106,7 @@ function runCommand(command, args, { allowFailure = false } = {}) {
   return { exitCode: result.exitCode, signalCode, stdout, stderr };
 }
 
-function readUnitState(serviceName) {
+export function readUnitState(serviceName, run = runCommand) {
   const args = [
     "--user",
     "show",
@@ -115,7 +117,7 @@ function readUnitState(serviceName) {
     "--property=MainPID",
     "--no-pager",
   ];
-  const result = runCommand("systemctl", args, { allowFailure: true });
+  const result = run("systemctl", args, { allowFailure: true });
   const values = Object.fromEntries(
     result.stdout
       .split("\n")
@@ -228,6 +230,7 @@ async function start(unit) {
     await waitForGateway(unit);
     process.stdout.write(
       `[dev-systemd] transient unit 已在运行: unit=${unit.serviceName} ` +
+        `frontend_root=${unit.layout.frontendRoot} backend_root=${unit.layout.projectRoot} ` +
         `frontend=${unit.frontendUrl} boxteam_home=${unit.layout.boxteamHome}\n`,
     );
     return;
@@ -241,6 +244,7 @@ async function start(unit) {
   await waitForGateway(unit);
   process.stdout.write(
     `[dev-systemd] transient unit ready: unit=${unit.serviceName} ` +
+      `frontend_root=${unit.layout.frontendRoot} backend_root=${unit.layout.projectRoot} ` +
       `frontend=${unit.frontendUrl} boxteam_home=${unit.layout.boxteamHome}\n`,
   );
 }
@@ -291,6 +295,8 @@ async function status(unit) {
       manager_ready: managerReady,
       gateway_ready: gatewayReady,
       frontend: unit.frontendUrl,
+      frontend_root: unit.layout.frontendRoot,
+      backend_root: unit.layout.projectRoot,
       boxteam_home: unit.layout.boxteamHome,
     })}\n`,
   );
@@ -307,7 +313,7 @@ export async function main(args = process.argv.slice(2)) {
   if (!new Set(["start", "stop", "status"]).has(action)) {
     throw new Error(`未知 dev systemd 操作: ${action}`);
   }
-  const unit = buildTransientDevelopmentUnit();
+  const unit = buildTransientDevelopmentUnit({ args: args.slice(1) });
   if (action === "start") await start(unit);
   if (action === "stop") stop(unit);
   if (action === "status") await status(unit);

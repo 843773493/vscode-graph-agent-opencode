@@ -241,7 +241,7 @@ def target_gateway_network(
             role = "gateway-b" if index else "gateway-a"
             with (observations[role].parent / "gateway.stderr.log").open("rb") as output:
                 output.seek(stderr_offsets.pop(gateway.process.pid))
-                process_log = output.read().decode("utf-8")
+                process_log = output.read().decode("utf-8", errors="replace")
             # 同 PID 保留完整 traceback，分别核对监听排空与 ASGI 清理阶段。
             records = [record for record in re.split(r"(?m)(?=^\d{4}-\d{2}-\d{2}T)", process_log)
                        if f"pid={gateway.process.pid} " in record.partition("\n")[0]]
@@ -849,7 +849,9 @@ def test_real_gateways_recover_original_owner_after_connection_update_and_offlin
         assert incompatible.json()["detail"] == "远端 Gateway 连接重连失败: stage=gateway_connection_reconnect, error=RuntimeError"
         diagnostic, = [record for record in re.split(
             r"(?m)(?=^\d{4}-\d{2}-\d{2}T)",
-            (network.observation_paths["gateway-a"].parent / "gateway.stderr.log").read_text(encoding="utf-8"),
+            (network.observation_paths["gateway-a"].parent / "gateway.stderr.log").read_bytes().decode(
+                "utf-8", errors="replace",
+            ),
         ) if 'logger=app.core.failures request_id="recovery-old-rejected"' in record.partition("\n")[0]]
         assert diagnostic.rstrip().endswith("RuntimeError: 远程 Gateway 协议不兼容: local=2, remote=1")
         evidence.append({"phase": "incompatible-protocol-diagnostic", "diagnostic": diagnostic})

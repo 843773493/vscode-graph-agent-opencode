@@ -16,7 +16,6 @@ from tests.support.model_stream.config import ModelStreamReplay, model_stream_re
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -30,7 +29,7 @@ from tests.support.processes.workspace import (
 def retry_model(request: pytest.FixtureRequest) -> Iterator[ModelStreamReplay]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     with model_stream_replay(
-        context.output_root,
+        context.artifacts_dir,
         runtime_root=context.runtime_root_for_node(request.node.nodeid),
         business_assertion="failed-session-retry-after-current-tools-migration",
     ) as replay:
@@ -108,7 +107,6 @@ async def test_persisted_failed_session_retries_with_migrated_current_tools(
             headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": backend.workspace_id},
             timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             session_response = await client.post(
                 "/api/v1/sessions",
                 json={"title": "Config Migration Retry E2E"},

@@ -76,8 +76,6 @@ try {
     result.apiReceipts.push(response.receipt);
     return response.data;
   };
-  // 通过真实页面 fetch 设置 Cookie，避免 Bun 的 Node HTTP 兼容层影响 Playwright APIRequestContext。
-  await api('/api/gateway/users/guest', undefined, { tracking: { source: 'message-content-search' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });

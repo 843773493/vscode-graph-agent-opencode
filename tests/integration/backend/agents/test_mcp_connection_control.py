@@ -30,7 +30,6 @@ from tests.support.mcp.http_endpoint import (
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -41,7 +40,7 @@ from tests.support.processes.workspace import (
 
 
 @pytest.fixture
-def product_case(recovery_case, free_tcp_port_factory):
+def product_case(request: pytest.FixtureRequest, recovery_case, free_tcp_port_factory):
     case = recovery_case
     backend_port, gateway_port = free_tcp_port_factory(), free_tcp_port_factory()
 
@@ -81,7 +80,7 @@ def product_case(recovery_case, free_tcp_port_factory):
         payload.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
         path.write_text(json.dumps(payload), encoding="utf-8")
         with model_stream_replay(
-            case.context.artifacts_dir / "model-replay", runtime_root=case.context.artifacts_dir / "replay-runtime",
+            case.context.artifacts_dir / "model-replay", runtime_root=case.context.runtime_root_for_node(request.node.nodeid),
             business_assertion="mcp-first-authorization-local-control",
         ) as replay:
             owned_backends = backend_processes if backend_processes is not None else []
@@ -104,7 +103,6 @@ def product_case(recovery_case, free_tcp_port_factory):
                     base_url=gateway_url, timeout=30,
                     headers={**LOCAL_TOKEN_HEADERS, "X-Workspace-ID": case.mount.workspace_id},
                 ) as client:
-                    await acquire_gateway_guest(client)
                     yield client, replay, case
             finally:
                 try:

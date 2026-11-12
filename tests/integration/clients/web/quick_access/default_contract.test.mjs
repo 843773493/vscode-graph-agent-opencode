@@ -147,7 +147,7 @@ for (const mode of ['user', 'gateway']) test(`正文类别集合在 ${mode} 身�
   const result = await exercise('contentSelectionContract', mode);
   expect(result.cancelled).toBe(true); expect(result.beforeConfirm).toBe(0);
   expect(result.requests).toEqual([]); expect(result.shows).toEqual([]);
-  expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('Gateway 或用户身份已改变');
+  expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('Gateway 或访问凭据已改变');
 });
 
 test('正文类别集合保留文件独立转 %，不发送正文类别请求', async () => {
@@ -434,7 +434,7 @@ test('身份屏障或 Gateway 改变立即取消、撤下旧结果，继续输�
     expect(item.calls).toBe(1);
     expect(item.busy).toBe(false);
     expect(item.selected).toBe(0);
-    expect(item.labels).toEqual(['Gateway 或用户身份已改变，请重新打开快速访问']);
+    expect(item.labels).toEqual(['Gateway 或访问凭据已改变，请重新打开快速访问']);
   }
 });
 

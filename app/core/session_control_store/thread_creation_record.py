@@ -55,12 +55,12 @@ from app.core.sqlite_state import load_sql
 # （tasks.md 8.5-A 冻结项 GraphBinding/capability/seed/reference、artifact
 # manifest 本体与 child UTC created_at——恢复只按预存 record 校验，需要
 # 清单本体而非仅 hash），字段映射见 rounds/R20-impl.md §6。
-_THREAD_CREATION_RECORDS_TABLE_DDL = load_sql(__package__, "sql/thread_creation_records.sql")
+_THREAD_CREATION_RECORDS_TABLE_DDL = load_sql(__package__, "migrations/thread_creation_records.sql")
 
 # delegated child 将 delegation_id 纳入唯一约束（tasks.md 8.5-A）：同一
 # delegation 至多绑定一条创建 record（含 aborted——失败后须换新
 # delegation 重试，不静默改绑）。
-_IDX_THREAD_CREATION_DELEGATION_DDL = load_sql(__package__, "sql/idx_thread_creation_delegation.sql")
+_IDX_THREAD_CREATION_DELEGATION_DDL = load_sql(__package__, "migrations/idx_thread_creation_delegation.sql")
 
 
 _THREAD_CREATION_RECORD_COLUMNS = (

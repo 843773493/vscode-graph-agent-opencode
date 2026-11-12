@@ -12,6 +12,7 @@ import { IEditorService } from '../upstream/src/vs/workbench/services/editor/com
 import { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
 import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { WorkspacePanelSurface } from './react/workspacePanelView.js';
+import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 
 export class WorkspacePanel extends ViewPane {
   private surface?: WorkspacePanelSurface;
@@ -38,5 +39,9 @@ export class WorkspacePanel extends ViewPane {
     this.surface = new WorkspacePanelSurface(container, this.editors, this.id, this.isBodyVisible(), this.notifications, this.commands);
   }
   override focus(): void { this.surface?.focus(); }
+  revealResource(owner: WorkspaceOwner, resourceId: string): void {
+    if (!this.surface) throw new Error('工作区资源面板尚未挂载');
+    this.surface.revealResource(owner, resourceId);
+  }
   override dispose(): void { this.surface?.dispose(); super.dispose(); }
 }

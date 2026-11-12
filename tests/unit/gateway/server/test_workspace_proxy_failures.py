@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Iterator
 from pathlib import Path
@@ -13,7 +12,6 @@ from fastapi import FastAPI, HTTPException
 
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
-from app.gateway.control.user_access import UserAccessContext
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
@@ -23,7 +21,6 @@ from app.gateway.registry import (
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import (
     _proxy_workspace_request,
-    verify_user_access_for_proxy,
 )
 from app.gateway.server.workspace_proxy import router as workspace_router
 from tests.unit.gateway.server.test_workspace_proxy_route_reference import (
@@ -83,7 +80,7 @@ async def test_upstream_failure_logs_cause_without_retry_or_route_leak(
         request = _make_request(app, method="GET", path="/api/v1/jobs/job_1", workspace_id=WORKSPACE_ID)
         request._body = b""
         with pytest.raises(HTTPException) as caught:
-            await _proxy_workspace_request("jobs/job_1", request, auth=None, user_access=None, include_credentials=False)
+            await _proxy_workspace_request("jobs/job_1", request, auth=None, include_credentials=False)
 
     assert caught.value.status_code == status
     assert caught.value.__cause__ is failure and failure.__cause__ is cause
@@ -124,12 +121,7 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
     app.exception_handler(HTTPException)(gateway_http_exception_handler)
     app.include_router(workspace_router)
     # 单测在认证依赖边界提供已验证上下文，不替生产创建业务或资源状态。
-    access = UserAccessContext(
-        kind="guest", user_id=None, access_session_id="proxy-unit", lease_generation=1,
-        invalidated=asyncio.Event(),
-    )
     app.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
-    app.dependency_overrides[verify_user_access_for_proxy] = lambda: access
     app.state.registry = registry
     caplog.set_level(logging.ERROR)
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), trust_env=False) as transport:
@@ -175,7 +167,6 @@ async def test_workspace_identity_header_rejects_before_owner_lookup_and_recover
     app.include_router(workspace_router)
     app.state.registry = registry
     app.dependency_overrides[verify_gateway_access] = lambda: GatewayAuthContext(kind="local")
-    app.dependency_overrides[verify_user_access_for_proxy] = lambda: None
     validated_owners: list[tuple[str, str]] = []
     forwarded: list[httpx.Request] = []
     original_workspace_key = registry.workspace_key
@@ -255,7 +246,7 @@ async def test_retired_backend_identity_header_rejects_even_valid_uuid_before_ad
         request = _make_request(app, method="GET", path="/api/v1/workspace", workspace_id=WORKSPACE_ID)
         request.scope["headers"].append((b"x-boxteam-backend-workspace-id", WORKSPACE_ID.encode()))
         with pytest.raises(HTTPException) as caught:
-            await _proxy_workspace_request("workspace", request, auth=None, user_access=None, include_credentials=True)
+            await _proxy_workspace_request("workspace", request, auth=None, include_credentials=True)
     assert caught.value.status_code == 400
     assert caught.value.detail == "旧 Backend 工作区身份头已失效，请使用同一工作区 UUID"
     assert lookups == [] and forwarded == []

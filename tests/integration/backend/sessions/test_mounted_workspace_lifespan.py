@@ -182,8 +182,8 @@ async def test_real_double_mount_requests_compilation_and_reverse_cleanup(
     case = mounted_case
     replay, controller = inprocess_model_replay
     planned = {}
-    async with main.lifespan(main.app) as _main_lifespan_state_185:
-        await _main_lifespan_state_185["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         registry = main.app.state.workspace_container_registry
         assert registry is not None
         containers = [registry.get(identity) for identity in case.roots]
@@ -312,8 +312,8 @@ async def test_real_double_mount_requests_compilation_and_reverse_cleanup(
 async def test_second_mount_failure_closes_both_real_containers(mounted_case: MountedCase):
     mounted_case.fail_second = True
     with pytest.raises(RuntimeError, match="第二工作区启动校验失败"):
-        async with main.lifespan(main.app) as _main_lifespan_state_314:
-            await _main_lifespan_state_314["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             raise AssertionError("部分启动失败不得进入 ready")
     assert len(mounted_case.containers) == 2
     assert_closed(mounted_case)
@@ -325,8 +325,8 @@ async def test_workspace_identity_carriers_reject_paths_before_resolving_mounts(
 ) -> None:
     case = mounted_case
     evidence = []
-    async with main.lifespan(main.app) as _main_lifespan_state_326:
-        await _main_lifespan_state_326["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         registry = main.app.state.workspace_container_registry
         assert registry is not None
         identities = list(case.roots)
@@ -426,8 +426,8 @@ async def test_registry_failure_closes_configured_transport(
         monkeypatch.setattr(main, "WorkspaceContainerRegistry", fail_registry)
     try:
         with pytest.raises(RuntimeError, match="registry 前置构造失败"):
-            async with main.lifespan(main.app) as _main_lifespan_state_426:
-                await _main_lifespan_state_426["after_http_startup"]()
+            async with main.lifespan(main.app) as _main_lifespan_state:
+                await _main_lifespan_state["after_http_startup"]()
                 raise AssertionError("registry 构造失败不得进入 ready")
         assert closed == ["transport"]
         assert controller.client is None
@@ -481,8 +481,8 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
     monkeypatch.setattr("app.testing.model_stream.transport.observe_phase", blocked_response)
 
     async def run_lifespan() -> None:
-        async with main.lifespan(main.app) as _main_lifespan_state_480:
-            await _main_lifespan_state_480["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             lifespan_ready.set()
             container = mounted_case.containers[0]
             containers.append(container)
@@ -592,8 +592,8 @@ async def test_shutdown_waits_for_pre_body_cancel_finalization_writer(
     starts = []
 
     async def run_lifespan() -> None:
-        async with main.lifespan(main.app) as _main_lifespan_state_590:
-            await _main_lifespan_state_590["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             lifespan_ready.set()
             container = mounted_case.containers[0]
             containers.append(container)
@@ -682,8 +682,8 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
     monkeypatch: pytest.MonkeyPatch,
     inprocess_model_replay,
 ) -> None:
-    async with main.lifespan(main.app) as _main_lifespan_state_679:
-        await _main_lifespan_state_679["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         a, b = mounted_case.containers
         sessions = []
         for container in (a, b):
@@ -879,8 +879,8 @@ async def test_double_mount_consumes_each_explicit_candidate_and_ignores_process
     monkeypatch.setenv("BOXTEAM_CONFIG_GENERATION", mounts[0].config_generation)
     monkeypatch.setenv("BOXTEAM_CONFIG_FENCING_TOKEN", mounts[0].config_fencing_token)
     monkeypatch.setenv("BOXTEAM_MOUNTED_WORKSPACES", json.dumps([mount.to_payload() for mount in mounts]))
-    async with main.lifespan(main.app) as _main_lifespan_state_875:
-        await _main_lifespan_state_875["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         for container, (agent_id, prompt, pending) in zip(mounted_case.containers, expected, strict=True):
             proof = container.config_service.get_loaded_config_proof()
             snapshot = container.config_service.get_snapshot().to_dict()
@@ -899,8 +899,8 @@ async def test_persistent_task_owners_and_management_are_isolated_between_mounts
     from app.core.resource_uri import thread_resource_uri
     from tests.integration.backend.sessions.test_persistent_tasks import _configuration
 
-    async with main.lifespan(main.app) as _main_lifespan_state_894:
-        await _main_lifespan_state_894["after_http_startup"]()
+    async with main.lifespan(main.app) as _main_lifespan_state:
+        await _main_lifespan_state["after_http_startup"]()
         a, b = mounted_case.containers
         tasks = []
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",

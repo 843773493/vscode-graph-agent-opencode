@@ -37,20 +37,26 @@ def invalid_backend_identity(request: pytest.FixtureRequest) -> str:
 async def test_invalid_bound_identity_is_rejected_without_io_or_public_input(
     invalid_backend_identity: str, entry: str, tmp_path: Path,
     registry: GatewayWorkspaceRegistry,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
+    def unexpected_io(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("非法身份必须在网络或进程副作用前拒绝")
+
+    monkeypatch.setattr(httpx, "AsyncClient", unexpected_io)
     expected_type = RuntimeError if entry == "proxy" else ValueError
     with pytest.raises(expected_type) as caught:
         if entry == "wait":
             await local_workspace.wait_for_workspace_health(URL, invalid_backend_identity)
         elif entry == "config-wait":
             await local_workspace.wait_for_workspace_config_proof(URL, None, workspace_id=invalid_backend_identity, expected_proof={})
-        else:
+        elif entry == "proxy":
             registry.target_request_headers(WorkspaceTarget(gateway_id=GATEWAY_ID,
                 workspace_id=invalid_backend_identity, name="目标", root_path=str(tmp_path),
                 backend_url=URL,  connection_kind="local",
             ))
     assert invalid_backend_identity not in str(caught.value)
     assert "identity-secret" not in str(caught.value)
+    assert repr(invalid_backend_identity) in caplog.text
 
 
 @pytest.fixture(params=["posix", "windows", "object", "missing"])
@@ -122,6 +128,8 @@ async def test_invalid_health_identity_is_rejected_before_followup_publication(
             elif entry == "pending":
                 controller = GatewayWorkspaceRuntimeController(registry=registry, project_root=tmp_path, log_dir=tmp_path)
                 await controller._resolve_pending_restart(target, candidate_ref="pending", request_id="health-test")
+            else:
+                pytest.fail(f"未支持的入口: {entry}")
         message = str(failure.value)
         assert "backend UUID 不匹配" in message and f"expected={UUID}" in message
         assert "actual=" not in message and "private-health-marker" not in message

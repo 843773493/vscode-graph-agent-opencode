@@ -33,7 +33,7 @@
 - 测试统一使用 pytest fixture 进行依赖注入；应用代码统一使用 FastAPI Depends 进行依赖注入
 - 每个测试必须隔离 `BOXTEAM_HOME`、Gateway 状态目录和工作区目录。
 - 正式 E2E 测试的输出目录必须镜像测试文件路径：`tests/e2e/<path>/test_name.py` 写入 `out/tests/e2e/<path>/test_name/`，工作区放在其 `workspace/` 子目录，可复查证据放在 `artifacts/` 子目录。
-- `out/tests/temp/` 只用于 Codex/Agent 在正式测试脚本之外创建的一次性诊断和临时操作，不得作为正式 E2E fixture 的输出目录。
+- `out/tests/temp/YYYY/MM/DD/<task_name>/` 只用于 Codex/Agent 在正式测试脚本之外创建的一次性诊断和临时操作，不得作为正式 E2E fixture 的输出目录。
 - 需要工作区配置时，先复制测试工作区，再创建 `.boxteam/`，最后把测试配置及 schema 复制进去；不得修改 `asset/` 模板或把项目根目录注册为工作区。
 - Gateway 持久化测试必须覆盖进程重启后的恢复；验证注册表重连时，应移除仅用于首次声明目标的配置，避免测试实际上依赖启动配置重新创建目标。
 - 会话存储断言必须通过 session manifest 或正式路径解析 API 找到物理会话节点，禁止继续假设 `.boxteam/sessions/{session_id}/` 固定路径。

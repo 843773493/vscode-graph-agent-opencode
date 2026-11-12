@@ -7,11 +7,11 @@ harness/
 ├── processes/                         进程启动、就绪、日志和归属的故障注入
 │   ├── test_process_scope.py           登记归属与嵌套清理
 │   ├── test_process_log_lifetime.py    Workspace/Gateway 日志句柄
-│   ├── test_auxiliary_process_lifetime.py  Browser/Terminal 辅助服务
 │   ├── test_fixture_process_lifetime.py    组合装具的启动失败清理
 │   ├── test_navigation_fixture_lifetime.py 导航下游的进程与日志
 │   └── test_http_readiness.py          HTTP 就绪预算、身份与退出诊断
 ├── test_run_context.py                测试运行上下文
+├── test_fixture_output_isolation.py   单测工作区、manifest、Docker证据隔离与混合收集标记
 ├── test_integration_gate.py           闸门根位置、原生锁失败与异常释放
 ├── test_output_paths.py               正式输出镜像路径与显式项目根
 ├── test_e2e_control_files.py           控制事件与模型回放文件的UTF-8读写
@@ -28,7 +28,7 @@ harness/
 
 控制文件测试在真实隔离文件上显式模拟 CP1252/GBK 默认文本编码，分别检查事件保存、已有回放读取、新回复写入和损坏 UTF-8 拒绝。server/thread 是生命周期替身，不监听端口、不启动产品；它证明文件合同，不等于 Windows 原生或完整 E2E 验收。
 
-计时记录器测试使用真实隔离文件，注入write/flush失败与中断，先核对记录器是否关闭句柄，再由fixture兜底。普通成功路径核UTF-8正文、记录顺序和完成计数；不运行427轮业务fixture，也不把记录器单测当成生成器验收。
+统一性能记录器使用真实隔离文件核验write/flush失败后的句柄释放、并发阶段归属、取消/真实setup失败与显式报告比较；不运行427轮业务fixture，也不把记录器验证当成生成器验收。业务专属计数留在业务装具。
 
 关闭环境装具的单测只使用正式输出目录内的文件和当前进程创建的目录fd，配置解析/schema校验是显式替身。验证准备中断、部分写入和关闭异常后的原字节恢复，不启动Gateway或验证业务关闭；故障注入遗留的本用例fd由单测兜底回收。
 

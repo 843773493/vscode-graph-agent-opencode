@@ -58,3 +58,33 @@ def test_cleanup_failure_retains_body_error_and_restores_outer_scope() -> None:
         process_scope.register_test_process(object(), lambda: order.append("outer-last"))
 
     assert order == ["inner", "outer-last", "outer-first"]
+
+
+def test_closed_scope_reclaims_late_handle_and_preserves_cleanup_failure() -> None:
+    scope = process_scope.TestProcessScope()
+    scope.close()
+    cleaned = []
+    with pytest.raises(RuntimeError, match="scope 已关闭"):
+        scope.register(object(), lambda: cleaned.append("late"))
+    assert cleaned == ["late"]
+    cleanup_error = OSError("迟到进程回收失败")
+
+    def fail_cleanup() -> None:
+        raise cleanup_error
+
+    with pytest.raises(ExceptionGroup) as failure:
+        scope.register(object(), fail_cleanup)
+    assert isinstance(failure.value.exceptions[0], RuntimeError)
+    assert failure.value.exceptions[1] is cleanup_error
+
+
+def test_duplicate_registration_does_not_close_the_existing_owner() -> None:
+    scope = process_scope.TestProcessScope()
+    handle = object()
+    cleaned = []
+    scope.register(handle, lambda: cleaned.append("owner"))
+    with pytest.raises(ValueError, match="重复注册"):
+        scope.register(handle, lambda: cleaned.append("duplicate"))
+    assert not cleaned
+    scope.close()
+    assert cleaned == ["owner"]

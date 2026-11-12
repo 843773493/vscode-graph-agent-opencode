@@ -13,7 +13,6 @@ function respond(document: Record<string, unknown> | ((url: URL, init?: RequestI
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.pathname === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "config-test-token" } });
-    if (url.pathname === "/api/gateway/users/current") return Response.json({ data: {}, request_id: "config-user" });
     inspect(url, init);
     const result = typeof document === "function" ? document(url, init) : document;
     return result instanceof Response ? result : Response.json({ code: 0, message: "ok", request_id: "source-read", data: result });

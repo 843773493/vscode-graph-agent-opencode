@@ -33,6 +33,7 @@ from app.core.session_lifecycle_gate import (
     SessionDeletionPendingError,
     SessionLifecycleGate,
 )
+from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugSetBreakpointActionRequest,
@@ -236,15 +237,21 @@ async def test_explicit_thread_parameter_locates_child_thread(
         thread_id=_CHILD_THREAD_ID,
         path="child.mjs",
     )
-    await start_node_debug(
-        payload=payload,
-        _="local-token",
-        request_id="req_start_child",
-        node_debug_service=node_debug_service,
-    )
+    gateway_token = set_current_gateway_id("gateway_789f146c159aa74461af8dacca7341ca")
+    try:
+        await start_node_debug(
+            payload=payload,
+            _="local-token",
+            request_id="req_start_child",
+            node_debug_service=node_debug_service,
+        )
+    finally:
+        reset_current_gateway_id(gateway_token)
     forwarded: dict[str, Any] = node_debug_service.start.await_args.kwargs
     assert forwarded["session_id"] == _SESSION_ID
     assert forwarded["thread_id"] == _CHILD_THREAD_ID
+    assert forwarded["gateway_id"] == "gateway_789f146c159aa74461af8dacca7341ca"
+    assert forwarded["request_id"] == "req_start_child"
 
 
 @pytest.mark.asyncio

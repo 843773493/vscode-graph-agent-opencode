@@ -11,7 +11,7 @@ from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Event, Lock, Thread
+from threading import Event, Lock
 from types import SimpleNamespace
 from typing import Literal
 from uuid import uuid4
@@ -71,6 +71,7 @@ from app.testing.model_stream import (
     responses_frames,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.http_server import running_http_server
 from tests.support.workspaces import prepare_default_test_workspace
 
 EMPTY_TOOL_SET = ToolSetSnapshot(selection_revision=sha256_jcs({}), tools=())
@@ -385,16 +386,11 @@ def native_http_server(
             self.end_headers()
             self.wfile.write(response)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield state, f"http://127.0.0.1:{server.server_port}/v1"
-    finally:
-        state.release_response.set()
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+    with running_http_server(ThreadingHTTPServer(("127.0.0.1", 0), Handler)) as server:
+        try:
+            yield state, f"http://127.0.0.1:{server.server_port}/v1"
+        finally:
+            state.release_response.set()
 
 
 def create_dispatch_agent(model, *, execution: ModelCallExecution, **options):

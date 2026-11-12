@@ -30,6 +30,7 @@ from app.schemas.internal_v2.turn import (
     TurnSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
 )
@@ -518,6 +519,12 @@ class RolloutCheckpointSaver(
         self, session_id: str, thread_id: str, model_call_id: str, tool_call_id: str,
     ) -> str | None:
         return self._storage.storage.committed_tool_result_id(session_id, thread_id, model_call_id, tool_call_id)
+
+    def list_history_tool_results(self, session_id: str, thread_id: str, *, after: int = 0,
+                                  limit: int = 100, view_id: str | None = None,
+                                  view_revision: int | None = None) -> ThreadToolResultListDTO:
+        return self._history_reader.list_tool_results(session_id, thread_id, after=after,
+            limit=limit, view_id=view_id, view_revision=view_revision)
 
     def search_history_messages(
         self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,

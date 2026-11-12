@@ -23,7 +23,6 @@ from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -69,7 +68,6 @@ async def test_thread_discovery_through_gateway_survives_backend_restart(
             headers=LOCAL_TOKEN_HEADERS,
             timeout=30,
         ) as client:
-            await acquire_gateway_guest(client)
             health = await client.get("/api/gateway/health")
             registry = await client.get(
                 "/api/gateway/workspaces", params={"check_health": False}

@@ -29,6 +29,9 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
 from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     mcp_plugin_case as mcp_plugin_case,  # noqa: PLC0414 - 真实 Gateway 与 Backend
 )
+from tests.integration.gateway.test_mcp_plugin_lifecycle import (
+    mcp_plugin_tool_restrictions as mcp_plugin_tool_restrictions,  # noqa: PLC0414 - mcp_plugin_case 的 fixture 依赖
+)
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 官方 SDK HTTP 服务
 )

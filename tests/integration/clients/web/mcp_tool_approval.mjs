@@ -16,20 +16,13 @@ try {
   context = await browser.newContext({ viewport: { width: 1600, height: 1050 } });
   page = await context.newPage();
   const errors = [];
+  const approvalReads = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/v1/jobs/tool-approvals") approvalReads.push(request.url());
+  });
   page.on("pageerror", (error) => errors.push(String(error)));
   const target = new URL(fixture.baseUrl);
   await page.goto(target.href, { waitUntil: "domcontentloaded" });
-  // Cookie 交由真实浏览器处理，避免 Bun 的 Node HTTP 兼容层改变响应 URL。
-  const access = await page.evaluate(async () => {
-    const credential = await fetch("/api/gateway/auth/local-credential");
-    if (!credential.ok) throw new Error("读取本机凭据失败");
-    const response = await fetch("/api/gateway/users/guest", {
-      method: "POST", headers: { "Content-Type": "application/json", "X-Local-Token": (await credential.json()).data.token },
-      body: JSON.stringify({ tracking: { source: "mcp-workbench-browser" } }),
-    });
-    return { status: response.status, body: await response.text() };
-  });
-  assert.equal(access.status, 200, access.body);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
   const session = page.locator(`button[data-session-id="${fixture.sessionId}"]`);
@@ -68,6 +61,9 @@ try {
     assert(result.requestId);
     assert.equal(result.requestId, result.body.request_id);
   }
+  // 覆盖旧轮询周期：没有等待确认事件时，真实入口不能发出审批查询。
+  await page.waitForTimeout(1700);
+  assert.equal(approvalReads.length, 0, "普通会话不应轮询工具审批");
   await thread.getByTestId("composer-input").fill("发现并发出两个 probe，等待我逐一审批。");
   const accepted = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/messages") && response.request().method() === "POST");
   await thread.getByTestId("composer-send").click();

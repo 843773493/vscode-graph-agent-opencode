@@ -23,7 +23,6 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -81,7 +80,6 @@ async def test_persistent_resources_through_real_workbench(
         lifetime.callback(close_gateway_process, gateway)
         base_url = f"http://127.0.0.1:{gateway.port}"
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=60) as client:
-            await acquire_gateway_guest(client)
             reply = await client.get("/api/gateway/workspaces")
             assert reply.status_code == 200, reply.text
             owner = reply.json()["data"]["active_workspace"]
@@ -109,7 +107,6 @@ async def test_persistent_resources_through_real_workbench(
             assert result.returncode == 0, f"{phase}: {result.stdout}\n{result.stderr}\n{details}"
             if phase == "before-unload":
                 async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=120) as client:
-                    await acquire_gateway_guest(client)
                     client.headers.update({"X-BoxTeam-Target-Gateway-Id": gateway_id,
                                            "X-BoxTeam-Workspace-Id": workspace_id})
                     health_before = await client.get("/api/v1/health")

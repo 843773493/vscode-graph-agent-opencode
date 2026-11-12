@@ -230,7 +230,7 @@ async def write_gateway_private_input(payload: PluginPrivateInputWriteRequest, r
     remote = await relay(request, payload, auth)
     if remote is not None:
         if remote.is_error:
-            raise HTTPException(remote.status_code, remote.json().get("detail"))
+            raise relay_http_error(remote, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         response.headers["Cache-Control"] = "no-store"
         return APIResponse[PluginPrivateInputReference].model_validate_json(remote.content)
     require_federation_capability(request, auth, "configuration_write")
@@ -261,7 +261,7 @@ async def configuration_schemas(payload: PluginConfigurationSchemasRequest, requ
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginConfigurationSchemasDTO].model_validate_json(response.content)
     _configuration_schema_access(payload, request, auth)
     return APIResponse(data=await _configuration_schema_snapshot(payload, request, auth, owner),
@@ -354,7 +354,7 @@ async def configuration_schema_events(payload: PluginConfigurationSchemasRequest
             body = UpstreamResponseBody(response)
             if response.is_error:
                 await response.aread()
-                raise HTTPException(response.status_code, response.json().get("detail"))
+                raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
             if (response.headers.get("X-Request-ID") != get_request_id(request)
                 or response.headers.get("content-type", "").split(";", 1)[0] != "text/event-stream"):
                 raise ValueError("配置声明事件的请求身份或协议不符")
@@ -386,7 +386,7 @@ async def inventory(payload: PluginTarget, request: Request,
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginInventoryResultDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     packages = await asyncio.to_thread(owner.packages.inventory)
@@ -405,7 +405,7 @@ async def install(payload: InstallPluginRequest, request: Request,
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginInstallOperationDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     if payload.source_id is None and auth.kind != "local":
@@ -428,7 +428,7 @@ async def installation_operation(payload: PluginInstallOperationRequest, request
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginInstallOperationDTO].model_validate_json(response.content)
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     try:
@@ -445,7 +445,7 @@ async def cancel_installation(payload: PluginInstallOperationRequest, request: R
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginInstallOperationDTO].model_validate_json(response.content)
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     try:
@@ -462,7 +462,7 @@ async def source_catalog(payload: PluginSourceCatalogRequest, request: Request,
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginSourceCatalogDTO].model_validate_json(response.content)
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     try:
@@ -489,7 +489,7 @@ async def uninstall(payload: PluginVersionRequest, request: Request,
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginUninstallResultDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_installation_manage")
     try:
@@ -611,7 +611,7 @@ async def status(payload: PluginTarget, request: Request,
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginRuntimeStatusDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_runtime_manage")
     data = _plugin_runtime_status_snapshot(request, owner)
@@ -692,7 +692,7 @@ async def restart(payload: RestartPluginRequest, request: Request,
     response = await relay(request, payload, auth)
     if response is not None:
         if response.is_error:
-            raise HTTPException(response.status_code, response.json().get("detail"))
+            raise relay_http_error(response, gateway_id=payload.gateway_id, request_id=get_request_id(request))
         return APIResponse[PluginSlotStatusDTO].model_validate(response.json())
     require_federation_capability(request, auth, "service_plugin_runtime_manage")
     binding = PluginBinding(package_id=payload.package_id, plugin_id=payload.plugin_id,

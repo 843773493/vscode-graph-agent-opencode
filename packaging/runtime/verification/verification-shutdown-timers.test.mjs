@@ -144,13 +144,12 @@ function makeBaseContext(platform, timers, child, { exitOnTreeKill = false } = {
       }
     },
     waitForGatewayStopped: async () => {},
-    gatewayUrl: "http://127.0.0.1:8014",
-    headers: {},
     verifyBrowserResource: async (_requestJson, options) => {
       expect(options.workspaceId).toBe("workspace-fixture");
-      expect(options.packagePath).toBe("fixture-plugin.zip");
       return { resource_id: "browser-fixture", page_id: "page-fixture" };
     },
+    gatewayUrl: "http://127.0.0.1:8014",
+    headers: {},
     fetch: async (input) => {
       if (String(input) === "http://127.0.0.1:8014/") {
         return { ok: true, text: async () => "root" };
@@ -162,9 +161,8 @@ function makeBaseContext(platform, timers, child, { exitOnTreeKill = false } = {
     },
     requestJson: async (pathname) => {
       requestCalls.push(pathname);
-      if (pathname === "/api/gateway/users/guest") return { data: {} };
       if (pathname === "/api/gateway/workspaces") {
-        return { data: { items: [{ managed: true, gateway_id: "gateway-fixture", workspace_id: "workspace-fixture" }] } };
+        return { data: { items: [{ managed: true, workspace_id: "workspace-fixture" }] } };
       }
       if (pathname === "/api/v1/resources/browser-fixture") {
         return { data: { metadata: { page_id: "page-fixture" } } };
@@ -255,12 +253,11 @@ describe("产品验证关闭计时器", () => {
     await evaluate(functions.linux.verifyRunningProduct, context)(
       child,
       () => "",
-      "fixture-plugin.zip",
+      "/fixture/developer-tools.zip",
     );
 
     expect(child.signals).toEqual(["SIGINT"]);
-    expect(requestCalls).toEqual(["/api/gateway/users/guest", "/api/gateway/workspaces",
-      "/api/gateway/workspaces/workspace-fixture/runtime/restart-safe", "/api/v1/resources/browser-fixture"]);
+    expect(requestCalls).toHaveLength(3);
     timers.expectCleared();
   });
 
@@ -279,7 +276,7 @@ describe("产品验证关闭计时器", () => {
       evaluate(functions.windows.verifyRunningProduct, context)(
         child,
         () => "",
-        { forceWindowsTreeShutdown: true, pluginArchive: "fixture-plugin.zip" },
+        { forceWindowsTreeShutdown: true, pluginArchive: "/fixture/developer-tools.zip" },
       ),
     ).rejects.toThrow("fixture Gateway 停止观察错误");
 

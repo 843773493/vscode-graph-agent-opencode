@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sized
-from contextvars import ContextVar
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import wraps
-from inspect import signature
 from pathlib import Path
-from time import perf_counter_ns
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -116,15 +112,6 @@ from app.services.infrastructure.resource_platform.registry.semantic_registry im
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     acheckpoint_messages,
-)
-from app.services.infrastructure.rollout_context.checkpoint.durable.queries import (
-    RolloutCheckpointQueriesMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.owner.context_dispatch import (
-    ContextDispatchOwnerMixin,
-)
-from app.services.infrastructure.rollout_context.checkpoint.projection.message_materializer import (
-    RolloutMessageMaterializerMixin,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -1150,148 +1137,19 @@ async def test_real_runner_message_v1_child_owner_matches_model_admission_and_re
 
 
 @pytest.fixture(autouse=True)
-def compaction_runtime_call_profile(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
-    """只观察原压缩节点的真实调用；嵌套耗时必须按边界解读，不能相加。"""
+def compaction_runtime_profile(request: pytest.FixtureRequest, perf):
+    """显式 core 档位观察原调用，使用统一阶段/产物，不复制计时器。"""
     if request.node.name != "test_real_runner_compaction_seals_candidates_then_continues_and_forks_selected_context":
         yield
         return
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    path = context.artifacts_dir / f"compaction-runtime-calls-{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}.jsonl"
-    origin = perf_counter_ns()
-    parents: ContextVar[tuple[int, ...]] = ContextVar("compaction_runtime_calls", default=())
-    async_callers: ContextVar[dict[str, object] | None] = ContextVar("compaction_async_caller", default=None)
-    lock = threading.Lock()
-    counts: dict[str, int] = {}
-    call_id = 0
+    from tests.harness.performance.observers import observe_calls
 
-    def size(value: object) -> int | None:
-        # 不展开迭代器，也不把业务正文或密钥写入统计。
-        return len(value) if isinstance(value, Sized) else None
-
-    with path.open("x", encoding="utf-8", buffering=1) as stream:
-        def write(record: dict[str, object]) -> None:
-            with lock:
-                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-        def install(owner: type, name: str) -> None:
-            original: Callable[..., object] = getattr(owner, name)
-            parameters = signature(original)
-
-            @wraps(original)
-            def measured(instance: object, *args: object, **kwargs: object) -> object:
-                nonlocal call_id
-                parent_ids = parents.get()
-                with lock:
-                    call_id += 1
-                    identity = call_id
-                    counts[name] = counts.get(name, 0) + 1
-                    ordinal = counts[name]
-                admission = current_execution_admission()
-                bound = parameters.bind(instance, *args, **kwargs)
-                bound.apply_defaults()
-                arguments = bound.arguments
-                if name in {"load_checkpoint", "checkpoint_values"}:
-                    scale = {"checkpoint_json_chars": size(arguments["index"].checkpoint_json)}
-                elif name == "_read_messages":
-                    scale = {"message_sequences": size(arguments["sequences"])}
-                else:
-                    scale = {
-                        key: size(arguments[key])
-                        for key in ("request_messages", "messages", "items", "committed_items", "request_only_content")
-                        if key in arguments
-                    }
-                checkpoint_ns = arguments.get("checkpoint_ns")
-                if checkpoint_ns is None:
-                    config = arguments.get("config")
-                    snapshot = arguments.get("snapshot")
-                    checkpoint_ns = (
-                        config.get("configurable", {}).get("checkpoint_ns", "")
-                        if isinstance(config, Mapping)
-                        else snapshot.checkpoint_ns if snapshot is not None else None
-                    )
-                caller = sys._getframe(1)
-                caller_identity = {
-                    "module": caller.f_globals.get("__name__"),
-                    "symbol": caller.f_code.co_qualname,
-                    "line": caller.f_lineno,
-                } if name == "get_tuple" else None
-                del caller
-                entered = perf_counter_ns()
-                write({
-                    "event": "begin", "call_id": identity, "method": name, "call_ordinal": ordinal,
-                    "parent_call_id": parent_ids[-1] if parent_ids else None, "depth": len(parent_ids),
-                    "thread_id": threading.get_ident(), "at_seconds": (entered - origin) / 1e9,
-                    "execution_id": admission.execution_id if admission is not None else None,
-                    "turn_id": admission.turn_id if admission is not None else None,
-                    "checkpoint_ns": checkpoint_ns,
-                    "include_execution_context": arguments.get("include_execution_context"),
-                    "summary_candidate": arguments.get("summary_candidate") is not None,
-                    "input_scale": scale,
-                    "requested_channels": list(arguments["channels"]) if name == "get_delta_channel_history" else None,
-                    "caller": caller_identity,
-                    "async_caller": async_callers.get() if name == "get_tuple" else None,
-                })
-                token = parents.set((*parent_ids, identity))
-                returned: object = None
-                succeeded = False
-                started = perf_counter_ns()
-                try:
-                    returned = original(instance, *args, **kwargs)
-                    succeeded = True
-                    return returned
-                finally:
-                    ended = perf_counter_ns()
-                    parents.reset(token)
-                    messages = returned
-                    if isinstance(returned, Mapping):
-                        channels = returned.get("channel_values", returned)
-                        messages = channels.get("messages") if isinstance(channels, Mapping) else None
-                    write({
-                        "event": "end", "call_id": identity, "method": name,
-                        "method_started_seconds": (started - origin) / 1e9,
-                        "at_seconds": (ended - origin) / 1e9, "elapsed_seconds": (ended - started) / 1e9,
-                        "returned": succeeded, "output_messages": size(messages),
-                    })
-
-            monkeypatch.setattr(owner, name, measured)
-
-        original_aget_tuple = RolloutCheckpointSaver.aget_tuple
-
-        @wraps(original_aget_tuple)
-        async def observe_aget_tuple(instance, config):
-            caller = sys._getframe(1)
-            token = async_callers.set({
-                "module": caller.f_globals.get("__name__"),
-                "symbol": caller.f_code.co_qualname,
-                "line": caller.f_lineno,
-            })
-            del caller
-            try:
-                return await original_aget_tuple(instance, config)
-            finally:
-                async_callers.reset(token)
-
-        monkeypatch.setattr(RolloutCheckpointSaver, "aget_tuple", observe_aget_tuple)
-        install(RolloutCheckpointQueriesMixin, "load_checkpoint")
-        install(RolloutCheckpointQueriesMixin, "checkpoint_values")
-        install(RolloutCheckpointQueriesMixin, "committed_context_items")
-        install(RolloutMessageMaterializerMixin, "_read_messages")
-        install(ContextDispatchOwnerMixin, "prepare_context_for_provider")
-        for name in (
-            "get_tuple", "get_delta_channel_history", "put", "ensure_request_items", "_compose_committed_context_plan",
-            "load_context_source_rebuild_state", "register_context_contribution",
-            "_request_content_for_plan", "_draft_request_body", "seal_context_plan",
-            "project_context_plan_to_provider", "project_context_plan_to_native",
-            "require_provider_resource_activation", "read_resource_activation_payload",
-        ):
-            install(RolloutCheckpointSaver, name)
-        write({"event": "opened", "started_at": datetime.now(UTC).isoformat(), "node_id": request.node.nodeid,
-               "elapsed_semantics": "包含嵌套调用；按 parent_call_id 解析，不累加为总耗时"})
-        try:
-            yield
-        finally:
-            write({"event": "closed", "at_seconds": (perf_counter_ns() - origin) / 1e9, "call_counts": counts})
-            print(f"compaction runtime call profile: {path}")
+    with observe_calls(RolloutCheckpointSaver, (
+        "get_tuple", "put", "prepare_context_for_provider", "seal_context_plan",
+        "project_context_plan_to_provider", "load_context_source_rebuild_state",
+        "committed_context_items", "load_checkpoint", "checkpoint_values",
+    ), perf):
+        yield
 
 
 @pytest.fixture
@@ -1317,7 +1175,7 @@ def runner_compaction_gateway_context(
 
 async def test_real_runner_compaction_seals_candidates_then_continues_and_forks_selected_context(
     runtime_case: RuntimeCase, cold_message_stream_client: httpx.AsyncClient,
-    runner_compaction_gateway_context: None, gateway_skill_publication, fork_deadlines,
+    runner_compaction_gateway_context: None, gateway_skill_publication, fork_deadlines, perf_loop,
 ) -> None:
     """仅替换 Provider 响应，经过真实准入、摘要重试、checkpoint、冷流和 fork 后继。"""
     case = runtime_case
@@ -2233,8 +2091,8 @@ async def test_lifespan_starts_cold_worker_and_closes_runtime_before_resource_pl
         lifespan_patch.setattr(platform_type, "close", close_platform)
         lifespan_patch.setattr(main, "configure_application_logging", lambda **_: None)
         lifespan_patch.setattr(main, "_model_stream_controller", None)
-        async with main.lifespan(main.app) as _main_lifespan_state_2236:
-            await _main_lifespan_state_2236["after_http_startup"]()
+        async with main.lifespan(main.app) as _main_lifespan_state:
+            await _main_lifespan_state["after_http_startup"]()
             assert service._sweep_task is not None and not service._sweep_task.done()
             assert case.tracker.snapshot(session_id, thread_id).residency == "cold"
             assert case.tracker.snapshot(session_id, thread_id).generation == 0

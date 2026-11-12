@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { threadHistoryCache } from "../../state/threadHistoryCache";
 import type { SessionTurnTimeline } from "../../state/session/turnTimeline";
 import { listAgents } from "../../api";
-import type { Agent, GatewayUserAccess, GatewayWorkspace, Session, WebUiSettings } from "../../types/backend";
+import type { Agent, GatewayWorkspace, Session, WebUiSettings } from "../../types/backend";
 import { INITIAL_APP_STATE } from "../app/appStateSeed";
 import { cloneMaps } from "../../state/appStateMaps";
 import { getConversationsForSession, messageStreamTurnIdForSession } from "../../state/conversations";
@@ -34,7 +34,6 @@ export interface ThreadSessionSeed {
   browserViewScope: string;
   session: Session;
   agents: Agent[];
-  access: GatewayUserAccess;
   workspaces: GatewayWorkspace[];
   settings: WebUiSettings;
 }
@@ -52,7 +51,7 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
     ...cloneMaps(INITIAL_APP_STATE), apiPort: 0, isBootstrapping: false,
     currentSession: seed.session, currentSessionWorkspaceId: owner.workspaceKey,
     activeGatewayWorkspaceId: owner.workspaceKey, agents: seed.agents,
-    browserViewScope: seed.browserViewScope, gatewayWorkspaces: seed.workspaces, gatewayUserAccess: seed.access,
+    browserViewScope: seed.browserViewScope, gatewayWorkspaces: seed.workspaces,
     uiSettings: seed.settings, uiSettingsLoaded: true,
     turnTimelinesBySession: new Map(seed.history ? [[scopeKey, seed.history]] : []),
   }));
@@ -62,14 +61,13 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
   const setStatus = useCallback((status: string) => setState(previous => ({ ...previous, status })), []);
   const views = useSessionViewState({ host: { apiPort: 0, currentWorkspaceId: owner.workspaceKey,
     currentSessionId: owner.sessionId, threadId: owner.threadId, scopeKey,
-    gatewayUserViewStates: state.gatewayUserViewStates, expandDetails: state.expandDetails }, setState, onError });
+    sessionViewStates: state.sessionViewStates, expandDetails: state.expandDetails }, setState, onError });
   useEffect(() => { void views.loadSessionViewState(owner.workspaceKey, owner.sessionId); }, [views.loadSessionViewState, owner.workspaceKey, owner.sessionId]);
   const selectionIntentRef = useRef(0);
   const [catalogRuntime] = useState(() => createSessionCatalogOutboxRuntime({ apiPort: 0, onError }));
   useEffect(() => {
-    catalogRuntime.activatePrincipal(seed.access);
     return () => catalogRuntime.dispose();
-  }, [catalogRuntime, seed.access]);
+  }, [catalogRuntime]);
   const { currentTurnTimeline: timeline, getCurrentTurnTimeline } = useSessionTurnTimeline(state, latestStateRef, scopeKey);
   const cacheOwner = useMemo(() => ({ gatewayId: owner.gatewayId, workspaceId: owner.workspaceId,
     sessionId: owner.sessionId, threadId: owner.threadId }), [owner.gatewayId, owner.workspaceId, owner.sessionId, owner.threadId]);
@@ -125,8 +123,7 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
     apiPort: 0, currentSession: state.currentSession,
     activeGatewayWorkspaceId: owner.workspaceKey, currentSessionGatewayWorkspaceId: owner.workspaceKey,
     defaultGatewayWorkspaceId: owner.workspaceKey, readState, setState, abortCurrentStream,
-    invalidateAgentState: content.invalidateAgentState, sessionCatalogOutboxRuntime: catalogRuntime,
-    gatewayUserAccess: seed.access, workspaceRequestTargets: seed.workspaces,
+    invalidateAgentState: content.invalidateAgentState, sessionCatalogOutboxRuntime: catalogRuntime, workspaceRequestTargets: seed.workspaces,
     selectionIntentRef, onSessionCreated,
   });
   const actions = useSessionRunActions({

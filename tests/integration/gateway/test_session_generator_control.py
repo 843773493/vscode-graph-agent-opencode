@@ -13,7 +13,6 @@ from configs.runtime import read_jsonc_object
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     reset_gateway_persistent_state,
     start_gateway_process,
@@ -53,7 +52,6 @@ def migration_gateway(request, integration_workspace_root_path):
 async def test_generator_import_uses_workspace_owner_and_does_not_overwrite_later_edits(migration_gateway):
     gateway, workspace, control_root = migration_gateway
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
-        await acquire_gateway_guest(client)
         targets = (await client.get("/api/gateway/workspaces")).json()["data"]
         owner = targets["active_workspace"]
         workspace_id = owner["workspace_id"]

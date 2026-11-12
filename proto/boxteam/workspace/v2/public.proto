@@ -2653,6 +2653,24 @@ message TurnDetailDTO {
   optional bool tool_summary_truncated = 28;
 }
 
+// 原历史视图的工具结果元数据；发现不读 canonical 正文。
+message TurnToolResultDTO {
+  string item_id = 1;
+  string turn_id = 2;
+  string tool_call_id = 3;
+  string tool_name = 4;
+  string status = 5;
+}
+
+message ThreadToolResultListDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  repeated TurnToolResultDTO items = 3;
+  optional int64 next_after = 4;
+  optional string source_view_id = 5;
+  int64 source_view_revision = 6;
+}
+
 // 精确 SessionThread 的字面量正文搜索；cursor 仅由历史 owner 解释。
 message TurnMessageSearchRequest {
   string query = 1;
@@ -2734,6 +2752,7 @@ message TurnHistoryLoadRequest {
   optional string execution_id = 9;
   repeated string tool_call_ids = 10;
   optional TurnMessageReferenceDTO anchor_message = 11;
+  optional string anchor_tool_result = 12;
 }
 
 message TurnHistoryPageDTO {
@@ -2751,6 +2770,7 @@ message TurnHistoryPageDTO {
   optional string source_view_id = 12;
   optional int64 source_view_revision = 13;
   optional TurnMessageLocationDTO located_message = 14;
+  optional TurnToolResultDTO located_tool_result = 15;
 }
 
 message InternalExecutionHistoryDTO {

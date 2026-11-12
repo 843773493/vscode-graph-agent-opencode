@@ -56,7 +56,7 @@ async def test_json_symbols_follow_model_version_and_workspace_identity(
     result_path = context.artifacts_dir / "language-models.json"
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "120", "--",
-               "bun", "tests/integration/clients/web/quick_access/language_models.mjs"]
+               "node", "tests/integration/clients/web/quick_access/language_models.mjs"]
     with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
         completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
             env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),

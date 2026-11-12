@@ -51,12 +51,6 @@ async function bootstrap() {
     const credential = await fetch("/api/gateway/auth/local-credential");
     if (!credential.ok) throw new Error(`读取本地凭证失败：${credential.status}`);
     const token = (await credential.json()).data.token;
-    const guest = await fetch("/api/gateway/users/guest", {
-      method: "POST",
-      headers: { "X-Local-Token": token, "Content-Type": "application/json" },
-      body: JSON.stringify({ tracking: { source: "itemized-context-browser-integration" } }),
-    });
-    if (!guest.ok) throw new Error(`访客登录失败：${guest.status}`);
     const workspaces = await fetch("/api/gateway/workspaces", { headers: { "X-Local-Token": token } });
     if (!workspaces.ok) throw new Error(`读取工作区失败：${workspaces.status}`);
     return (await workspaces.json()).data;

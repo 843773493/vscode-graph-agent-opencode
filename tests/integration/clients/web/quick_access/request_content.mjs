@@ -34,7 +34,6 @@ try {
     if (!response.ok || payload.request_id !== response.headers.get('X-Request-ID')) throw new Error(JSON.stringify({ path, status: response.status, payload }));
     return payload.data;
   }, { path, body });
-  await api('/api/gateway/users/guest', { tracking: { source: 'request-content' } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
   await api('/api/gateway/health'); await api('/api/gateway/workspaces'); await api('/api/v1/workspace');

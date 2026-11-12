@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api import workspace_observation as api
+from app.schemas.internal_v2.session_navigation.operations import NavigationSnapshotDTO
 from app.schemas.internal_v2.workspace_observation import WorkspaceObservationRequest
 
 SESSION_ID = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
@@ -20,7 +21,7 @@ THREAD_ID = "thr_018f0000000070008000000000000001"
 def observation_sources(monkeypatch: pytest.MonkeyPatch):
     calls = []
     closed = set()
-    queues = {kind: asyncio.Queue() for kind in ("activity", "trace", "files")}
+    queues = {kind: asyncio.Queue() for kind in ("activity", "trace", "files", "navigation")}
 
     async def frames(kind: str) -> AsyncIterator[str]:
         try:
@@ -50,6 +51,11 @@ def observation_sources(monkeypatch: pytest.MonkeyPatch):
             raise HTTPException(403, detail="路径禁止访问")
         return frames("files")
 
+    def navigation(service):
+        calls.append(("navigation",))
+        return frames("navigation")
+
+    monkeypatch.setattr(api, "_stream_navigation_changes", navigation)
     monkeypatch.setattr(api, "_stream_session_activity_sse", activity)
     monkeypatch.setattr(api, "open_session_trace_sse", trace)
     monkeypatch.setattr(api, "open_workspace_file_sse", files)
@@ -63,7 +69,7 @@ def open_observations(observation_sources):
         return await api.stream_workspace_observation(
             WorkspaceObservationRequest(subscriptions=subscriptions), "token",
             activity_service=object(), session_service=object(), config_service=object(),
-            watch_service=object(), workspace_service=SimpleNamespace(
+            watch_service=object(), catalog_service=object(), workspace_service=SimpleNamespace(
                 file_operations=SimpleNamespace(store=SimpleNamespace(latest_event_id=lambda: 27)),
             ),
         )
@@ -74,6 +80,30 @@ async def read_envelope(stream):
     frame = await asyncio.wait_for(anext(stream), 0.5)
     assert frame.startswith("event: observation\ndata: ")
     return json.loads(frame.split("data: ", 1)[1])
+
+
+async def test_idle_navigation_sends_logical_heartbeat_without_reading_snapshot(monkeypatch):
+    closed = asyncio.Event()
+    reads = []
+
+    async def changes():
+        try:
+            reads.append("initial")
+            yield NavigationSnapshotDTO(workspace_id="workspace", catalog_revision=7, event_seq_watermark=2, generation=7)
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(api, "SSE_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    stream = api._stream_navigation_changes(SimpleNamespace(operations=SimpleNamespace(changes=changes)))
+    try:
+        assert (await anext(stream)).startswith("event: session_navigation\n")
+        assert await asyncio.wait_for(anext(stream), 0.5) == ": heartbeat\n\n"
+        assert await asyncio.wait_for(anext(stream), 0.5) == ": heartbeat\n\n"
+        assert reads == ["initial"]
+    finally:
+        await stream.aclose()
+    assert closed.is_set()
 
 
 async def test_observations_keep_independent_cursors_and_original_frames(
@@ -165,3 +195,20 @@ async def test_owner_runtime_error_is_visible_and_other_owner_keeps_streaming(
 def test_observation_request_rejects_ambiguous_or_invalid_scope(subscriptions):
     with pytest.raises(ValidationError):
         WorkspaceObservationRequest(subscriptions=subscriptions)
+
+
+async def test_navigation_changes_share_transport_and_release_reader(open_observations, observation_sources):
+    response = await open_observations([
+        {"subscription_id": "navigation", "kind": "session_navigation"},
+        {"subscription_id": "activity", "kind": "session_activity"},
+    ])
+    stream = response.body_iterator
+    try:
+        ready = [await read_envelope(stream) for _ in range(2)]
+        assert {item["subscription_id"] for item in ready} == {"navigation", "activity"}
+        original = 'event: session_navigation\ndata: {"catalog_revision":7}\n\n'
+        await observation_sources.queues["navigation"].put(original)
+        assert await read_envelope(stream) == {"subscription_id": "navigation", "state": "frame", "frame": original}
+    finally:
+        await stream.aclose()
+    assert observation_sources.closed == {"navigation", "activity"}

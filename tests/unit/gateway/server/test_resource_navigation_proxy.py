@@ -28,7 +28,7 @@ from app.gateway.registry import (
 )
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.resource_navigation import router as navigation_router
-from app.gateway.server.workspace_proxy import router, verify_user_access_for_proxy
+from app.gateway.server.workspace_proxy import router
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationResultDTO
 from app.services.infrastructure.resource_platform.sources.gateway_resource_navigation import (
     qualify_navigation_result,
@@ -100,7 +100,6 @@ async def navigation_proxy(
         application.state.registry = registry
         application.state.http_client = upstream
         application.state.streaming_http_client = upstream
-        application.dependency_overrides[verify_user_access_for_proxy] = lambda: None
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://gateway.test",
                                      headers={"X-Local-Token": get_gateway_local_token()}) as client:
             yield client, registry, forwarded

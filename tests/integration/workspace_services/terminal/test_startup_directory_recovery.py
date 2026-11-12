@@ -58,6 +58,7 @@ def startup_shell(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: p
 async def test_unverified_startup_keeps_directory_until_original_management_stop(
     request: pytest.FixtureRequest, integration_backend_port: int, integration_config_path: str,
     monkeypatch: pytest.MonkeyPatch, cold: bool,
+    prepared_developer_tools_package: Path,
 ) -> None:
     run = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     root = prepare_default_test_workspace(
@@ -79,6 +80,7 @@ async def test_unverified_startup_keeps_directory_until_original_management_stop
         terminal_plugin_gateway_for_workspace(
             workspace_root=root, artifacts_dir=run.artifacts_dir,
             gateway_port=integration_backend_port + 68, boxteam_home=home,
+            prepared_package_root=prepared_developer_tools_package,
         ) as plugin,
         workspace_tool_runtime(root) as (container, session_id, context),
     ):

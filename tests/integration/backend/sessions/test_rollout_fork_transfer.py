@@ -72,21 +72,21 @@ async def transfer_triad(request: pytest.FixtureRequest) -> AsyncIterator[
     artifacts.mkdir(parents=True, exist_ok=True)
     options = getattr(request, "param", {})
     same_backend_routes = bool(options.get("same_backend_routes"))
+    browser_plugin_nodes = options.get("browser_plugin_nodes", ())
     fork_deadlines = ForkDeadlineRegistry(artifacts)
     try:
         with model_stream_replay(
-            context.artifacts_dir.parent, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+            context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
             business_assertion="cross-gateway-fork-transfer",
         ) as model:
             control = model.control
             async with open_communication_triad(
                 context, _prepare_workspace, backend_environment=model.environment,
                 backend_asgi_app="tests.support.e2e_control.backend_app:app",
-                browser_plugin_nodes=options.get("browser_plugin_nodes", ()),
-                prepared_developer_tools_package=(
-                    request.getfixturevalue("prepared_developer_tools_package")
-                    if options.get("browser_plugin_nodes") else None
-                ),
+                # 共享 Backend 时真实 owner 是 A，辅助服务必须跟随该 owner 启动。
+                browser_plugin_nodes=browser_plugin_nodes,
+                prepared_developer_tools_package=request.getfixturevalue("prepared_developer_tools_package")
+                if browser_plugin_nodes else None,
                 on_sshd_started=fork_deadlines.watchdog.register_c3_sshd,
                 same_backend_routes=same_backend_routes,
             ) as nodes:

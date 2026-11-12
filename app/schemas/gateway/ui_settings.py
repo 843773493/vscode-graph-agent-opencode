@@ -8,11 +8,9 @@ from pydantic import (
     Field,
     PlainSerializer,
     field_validator,
-    model_validator,
 )
 
 from app.core.resource_uri import parse_resource_uri
-from app.gateway.theme.defaults import DEFAULT_THEME_BACKGROUND_OVERLAY
 
 
 def _file_reference(value: str) -> str:
@@ -181,57 +179,6 @@ class WebUIGatewayConsoleSettingsDTO(BaseModel):
     view: Literal["routing", "managed"] = "routing"
 
 
-class GatewayThemeBackgroundDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    type: Literal["remote", "gateway_asset"]
-    url: str | None = None
-    asset_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
-    position: str = Field(default="center", min_length=1, max_length=120)
-    size: str = Field(default="cover", min_length=1, max_length=120)
-    repeat: Literal["no-repeat", "repeat", "repeat-x", "repeat-y", "space", "round"] = (
-        "no-repeat"
-    )
-    appearance: Literal["immersive", "theme"] = "immersive"
-    overlay: str = Field(
-        default=DEFAULT_THEME_BACKGROUND_OVERLAY,
-        min_length=1,
-        max_length=1000,
-    )
-
-    @model_validator(mode="after")
-    def validate_source(self) -> GatewayThemeBackgroundDTO:
-        if self.type == "remote":
-            if not self.url or self.asset_id is not None:
-                raise ValueError("remote 背景必须只提供 url")
-        elif not self.asset_id or self.url is not None:
-            raise ValueError("gateway_asset 背景必须只提供 asset_id")
-        return self
-
-
-class ResolvedGatewayThemeDTO(BaseModel):
-    id: str
-    label: str
-    color_scheme: Literal["light", "dark"]
-    tokens: dict[str, str]
-    background_image_url: str | None = None
-
-
-class GatewayThemeOptionDTO(BaseModel):
-    id: str
-    label: str
-    extends: Literal["warm", "green", "blue"]
-    source: Literal["builtin", "gateway_config"]
-    preview_tokens: dict[str, str]
-    background_image_url: str | None = None
-
-
-class GatewayThemeCatalogDTO(BaseModel):
-    current_theme_id: str
-    items: list[GatewayThemeOptionDTO]
-    current_theme: ResolvedGatewayThemeDTO
-
-
 class GatewayUIAssetDTO(BaseModel):
     asset_id: str
     original_filename: str
@@ -240,26 +187,10 @@ class GatewayUIAssetDTO(BaseModel):
     sha256: str
     imported_at: str
     url: str
-    referenced_theme_ids: list[str] = Field(default_factory=list)
 
 
 class GatewayUIAssetListDTO(BaseModel):
     items: list[GatewayUIAssetDTO] = Field(default_factory=list)
-
-
-class WebUIThemeSettingsDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    theme_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
-    background: GatewayThemeBackgroundDTO | None = None
-    resolved_theme: ResolvedGatewayThemeDTO | None = None
-
-
-class WebUIThemeSettingsUpdateDTO(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    theme_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
-    background: GatewayThemeBackgroundDTO | None = None
 
 
 class WebUISettingsDTO(BaseModel):
@@ -275,7 +206,6 @@ class WebUISettingsDTO(BaseModel):
     gateway_console: WebUIGatewayConsoleSettingsDTO = Field(
         default_factory=WebUIGatewayConsoleSettingsDTO
     )
-    theme: WebUIThemeSettingsDTO = Field(default_factory=WebUIThemeSettingsDTO)
 
 
 class WebUISettingsUpdateDTO(BaseModel):
@@ -285,4 +215,3 @@ class WebUISettingsUpdateDTO(BaseModel):
     session_sidebar: WebUISessionSidebarSettingsDTO | None = None
     workspace_file_tree: WebUIWorkspaceFileTreeSettingsDTO | None = None
     gateway_console: WebUIGatewayConsoleSettingsDTO | None = None
-    theme: WebUIThemeSettingsUpdateDTO | None = None

@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from app.services.infrastructure import workspace_state_store as store_module
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
     ConfigEventInput,
@@ -16,7 +15,7 @@ from app.services.infrastructure.workspace_state_store import WorkspaceStateStor
 
 
 def test_pending_location_migration_preserves_candidate_and_replay(
-    workspace_root: Path, monkeypatch: pytest.MonkeyPatch,
+    workspace_root: Path,
 ) -> None:
     def create(store: WorkspaceStateStore, *, digest: str = "candidate-digest"):
         return store.create_pending_config_candidate(
@@ -29,16 +28,18 @@ def test_pending_location_migration_preserves_candidate_and_replay(
             base_active_revision=5, source_generation=11,
         )
 
-    with monkeypatch.context() as legacy:
-        legacy.setattr(store_module, "_WORKSPACE_MIGRATIONS", store_module._WORKSPACE_MIGRATIONS[:22])
-        with WorkspaceStateStore(workspace_root=workspace_root) as old:
-            candidate = create(old)
-            with closing(old.connection()) as connection:
-                # 仅重现旧 writer 曾保存的位置，其余状态由原 owner 生成。
-                connection.execute("UPDATE config_pending_candidate SET persistence_location = ?", (str(old.path),))
-                original = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
-                del original["persistence_location"]
-                versions = list(connection.execute("SELECT * FROM schema_migrations ORDER BY version"))
+    with WorkspaceStateStore(workspace_root=workspace_root) as old:
+        candidate = create(old)
+        with closing(old.connection()) as connection:
+            # 当前 writer 只写当前 schema；夹具逆向还原 23/24 两步，重现真实 schema 22。
+            connection.execute("ALTER TABLE config_pending_candidate DROP COLUMN source_edit_json")
+            connection.execute("ALTER TABLE config_pending_candidate ADD COLUMN persistence_location TEXT")
+            connection.execute("UPDATE config_pending_candidate SET persistence_location = ?", (str(old.path),))
+            connection.execute("DELETE FROM schema_migrations WHERE version > 22")
+            original = dict(connection.execute("SELECT * FROM config_pending_candidate").fetchone())
+            del original["persistence_location"]
+            original["source_edit_json"] = None
+            versions = list(connection.execute("SELECT * FROM schema_migrations ORDER BY version"))
 
     for _ in range(2):
         with WorkspaceStateStore(workspace_root=workspace_root) as store:
@@ -354,6 +355,14 @@ def test_workspace_config_apply_claim_uses_lease_and_fencing(workspace_root):
             lease_seconds=30,
         )
         assert renewed.apply_id == claim.apply_id
+        with pytest.raises(ConfigConflictError, match="apply claim"):
+            store.create_pending_config_candidate(
+                config_domain="workspace", candidate_id="candidate-2",
+                idempotency_key="reload-2", payload={"config_version": 2},
+                source_baseline={}, candidate_digest="candidate-2",
+                effective_digest="candidate-2", target_generation="workspace-runtime",
+                fencing_token=None, state="candidate_validated", base_active_revision=1,
+            )
         with pytest.raises(ConfigConflictError):
             store.release_config_apply_claim(
                 config_domain="workspace",

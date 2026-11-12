@@ -5,7 +5,6 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
-import logging
 from functools import partial
 from io import BytesIO
 from pathlib import Path
@@ -13,10 +12,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app.gateway.config import GatewayConfig
 from app.gateway.theme import assets
-from app.gateway.theme.resolver import resolve_theme
-from app.schemas.gateway.ui_settings import GatewayThemeBackgroundDTO
 
 
 @pytest.fixture
@@ -42,7 +38,7 @@ def native_path(request: pytest.FixtureRequest) -> str:
     return request.param
 
 
-@pytest.mark.parametrize("operation", ["manifest-read", "manifest-write", "image-write", "local-image-read", "image-read", "image-delete"])
+@pytest.mark.parametrize("operation", ["manifest-read", "manifest-write", "image-write", "image-read", "image-delete"])
 def test_asset_storage_error_keeps_raw_cause_and_recovery(
     image_store, image_bytes, native_path, operation, tmp_path, monkeypatch, asset_diagnostics,
 ) -> None:
@@ -54,9 +50,8 @@ def test_asset_storage_error_keeps_raw_cause_and_recovery(
     second_path = root / "ui-assets" / hashlib.sha256(image_bytes[1]).hexdigest() / "original.png"
     method, target, action = {
         "manifest-read": ("read_text", manifest, partial(assets.list_ui_assets, root)),
-        "manifest-write": ("replace", manifest.with_suffix(".json.tmp"), partial(assets.update_ui_asset_references, {asset.asset_id: ["blue"]}, gateway_root=root)),
+        "manifest-write": ("replace", manifest.with_suffix(".json.tmp"), partial(assets.import_ui_asset, image_bytes[1], original_filename="second.png", gateway_root=root)),
         "image-write": ("write_bytes", second_path, partial(assets.import_ui_asset, image_bytes[1], original_filename="second.png", gateway_root=root)),
-        "local-image-read": ("read_bytes", source, partial(assets.import_ui_asset_file, source, gateway_root=root)),
         "image-read": ("open", path, partial(assets.resolve_ui_asset, asset.asset_id, gateway_root=root)),
         "image-delete": ("unlink", path, partial(assets.delete_ui_asset, asset.asset_id, gateway_root=root)),
     }[operation]
@@ -93,7 +88,7 @@ def test_asset_storage_error_keeps_raw_cause_and_recovery(
         assert resolved.read_bytes() == image_bytes[0] and same_asset.asset_id == asset.asset_id
 
 
-@pytest.mark.parametrize("kind", ["shape", "json", "utf8", "key", "identity", "digest", "original-filename", "filename", "content-type", "size", "imported-at", "references"])
+@pytest.mark.parametrize("kind", ["shape", "json", "utf8", "key", "identity", "digest", "original-filename", "filename", "content-type", "size", "imported-at"])
 def test_manifest_failure_never_rewrites_or_exposes_native_content(image_store, native_path, kind, asset_diagnostics) -> None:
     root, asset, _ = image_store
     path = root / "ui-assets/manifest.json"
@@ -109,8 +104,8 @@ def test_manifest_failure_never_rewrites_or_exposes_native_content(image_store, 
         if kind == "key":
             data = {native_path: data[asset.asset_id]}
         else:
-            field = {"identity": "asset_id", "digest": "sha256", "original-filename": "original_filename", "filename": "filename", "content-type": "content_type", "size": "size", "imported-at": "imported_at", "references": "referenced_theme_ids"}[kind]
-            data[asset.asset_id][field] = [native_path] if kind == "references" else native_path
+            field = {"identity": "asset_id", "digest": "sha256", "original-filename": "original_filename", "filename": "filename", "content-type": "content_type", "size": "size", "imported-at": "imported_at"}[kind]
+            data[asset.asset_id][field] = native_path
         content = json.dumps(data).encode()
     path.write_bytes(content)
     with pytest.raises(ValueError) as caught:
@@ -127,11 +122,9 @@ def test_manifest_failure_never_rewrites_or_exposes_native_content(image_store, 
     assert assets.list_ui_assets(root)[0].asset_id == asset.asset_id
 
 
-def test_valid_metadata_preserves_current_ui_reference_and_integer_size(image_store, image_bytes) -> None:
-    root, asset, _ = image_store
-    assets.update_ui_asset_references({asset.asset_id: ["当前 UI 设置", "blue"]}, gateway_root=root)
+def test_valid_metadata_preserves_integer_size(image_store, image_bytes) -> None:
+    root, _, _ = image_store
     reopened, = assets.list_ui_assets(root)
-    assert reopened.referenced_theme_ids == ["blue", "当前 UI 设置"]
     assert reopened.size == len(image_bytes[0]) and reopened.content_type == "image/png"
 
 
@@ -141,24 +134,3 @@ def test_path_like_asset_identity_is_rejected_without_echo(image_store, native_p
         with pytest.raises(KeyError, match="UI 资源不存在") as caught:
             action(native_path, gateway_root=root)
         assert native_path not in str(caught.value)
-
-
-@pytest.mark.parametrize("kind", ["missing", "symlink"])
-def test_local_background_failure_reports_reason_without_source_path(tmp_path, image_store, caplog, kind) -> None:
-    root, _, path = image_store
-    source = tmp_path / "private-local-image.png"
-    if kind == "symlink":
-        source.symlink_to(path)
-    with caplog.at_level(logging.ERROR, logger=assets.__name__), pytest.raises((FileNotFoundError, ValueError)) as caught:
-        assets.import_ui_asset_file(source, gateway_root=root)
-    assert str(source) not in str(caught.value)
-    assert str(source) in caplog.text
-
-
-def test_file_url_is_not_a_theme_background_exception(tmp_path, native_path, caplog) -> None:
-    url = "file://" + native_path
-    with caplog.at_level(logging.ERROR, logger="app.gateway.theme.resolver"), pytest.raises(ValueError, match="http/https") as caught:
-        resolve_theme("warm", config=GatewayConfig(), gateway_root=tmp_path,
-                      background_override=GatewayThemeBackgroundDTO(type="remote", url=url))
-    assert native_path not in str(caught.value) and "scheme=file" in str(caught.value)
-    assert url in caplog.text

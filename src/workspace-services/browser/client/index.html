@@ -172,6 +172,7 @@
               <span class="sr-only">高度</span>
               <input id="device-height-input" type="number" min="1" max="4096" inputmode="numeric" aria-label="视口高度" />
             </label>
+            <button id="device-size-apply" type="button" title="应用宽高，影响所有观看者及 Agent" aria-label="应用视口尺寸">应用</button>
             <label class="device-compact-field" title="设备像素比">
               <span class="sr-only">DPR</span>
               <select id="device-dpr-select" aria-label="设备像素比">
@@ -248,9 +249,6 @@
                 <div id="element-highlight" class="element-highlight" hidden>
                   <span id="element-highlight-label" class="element-highlight-label"></span>
                 </div>
-                <div class="viewport-resize-handle viewport-resize-right" data-resize-axis="x" title="拖拽调整宽度"></div>
-                <div class="viewport-resize-handle viewport-resize-bottom" data-resize-axis="y" title="拖拽调整高度"></div>
-                <div class="viewport-resize-handle viewport-resize-corner" data-resize-axis="xy" title="拖拽调整宽高"></div>
               </div>
             </div>
             <div id="screen-overlay" class="screen-overlay">正在连接浏览器…</div>

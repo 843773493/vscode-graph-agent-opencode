@@ -497,7 +497,7 @@ export function useAroundTurnLoader({
 }: Omit<Parameters<typeof useDirectionalTurnLoader>[0], "direction">):
   LoadAroundTurn {
   const activeRequestRef = useRef<AbortController | null>(null);
-  return useCallback<LoadAroundTurn>(async (anchorTurnId, navigationSignal, anchorMessage) => {
+  return useCallback<LoadAroundTurn>(async (anchorTurnId, navigationSignal, anchorMessage, toolResultId) => {
     if (apiPort === null || !sessionId || !sessionCacheKey || !anchorTurnId) {
       throw new Error("当前会话尚未就绪，无法定位轮次");
     }
@@ -555,6 +555,7 @@ export function useAroundTurnLoader({
           direction: "around",
           anchor_turn_id: anchorTurnId,
           ...(anchorMessage ? { anchor_message: anchorMessage } : {}),
+          ...(toolResultId ? { anchor_tool_result: toolResultId } : {}),
           before_turns: CURSOR_HISTORY_TURNS,
           after_turns: CURSOR_HISTORY_TURNS,
         },
@@ -566,6 +567,7 @@ export function useAroundTurnLoader({
       if (!isCurrentRequest()) throw new Error("轮次定位请求的会话线程已切换");
       if (page.thread_id !== currentTimeline.threadId) throw new Error("指定轮次历史的 thread owner 与请求不一致");
       if (anchorMessage && !page.located_message) throw new Error("指定消息缺少后端核验的原文，无法定位");
+      if (toolResultId && page.located_tool_result?.item_id !== toolResultId) throw new Error("指定工具结果缺少后端核验的原调用身份");
       if (![...page.items, ...(page.summaries ?? [])].some((turn) => turn.turn_id === anchorTurnId)) {
         throw new Error("当前会话线程中未找到指定轮次：" + anchorTurnId);
       }
@@ -586,7 +588,7 @@ export function useAroundTurnLoader({
           ),
         };
       });
-      return page.located_message ?? undefined;
+      return page.located_message ?? page.located_tool_result ?? undefined;
     } catch (error) {
       if (signal.aborted) {
         releaseLoading();

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crossSpawn from "cross-spawn";
+import { assertReleaseSource } from "../release/source-policy.mjs";
 
 import { computeBuildInputFingerprint } from "../../packaging/runtime/build-input-fingerprint.mjs";
 import { sha256File } from "../../packaging/runtime/runtime-release-assets.mjs";
@@ -159,7 +160,7 @@ export function buildReleaseInstallCommand({
   args.push(paths.launcherTarball, paths.runtimeTarball);
 
   return Object.freeze({
-    command: platform === "win32" ? "npm.cmd" : "npm",
+    command: "npm",
     args: Object.freeze(args),
     targetPlatform,
     version: requiredValue(version, "version"),
@@ -359,6 +360,7 @@ export async function main(args = process.argv.slice(2)) {
   const projectRoot = path.resolve(
     process.env.BOXTEAM_PROJECT_ROOT?.trim() || process.cwd(),
   );
+  assertReleaseSource(projectRoot);
   const command = buildReleaseInstallCommand({
     prefix: options.prefix,
     projectRoot,

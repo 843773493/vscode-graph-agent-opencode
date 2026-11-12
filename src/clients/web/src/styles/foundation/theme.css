@@ -1,19 +1,16 @@
 :root {
-  color-scheme: light;
+  color-scheme: var(--boxteam-color-scheme);
 
   /* 字体与排版 */
-  --bt-font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
-  --bt-font-family-mono:
-    "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --bt-font-family: var(--vscode-font-family);
+  --bt-font-family-mono: var(--monaco-monospace-font);
   --bt-font-size: 13px;
   --bt-font-size-heading: 18px;
   --bt-font-size-label: 11px;
   --bt-font-weight: 400;
 
-  /* 暖色主题基础表面 */
-  --bt-page-background: #f2ecd9;
+  /* 配色仅来自 Workbench；--bt-* 是共享组件的语义别名。 */
+  --bt-page-background: var(--vscode-boxteam-chat-background);
   --bt-canvas-background: var(--bt-page-background);
   --bt-chrome-surface: color-mix(
     in srgb,
@@ -81,71 +78,71 @@
   --bt-surface-backdrop-filter: blur(12px) saturate(1.08);
   --bt-chrome-backdrop-filter: var(--bt-surface-backdrop-filter);
   --bt-workspace-backdrop-filter: none;
-  --bt-panel-background: #fff8e8;
-  --bt-surface-background: #fbf3df;
-  --bt-surface-raised: #fffaf0;
-  --bt-surface-muted: #eee3c9;
-  --bt-overlay-background: #fffaf0;
-  --bt-input-background: #f8efd9;
-  --bt-input-foreground: #39352b;
-  --bt-dropdown-background: #fff8e8;
-  --bt-dropdown-foreground: #39352b;
-  --bt-menu-background: #fff8e8;
-  --bt-menu-foreground: #39352b;
-  --bt-code-background: #eee3c9;
-  --bt-chat-input-background: #d8cfb9;
+  --bt-panel-background: var(--vscode-editor-background);
+  --bt-surface-background: var(--vscode-editor-background);
+  --bt-surface-raised: var(--vscode-editorWidget-background);
+  --bt-surface-muted: var(--vscode-textCodeBlock-background);
+  --bt-overlay-background: var(--vscode-editorWidget-background);
+  --bt-input-background: var(--vscode-input-background);
+  --bt-input-foreground: var(--vscode-input-foreground);
+  --bt-dropdown-background: var(--vscode-dropdown-background);
+  --bt-dropdown-foreground: var(--vscode-dropdown-foreground);
+  --bt-menu-background: var(--vscode-menu-background);
+  --bt-menu-foreground: var(--vscode-menu-foreground);
+  --bt-code-background: var(--vscode-textCodeBlock-background);
+  --bt-chat-input-background: var(--vscode-boxteam-chat-inputBackground);
 
   /* 文字与图标 */
-  --bt-text-primary: #39352b;
-  --bt-text-muted: #766f5e;
-  --bt-text-subtle: #8a826d;
-  --bt-text-disabled: rgba(57, 53, 43, 0.42);
-  --bt-text-on-strong: #fffaf0;
-  --bt-icon-foreground: #625b4b;
-  --bt-link-foreground: #a85d27;
+  --bt-text-primary: var(--vscode-editor-foreground);
+  --bt-text-muted: var(--vscode-descriptionForeground);
+  --bt-text-subtle: var(--vscode-descriptionForeground);
+  --bt-text-disabled: var(--vscode-disabledForeground);
+  --bt-text-on-strong: var(--vscode-button-foreground);
+  --bt-icon-foreground: var(--vscode-icon-foreground);
+  --bt-link-foreground: var(--vscode-textLink-foreground);
 
   /* 边框、选中态与阴影 */
-  --bt-border: rgba(108, 96, 70, 0.24);
-  --bt-panel-border: rgba(108, 96, 70, 0.24);
-  --bt-input-border: rgba(108, 96, 70, 0.28);
-  --bt-menu-border: rgba(108, 96, 70, 0.24);
-  --bt-overlay-border: rgba(108, 96, 70, 0.3);
-  --bt-chat-input-border: rgba(92, 82, 58, 0.18);
-  --bt-chat-request-border: rgba(108, 96, 70, 0.22);
-  --bt-quote-border: rgba(108, 96, 70, 0.32);
-  --bt-focus-border: color-mix(in srgb, var(--bt-accent) 62%, transparent);
-  --bt-chat-input-focus-border: color-mix(in srgb, var(--bt-accent) 62%, transparent);
-  --bt-selection-background: rgba(74, 84, 102, 0.2);
-  --bt-selection-muted-background: rgba(74, 84, 102, 0.1);
-  --bt-active-selection-background: rgba(74, 84, 102, 0.14);
-  --bt-active-selection-foreground: #26231c;
-  --bt-menu-selection-background: rgba(74, 84, 102, 0.14);
-  --bt-menu-selection-foreground: #26231c;
-  --bt-menu-separator-background: rgba(108, 96, 70, 0.18);
-  --bt-hover-background: rgba(72, 66, 51, 0.11);
-  --bt-toolbar-hover-background: rgba(72, 66, 51, 0.11);
-  --bt-toolbar-active-background: rgba(72, 66, 51, 0.16);
-  --bt-section-header-background: rgba(72, 66, 51, 0.06);
-  --bt-surface-shadow: 0 8px 24px rgba(61, 54, 38, 0.12);
-  --bt-scrim-background: rgba(31, 29, 24, 0.5);
-  --bt-highlight-soft: rgba(255, 250, 240, 0.35);
+  --bt-border: var(--vscode-panel-border, transparent);
+  --bt-panel-border: var(--vscode-panel-border, transparent);
+  --bt-input-border: var(--vscode-input-border, transparent);
+  --bt-menu-border: var(--vscode-menu-border, transparent);
+  --bt-overlay-border: var(--vscode-editorWidget-border, transparent);
+  --bt-chat-input-border: var(--vscode-input-border, transparent);
+  --bt-chat-request-border: var(--vscode-chat-requestBorder, transparent);
+  --bt-quote-border: var(--vscode-textBlockQuote-border, transparent);
+  --bt-focus-border: var(--vscode-focusBorder);
+  --bt-chat-input-focus-border: var(--vscode-focusBorder);
+  --bt-selection-background: var(--vscode-editor-selectionBackground);
+  --bt-selection-muted-background: var(--vscode-editor-inactiveSelectionBackground);
+  --bt-active-selection-background: var(--vscode-list-activeSelectionBackground);
+  --bt-active-selection-foreground: var(--vscode-list-activeSelectionForeground);
+  --bt-menu-selection-background: var(--vscode-menu-selectionBackground);
+  --bt-menu-selection-foreground: var(--vscode-menu-selectionForeground);
+  --bt-menu-separator-background: var(--vscode-menu-separatorBackground);
+  --bt-hover-background: var(--vscode-list-hoverBackground);
+  --bt-toolbar-hover-background: var(--vscode-toolbar-hoverBackground);
+  --bt-toolbar-active-background: var(--vscode-toolbar-activeBackground);
+  --bt-section-header-background: var(--vscode-sideBarSectionHeader-background, transparent);
+  --bt-surface-shadow: 0 8px 24px var(--vscode-widget-shadow);
+  --bt-scrim-background: var(--vscode-editorGroup-dropBackground);
+  --bt-highlight-soft: var(--vscode-list-hoverBackground);
 
   /* 操作与状态 */
-  --bt-accent: #b96f32;
-  --bt-accent-soft: #e0b27c;
-  --bt-button-background: #b96f32;
-  --bt-button-foreground: #fffaf0;
-  --bt-button-border: rgba(185, 111, 50, 0.42);
-  --bt-button-secondary-background: #e4d8ba;
-  --bt-button-secondary-foreground: #39352b;
-  --bt-badge-background: #e8ddc3;
-  --bt-badge-foreground: #514a3c;
-  --bt-progress-background: #b96f32;
-  --bt-status-success: #258a55;
-  --bt-status-warning: #b7791f;
-  --bt-status-danger: #b33a31;
-  --bt-status-danger-background: rgba(179, 58, 49, 0.08);
-  --bt-status-info: #6f5da8;
+  --bt-accent: var(--vscode-focusBorder);
+  --bt-accent-soft: var(--vscode-textLink-foreground);
+  --bt-button-background: var(--vscode-button-background);
+  --bt-button-foreground: var(--vscode-button-foreground);
+  --bt-button-border: var(--vscode-button-border, transparent);
+  --bt-button-secondary-background: var(--vscode-button-secondaryBackground);
+  --bt-button-secondary-foreground: var(--vscode-button-secondaryForeground);
+  --bt-badge-background: var(--vscode-badge-background);
+  --bt-badge-foreground: var(--vscode-badge-foreground);
+  --bt-progress-background: var(--vscode-progressBar-background);
+  --bt-status-success: var(--vscode-testing-iconPassed);
+  --bt-status-warning: var(--vscode-editorWarning-foreground);
+  --bt-status-danger: var(--vscode-errorForeground);
+  --bt-status-danger-background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent);
+  --bt-status-info: var(--vscode-editorInfo-foreground);
   --bt-status-bar-background: color-mix(
     in srgb,
     var(--bt-panel-background) 58%,
@@ -153,18 +150,18 @@
   );
   --bt-status-bar-border: var(--bt-panel-border);
   --bt-status-bar-foreground: var(--bt-text-primary);
-  --bt-chat-avatar-background: #e4d8ba;
-  --bt-chat-request-background: rgba(221, 212, 184, 0.58);
+  --bt-chat-avatar-background: var(--vscode-chat-avatarBackground);
+  --bt-chat-request-background: var(--vscode-boxteam-chat-requestBackground);
 
   /* 控件细节 */
-  --bt-chat-input-foreground: #39352b;
-  --bt-chat-input-placeholder: rgba(67, 62, 49, 0.54);
-  --bt-scrollbar-background: rgba(108, 96, 70, 0.2);
-  --bt-scrollbar-hover-background: rgba(108, 96, 70, 0.34);
-  --bt-terminal-background: #111827;
-  --bt-terminal-foreground: #fffaf0;
-  --bt-terminal-muted: rgba(255, 250, 240, 0.7);
-  --bt-terminal-border: rgba(255, 250, 240, 0.3);
+  --bt-chat-input-foreground: var(--vscode-input-foreground);
+  --bt-chat-input-placeholder: var(--vscode-input-placeholderForeground);
+  --bt-scrollbar-background: var(--vscode-scrollbarSlider-background);
+  --bt-scrollbar-hover-background: var(--vscode-scrollbarSlider-hoverBackground);
+  --bt-terminal-background: var(--vscode-terminal-background, var(--vscode-editor-background));
+  --bt-terminal-foreground: var(--vscode-terminal-foreground);
+  --bt-terminal-muted: var(--vscode-descriptionForeground);
+  --bt-terminal-border: var(--vscode-panel-border, transparent);
   --bt-radius-small: 4px;
   --bt-radius-medium: 6px;
   --bt-radius-large: 8px;
@@ -172,21 +169,7 @@
   --bt-surface-gap: 10px;
   --bt-surface-border: 1px solid var(--bt-panel-border);
 
-  /* 背景图扩展点：运行时配置只需覆盖这些变量。 */
-  --bt-background-image: none;
-  --bt-background-position: center;
-  --bt-background-size: cover;
-  --bt-background-repeat: no-repeat;
-  --bt-background-overlay:
-    radial-gradient(circle at top right, rgba(45, 112, 172, 0.06), transparent 38%),
-    radial-gradient(circle at bottom left, rgba(183, 121, 31, 0.05), transparent 32%);
-
   font-family: var(--bt-font-family);
   font-size: var(--bt-font-size);
   font-weight: var(--bt-font-weight);
-}
-
-/* 后续主题插件可以通过 data-boxteam-theme 注册整套变量覆盖。 */
-:root[data-boxteam-theme="warm"] {
-  color-scheme: light;
 }

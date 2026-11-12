@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
 from pathlib import Path
 
 import pytest
@@ -10,15 +9,11 @@ from app.abstractions.background_message_bus import BackgroundMessageKind
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.path_utils import get_session_path_resolver
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
-from tests.harness.python.run_context import TestRunContext
 
 
 @pytest.fixture
-def background_message_bus_case(request, session_bundle_factory):
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    workspace_root = context.workspace_root
-    shutil.rmtree(workspace_root)
-    workspace_root.mkdir()
+def background_message_bus_case(empty_workspace_scope: tuple[str, Path], session_bundle_factory):
+    workspace_root = empty_workspace_scope[1]
     sessions = workspace_root / ".boxteam" / "sessions"
     session_ids = [
         "ses_019c3df7f8527d568e834acf3c0f6612",

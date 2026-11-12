@@ -33,7 +33,7 @@ export interface CatalogOutboxPartition {
   /** 稳定 Gateway 身份：本地 Gateway 用其监听端口，远程 Gateway 用其 gateway_id。 */
   gatewayId: string;
   workspaceId: string;
-  /** 认证主体：Gateway 用户 user_id，游客为 `guest`。 */
+  /** 持久分区：当前使用 `local`；旧账户分区保留原件，不接管或重放。 */
   principal: string;
 }
 

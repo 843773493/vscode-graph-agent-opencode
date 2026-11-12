@@ -65,6 +65,7 @@ class ReloadLifecycleMixin:
         self._schema_path = schema_path.expanduser().resolve() if schema_path else None
         self._on_runtime_config = on_runtime_config
         self._on_committed_config = on_committed_config
+        self._remove_released_plugin_private_inputs: Callable[[object], None] | None = None
         self._gateway_id = gateway_id
         self._watcher: ConfigFileWatcher | None = None
         self._reload_lock = asyncio.Lock()
@@ -481,6 +482,7 @@ class ReloadLifecycleMixin:
             runtime_apply_started = False
             runtime_result: GatewayRuntimeConsumerApplyResult | None = None
             failure_stage = "runtime_apply"
+            promoted = False
             try:
                 if self._on_runtime_config is not None:
                     runtime_apply_started = True
@@ -571,6 +573,7 @@ class ReloadLifecycleMixin:
                         applied_paths=changed_paths,
                     ),
                 )
+                promoted = True
             except Exception as error:
                 error_detail = failure_detail(error, stage=failure_stage, label="Gateway 配置应用失败")
                 (
@@ -621,43 +624,50 @@ class ReloadLifecycleMixin:
                 raise reported_error from error
             finally:
                 try:
-                    if runtime_result is not None:
-                        await runtime_result.finalize()
+                    try:
+                        if runtime_result is not None:
+                            await runtime_result.finalize()
+                    finally:
+                        if promoted:
+                            self._config = candidate
+                            self._status = replace(
+                                self._status,
+                                healthy=True,
+                                revision=candidate.revision,
+                                last_success_at=now,
+                                last_attempt_at=now,
+                                last_error=None,
+                                restart_required=False,
+                                reason=None,
+                                changed_sections=tuple(
+                                    sorted(
+                                        {
+                                            path.strip("/").split("/")[0]
+                                            for path in changed_paths
+                                            if path != "/"
+                                        }
+                                    )
+                                ),
+                                state="active",
+                                candidate_id=None,
+                                candidate_ref=None,
+                                attempt_id=None,
+                                apply_id=None,
+                                applied_paths=changed_paths,
+                                deferred_paths=(),
+                            )
+                            if self._remove_released_plugin_private_inputs is not None and active is not None:
+                                self._remove_released_plugin_private_inputs(active.payload)
                 finally:
-                    claim_renewal_task.cancel()
-                    await asyncio.gather(claim_renewal_task, return_exceptions=True)
-                    self._state_store.release_config_apply_claim(
-                        config_domain=self._CONFIG_DOMAIN,
-                        apply_id=claim.apply_id,
-                        fencing_token=claim.fencing_token,
-                    )
-            self._config = candidate
-            self._status = replace(
-                self._status,
-                healthy=True,
-                revision=candidate.revision,
-                last_success_at=now,
-                last_attempt_at=now,
-                last_error=None,
-                restart_required=False,
-                reason=None,
-                changed_sections=tuple(
-                    sorted(
-                        {
-                            path.strip("/").split("/")[0]
-                            for path in changed_paths
-                            if path != "/"
-                        }
-                    )
-                ),
-                state="active",
-                candidate_id=None,
-                candidate_ref=None,
-                attempt_id=None,
-                apply_id=None,
-                applied_paths=changed_paths,
-                deferred_paths=(),
-            )
+                    try:
+                        claim_renewal_task.cancel()
+                        await asyncio.gather(claim_renewal_task, return_exceptions=True)
+                    finally:
+                        self._state_store.release_config_apply_claim(
+                            config_domain=self._CONFIG_DOMAIN,
+                            apply_id=claim.apply_id,
+                            fencing_token=claim.fencing_token,
+                        )
         except Exception as error:
             self._status = replace(
                 self._status,

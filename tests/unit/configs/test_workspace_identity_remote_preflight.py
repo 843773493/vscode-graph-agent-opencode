@@ -21,8 +21,8 @@ from app.gateway.credentials import FederationCredentialStore
 from app.gateway.federation import RemoteGatewayConnection
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from configs import workspace_identity_migration as migration
 from configs.cli import main
+from configs.maintenance import workspace_identity_migration as migration
 from tests.unit.configs.conftest import LegacyGateway
 
 WORKSPACE_ID = "00000000-0000-4000-8000-000000000099"

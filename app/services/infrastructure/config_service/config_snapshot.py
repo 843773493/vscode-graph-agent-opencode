@@ -384,9 +384,11 @@ class ConfigSnapshotMixin:
     ) -> ConfigReloadStatus:
         """用新 generation 的完整 proof 提升已成功启动的 Workspace candidate。"""
 
+        service = cast("ConfigService", self)
         return self._pending_restart.resolve_pending_restart(
             candidate_ref=candidate_ref,
             health_proof=health_proof,
+            after_promotion=service._remove_released_plugin_private_inputs,
         )
 
     def discard_pending_restart(
@@ -398,11 +400,18 @@ class ConfigSnapshotMixin:
     ) -> ConfigReloadStatus:
         """仅在旧 active/source 基线可证明安全时丢弃 pending。"""
 
-        return self._pending_restart.discard_pending_restart(
+        service = cast("ConfigService", self)
+        store = service._workspace_state_store
+        pending = (store.load_pending_config_candidate(candidate_ref=candidate_ref, allow_recovery=True,
+                                                       allow_discarded=True) if store is not None else None)
+        status = self._pending_restart.discard_pending_restart(
             candidate_ref=candidate_ref,
             expected_active_revision=expected_active_revision,
             expected_active_digest=expected_active_digest,
         )
+        if pending is not None:
+            service._remove_released_plugin_private_inputs(pending.payload)
+        return status
 
     @contextmanager
     def use_snapshot(self, snapshot: ConfigSnapshot) -> Iterator[None]:

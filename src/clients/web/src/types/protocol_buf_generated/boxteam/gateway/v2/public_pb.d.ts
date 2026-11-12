@@ -103,22 +103,6 @@ export declare type GatewayResourceAddressDTO = Message<"boxteam.gateway.v2.Gate
 export declare const GatewayResourceAddressDTOSchema: GenMessage<GatewayResourceAddressDTO>;
 
 /**
- * @generated from message boxteam.gateway.v2.AcquireGatewayUserRequest
- */
-export declare type AcquireGatewayUserRequest = Message<"boxteam.gateway.v2.AcquireGatewayUserRequest"> & {
-  /**
-   * @generated from field: optional string client_label = 1;
-   */
-  clientLabel?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.AcquireGatewayUserRequest.
- * Use `create(AcquireGatewayUserRequestSchema)` to create a new message.
- */
-export declare const AcquireGatewayUserRequestSchema: GenMessage<AcquireGatewayUserRequest>;
-
-/**
  * 同机认证控制链专用，不作为普通文件响应或联邦资源投影。
  *
  * @generated from message boxteam.gateway.v2.NativeDirectoryBindRequest
@@ -325,22 +309,6 @@ export declare type CreateFederationManagedWorkspaceRequest = Message<"boxteam.g
 export declare const CreateFederationManagedWorkspaceRequestSchema: GenMessage<CreateFederationManagedWorkspaceRequest>;
 
 /**
- * @generated from message boxteam.gateway.v2.CreateGatewayGuestRequest
- */
-export declare type CreateGatewayGuestRequest = Message<"boxteam.gateway.v2.CreateGatewayGuestRequest"> & {
-  /**
-   * @generated from field: optional google.protobuf.Struct tracking = 1;
-   */
-  tracking?: JsonObject | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.CreateGatewayGuestRequest.
- * Use `create(CreateGatewayGuestRequestSchema)` to create a new message.
- */
-export declare const CreateGatewayGuestRequestSchema: GenMessage<CreateGatewayGuestRequest>;
-
-/**
  * @generated from message boxteam.gateway.v2.CreateGatewayManagedWorkspaceRequest
  */
 export declare type CreateGatewayManagedWorkspaceRequest = Message<"boxteam.gateway.v2.CreateGatewayManagedWorkspaceRequest"> & {
@@ -370,27 +338,6 @@ export declare type CreateGatewayManagedWorkspaceRequest = Message<"boxteam.gate
  * Use `create(CreateGatewayManagedWorkspaceRequestSchema)` to create a new message.
  */
 export declare const CreateGatewayManagedWorkspaceRequestSchema: GenMessage<CreateGatewayManagedWorkspaceRequest>;
-
-/**
- * @generated from message boxteam.gateway.v2.CreateGatewayUserRequest
- */
-export declare type CreateGatewayUserRequest = Message<"boxteam.gateway.v2.CreateGatewayUserRequest"> & {
-  /**
-   * @generated from field: string display_name = 1;
-   */
-  displayName: string;
-
-  /**
-   * @generated from field: optional string user_id = 2;
-   */
-  userId?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.CreateGatewayUserRequest.
- * Use `create(CreateGatewayUserRequestSchema)` to create a new message.
- */
-export declare const CreateGatewayUserRequestSchema: GenMessage<CreateGatewayUserRequest>;
 
 /**
  * @generated from message boxteam.gateway.v2.CreatePortForwardRequest
@@ -3152,124 +3099,6 @@ export declare type GatewaySearchScopeResolutionDTO = Message<"boxteam.gateway.v
 export declare const GatewaySearchScopeResolutionDTOSchema: GenMessage<GatewaySearchScopeResolutionDTO>;
 
 /**
- * @generated from message boxteam.gateway.v2.GatewayThemeBackgroundDTO
- */
-export declare type GatewayThemeBackgroundDTO = Message<"boxteam.gateway.v2.GatewayThemeBackgroundDTO"> & {
-  /**
-   * @generated from field: string type = 1;
-   */
-  type: string;
-
-  /**
-   * @generated from field: optional string url = 2;
-   */
-  url?: string | undefined;
-
-  /**
-   * @generated from field: optional string asset_id = 3;
-   */
-  assetId?: string | undefined;
-
-  /**
-   * @generated from field: optional string position = 4;
-   */
-  position?: string | undefined;
-
-  /**
-   * @generated from field: optional string size = 5;
-   */
-  size?: string | undefined;
-
-  /**
-   * @generated from field: optional string repeat = 6;
-   */
-  repeat?: string | undefined;
-
-  /**
-   * @generated from field: optional string appearance = 7;
-   */
-  appearance?: string | undefined;
-
-  /**
-   * @generated from field: optional string overlay = 8;
-   */
-  overlay?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayThemeBackgroundDTO.
- * Use `create(GatewayThemeBackgroundDTOSchema)` to create a new message.
- */
-export declare const GatewayThemeBackgroundDTOSchema: GenMessage<GatewayThemeBackgroundDTO>;
-
-/**
- * @generated from message boxteam.gateway.v2.GatewayThemeCatalogDTO
- */
-export declare type GatewayThemeCatalogDTO = Message<"boxteam.gateway.v2.GatewayThemeCatalogDTO"> & {
-  /**
-   * @generated from field: string current_theme_id = 1;
-   */
-  currentThemeId: string;
-
-  /**
-   * @generated from field: repeated boxteam.gateway.v2.GatewayThemeOptionDTO items = 2;
-   */
-  items: GatewayThemeOptionDTO[];
-
-  /**
-   * @generated from field: boxteam.gateway.v2.ResolvedGatewayThemeDTO current_theme = 3;
-   */
-  currentTheme?: ResolvedGatewayThemeDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayThemeCatalogDTO.
- * Use `create(GatewayThemeCatalogDTOSchema)` to create a new message.
- */
-export declare const GatewayThemeCatalogDTOSchema: GenMessage<GatewayThemeCatalogDTO>;
-
-/**
- * @generated from message boxteam.gateway.v2.GatewayThemeOptionDTO
- */
-export declare type GatewayThemeOptionDTO = Message<"boxteam.gateway.v2.GatewayThemeOptionDTO"> & {
-  /**
-   * @generated from field: string id = 1;
-   */
-  id: string;
-
-  /**
-   * @generated from field: string label = 2;
-   */
-  label: string;
-
-  /**
-   * @generated from field: string extends = 3;
-   */
-  extends: string;
-
-  /**
-   * @generated from field: string source = 4;
-   */
-  source: string;
-
-  /**
-   * @generated from field: google.protobuf.Struct preview_tokens = 5;
-   */
-  previewTokens?: JsonObject | undefined;
-
-  /**
-   * @generated from field: optional string background_image_url = 6;
-   */
-  backgroundImageUrl?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayThemeOptionDTO.
- * Use `create(GatewayThemeOptionDTOSchema)` to create a new message.
- */
-export declare const GatewayThemeOptionDTOSchema: GenMessage<GatewayThemeOptionDTO>;
-
-/**
  * @generated from message boxteam.gateway.v2.GatewayUIAssetDTO
  */
 export declare type GatewayUIAssetDTO = Message<"boxteam.gateway.v2.GatewayUIAssetDTO"> & {
@@ -3307,11 +3136,6 @@ export declare type GatewayUIAssetDTO = Message<"boxteam.gateway.v2.GatewayUIAss
    * @generated from field: string url = 7;
    */
   url: string;
-
-  /**
-   * @generated from field: repeated string referenced_theme_ids = 8;
-   */
-  referencedThemeIds: string[];
 };
 
 /**
@@ -3337,232 +3161,65 @@ export declare type GatewayUIAssetListDTO = Message<"boxteam.gateway.v2.GatewayU
 export declare const GatewayUIAssetListDTOSchema: GenMessage<GatewayUIAssetListDTO>;
 
 /**
- * @generated from message boxteam.gateway.v2.GatewayUserAccessDTO
- */
-export declare type GatewayUserAccessDTO = Message<"boxteam.gateway.v2.GatewayUserAccessDTO"> & {
-  /**
-   * @generated from field: string kind = 1;
-   */
-  kind: string;
-
-  /**
-   * @generated from field: optional string user_id = 2;
-   */
-  userId?: string | undefined;
-
-  /**
-   * @generated from field: int64 lease_generation = 3;
-   */
-  leaseGeneration: bigint;
-
-  /**
-   * @generated from field: optional string expires_at = 4;
-   */
-  expiresAt?: string | undefined;
-
-  /**
-   * @generated from field: optional bool takeover = 5;
-   */
-  takeover?: boolean | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayUserAccessDTO.
- * Use `create(GatewayUserAccessDTOSchema)` to create a new message.
- */
-export declare const GatewayUserAccessDTOSchema: GenMessage<GatewayUserAccessDTO>;
-
-/**
- * @generated from message boxteam.gateway.v2.GatewayUserDTO
- */
-export declare type GatewayUserDTO = Message<"boxteam.gateway.v2.GatewayUserDTO"> & {
-  /**
-   * @generated from field: string user_id = 1;
-   */
-  userId: string;
-
-  /**
-   * @generated from field: string display_name = 2;
-   */
-  displayName: string;
-
-  /**
-   * @generated from field: string created_at = 3;
-   */
-  createdAt: string;
-
-  /**
-   * @generated from field: optional boxteam.gateway.v2.GatewayUserLeaseDTO lease = 4;
-   */
-  lease?: GatewayUserLeaseDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayUserDTO.
- * Use `create(GatewayUserDTOSchema)` to create a new message.
- */
-export declare const GatewayUserDTOSchema: GenMessage<GatewayUserDTO>;
-
-/**
- * @generated from message boxteam.gateway.v2.GatewayUserLeaseDTO
- */
-export declare type GatewayUserLeaseDTO = Message<"boxteam.gateway.v2.GatewayUserLeaseDTO"> & {
-  /**
-   * @generated from field: optional bool occupied = 1;
-   */
-  occupied?: boolean | undefined;
-
-  /**
-   * @generated from field: optional string client_label = 2;
-   */
-  clientLabel?: string | undefined;
-
-  /**
-   * @generated from field: optional string heartbeat_at = 3;
-   */
-  heartbeatAt?: string | undefined;
-
-  /**
-   * @generated from field: optional string expires_at = 4;
-   */
-  expiresAt?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayUserLeaseDTO.
- * Use `create(GatewayUserLeaseDTOSchema)` to create a new message.
- */
-export declare const GatewayUserLeaseDTOSchema: GenMessage<GatewayUserLeaseDTO>;
-
-/**
- * @generated from message boxteam.gateway.v2.GatewayUserListDTO
- */
-export declare type GatewayUserListDTO = Message<"boxteam.gateway.v2.GatewayUserListDTO"> & {
-  /**
-   * @generated from field: repeated boxteam.gateway.v2.GatewayUserDTO items = 1;
-   */
-  items: GatewayUserDTO[];
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayUserListDTO.
- * Use `create(GatewayUserListDTOSchema)` to create a new message.
- */
-export declare const GatewayUserListDTOSchema: GenMessage<GatewayUserListDTO>;
-
-/**
  * 视图状态按用户、Gateway、工作区与 Session 归属，仅用于主聊天 main thread。
  * 无锚点时 writer 记录当前 scrollTop，恢复忽略该像素偏移并回到最新尾部。
- *
- * @generated from message boxteam.gateway.v2.GatewayUserViewStateDTO
- */
-export declare type GatewayUserViewStateDTO = Message<"boxteam.gateway.v2.GatewayUserViewStateDTO"> & {
-  /**
-   * @generated from field: string user_id = 1;
-   */
-  userId: string;
-
-  /**
-   * @generated from field: string workspace_id = 2;
-   */
-  workspaceId: string;
-
-  /**
-   * @generated from field: string session_id = 3;
-   */
-  sessionId: string;
-
-  /**
-   * 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。
-   *
-   * @generated from field: optional string turn_anchor = 4;
-   */
-  turnAnchor?: string | undefined;
-
-  /**
-   * 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。
-   *
-   * @generated from field: double scroll_offset = 5;
-   */
-  scrollOffset: number;
-
-  /**
-   * 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。
-   *
-   * @generated from field: optional bool follow_latest = 6;
-   */
-  followLatest?: boolean | undefined;
-
-  /**
-   * @generated from field: int64 projection_version = 7;
-   */
-  projectionVersion: bigint;
-
-  /**
-   * @generated from field: optional bool tool_details_expanded = 8;
-   */
-  toolDetailsExpanded?: boolean | undefined;
-
-  /**
-   * @generated from field: string updated_at = 9;
-   */
-  updatedAt: string;
-
-  /**
-   * @generated from field: string gateway_id = 10;
-   */
-  gatewayId: string;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayUserViewStateDTO.
- * Use `create(GatewayUserViewStateDTOSchema)` to create a new message.
- */
-export declare const GatewayUserViewStateDTOSchema: GenMessage<GatewayUserViewStateDTO>;
-
-/**
  * PUT 请求完整替换当前用户、工作区和会话范围的视图状态；未提供字段采用服务端默认值。
  *
- * @generated from message boxteam.gateway.v2.GatewayUserViewStateUpdateRequest
+ * @generated from message boxteam.gateway.v2.GatewayManagementTargetDTO
  */
-export declare type GatewayUserViewStateUpdateRequest = Message<"boxteam.gateway.v2.GatewayUserViewStateUpdateRequest"> & {
+export declare type GatewayManagementTargetDTO = Message<"boxteam.gateway.v2.GatewayManagementTargetDTO"> & {
   /**
-   * 当前 session_id 范围内的锚点 Turn ID；未设置或空字符串表示没有具体锚点。
-   *
-   * @generated from field: optional string turn_anchor = 1;
+   * @generated from field: string gateway_id = 1;
    */
-  turnAnchor?: string | undefined;
+  gatewayId: string;
 
   /**
-   * 锚点 Turn 顶部被视口上沿裁切的非负距离，单位为 CSS 像素；仅在锚点非空且不跟随最新时用于恢复。
-   *
-   * @generated from field: optional double scroll_offset = 2;
+   * @generated from field: string name = 2;
    */
-  scrollOffset?: number | undefined;
+  name: string;
 
   /**
-   * 为 true 时恢复到会话最新尾部；否则锚点非空时按锚点和偏移恢复，锚点为空仍回到最新尾部。
-   *
-   * @generated from field: optional bool follow_latest = 3;
+   * @generated from field: string connection_kind = 3;
    */
-  followLatest?: boolean | undefined;
+  connectionKind: string;
 
   /**
-   * @generated from field: optional int64 projection_version = 4;
+   * @generated from field: optional string gateway_connection_id = 4;
    */
-  projectionVersion?: bigint | undefined;
+  gatewayConnectionId?: string | undefined;
 
   /**
-   * @generated from field: optional bool tool_details_expanded = 5;
+   * @generated from field: optional string connection_error = 5;
    */
-  toolDetailsExpanded?: boolean | undefined;
+  connectionError?: string | undefined;
 };
 
 /**
- * Describes the message boxteam.gateway.v2.GatewayUserViewStateUpdateRequest.
- * Use `create(GatewayUserViewStateUpdateRequestSchema)` to create a new message.
+ * Describes the message boxteam.gateway.v2.GatewayManagementTargetDTO.
+ * Use `create(GatewayManagementTargetDTOSchema)` to create a new message.
  */
-export declare const GatewayUserViewStateUpdateRequestSchema: GenMessage<GatewayUserViewStateUpdateRequest>;
+export declare const GatewayManagementTargetDTOSchema: GenMessage<GatewayManagementTargetDTO>;
+
+/**
+ * @generated from message boxteam.gateway.v2.GatewayManagementDirectoryDTO
+ */
+export declare type GatewayManagementDirectoryDTO = Message<"boxteam.gateway.v2.GatewayManagementDirectoryDTO"> & {
+  /**
+   * @generated from field: string local_gateway_id = 1;
+   */
+  localGatewayId: string;
+
+  /**
+   * @generated from field: repeated boxteam.gateway.v2.GatewayManagementTargetDTO items = 2;
+   */
+  items: GatewayManagementTargetDTO[];
+};
+
+/**
+ * Describes the message boxteam.gateway.v2.GatewayManagementDirectoryDTO.
+ * Use `create(GatewayManagementDirectoryDTOSchema)` to create a new message.
+ */
+export declare const GatewayManagementDirectoryDTOSchema: GenMessage<GatewayManagementDirectoryDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.GatewayWorkspaceDTO
@@ -3803,42 +3460,6 @@ export declare type ReorderGatewayWorkspacesRequest = Message<"boxteam.gateway.v
  * Use `create(ReorderGatewayWorkspacesRequestSchema)` to create a new message.
  */
 export declare const ReorderGatewayWorkspacesRequestSchema: GenMessage<ReorderGatewayWorkspacesRequest>;
-
-/**
- * @generated from message boxteam.gateway.v2.ResolvedGatewayThemeDTO
- */
-export declare type ResolvedGatewayThemeDTO = Message<"boxteam.gateway.v2.ResolvedGatewayThemeDTO"> & {
-  /**
-   * @generated from field: string id = 1;
-   */
-  id: string;
-
-  /**
-   * @generated from field: string label = 2;
-   */
-  label: string;
-
-  /**
-   * @generated from field: string color_scheme = 3;
-   */
-  colorScheme: string;
-
-  /**
-   * @generated from field: google.protobuf.Struct tokens = 4;
-   */
-  tokens?: JsonObject | undefined;
-
-  /**
-   * @generated from field: optional string background_image_url = 5;
-   */
-  backgroundImageUrl?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.ResolvedGatewayThemeDTO.
- * Use `create(ResolvedGatewayThemeDTOSchema)` to create a new message.
- */
-export declare const ResolvedGatewayThemeDTOSchema: GenMessage<ResolvedGatewayThemeDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.SshConnectionOptionDTO
@@ -4150,11 +3771,6 @@ export declare type WebUISettingsDTO = Message<"boxteam.gateway.v2.WebUISettings
    * @generated from field: optional boxteam.gateway.v2.WebUIGatewayConsoleSettingsDTO gateway_console = 4;
    */
   gatewayConsole?: WebUIGatewayConsoleSettingsDTO | undefined;
-
-  /**
-   * @generated from field: optional boxteam.gateway.v2.WebUIThemeSettingsDTO theme = 5;
-   */
-  theme?: WebUIThemeSettingsDTO | undefined;
 };
 
 /**
@@ -4186,11 +3802,6 @@ export declare type WebUISettingsUpdateDTO = Message<"boxteam.gateway.v2.WebUISe
    * @generated from field: optional boxteam.gateway.v2.WebUIGatewayConsoleSettingsDTO gateway_console = 4;
    */
   gatewayConsole?: WebUIGatewayConsoleSettingsDTO | undefined;
-
-  /**
-   * @generated from field: optional boxteam.gateway.v2.WebUIThemeSettingsUpdateDTO theme = 5;
-   */
-  theme?: WebUIThemeSettingsUpdateDTO | undefined;
 };
 
 /**
@@ -4198,53 +3809,6 @@ export declare type WebUISettingsUpdateDTO = Message<"boxteam.gateway.v2.WebUISe
  * Use `create(WebUISettingsUpdateDTOSchema)` to create a new message.
  */
 export declare const WebUISettingsUpdateDTOSchema: GenMessage<WebUISettingsUpdateDTO>;
-
-/**
- * @generated from message boxteam.gateway.v2.WebUIThemeSettingsDTO
- */
-export declare type WebUIThemeSettingsDTO = Message<"boxteam.gateway.v2.WebUIThemeSettingsDTO"> & {
-  /**
-   * @generated from field: optional string theme_id = 1;
-   */
-  themeId?: string | undefined;
-
-  /**
-   * @generated from field: optional boxteam.gateway.v2.GatewayThemeBackgroundDTO background = 2;
-   */
-  background?: GatewayThemeBackgroundDTO | undefined;
-
-  /**
-   * @generated from field: optional boxteam.gateway.v2.ResolvedGatewayThemeDTO resolved_theme = 3;
-   */
-  resolvedTheme?: ResolvedGatewayThemeDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.WebUIThemeSettingsDTO.
- * Use `create(WebUIThemeSettingsDTOSchema)` to create a new message.
- */
-export declare const WebUIThemeSettingsDTOSchema: GenMessage<WebUIThemeSettingsDTO>;
-
-/**
- * @generated from message boxteam.gateway.v2.WebUIThemeSettingsUpdateDTO
- */
-export declare type WebUIThemeSettingsUpdateDTO = Message<"boxteam.gateway.v2.WebUIThemeSettingsUpdateDTO"> & {
-  /**
-   * @generated from field: optional string theme_id = 1;
-   */
-  themeId?: string | undefined;
-
-  /**
-   * @generated from field: optional boxteam.gateway.v2.GatewayThemeBackgroundDTO background = 2;
-   */
-  background?: GatewayThemeBackgroundDTO | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.WebUIThemeSettingsUpdateDTO.
- * Use `create(WebUIThemeSettingsUpdateDTOSchema)` to create a new message.
- */
-export declare const WebUIThemeSettingsUpdateDTOSchema: GenMessage<WebUIThemeSettingsUpdateDTO>;
 
 /**
  * @generated from message boxteam.gateway.v2.WebUIWorkspaceBottomPanelSettingsDTO
@@ -4479,63 +4043,4 @@ export declare type WorkspaceNavigationTreeDTO = Message<"boxteam.gateway.v2.Wor
  * Use `create(WorkspaceNavigationTreeDTOSchema)` to create a new message.
  */
 export declare const WorkspaceNavigationTreeDTOSchema: GenMessage<WorkspaceNavigationTreeDTO>;
-
-/**
- * 当前 registry 的入口投影，包括未投影任何工作区的远端连接。
- *
- * @generated from message boxteam.gateway.v2.GatewayManagementTargetDTO
- */
-export declare type GatewayManagementTargetDTO = Message<"boxteam.gateway.v2.GatewayManagementTargetDTO"> & {
-  /**
-   * @generated from field: string gateway_id = 1;
-   */
-  gatewayId: string;
-
-  /**
-   * @generated from field: string name = 2;
-   */
-  name: string;
-
-  /**
-   * @generated from field: string connection_kind = 3;
-   */
-  connectionKind: string;
-
-  /**
-   * @generated from field: optional string gateway_connection_id = 4;
-   */
-  gatewayConnectionId?: string | undefined;
-
-  /**
-   * @generated from field: optional string connection_error = 5;
-   */
-  connectionError?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayManagementTargetDTO.
- * Use `create(GatewayManagementTargetDTOSchema)` to create a new message.
- */
-export declare const GatewayManagementTargetDTOSchema: GenMessage<GatewayManagementTargetDTO>;
-
-/**
- * @generated from message boxteam.gateway.v2.GatewayManagementDirectoryDTO
- */
-export declare type GatewayManagementDirectoryDTO = Message<"boxteam.gateway.v2.GatewayManagementDirectoryDTO"> & {
-  /**
-   * @generated from field: string local_gateway_id = 1;
-   */
-  localGatewayId: string;
-
-  /**
-   * @generated from field: repeated boxteam.gateway.v2.GatewayManagementTargetDTO items = 2;
-   */
-  items: GatewayManagementTargetDTO[];
-};
-
-/**
- * Describes the message boxteam.gateway.v2.GatewayManagementDirectoryDTO.
- * Use `create(GatewayManagementDirectoryDTOSchema)` to create a new message.
- */
-export declare const GatewayManagementDirectoryDTOSchema: GenMessage<GatewayManagementDirectoryDTO>;
 

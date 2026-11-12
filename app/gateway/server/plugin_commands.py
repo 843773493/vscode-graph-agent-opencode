@@ -140,8 +140,6 @@ async def publications(payload: PluginContributionTarget, request: Request,
         raise HTTPException(403, str(error)) from error
     except httpx.HTTPStatusError as error:
         raise HTTPException(error.response.status_code, error.response.json().get("detail")) from error
-
-
 @router.post("/api/gateway/service-plugins/commands/events", response_class=StreamingResponse,
     responses=sse_responses("原绑定的完整命令贡献快照", {"snapshot": PluginCommandSnapshotDTO}))
 async def publication_events(payload: PluginContributionTarget, request: Request, auth: Auth) -> StreamingResponse:

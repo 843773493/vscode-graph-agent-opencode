@@ -1,8 +1,11 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import childProcess, { execFileSync, spawnSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { createHash, randomUUID } from "node:crypto";
+import os from "node:os";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -13,6 +16,7 @@ import {
 import path from "node:path";
 
 import {
+  defaultTargetConfigPath,
   loadTargetConfiguration,
   selectTarget,
 } from "../../tools/cross-platform-development-targets/config.mjs";
@@ -22,7 +26,6 @@ import {
   createWorkspaceSnapshot,
 } from "../../tools/cross-platform-development-targets/snapshot.mjs";
 import {
-  commandForCurrentPlatform,
   runChecked,
   runCheckedWithInput,
 } from "../../tools/cross-platform-development-targets/process.mjs";
@@ -112,6 +115,20 @@ if (name === 'bun' && args.includes('src/clients/workbench') && process.env.BOOT
 }
 
 describe.skipIf(process.platform !== "linux")("Linux bootstrap 的唯一 Workbench 依赖", () => {
+  test.each(["3.12", "3.11"])("带空格路径中的既有 venv 按实际版本 %s 决定是否重建", version => {
+    const fixture = bootstrapFixture();
+    const venv = path.join(fixture.repository, ".venv");
+    mkdirSync(path.join(venv, "bin"), { recursive: true });
+    writeFileSync(path.join(venv, "bin/python"), `#!/bin/sh\nprintf '%s\\n' '${version}'\n`, { mode: 0o700 });
+    const marker = path.join(venv, "existing-marker");
+    writeFileSync(marker, "existing environment");
+    const result = fixture.run();
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(existsSync(marker)).toBe(version === "3.12");
+    expect(existsSync(path.join(venv, ".boxteam-target-metadata"))).toBe(true);
+  });
+
   test("缺少固定上游时在安装依赖前明确失败", () => {
     const fixture = bootstrapFixture({ upstream: false });
     const result = fixture.run();
@@ -433,7 +450,6 @@ async function observeDockerProvision(
   const fs = await import("node:fs");
   const path = await import("node:path");
   const { createContext, SourceTextModule, SyntheticModule } = await import("node:vm");
-  const processAdapter = await import(new URL("./process.mjs", entryUrl));
   const clock = { now: 0 };
   const childCalls = [];
   const spawnedCommands = [];
@@ -444,46 +460,43 @@ async function observeDockerProvision(
     fs.mkdirSync(path.dirname(knownHostsPath), { recursive: true });
     fs.writeFileSync(knownHostsPath, existingKnownHosts, "utf8");
   }
+  const spawnSync = (command, args, options) => {
+    args = [command, ...args];
+    spawnedCommands.push(args);
+    if (args[0] === "docker") {
+      return { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    }
+    if (args[0] !== "ssh-keyscan") throw new Error(`未预期的进程: ${args[0]}`);
+    if (!Number.isFinite(options.timeout) || options.timeout <= 0) {
+      throw new Error("ssh-keyscan 没有有效的子进程期限");
+    }
+    childCalls.push({ args, timeout: options.timeout });
+    const response = plan.shift() ?? { elapsedMs: options.timeout + 1, exitCode: 1 };
+    const elapsedMs = response.elapsedMs ?? 0;
+    if (elapsedMs > options.timeout) {
+      clock.now += options.timeout;
+      return {
+        status: null,
+        signal: "SIGTERM",
+        error: Object.assign(new Error("fixture timeout"), { code: "ETIMEDOUT" }),
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.from(response.stderr ?? ""),
+      };
+    }
+    clock.now += elapsedMs;
+    return {
+      status: response.exitCode,
+      signal: response.signalCode ?? null,
+      stdout: Buffer.from(response.stdout ?? ""),
+      stderr: Buffer.from(response.stderr ?? ""),
+    };
+  };
   const context = createContext({
     Buffer,
     TextDecoder,
     performance: { now: () => clock.now },
     process: { env: {}, platform: hostPlatform, getuid: () => 1000, getgid: () => 1000 },
     Bun: {
-      spawnSync(command, options) {
-        const args = Array.from(command);
-        spawnedCommands.push(args);
-        const dockerCommand = hostPlatform === "win32" ? "docker.exe" : "docker";
-        const keyscanCommand = hostPlatform === "win32" ? "ssh-keyscan.exe" : "ssh-keyscan";
-        if (args[0] === dockerCommand) {
-          return { exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
-        }
-        if (args[0] !== keyscanCommand) throw new Error(`未预期的进程: ${args[0]}`);
-        if (!Number.isFinite(options.timeout) || options.timeout <= 0) {
-          throw new Error("ssh-keyscan 没有有效的子进程期限");
-        }
-        childCalls.push({ args, timeout: options.timeout });
-        const response = plan.shift() ?? { elapsedMs: options.timeout + 1, exitCode: 1 };
-        const elapsedMs = response.elapsedMs ?? 0;
-        if (elapsedMs > options.timeout) {
-          clock.now += options.timeout;
-          return {
-            exitCode: null,
-            signalCode: "SIGTERM",
-            exitedDueToTimeout: true,
-            stdout: Buffer.alloc(0),
-            stderr: Buffer.from(response.stderr ?? ""),
-          };
-        }
-        clock.now += elapsedMs;
-        return {
-          exitCode: response.exitCode,
-          signalCode: response.signalCode ?? null,
-          exitedDueToTimeout: false,
-          stdout: Buffer.from(response.stdout ?? ""),
-          stderr: Buffer.from(response.stderr ?? ""),
-        };
-      },
       sleepSync(milliseconds) {
         sleeps.push(milliseconds);
         clock.now += milliseconds;
@@ -509,9 +522,9 @@ async function observeDockerProvision(
       writeFileSync: fs.writeFileSync,
     }],
     ["node:path", { default: path.default }],
+    ["cross-spawn", { default: { sync: spawnSync } }],
+    ["shlex", await import("shlex")],
     ["./process.mjs", {
-      commandForCurrentPlatform: (command) =>
-        processAdapter.commandForCurrentPlatform(command, hostPlatform),
       runChecked(command) {
         const args = Array.from(command);
         checkedCommands.push(args);
@@ -618,39 +631,33 @@ function expectShellTransport(observation, remoteCommand) {
   const { command, destination, identityFile, knownHostsFile } = observation;
   expect(command[0]).toBe("ssh");
   expect(command[1]).toBe("-t");
-  expect(command).toContain(identityFile);
+  expect(command).toContain(`IdentityFile="${identityFile.replaceAll("\\", "\\\\")}"`);
   expect(command).toContain("22222");
   expect(command).toContain("StrictHostKeyChecking=yes");
-  expect(command).toContain(`UserKnownHostsFile=${knownHostsFile}`);
+  expect(command).toContain(`UserKnownHostsFile="${knownHostsFile.replaceAll("\\", "\\\\")}"`);
   expect(command).not.toContain("fixture identity only");
   expect(command.at(-1)).toBe(remoteCommand ?? destination);
   if (remoteCommand === undefined) expect(command).not.toContain(undefined);
 }
 
 describe("runChecked", () => {
-  test("Windows 裸命令补 .exe，其他平台维持原命令", () => {
-    expect(commandForCurrentPlatform(["git", "status"], "win32")).toEqual([
-      "git.exe",
-      "status",
+  test("真实参数中的中文、空格和shell符号保持原样", () => {
+    const args = ["中文 空格 & (括号)", "a'b\"c", "%PATH%", "$HOME", ""];
+    const result = runChecked([
+      process.execPath, "-e", "console.log(JSON.stringify(process.argv.slice(1)))", ...args,
     ]);
-    expect(commandForCurrentPlatform(["C:\\Tools\\git", "status"], "win32")).toEqual([
-      "C:\\Tools\\git.exe",
-      "status",
-    ]);
-    expect(commandForCurrentPlatform(["git.exe", "status"], "win32")).toEqual([
-      "git.exe",
-      "status",
-    ]);
-    expect(commandForCurrentPlatform(["git", "status"], "darwin")).toEqual([
-      "git",
-      "status",
-    ]);
+    expect(JSON.parse(result.stdout)).toEqual(args);
+  });
+
+  test("同步输出超过Node默认缓冲区时仍完整收集", () => {
+    const result = runChecked([process.execPath, "-e", "process.stdout.write('x'.repeat(2 * 1024 * 1024))"]);
+    expect(result.stdout.length).toBe(2 * 1024 * 1024);
   });
 
   test("spawnSync 创建失败时附调用方 label 并保留原始 cause", () => {
     const label = "Docker 目标 fixture 创建阶段";
     const cause = new Error("native spawn failure");
-    const spawnSync = spyOn(Bun, "spawnSync").mockImplementation(() => {
+    const spawnSync = spyOn(crossSpawn, "sync").mockImplementation(() => {
       throw cause;
     });
     try {
@@ -691,9 +698,9 @@ describe("runChecked", () => {
   });
 
   test("成功返回保持裁剪后的 stdout、stderr 和 exitCode", () => {
-    const spawnSync = spyOn(Bun, "spawnSync").mockReturnValue({
-      exitCode: 0,
-      signalCode: null,
+    const spawnSync = spyOn(crossSpawn, "sync").mockReturnValue({
+      status: 0,
+      signal: null,
       stdout: Buffer.from(" ready \n"),
       stderr: Buffer.from(" notice \n"),
     });
@@ -710,9 +717,9 @@ describe("runChecked", () => {
 
   test("非零退出的 stdout 和 stderr 错误格式不变", () => {
     const label = "目标 fixture 动作阶段";
-    const spawnSync = spyOn(Bun, "spawnSync").mockReturnValue({
-      exitCode: 23,
-      signalCode: null,
+    const spawnSync = spyOn(crossSpawn, "sync").mockReturnValue({
+      status: 23,
+      signal: null,
       stdout: Buffer.from(" partial output \n"),
       stderr: Buffer.from(" command failed \n"),
     });
@@ -735,6 +742,24 @@ describe("runChecked", () => {
 });
 
 describe("runCheckedWithInput", () => {
+  test("不存在的命令保留异步启动错误及调用方label", async () => {
+    const label = "缺失命令 fixture";
+    try {
+      await runCheckedWithInput([`boxteam-missing-${randomUUID()}`], "input", { label });
+      throw new Error("缺失命令不应成功");
+    } catch (error) {
+      expect(error.message).toContain(`${label}启动失败`);
+      expect(error.cause?.code).toBe("ENOENT");
+    }
+  });
+
+  test("子进程提前拒绝输入仍报告退出码和stderr", async () => {
+    await expect(runCheckedWithInput([
+      process.execPath, "-e", "process.stderr.write('拒绝输入'); process.exit(23)",
+    ], "x".repeat(2 * 1024 * 1024), { label: "提前退出 fixture" }))
+      .rejects.toThrow("提前退出 fixture失败(exit=23)\nstderr:\n拒绝输入");
+  });
+
   test("真实子进程接收 UTF-8 中文输入并回显", async () => {
     const input = "目标动作：同步中文管理脚本\n";
     const result = await runCheckedWithInput(
@@ -749,7 +774,7 @@ describe("runCheckedWithInput", () => {
   test("spawn 创建失败时附调用方 label 并保留原始 cause", async () => {
     const label = "Windows 目标 fixture 动作阶段";
     const cause = new Error("native spawn failure");
-    const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+    const spawn = spyOn(childProcess, "spawn").mockImplementation(() => {
       throw cause;
     });
     try {
@@ -819,18 +844,18 @@ describe("runCheckedWithInput", () => {
 });
 
 describe("Docker provision SSH host key deadline", () => {
-  test("Windows 宿主机启动 Docker 工具时使用原生 .exe", () => {
+  test("Windows 宿主机将裸命令交给跨平台执行包", () => {
     const observation = invokeDockerProvision([
       { elapsedMs: 1, exitCode: 0, stdout: "[fixture.invalid]:22222 ssh-ed25519 AAA-fixture-key\n" },
     ], null, false, [], "win32");
 
     expect(observation.error).toBeNull();
     expect(observation.spawnedCommands.map(([executable]) => executable)).toEqual([
-      "docker.exe",
-      "ssh-keyscan.exe",
+      "docker",
+      "ssh-keyscan",
     ]);
     expect(observation.childCalls[0].args).toEqual([
-      "ssh-keyscan.exe",
+      "ssh-keyscan",
       "-p",
       "22222",
       "-t",
@@ -872,7 +897,7 @@ describe("Docker provision SSH host key deadline", () => {
     expect(observation.childCalls).toEqual([
       {
         args: [
-          commandForCurrentPlatform(["ssh-keyscan"])[0],
+          "ssh-keyscan",
           "-p",
           "22222",
           "-t",
@@ -968,6 +993,32 @@ describe("Docker provision SSH host key deadline", () => {
 });
 
 describe("跨平台开发目标配置", () => {
+  test("路径展开保留美元替换符，且不再次展开插入的路径", () => {
+    const root = createFixtureRoot();
+    const repository = path.join(root, "repo-$&-$$-${HOME}");
+    const home = path.join(root, "home-$&-$$-${PROJECT_ROOT}");
+    const schema = "tools/cross-platform-development-targets/target.schema.json";
+    mkdirSync(path.dirname(path.join(repository, schema)), { recursive: true });
+    copyFileSync(path.join(projectRoot, schema), path.join(repository, schema));
+    mkdirSync(home);
+    const target = loadTargetConfiguration({
+      configPath: path.join(projectRoot, "tools/cross-platform-development-targets/targets.example.jsonc"),
+    }).targets[0];
+    target.ssh.identityFile = "${PROJECT_ROOT}/key-${HOME}";
+    target.ssh.knownHostsFile = "${HOME}/known_hosts";
+    writeFileSync(path.join(home, "targets.jsonc"), JSON.stringify({ version: 1, targets: [target] }));
+    const homedir = spyOn(os, "homedir").mockReturnValue(home);
+    try {
+      const configuration = loadTargetConfiguration({ configPath: "~/targets.jsonc", projectRoot: repository });
+      expect(configuration.targets[0].ssh.identityFile).toBe(`${repository}/key-${home}`);
+      expect(configuration.targets[0].ssh.knownHostsFile).toBe(`${home}/known_hosts`);
+      expect(defaultTargetConfigPath({ environment: { BOXTEAM_HOME: "~/boxteam" } }))
+        .toBe(path.join(home, "boxteam/config/cross-platform-development-targets.jsonc"));
+    } finally {
+      homedir.mockRestore();
+    }
+  });
+
   test("加载示例并严格校验目标", () => {
     const configuration = loadTargetConfiguration({
       configPath: path.join(
@@ -1128,7 +1179,7 @@ describe("平台 adapter 边界", () => {
 
     const result = sshCommand(target, "echo ready");
 
-    expect(result).toContain(identityFile);
+    expect(result).toContain(`IdentityFile="${identityFile.replaceAll("\\", "\\\\")}"`);
     expect(statSync(identityFile).mode & 0o777).toBe(0o600);
   });
 
@@ -1153,7 +1204,7 @@ describe("平台 adapter 边界", () => {
 
     const result = sshCommand(target, "echo ready");
 
-    expect(result).toContain(identityFile);
+    expect(result).toContain(`IdentityFile="${identityFile.replaceAll("\\", "\\\\")}"`);
     const encodedPath = Buffer.from(identityFile, "utf8").toString("base64");
     const verifyAcl = [
       "$ErrorActionPreference = 'Stop'",

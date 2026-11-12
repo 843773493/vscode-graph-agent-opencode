@@ -51,14 +51,6 @@ class ConfiguredRemoteGateway:
     remote_gateway_port: int = 8014
     activate: bool = False
     enabled: bool = True
-@dataclass(frozen=True, slots=True)
-class ConfiguredTheme:
-    id: str
-    label: str
-    extends: Literal["warm", "green", "blue"]
-    color_scheme: Literal["light", "dark"]
-    tokens: dict[str, str]
-    background: dict[str, object] | None = None
 GatewayHistoryLoadingConfig = HistoryLoadingConfig
 REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS = frozenset(
     {
@@ -73,8 +65,6 @@ REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS = frozenset(
 @dataclass(frozen=True, slots=True)
 class GatewayConfig:
     workspaces: tuple[ConfiguredRemoteGateway, ...] = ()
-    default_theme_id: str = "warm"
-    custom_themes: tuple[ConfiguredTheme, ...] = ()
     session_catalog_refresh_interval_seconds: float = 30
     session_catalog_max_concurrency: int = 8
     session_catalog_request_timeout_seconds: float = 30
@@ -197,16 +187,3 @@ def resolve_gateway_path(value: str, *, config_root: Path | None = None) -> Path
     if raw_path.is_absolute():
         return raw_path.resolve()
     return ((config_root or get_user_config_root()) / raw_path).resolve()
-def _configured_theme_background(
-    background: dict[str, object] | None,
-    *,
-    config_root: Path,
-) -> dict[str, object] | None:
-    if background is None or background.get("type") != "local_file":
-        return background
-    return {
-        **background,
-        "path": str(
-            resolve_gateway_path(cast(str, background["path"]), config_root=config_root)
-        ),
-    }

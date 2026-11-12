@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import FiniteFloat, ValidationError
 
 from app.api.deps import (
@@ -35,6 +35,7 @@ from app.schemas.internal_v2.turn import (
     TurnProjectionCorruptedErrorDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
     WorkspaceMessageSearchResultsDTO,
@@ -84,6 +85,29 @@ async def search_workspace_history_messages(
         raise state_conflict_http_error(error) from error
     assert result.messages is not None
     return APIResponse(data=result.messages, request_id=request_id)
+
+
+@router.get("/{session_id}/threads/{thread_id}/tool-results",
+            response_model=APIResponse[ThreadToolResultListDTO], summary="列出精确 Thread 的工具结果元数据")
+async def list_thread_tool_results(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    history: Annotated[SessionTurnHistoryService, Depends(get_session_turn_history_service)],
+    after: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=100),
+    view_id: str | None = Query(default=None, min_length=1, max_length=256),
+    view_revision: int | None = Query(default=None, ge=0),
+):
+    if (view_id is None) != (view_revision is None) or after and view_id is None:
+        raise HTTPException(status_code=422, detail="工具结果续页必须同时提供原 view_id 和 view_revision")
+    try:
+        result = await history.list_tool_results(session_id, thread_id, after=after, limit=limit,
+                                                view_id=view_id, view_revision=view_revision)
+    except NotFoundError as error:
+        raise not_found_http_error(error) from error
+    except Exception as error:
+        raise _turn_history_http_error(session_id, error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.post(

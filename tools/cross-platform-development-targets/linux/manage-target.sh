@@ -171,7 +171,7 @@ case "$action" in
     test -f "$repository/src/clients/workbench/upstream/product.json" || fail "Workbench 固定子模块未初始化，请执行 bootstrap --submodules"
     system_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     if test -x "$repository/.venv/bin/python"; then
-      venv_version=$($repository/.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)
+      venv_version=$("$repository/.venv/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)
       if test "$venv_version" != "$system_version"; then
         test "$repository/.venv" = "${repository%/}/.venv" || fail "虚拟环境删除路径校验失败"
         rm -rf -- "$repository/.venv"

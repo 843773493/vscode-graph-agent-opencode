@@ -4,7 +4,7 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 from app.core.config_sources import ConfigSource, config_revision
 from app.core.path_utils import (
@@ -38,9 +38,7 @@ from .sources import (
 from .values import (
     _GATEWAY_SOURCE_LAYER_AUTHORITY,
     REQUIRED_GATEWAY_CONSUMER_HEALTH_IDS,
-    ConfiguredTheme,
     GatewayConfig,
-    _configured_theme_background,
     _history_loading_config,
     _nested_config_value,
     _positive_integer_config,
@@ -216,7 +214,6 @@ def load_gateway_config(
     )
     _normalize_connection_ids(
         raw_gateway_config,
-        config_path=resolved_config_path,
         state_store=state_store if not loaded_persisted_snapshot else None,
         persist_migrations=persist_migrations and not loaded_persisted_snapshot,
         allow_new_ids=allow_new_connection_ids,
@@ -232,11 +229,6 @@ def load_gateway_config(
     if not isinstance(raw_workspaces, list):
         raise TypeError("Gateway workspaces 配置必须是数组")
     validated_workspaces = cast(list[dict[str, object]], raw_workspaces)
-    raw_ui = cast(dict[str, object], raw_gateway_config.get("ui", {}))
-    raw_theme = cast(dict[str, object], raw_ui.get("theme", {}))
-    raw_custom_themes = cast(
-        list[dict[str, object]], raw_theme.get("custom_themes", [])
-    )
     return GatewayConfig(
         workspaces=tuple(
             workspace
@@ -244,25 +236,6 @@ def load_gateway_config(
             if cast(bool, item.get("enabled", True))
             if (workspace := _workspace_from_validated_config(item)).enabled
         ),
-        default_theme_id=cast(str, raw_theme.get("default_theme_id", "warm")),
-        custom_themes=tuple(
-            ConfiguredTheme(
-                id=cast(str, item["id"]),
-                label=cast(str, item["label"]),
-                extends=cast(Literal["warm", "green", "blue"], item["extends"]),
-                color_scheme=cast(
-                    Literal["light", "dark"], item.get("color_scheme", "light")
-                ),
-                tokens=cast(dict[str, str], item.get("tokens", {})),
-                background=_configured_theme_background(
-                    cast(dict[str, object] | None, item.get("background")),
-                    config_root=resolved_config_path.parent,
-                ),
-            )
-            for item in raw_custom_themes
-        ),
-        # 这些运行时默认值来自 inline 配置；schema 校验已在上方完成，读取失败时保留
-        # 旧常量作为仅针对旧自定义 inline 文件的兼容兜底。
         session_catalog_refresh_interval_seconds=_positive_number_config(
             raw_gateway_config,
             "features",

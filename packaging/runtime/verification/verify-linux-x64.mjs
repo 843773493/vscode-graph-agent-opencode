@@ -76,8 +76,6 @@ async function requestJson(pathname, options = {}) {
       ...(options.headers ?? {}),
     },
   });
-  const cookies = response.headers.getSetCookie();
-  if (cookies.length) headers.Cookie = cookies.map((cookie) => cookie.split(";", 1)[0]).join("; ");
   const text = await response.text();
   if (!response.ok) {
     throw new Error(
@@ -135,9 +133,6 @@ async function verifyRunningProduct(child, readLauncherOutput, pluginArchive) {
     throw new Error("安装版 Gateway 本地凭据响应非法");
   }
   headers["X-Local-Token"] = localToken;
-  await requestJson("/api/gateway/users/guest", {
-    method: "POST", body: JSON.stringify({ tracking: { release_verification: true } }),
-  });
 
   const workspacePayload = await requestJson("/api/gateway/workspaces");
   const workspace = workspacePayload.data?.items?.find((item) => item.managed);
@@ -146,8 +141,7 @@ async function verifyRunningProduct(child, readLauncherOutput, pluginArchive) {
   }
 
   const browser = await verifyBrowserResource(requestJson, {
-    gatewayId: workspace.gateway_id,
-    workspaceId: workspace.workspace_id,
+    gatewayId: workspace.gateway_id, workspaceId: workspace.workspace_id,
     packagePath: pluginArchive,
     url: "data:text/html,<title>BoxTeam packaged browser</title>",
   });

@@ -21,7 +21,6 @@ from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -120,7 +119,6 @@ async def test_gateway_catalog_owner_and_offline_mirror_share_original_pages(cat
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{network.port}", headers=LOCAL_TOKEN_HEADERS,
                                      timeout=25, trust_env=False) as client:
-            await acquire_gateway_guest(client)
             owners = [{"gateway_id": network.gateway_id, "workspace_id": backend.workspace_id} for backend in network.backends]
             query = {"category": "catalog", "query": "SCN", "limit": 1, "allow_catalog_mirror": True}
 
@@ -168,7 +166,6 @@ async def test_gateway_catalog_owner_and_offline_mirror_share_original_pages(cat
             assert failed[-1]["summary"]["branches"][0]["code"] == "target_unavailable"
             close_gateway_process(gateway)
             gateway = await asyncio.to_thread(network.start)
-            await acquire_gateway_guest(client)
             restarted = await search(continuation)
             restored, = [event for event in restarted if event["type"] == "page"]
             assert restored["page"] == b_next["page"] and restored["source"] == b_next["source"]

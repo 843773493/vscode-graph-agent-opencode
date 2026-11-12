@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import cast
@@ -16,7 +16,7 @@ from jsonschema.exceptions import ValidationError
 from pydantic import JsonValue, Secret
 from pydantic import ValidationError as ModelValidationError
 
-from app.core.atomic_fs import atomic_write_bytes, native_io_path
+from app.core.atomic_fs import atomic_write_bytes, fsync_directory, native_io_path
 from app.core.file_permissions import (
     protect_readonly_file,
     require_private_file_access,
@@ -36,6 +36,47 @@ def _environment_name(value: object) -> str | None:
 
 def _is_reference(value: object) -> bool:
     return isinstance(value, dict) and value.get("kind") == "plugin_private_file"
+
+
+def private_input_references(value: object) -> tuple[PluginPrivateInputReference, ...]:
+    """从来源或恢复快照中提取正式插件私有引用，不解析秘密正文。"""
+    if _is_reference(value):
+        return (PluginPrivateInputReference.model_validate(value),)
+    if isinstance(value, Mapping):
+        return tuple(reference for child in value.values() for reference in private_input_references(child))
+    if isinstance(value, list):
+        return tuple(reference for child in value for reference in private_input_references(child))
+    return ()
+
+
+def remove_unreferenced_plugin_private_inputs(
+    directory: Path,
+    *,
+    candidates: Iterable[PluginPrivateInputReference],
+    retained: Iterable[PluginPrivateInputReference],
+) -> tuple[str, ...]:
+    """回收配置 owner 本次释放、且所有当前快照均不再引用的不可变值。"""
+    directory = native_io_path(directory)
+    retained_versions = {
+        (reference.gateway_id, reference.workspace_id, reference.version)
+        for reference in retained
+    }
+    removed: list[str] = []
+    for reference in candidates:
+        identity = reference.gateway_id, reference.workspace_id, reference.version
+        if identity in retained_versions:
+            continue
+        path = directory / f"{reference.version}.json"
+        if not path.exists():
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("插件私有输入清理目标不是普通文件")
+        path.chmod(0o600)
+        path.unlink()
+        removed.append(reference.version)
+    if removed:
+        fsync_directory(directory)
+    return tuple(removed)
 
 
 def has_parameter_references(value: object) -> bool:
@@ -181,8 +222,19 @@ class PluginPrivateInputStore:
             "value": value.get_secret_value()}, ensure_ascii=False).encode())
         restrict_private_path_access(path)
         protect_readonly_file(path)
-        # TODO：复用原私有输入 owner 的回收边界，核 active／pending 及来源引用后清理未引用值。
         return reference
+
+    def remove_unreferenced(self, *, candidates: tuple[PluginPrivateInputReference, ...],
+                            retained: tuple[PluginPrivateInputReference, ...]) -> tuple[str, ...]:
+        """只删除本次配置变更明确释放、且来源/active/pending 都不再引用的版本。"""
+        owner = self.gateway_id, self.workspace_id
+        return remove_unreferenced_plugin_private_inputs(
+            self.directory,
+            candidates=tuple(reference for reference in candidates
+                             if (reference.gateway_id, reference.workspace_id) == owner),
+            retained=tuple(reference for reference in retained
+                           if (reference.gateway_id, reference.workspace_id) == owner),
+        )
 
     def resolve(self, values: dict[str, JsonValue], *, package_id: str, plugin_id: str,
                 schema: Mapping[str, object] | None) -> dict[str, JsonValue]:

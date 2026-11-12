@@ -15,9 +15,9 @@ from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.sqlite_state import load_sql
 from app.domain.itemized.hashing import sha256_jcs
 
-BACKGROUND_MAILBOX_DDL = load_sql(__package__, "sql/background_mailbox.sql")
-BACKGROUND_MAILBOX_OWNER_DDL = load_sql(__package__, "sql/idx_background_mailbox_owner.sql")
-BACKGROUND_CONSUMPTIONS_DDL = load_sql(__package__, "sql/background_consumptions.sql")
+BACKGROUND_MAILBOX_DDL = load_sql(__package__, "migrations/background_mailbox.sql")
+BACKGROUND_MAILBOX_OWNER_DDL = load_sql(__package__, "migrations/idx_background_mailbox_owner.sql")
+BACKGROUND_CONSUMPTIONS_DDL = load_sql(__package__, "migrations/background_consumptions.sql")
 
 
 class BackgroundMailboxMixin:

@@ -19,7 +19,6 @@ from app.gateway.search.scope import SearchScopeError, resolve_search_scope
 from app.gateway.search.service import GatewaySearchService
 from app.gateway.server.workspace_proxy import (
     _http_client,
-    verify_user_access_for_proxy,
 )
 from app.schemas.gateway.search import (
     GatewaySearchScopeRequest,
@@ -65,7 +64,7 @@ _SEARCH_RESPONSES = sse_responses("请求级联邦搜索流", {"search": Federat
 
 
 @router.post(
-    "", response_class=StreamingResponse, dependencies=[Depends(verify_user_access_for_proxy)],
+    "", response_class=StreamingResponse,
     responses=_SEARCH_RESPONSES,
 )
 @router.post(

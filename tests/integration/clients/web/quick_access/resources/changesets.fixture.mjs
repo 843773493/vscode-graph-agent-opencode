@@ -43,6 +43,7 @@ export async function changesetContract(mode, kind = 'changeset') {
       return ok({ session_id: mode === 'wrong-owner' ? 'ses_wrong' : 'ses_origin',
         items: [{ changeset_id: 'turn:chosen', label: '选定任务的更改', change_kind: 'turn', summary: { files: 2 } }] });
     }
+    if (path.endsWith('/tool-results')) return ok({ session_id: 'ses_origin', thread_id: 'thr_child', items: [], source_view_id: null, source_view_revision: 0 });
     if (path.endsWith('/config/sources')) return ok({ sources: [] });
     if (path.endsWith('/agent-spec')) return ok({ node: { uri: 'AGENTS', resource_shape: 'file', operations: ['read'] } });
     if (path.endsWith('/gateway-skills')) return ok({ gateway_id: gatewayId, workspace_id: workspaceId, available: true, entries: [] });

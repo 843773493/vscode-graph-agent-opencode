@@ -45,7 +45,7 @@ async def test_runtime_logs_use_process_sources_and_original_diagnostics(
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true",
                    "BOXTEAM_SERVICE_LOG_PATH": str(artifacts / "gateway.stderr.log")})
     result_path = context.artifacts_dir / "runtime-log-content.json"
-    command = ["bun", "tests/integration/clients/web/quick_access/runtime_log_content.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/runtime_log_content.mjs"]
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,

@@ -18,7 +18,6 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
-    acquire_gateway_guest,
     close_gateway_process,
     start_gateway_process,
 )
@@ -60,7 +59,6 @@ async def test_web_bootstrap_and_resource_refresh_recover_gateway_auth(
         # Gateway 托管完整工作区运行时，资源查询必须连接真实 Terminal/Browser owner。
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}",
                                      headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:
-            await acquire_gateway_guest(client)
             session_response = await client.post("/api/v1/sessions", json={"title": "Gateway 认证恢复资源面板"})
             assert session_response.status_code == 200, session_response.text
             session = session_response.json()["data"]

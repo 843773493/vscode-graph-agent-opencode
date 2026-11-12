@@ -67,7 +67,7 @@ def configuration_assets(
     }
     if variant == "delayed-cache-write":
         assets = context.runtime_root_for_node(request.node.nodeid) / "instrumented-dist"
-        command = ["bun", "tests/integration/clients/web/quick_access/configuration_cache_browser.mjs",
+        command = ["node", "tests/integration/clients/web/quick_access/configuration_cache_browser.mjs",
                    "--prepare-assets", str(web_workbench_assets), str(assets), str(context.artifacts_dir)]
         supervised = _protected_command(context, command, 60)
         process = subprocess.run(supervised, cwd=context.project_root, capture_output=True,
@@ -158,7 +158,7 @@ async def test_real_profile_folder_cache_and_normal_close(
         json.dumps(initialization, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
     result_path = context.artifacts_dir / "configuration-cache-browser.json"
-    command = ["bun", "tests/integration/clients/web/quick_access/configuration_cache_browser.mjs"]
+    command = ["node", "tests/integration/clients/web/quick_access/configuration_cache_browser.mjs"]
     supervised = _protected_command(context, command, 180)
     with chromium_temporary_environment(runtime / "chromium-tmp") as temporary:
         process = await asyncio.to_thread(
