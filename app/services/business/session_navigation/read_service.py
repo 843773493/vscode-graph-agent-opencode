@@ -175,12 +175,19 @@ class SessionCatalogReadService:
             query=query, limit=limit, cursor=cursor, budget=budget,
         )
 
-    async def export_index(self, *, check: Callable[[], None] = lambda: None) -> SessionCatalogExportDTO:
+    async def export_index(
+        self, *, node_ids: list[str] | None = None,
+        check: Callable[[], None] = lambda: None,
+    ) -> SessionCatalogExportDTO:
         snapshot = await self._snapshot(check=check)
         return SessionCatalogExportDTO(
             revision=snapshot.revision,
             catalog_revision=snapshot.catalog_revision,
-            items=snapshot.nodes,
+            items=(snapshot.nodes if node_ids is None else [
+                snapshot.nodes_by_id[node_id]
+                for node_id in sorted(set(node_ids))
+                if node_id in snapshot.visible_node_ids
+            ]),
         )
 
     async def _snapshot(

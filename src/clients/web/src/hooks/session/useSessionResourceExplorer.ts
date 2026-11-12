@@ -648,7 +648,10 @@ export function useSessionResourceExplorer({
         if (errors.length === missingParents.length && !superseded && attempt < CATALOG_RETRY_LIMIT - 1) {
           let latest: SessionCatalogExport | undefined;
           try {
-            latest = await getSessionCatalogExport(apiPort, workspaceRequestTarget(workspaceId), { signal: confirmedRead.signal });
+            latest = await getSessionCatalogExport(apiPort, workspaceRequestTarget(workspaceId), {
+              signal: confirmedRead.signal,
+              nodeIds: parentNodeIds.filter((nodeId): nodeId is string => nodeId !== null),
+            });
           } catch (error) {
             errors.push(`确认目录是否推进失败: ${errorMessage(error)}`);
             failed = true;
@@ -665,7 +668,7 @@ export function useSessionResourceExplorer({
                 || [...removed].some(([key, requestId]) => branchRequestRefs.current.get(key) !== requestId)) {
                 throw new CatalogReadSupersededError(`会话目录分支刷新已被更新请求取代: ${workspaceId}`);
               }
-              // 新 export 须同时确认推进及全部 404 父节点已撤销；旧页整批作废，不提前 prune。
+              // 新快照须同时确认推进及全部 404 父节点已撤销；旧页整批作废，不提前 prune。
               confirmedRead = { ...confirmedRead, minimumCatalogRevision: latest.catalog_revision,
                 visibleParentIds: new Set(latest.items.map(node => node.node_id)) };
               continue;
@@ -816,7 +819,9 @@ export function useSessionResourceExplorer({
       let minimumCatalogRevision = options.minimumCatalogRevision ?? 0;
       let visibleParentIds: ReadonlySet<string> | undefined;
       if ([...parentNodeIds].some((parentNodeId) => parentNodeId !== null)) {
-        const catalog = await getSessionCatalogExport(apiPort, target, { signal });
+        const catalog = await getSessionCatalogExport(apiPort, target, {
+          signal, nodeIds: [...parentNodeIds].filter((nodeId): nodeId is string => nodeId !== null),
+        });
         signal.throwIfAborted();
         const floor = Math.max(minimumCatalogRevision, ...[...branchesRef.current.entries()]
           .filter(([key]) => key.startsWith(`${workspaceId}:`))

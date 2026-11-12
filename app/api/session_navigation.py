@@ -26,6 +26,7 @@ from app.core.trace_middleware import (
     require_current_gateway_id,
     require_current_navigation_actor,
 )
+from app.schemas.canonical_params import CanonicalSessionId
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import WorkspaceSearchRequest
 from app.schemas.internal_v2.session_navigation import (
@@ -346,11 +347,12 @@ async def get_session_catalog_breadcrumb(
     response_model=APIResponse[SessionCatalogExportDTO],
 )
 async def export_session_catalog(
+    node_id: Annotated[list[CanonicalSessionId] | None, Query()] = None,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     try:
-        result = await service.export_index()
+        result = await service.export_index(node_ids=node_id)
     except RuntimeError as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)

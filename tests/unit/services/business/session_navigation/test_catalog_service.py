@@ -52,6 +52,10 @@ async def test_catalog_public_projections_hide_locator_but_keep_path_search(
         await catalog.list_children(parent_node_id=folder.node_id, limit=10, cursor=None),
         await catalog.breadcrumb(session_id),
     ]
+    filtered = await catalog.export_index(node_ids=[session_id, canonical("未登记"), session_id])
+    assert filtered.revision == results[0].revision
+    assert filtered.catalog_revision == results[0].catalog_revision
+    assert [node.node_id for node in filtered.items] == [session_id]
     for query in (session_id, locator, locator.split("/")[0]):
         search = await catalog.search(query=query, limit=10, cursor=None)
         assert [item.node.node_id for item in search.items] == [session_id]
@@ -70,6 +74,7 @@ async def test_catalog_public_projections_hide_locator_but_keep_path_search(
     assert locator not in str(caught.value)
 
     resolver.catalog_store.set_node_state(session_id, "deleting")
+    assert (await catalog.export_index(node_ids=[session_id])).items == []
     pending = await catalog.breadcrumb(session_id)
     assert pending.items[-1].state == "deleting"
     assert pending.items[-1].session is None

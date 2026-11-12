@@ -66,18 +66,20 @@ export async function refreshSessionCatalog(
   return page;
 }
 
-/** 完整的可见节点集用于确认已加载分支是否仍可读取，不从单个分页推断节点消失。 */
+/** 按权威快照确认指定节点是否可见；不从单个分页推断节点消失。 */
 export async function getSessionCatalogExport(
   port: number,
   workspaceTarget: GatewayWorkspaceRequestTarget,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; nodeIds: readonly string[] },
 ): Promise<SessionCatalogExport> {
+  const query = new URLSearchParams();
+  for (const nodeId of options.nodeIds) query.append("node_id", nodeId);
   const catalog = unwrapApiData(await requestJson<APIResponse<SessionCatalogExport>>(
     port,
-    "/api/v1/session-catalog/export",
+    `/api/v1/session-catalog/export?${query.toString()}`,
     { headers: gatewayWorkspaceRequestHeaders(workspaceTarget), signal: options.signal },
   ));
-  assertSessionCatalogNodes(catalog.items, "会话目录完整节点集");
+  assertSessionCatalogNodes(catalog.items, "会话目录节点确认");
   return catalog;
 }
 
