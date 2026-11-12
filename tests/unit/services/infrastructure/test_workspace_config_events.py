@@ -240,7 +240,8 @@ def test_workspace_config_events_cross_domain_bounds_and_prune(
             connection.commit()
         finally:
             connection.close()
-        assert store.prune_config_events(config_domain="workspace", retention_days=30) == 1
+        assert store.prune_config_events(config_domain="workspace", retain_from=1) == 0
+        assert store.prune_config_events(config_domain="workspace", retain_from=3) == 1
         assert store.config_event_bounds(config_domain="workspace") == (3, 3)
     finally:
         store.close()

@@ -220,3 +220,46 @@ async def test_startup_prune_runs_outside_event_loop(
         release.set()
         await starting
         await lifetime.__aexit__(None, None, None)
+
+
+async def test_periodic_config_events_expire_in_mounted_workspace(
+    mounted_case: MountedCase, prune_tick: asyncio.Event,
+) -> None:
+    lifetime = main.lifespan(main.app)
+    state = await lifetime.__aenter__()
+    try:
+        await state["after_http_startup"]()
+        store = mounted_case.containers[-1].workspace_activity_service.store
+        for event_id, domain in (("expired", "workspace"), ("fresh", "workspace"), ("other", "other")):
+            store.append_config_event(
+                event_id=event_id, config_domain=domain, candidate_id=None, attempt_id=None,
+                apply_id=None, idempotency_key=None, commit_revision=None,
+                active_revision=None, pending_revision=None, source="watcher", result="applied",
+            )
+        store.create_pending_config_candidate(
+            config_domain="workspace", candidate_id="current", idempotency_key="current",
+            payload={}, source_baseline={}, candidate_digest="candidate", effective_digest="effective",
+            target_generation=None, fencing_token=None, state="candidate_validated",
+        )
+        store.append_config_event(
+            event_id="diagnostic", config_domain="workspace", candidate_id="current", attempt_id=None,
+            apply_id=None, idempotency_key=None, commit_revision=None, active_revision=None,
+            pending_revision=None, source="watcher", result="applied", applied_paths=("/logging",),
+        )
+        connection = store._database.connection()
+        try:
+            connection.execute(
+                "UPDATE config_events SET occurred_at=? WHERE event_id IN ('expired','other','diagnostic')",
+                ((datetime.now(UTC) - timedelta(days=40)).isoformat(),),
+            )
+        finally:
+            connection.close()
+        prune_tick.set()
+        async with asyncio.timeout(5):
+            while any(event.event_id == "expired" for event in store.list_config_events(config_domain="workspace")):
+                await asyncio.sleep(0.01)
+        assert [event.event_id for event in store.list_config_events(config_domain="workspace")] == ["fresh", "diagnostic"]
+        assert mounted_case.containers[-1].config_service.get_reload_status().applied_paths == ("/logging",)
+        assert [event.event_id for event in store.list_config_events(config_domain="other")] == ["other"]
+    finally:
+        await lifetime.__aexit__(None, None, None)

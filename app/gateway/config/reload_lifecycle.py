@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from app.core.failures import failure_detail
+from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.runtime.consumer_protocol import (
     GatewayRuntimeConsumerApplyError,
@@ -68,6 +69,7 @@ class ReloadLifecycleMixin:
         self._remove_released_plugin_private_inputs: Callable[[object], None] | None = None
         self._gateway_id = gateway_id
         self._watcher: ConfigFileWatcher | None = None
+        self._event_prune_task: asyncio.Task[None] | None = None
         self._reload_lock = asyncio.Lock()
         now = datetime.now(UTC)
         self._state_store.recover_expired_config_applies(
@@ -282,7 +284,7 @@ class ReloadLifecycleMixin:
                 lease_seconds=30,
             )
     async def start(self) -> None:
-        if self._watcher is not None:
+        if self._watcher is not None or self._event_prune_task is not None:
             raise RuntimeError("Gateway 配置监听器不允许重复启动")
         self.initialize_active_snapshot()
         watcher = ConfigFileWatcher(
@@ -292,11 +294,38 @@ class ReloadLifecycleMixin:
         )
         await watcher.start()
         self._watcher = watcher
+        self._event_prune_task = asyncio.create_task(
+            self._prune_events_periodically(), name="gateway-config-events-prune",
+        )
+        self._event_prune_task.add_done_callback(self._report_event_prune_failure)
+
+    async def _prune_events_periodically(self) -> None:
+        while True:
+            await asyncio.sleep(3600)
+            removed = await run_sync_shielded(
+                self._state_store.prune_config_events, config_domain=self._CONFIG_DOMAIN,
+            )
+            if removed:
+                logger.info("清理 Gateway 配置事件: removed=%s", removed)
+
+    @staticmethod
+    def _report_event_prune_failure(task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("Gateway 配置事件清理失败", exc_info=(type(error), error, error.__traceback__))
+
     async def stop(self) -> None:
         watcher = self._watcher
-        self._watcher = None
         if watcher is not None:
             await watcher.stop()
+            self._watcher = None
+        prune = self._event_prune_task
+        if prune is not None:
+            prune.cancel()
+            try:
+                await prune
+            except asyncio.CancelledError:
+                pass
+            self._event_prune_task = None
     async def _reload_from_watcher(self) -> None:
         try:
             await self.reload()

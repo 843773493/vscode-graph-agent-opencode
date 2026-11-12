@@ -662,15 +662,18 @@ class WorkspaceConfigEventMixin:
                 first=first if first is not None else latest,
             )
 
-    def prune_config_events(self, *, config_domain: str, retention_days: int = 30) -> int:
+    def prune_config_events(
+        self, *, config_domain: str, retention_days: int = 30, retain_from: int | None = None,
+    ) -> int:
         if retention_days < 1:
             raise ValueError("配置事件保留天数必须大于 0")
         cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
         connection = self._database.connection()
         try:
             cursor = connection.execute(
-                "DELETE FROM config_events WHERE config_domain = ? AND occurred_at < ?",
-                (config_domain, cutoff),
+                "DELETE FROM config_events WHERE config_domain = ? AND occurred_at < ? "
+                "AND (? IS NULL OR event_seq < ?)",
+                (config_domain, cutoff, retain_from, retain_from),
             )
             return int(cursor.rowcount)
         finally:

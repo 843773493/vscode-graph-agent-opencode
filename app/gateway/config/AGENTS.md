@@ -42,6 +42,7 @@ app/gateway/config/
 - 新增模块必须保持每文件 ≤800 行。
 - 失败直接抛出明确错误，不得静默降级；不得返回虚假默认值。
 - watcher 的单次 reload 失败须保留原失败状态并记录异常，继续观察后续文件修复；显式 reload 仍抛错，取消继续向上传播，不增加第二套重试链。
+- 配置事件沿既有 30 天窗口每小时在 worker 中裁剪；任务由 reload service 的 start/stop 持有，关闭须等待正在执行的 SQLite 清理结算。清理只删除 outbox 和级联的投递记录，不修改 active/pending 配置，不在请求路径执行 VACUUM；过期游标沿原 CursorGone 契约重新同步。
 - 失败事实与完整异常诊断复用 `app/core/failures.py`，不另存原生异常正文。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 

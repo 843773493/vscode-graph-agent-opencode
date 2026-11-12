@@ -55,6 +55,18 @@ def _workspace_startup_stage(container: AppContainer, stage: str):
 
 
 async def _prune_workspace_activity_periodically(container: AppContainer) -> None:
+    def prune_config_events() -> int:
+        store = container.workspace_activity_service.store
+        pending = store.get_pending_config_candidate(config_domain="workspace")
+        event = store.latest_config_attempt_event(
+            config_domain="workspace", candidate_id=pending.candidate_id,
+            attempt_id=pending.last_attempt_id,
+        ) if pending is not None else None
+        # 状态诊断仍引用最新候选的事件；保留连续后缀，避免在游标窗口中挖洞。
+        return store.prune_config_events(
+            config_domain="workspace", retain_from=event.event_seq if event is not None else None,
+        )
+
     while True:
         await asyncio.sleep(3600)
         # 原周期任务持有worker到结算；关闭不能在DELETE仍等待写锁时释放存储。
@@ -62,6 +74,9 @@ async def _prune_workspace_activity_periodically(container: AppContainer) -> Non
         removed = await run_sync_shielded(container.workspace_activity_service.prune)
         if removed:
             logger.info("清理 Workspace 会话活动事件: removed=%s", removed)
+        removed = await run_sync_shielded(prune_config_events)
+        if removed:
+            logger.info("清理 Workspace 配置事件: removed=%s", removed)
 
 
 def _report_periodic_failure(task: asyncio.Task[None]) -> None:
