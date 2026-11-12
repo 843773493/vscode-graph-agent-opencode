@@ -71,6 +71,9 @@ async def test_closed_resources_survive_history_reload_without_deleting_business
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert result["restoredClosedHistory"] and result["reopenDeduplicated"] and result["removedHistoryOnly"]
     assert result["draftRestored"] and result["businessPreserved"] and result["scopedOwners"]
+    assert [item["mode"] for item in result["recovery"]] == ["unknown-version", "missing-owner", "broken-json"]
+    assert all(item["retainedAcrossReload"] and item["displayOnlyRemoval"] and item["targetReads"] == 0
+               for item in result["recovery"])
     assert result["searches"] == [] and result["executions"] == []
     assert (workspace / "history.txt").read_text(encoding="utf-8") == "A history file"
     with provider.control._condition:

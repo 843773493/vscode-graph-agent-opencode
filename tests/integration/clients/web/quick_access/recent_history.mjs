@@ -8,8 +8,8 @@ import { writeWorkspaceSettings } from '../../../../support/workbench/settings.m
 const required = name => { const value = process.env[name]; if (!value) throw new Error(`最近历史验收缺少 ${name}`); return value; };
 const base = required('BOXTEAM_BROWSER_BASE_URL'), output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_recent_history.py');
-const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], searches: [], executions: [], receipts: [],
-  boundary: '真实 Gateway／Backend／正式 Workbench。由产品创建Session，实际打开、关闭并沿原prepareToClose提交展示态后刷新；不预写浏览器存储，只读来源为普通文件预备。' };
+const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], searches: [], executions: [], receipts: [], threadReads: [], recovery: [],
+  boundary: '真实 Gateway／Backend／正式 Workbench。由产品创建Session并生成历史与草稿；恢复负例只在页面卸载后破坏一条真实Thread序列化记录，不预写业务状态。来源为普通文件预备。' };
 let page, failure;
 try {
   const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'), headless: true,
@@ -22,6 +22,7 @@ try {
     const path = new URL(request.url()).pathname;
     if (path === '/api/gateway/search') result.searches.push({ phase: result.phase, body: request.postDataJSON() });
     if (request.method() === 'POST' && /\/threads\/[^/]+\/messages$/.test(path)) result.executions.push(path);
+    if (/^\/api\/v1\/sessions\/[^/]+\//.test(path)) result.threadReads.push({ phase: result.phase, path });
   });
   const command = (id, ...args) => page.evaluate(async ({ id, args }) => {
     await globalThis.workbench.commands.executeCommand(id, ...args);
@@ -161,6 +162,103 @@ try {
   await expect(pick(b.resource)).toHaveCount(1); await expect(pick(a.resource)).toHaveCount(0);
   expect(await api(`/api/v1/sessions/${b.sessionId}/main-thread`, ownerB)).toMatchObject({ thread_id: b.threadId });
   result.scopedOwners = true; result.draftRestored = true; result.businessPreserved = true;
+  await page.keyboard.press('Escape');
+  await command('workbench.action.closeAllEditors');
+  await command('workbench.action.joinAllGroups');
+  await open(a.publicUri);
+  const groups = page.locator('.editor-group-container');
+  const reload = async () => {
+    await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
+    await page.reload({ waitUntil: 'domcontentloaded' }); await ready();
+  };
+  for (const mode of ['unknown-version', 'missing-owner', 'broken-json']) {
+    result.phase = 'prepare-' + mode;
+    await command('workbench.action.focusFirstEditorGroup');
+    await command('workbench.action.quickOpen', b.publicUri);
+    await quick.locator(`[data-quick-input-id="link:${b.publicUri}"]`).click({ modifiers: ['Alt'] });
+    await expect(groups).toHaveCount(2);
+    await expect(threadPane(b).getByTestId('composer-input')).toHaveValue('B 最近历史草稿');
+    await expect(threadPane(a).getByTestId('composer-input')).toHaveValue('A 最近历史草稿');
+    await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
+    // 离开工作台后只破坏原存储的一条真实记录，避免运行中的存储服务覆盖故障样本。
+    const storageUrl = new URL('/__thread_recovery_storage__', base).href;
+    await page.route(storageUrl, route => route.fulfill({ contentType: 'text/html', body: '<title>Thread恢复存储故障注入</title>' }));
+    await page.goto(storageUrl, { waitUntil: 'domcontentloaded' });
+    const corruption = await page.evaluate(async ({ mode, sessionId }) => {
+      const read = request => new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+      });
+      const matches = [];
+      for (const info of await indexedDB.databases()) {
+        if (!info.name.startsWith('vscode-web-state-db-')) continue;
+        const db = await read(indexedDB.open(info.name));
+        try {
+          const table = db.transaction('ItemTable').objectStore('ItemTable');
+          const [keys, values] = await Promise.all([read(table.getAllKeys()), read(table.getAll())]);
+          for (let index = 0; index < values.length; index++) {
+            let state;
+            try { state = JSON.parse(values[index]); } catch { continue; }
+            if (!state || typeof state !== 'object' || !state['editorpart.state']) continue;
+            const changed = [];
+            const visit = value => {
+              if (!value || typeof value !== 'object') return;
+              if (Array.isArray(value.editors)) for (const editor of value.editors) {
+                if (editor.id !== 'boxteam.editor.thread') continue;
+                const stored = JSON.parse(editor.value);
+                if (stored.target?.sessionId !== sessionId) continue;
+                const replacement = mode === 'broken-json' ? '{"version":2,' : JSON.stringify(mode === 'unknown-version'
+                  ? { ...stored, version: 42 } : { ...stored, target: { ...stored.target, gatewayId: '' } });
+                changed.push({ original: editor.value, replacement }); editor.value = replacement;
+              }
+              for (const child of Object.values(value)) visit(child);
+            };
+            visit(state['editorpart.state']);
+            if (changed.length) matches.push({ database: info.name, key: keys[index], value: JSON.stringify(state), changed });
+          }
+        } finally { db.close(); }
+      }
+      if (matches.length !== 1 || matches[0].changed.length !== 1) throw new Error(`预期一条Thread记录，实际${JSON.stringify(matches)}`);
+      const match = matches[0], db = await read(indexedDB.open(match.database));
+      try {
+        await new Promise((resolve, reject) => {
+          const transaction = db.transaction('ItemTable', 'readwrite');
+          transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error ?? new Error('Thread恢复故障写入中止'));
+          transaction.objectStore('ItemTable').put(match.value, match.key);
+        });
+      } finally { db.close(); }
+      return { mode, database: match.database, key: match.key, ...match.changed[0] };
+    }, { mode, sessionId: b.sessionId });
+    await page.unroute(storageUrl);
+    const reason = mode === 'unknown-version' ? '不支持的 Thread 编辑器恢复版本：42'
+      : mode === 'missing-owner' ? 'Thread 编辑器恢复数据缺少精确 owner' : 'Thread 编辑器恢复 JSON 损坏';
+    result.phase = 'recover-' + mode;
+    await page.goto(base, { waitUntil: 'domcontentloaded' }); await ready();
+    const placeholder = page.locator('.monaco-editor-pane-placeholder').filter({ visible: true });
+    await expect(placeholder).toContainText(reason);
+    await expect(threadPane(a).getByTestId('composer-input')).toHaveValue('A 最近历史草稿');
+    await expect(threadPane(b)).toHaveCount(0);
+    result.phase = 'retain-' + mode;
+    await reload();
+    await expect(placeholder).toContainText(reason);
+    await expect(threadPane(a).getByTestId('composer-input')).toHaveValue('A 最近历史草稿');
+    await placeholder.getByRole('button', { name: '移除此展示记录', exact: true }).click();
+    await expect(placeholder).toHaveCount(0);
+    result.phase = 'remove-' + mode;
+    await reload();
+    await expect(page.locator('.editor-placeholder-label-container').filter({ hasText: reason })).toHaveCount(0);
+    await expect(threadPane(a).getByTestId('composer-input')).toHaveValue('A 最近历史草稿');
+    await expect(threadPane(b)).toHaveCount(0);
+    expect(result.threadReads.filter(read => /^(recover|retain|remove)-/.test(read.phase)
+      && read.path.startsWith(`/api/v1/sessions/${b.sessionId}/`))).toEqual([]);
+    result.phase = 'verify-business-' + mode;
+    expect(await api(`/api/v1/sessions/${b.sessionId}/main-thread`, ownerB)).toMatchObject({ thread_id: b.threadId });
+    result.recovery.push({ ...corruption, retainedAcrossReload: true, displayOnlyRemoval: true, targetReads: 0 });
+    // 单条移除不删除业务、原草稿或最近历史；下一轮仍从同一规范引用打开。
+  }
+  result.phase = 'reopen-after-display-removal';
+  await open(b.publicUri);
+  await expect(threadPane(b).getByTestId('composer-input')).toHaveValue('B 最近历史草稿');
   expect(result.searches).toEqual([]); expect(result.executions).toEqual([]); expect(result.pageErrors).toEqual([]);
   result.phase = 'complete';
 } catch (error) {

@@ -9,6 +9,7 @@ import { IStorageService } from '../upstream/src/vs/platform/storage/common/stor
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { Dimension } from '../upstream/src/vs/base/browser/dom.js';
+import { toAction } from '../upstream/src/vs/base/common/actions.js';
 import { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
 import { EditorInput } from '../upstream/src/vs/workbench/common/editor/editorInput.js';
 import { IEditorOptions } from '../upstream/src/vs/platform/editor/common/editor.js';
@@ -57,7 +58,9 @@ export class ThreadPane extends EditorPane {
     this.conversation?.dispose(); this.conversation = undefined; this.current = undefined;
     await super.setInput(input, options, context, token);
     if (token.isCancellationRequested || this.input !== input) return;
-    if (input instanceof UnavailableThreadInput) throw createEditorOpenError(input.reason, [], { forceMessage: true });
+    if (input instanceof UnavailableThreadInput) throw createEditorOpenError(input.reason, [toAction({
+      id: 'boxteam.thread.removeUnavailableRecord', label: '移除此展示记录', run: () => this.group.closeEditor(input),
+    })], { forceMessage: true });
     if (!(input instanceof ThreadInput)) throw new Error('ThreadPane 只接受 ThreadInput');
     try { await input.resolveOwner(); }
     catch (error) { throw createEditorOpenError(error instanceof Error ? error : String(error), [], { forceMessage: true }); }
