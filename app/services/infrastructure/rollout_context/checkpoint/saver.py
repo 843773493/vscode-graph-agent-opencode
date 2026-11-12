@@ -14,6 +14,7 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
+from app.abstractions.session_context import SessionContextAssemblySummary
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.path_utils import get_session_path_resolver
@@ -373,6 +374,12 @@ class RolloutCheckpointSaver(
             thread_id,
             turn_id=turn_id,
         )
+
+    def list_context_assembly_summaries(
+        self, session_id: str, thread_id: str,
+    ) -> tuple[SessionContextAssemblySummary, ...]:
+        """由同一封存清单提供摘要，不恢复列表未消费的历史正文。"""
+        return self._storage.assemblies.list_context_assembly_summaries(session_id, thread_id)
 
 
     def register_content_part(

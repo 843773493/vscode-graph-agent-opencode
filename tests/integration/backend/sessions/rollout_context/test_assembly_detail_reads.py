@@ -71,6 +71,13 @@ async def test_detail_read_only_restores_selected_assembly(assembly_detail, requ
     assert cold.list_context_assembly_ids(case.session_id, case.thread_id) == ids
     assert cold.list_context_assembly_ids(case.session_id, case.thread_id, turn_id=case.turn_id) == ids
     assert cold.list_context_assembly_ids(case.session_id, case.thread_id, turn_id="missing") == ()
+    listing = await service.read_context(query.model_copy(update={"view": "assemblies", "assembly_ref": None}))
+    assert [item.data for item in listing.items] == [
+        {"session_id": value.session_id, "assembly_id": value.assembly_id, "plan_id": value.plan_id,
+         "history_view_revision": value.history_view_revision, "source_overlay_epoch": value.source_overlay_epoch,
+         "selection_count": len(value.selection), "target_format": value.target_format}
+        for value in reversed(snapshots)
+    ]
     expected = cold.read_context_assembly_history(
         case.session_id, case.thread_id, target.assembly_id,
     )
@@ -93,30 +100,46 @@ async def test_detail_read_only_restores_selected_assembly(assembly_detail, requ
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("damage", ["header", "body"])
+@pytest.mark.parametrize("damage", ["header", "body", "content_node"])
 async def test_detail_defers_unselected_damage_but_rejects_selected_damage(assembly_detail, damage):
     case, snapshots, cold, service, query = assembly_detail
     expected = await service.read_context(query)
+    list_query = query.model_copy(update={"view": "assemblies", "assembly_ref": None})
+    listing = await service.read_context(list_query)
     old = snapshots[0]
     with case.connection:
         if damage == "header":
             case.connection.execute("UPDATE context_assemblies SET plan_hash='forged' WHERE assembly_id=?", (old.assembly_id,))
-        else:
+        elif damage == "body":
             case.connection.execute("UPDATE context_assemblies SET snapshot_json='{}' WHERE assembly_id=?", (old.assembly_id,))
+        else:
+            manifest, = case.connection.execute(
+                "SELECT snapshot_json FROM context_assemblies WHERE assembly_id=?", (old.assembly_id,),
+            ).fetchone()
+            case.connection.execute(
+                "UPDATE assembly_content_nodes SET body_json='{}' WHERE session_id=? AND thread_id=? AND node_id=?",
+                (old.session_id, old.thread_id, json.loads(manifest)["tool_set_refs"]["node"]),
+            )
     before = case.connection.execute("SELECT * FROM context_assemblies ORDER BY rowid").fetchall()
     jsonl = case.jsonl_path.read_bytes()
     assert (await service.read_context(query)).model_dump() == expected.model_dump()
     broken_query = query.model_copy(update={
         "assembly_ref": context_assembly_identity(query.resource_identity, old.assembly_id),
     })
-    error, message = (
-        (RuntimeError, "context assembly header") if damage == "header"
-        else (ValueError, "assembly content manifest 格式不受支持")
-    )
+    error, message = {
+        "header": (RuntimeError, "context assembly header"),
+        "body": (ValueError, "assembly content manifest 格式不受支持"),
+        "content_node": (ValueError, "assembly content hash 不一致"),
+    }[damage]
     with pytest.raises(error, match=message):
         await service.read_context(broken_query)
     # 完整列表仍维持恢复全部快照的校验合同。
     with pytest.raises(error, match=message):
         cold.list_context_assemblies(case.session_id, case.thread_id)
+    if damage == "content_node":
+        assert (await service.read_context(list_query)).model_dump() == listing.model_dump()
+    else:
+        with pytest.raises(error, match="summary header" if damage == "header" else message):
+            await service.read_context(list_query)
     assert case.connection.execute("SELECT * FROM context_assemblies ORDER BY rowid").fetchall() == before
     assert case.jsonl_path.read_bytes() == jsonl

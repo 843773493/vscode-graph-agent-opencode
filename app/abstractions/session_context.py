@@ -117,6 +117,19 @@ class SessionContextHistoryProjection:
     resource_activation: ResourceActivationSnapshotRef | None
 
 
+@dataclass(frozen=True, slots=True)
+class SessionContextAssemblySummary:
+    """封存清单中的列表字段，不包含请求正文或工具定义。"""
+
+    assembly_id: str
+    session_id: str
+    plan_id: str
+    history_view_revision: int
+    source_overlay_epoch: int
+    selection_count: int
+    target_format: str
+
+
 class SessionContextAssemblySourceProtocol(Protocol):
     """上下文检查面只消费 Saver 冻结的 assembly 和 history diagnostics。"""
 
@@ -128,13 +141,11 @@ class SessionContextAssemblySourceProtocol(Protocol):
         turn_id: str | None = None,
     ) -> tuple[str, ...]: ...
 
-    def list_context_assemblies(
+    def list_context_assembly_summaries(
         self,
         session_id: str,
         thread_id: str,
-        *,
-        turn_id: str | None = None,
-    ) -> tuple[ContextAssemblySnapshot, ...]: ...
+    ) -> tuple[SessionContextAssemblySummary, ...]: ...
 
     def read_context_assembly_history(
         self,

@@ -301,7 +301,7 @@ async def test_assemblies_read_uses_catalog_resolved_main_thread():
     assembly_source = create_autospec(
         SessionContextAssemblySourceProtocol, spec_set=True
     )
-    assembly_source.list_context_assemblies.return_value = ()
+    assembly_source.list_context_assembly_summaries.return_value = ()
     service = SessionContextQueryService(
         message_source=_FakeMessageSource(),
         session_lookup=_FakeSessionLookup(),
@@ -312,7 +312,7 @@ async def test_assemblies_read_uses_catalog_resolved_main_thread():
     result = await service.read_context(_session_request(view="assemblies"))
 
     assert result.items == []
-    assembly_source.list_context_assemblies.assert_called_once_with(
+    assembly_source.list_context_assembly_summaries.assert_called_once_with(
         "ses_target",
         "thread_target",
     )
@@ -378,7 +378,7 @@ async def test_assembly_history_projection_uses_session_thread_pair():
         "ses_target",
         "thread_target",
     )
-    assembly_source.list_context_assemblies.assert_not_called()
+    assembly_source.list_context_assembly_summaries.assert_not_called()
     assembly_source.read_context_assembly_history.assert_called_once_with(
         "ses_target",
         "thread_target",
@@ -439,10 +439,10 @@ def assembly_selection_query() -> AssemblySelectionQueryFixture:
         plan_hash="plan-hash", request_hash="request-hash", history_view_revision=1,
         source_overlay_epoch=1, target_format="langchain", compiler_version="compiler",
         provider_version="provider", projector_id="projector", projector_version="1",
-        selection=tuple(selection), loss=(),
+        selection=tuple(selection), selection_count=len(selection), loss=(),
     )
     assembly_source = create_autospec(SessionContextAssemblySourceProtocol, spec_set=True)
-    assembly_source.list_context_assemblies.return_value = (snapshot,)
+    assembly_source.list_context_assembly_summaries.return_value = (snapshot,)
     assembly_source.list_context_assembly_ids.return_value = (snapshot.assembly_id,)
     assembly_source.read_context_assembly_history.return_value = SessionContextHistoryProjection(
         assembly=snapshot, messages=[], losses=(), resource_activation=None,
@@ -552,9 +552,9 @@ async def test_default_assembly_revision_and_cursor_use_structure_without_body_h
         assembly_id="asm_second", session_id=snapshot.session_id,
         plan_id="plan_second", plan_hash="second-sensitive-plan-hash",
         history_view_revision=2, source_overlay_epoch=2,
-        selection=snapshot.selection, target_format=snapshot.target_format,
+        selection=snapshot.selection, selection_count=len(snapshot.selection), target_format=snapshot.target_format,
     )
-    service._assembly_source.list_context_assemblies.return_value = (snapshot, second)
+    service._assembly_source.list_context_assembly_summaries.return_value = (snapshot, second)
     list_request = _session_request(view="assemblies", limit=1, max_chars=65_536)
     listing = await service.read_context(list_request)
     list_revision = "assemblies:" + hashlib.sha256(

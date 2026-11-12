@@ -61,7 +61,7 @@ class SessionContextAssemblyQueryService:
         """只列 Saver 已封存快照；列表顺序不改变快照内部 selection。"""
         thread_id = self._require_main_thread_id(session)
         snapshots = await asyncio.to_thread(
-            self._assembly_source.list_context_assemblies,
+            self._assembly_source.list_context_assembly_summaries,
             session.session_id,
             thread_id,
         )
@@ -89,7 +89,7 @@ class SessionContextAssemblyQueryService:
                     "plan_id": snapshot.plan_id,
                     "history_view_revision": snapshot.history_view_revision,
                     "source_overlay_epoch": snapshot.source_overlay_epoch,
-                    "selection_count": len(snapshot.selection),
+                    "selection_count": snapshot.selection_count,
                     "target_format": snapshot.target_format,
                 },
             )

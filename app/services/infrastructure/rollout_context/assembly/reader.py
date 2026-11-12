@@ -5,9 +5,13 @@ from __future__ import annotations
 import sqlite3
 from typing import TYPE_CHECKING
 
+from app.abstractions.session_context import SessionContextAssemblySummary
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.runtime_wakeup import RuntimeInputConsumption
+from app.services.infrastructure.rollout_context.assembly.content_store import (
+    read_snapshot_manifest,
+)
 from app.services.infrastructure.rollout_context.assembly.detail_identity import (
     detail_ref_from_key,
     optional_detail_ref_key,
@@ -20,6 +24,7 @@ from app.services.infrastructure.rollout_context.assembly.plans.types import (
     ContextPlanRegistration,
 )
 from app.services.infrastructure.rollout_context.assembly.validation import (
+    exact_row,
     non_negative_int,
     optional_text,
     required_text,
@@ -329,6 +334,44 @@ class ContextAssemblyReaderMixin:
                 )[0]
                 for assembly_id in self._list_context_assembly_ids_connection(snapshot.connection, turn_id=turn_id)
             )
+
+    def list_context_assembly_summaries(
+        self, session_id: str, thread_id: str,
+    ) -> tuple[SessionContextAssemblySummary, ...]:
+        """列表仅核封存清单及归属；完整正文由详情和完整读取校验。"""
+        summaries = []
+        fields = (
+            "assembly_id", "session_id", "thread_id", "plan_id", "plan_hash",
+            "request_hash", "turn_id", "execution_id", "history_view_revision",
+            "source_overlay_epoch",
+        )
+        with self._storage.open_read_snapshot(session_id, thread_id, "") as snapshot:
+            connection = snapshot.connection
+            for row in connection.execute(
+                "SELECT snapshot_json,assembly_id,session_id,thread_id,plan_id,plan_hash,"
+                "request_hash,turn_id,execution_id,history_view_revision,source_overlay_epoch "
+                "FROM context_assemblies WHERE status IN ('sealed','terminal') ORDER BY rowid",
+            ):
+                manifest = read_snapshot_manifest(row[0])
+                require_historical_scope(connection, row[2], row[3], current_owner=(session_id, thread_id))
+                exact_row(
+                    (*row[1:], manifest["format_version"], manifest["sealed"], manifest["plan_state"]),
+                    (*(manifest[field] for field in fields), 2, True, "sealed"),
+                    field="context assembly summary header",
+                )
+                selection = manifest["selection"]
+                if not isinstance(selection, list):
+                    raise TypeError("context assembly summary selection 必须是 array")
+                summaries.append(SessionContextAssemblySummary(
+                    assembly_id=required_text(row[1], field="assembly_id"),
+                    session_id=required_text(row[2], field="session_id"),
+                    plan_id=required_text(row[4], field="plan_id"),
+                    history_view_revision=non_negative_int(row[9], field="history_view_revision"),
+                    source_overlay_epoch=non_negative_int(row[10], field="source_overlay_epoch"),
+                    selection_count=len(selection),
+                    target_format=required_text(manifest["target_format"], field="target_format"),
+                ))
+        return tuple(summaries)
 
 
 __all__ = ["ContextAssemblyReaderMixin"]

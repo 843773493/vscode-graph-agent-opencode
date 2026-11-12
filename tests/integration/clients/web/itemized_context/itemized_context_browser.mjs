@@ -81,7 +81,7 @@ async function openFrozen(sessionId, expectedError = null) {
   await inspector.waitFor({ state: "visible" });
   await waitUntil(async () => await inspector.getAttribute("data-owner-session-id") === sessionId, "检查面 session owner");
   await waitUntil(async () => !(await inspector.getByText("正在读取封存请求…", { exact: true }).count()), "请求列表");
-  assert.equal(await inspector.getByRole("alert").count(), expectedError ? 1 : 0);
+  await expect(inspector.getByRole("alert")).toHaveCount(expectedError ? 1 : 0);
   if (expectedError) assert.ok((await inspector.getByRole("alert").innerText()).includes(expectedError));
   return inspector;
 }
