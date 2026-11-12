@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,24 @@ async def test_snapshot_reopen_uses_catalog_and_metadata_identity(
         await reopened.read_html_snapshot(
             result.snapshot_id, session_id=SESSION_ID, metadata=True
         )
+
+
+@pytest.mark.asyncio
+async def test_snapshot_expiration_removes_published_pair_and_preserves_fresh(snapshot_storage) -> None:
+    service = snapshot_storage.log_service
+    expired = await service.write_html_snapshot(LogSnapshotRecord(session_id=SESSION_ID, html="旧快照"))
+    fresh = await service.write_html_snapshot(LogSnapshotRecord(session_id=None, html="新快照"))
+    directory = snapshot_storage.session_directory / "logs/webview"
+    metadata = directory / f"{expired.snapshot_id}.json"
+    value = json.loads(metadata.read_text())
+    value["created_at"] = (datetime.now(UTC) - timedelta(days=31)).isoformat()
+    metadata.write_text(json.dumps(value))
+    for metadata_only in (True, False):
+        with pytest.raises(KeyError, match="已过期"):
+            await service.read_html_snapshot(expired.snapshot_id, session_id=SESSION_ID, metadata=metadata_only)
+    assert await service.prune_html_snapshots() == 1
+    assert not metadata.exists() and not (directory / f"{expired.snapshot_id}.html").exists()
+    assert await service.read_html_snapshot(fresh.snapshot_id, session_id=None, metadata=False) == "新快照"
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,9 @@ async def _prune_workspace_activity_periodically(container: AppContainer) -> Non
         removed = await run_sync_shielded(prune_config_events)
         if removed:
             logger.info("清理 Workspace 配置事件: removed=%s", removed)
+        removed = await container.log_service.prune_html_snapshots()
+        if removed:
+            logger.info("清理 Workspace HTML 快照: removed=%s", removed)
 
 
 def _report_periodic_failure(task: asyncio.Task[None]) -> None:

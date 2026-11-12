@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,
     AttachmentMaintenanceLock,
 )
+from app.services.infrastructure.log_service import LogSnapshotRecord
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from tests.integration.backend.sessions.test_attachment_maintenance import (
     maintenance_case as maintenance_case,  # noqa: PLC0414
@@ -222,14 +224,20 @@ async def test_startup_prune_runs_outside_event_loop(
         await lifetime.__aexit__(None, None, None)
 
 
-async def test_periodic_config_events_expire_in_mounted_workspace(
+async def test_periodic_retention_in_mounted_workspace(
     mounted_case: MountedCase, prune_tick: asyncio.Event,
 ) -> None:
     lifetime = main.lifespan(main.app)
     state = await lifetime.__aenter__()
     try:
         await state["after_http_startup"]()
-        store = mounted_case.containers[-1].workspace_activity_service.store
+        selected = mounted_case.containers[-1]
+        snapshot = await selected.log_service.write_html_snapshot(LogSnapshotRecord(session_id=None, html="过期快照"))
+        metadata = selected.workspace_root / f".boxteam/logs/webview/{snapshot.snapshot_id}.json"
+        payload = json.loads(metadata.read_text())
+        payload["created_at"] = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+        metadata.write_text(json.dumps(payload))
+        store = selected.workspace_activity_service.store
         for event_id, domain in (("expired", "workspace"), ("fresh", "workspace"), ("other", "other")):
             store.append_config_event(
                 event_id=event_id, config_domain=domain, candidate_id=None, attempt_id=None,
@@ -261,5 +269,9 @@ async def test_periodic_config_events_expire_in_mounted_workspace(
         assert [event.event_id for event in store.list_config_events(config_domain="workspace")] == ["fresh", "diagnostic"]
         assert mounted_case.containers[-1].config_service.get_reload_status().applied_paths == ("/logging",)
         assert [event.event_id for event in store.list_config_events(config_domain="other")] == ["other"]
+        async with asyncio.timeout(5):
+            while metadata.exists():
+                await asyncio.sleep(0.01)
+        assert not metadata.with_suffix(".html").exists()
     finally:
         await lifetime.__aexit__(None, None, None)
