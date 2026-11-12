@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from app.core.session_catalog_resolver import (
     SessionCatalogPathResolver,
     SessionCatalogSessionProjection,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -54,6 +56,7 @@ class SessionCatalogReadService:
         self._session_service = session_service
         self._path_resolver: SessionCatalogPathResolver = session_service.path_resolver
         self._cached_snapshot: _SessionCatalogReadSnapshot | None = None
+        self._snapshot_lock = asyncio.Lock()
 
     def invalidate(self) -> None:
         self._cached_snapshot = None
@@ -186,25 +189,36 @@ class SessionCatalogReadService:
         force: bool = False,
         check: Callable[[], None] = lambda: None,
     ) -> _SessionCatalogReadSnapshot:
+        # 同一时刻只构建一份投影；取消须等 worker 结算再释放锁。
+        async with self._snapshot_lock:
+            return await run_sync_shielded(self._read_snapshot, force=force, check=check)
+
+    def _read_snapshot(
+        self,
+        *,
+        force: bool = False,
+        check: Callable[[], None] = lambda: None,
+    ) -> _SessionCatalogReadSnapshot:
         check()
         current_revision = self._path_resolver.revision
+        cached = self._cached_snapshot
         if (
             not force
-            and self._cached_snapshot is not None
-            and self._cached_snapshot.catalog_revision == current_revision
+            and cached is not None
+            and cached.catalog_revision == current_revision
         ):
             # 同一 catalog revision 的静态字段不变；默认 provider 每次请求按 Agent 解析，
             # 配置变化时只替换受影响的 DTO，避免缓存命中仍逐会话重建完整投影。
             provider_by_agent: dict[str, str | None] = {}
             replacements: dict[str, SessionCatalogNodeDTO] = {}
-            for node in self._cached_snapshot.default_provider_nodes:
+            for node in cached.default_provider_nodes:
                 check()
                 if node.current_agent_id not in provider_by_agent:
                     provider_by_agent[node.current_agent_id] = (
                         self._session_service.project_catalog_session(node).current_provider_id
                     )
                 provider_id = provider_by_agent[node.current_agent_id]
-                cached_node = self._cached_snapshot.nodes_by_id[node.node_id]
+                cached_node = cached.nodes_by_id[node.node_id]
                 session = cast(SessionDTO, cached_node.session)
                 if session.current_provider_id != provider_id:
                     replacements[node.node_id] = cached_node.model_copy(
@@ -213,19 +227,20 @@ class SessionCatalogReadService:
             if replacements:
                 nodes = [
                     replacements.get(node.node_id, node)
-                    for node in self._cached_snapshot.nodes
+                    for node in cached.nodes
                 ]
-                self._cached_snapshot = replace(
-                    self._cached_snapshot,
+                cached = replace(
+                    cached,
                     nodes=nodes,
                     nodes_by_id={
-                        **self._cached_snapshot.nodes_by_id,
+                        **cached.nodes_by_id,
                         **replacements,
                     },
                     revision=self._revision(nodes, check=check),
                 )
             check()
-            return self._cached_snapshot
+            self._cached_snapshot = cached
+            return cached
 
         catalog_revision, catalog_nodes = self._path_resolver.catalog_snapshot(check=check)
         visible_catalog_nodes = self._visible_catalog_nodes(catalog_nodes, check=check)
