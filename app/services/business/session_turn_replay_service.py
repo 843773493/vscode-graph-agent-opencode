@@ -14,6 +14,7 @@ from app.core.checkpoint_config import build_checkpoint_config
 from app.core.job_event_bus import EventType
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.session_thread_context import session_thread_owner_scope
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import (
@@ -238,7 +239,7 @@ class SessionTurnReplayService:
             if job.message_id == message_id
         ]
         if not matching_jobs:
-            if self._trace_has_failed_job(session_id, message_id):
+            if await run_sync_shielded(self._trace_has_failed_job, session_id, message_id):
                 return True
             raise ValueError(f"目标轮次缺少对应 Job: message_id={message_id}")
         matching_jobs.sort(key=lambda job: job.created_at)
