@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import threading
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -226,8 +226,8 @@ _original_lifespan = app.router.lifespan_context
 
 
 @asynccontextmanager
-async def observed_lifespan(application: FastAPI) -> AsyncIterator[None]:
-    async with _original_lifespan(application):
+async def observed_lifespan(application: FastAPI) -> AsyncIterator[Mapping[str, object] | None]:
+    async with _original_lifespan(application) as state:
         registry = application.state.workspace_container_registry
         workspace_id, = registry.workspace_ids
         service = registry.get(workspace_id).workspace_search_service
@@ -236,7 +236,7 @@ async def observed_lifespan(application: FastAPI) -> AsyncIterator[None]:
         _control.record("ready", workspace_id=workspace_id, **_control.snapshot())
         controller = asyncio.create_task(_control.run())
         try:
-            yield
+            yield state
         finally:
             if _control.gate is not None:
                 _control.gate.release.set()
