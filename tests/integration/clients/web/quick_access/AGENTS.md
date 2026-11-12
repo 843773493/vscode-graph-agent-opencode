@@ -50,6 +50,8 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 
 `test_query_lifecycle` 用隔离 A/B/C、产品 API 创建的 Session 和正式 Workbench 验证搜索分支。名称统一观察 Gateway SSE；`query_gateway_fixture.py` 仅替换本测试进程的出站网络边界，延迟指定真实领域响应或注入具名读取失败，记录 Gateway 实际分发、期限、取消和 request_id。名称及文件读取失败均在同一 Gateway 出站边界注入；身份 401 在明确浏览器 HTTP 边界注入。核对三并发占满时第四分支不分发、超时保留其他结果、单分支重试、停止目标零业务读取及身份失效；不替换匹配、调度、SSE 编码或业务状态，不以这些替身证明真实服务故障。正常名称／文件和正文验收仍使用真实 Gateway／后端。
 
+`test_text_search_recovery.py` 经真实 Gateway、正式静态产物和浏览器入口验证成功分支保留及失败分支重试，故障只在 Gateway 出站 owner 读取边界注入；对应 Chromium 合同中的 Picker 事件和 HTTP 回执为显式替身，不充当完整产品入口验收。
+
 首范围事件前断流仅将一次真实 Gateway 搜索的浏览器 HTTP 正文截为空，保留原响应头及 request_id；核对失败状态、原请求身份、零自动重试，以及使用同次成功文件流的真实冻结 scope 精确重试一个 Thread 分支，其他失败保留原身份。完全没有 scope 时重查原范围由 Chromium 内容合同装具另核。不将该具名 HTTP 故障注入称为真实 TCP 断连；API 单测另核流错误的机器代码、取消和超时类型。
 
 `test_search_disconnect` 使用独立本地 HTTP 故障服务与生产 `_encode_search_sse`，按真实 Content-Length 截断区分网络错误和正常 EOF；Chromium 原 API 与 Python 搜索 SDK 分别覆盖首范围事件前后，消费确认屏障控制断连。响应头观察器只放行原响应，不替换正文或协议解码；核原 request_id、原网络 cause／HTTPX 类型和零自动重试。该传输检查不替代真实 Gateway 产品页面；Provider 的错误展示及已完成分支保留由 `default_contract` 显式宿主装具另证。

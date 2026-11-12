@@ -12,7 +12,7 @@ await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/
   outfile: bundle, bundle: true, format: 'esm', platform: 'browser', target: 'es2024',
   plugins: [buildSourcePlugin(resolve('src/clients/workbench'), sourceTransform(resolve('src/clients/workbench'), { commit: pinnedUpstreamCommit }, []))],
   tsconfig: resolve('src/clients/workbench/tsconfig.jsonc'), logLevel: 'silent' });
-const { URI, gateway, fixture, model, WorkspaceSearchService, WorkspaceSearchProvider,
+const { URI, gateway, fixture, model, WorkspaceSearchService, WorkspaceSearchProvider, WorkspaceSearchBranchError, workspaceSearchBranchErrors,
   workspaceFileUri, workspaceFileSource, textMatch, CancellationTokenSource, resourceInQuery,
   ExtUri, extUri, textSearchResultToMatches, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
 const ownerA = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
@@ -533,19 +533,137 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
           message: '无法读取 /target/project/secret.txt：权限不足', retryable: false },
         { state: 'cancelled', code: 'cancelled', error_owner: 'workspace_files', reason: 'request_cancelled',
           message: '原目标文件查询已停止', retryable: true },
+        { state: 'failed', code: 'deadline', message: '原目标超过期限', retryable: true },
+        { state: 'failed', code: 'execution_failed', message: '原线协议空值', retryable: false, http_status: null, error_owner: null, reason: null },
       ]) await withTransport(async calls => {
         const error = await f.search.textSearch(query()).then(() => undefined, failure => failure);
         expect(error).toBeInstanceOf(Error);
         expect(error.cause).toMatchObject({ type: 'branch', request_id: 'file-request-0', branch: diagnostic });
         expect(error.message).toContain(diagnostic.state === 'cancelled' ? '文件搜索已取消：' : '文件搜索失败：');
         expect(error.message).toContain(diagnostic.message);
+        if (diagnostic.code === 'deadline') expect(error.message).toContain('查询超时：');
         for (const field of ['code', 'error_owner', 'reason', 'http_status']) {
-          if (diagnostic[field] === undefined) expect(error.message).not.toContain(`${field}:`);
+          if (diagnostic[field] == null) expect(error.message).not.toContain(`${field}:`);
           else expect(error.message).toContain(`${field}: ${diagnostic[field]}`);
         }
         expect(error.message).toContain('request_id: file-request-0');
         expect(calls).toHaveLength(1);
       }, async () => ({ failure: diagnostic }));
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('首分支失败不截断成功兄弟，明确重试只读原失败cursor并保留原页大小和冻结owner顺序', async () => {
+    const f = fixture([]), progress = [];
+    try {
+      for (const state of ['failed', 'cancelled']) await withTransport(async calls => {
+        const input = query({ folderQueries: [{ folder: uri(ownerA) }, { folder: uri(ownerB) }], maxResults: 12 });
+        const error = await f.search.textSearch(input, undefined, item => progress.push(item)).catch(error => error);
+        expect(error).toBeInstanceOf(WorkspaceSearchBranchError);
+        expect(progress.slice(-3).map(item => item.resource.toString())).toEqual([
+          uri(ownerA, 'a0.txt').toString(), uri(ownerB, 'b.txt').toString(), uri(ownerA, 'a1.txt').toString()]);
+        expect(error.cause.branch.state).toBe(state); expect(error.cause.branch.cursor).toBe('a-page-2');
+        expect(error.message).toContain('retryable: true');
+        expect(error.message).toContain(root(ownerA)); expect(error.message).toContain(ownerA.gatewayId);
+        expect(calls).toHaveLength(3);
+        const retryProgress = [], result = await error.retry(undefined, item => retryProgress.push(item));
+        expect(result.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'a2.txt').toString()]);
+        expect(retryProgress).toHaveLength(1); expect(calls).toHaveLength(4);
+        const initial = calls[0].request, retry = calls[3].request;
+        expect(retry.scope.mode).toBe('resume'); expect(retry.scope.scope.owners).toEqual(initial.scope.owners);
+        expect(retry.continuations).toEqual([{ branch: error.cause.branch.branch, cursor: 'a-page-2' }]);
+        expect(retry.queries[0].limit).toBe(initial.queries[0].limit);
+        expect(retry.queries[0].file_targets).toEqual([initial.queries[0].file_targets[0]]);
+        expect(retry.deadline_at).toBeGreaterThanOrEqual(initial.deadline_at);
+      }, async (target, cursor, _q, _signal, request) => {
+        if (target.uri === root(ownerB)) return page(target.uri, [hit(target.uri + '/b.txt')]);
+        if (!cursor) return page(target.uri, [hit(target.uri + '/a0.txt')], { truncated: true, next_cursor: 'a-page-1' });
+        if (cursor === 'a-page-1') return page(target.uri, [hit(target.uri + '/a1.txt')], { truncated: true, next_cursor: 'a-page-2' });
+        if (request.queries[0].file_targets.length === 2) return { failure: { state, code: 'execution_failed', reason: 'read_failed',
+          error_owner: 'workspace_files', message: '原第三页拒绝', retryable: true, cursor } };
+        return page(target.uri, [hit(target.uri + '/a2.txt')]);
+      });
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('多个错误保留原分支事件；成功配额扣减、不可重试与本地取消保持明确边界', async () => {
+    const f = fixture([]);
+    try {
+      await withTransport(async calls => {
+        const error = await f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerA) }, { folder: uri(ownerB) }] })).catch(error => error);
+        const errors = workspaceSearchBranchErrors(error);
+        expect(error).toBeInstanceOf(AggregateError); expect(errors).toHaveLength(2);
+        expect(errors.map(error => error.cause.branch.branch.owner.gateway_id)).toEqual([ownerA.gatewayId, ownerB.gatewayId]);
+        expect(errors[0].retry).toBeUndefined(); expect(typeof errors[1].retry).toBe('function'); expect(calls).toHaveLength(1);
+      }, async target => ({ failure: { state: target.uri === root(ownerA) ? 'failed' : 'cancelled', code: 'execution_failed',
+        message: '具名拒绝', retryable: target.uri !== root(ownerA) } }));
+      await withTransport(async calls => {
+        const progress = [], error = await f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerA) }, { folder: uri(ownerB) }], maxResults: 2 }),
+          undefined, item => progress.push(item)).catch(error => error);
+        expect(progress).toHaveLength(1);
+        const result = await error.retry(undefined, item => progress.push(item));
+        expect(result.limitHit).toBe(true); expect(progress).toHaveLength(2);
+        expect(progress.map(item => item.resource.toString())).toEqual([uri(ownerB, 'ok.txt').toString(), uri(ownerA, 'new-0.txt').toString()]);
+        await expect(error.retry(undefined, () => {})).rejects.toThrow('本次查询覆盖受限');
+        expect(calls).toHaveLength(3);
+        expect(calls[2].request.continuations[0].cursor).toBe('next');
+      }, async (target, cursor, _q, _signal, request) => target.uri === root(ownerB) ? page(target.uri, [hit(target.uri + '/ok.txt')])
+        : request.continuations.length ? page(target.uri, [hit(target.uri + (cursor ? '/new-1.txt' : '/new-0.txt'))], cursor ? {} : { truncated: true, next_cursor: 'next' })
+          : { failure: { code: 'execution_failed', retryable: true, message: '首轮拒绝' } });
+      await withTransport(async calls => {
+        const error = await f.search.textSearch(query()).catch(error => error), source = new CancellationTokenSource(), progress = [];
+        const retry = error.retry(source.token, item => progress.push(item));
+        while (calls.length < 2) await new Promise(resolve => setTimeout(resolve, 0));
+        source.cancel();
+        await expect(retry).rejects.toThrow('Canceled'); expect(calls[1].signal.aborted).toBe(true); expect(progress).toEqual([]);
+        source.dispose();
+      }, async (target, _cursor, _q, signal, request) => {
+        if (!request.continuations.length) return { failure: { code: 'execution_failed', retryable: true, message: '原分支拒绝' } };
+        await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+        return page(target.uri, [hit(target.uri + '/late.txt')]);
+      });
+    } finally { f.instantiation.dispose(); }
+  });
+
+  test('原模型覆盖的版本变化使旧重试明确拒绝，在途变化取消实际请求且不交付迟到匹配', async () => {
+    for (const action of ['before', 'during', 'dispose']) {
+      const draft = model(uri(ownerA, 'draft.txt'), 'removed'), f = fixture([draft]);
+      try {
+        await withTransport(async calls => {
+          const error = await f.search.textSearch(query()).catch(error => error), progress = [];
+          expect(draft.watching).toBe(false);
+          if (action === 'before') draft.setValue('needle new');
+          if (action === 'dispose') draft.dispose();
+          const retry = error.retry(undefined, item => progress.push(item));
+          if (action === 'during') {
+            while (calls.length < 2) await new Promise(resolve => setTimeout(resolve, 0));
+            expect(draft.watching).toBe(true); draft.setValue('needle changed');
+          }
+          await expect(retry).rejects.toThrow('已打开文件发生变化');
+          expect(progress).toEqual([]); expect(draft.watching).toBe(false);
+          expect(calls).toHaveLength(action === 'during' ? 2 : 1);
+          if (action === 'during') expect(calls[1].signal.aborted).toBe(true);
+        }, async (target, _cursor, _q, signal, request) => {
+          if (!request.continuations.length) return { failure: { code: 'execution_failed', message: '原拒绝', retryable: true } };
+          await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+          return page(target.uri, [hit(target.uri + '/late.txt')]);
+        });
+      } finally { f.instantiation.dispose(); draft.dispose(); }
+    }
+  });
+
+  test('onlyOpenEditors重试冻结原精确目标，不因后来打开文件改变失败输入', async () => {
+    const original = uri(ownerA, 'original.txt'), f = fixture([], [original]);
+    try {
+      await withTransport(async calls => {
+        const error = await f.search.textSearch(query({ onlyOpenEditors: true })).catch(error => error);
+        f.editors.editors = [{ resource: uri(ownerA, 'later.txt') }];
+        const result = await error.retry(undefined, () => {});
+        expect(result.results.map(item => item.resource.toString())).toEqual([original.toString()]);
+        expect(calls).toHaveLength(2);
+        expect(calls[1].request.queries[0].file_targets).toEqual(calls[0].request.queries[0].file_targets);
+        expect(calls[1].request.continuations[0].branch.resource_uri).toBe(workspaceFileSource(original).path);
+      }, async (target, _cursor, _q, _signal, request) => request.continuations.length ? exactPage(target, [hit(target.uri)])
+        : { failure: { code: 'execution_failed', message: '原精确文件拒绝', retryable: true } });
     } finally { f.instantiation.dispose(); }
   });
 
@@ -620,7 +738,7 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
           if (mode === 'change') a.setValue('needle new generation');
           else if (mode === 'model-dispose') a.dispose();
           else f.instantiation.dispose();
-          await expect(pending).rejects.toThrow();
+          await expect(pending).rejects.toThrow(mode === 'service-dispose' ? 'Canceled' : '已打开文件发生变化');
           expect(calls[0].signal.aborted).toBe(true); expect(a.watching).toBe(false);
           release.resolve(); await new Promise(resolve => setTimeout(resolve, 5));
           expect(progress).toEqual([]); expect(calls).toHaveLength(1);
@@ -639,7 +757,7 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         const pendingB = f.search.textSearch(query({ folderQueries: [{ folder: uri(ownerB) }] }), undefined, item => progressB.push(item));
         await Promise.all(entered.map(item => item.promise));
         a.setValue('needle in next generation');
-        await expect(pendingA).rejects.toThrow();
+        await expect(pendingA).rejects.toThrow('已打开文件发生变化');
         expect(calls[0].signal.aborted).toBe(true); expect(calls[1].signal.aborted).toBe(false);
         expect(a.watching).toBe(false); expect(b.watching).toBe(true);
         release[1].resolve();

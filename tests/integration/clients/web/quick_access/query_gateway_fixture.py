@@ -16,8 +16,9 @@ from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
 
 
 class FaultRequest(BaseModel):
-    mode: Literal["delay", "fail", "release"]
+    mode: Literal["delay", "fail", "cancel", "release"]
     categories: list[str] = ["catalog", "thread"]
+    workspace_ids: list[str] = []
 
 
 @dataclass
@@ -26,6 +27,7 @@ class ReadObservation:
     category: str
     request_id: str
     deadline: float | None
+    resource_uri: str | None = None
     received: bool = False
     cancelled: bool = False
     settled: bool = False
@@ -65,14 +67,18 @@ class FaultSearchTransport(SearchTransport):
         fault = faults.get(job.request.query)
         if fault is None or (job.key.category == "file" and "file" not in fault.request.categories):
             return await super()._read(job, url, headers)
-        read = ReadObservation(job.key.owner.workspace_id, job.key.category, self.request_id, job.request.deadline_at)
+        selected = not fault.request.workspace_ids or job.key.owner.workspace_id in fault.request.workspace_ids
+        read = ReadObservation(job.key.owner.workspace_id, job.key.category, self.request_id, job.request.deadline_at,
+                               resource_uri=job.key.resource_uri)
         fault.reads.append(read)
         try:
-            if job.key.category in fault.request.categories and fault.request.mode == "fail":
+            if selected and job.key.category in fault.request.categories and fault.request.mode == "cancel":
+                raise asyncio.CancelledError("显式测试故障：owner 取消读取")
+            if selected and job.key.category in fault.request.categories and fault.request.mode == "fail":
                 raise SearchBranchError("owner_http_error", "显式测试故障：owner 读取失败", retryable=True)
             page = await super()._read(job, url, headers)
             read.received = True
-            if job.key.category in fault.request.categories and fault.request.mode == "delay":
+            if selected and job.key.category in fault.request.categories and fault.request.mode == "delay":
                 await fault.gate.wait()
             return page
         except asyncio.CancelledError:

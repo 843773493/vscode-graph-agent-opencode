@@ -20,7 +20,7 @@ import { WorkspaceSearchService } from '../../../../../src/clients/workbench/src
 export { CancellationTokenSource } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 export { ResourceSet } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/map.js';
 export { textSearchResultToMatches } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/browser/searchTreeModel/match.js';
-export { WorkspaceSearchProvider, textMatch } from '../../../../../src/clients/workbench/src/search/fileProvider.js';
+export { WorkspaceSearchProvider, WorkspaceSearchBranchError, workspaceSearchBranchErrors, textMatch } from '../../../../../src/clients/workbench/src/search/fileProvider.js';
 export { resourceInQuery } from '../../../../../src/clients/workbench/src/search/query.js';
 export { ExtUri, extUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
 export { gateway } from '../../../../../src/clients/workbench/src/agentApi.js';
@@ -30,13 +30,15 @@ export { URI, WorkspaceSearchService };
 /** 只提供内存文本存取，匹配使用真实上游引擎；不加载浏览器编辑器 UI。 */
 export function model(resource: URI, text: string) {
   let lines = text.split('\n');
+  let version = 1, disposed = false;
   const changed = new Emitter<void>(), disposing = new Emitter<void>();
   return {
     uri: resource, calls: 0,
     onDidChangeContent: changed.event, onWillDispose: disposing.event,
     get watching() { return changed.hasListeners() || disposing.hasListeners(); },
-    setValue(value: string) { lines = value.split('\n'); changed.fire(); },
-    dispose() { disposing.fire(); changed.dispose(); disposing.dispose(); },
+    getVersionId() { return version; }, isDisposed() { return disposed; },
+    setValue(value: string) { lines = value.split('\n'); version++; changed.fire(); },
+    dispose() { disposed = true; disposing.fire(); changed.dispose(); disposing.dispose(); },
     getLineContent(line: number) { return lines[line - 1]; },
     getLineCount() { return lines.length; },
     getLanguageId() { return 'plaintext'; },

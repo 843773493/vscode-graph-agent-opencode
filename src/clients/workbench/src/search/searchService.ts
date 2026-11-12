@@ -82,12 +82,29 @@ export class WorkspaceSearchService extends RemoteSearchService {
     lifetime.add(toDisposable(() => source.dispose(true)));
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
     let count = 0, limitHit = false;
+    const modelVersions = new Map<ReturnType<typeof this.businessModels.getModels>[number], number>();
+    const validateModels = () => {
+      const current = new Map(this.businessModels.getModels().map(model => [key(model.uri), model]));
+      if ([...modelVersions].some(([model, version]) => model.isDisposed() || current.get(key(model.uri)) !== model || model.getVersionId() !== version)) {
+        throw new Error(t('quickAccess.files.modelsChanged'));
+      }
+    };
+    const watchRetryModels = (retrySource: CancellationTokenSource) => {
+      validateModels();
+      const watch = new DisposableStore();
+      for (const model of modelVersions.keys()) {
+        watch.add(model.onDidChangeContent(() => retrySource.cancel()));
+        watch.add(model.onWillDispose(() => retrySource.cancel()));
+      }
+      return { dispose: () => watch.dispose(), validate: validateModels };
+    };
     try {
       for (const model of this.businessModels.getModels()) {
         if (token.isCancellationRequested) throw new CancellationError();
         // 在 findMatches 和首次 progress 之前限制完整身份；零命中模型也覆盖磁盘正文。
         if (!open.has(model.uri) || !resourceInQuery(model.uri, query, identity) || covered.has(model.uri)) continue;
         covered.add(model.uri);
+        modelVersions.set(model, model.getVersionId());
         if (ignoredModels.has(model.uri)) continue;
         // 位置及负命中都属于这一代模型；变更／释放后停止网络、续页及迟到 progress。
         lifetime.add(model.onDidChangeContent(() => source.cancel()));
@@ -115,12 +132,16 @@ export class WorkspaceSearchService extends RemoteSearchService {
           const ignored = await raceCancellationError(asyncNotebookFilesToIgnore ?? Promise.resolve(new ResourceSet()), token);
           for (const resource of ignoredModels) covered.add(resource);
           for (const resource of ignored) covered.add(resource);
-          return await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered, { deadlineAt });
+          return await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered, { deadlineAt, watchRetryModels });
+        } catch (error) {
+          validateModels();
+          throw error;
         } finally { this._store.delete(lifetime); }
       })();
       return { syncResults, asyncResults };
     } catch (error) {
       this._store.delete(lifetime);
+      validateModels();
       throw error;
     }
   }

@@ -730,6 +730,16 @@ if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`)
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts')) {
       const declaration = 'export class SearchModelImpl extends Disposable implements ISearchModel {';
       contents = replaceOnce(contents, declaration, `${declaration}\npublic ownSearchContext(context: IDisposable): void { this._register(context); }`);
+      // 只刷新本代文件分支已交付的原队列，仍拒绝原错误；旧代不能提交到新查询。
+      contents = replaceOnce(contents, 'const asyncResults = req.asyncResults;', 'const asyncResults = req.asyncResults;\nconst searchTokenSource = this.currentCancelTokenSource;');
+      contents = replaceOnce(contents, 'this.onSearchError(e, Date.now() - start, false);', `if (workspaceSearchBranchErrors(e) && this.currentCancelTokenSource === searchTokenSource && !callerToken?.isCancellationRequested) {
+  this.onSearchCompleted(undefined, Date.now() - start, searchInstanceID, false);
+} else {
+  this.onSearchError(e, Date.now() - start, false);
+}`);
+      // 首次渲染遥测只观察结算；主 asyncResults 仍向调用方传播原拒绝。
+      contents = replaceOnce(contents, 'Promise.race([asyncResults, progressEmitterPromise]).finally', 'Promise.race([asyncResults.then(() => undefined, () => undefined), progressEmitterPromise]).finally');
+      contents = `import { workspaceSearchBranchErrors } from ${JSON.stringify(join(root, 'src/search/fileProvider.js'))};\n` + contents;
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/searchTreeModel/match.ts')) {
       // lcut 允许整词超出长度；有界片段的长前缀不能耗尽额度并隐藏真正命中。
@@ -741,6 +751,15 @@ if (before.length > 26) before = '…' + Array.from(before).slice(-26).join('');
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.ts')) {
       // 子类消费同一次原搜索的消息，不额外发起查询或维护另一份完成状态。
       contents = replaceOnce(contents, 'private currentAsyncSearch: Promise<ISearchComplete>', 'protected currentAsyncSearch: Promise<ISearchComplete>');
+      contents = replaceOnce(contents, 'private searchModel: SearchModelImpl;', 'protected searchModel: SearchModelImpl;');
+      contents = replaceOnce(contents, 'const MAX_FILES_SHOWN = 30;', 'export const MAX_FILES_SHOWN = 30;');
+      contents = replaceOnce(contents, 'private _getPicksFromMatches(matches: ISearchTreeFileMatch[], limit: number,', 'protected _getPicksFromMatches(matches: ISearchTreeFileMatch[], limit = MAX_FILES_SHOWN,');
+      // 达到同步文件展示上限时仍消费同一次远端结算，避免丢失失败或警告。
+      contents = replaceOnce(contents, `\t\tif (matches.length >= MAX_FILES_SHOWN) {
+\t\t\treturn syncResult;
+\t\t}`, `if (matches.length >= MAX_FILES_SHOWN) {
+  return { picks: syncResult, additionalPicks: allMatches.asyncResults.then(() => []) };
+}`);
       // 由原 QueryBuilder 消费用户的 search.useIgnoreFiles，交目标文件 owner 解释规则。
       contents = replaceOnce(contents, '\tdisregardIgnoreFiles: false,\n', '');
       const transfer = `\t\tthis._viewsService.openView(VIEW_ID, false);
