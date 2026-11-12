@@ -54,6 +54,9 @@ _REMOTE_PORT = int(os.environ.get("BOXTEAM_REMOTE_PLUGIN_GATEWAY_PORT", "8014"))
 _PACKAGE_ID = "remote.ssh.lifecycle"
 _PLUGIN_ID = "http_probe"
 _WINDOWS_SERVER_PORT = 18414
+_ENVIRONMENT_NAME = "BOXTEAM_REMOTE_PLUGIN_ACCEPTANCE_SECRET"
+_TARGET_ENVIRONMENT_VALUE = "windows-target-owned-environment"
+_RELAY_ENVIRONMENT_VALUE = "linux-relay-must-not-resolve"
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 
 
@@ -139,14 +142,18 @@ def _plugin_archive(version: str) -> bytes:
             "runtime": "python",
             "entrypoint": ["server.py"],
             "management_protocol_version": 1,
-            "requires": [{"extension_point": "services", "version": 1}],
+            "requires": [{"extension_point": "services", "version": 1},
+                         {"extension_point": "configuration", "version": 1}],
             "contributes": {"services": [{
                 "service_id": "echo", "service_type": "terminal", "protocol": "http",
-            }]},
+            }], "configuration": {
+                "type": "object", "additionalProperties": False, "required": ["credentialValue"],
+                "properties": {"credentialValue": {"type": "string", "writeOnly": True}},
+            }},
         }],
     }
     source = '''
-import json, os, sys
+import hashlib, json, os, sys
 sys.path.insert(0, os.environ['BOXTEAM_PROJECT_ROOT'])
 import asyncio
 from fastapi import FastAPI, Request
@@ -156,13 +163,28 @@ from app.runtime.plugin_commands import plugin_command_router
 import uvicorn
 configure_application_logging(service='remote-lifecycle-probe')
 identity = json.loads(os.environ['BOXTEAM_PLUGIN_INSTANCE'])
+parameters = json.loads(os.environ['BOXTEAM_PLUGIN_PARAMETERS'])
+effects = []
 app = FastAPI()
 async def shutdown(): server.should_exit = True
 app.include_router(plugin_command_router({}, shutdown=shutdown))
 @app.get('/services/echo/')
 async def echo(request: Request):
     return {'instance_id': identity['instance_id'], 'package_version': identity['package_version'],
-            'process_id': os.getpid(), 'request_id': request.headers.get('X-Request-ID')}
+            'process_id': os.getpid(), 'request_id': request.headers.get('X-Request-ID'),
+            'credential_digest': hashlib.sha256(parameters['credentialValue'].encode()).hexdigest()}
+@app.get('/services/echo/effects')
+async def effect_status(request: Request):
+    return {'effects': effects, 'request_id': request.headers.get('X-Request-ID')}
+@app.post('/services/echo/effects')
+async def effect(request: Request):
+    request_id = request.headers.get('X-Request-ID')
+    effects.append(request_id)
+    async def frames():
+        yield json.dumps({'instance_id': identity['instance_id'],
+                          'request_id': request_id, 'kind': 'accepted'}) + '\\n'
+        await asyncio.Event().wait()
+    return StreamingResponse(frames(), media_type='application/x-ndjson')
 @app.get('/services/echo/stream')
 async def echo_stream(request: Request):
     async def frames():
@@ -276,12 +298,28 @@ def test_serve_isolated_windows_gateway_for_remote_lifecycle_acceptance(
     lease.acquire()
     gateway = None
     try:
+        ssh_client = os.environ.get("SSH_CLIENT", "").split()
+        if not ssh_client:
+            raise RuntimeError("Windows 远程 SSH 测试缺少 SSH_CLIENT，无法限定插件目录的直连例外")
+        no_proxy_entries = dict.fromkeys(
+            entry.strip()
+            for key in ("NO_PROXY", "no_proxy")
+            for entry in os.environ.get(key, "").split(",")
+            if entry.strip()
+        )
+        no_proxy_entries.setdefault(ssh_client[0], None)
+        no_proxy = ",".join(no_proxy_entries)
         gateway = start_gateway_process(
             workspace_root=workspace,
             default_backend_url=None,
             port=_WINDOWS_SERVER_PORT,
             boxteam_home=home,
             artifacts_dir=context.artifacts_dir / "windows-gateway-b",
+            extra_env={
+                _ENVIRONMENT_NAME: _TARGET_ENVIRONMENT_VALUE,
+                "NO_PROXY": no_proxy,
+                "no_proxy": no_proxy,
+            },
         )
         gateway_id = httpx.get(
             f"http://127.0.0.1:{_WINDOWS_SERVER_PORT}/api/gateway/health",
@@ -380,6 +418,7 @@ def remote_gateway_clients(
             port=ports.port(0),
             boxteam_home=home,
             artifacts_dir=context.artifacts_dir / "gateway-a",
+            extra_env={_ENVIRONMENT_NAME: _RELAY_ENVIRONMENT_VALUE},
         )
         with socket.create_connection((remote.hostname, remote.port), timeout=5) as route_probe:
             local_route_address = route_probe.getsockname()[0]
@@ -479,12 +518,15 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
         assert response.status_code == expected_status, response.text
         return response
 
-    def edit_b(update: Callable[[dict[str, JsonValue]], None]) -> dict[str, JsonValue]:
+    def edit_b(update: Callable[[dict[str, JsonValue]], None], *, via_relay: bool = False) -> dict[str, JsonValue]:
         source_path = "/api/gateway/config/sources/gateway_mutable_override"
-        before = direct("GET", source_path).raise_for_status().json()["data"]
+        exchange = relay if via_relay else direct
+        if via_relay:
+            source_path += f"?gateway_connection_id={connection_id}"
+        before = exchange("GET", source_path).raise_for_status().json()["data"]
         document = _JSON_OBJECT_ADAPTER.validate_python(commentjson.loads(before["jsonc"]))
         update(document)
-        response = direct("PUT", source_path, {
+        response = exchange("PUT", source_path, {
             "gateway_id": gateway_b,
             "source_key": "gateway_mutable_override",
             "jsonc": json.dumps(document, ensure_ascii=False),
@@ -557,8 +599,11 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
                 "package_version": version,
                 "enabled": enabled,
             }]}
+            plugins["configuration"] = {"values": {_PACKAGE_ID: {
+                _PLUGIN_ID: {"credentialValue": "${" + _ENVIRONMENT_NAME + "}"},
+            }}}
             document["plugins"] = plugins
-        edit_b(update)
+        edit_b(update, via_relay=True)
 
     def echo(client: httpx.Client, *, remote: bool, instance_id: str, version: str) -> dict[str, object]:
         path = (f"/api/gateway/service-plugins/{_PACKAGE_ID}/{_PLUGIN_ID}/instances/"
@@ -575,17 +620,22 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
         record(response, request_id).raise_for_status()
         result = response.json()
         assert result["instance_id"] == instance_id and result["request_id"] == request_id, result
+        assert result["credential_digest"] == hashlib.sha256(_TARGET_ENVIRONMENT_VALUE.encode()).hexdigest()
+        assert result["credential_digest"] != hashlib.sha256(_RELAY_ENVIRONMENT_VALUE.encode()).hexdigest()
+        assert _TARGET_ENVIRONMENT_VALUE not in response.text and _RELAY_ENVIRONMENT_VALUE not in response.text
         return result
 
     def open_relay_stream(
         instance_id: str,
         request_id: str,
         first_frame: threading.Event,
+        *,
+        side_effect: bool = False,
     ) -> list[str]:
         path = (f"/api/gateway/service-plugins/{_PACKAGE_ID}/{_PLUGIN_ID}/instances/"
-                f"{instance_id}/services/echo/stream?package_version=1.0.0")
+                f"{instance_id}/services/echo/{'effects' if side_effect else 'stream'}?package_version=1.0.0")
         lines: list[str] = []
-        with client_a.stream("GET", path, headers={
+        with client_a.stream("POST" if side_effect else "GET", path, headers={
             "X-Request-ID": request_id,
             "X-BoxTeam-Target-Gateway-Id": gateway_b,
             "X-BoxTeam-Gateway-Connection-Id": connection_id or "",
@@ -599,6 +649,10 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
             for line in response.iter_lines():
                 lines.append(line)
                 if line.startswith("{"):
+                    frame = json.loads(line)
+                    assert frame["instance_id"] == instance_id and frame["request_id"] == request_id
+                    if side_effect:
+                        assert frame["kind"] == "accepted"
                     first_frame.set()
         return lines
 
@@ -717,11 +771,13 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
         retired_business_stream_closed = False
         retired_management_stream_closed = False
         new_route_served_after_reconnect = False
+        unknown_result_not_replayed = False
         business_request_id = f"remote-plugin-retired-business-{len(evidence)}"
         management_request_id = f"remote-plugin-retired-management-{len(evidence)}"
         with ThreadPoolExecutor(max_workers=2) as executor:
             old_business = executor.submit(
                 open_relay_stream, instance_id, business_request_id, business_started,
+                side_effect=True,
             )
             old_management = executor.submit(
                 open_relay_management_stream, management_request_id, management_started,
@@ -736,14 +792,26 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
             record(reconnected, reconnect_request_id)
             assert reconnected.status_code == 200, reconnected.text
             assert reconnected.json()["data"]["items"]
-            business_lines = old_business.result(timeout=10)
+            transport_error: str | None = None
+            try:
+                business_lines = old_business.result(timeout=10)
+            except httpx.RemoteProtocolError as error:
+                # 响应头后断流允许缺少终态；副作用事实仍须由原实例核实。
+                transport_error = str(error)
+                business_lines = []
             management_lines = old_management.result(timeout=10)
             retired_business_stream_closed = True
             retired_management_stream_closed = True
-            assert any(json.loads(line).get("request_id") == business_request_id
-                       for line in business_lines if line.startswith("{"))
+            assert transport_error is not None or [json.loads(line) for line in business_lines] == [{
+                "instance_id": instance_id, "request_id": business_request_id, "kind": "accepted",
+            }]
             assert "event: snapshot" in management_lines
             assert echo(client_a, remote=True, instance_id=instance_id, version="1.0.0")["instance_id"] == instance_id
+            effect_path = (f"/api/gateway/service-plugins/{_PACKAGE_ID}/{_PLUGIN_ID}/instances/"
+                           f"{instance_id}/services/echo/effects?package_version=1.0.0")
+            assert direct("GET", effect_path).json()["effects"] == [business_request_id]
+            assert relay("GET", effect_path).json()["effects"] == [business_request_id]
+            unknown_result_not_replayed = True
             new_route_served_after_reconnect = True
 
         install(artifacts["1.1.0"])
@@ -802,6 +870,9 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
             "retired_business_stream_closed": retired_business_stream_closed,
             "retired_management_stream_closed": retired_management_stream_closed,
             "new_route_served_after_reconnect": new_route_served_after_reconnect,
+            "target_environment_resolved_without_relay_value": True,
+            "unknown_result_not_replayed": unknown_result_not_replayed,
+            "unknown_result_transport_error": transport_error,
             "evidence": evidence,
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     finally:
