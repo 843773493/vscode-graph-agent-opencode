@@ -5,6 +5,8 @@ import { IClipboardService } from '../../../../../../src/clients/workbench/upstr
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
 import { ResourceOpener } from '../../../../../../src/clients/workbench/src/resourceOpener.js';
 import { sourceDocumentSource } from '../../../../../../src/clients/workbench/src/sourceDocuments.js';
+import { ThreadInput } from '../../../../../../src/clients/workbench/src/threadInput.js';
+import { workspaceFileSource } from '../../../../../../src/clients/workbench/src/workspaceFiles.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
 import { invalidateGatewayToken } from '../../../../../../src/clients/web/src/api/http.js';
@@ -45,6 +47,7 @@ export async function agentSpecContract(mode) {
       return result();
     }
     if (path === '/api/gateway/resource-addresses/parse') {
+      if (mode === 'open-parse-identity') invalidateGatewayToken(0);
       const owner = owners.find(item => item.gatewayId === body.resource_gateway_id) ?? owners[0];
       const result = () => ok({ gateway_id: ['mismatch', 'copy-mismatch'].includes(mode) ? owners[0].gatewayId : owner.gatewayId,
         scope: 'workspace', scope_id: owner.workspaceId, kind: 'agent-spec', uri,
@@ -62,13 +65,15 @@ export async function agentSpecContract(mode) {
   const configuration = { getValue: key => key === 'workbench.editor.openSideBySideDirection' ? 'right'
     : key === 'workbench.editor.enablePreview' && mode === 'no-preview' ? false : true };
   const models = { async createModelReference(resource) { references.push(sourceDocumentSource(resource));
+    if (mode === 'open-model-identity') invalidateGatewayToken(0);
+    if (mode === 'open-model-gateway') workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
     return { object: {}, dispose() { released += 1; } }; } };
   const opener = new ResourceOpener({ registerOpener: () => ({ dispose() {} }) },
     { openEditor: async (input, id) => opened.push({ source: sourceDocumentSource(input.resource), options: input.options, group: id }) },
     groups, configuration, models, {});
   const notifications = { error: cause => errors.push(String(cause)) };
   const picker = { value: 'resource ag', items: [], activeItems: [], selectedItems: [], buttons: [],
-    keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' }, onDidChangeValue: changes.event,
+    keyMods: { alt: mode === 'side' || mode.startsWith('open-'), ctrlCmd: mode === 'pinned' }, onDidChangeValue: changes.event,
     onDidAccept: accepts.event, onDidTriggerButton: buttons.event, onDidTriggerItemButton: itemButtons.event,
     onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
   const commands = { executeCommand(id, ...args) {
@@ -122,5 +127,53 @@ export async function agentSpecContract(mode) {
   } finally {
     lifetime.dispose(); cancellation.dispose(true); provider.dispose(); opener.dispose();
     changes.dispose(); accepts.dispose(); buttons.dispose(); itemButtons.dispose(); unwrapSessionApiFetch(); workspaceContext.publish(previous);
+  }
+}
+
+/** 真实 Opener／客户端；只替换目录回执和编辑器宿主，验证异步准入期间的身份切换。 */
+export async function resourceOpenTargetContract(mode) {
+  const previous = workspaceContext.getSnapshot(), owner = owners[0];
+  const target = { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, status: 'ready' };
+  const sessionId = 'sess_20261112_000000_lifetime', threadId = 'thread_lifetime_exact';
+  const kind = mode.split('-')[0], root = `boxteam://workspace/${owner.workspaceId}/resources/files/workspace`;
+  const uri = kind === 'file' ? root + '/same.png'
+    : `boxteam://workspace/${owner.workspaceId}/resources/session/${sessionId}${kind === 'thread' ? '/threads/' + threadId : ''}`;
+  const requests = [], opened = [], errors = [], inputs = [];
+  let addedGroups = 0;
+  workspaceContext.publish({ ...previous, gatewayId: owner.gatewayId });
+  const ok = data => Response.json({ code: 0, request_id: 'resource-open-target', data }, { headers: { 'X-Request-ID': 'resource-open-target' } });
+  installSessionApiFetchMock(({ path, method, init }) => {
+    requests.push({ path, method, body: init.body && JSON.parse(String(init.body)) });
+    if (path.endsWith('/parse')) return ok({ gateway_id: owner.gatewayId, scope: 'workspace', scope_id: owner.workspaceId,
+      kind: kind === 'file' ? 'files' : 'session', uri, reference_uri: uri,
+      file_root_uri: kind === 'file' ? root : null, session_id: kind === 'file' ? null : sessionId,
+      thread_id: kind === 'thread' ? threadId : null });
+    if (path === '/api/gateway/workspaces') {
+      if (mode.endsWith('route-identity')) invalidateGatewayToken(0);
+      return ok({ items: [target] });
+    }
+    if (path === `/api/v1/sessions/${sessionId}/main-thread`) {
+      if (mode.endsWith('main-identity')) invalidateGatewayToken(0);
+      if (mode.endsWith('main-gateway')) workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+      return ok({ session_id: sessionId, thread_id: threadId });
+    }
+    throw new Error(`资源打开产生非预期请求 ${method} ${path}`);
+  });
+  const opener = new ResourceOpener({ registerOpener: () => ({ dispose() {} }) }, {
+    async openEditor(input, options, group) {
+      if (input instanceof ThreadInput) { inputs.push(input); opened.push({ owner: input.owner, group, options }); }
+      else opened.push({ source: workspaceFileSource(input.resource), group: options, options: input.options });
+    },
+  }, { activeGroup: { id: 7 }, getGroup: id => ({ id }), findGroup: () => undefined,
+    addGroup: () => { addedGroups++; return { id: 8 }; } }, { getValue: () => 'right' }, {
+    createModelReference: async () => { throw new Error('文件或Thread不得先读取只读来源'); },
+  }, {});
+  try {
+    try { await opener.open(uri, { boxteamResourceOwner: owner, openToSide: true, editorOptions: { pinned: true } }); }
+    catch (cause) { errors.push(String(cause)); }
+    return { requests, opened, errors, addedGroups, owner, threadId };
+  } finally {
+    for (const input of inputs) input.dispose();
+    opener.dispose(); unwrapSessionApiFetch(); workspaceContext.publish(previous);
   }
 }
