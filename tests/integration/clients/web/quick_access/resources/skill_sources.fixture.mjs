@@ -98,7 +98,7 @@ export async function skillSourcesContract(mode) {
         try { await provider.provideTextContent(resource); } finally { source.dispose(); }
       }
       return { object: {}, dispose() { released++; } };
-    } });
+    } }, {});
   picker = { value: 'resource ', items: [], activeItems: [], selectedItems: [], buttons: [], keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' },
     onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerButton: buttons.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { lifetime.dispose(); } };

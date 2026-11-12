@@ -16,6 +16,8 @@ Web 与 Electron 共用的唯一完整 Code OSS 工作台入口。复用同级 w
 
 来源和更改文档沿原只读内容 Provider／resolver 共享模型与释放引用；更改仅合并在途变更集读取，不缓存第二份历史正文。只读输入只序列化稳定引用，原编辑器组保存视图态；旧更改投影在唯一输入工厂一次迁移，不复用临时路由或保留旧文件 Provider。
 
+配置 URI 的 Opener 先经唯一 grammar 解析，再匹配原配置 owner 公布的 URI／source_key 并交原 JSONC 来源命令；远端 reference 仅由同一 parser 在目标 owner 上归一，不截取文件名推断来源、不交普通只读文档 Provider。发起组、选项和 owner 在异步读取前冻结，凭据或 Gateway 改变拒绝迟到打开。
+
 文件及来源文档的复制引用共用 `resourceActions` 的原 Action／Command，编辑器菜单、文件菜单与 Quick Access 不另写复制逻辑。规范引用由 Gateway 唯一 URI owner 提供，包含明确 Gateway；复制不打开资源、不读取正文、不固定版本或激活来源。
 
 引用与选定正文粘贴由 `composerActions` 的独立原 Action／Command 处理；来源在发起时捕获，接收者使用发起 Thread 或明确选择的可见 Thread。通过原 `ThreadPane.threadTarget` 捕获原 Composer writer，关闭、切换与身份失效明确拒绝，不维护最近 Thread 注册表、不另写草稿存储，也不伪装上传附件或启动执行。

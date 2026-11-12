@@ -19,12 +19,12 @@ let browser;
 beforeAll(async () => { browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? Bun.which('chromium'),
   headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] }); run.addCleanup('Chromium', () => browser.close()); });
 afterAll(() => run.close());
-async function exercise(mode) {
+async function exercise(mode, contract = 'configurationSourcesContract') {
   const page = await browser.newPage(), errors = [];
   page.on('pageerror', cause => errors.push(String(cause)));
   try {
     await page.goto(server.url.href);
-    const result = await page.evaluate(mode => import('/configuration-sources.mjs').then(module => module.configurationSourcesContract(mode)), mode);
+    const result = await page.evaluate(({ mode, contract }) => import('/configuration-sources.mjs').then(module => module[contract](mode)), { mode, contract });
     expect(errors).toEqual([]); return result;
   } finally { await page.close(); }
 }
@@ -56,4 +56,44 @@ test('配置权限失败独立显示原request_id，其它owner仍可打开', as
 for (const mode of ['close', 'identity']) test(`${mode}结束配置发现实际读取，丢弃迟到候选`, async () => {
   const result = await exercise(mode); expect(result.aborted).toBe(true); expect(result.commands).toEqual([]);
   expect(result.rows.map(item => item.id)).toEqual(mode === 'close' ? [] : ['source-access-invalidated']);
+});
+
+for (const mode of ['workspace', 'gateway', 'side', 'pinned', 'background', 'freeze']) test(`${mode}配置URI由正式目录定位来源后复用原JSONC命令`, async () => {
+  const result = await exercise(mode, 'configurationUriContract');
+  expect(result.errors).toEqual([]); expect(result.references).toEqual([]); expect(result.addedGroups).toBe(0);
+  expect(result.commands).toEqual([{ id: 'boxteam.settings.openSource', request: {
+    location: { gateway_id: result.owner.gatewayId, ...(mode === 'gateway' ? {} : { workspace_id: result.owner.workspaceId }),
+      version: 2, source_key: mode === 'gateway' ? 'gateway-formal-owner-key' : 'workspace-formal-owner-key',
+      name: mode === 'gateway' ? 'Gateway' : result.owner.workspaceId },
+    groupId: 7, openToSide: mode === 'side', editorOptions: { pinned: mode === 'pinned', preserveFocus: mode === 'background' },
+  } }]);
+  expect(result.requests.every(request => request.path.endsWith('/parse') || request.path.endsWith('/sources'))).toBe(true);
+});
+test('远端reference URI由同一grammar按目标Gateway归一后匹配正式来源', async () => {
+  const result = await exercise('remote', 'configurationUriContract');
+  const { gatewayId: remoteGatewayId, sourceUri, referenceUri } = result.remoteFixture;
+  expect(result.errors).toEqual([]);
+  const parses = result.requests.filter(request => request.path.endsWith('/parse'));
+  expect(parses).toHaveLength(2);
+  expect(parses.map(request => request.body)).toEqual([
+    { uri: referenceUri, local_gateway_id: result.owner.gatewayId },
+    { uri: referenceUri, local_gateway_id: result.owner.gatewayId, resource_gateway_id: remoteGatewayId },
+  ]);
+  expect(result.requests.filter(request => request.path.endsWith('/config/sources')).map(request => request.gatewayId)).toEqual([remoteGatewayId]);
+  expect(result.requests.find(request => request.path.endsWith('/config/sources'))?.gatewayId).toBe(remoteGatewayId);
+  expect(result.requests.filter(request => request.path.endsWith('/config/sources')).every(request => !request.workspaceId)).toBe(true);
+  expect(result.requests.filter(request => request.path.endsWith('/config/sources')).map(request => request.body)).toEqual([undefined]);
+  expect(result.commands).toEqual([{ id: 'boxteam.settings.openSource', request: {
+    location: { gateway_id: remoteGatewayId, version: 2, source_key: 'remote-gateway-formal-owner-key', name: 'Gateway' },
+    groupId: 7, openToSide: false, editorOptions: { pinned: false, preserveFocus: false },
+  } }]);
+  expect(sourceUri).toBe('boxteam://inline/source-development-0_0_2/resources/config/gateway_inline');
+});
+for (const mode of ['missing', 'ambiguous', 'denied', 'wrong-owner', 'identity', 'parse-identity']) test(`${mode}配置URI拒绝改投或退回普通文件读取`, async () => {
+  const result = await exercise(mode, 'configurationUriContract');
+  expect(result.commands).toEqual([]); expect(result.references).toEqual([]); expect(result.addedGroups).toBe(0);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain({ missing: '没有公布', ambiguous: '多个正式来源', denied: '权限已撤销',
+    'wrong-owner': '归属不匹配', identity: '凭据已改变', 'parse-identity': '凭据已改变' }[mode]);
+  if (mode === 'parse-identity') expect(result.requests.map(request => request.path)).toEqual(['/api/gateway/resource-addresses/parse']);
 });

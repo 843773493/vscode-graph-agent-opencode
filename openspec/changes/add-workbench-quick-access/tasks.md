@@ -1025,3 +1025,9 @@
 - `resource ` 仅发现发起 Thread 所属 Session 的 changeset 摘要，且工作区须入选；逐键筛选和取消不读 Diff／补丁、不写审阅。接受复用原 Thread 更改面板及 loader，冻结精确 child、changeset、发起组和打开选项；选定范围随原 ThreadInput 展示态复制／恢复，无新 URI、正文缓存或 writer。
 - 原 Provider／更改模型合同49项、ThreadInput序列化12项通过；172份实际转换源码类型检查、Ruff、ESM语法及差异检查通过。正式 Gateway／Backend／Workbench／Chromium 1 passed／104.11秒，核真实执行生成更改、取消零读取／写入、指定范围打开、Diff／补丁、共享模型及刷新恢复，pageErrors为空；同批正式79扩展构建27.49秒通过。
 - 用例准备迁齐新版插件配置交接、隔离Home及运行令牌，关闭顺序为Backend→Gateway→model_stream；此前旧fixture、缺令牌、错误prepared路径及关闭顺序失败原件均保留。最小复审只保留原领域链与展示态；未验Windows／Relay／Electron，不勾完11.2。命令、指纹和准确适用范围见 `out/tests/temp/2026/11/11/changeset_resource_quick_access/artifacts/verification.json`。
+
+### 2026-11-12：配置 URI 复用正式来源编辑（2.2、11.2 部分）
+
+- 规范配置 URI 经唯一寻址 parser 与原来源目录匹配后，进入同一 JSONC 命令、模型与 CAS writer；远端引用仍由该 parser 按目标 Gateway 归一。inline 来源只查目标 Gateway 和同 Gateway 的明确发起工作区，缺失或歧义明确失败，不猜 source_key。打开前冻结编辑器组和选项，凭据变化拒绝迟到打开。
+- Provider／Opener 合同37项244断言、原来源回归56项416断言及172份实际转换源码类型检查通过。真实Gateway／Backend／Workbench／Chromium 1 passed／95.73秒，覆盖Gateway与Workspace配置URI、侧开、只读及原CAS冲突／未知保存零重放；pageErrors为空。最终正式79扩展构建通过，远端解析另经真实A/B parser入口核对。
+- 最小复审保留原parser、来源目录、命令与writer，无第二配置映射、正文缓存或语法实现。真实跨机／Windows／Electron配置URI页面未验，2.2与11.2保持未完成；准确指纹、命令及原件见 `out/tests/temp/2026/11/11/config_uri_opener/artifacts/verification.json` 和 `web-build-final-01/`。

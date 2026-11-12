@@ -12,6 +12,8 @@
 
 # 规范
 
+资源 URI 打开同样经原 ConfigurationSourceOwner 目录取得正式 source_key，复用同一个来源命令、JSONC 模型和 CAS writer；没有唯一目录匹配时明确拒绝，不维护 URI 到来源的第二张映射表。
+
 冻结 Gateway／工作区／来源；只读来源仍可查看。复用 web API owner 和原 JSONC AST 编辑器，完整保留 CAS 与幂等身份；冲突保留输入，显式重新预检，未知结果仅查询原提交。使用中文提示与注释。
 
 当前窗口的主题、布局及编辑器设置继续使用原 WorkspaceService／registry。业务设置只从正式来源 JSONC 及目标安装 schema 投影原设置树，不读旧 Extension Host profile/view，不向窗口 IConfigurationService 注册业务值。输入仅保存稳定 Gateway／工作区／来源；每组 child 和模型引用随原 Pane 关闭回收，同一来源表单与 JSON 共用原文本模型、dirty、undo、保存及备份。切换目标打开新输入，不重绑原草稿。

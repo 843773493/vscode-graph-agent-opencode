@@ -1,5 +1,6 @@
 import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { ResourceOpener } from '../../../../../../src/clients/workbench/src/resourceOpener.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
@@ -82,4 +83,68 @@ export async function configurationSourcesContract(mode) {
     lifetime.dispose(); cancellation.dispose(true); provider.dispose(); changes.dispose(); accepts.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(previous);
   }
+}
+
+/** 原 Opener、配置来源 API 与命令分派；HTTP 和编辑器是明确装具边界。 */
+export async function configurationUriContract(mode) {
+  const previous = workspaceContext.getSnapshot(), gatewayId = `gateway_${'a'.repeat(32)}`;
+  const remoteGatewayId = `gateway_${'b'.repeat(32)}`;
+  const owner = { gatewayId, workspaceId: '019a0000-0000-7000-8000-000000000001' };
+  const uri = 'boxteam://inline/distribution/resources/config/workspace_inline';
+  const gatewayUri = 'boxteam://inline/distribution/resources/config/gateway_inline';
+  const remoteFixture = {
+    gatewayId: remoteGatewayId,
+    sourceUri: 'boxteam://inline/source-development-0_0_2/resources/config/gateway_inline',
+    referenceUri: `boxteam://${remoteGatewayId}/inline/source-development-0_0_2/resources/config/gateway_inline`,
+  };
+  const requests = [], commands = [], errors = [], references = [];
+  let release, group = { id: 7 }, addedGroups = 0;
+  workspaceContext.publish({ ...previous, gatewayId, loading: false, error: null, activeId: gatewayWorkspaceKey(owner),
+    workspaces: [{ gateway_id: gatewayId, workspace_id: owner.workspaceId, name: '正式配置目标', status: 'ready' }] });
+  const ok = data => Response.json({ code: 0, data, request_id: 'configuration-uri-contract' },
+    { headers: { 'X-Request-ID': 'configuration-uri-contract' } });
+  installSessionApiFetchMock(async ({ path, method, init }) => {
+    const body = init.body ? JSON.parse(String(init.body)) : undefined;
+    const headers = new Headers(init.headers), workspaceId = headers.get('X-BoxTeam-Workspace-Id');
+    requests.push({ path, method, body, gatewayId: headers.get('X-BoxTeam-Target-Gateway-Id'), workspaceId });
+    if (path === '/api/gateway/resource-addresses/parse') {
+      if (mode === 'parse-identity') invalidateGatewayToken(0);
+      if (mode === 'remote') return ok({ uri: body.resource_gateway_id ? remoteFixture.sourceUri : remoteFixture.referenceUri,
+        reference_uri: remoteFixture.referenceUri, gateway_id: remoteGatewayId, scope: 'inline', scope_id: 'source-development-0_0_2', kind: 'config' });
+      const parsedUri = mode === 'gateway' ? gatewayUri : uri;
+      const parsedGatewayId = mode === 'wrong-owner' ? 'gateway-other' : gatewayId;
+      return ok({ uri: parsedUri, reference_uri: `boxteam://${parsedGatewayId}/inline/distribution/resources/config/${mode === 'gateway' ? 'gateway_inline' : 'workspace_inline'}`,
+      gateway_id: parsedGatewayId, scope: 'inline', scope_id: 'distribution', kind: 'config' });
+    }
+    if (path.endsWith('/config/sources')) {
+      if (mode === 'freeze' && workspaceId) await new Promise(resolve => { release = resolve; });
+      if (mode === 'identity' && workspaceId) invalidateGatewayToken(0);
+      if (mode === 'denied' && workspaceId) return Response.json({ detail: '原配置来源权限已撤销' }, { status: 403 });
+      return ok({ sources: [{ source_key: workspaceId ? 'workspace-formal-owner-key'
+        : mode === 'remote' ? 'remote-gateway-formal-owner-key' : 'gateway-formal-owner-key',
+      uri: mode === 'missing' ? undefined : mode === 'remote' ? remoteFixture.sourceUri
+        : workspaceId || mode === 'ambiguous' ? uri : gatewayUri, layer: 'inline' }] });
+    }
+    throw new Error(`配置URI产生非预期请求 ${method} ${path}`);
+  });
+  const opener = new ResourceOpener({ registerOpener: () => ({ dispose() {} }) }, { activeEditor: undefined,
+    openEditor: async () => { throw new Error('不得绕过原设置命令直接打开模型'); } },
+    { activeGroup: group, getGroup: () => mode === 'closed-group' ? undefined : group,
+      findGroup: () => undefined, addGroup: () => { addedGroups++; return { id: 8 }; } },
+    { getValue: () => 'right' }, { createModelReference: async resource => { references.push(String(resource)); throw new Error('不得走普通来源正文读取'); } },
+    { executeCommand: async (id, request) => { commands.push({ id, request }); } });
+  try {
+    const opened = opener.open(mode === 'gateway' ? gatewayUri : mode === 'remote' ? remoteFixture.referenceUri : uri, {
+      ...(mode === 'remote' ? {} : { boxteamResourceOwner: owner }), boxteamTargetGroup: 7,
+      openToSide: mode === 'side', editorOptions: { pinned: mode === 'pinned', preserveFocus: mode === 'background' } });
+    if (mode === 'freeze') {
+      for (let i = 0; i < 200 && !release; i++) await new Promise(resolve => setTimeout(resolve, 5));
+      if (!release) throw new Error('配置目录没有进入受控等待');
+      group = { id: 99 };
+      workspaceContext.publish({ ...workspaceContext.getSnapshot(), activeId: 'later-active-workspace' });
+      release();
+    }
+    try { await opened; } catch (error) { errors.push(String(error)); }
+    return { owner, remoteFixture, requests, commands, errors, references, addedGroups };
+  } finally { opener.dispose(); unwrapSessionApiFetch(); workspaceContext.publish(previous); }
 }

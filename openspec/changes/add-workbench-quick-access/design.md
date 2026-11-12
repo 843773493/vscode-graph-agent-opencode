@@ -363,6 +363,8 @@ scope 跟随原 Input 的 configuration model，原 JSON serializer 的 config �
 
 配置候选只读原来源目录，按所选工作区独立列出，同一 Gateway 的来源只列一次；已有文件 URI 直接展示，无文件 URI 的正式逻辑层不造地址。接受后交同一个设置来源命令，使用冻结 Gateway／必要 workspace／source_key 读取并打开原 JSONC 编辑器；预览／固定、侧开／后台和发起组沿原编辑器选项，保存仍由原预检／CAS 决定。来源发现、逐键筛选与取消不提前读正文或写入配置，不把配置当普通文件改写。
 
+直接打开配置 URI 同样先由唯一寻址 parser 确认归属，再匹配原来源目录公布的 URI／source_key。远端 reference 由同一 parser 在原生目标上下文归一；inline 未携配置域时只查询目标 Gateway 与同 Gateway 的明确发起工作区，要求唯一匹配。不从 URI 文件名猜 source_key，不复用普通只读正文 Provider，也不建立第二套配置映射或 writer。
+
 会话变更候选限定本次发起 Thread 所属 Session，且工作区必须入选；没有 Session 不扫描其它会话补目录。发现只消费原 changeset 摘要，接受将领域 changeset 身份交同一 Thread 更改面板，原按钮与 Quick Access 共用 loader、只读 Diff 和完整补丁。选定范围属于各组 ThreadInput 的展示态，随原复制／恢复保留；不造变更公开 URI、不提前读预览或标记审阅。
 
 原 Opener 的项目贡献将原始规范 URI 交给认证 Gateway 的 `/api/gateway/resource-addresses/parse`，由 `app.core.resource_uri` 唯一 grammar 投影规范引用、Gateway／scope／kind 和已有 Session／Thread／文件根字段。此只读入口不探测文件、不确认资源存在、不产生访问能力，也不启动目标；公开结构由 Gateway proto 描述。客户端不重复模板解析，在实际打开时重新解析已登记工作区路由，并交原 Session／Thread／文件 owner 核验；不支持的资源形态明确报告。Quick Access 传原始 URI，不先应用文件行号或符号后缀识别，位置继续作为独立 editor options；发起组和后台／侧边选项在异步解析前冻结。

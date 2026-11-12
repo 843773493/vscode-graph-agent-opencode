@@ -282,6 +282,29 @@ try {
   assert.equal(result.writes.length, readonlyBefore);
   result.readonly = true;
   result.resource_readonly = true;
+  result.phase = 'configuration-resource-uri';
+  const openConfigurationUri = async (uri, sourceKey, modifiers = []) => {
+    const parsed = await api('/api/gateway/resource-addresses/parse', { method: 'POST',
+      body: { uri, local_gateway_id: health.gateway_id } });
+    await command('workbench.action.quickOpen', parsed.reference_uri);
+    const link = quick.locator(`[data-quick-input-id="link:${parsed.reference_uri}"]`);
+    await expect(link).toBeVisible();
+    await link.click({ modifiers });
+    await expect(tab).toContainText(sourceKey + '.jsonc');
+    await expect(text).toBeVisible();
+    return parsed;
+  };
+  assert(inline.uri, 'Gateway inline 来源必须由原 owner 提供 URI');
+  await openConfigurationUri(inline.uri, inline.source_key);
+  const workspaceSources = await api('/api/v1/config/sources', { headers: workspaceHeaders });
+  const workspaceInline = workspaceSources.sources.find(source => source.layer === 'inline' && source.source_key && source.uri);
+  assert(workspaceInline, 'Workspace inline 来源必须由原 owner 提供 URI');
+  await openConfigurationUri(workspaceInline.uri, workspaceInline.source_key, ['Alt']);
+  await text.click(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('// URI 打开仍只读\n');
+  await expect(tab).not.toHaveClass(/\bdirty\b/);
+  await expect(text).not.toContainText('URI 打开仍只读');
+  assert.equal(result.writes.length, readonlyBefore, '配置 URI 打开不得绕过原来源 writer');
+  result.configuration_uri_opened = true;
   const status = command('boxteam.settings.sourceStatus');
   await expect(quick).toBeVisible(); await expect(quick).toContainText('来源层');
   await page.keyboard.press('Escape'); await status;
