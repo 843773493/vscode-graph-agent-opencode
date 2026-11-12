@@ -66,6 +66,7 @@ message FederatedSearchBranchDTO {
   optional string reason = 11;
   // 仅真实 HTTP 拒绝携带；本地调度、取消或网络失败不伪造状态码。
   optional int32 http_status = 12;
+  repeated boxteam.workspace.v2.SearchDiagnosticDTO diagnostics = 13;
 }
 
 message FederatedSearchSummaryDTO {

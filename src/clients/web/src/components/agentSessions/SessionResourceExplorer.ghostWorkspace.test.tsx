@@ -18,6 +18,7 @@ import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBr
 import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
 import SessionResourceExplorer from "./SessionResourceExplorer";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
+import { FederatedSearchEventDTO } from "../../types/protocol_generated/boxteam/search/v1/public";
 import { setLocaleResources } from "../../../../shared/core/i18n/index.js";
 import english from "../../../../shared/core/i18n/messages/en.json";
 import chinese from "../../../../shared/core/i18n/messages/zh-cn.json";
@@ -81,6 +82,11 @@ async function renderExplorer(options: {
   activeWorkspaceId?: string | null;
   currentSessionId?: string;
   breadcrumbFails?: string | null;
+  searchDiagnostics?: boolean;
+  searchMixedDiagnostics?: boolean;
+  searchNotices?: boolean;
+  searchOpen?: boolean;
+  searchQuery?: string;
   onActivateWorkspace?: (workspaceId: string) => Promise<void>;
 }): Promise<{ html: string; tree: ReactTestRenderer; diagnostics: Array<{ title: string; detail: string }> }> {
   const diagnostics: Array<{ title: string; detail: string }> = [];
@@ -97,6 +103,36 @@ async function renderExplorer(options: {
         return undefined;
       }
       return apiSuccessResponse({ revision: "navigation", nodes: options.nodes });
+    }
+    if (request.path === "/api/gateway/search/workspaces" && options.searchDiagnostics) {
+      return apiSuccessResponse({ gateway_id: "gateway-test", query: "needle", resolved_at: "2026-11-12T00:00:00Z",
+        source: "registry", items: [], folders: [], complete: true });
+    }
+    if (request.path === "/api/gateway/search" && options.searchDiagnostics) {
+      const owner = { gateway_id: "gateway-test", workspace_id: WORKSPACE_ID };
+      const otherOwner = { gateway_id: "gateway-test", workspace_id: OTHER_WORKSPACE_ID };
+      const owners = options.searchMixedDiagnostics ? [owner, otherOwner] : [owner];
+      const branch = { branch: { owner, category: "catalog", operation: "name" }, state: options.searchMixedDiagnostics ? "complete" : "failed",
+        ...(options.searchMixedDiagnostics ? {} : { code: "owner_unavailable", message: "目标已移除", error_owner: "search_transport",
+          reason: "route_removed", http_status: 503 }),
+        retryable: !options.searchMixedDiagnostics, allocated_results: 50, returned_results: 0,
+        ...(options.searchNotices === false ? {} : { diagnostics: [{ severity: "warning", code: "stale_catalog_mirror",
+          owner: "gateway_catalog_mirror", message: "[执行](command:workbench.action.danger)" }] }) };
+      const completed = { branch: { owner: otherOwner, category: "catalog", operation: "name" }, state: "complete",
+        retryable: false, allocated_results: 50, returned_results: 0 };
+      const scope = { scope: { version: 1, gateway_id: "gateway-test", resolved_at: "2026-11-12T00:00:00Z", mode: "all", owners },
+        branches: owners.map(owner => ({ owner, state: "registered" })) };
+      const frames = [
+        { type: "scope", scope },
+        { type: "branch", branch },
+        ...(options.searchMixedDiagnostics ? [{ type: "branch", branch: completed }] : []),
+        { type: "end", summary: { state: options.searchMixedDiagnostics ? "complete" : "incomplete", order: "category-scope-owner-v1",
+          branches: [branch, ...(options.searchMixedDiagnostics ? [completed] : [])], returned_results: 0 } },
+      ].map((payload, index) => {
+        const event = FederatedSearchEventDTO.create({ ...payload, sequence: index + 1, request_id: "catalog-diagnostic-request" });
+        return `id: ${index + 1}\nevent: search\ndata: ${JSON.stringify(event)}\n\n`;
+      }).join("");
+      return new Response(frames, { headers: { "content-type": "text/event-stream", "X-Request-ID": "catalog-diagnostic-request" } });
     }
     if (request.path.includes("/api/v1/session-catalog/breadcrumb/")) {
       if (options.breadcrumbFails) {
@@ -135,8 +171,8 @@ async function renderExplorer(options: {
         activeWorkspaceId={options.activeWorkspaceId ? gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: options.activeWorkspaceId }) : null}
         currentSessionId={options.currentSessionId ?? ""}
         currentSessionWorkspaceId={options.activeWorkspaceId ? gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: options.activeWorkspaceId }) : null}
-        searchOpen={false}
-        searchQuery=""
+        searchOpen={options.searchOpen ?? false}
+        searchQuery={options.searchQuery ?? ""}
         workspaceSwitching={false}
         startingWorkspaceIds={new Set()}
         removingWorkspaceIds={new Set()}
@@ -249,6 +285,56 @@ describe("工作区导航树的空态与加载态", () => {
     expect(html).toContain("无法加载工作区列表");
     // 旧快照为空 + 刷新失败：错误优先，空态必须让位
     expect(html).not.toContain("还没有工作区");
+  });
+});
+
+describe("目录搜索分支诊断渲染", () => {
+  test("将错误字段和 notice 当纯文本显示，不把命令链接变成可执行链接", async () => {
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
+      searchOpen: true,
+      searchQuery: "needle",
+      searchDiagnostics: true,
+    });
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 350)); });
+    const html = JSON.stringify(tree.toJSON());
+    for (const detail of ["code: owner_unavailable", "error_owner: search_transport", "reason: route_removed",
+      "http_status: 503", "retryable: true", "request_id: catalog-diagnostic-request",
+      "warning: [执行](command:workbench.action.danger)"]) {
+      expect(html).toContain(detail);
+    }
+    expect(tree.root.findAllByType("a").some(link => String(link.props.href ?? "").startsWith("command:"))).toBe(false);
+  });
+
+  test("真实 SSE 校验省略 diagnostics 时仍显示分支错误", async () => {
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
+      searchOpen: true,
+      searchQuery: "needle",
+      searchDiagnostics: true,
+      searchNotices: false,
+    });
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 350)); });
+    const html = JSON.stringify(tree.toJSON());
+    expect(html).toContain("code: owner_unavailable");
+    expect(html).toContain("request_id: catalog-diagnostic-request");
+  });
+
+  test("一个 available warning 分支展开后仍能遍历省略 diagnostics 的分支", async () => {
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1"), navigationNode(OTHER_WORKSPACE_ID, "gw_2")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready"), gatewayWorkspace(OTHER_WORKSPACE_ID, "ready")],
+      searchOpen: true,
+      searchQuery: "needle",
+      searchDiagnostics: true,
+      searchMixedDiagnostics: true,
+    });
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 350)); });
+    const html = JSON.stringify(tree.toJSON());
+    expect(html).toContain("warning: [执行](command:workbench.action.danger)");
+    expect(html).toContain("state: complete");
   });
 });
 

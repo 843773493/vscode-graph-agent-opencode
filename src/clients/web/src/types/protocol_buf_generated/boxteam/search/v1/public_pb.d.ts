@@ -5,7 +5,7 @@
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { Message } from "@bufbuild/protobuf";
 import type { GatewayDiagnosticLogQueryResultDTO, GatewayDiagnosticLogQueryScopeDTO, GatewaySearchScopeRequest, GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO } from "../../gateway/v2/public_pb.js";
-import type { ContextGrantTarget, WorkspaceContextSearchOptionsDTO, WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
+import type { ContextGrantTarget, SearchDiagnosticDTO, WorkspaceContextSearchOptionsDTO, WorkspaceFileSearchTargetDTO, WorkspaceSearchResultDTO } from "../../workspace/v2/public_pb.js";
 
 /**
  * Describes the file boxteam/search/v1/public.proto.
@@ -279,6 +279,11 @@ export declare type FederatedSearchBranchDTO = Message<"boxteam.search.v1.Federa
    * @generated from field: optional int32 http_status = 12;
    */
   httpStatus?: number | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SearchDiagnosticDTO diagnostics = 13;
+   */
+  diagnostics: SearchDiagnosticDTO[];
 };
 
 /**

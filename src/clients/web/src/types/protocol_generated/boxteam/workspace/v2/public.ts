@@ -345,6 +345,14 @@ export interface WorkspaceSearchRequest {
   context?: WorkspaceContextSearchOptionsDTO | undefined;
 }
 
+/** 普通信息和警告不改变查询完成状态；文本不授予链接或命令执行权限。 */
+export interface SearchDiagnosticDTO {
+  severity: string;
+  code: string;
+  owner: string;
+  message: string;
+}
+
 export interface WorkspaceSearchResultDTO {
   provider_id: string;
   workspace_id: string;
@@ -360,6 +368,7 @@ export interface WorkspaceSearchResultDTO {
   files: ResourceNavigationResultDTO | undefined;
   context?: SessionContextSearchResultDTO | undefined;
   traces: WorkspaceTraceSearchResultsDTO | undefined;
+  diagnostics: SearchDiagnosticDTO[];
 }
 
 export interface SessionThreadSearchResultDTO {
@@ -5899,6 +5908,50 @@ export const WorkspaceSearchRequest: MessageFns<WorkspaceSearchRequest> = {
   },
 };
 
+function createBaseSearchDiagnosticDTO(): SearchDiagnosticDTO {
+  return { severity: "", code: "", owner: "", message: "" };
+}
+
+export const SearchDiagnosticDTO: MessageFns<SearchDiagnosticDTO> = {
+  fromJSON(object: any): SearchDiagnosticDTO {
+    return {
+      severity: isSet(object.severity) ? globalThis.String(object.severity) : "",
+      code: isSet(object.code) ? globalThis.String(object.code) : "",
+      owner: isSet(object.owner) ? globalThis.String(object.owner) : "",
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+    };
+  },
+
+  toJSON(message: SearchDiagnosticDTO): unknown {
+    const obj: any = {};
+    if (message.severity !== "") {
+      obj.severity = message.severity;
+    }
+    if (message.code !== "") {
+      obj.code = message.code;
+    }
+    if (message.owner !== "") {
+      obj.owner = message.owner;
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SearchDiagnosticDTO>, I>>(base?: I): SearchDiagnosticDTO {
+    return SearchDiagnosticDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SearchDiagnosticDTO>, I>>(object: I): SearchDiagnosticDTO {
+    const message = createBaseSearchDiagnosticDTO();
+    message.severity = object.severity ?? "";
+    message.code = object.code ?? "";
+    message.owner = object.owner ?? "";
+    message.message = object.message ?? "";
+    return message;
+  },
+};
+
 function createBaseWorkspaceSearchResultDTO(): WorkspaceSearchResultDTO {
   return {
     provider_id: "",
@@ -5915,6 +5968,7 @@ function createBaseWorkspaceSearchResultDTO(): WorkspaceSearchResultDTO {
     files: undefined,
     context: undefined,
     traces: undefined,
+    diagnostics: [],
   };
 }
 
@@ -5937,6 +5991,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
       files: isSet(object.files) ? ResourceNavigationResultDTO.fromJSON(object.files) : undefined,
       context: isSet(object.context) ? SessionContextSearchResultDTO.fromJSON(object.context) : undefined,
       traces: isSet(object.traces) ? WorkspaceTraceSearchResultsDTO.fromJSON(object.traces) : undefined,
+      diagnostics: globalThis.Array.isArray(object?.diagnostics)
+        ? object.diagnostics.map((e: any) => SearchDiagnosticDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -5984,6 +6041,9 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
     if (message.traces !== undefined) {
       obj.traces = WorkspaceTraceSearchResultsDTO.toJSON(message.traces);
     }
+    if (message.diagnostics?.length) {
+      obj.diagnostics = message.diagnostics.map((e) => SearchDiagnosticDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -6020,6 +6080,7 @@ export const WorkspaceSearchResultDTO: MessageFns<WorkspaceSearchResultDTO> = {
     message.traces = (object.traces !== undefined && object.traces !== null)
       ? WorkspaceTraceSearchResultsDTO.fromPartial(object.traces)
       : undefined;
+    message.diagnostics = object.diagnostics?.map((e) => SearchDiagnosticDTO.fromPartial(e)) || [];
     return message;
   },
 };

@@ -23,7 +23,7 @@ from app.schemas.gateway.search import (
     GatewaySearchScopeResolutionDTO,
 )
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationResultDTO
-from app.schemas.internal_v2.search import WorkspaceSearchResultDTO
+from app.schemas.internal_v2.search import SearchDiagnosticDTO, WorkspaceSearchResultDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogSearchResultDTO,
     SessionCatalogSearchResultsDTO,
@@ -115,6 +115,35 @@ def page(job: SearchJob, *, cursor: str | None = None) -> SearchPage:
         state="limited" if cursor else "complete", limited_reason="result_limit" if cursor else None,
         catalog=SessionCatalogSearchResultsDTO(revision="r1", catalog_revision=1, cursor=cursor),
     ))
+
+
+async def test_info_and_warning_survive_terminal_and_summary_without_changing_completion(
+    scope: GatewaySearchScopeResolutionDTO, request_body: FederatedSearchRequest,
+) -> None:
+    notices = (
+        SearchDiagnosticDTO(severity="info", code="preview_truncated", owner="catalog", message="原始预览信息"),
+        SearchDiagnosticDTO(severity="warning", code="source_warning", owner="catalog",
+                            message="[不执行](command:workbench.action.closeWindow)"),
+    )
+
+    async def query(job: SearchJob) -> SearchPage:
+        result = page(job)
+        result.result.diagnostics = notices
+        return result
+
+    jobs = plan_search(request_body, scope)
+    events = [event async for event in search_events(jobs, scope, request_id="notices", query=query,
+                                                     budget=NameSearchBudget.create(None))]
+    for event in events:
+        assert event.request_id == "notices"
+        if event.branch is not None:
+            assert event.branch.state == "complete" and event.branch.code is None
+            assert event.branch.diagnostics == notices
+            assert event.branch.returned_results == 0 and not event.branch.retryable
+    summary = events[-1].summary
+    assert summary is not None and summary.state == "complete" and summary.returned_results == 0
+    assert all(branch.diagnostics == notices for branch in summary.branches)
+    assert [event.branch for event in events if event.type == "branch"] == summary.branches
 
 
 async def test_fast_page_precedes_slow_branch_and_terminal_is_unique(

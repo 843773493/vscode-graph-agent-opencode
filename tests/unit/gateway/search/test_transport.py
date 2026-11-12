@@ -458,6 +458,9 @@ async def test_mirror_is_opt_in_and_online_always_uses_owner(search_http: Search
     page, = [event for event in offline if event.type == "page"]
     assert page.source.kind == "gateway_catalog_mirror" and page.source.stale
     assert page.source.updated_at == mirrored_owner.updated_at and "目标断开" in page.source.unavailable_reason
+    notice, = page.branch.diagnostics
+    assert (notice.severity, notice.code, notice.owner) == ("warning", "stale_catalog_mirror", "gateway_catalog_mirror")
+    assert "目标断开" in notice.message and mirrored_owner.updated_at.isoformat() in notice.message
     assert page.page.catalog.catalog_revision == 7
     cursor = page.page.catalog.cursor
     resumed = events(await search_http.search(scope={"mode": "resume", "scope": offline[0].scope.scope.model_dump(mode="json")},

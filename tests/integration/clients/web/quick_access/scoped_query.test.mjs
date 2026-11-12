@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { resolve, join } from 'node:path';
@@ -19,6 +19,66 @@ const owner = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const root = 'boxteam://workspace/workspace-a/resources/files/root';
 const scope = { version: 1, workspaces: [{ ...owner, rootUri: root, label: '工作区 A' }] };
 const uri = (name = '', target = owner) => m.workspaceFileUri(target, root + (name ? '/' + name : ''), root);
+
+// 这些模块明确整文件生成，不消费上游正文中的文本锚点。
+const generatedModules = new Map([
+  ['src/vs/workbench/contrib/chat/common/plugins/agentPluginServiceImpl.ts', 'export class AgentPluginService'],
+  ['src/vs/workbench/contrib/chat/browser/chat.view.contribution.ts', ''],
+  ['src/vs/workbench/services/extensionManagement/common/webExtensionManagementService.ts', 'export { WebExtensionManagementService };'],
+  ['src/vs/workbench/services/extensionManagement/common/extensionManagementService.ts', 'export { ExtensionManagementService };'],
+  ['src/vs/workbench/services/extensionManagement/common/extensionManagementServerService.ts', 'export { ExtensionManagementServerService };'],
+  ['src/vs/workbench/contrib/extensions/browser/extensionsQuickAccess.ts', 'ManagePluginQuickAccessProvider as ManageExtensionsQuickAccessProvider'],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/pluginCustomizationMarketplaceProvider.ts', 'export {}\n'],
+  ['src/vs/workbench/contrib/chat/browser/agentPluginsView.ts', 'export {};\n'],
+]);
+// AST 删除、模板插值与 NLS 改写按语义验证，不把整份原文重复伪称为单锚点冲突。
+const structuralModules = new Map([
+  ['src/vs/workbench/contrib/chat/browser/chatSlashCommands.ts', ["command: 'plugins'", 'registerSlashCommand']],
+  ['src/vs/platform/product/common/product.ts', ['/*BUILD->INSERT_PRODUCT_CONFIGURATION*/', pinnedUpstreamCommit]],
+  ['src/vs/workbench/contrib/mcp/common/mcpTypes.ts', ['queryGallery(', 'IMcpWorkbenchService']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/toolsListWidget.ts', ['createInstalledPluginItem', 'selection: file.range']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/aiCustomizationDiscoveryPage.ts', ['getPluginCustomizationMarketplaceSourceId', 'marketplace?.sourceId === this.selectedSourceId']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/pluginListWidget.ts', ['showMarketplaceActions', "executeCommand<boolean>('workbench.action.chat.installPluginFromSource')"]],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMarketplace.contribution.ts', ["localize('customizationDiscovery.help.overview'", 'customizationMarketplace.contribution#customizationDiscovery.help.overview']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMigrationCategories.ts', ['PluginMarketplaces', 'CustomizationMigrationCategoryId.McpServers']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMigrationAccessibility.ts', ['migrationHelpPluginMarketplaces', 'migrationHelpOverview']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMigrationDashboard.ts', ['PluginMarketplaces', 'CustomizationMigrationCategoryId.McpServers']],
+  ['src/vs/workbench/contrib/chat/common/promptSyntax/service/customizationMigrationService.ts', ['PluginMarketplaces', 'migrateMcpServers', '缺少 ICustomizationMigrationService']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMigration.ts', ['isPluginMarketplaceCustomizationMigrationCandidate', 'isMcpServerCustomizationMigrationCandidate']],
+]);
+// 这两个转换核边界存在后生成正文／裁去尾部，重复尾部不会留下第二套实现。
+const boundaryModules = new Map([
+  ['src/vs/workbench/contrib/mcp/browser/mcpWorkbenchService.ts', ['上游 MCP 初始上下文贡献缺失', 'export class MCPContextsInitialisation']],
+  ['src/vs/workbench/contrib/chat/browser/widget/chatAgentHover.ts', ['Chat Agent 扩展详情悬浮入口缺失', 'export class ChatAgentHover']],
+]);
+// 唯一 AST owner 和具名边界保留自己的拒绝原因，其余文本 seam 必须明确报告“恰好一次”。
+const anchorErrors = new Map([
+  ['src/vs/workbench/contrib/chat/browser/actions/chatPluginActions.ts', ['缺少 provider 插件来源安装动作', 'InstallFromSourceAction precondition锚点数量错误']],
+  ['src/vs/workbench/services/extensionManagement/browser/webExtensionsScannerService.ts', ['原扩展管理 owner 不唯一：WebExtensionsScannerService', '原扩展管理 owner 不唯一：WebExtensionsScannerService']],
+  ['src/vs/workbench/contrib/mcp/browser/mcpCommands.ts', ['上游 MCP 命令 seam 缺失：McpAgentHostServerOptionsCommand']],
+  ['src/vs/workbench/contrib/mcp/browser/mcpServerActions.ts', ['上游 MCP InstallAction 边界缺失']],
+  ['src/vs/workbench/contrib/mcp/browser/mcpServerEditor.ts', ['上游 MCP 详情 action import 锚点缺失']],
+  ['src/vs/workbench/contrib/extensions/browser/extensionsViewlet.ts', ['原扩展管理 owner 不唯一：ExtensionsViewletViewsContribution', '原扩展管理 owner 不唯一：ExtensionsViewletViewsContribution']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMarketplaceInstallService.ts', ['缺少 CustomizationMarketplaceInstallService']],
+  ['src/vs/platform/customizationMarketplace/electron-browser/customizationMarketplaceService.ts', ['上游 MCP 转换边界缺失']],
+  ['src/vs/workbench/services/extensions/browser/extensionService.ts', ['内置 Worker 转换边界缺失']],
+  ['src/vs/workbench/browser/parts/statusbar/statusbarActions.ts', ['待删除的旧扩展详情类缺失：ManageExtensionAction', '待删除的旧扩展详情类缺失：ManageExtensionAction']],
+  ['src/vs/workbench/contrib/extensions/browser/extensionsActions.ts', ['按 Extension ID 搜索的旧 Workbench 命令与固定上游不匹配', '按 Extension ID 搜索的旧 Workbench 命令与固定上游不匹配']],
+  ['src/vs/workbench/contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.ts', ['Remote Tunnel 的旧扩展详情动作数量或结构不符', 'Remote Tunnel 的旧扩展详情动作数量或结构不符']],
+  ['src/vs/workbench/services/extensionManagement/common/extensionManagement.ts', ['原扩展管理 owner 不唯一：IWebExtensionsScannerService', '原扩展管理 owner 不唯一：IWebExtensionsScannerService']],
+  ['src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts', ['欢迎页插件步骤与固定上游不匹配', '欢迎页插件步骤与固定上游不匹配']],
+  ['src/vs/workbench/contrib/notebook/browser/contrib/cellStatusBar/statusBarProviders.ts', ['Notebook 未知语言的旧扩展市场入口与固定上游不匹配', 'Notebook 未知语言的旧扩展市场入口与固定上游不匹配']],
+  ['src/vs/workbench/api/common/extHostLanguageFeatures.ts', ['CodeActionAdapter 原文档 owner 构造入口已变化']],
+  ['src/vs/workbench/contrib/chat/browser/widget/input/editor/chatInputCompletions.ts', ['聊天扩展安装补全登记数量不符：0', '聊天扩展安装补全登记数量不符：2']],
+  ['src/vs/workbench/contrib/chat/browser/aiCustomization/customizationMigrationServiceImpl.ts', ['缺少 CustomizationMigrationService']],
+  ['src/vs/workbench/services/preferences/common/preferencesEditorInput.ts', ['设置转换锚点缺失：export class SettingsEditor2Input']],
+  ['src/vs/workbench/contrib/preferences/browser/preferences.contribution.ts', ['设置转换锚点缺失：\tserialize(input: SettingsEditor2Input)']],
+]);
+const newlineReceipts = [];
+afterAll(async () => {
+  await writeFile(join(run.artifactsDir, 'source-newlines.json'), JSON.stringify({ commit: pinnedUpstreamCommit,
+    receipts: newlineReceipts.sort((left, right) => left.path.localeCompare(right.path)) }, null, 2) + '\n');
+});
 
 function fixture(context = new m.SearchWorkspaceContext(scope), groupService = { groups: [] }) {
   const configuration = { editor: { wordSeparators: ' /' }, files: { encoding: 'utf8', exclude: {} },
@@ -96,33 +156,52 @@ describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
     }
   });
 
-  test('整批固定上游在LF和CRLF输入下转换字节一致，检出原件保持不变', async () => {
-    const hash = value => createHash('sha256').update(value).digest('hex'), receipts = [];
-    for (const path of transformedSourcePaths) {
-      const absolute = join(workbench, 'upstream', path), original = await readFile(absolute);
-      const lf = original.toString('utf8').replace(/\r\n/g, '\n'), crlf = lf.replace(/\n/g, '\r\n');
-      const generatedLf = Buffer.from(await transform(absolute, lf)), generatedCrlf = Buffer.from(await transform(absolute, crlf));
-      expect(generatedCrlf.equals(generatedLf)).toBe(true);
-      const unchanged = await readFile(absolute);
-      expect(unchanged.equals(original)).toBe(true);
-      receipts.push({ path, original: hash(original), after: hash(unchanged), lf: hash(generatedLf), crlf: hash(generatedCrlf) });
-    }
-    await writeFile(join(run.artifactsDir, 'source-newlines.json'), JSON.stringify({ commit: pinnedUpstreamCommit, receipts }, null, 2) + '\n');
+  test.each(transformedSourcePaths)('LF／CRLF 转换字节一致且检出原件不变：%s', async path => {
+    const hash = value => createHash('sha256').update(value).digest('hex');
+    const absolute = join(workbench, 'upstream', path), original = await readFile(absolute);
+    const lf = original.toString('utf8').replace(/\r\n/g, '\n'), crlf = lf.replace(/\n/g, '\r\n');
+    const generatedLf = Buffer.from(await transform(absolute, lf)), generatedCrlf = Buffer.from(await transform(absolute, crlf));
+    expect(generatedCrlf.equals(generatedLf)).toBe(true);
+    expect(generatedLf.equals(Buffer.from(lf))).toBe(false);
+    const unchanged = await readFile(absolute);
+    expect(unchanged.equals(original)).toBe(true);
+    newlineReceipts.push({ path, original: hash(original), after: hash(unchanged), lf: hash(generatedLf), crlf: hash(generatedCrlf) });
   });
 
-  test('固定提交及每个锚点缺失、重复均失败，实际上游原件保持不变', async () => {
+  test('固定提交不符时拒绝，特殊转换清单全部属于正式管线', () => {
     expect(() => sourceTransform(workbench, { commit: 'other' }, [])).toThrow('上游版本');
-    for (const path of transformedSourcePaths) {
-      const absolute = join(workbench, 'upstream', path), original = await readFile(absolute, 'utf8');
-      const generated = await transform(absolute, original);
-      expect(generated).not.toBe(original);
-      const missingAnchor = path.endsWith('/mcpCommands.ts') ? '上游 MCP 命令 seam 缺失'
-        : path.endsWith('/mcpServerActions.ts') ? '上游 MCP InstallAction 边界缺失'
-        : path.endsWith('/mcpServerEditor.ts') ? '上游 MCP 详情 action import 锚点缺失' : '恰好一次';
-      await expect(transform(absolute, '')).rejects.toThrow(missingAnchor);
-      await expect(transform(absolute, original + original)).rejects.toThrow('恰好一次');
-      expect(await readFile(absolute, 'utf8')).toBe(original);
+    for (const path of [...generatedModules.keys(), ...structuralModules.keys(), ...boundaryModules.keys(), ...anchorErrors.keys()]) {
+      expect(transformedSourcePaths).toContain(path);
     }
+  });
+
+  test.each(transformedSourcePaths)('按真实机制核输入合同且原件不变：%s', async path => {
+    const absolute = join(workbench, 'upstream', path), original = await readFile(absolute, 'utf8');
+    const generated = await transform(absolute, original);
+    expect(generated).not.toBe(original);
+    if (generatedModules.has(path)) {
+      const required = generatedModules.get(path);
+      if (required === '') expect(generated).toBe('');
+      else expect(generated).toContain(required);
+      expect(await transform(absolute, '')).toBe(generated);
+      expect(await transform(absolute, original + original)).toBe(generated);
+    } else if (boundaryModules.has(path)) {
+      const [missingBoundary, retained] = boundaryModules.get(path);
+      await expect(transform(absolute, '')).rejects.toThrow(missingBoundary);
+      expect(generated).toContain(retained);
+      expect(await transform(absolute, original + original)).toBe(generated);
+    } else if (structuralModules.has(path)) {
+      const [removed, retained, missingDeclaration] = structuralModules.get(path);
+      expect(original).toContain(removed);
+      expect(generated).not.toContain(removed);
+      expect(generated).toContain(retained);
+      if (missingDeclaration) await expect(transform(absolute, '')).rejects.toThrow(missingDeclaration);
+    } else {
+      const [missingAnchor, duplicateAnchor = '恰好一次'] = anchorErrors.get(path) ?? ['恰好一次'];
+      await expect(transform(absolute, '')).rejects.toThrow(missingAnchor);
+      await expect(transform(absolute, original + original)).rejects.toThrow(duplicateAnchor);
+    }
+    expect(await readFile(absolute, 'utf8')).toBe(original);
   });
 
   test('真实 child 构建只使用明确根，在查询前排除跨 Gateway、跨工作区及原生 extras', () => {

@@ -567,6 +567,30 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
     } finally { f.instantiation.dispose(); }
   });
 
+  test('普通信息和警告沿原SearchComplete展示，不变成失败、受限或命令授权', async () => {
+    const f = fixture([]), diagnostics = [
+      { severity: 'info', code: 'preview_truncated', owner: 'workspace_files', message: '原始预览说明' },
+      { severity: 'warning', code: 'source_warning', owner: 'workspace_files',
+        message: '原警告 [不执行](command:workbench.action.closeWindow) <b>正文</b>' },
+    ];
+    try {
+      await withTransport(async calls => {
+        const progress = [], result = await f.search.textSearch(query(), undefined, item => progress.push(item));
+        expect(result.limitHit).toBe(false); expect(result.results).toHaveLength(1);
+        expect(progress).toHaveLength(1); expect(result.messages).toHaveLength(2);
+        expect(result.messages.map(message => message.type)).toEqual([1, 2]);
+        for (const [index, notice] of diagnostics.entries()) {
+          const message = result.messages[index];
+          expect(message.trusted).toBe(false);
+          for (const value of [notice.message, `code: ${notice.code}`, `owner: ${notice.owner}`, 'request_id: file-request-0']) {
+            expect(message.text).toContain(value);
+          }
+        }
+        expect(calls).toHaveLength(1);
+      }, async target => page(target.uri, [hit(target.uri + '/one.txt')]), { diagnostics });
+    } finally { f.instantiation.dispose(); }
+  });
+
   test('取消与 dispose 中止实际 Gateway 信号；首条 progress 后取消不投递同页后续命中', async () => {
     for (const mode of ['cancel', 'dispose', 'progress']) {
       const f = fixture([]), token = new CancellationTokenSource(), entered = Promise.withResolvers(), release = Promise.withResolvers();

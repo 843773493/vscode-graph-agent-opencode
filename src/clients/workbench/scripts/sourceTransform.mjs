@@ -739,6 +739,8 @@ let before = lcut(fullBefore, 26, '…');
 if (before.length > 26) before = '…' + Array.from(before).slice(-26).join('');`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.ts')) {
+      // 子类消费同一次原搜索的消息，不额外发起查询或维护另一份完成状态。
+      contents = replaceOnce(contents, 'private currentAsyncSearch: Promise<ISearchComplete>', 'protected currentAsyncSearch: Promise<ISearchComplete>');
       // 由原 QueryBuilder 消费用户的 search.useIgnoreFiles，交目标文件 owner 解释规则。
       contents = replaceOnce(contents, '\tdisregardIgnoreFiles: false,\n', '');
       const transfer = `\t\tthis._viewsService.openView(VIEW_ID, false);

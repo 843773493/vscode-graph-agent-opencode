@@ -18,6 +18,7 @@ from app.schemas.gateway.search import (
 )
 from app.schemas.internal_v2.resource_navigation import NavigationResourceURI
 from app.schemas.internal_v2.search import (
+    SearchDiagnosticDTO,
     WorkspaceContextSearchOptionsDTO,
     WorkspaceFileSearchTargetDTO,
     WorkspaceSearchResultDTO,
@@ -144,6 +145,7 @@ class FederatedSearchBranchDTO(BaseModel):
     error_owner: str | None = None
     reason: str | None = None
     http_status: int | None = Field(default=None, ge=100, le=599)
+    diagnostics: tuple[SearchDiagnosticDTO, ...] = ()
 
 
 class FederatedSearchSummaryDTO(BaseModel):

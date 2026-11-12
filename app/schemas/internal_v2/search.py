@@ -88,6 +88,17 @@ class WorkspaceSearchRequest(BaseModel):
         return self
 
 
+class SearchDiagnosticDTO(BaseModel):
+    """原 owner 的普通文本提示；不替代结果、受限、取消或错误状态。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    severity: Literal["info", "warning"]
+    code: str = Field(min_length=1)
+    owner: str = Field(min_length=1)
+    message: str
+
+
 class WorkspaceSearchResultDTO(BaseModel):
     provider_id: str
     workspace_id: str
@@ -105,6 +116,7 @@ class WorkspaceSearchResultDTO(BaseModel):
     files: ResourceNavigationResultDTO | None = None
     context: SessionContextSearchResultDTO | None = None
     traces: WorkspaceTraceSearchResultsDTO | None = None
+    diagnostics: tuple[SearchDiagnosticDTO, ...] = ()
 
     @property
     def domain_page(self) -> SessionCatalogSearchResultsDTO | SessionThreadSearchResultsDTO | WorkspaceMessageSearchResultsDTO | WorkspaceLLMRequestLogSearchResultsDTO | ResourceNavigationResultDTO | SessionContextSearchResultDTO | WorkspaceTraceSearchResultsDTO | None:

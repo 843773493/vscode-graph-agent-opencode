@@ -859,7 +859,9 @@ export default function SessionResourceExplorer({
             </div>
           </div>
         ) : null}
-        {!explorer.searching && !explorer.searchError && explorer.searchResults.items.length === 0 ? <div className="session-resource-state">{t('navigation.search.empty')}</div> : null}
+        {!explorer.searching && !explorer.searchError && explorer.searchResults.items.length === 0
+          && !explorer.searchResults.workspaces.some((workspace) => workspace.status === "unavailable" || workspace.limited)
+          ? <div className="session-resource-state">{t('navigation.search.empty')}</div> : null}
         {explorer.searchResults.items.map((item) => (
           <button
             type="button"
@@ -898,10 +900,35 @@ export default function SessionResourceExplorer({
           </button>
         ))}
         {explorer.searchResults.limited ? <div className="session-resource-state">{t('navigation.search.limitReached')}</div> : null}
-        {explorer.searchResults.workspaces.some((workspace) => workspace.status === "stale" || workspace.status === "unavailable") ? (
+        {explorer.searchResults.workspaces.some((workspace) => workspace.status === "stale" || workspace.status === "unavailable"
+          || workspace.limited || (workspace.branch?.diagnostics?.length ?? 0) > 0) ? (
           <details className="session-resource-offline-summary">
-            <summary>{t('navigation.search.offlineSummary')}</summary>
-            {explorer.searchResults.workspaces.filter((workspace) => workspace.status === "stale" || workspace.status === "unavailable").map((workspace) => <div key={workspace.workspace_id}>{t('navigation.search.workspaceStatus', workspace.workspace_name, t(workspace.status === "stale" ? 'navigation.search.cached' : 'navigation.search.unsearchable'), workspace.error)}{workspace.source?.updated_at ? t('navigation.search.catalogUpdated', workspace.source.updated_at) : ""}</div>)}
+            <summary>{t('navigation.search.diagnosticSummary')}</summary>
+            {explorer.searchResults.workspaces.filter((workspace) => workspace.status === "stale" || workspace.status === "unavailable"
+              || workspace.limited || (workspace.branch?.diagnostics?.length ?? 0) > 0)
+              .map((workspace) => <div key={workspace.workspace_id}>
+                {t('navigation.search.workspaceStatus', workspace.workspace_name, t(workspace.status === "stale" ? 'navigation.search.cached'
+                  : workspace.status === "unavailable" ? 'navigation.search.unsearchable' : 'navigation.search.available'), workspace.error ?? "")}
+                {workspace.limited ? ` · ${t('navigation.search.limitReached')}` : ""}
+                {workspace.source?.updated_at ? t('navigation.search.catalogUpdated', workspace.source.updated_at) : ""}
+                {workspace.branch ? <div className="session-resource-search-diagnostic">
+                  <div>{[`state: ${workspace.branch.state}`, workspace.branch.code && `code: ${workspace.branch.code}`,
+                    workspace.branch.message && `message: ${workspace.branch.message}`,
+                    workspace.branch.provider_id && `provider_id: ${workspace.branch.provider_id}`,
+                    workspace.branch.error_owner && `error_owner: ${workspace.branch.error_owner}`,
+                    workspace.branch.reason && `reason: ${workspace.branch.reason}`,
+                    workspace.branch.http_status !== undefined && `http_status: ${workspace.branch.http_status}`,
+                    `retryable: ${workspace.branch.retryable}`,
+                    workspace.branch.cursor && `cursor: ${workspace.branch.cursor}`,
+                    `allocated_results: ${workspace.branch.allocated_results}`,
+                    `returned_results: ${workspace.branch.returned_results}`,
+                    workspace.request_id && `request_id: ${workspace.request_id}`]
+                    .filter(Boolean).join(' · ')}</div>
+                  {(workspace.branch.diagnostics ?? []).map((notice, index) => <div key={`${notice.owner}:${notice.code}:${index}`}>
+                    {`${notice.severity}: ${notice.message} · code: ${notice.code} · owner: ${notice.owner}`}
+                  </div>)}
+                </div> : null}
+              </div>)}
           </details>
         ) : null}
       </section>

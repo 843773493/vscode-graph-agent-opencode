@@ -1,6 +1,8 @@
 import { t } from '../../../shared/core/i18n/index.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
+import { ThemeIcon } from '../../upstream/src/vs/base/common/themables.js';
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { ServiceCollection } from '../../upstream/src/vs/platform/instantiation/common/serviceCollection.js';
@@ -8,18 +10,30 @@ import { DefaultQuickAccessFilterValue, IQuickAccessProvider, IQuickAccessProvid
 import { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspace/common/workspace.js';
 import { TextSearchQuickAccess } from '../../upstream/src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { TextSearchCompleteMessageType } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 import { SearchWorkspaceContext } from './scope.js';
 import { captureSearchOwner, loadSearchScope, type SearchInvocationOptions } from './target.js';
 
+// TODO：沿原分支 cause 区分远端取消及单分支重试；普通信息／警告已交同次完成结果展示。
 function searchFailure(error: unknown) { return [{ label: t('quickAccess.files.failed', error instanceof Error ? error.message : String(error)) }]; }
 
 /** 原版 Provider 负责搜索；业务拒绝留在当前浮层，不把异步失败变成无匹配。 */
 class ScopedTextSearch extends TextSearchQuickAccess {
   protected override async _getPicks(pattern: string, disposables: DisposableStore, token: CancellationToken) {
     try {
-      const picks = await super._getPicks(pattern, disposables, token);
+      const pendingPicks = super._getPicks(pattern, disposables, token);
+      const completion = this.currentAsyncSearch;
+      const picks = await pendingPicks;
       if (picks && !Array.isArray(picks) && 'additionalPicks' in picks) {
-        return { ...picks, additionalPicks: picks.additionalPicks.catch(error => token.isCancellationRequested ? [] : searchFailure(error)) };
+        return { ...picks, additionalPicks: Promise.all([picks.additionalPicks, completion]).then(([additional, complete]) => {
+          if (token.isCancellationRequested) return [];
+          const notices = complete.messages.map(message => ({ label: message.text,
+            iconClass: ThemeIcon.asClassName(message.type === TextSearchCompleteMessageType.Information ? Codicon.info : Codicon.warning) }));
+          if (complete.limitHit) notices.push({ label: t('quickAccess.queryLimited', t('quickAccess.moreResults')),
+            iconClass: ThemeIcon.asClassName(Codicon.warning) });
+          // 沿原 Picker 的数组／active 形状追加纯文本提示，接受提示不执行动作。
+          return 'items' in additional ? { ...additional, items: [...additional.items, ...notices] } : [...additional, ...notices];
+        }).catch(error => token.isCancellationRequested ? [] : searchFailure(error)) };
       }
       return picks ?? [];
     } catch (error) { return token.isCancellationRequested ? [] : searchFailure(error); }

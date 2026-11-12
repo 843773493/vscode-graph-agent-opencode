@@ -74,3 +74,21 @@ async def test_missing_identity_and_inconsistent_regex_never_dispatch(service) -
         await search.search(request.model_copy(update={"operation": "content", "match_mode": "regex"}), gateway_id=GATEWAY)
     assert failure.value.code == "unsupported_option"
     query.assert_not_called()
+
+
+async def test_clipped_preview_and_context_are_not_query_truncation(service) -> None:
+    search, query = service
+    query.return_value = ResourceNavigationResultDTO.model_validate({
+        "node": {"uri": ROOT, "resource_shape": "directory", "operations": ["search"]},
+        "matches": [{"uri": ROOT + "/large.txt", "line": 2, "column": 1, "text": "needle",
+                     "snippet_start_column": 1, "truncated": True}],
+        "contexts": [{"uri": ROOT + "/large.txt", "line": 1, "text": "context", "truncated": True}],
+    })
+    result = await search.search(WorkspaceSearchRequest(
+        workspace_id="ws", category="file", operation="content", match_mode="literal", query="needle",
+    ), gateway_id=GATEWAY)
+    assert result.state == "complete" and result.cursor is None and result.result_count == 1
+    assert [(item.severity, item.code, item.owner) for item in result.diagnostics] == [
+        ("info", "match_preview_truncated", "workspace_files"),
+        ("warning", "context_line_truncated", "workspace_files"),
+    ]

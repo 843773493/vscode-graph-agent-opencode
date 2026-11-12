@@ -1093,3 +1093,13 @@ Gateway 地址及路由短验 25 passed、公开结构 96 passed、认证与顺�
 
 - 原上下文 owner 对无法容纳最小命中身份的字符预算给出 `context_search_budget_too_small`／`minimum_result_exceeds_budget`；精确、统一、relay 与 Agent 工具沿原错误出口保留归属和 request_id。统一搜索移除将任意 ValueError 伪装为可重试409的兜底。
 - 457项定向检查、Ruff通过；13文件Pyright与冻结de1de56ab基线均20诊断，无新增。真实双Backend／Gateway通过产品创建Session，精确及统一API预算拒绝和双owner SSE均通过；完整测试随后停在既有缺失目录断言（预期unknown_resource，原owner自43cdedfcce已返回file_not_found），后续阶段未验。本片不据此完成16.18。命令、源码指纹、原件和退出码：`out/tests/temp/2026/11/12/context_search_budget/artifacts/verification.json`。
+
+### 2026-11-12：普通搜索信息／警告与原界面诊断（16.18 部分）
+
+- 唯一 `SearchDiagnosticDTO` 在工作区结果及联邦分支复用，信息／警告保留severity、code、原owner和原文，沿同次page、分支终态及summary传递；命中预览与上下文裁剪不冒充查询失败或扫描受限。显式离线目录镜像提供原不可达原因、更新时间及stale警告，不新增事件类型、诊断数据库或第二查询状态。
+- 原文件Provider将诊断交原 `ISearchComplete.messages`，不授予命令链接权限；`%` 消费同一次原搜索完成Promise并追加普通文本提示及原受限状态，不另查一次。Quick Access保留流前HTTP原detail、状态及request_id；React目录搜索保留完整原分支并在原摘要显示错误、受限和普通诊断，省略空diagnostics的混合分支仍可展示。删除迁齐后的旧提示及无调用翻译key。
+- 后端／协议定向86项、文件SearchService合同32项／599断言通过；目录客户端／组件30项及最终混合分支组件28项通过，批次有重叠不累加。182份实际转换源码类型检查、最终Web真实类型检查、79扩展正式构建、Ruff、协议生成一致性和以a60cc7256为基线的breaking检查通过。真实双Backend／Gateway完整场景1 passed／48.01秒，保留分页、重启续页、fork、原错误归属及单分支重试断言。
+- 最终正式资产真实Web场景 `run-2875c2ebe401`，1 passed／23.12秒：通过三个初始化API并核request_id，产品入口创建Session，原Settings Editor保存配额；`%`显示info及受限warning，Search Editor显示info／warning，两次搜索各发一次请求，pageErrors为空且零模型调用。首次驱动误序列化原编辑器对象的失败原件保留，修正为等待命令完成但不跨页面返回编辑器对象；不放宽业务断言。
+- 原文本完整产品恢复场景另复用同一i18n冻结资产，1 passed／144.01秒；证明真实files/references 404提前拒绝、原B身份、零搜索分发、搬迁后同UUID重跑及重载恢复。182路径按文本锚点／AST／整文件生成的实际机制核LF／CRLF及精确拒绝，不修改固定上游。该旧资产验收不冒充新诊断证明。
+- 首次真实后端场景暴露装具缺Terminal绑定，后续插件准备又暴露独立Backend配置误投默认Gateway；现复用一次预备的不可变包，并将配置及运行时交接指向同一隔离Gateway，fork仍经产品入口生成。命令、源码指纹、原始失败／通过输出、资产摘要和最小实现复审见 `out/tests/temp/2026/11/12/search_diagnostic_notices/artifacts/verification.json`；恢复及转换完整证据见 `out/tests/temp/2026/11/12/quick_access_search_closure/artifacts/verification-12.json`。
+- `%`的远端取消及单分支重试展示仍有具名代码TODO；本片未完成16.18全部消费者及组合，也未证明Electron搜索恢复、Windows、跨机器或run10偶发问题根因。16.18及相关宽任务保持未勾选。仅本地提交，不同步、push或重启dev。

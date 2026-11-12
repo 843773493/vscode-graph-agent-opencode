@@ -19,6 +19,7 @@ from app.schemas.gateway.search import (
     GatewaySearchScopeResolutionDTO,
 )
 from app.schemas.internal_v2.search import (
+    SearchDiagnosticDTO,
     WorkspaceFileSearchTargetDTO,
     WorkspaceSearchRequest,
     WorkspaceSearchResultDTO,
@@ -162,11 +163,13 @@ async def search_events(
         code: str | None = None, message: str | None = None, retryable: bool = False,
         provider_id: str | None = None, cursor: str | None = None, returned_results: int = 0,
         error_owner: str | None = None, reason: str | None = None, http_status: int | None = None,
+        diagnostics: tuple[SearchDiagnosticDTO, ...] = (),
     ) -> FederatedSearchBranchDTO:
         return FederatedSearchBranchDTO(
             branch=job.key, allocated_results=job.request.limit, state=state, code=code, message=message,
             retryable=retryable, provider_id=provider_id, cursor=cursor, returned_results=returned_results,
             error_owner=error_owner, reason=reason, http_status=http_status,
+            diagnostics=diagnostics,
         )
 
     def terminal(index: int) -> FederatedSearchEventDTO:
@@ -295,7 +298,8 @@ async def search_events(
                 else:
                     statuses[index] = status(job, state=page.state, provider_id=page.provider_id,
                                              code=page.limited_reason, cursor=page.cursor,
-                                             returned_results=count)
+                                             returned_results=count,
+                                             diagnostics=page.diagnostics if isinstance(page, WorkspaceSearchResultDTO) else ())
                     event = FederatedSearchEventDTO(sequence=sequence + 1, request_id=request_id, type="page", branch=statuses[index],
                         page=page if isinstance(page, WorkspaceSearchResultDTO) else None,
                         diagnostic_logs=page if isinstance(page, GatewayDiagnosticLogQueryResultDTO) else None, source=reply.source)

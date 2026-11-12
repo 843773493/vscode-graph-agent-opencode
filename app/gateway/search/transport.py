@@ -19,6 +19,7 @@ from app.gateway.search.scheduler import SearchBranchError, SearchJob, SearchPag
 from app.schemas.gateway.diagnostics import GatewayDiagnosticLogQueryRequest
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.search import (
+    SearchDiagnosticDTO,
     WorkspaceSearchRequest,
     WorkspaceSearchResultDTO,
 )
@@ -86,6 +87,10 @@ class SearchTransport:
             category="catalog", operation="name", contract_version=1,
             state="limited" if page.cursor else "complete", limited_reason="result_limit" if page.cursor else None,
             catalog=page,
+            diagnostics=(SearchDiagnosticDTO(
+                severity="warning", code="stale_catalog_mirror", owner="gateway_catalog_mirror",
+                message=f"目标不可达，本次使用已登记目录镜像，更新时间 {updated_at.isoformat()}；{unavailable}",
+            ),),
         )
         # 镜像没有网络接收边界，在此限制完整领域页，不截断后推进原 cursor。
         if len(result.model_dump_json().encode()) > job.max_bytes:

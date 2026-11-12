@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.schemas.internal_v2.search import (
+    SearchDiagnosticDTO,
     SearchProviderCapabilityDTO,
     WorkspaceFileSearchTargetDTO,
     WorkspaceSearchRequest,
@@ -57,10 +58,22 @@ def register_file_search(service: WorkspaceSearchService, navigation: ResourceNa
                 reason = "byte_limit"
             else:
                 raise SearchContractError("invalid_response", "文件搜索缺少可识别的受限原因")
+        diagnostics: list[SearchDiagnosticDTO] = []
+        if any(hit.truncated for hit in page.matches):
+            diagnostics.append(SearchDiagnosticDTO(
+                severity="info", code="match_preview_truncated", owner="workspace_files",
+                message="部分命中预览已截短；完整内容仍由原文件读取入口提供",
+            ))
+        if any(line.truncated for line in page.contexts):
+            diagnostics.append(SearchDiagnosticDTO(
+                severity="warning", code="context_line_truncated", owner="workspace_files",
+                message="部分搜索上下文行已截短；结果中的 URI 和行号仍指向原文件",
+            ))
         return WorkspaceSearchResultDTO(
             provider_id=f"workspace-files-{request.operation}", workspace_id=service.workspace_id, category="file", operation=request.operation,
             contract_version=1, state="limited" if page.truncated else "complete",
             limited_reason=reason, files=page,
+            diagnostics=tuple(diagnostics),
         )
 
     for operation, modes in (("name", ("path", "fuzzy", "glob")), ("content", ("literal", "regex"))):

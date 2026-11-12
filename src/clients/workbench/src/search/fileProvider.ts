@@ -153,6 +153,11 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           if (!plan) throw new Error(t('quickAccess.files.unexpectedRoot'));
           const { owner, folder, target, exact } = plan;
           if (event.type === 'branch') {
+            for (const notice of event.branch.diagnostics ?? []) messages.push({
+              type: notice.severity === 'info' ? TextSearchCompleteMessageType.Information : TextSearchCompleteMessageType.Warning,
+              text: `${notice.message} · code: ${notice.code} · owner: ${notice.owner} · request_id: ${event.request_id}`,
+              trusted: false,
+            });
             const diagnostic = [event.branch.code && `code: ${event.branch.code}`, event.branch.message,
               event.branch.error_owner && `error_owner: ${event.branch.error_owner}`, event.branch.reason && `reason: ${event.branch.reason}`,
               event.branch.http_status !== undefined && `http_status: ${event.branch.http_status}`, `request_id: ${event.request_id}`].filter(Boolean).join(' · ');
@@ -229,7 +234,6 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
             const context = { lineNumber: line.line, text: line.text + (line.truncated ? '…' : '') };
             file.results!.push(context);
             onProgress?.({ resource: file.resource, results: [context] });
-            if (line.truncated) messages.push({ type: TextSearchCompleteMessageType.Warning, text: t('quickAccess.files.contextTruncated', line.uri, line.line) });
           }
         }
       }

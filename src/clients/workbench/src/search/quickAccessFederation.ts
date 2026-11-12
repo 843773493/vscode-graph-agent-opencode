@@ -20,6 +20,25 @@ import { workspaceFileUri } from '../workspaceFiles.js';
 import type { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { formatNumber, t } from '../../../shared/core/i18n/index.js';
 
+function httpFailureDetail(error: HttpRequestError): string {
+  const fields: string[] = [];
+  const detail = error.detail;
+  if (typeof detail === 'string') {
+    fields.push(`detail: ${detail}`);
+  } else if (detail && typeof detail === 'object') {
+    const values = !Array.isArray(detail) ? detail as Record<string, unknown> : undefined;
+    for (const key of ['code', 'owner', 'reason']) {
+      const value = values?.[key];
+      if (typeof value === 'string') fields.push(`${key}: ${value}`);
+    }
+    const serialized = JSON.stringify(detail);
+    if (serialized) fields.push(`detail: ${serialized}`);
+  }
+  fields.push(`http_status: ${error.status}`);
+  if (error.requestId) fields.push(`request_id: ${error.requestId}`);
+  return fields.join(' · ');
+}
+
 interface SearchBranch<Category extends SearchCategory = SearchCategory> {
   contextOwner: WorkspaceOwner;
   diagnostics?: FederatedDiagnosticLogTargetDTO;
@@ -132,6 +151,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
       detail: [branch.diagnosticSummary ?? t('quickAccess.readCount', formatNumber(branch.picks.length)),
         !failed && !cancelled && state.message, state.code && `code: ${state.code}`,
         state.error_owner && `error_owner: ${state.error_owner}`, state.reason && `reason: ${state.reason}`,
+        ...(state.diagnostics ?? []).map(notice => `${notice.severity}: ${notice.message} · code: ${notice.code} · owner: ${notice.owner}`),
         state.http_status !== undefined && `http_status: ${state.http_status}`, `request_id: ${requestId}`].filter(Boolean).join(' · '),
       ...((continuation || ((failed || cancelled) && state.retryable)) ? { buttons: [continuation ? moreButton : retryButton],
         trigger: async () => { await run([branch], continuation ? state.cursor : undefined); return TriggerAction.NO_ACTION; } } : {}) };
@@ -169,7 +189,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
           } catch (error) {
             settled.add(branch); branch.pending = false;
             branch.status = { id: `status-${branch.key}`, label: `${branch.label} · ${t('quickAccess.queryFailed', error instanceof Error ? error.message : String(error))}`,
-              detail: error instanceof HttpRequestError && error.requestId ? `request_id: ${error.requestId}` : undefined,
+              detail: error instanceof HttpRequestError ? httpFailureDetail(error) : undefined,
               buttons: [retryButton], trigger: async () => { await run([branch]); return TriggerAction.NO_ACTION; } };
           }
         });
@@ -240,7 +260,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
         const message = error instanceof Error ? error.message : String(error);
         const failureId = error instanceof HttpRequestError || error instanceof IncompleteSearchStreamError || error instanceof SearchStreamReadError ? error.requestId : requestId;
         branch.status = { id: `status-${branch.key}`, label: `${branch.label} · ${t('quickAccess.queryFailed', error instanceof DOMException && error.name === 'TimeoutError' ? t('quickAccess.timeoutTarget') : message)}`,
-          detail: failureId ? `request_id: ${failureId}` : undefined,
+          detail: error instanceof HttpRequestError ? httpFailureDetail(error) : failureId ? `request_id: ${failureId}` : undefined,
           buttons: [retryButton], trigger: async () => { await run(scope ? [branch] : branches); return TriggerAction.NO_ACTION; } };
       }
     } finally {

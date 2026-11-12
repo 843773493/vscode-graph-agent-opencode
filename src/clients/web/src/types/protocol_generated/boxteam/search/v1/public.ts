@@ -14,6 +14,7 @@ import {
 } from "../../gateway/v2/public.js";
 import {
   ContextGrantTarget,
+  SearchDiagnosticDTO,
   WorkspaceContextSearchOptionsDTO,
   WorkspaceFileSearchTargetDTO,
   WorkspaceSearchResultDTO,
@@ -86,6 +87,7 @@ export interface FederatedSearchBranchDTO {
     | undefined;
   /** 仅真实 HTTP 拒绝携带；本地调度、取消或网络失败不伪造状态码。 */
   http_status?: number | undefined;
+  diagnostics: SearchDiagnosticDTO[];
 }
 
 export interface FederatedSearchSummaryDTO {
@@ -455,6 +457,7 @@ function createBaseFederatedSearchBranchDTO(): FederatedSearchBranchDTO {
     error_owner: undefined,
     reason: undefined,
     http_status: undefined,
+    diagnostics: [],
   };
 }
 
@@ -473,6 +476,9 @@ export const FederatedSearchBranchDTO: MessageFns<FederatedSearchBranchDTO> = {
       error_owner: isSet(object.error_owner) ? globalThis.String(object.error_owner) : undefined,
       reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
       http_status: isSet(object.http_status) ? globalThis.Number(object.http_status) : undefined,
+      diagnostics: globalThis.Array.isArray(object?.diagnostics)
+        ? object.diagnostics.map((e: any) => SearchDiagnosticDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -514,6 +520,9 @@ export const FederatedSearchBranchDTO: MessageFns<FederatedSearchBranchDTO> = {
     if (message.http_status !== undefined) {
       obj.http_status = Math.round(message.http_status);
     }
+    if (message.diagnostics?.length) {
+      obj.diagnostics = message.diagnostics.map((e) => SearchDiagnosticDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -536,6 +545,7 @@ export const FederatedSearchBranchDTO: MessageFns<FederatedSearchBranchDTO> = {
     message.error_owner = object.error_owner ?? undefined;
     message.reason = object.reason ?? undefined;
     message.http_status = object.http_status ?? undefined;
+    message.diagnostics = object.diagnostics?.map((e) => SearchDiagnosticDTO.fromPartial(e)) || [];
     return message;
   },
 };

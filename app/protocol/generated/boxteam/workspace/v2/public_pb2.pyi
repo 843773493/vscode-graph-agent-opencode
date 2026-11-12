@@ -589,8 +589,20 @@ class WorkspaceSearchRequest(_message.Message):
     context: WorkspaceContextSearchOptionsDTO
     def __init__(self, workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., query: _Optional[str] = ..., match_mode: _Optional[str] = ..., limit: _Optional[int] = ..., cursor: _Optional[str] = ..., deadline_at: _Optional[float] = ..., file: _Optional[_Union[WorkspaceFileSearchTargetDTO, _Mapping]] = ..., context: _Optional[_Union[WorkspaceContextSearchOptionsDTO, _Mapping]] = ...) -> None: ...
 
+class SearchDiagnosticDTO(_message.Message):
+    __slots__ = ("severity", "code", "owner", "message")
+    SEVERITY_FIELD_NUMBER: _ClassVar[int]
+    CODE_FIELD_NUMBER: _ClassVar[int]
+    OWNER_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    severity: str
+    code: str
+    owner: str
+    message: str
+    def __init__(self, severity: _Optional[str] = ..., code: _Optional[str] = ..., owner: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
+
 class WorkspaceSearchResultDTO(_message.Message):
-    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads", "messages", "llm_requests", "files", "context", "traces")
+    __slots__ = ("provider_id", "workspace_id", "category", "operation", "contract_version", "state", "limited_reason", "catalog", "threads", "messages", "llm_requests", "files", "context", "traces", "diagnostics")
     PROVIDER_ID_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
@@ -605,6 +617,7 @@ class WorkspaceSearchResultDTO(_message.Message):
     FILES_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_FIELD_NUMBER: _ClassVar[int]
     TRACES_FIELD_NUMBER: _ClassVar[int]
+    DIAGNOSTICS_FIELD_NUMBER: _ClassVar[int]
     provider_id: str
     workspace_id: str
     category: str
@@ -619,7 +632,8 @@ class WorkspaceSearchResultDTO(_message.Message):
     files: ResourceNavigationResultDTO
     context: SessionContextSearchResultDTO
     traces: WorkspaceTraceSearchResultsDTO
-    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ..., messages: _Optional[_Union[WorkspaceMessageSearchResultsDTO, _Mapping]] = ..., llm_requests: _Optional[_Union[WorkspaceLLMRequestLogSearchResultsDTO, _Mapping]] = ..., files: _Optional[_Union[ResourceNavigationResultDTO, _Mapping]] = ..., context: _Optional[_Union[SessionContextSearchResultDTO, _Mapping]] = ..., traces: _Optional[_Union[WorkspaceTraceSearchResultsDTO, _Mapping]] = ...) -> None: ...
+    diagnostics: _containers.RepeatedCompositeFieldContainer[SearchDiagnosticDTO]
+    def __init__(self, provider_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., category: _Optional[str] = ..., operation: _Optional[str] = ..., contract_version: _Optional[int] = ..., state: _Optional[str] = ..., limited_reason: _Optional[str] = ..., catalog: _Optional[_Union[SessionCatalogSearchResultsDTO, _Mapping]] = ..., threads: _Optional[_Union[SessionThreadSearchResultsDTO, _Mapping]] = ..., messages: _Optional[_Union[WorkspaceMessageSearchResultsDTO, _Mapping]] = ..., llm_requests: _Optional[_Union[WorkspaceLLMRequestLogSearchResultsDTO, _Mapping]] = ..., files: _Optional[_Union[ResourceNavigationResultDTO, _Mapping]] = ..., context: _Optional[_Union[SessionContextSearchResultDTO, _Mapping]] = ..., traces: _Optional[_Union[WorkspaceTraceSearchResultsDTO, _Mapping]] = ..., diagnostics: _Optional[_Iterable[_Union[SearchDiagnosticDTO, _Mapping]]] = ...) -> None: ...
 
 class SessionThreadSearchResultDTO(_message.Message):
     __slots__ = ("workspace_id", "session_id", "thread_id", "thread_uri", "kind", "title", "session_title", "created_at")

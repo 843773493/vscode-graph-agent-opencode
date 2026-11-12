@@ -342,6 +342,14 @@ message WorkspaceSearchRequest {
   optional WorkspaceContextSearchOptionsDTO context = 11;
 }
 
+// 普通信息和警告不改变查询完成状态；文本不授予链接或命令执行权限。
+message SearchDiagnosticDTO {
+  string severity = 1;
+  string code = 2;
+  string owner = 3;
+  string message = 4;
+}
+
 message WorkspaceSearchResultDTO {
   string provider_id = 1;
   string workspace_id = 2;
@@ -357,6 +365,7 @@ message WorkspaceSearchResultDTO {
   ResourceNavigationResultDTO files = 12;
   optional SessionContextSearchResultDTO context = 13;
   WorkspaceTraceSearchResultsDTO traces = 14;
+  repeated SearchDiagnosticDTO diagnostics = 15;
 }
 
 message SessionThreadSearchResultDTO {

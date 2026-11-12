@@ -66,3 +66,40 @@ test("目录命中按完整 owner 解析目标，明确失败不改投活动目�
   await expect(resolveCatalogSearchTarget(49_362, owners[1])).rejects.toThrow(/404/);
   expect(calls).toBe(2);
 });
+
+test("目录搜索保留分支机器诊断、原 request_id 和具名 notices", async () => {
+  let output!: ReadableStreamDefaultController<Uint8Array>, sequence = 0;
+  const send = (type: string, payload: Record<string, unknown>) => {
+    const event = FederatedSearchEventDTO.create({ type, sequence: ++sequence, request_id: "diagnostic-request", ...payload });
+    output.enqueue(new TextEncoder().encode(`id: ${sequence}\nevent: search\ndata: ${JSON.stringify(event)}\n\n`));
+  };
+  installSessionApiFetchMock(({ path }) => {
+    if (path === "/api/gateway/search/workspaces") return Response.json({ code: 0, request_id: "discovery", data: {
+      gateway_id: "gateway", query: "needle", resolved_at: scope.resolved_at, source: "registry", items: [], folders: [], complete: true,
+    } });
+    expect(path).toBe("/api/gateway/search");
+    return new Response(new ReadableStream<Uint8Array>({ start(controller) { output = controller; } }),
+      { headers: { "Content-Type": "text/event-stream", "X-Request-ID": "diagnostic-request" } });
+  });
+  const views: CatalogSearchView[] = [];
+  const running = searchCatalogView(49_363, "needle", null, new AbortController().signal, view => views.push(structuredClone(view)));
+  for (let count = 0; !output && count < 100; count++) await Bun.sleep(1);
+  const key = { owner: owners[0], category: "catalog", operation: "name" };
+  send("scope", { scope: { scope, branches: owners.map(owner => ({ owner, state: "registered" })) } });
+  const notice = { severity: "warning", code: "stale_catalog_mirror", owner: "gateway_catalog_mirror",
+    message: "缓存目录提示 [执行](command:workbench.action.danger)" };
+  const failed = { branch: key, state: "failed", code: "owner_unavailable", message: "目标已移除",
+    retryable: true, allocated_results: 50, returned_results: 0, error_owner: "search_transport", reason: "route_removed",
+    http_status: 503, diagnostics: [notice] };
+  const completed = { branch: { owner: owners[1], category: "catalog", operation: "name" }, state: "complete",
+    retryable: false, allocated_results: 50, returned_results: 0 };
+  send("branch", { branch: failed });
+  send("branch", { branch: completed });
+  send("end", { summary: { state: "incomplete", order: "category-scope-owner-v1", returned_results: 0, branches: [failed, completed] } });
+  output.close();
+  await running;
+  expect(views.at(-1)?.workspaces[0]).toMatchObject({
+    status: "unavailable", error: "目标已移除", request_id: "diagnostic-request", branch: failed,
+  });
+  expect(views.at(-1)?.workspaces[0].branch?.diagnostics).toEqual([notice]);
+});

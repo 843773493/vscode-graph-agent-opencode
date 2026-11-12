@@ -1488,6 +1488,39 @@ export declare type WorkspaceSearchRequest = Message<"boxteam.workspace.v2.Works
 export declare const WorkspaceSearchRequestSchema: GenMessage<WorkspaceSearchRequest>;
 
 /**
+ * 普通信息和警告不改变查询完成状态；文本不授予链接或命令执行权限。
+ *
+ * @generated from message boxteam.workspace.v2.SearchDiagnosticDTO
+ */
+export declare type SearchDiagnosticDTO = Message<"boxteam.workspace.v2.SearchDiagnosticDTO"> & {
+  /**
+   * @generated from field: string severity = 1;
+   */
+  severity: string;
+
+  /**
+   * @generated from field: string code = 2;
+   */
+  code: string;
+
+  /**
+   * @generated from field: string owner = 3;
+   */
+  owner: string;
+
+  /**
+   * @generated from field: string message = 4;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.SearchDiagnosticDTO.
+ * Use `create(SearchDiagnosticDTOSchema)` to create a new message.
+ */
+export declare const SearchDiagnosticDTOSchema: GenMessage<SearchDiagnosticDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.WorkspaceSearchResultDTO
  */
 export declare type WorkspaceSearchResultDTO = Message<"boxteam.workspace.v2.WorkspaceSearchResultDTO"> & {
@@ -1560,6 +1593,11 @@ export declare type WorkspaceSearchResultDTO = Message<"boxteam.workspace.v2.Wor
    * @generated from field: boxteam.workspace.v2.WorkspaceTraceSearchResultsDTO traces = 14;
    */
   traces?: WorkspaceTraceSearchResultsDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.SearchDiagnosticDTO diagnostics = 15;
+   */
+  diagnostics: SearchDiagnosticDTO[];
 };
 
 /**

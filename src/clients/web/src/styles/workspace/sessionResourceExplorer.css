@@ -389,3 +389,9 @@
 .session-resource-offline-summary {
   margin: 8px 12px;
 }
+
+.session-resource-search-diagnostic {
+  margin: 4px 0 8px 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

@@ -124,27 +124,45 @@ export async function verifySearchRecovery({ page, command, api, result, fileUri
   expect(replacement.workspace_id).toEqual(expect.any(String));
   expect(replacement.workspace_id).not.toBe(ownerB.workspaceId);
   const beforeMissing = result.searches.length;
-  // 只在出站边界观察：失效 owner 应在分发前被拒绝，不能查询复用原路径的 C。
+  const previousResults = await lines(b).allTextContents();
+  const admissions = [];
+  const observeAdmission = request => {
+    if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/v1/workspace/files/references') return;
+    const headers = request.headers();
+    admissions.push({ gatewayId: headers['x-boxteam-target-gateway-id'], workspaceId: headers['x-boxteam-workspace-id'],
+      paths: request.postDataJSON().paths });
+  };
+  // 文件引用先准入原 owner；失效时不得再分发搜索或改投复用原路径的 C。
   await searchFault(page, 'quickscope', 'fail', ['file']);
-  const rejectedResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/search'
-    && response.request().postDataJSON()?.queries.some(query => query.category === 'file' && query.query === 'quickscope'));
-  await input(b).fill('quickscope');
-  await input(b).press('Enter');
-  const rejected = await rejectedResponse;
-  expect(rejected.status()).toBe(404);
-  const error = await rejected.json(), message = `工作区归属未登记或已移除: ${ownerB.gatewayId}/${ownerB.workspaceId}`;
-  expect(error.detail.code).toBe('owner_unavailable');
-  expect(error.detail.message).toBe(message);
-  expect(error.request_id).toBeTruthy();
-  expect(error.request_id).toBe(rejected.headers()['x-request-id']);
-  await expect(page.locator('.notifications-toasts')).toContainText(message);
-  const missingRequests = result.searches.slice(beforeMissing);
-  expect(missingRequests.length).toBeGreaterThan(0);
-  expect(missingRequests.every(request => request.workspaceId === ownerB.workspaceId && request.gatewayId === ownerB.gatewayId && request.uri === ownerB.root)).toBe(true);
-  expect((await searchFault(page, 'quickscope')).reads).toEqual([]);
-  await searchFault(page, 'quickscope', 'release');
-  result.editorRejectedOwner = { gatewayId: ownerB.gatewayId, workspaceId: ownerB.workspaceId,
-    status: rejected.status(), requestId: error.request_id, dispatched: 0 };
+  page.on('request', observeAdmission);
+  try {
+    const rejectedResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/workspace/files/references'
+      && response.request().headers()['x-boxteam-workspace-id'] === ownerB.workspaceId);
+    await input(b).fill('quickscope');
+    await input(b).press('Enter');
+    const rejected = await rejectedResponse;
+    expect(rejected.status()).toBe(404);
+    const error = await rejected.json(), message = 'Gateway 工作区不存在: stage=gateway-workspace-resolve, error=LookupError';
+    expect(error.detail).toBe(message);
+    expect(error.request_id).toBeTruthy();
+    expect(error.request_id).toBe(rejected.headers()['x-request-id']);
+    await expect(page.locator('.notifications-toasts')).toContainText(`请求失败 404 Not Found: ${message}`);
+    expect(admissions.length).toBeGreaterThan(0);
+    expect(admissions.every(request => request.gatewayId === ownerB.gatewayId && request.workspaceId === ownerB.workspaceId
+      && request.paths.every(path => path.startsWith(ownerB.root + '/')))).toBe(true);
+    expect(admissions.flatMap(request => request.paths)).toContain(ownerB.root + '/quick-scope.txt');
+    expect((await searchFault(page, 'quickscope')).reads).toEqual([]);
+    expect(result.searches.slice(beforeMissing)).toEqual([]);
+    await expect(b.locator('.boxteam-search-scope')).toContainText('搜索隔离 B');
+    await expect(input(b)).toHaveValue('quickscope');
+    expect(await lines(b).allTextContents()).toEqual(previousResults);
+    result.editorRejectedOwner = { gatewayId: ownerB.gatewayId, workspaceId: ownerB.workspaceId,
+      admissionPath: new URL(rejected.url()).pathname, admissions, detail: error.detail,
+      status: rejected.status(), requestId: error.request_id, dispatched: 0 };
+  } finally {
+    page.off('request', observeAdmission);
+    await searchFault(page, 'quickscope', 'release');
+  }
 
   result.phase = 'stable-owner-resolves-relocated-root';
   await api('/api/gateway/managed-workspaces', { method: 'POST',

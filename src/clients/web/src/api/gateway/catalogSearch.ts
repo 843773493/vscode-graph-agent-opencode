@@ -1,7 +1,7 @@
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../workspaceIdentity";
 import type { APIResponse, WorkspaceNavigationTree } from "../../types/backend";
 import type { GatewaySearchScopeResolutionDTO, GatewaySearchWorkspaceOwnerDTO, GatewayWorkspaceDiscoveryResultsDTO } from "../../types/protocol_generated/boxteam/gateway/v2/public";
-import type { FederatedSearchSourceDTO } from "../../types/protocol_generated/boxteam/search/v1/public";
+import type { FederatedSearchBranchDTO, FederatedSearchSourceDTO } from "../../types/protocol_generated/boxteam/search/v1/public";
 import { requestJson, unwrapApiData } from "../http";
 import { searchBranchKey, streamFederatedSearch } from "../stream/federatedSearch";
 
@@ -21,7 +21,7 @@ export interface CatalogSearchItem {
 export interface CatalogSearchView {
   items: CatalogSearchItem[];
   workspaces: { workspace_id: string; workspace_name: string; status: string; error?: string;
-    source?: FederatedSearchSourceDTO; limited: boolean }[];
+    source?: FederatedSearchSourceDTO; branch?: FederatedSearchBranchDTO; request_id?: string; limited: boolean }[];
   limited: boolean;
 }
 
@@ -103,6 +103,8 @@ export async function searchCatalogView(port: number, query: string, navigation:
             : branch.source?.stale ? "stale" : "available";
           branch.error = event.branch.message ?? branch.source?.unavailable_reason;
           branch.limited = event.branch.state === "limited";
+          branch.branch = event.branch;
+          branch.request_id = event.request_id;
         }
       }
       update();

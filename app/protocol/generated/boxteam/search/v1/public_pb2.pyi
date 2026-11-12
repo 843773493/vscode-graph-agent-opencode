@@ -85,7 +85,7 @@ class FederatedSearchRequest(_message.Message):
     def __init__(self, scope: _Optional[_Union[_public_pb2.GatewaySearchScopeRequest, _Mapping]] = ..., queries: _Optional[_Iterable[_Union[FederatedSearchQueryDTO, _Mapping]]] = ..., continuations: _Optional[_Iterable[_Union[FederatedSearchContinuationDTO, _Mapping]]] = ..., max_results: _Optional[int] = ..., deadline_at: _Optional[float] = ...) -> None: ...
 
 class FederatedSearchBranchDTO(_message.Message):
-    __slots__ = ("branch", "state", "provider_id", "code", "message", "retryable", "cursor", "allocated_results", "returned_results", "error_owner", "reason", "http_status")
+    __slots__ = ("branch", "state", "provider_id", "code", "message", "retryable", "cursor", "allocated_results", "returned_results", "error_owner", "reason", "http_status", "diagnostics")
     BRANCH_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
     PROVIDER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -98,6 +98,7 @@ class FederatedSearchBranchDTO(_message.Message):
     ERROR_OWNER_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
     HTTP_STATUS_FIELD_NUMBER: _ClassVar[int]
+    DIAGNOSTICS_FIELD_NUMBER: _ClassVar[int]
     branch: FederatedSearchBranchKeyDTO
     state: str
     provider_id: str
@@ -110,7 +111,8 @@ class FederatedSearchBranchDTO(_message.Message):
     error_owner: str
     reason: str
     http_status: int
-    def __init__(self, branch: _Optional[_Union[FederatedSearchBranchKeyDTO, _Mapping]] = ..., state: _Optional[str] = ..., provider_id: _Optional[str] = ..., code: _Optional[str] = ..., message: _Optional[str] = ..., retryable: _Optional[bool] = ..., cursor: _Optional[str] = ..., allocated_results: _Optional[int] = ..., returned_results: _Optional[int] = ..., error_owner: _Optional[str] = ..., reason: _Optional[str] = ..., http_status: _Optional[int] = ...) -> None: ...
+    diagnostics: _containers.RepeatedCompositeFieldContainer[_public_pb2_1.SearchDiagnosticDTO]
+    def __init__(self, branch: _Optional[_Union[FederatedSearchBranchKeyDTO, _Mapping]] = ..., state: _Optional[str] = ..., provider_id: _Optional[str] = ..., code: _Optional[str] = ..., message: _Optional[str] = ..., retryable: _Optional[bool] = ..., cursor: _Optional[str] = ..., allocated_results: _Optional[int] = ..., returned_results: _Optional[int] = ..., error_owner: _Optional[str] = ..., reason: _Optional[str] = ..., http_status: _Optional[int] = ..., diagnostics: _Optional[_Iterable[_Union[_public_pb2_1.SearchDiagnosticDTO, _Mapping]]] = ...) -> None: ...
 
 class FederatedSearchSummaryDTO(_message.Message):
     __slots__ = ("state", "order", "branches", "returned_results")

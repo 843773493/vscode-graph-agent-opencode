@@ -7,6 +7,7 @@ from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from pathlib import Path
 
+import commentjson
 import httpx
 import pytest
 
@@ -35,6 +36,10 @@ from tests.support.processes.workspace import (
     start_backend_process,
     workspace_backend_id_for_root,
 )
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -61,7 +66,8 @@ class Network:
 
 
 @pytest.fixture
-def network(request: pytest.FixtureRequest, integration_workspace_root_path: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Network]:
+def network(request: pytest.FixtureRequest, integration_workspace_root_path: str, monkeypatch: pytest.MonkeyPatch,
+            prepared_developer_tools_package: Path) -> Iterator[Network]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
     workspace = Path(integration_workspace_root_path)
@@ -77,9 +83,11 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
             (target / "empty").mkdir()
             for name in ("needle-a.txt", "needle-b.txt", "needle-c.md"):
                 (target / name).write_text("🧪 needle\ncontext\nneedle\n", encoding="utf-8")
+            (target / "long-preview.txt").write_text("c" * 2200 + "\nnoticeword " + "p" * 2200 + "\n", encoding="utf-8")
             (target / "covered.txt").write_bytes(b"\xffmodel body must not be read")
     ports = integration_port_block_for_file(Path(request.node.path))
     gateway_home = runtime / "gateway-home"
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     gateway_id = load_or_create_gateway_id(gateway_home / "state/gateway/identity.json")
     # 本机目录控制链和 Gateway 使用同一原生身份；独立 HOME 会产生互不相认的本机令牌。
     credential = gateway_home / "state/gateway/credentials/local-token"
@@ -103,12 +111,19 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
         (context.artifacts_dir / "port-allocation.json").write_text(
             json.dumps({"ports": service_ports, "probes": port_probes}) + "\n", encoding="utf-8",
         )
-        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{service_ports['gateway']}")
+        gateway_url = f"http://127.0.0.1:{service_ports['gateway']}"
+        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", gateway_url)
         fixture = Network(workspace, secondary, stopped, gateway_home, gateway_id, service_ports["gateway"],
                           service_ports["backend-0"], context.artifacts_dir, [])
         for index, root in enumerate((workspace, secondary)):
+            # 独立 Backend 的配置校验和运行时交接均须指向本装具的 Gateway。
+            config_path = root / ".boxteam/workspace.jsonc"
+            config = commentjson.loads(config_path.read_text(encoding="utf-8"))
+            config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+            config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             backend = start_backend_process(workspace_root=str(root), port=service_ports[f"backend-{index}"], log_name=f"backend-{index}",
                                             boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts,
+                                            env_overrides={"BOXTEAM_RUNTIME_CONTROL_TOKEN": LOCAL_TOKEN_HEADERS["X-Local-Token"]},
                                             )
             cleanup.callback(close_backend_process, backend)
             fixture.backends.append(backend)
@@ -318,6 +333,24 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
                 "continuations": [{"branch": content_page["branch"]["branch"], "cursor": content_page["branch"]["cursor"]}]}, "req_federation_file_content_next")
             next_hit, = next(event for event in following if event["type"] == "page")["page"]["files"]["matches"]
             assert next_hit["uri"] == hit["uri"] and next_hit["line"] == 3
+            notices = await search({"scope": {"mode": "origin", "origin": owners[workspace_a]}, "queries": [{
+                "category": "file", "operation": "content", "query": "noticeword", "match_mode": "literal",
+                "file_targets": [{"owner": owners[workspace_a], "target": {"uri": content_root,
+                    "search_options": {"include_globs": ["long-preview.txt"], "context_lines": 1}}}],
+            }]}, "req_federation_file_notices")
+            notice_page, = [event for event in notices if event["type"] == "page"]
+            notice_branch, = [event["branch"] for event in notices if event["type"] == "branch"]
+            assert notice_page["page"]["files"]["matches"][0]["truncated"]
+            assert notice_page["page"]["files"]["contexts"][0]["truncated"]
+            assert notice_page["page"]["diagnostics"] == notice_page["branch"]["diagnostics"] == notice_branch["diagnostics"]
+            assert [(item["severity"], item["code"], item["owner"]) for item in notice_branch["diagnostics"]] == [
+                ("info", "match_preview_truncated", "workspace_files"),
+                ("warning", "context_line_truncated", "workspace_files"),
+            ]
+            assert notice_branch["state"] == "complete" and notice_branch["returned_results"] == 1
+            assert notice_branch["code"] is notice_branch["http_status"] is notice_branch["cursor"] is None
+            assert notices[-1]["summary"]["state"] == "complete" and notices[-1]["summary"]["branches"] == [notice_branch]
+            assert notices[-1]["summary"]["returned_results"] == 1
             invalid_query = {**content_query, "file_targets": [{"owner": owners[workspace_a], "target": {"uri": content_root,
                 "search_options": {"include_globs": ["*.txt"]}}}]}
             rejected = await search({"scope": {"mode": "origin", "origin": owners[workspace_a]}, "queries": [invalid_query]}, "req_federation_file_encoding")
@@ -346,7 +379,9 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             missing_query = {**file_query, "file_targets": [{"owner": owners[workspace_a], "target": {"uri": roots[workspace_a] + "/missing-directory"}}]}
             missing = await search({"scope": {"mode": "origin", "origin": owners[workspace_a]}, "queries": [missing_query]}, "req_federation_file_missing")
             missing_branch, = missing[-1]["summary"]["branches"]
-            assert missing_branch["state"] == "failed" and missing_branch["code"] == "unknown_resource"
+            assert (missing_branch["state"], missing_branch["code"], missing_branch["error_owner"],
+                    missing_branch["reason"], missing_branch["http_status"]) == (
+                "failed", "file_not_found", "resource_file_operations", "not_found", 400)
 
             await asyncio.to_thread(close_gateway_process, gateway)
             gateway = None
@@ -412,6 +447,8 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             assert not (network.stopped / ".boxteam/sessions").exists()
 
             # 产品入口发布真实 child，使名称续点停留在同一 Session 的 Thread 版本内。
+            await enable_developer_tools_plugins(client, gateway_id=gateway_id, workspace_id=workspace_a,
+                                                  plugin_ids=("terminal", "browser"))
             session_a = sessions[workspace_a][0]
             selection = {"X-BoxTeam-Workspace-Id": workspace_a}
             point_response = await client.get(f"/api/v1/sessions/{session_a}/fork-source-point", headers=selection,
