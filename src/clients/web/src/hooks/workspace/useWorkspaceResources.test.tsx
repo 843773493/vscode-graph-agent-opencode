@@ -60,6 +60,19 @@ function stubList() {
 }
 
 describe("工作区连接 owner 镜像", () => {
+  test("读取慢于轮询周期时仍展示首个完成的完整清单", async () => {
+    const first = deferred<Awaited<ReturnType<typeof api.listWorkspaceResources>>>();
+    const later = deferred<Awaited<ReturnType<typeof api.listWorkspaceResources>>>();
+    stubList().mockReturnValueOnce(first.promise).mockReturnValue(later.promise);
+    const mounted = await mount();
+    act(() => mounted.poll());
+    act(() => mounted.poll());
+    await act(async () => { first.resolve({ workspace_id: "backend-uuid", items: [resource()] }); });
+    expect(mounted.current().items).toEqual([resource()]);
+    expect(mounted.current().loading).toBe(false);
+    later.resolve({ workspace_id: "backend-uuid", items: [resource()] });
+  });
+
   test("原按钮通过统一命令的临时句柄执行，仅写一次并完整替换回执", async () => {
     stubList();
     const promoted = { ...resource(2), retention_scope: "workspace", thread_associations: [] };
@@ -136,8 +149,9 @@ describe("工作区连接 owner 镜像", () => {
     restores.push(() => control.mockRestore());
     const mounted = await mount();
     await act(async () => { await mounted.current().control(resource(), "promote"); });
+    list.mockResolvedValue({ workspace_id: "backend-uuid", items: [promoted] });
+    await act(async () => mounted.poll());
     await act(async () => { oldList.resolve({ workspace_id: "backend-uuid", items: [resource()] }); });
-    expect(list).toHaveBeenCalledTimes(1);
     expect(mounted.current().items).toEqual([promoted]);
     expect(mounted.current().loading).toBe(false);
   });

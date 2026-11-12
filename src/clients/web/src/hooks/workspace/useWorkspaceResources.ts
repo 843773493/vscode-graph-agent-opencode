@@ -11,7 +11,8 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
   const [mutating, setMutating] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
-  const scope = useMemo(() => ({ apiPort, workspaceId, kind, generation: 0, mutating: false }), [apiPort, workspaceId, kind]);
+  const scope = useMemo(() => ({ apiPort, workspaceId, kind, generation: 0, mutating: false,
+    pending: null as ReturnType<typeof listWorkspaceResources> | null }), [apiPort, workspaceId, kind]);
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
   const replace = useCallback((resource: WorkspaceResourceDTO) => {
@@ -23,8 +24,9 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
     if (!workspaceId || scope.mutating) return;
     const request = ++scope.generation;
     setLoading(true);
+    const pending = scope.pending ??= listWorkspaceResources(apiPort, workspaceId, kind);
     try {
-      const result = await listWorkspaceResources(apiPort, workspaceId, kind);
+      const result = await pending;
       if (scopeRef.current === scope && request === scope.generation) {
         setItems(result.items);
         setReadError(null);
@@ -33,6 +35,7 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
     } catch (cause) {
       if (scopeRef.current === scope && request === scope.generation) setReadError(errorMessage(cause));
     } finally {
+      if (scope.pending === pending) scope.pending = null;
       if (scopeRef.current === scope && request === scope.generation) setLoading(false);
     }
   }, [apiPort, scope, workspaceId, kind]);
@@ -48,13 +51,14 @@ export function useWorkspaceResources(apiPort: number, workspaceId: string | nul
     if (!enabled || !workspaceId) return;
     void refresh(false);
     const timer = window.setInterval(() => void refresh(false), 2000);
-    return () => { ++scope.generation; window.clearInterval(timer); };
+    return () => { ++scope.generation; scope.pending = null; window.clearInterval(timer); };
   }, [enabled, refresh, scope, workspaceId]);
   const mutate = useCallback(async (operation: () => Promise<WorkspaceResourceDTO>) => {
     if (!workspaceId || scopeRef.current !== scope) throw new Error("资源管理缺少当前工作区");
     if (scope.mutating) throw new Error("当前资源操作尚未完成，请稍后重试");
     // 管理写入开始即作废在途刷新；轮询不能用旧清单覆盖完整 owner 回执。
     ++scope.generation;
+    scope.pending = null;
     scope.mutating = true;
     setMutating(true);
     setLoading(false);
