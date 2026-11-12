@@ -145,9 +145,10 @@
 
 ## 12. 引用与 Composer
 
-覆盖规范：引用动作必须固定来源与接收者；文件引用粘贴内容和可复现引用必须分别处理；选择和参数输入必须复用成熟交互并保持无副作用。
+覆盖规范：引用动作必须固定来源与接收者；普通资源引用与粘贴内容必须分别处理；选择和参数输入必须复用成熟交互并保持无副作用。
 
-- [ ] 12.1 将复制 URI、引用、粘贴和明确固定版本作为独立动作，使用原只选择／多步 Quick Input，不抢占打开的侧边／固定／后台修饰键。
+- [ ] 12.1 将复制 URI、引用和粘贴作为独立动作，使用原只选择／多步 Quick Input，不抢占打开的侧边／固定／后台修饰键。
+  - 2026-11-12 用户裁定收敛：删除额外固定版本引用功能及其验收要求。普通引用只保存资源 URI，原 owner 读取当前内容；不新增快照、版本字段或“不支持固定版本”提示。产物、Diff、执行历史和恢复继续归原模块。下方旧收据中“固定版本未验”仅记录当时范围，不再代表待实现任务。
   - 复制 URI 已接入同一原 Action／Command：编辑器菜单、文件菜单及 Quick Access 文件／来源候选复用，后端唯一 grammar 返回带明确 Gateway 的 `reference_uri`，保留原地址字段语义。真实 Gateway／Chromium 验证来源文档、执行生成的工具结果和文件候选复制；没有正文读取、打开资源、激活来源或新增执行，候选按钮保留搜索框焦点。130项Python检查、Workbench真实类型检查、正式构建、协议生成一致性及breaking检查通过；准确命令、指纹和失败原件见 `out/tests/temp/2026/11/05/resource_reference_copy/artifacts/verification-001.json`。首次页面运行在辅助服务端口租约阶段失败，确认端口恢复可绑定后的一次重试通过。引用／粘贴／固定版本及Thread／Diff复制尚未齐，本项继续未勾选。
   - Thread命令面板现可用原QuickAccess只选择未打开文件，先固定原草稿与工作区，取消不改草稿，接受只附加规范URI。真实Gateway／正式Workbench页面1 passed，核零新Tab／正文读取／执行及刷新保留；异步提示覆盖和外部delegate被插复制按钮的回归已修复，原断言保留，11项delegate／原Chat合同、最终真实类型与规定Web构建通过。证据`out/tests/temp/2026/11/05/composer_source_selection/artifacts/verification-001.json`；初次页面、合同及两项临时命令配置失败原件均保留。固定版本、多选／返回及完整能力矩阵仍未完成，本项不勾选。
 - [x] 12.2 在发起时固定来源及接收 Thread，全局入口无接收者才选择，切换焦点／范围不改投；接收者失效明确失败，不猜最近 Thread。
@@ -156,7 +157,7 @@
   - 真实 Gateway、双工作区、正式 Workbench／Chromium 验证两个可见 Thread 的明确接收、取消不变、无额外正文读取、来源修改及刷新恢复、零执行／模型调用；具名浏览器 HTTP 边界只延迟真实地址回执，期间把焦点切到另一 Thread，仍仅写发起草稿。草稿8项与Composer回归12项通过，Python合同133项（2条既有重复operation ID警告）、Workbench真实类型、正式构建、Ruff／Pyright、协议生成一致性及breaking检查通过。证据 `out/tests/temp/2026/11/05/composer_resource_actions/artifacts/verification-001.json`；首轮错误使用上游命令选项而绕过Opener及清理方法误名的原件保留。本片未覆盖从Thread选择未打开来源、显式固定版本、多选／二级返回或Electron，12.1／12.4／12.5继续未勾选。
   - 2026-11-11 Gateway／插件 Skill 复制引用：原 resourceReference 同时接受确切 Gateway Skill 和工作区来源，仍核 Gateway／scope／kind，复制与 Composer 共用唯一解析器，无正文重读或新打开链。41项来源合同／276断言、167份转换源码真实类型、79扩展正式构建及真实双Workspace产品页面通过；页面经安装绑定打开Skill后执行原复制命令并核实际剪贴板、冻结owner及零正文重读。错误owner和非Skill的Gateway来源明确拒绝；未代替Windows／真实远端页面／Electron或完整Composer选择验收，12.1仍保留。精确命令、指纹和复审见 `out/tests/temp/2026/11/11/plugin_skill_reference/artifacts/verification.json`。
   - 2026-11-12 Thread 复制引用完整页面收口：真实消息及 fork 创建 main／child，正式 Workbench 最近候选分别复制精确 URI，原 Composer 文件多选仍只附加未打开文件引用。组合页面2项通过、9项真实 Command／Provider 合同57条断言通过，核实际剪贴板、原 request_id、无额外正文读取／打开及零新增执行；跨 Gateway 仍为具名 HTTP 装具。只修测试导入排序并复用此前产品类型／正式构建，不重复已通过长页；证据见 `out/tests/temp/2026/11/12/thread_resource_reference/artifacts/verification.json`。固定版本、完整返回／能力矩阵和 Electron 仍未由本片证明，宽任务继续未勾选。
-- [ ] 12.4 粘贴保留选定正文，显式可复现引用由原 owner 核验版本；无法取得版本明确失败，不新增统一快照／冻结体系。
+- [ ] 12.4 粘贴保留实际选定正文，来源变化不替换已粘贴内容；普通引用由原 owner 读取当前内容，产物、Diff、执行历史与恢复继续遵守原版本合同，不新增引用快照或版本字段。
   - 2026-11-12 可用附件候选的独立复制按钮复用原资源 Command／唯一 URI parser，直接传原 file_id 与冻结 owner；文本和 PDF 不提前打开或读取原件。正式 Gateway／Backend／Workbench 页面1 passed／51.34秒，核实际剪贴板、原 request_id、100+1分页、复制后焦点及零新Tab／正文读取，原预览／分屏／刷新保持。172份实际转换源码类型和79扩展正式构建通过；新增与原附件／变更／Thread合同通过，联合来源检查有两个场景及清理钩子5秒超时，单独来源19项140断言通过，未确定原超时原因。页面首次上游断连原件保留、未加重试；第二次按产品共用续页按钮迁齐旧装具后通过。最小复审无新URI／正文缓存／持久账本；证据见 `out/tests/temp/2026/11/12/attachment_reference/artifacts/verification.json`。本片不证明固定版本、通用媒体URI重开、Windows／真实远端／Electron，宽任务保持未勾选。
 - [ ] 12.5 验证多 Thread 同时可见、跨工作区来源、二级返回、多选取消、不支持能力和来源变化，只有指定草稿变化且无隐式模型调用。
   - 2026-11-12 附件候选新增独立“将资源 URI 加入聊天草稿”按钮，复用原 Composer Command／URI parser／草稿 writer；provide 夺焦前捕获原 Pane 与接收者，范围选择往返保持同一临时句柄，发起时无 Thread 才明确选择。关闭、未就绪和凭据失效零追加，焦点改变不改投；不上传附件、不读原件或发送消息。39项原附件／变更合同206断言、最终6项引用反例54断言及原Composer多选4项35断言通过；172份实际转换源码类型、最终79扩展正式构建及真实Gateway／Backend／Workbench完整页1 passed／51.86秒，核文本／PDF引用、零新Tab／原件读取／新增执行及刷新草稿恢复，前后源码一致。最小复审无草稿注册表、第二存储或新恢复机制；首轮通过及一次非dist输出目录被拒绝的原件保留。准确命令、源码指纹与适用范围见 `out/tests/temp/2026/11/12/attachment_composer/artifacts/verification.json`。全局／跨工作区与失效反例仍是具名宿主合同，Windows／真实远端／Electron及固定版本未验，宽项继续未勾选。
