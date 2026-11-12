@@ -53,6 +53,7 @@ class BackgroundTaskRegistry:
             raise ValueError("后台恢复 handler kind/version 重复")
         self._holders = OperationHolderGate(store.sessions_dir, namespace="background_tasks")
         self._running_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
+        self._active_session_ids: set[str] | None = None
         self._stopping = False
         residency_tracker.add_blocker_source(self)
 
@@ -85,6 +86,8 @@ class BackgroundTaskRegistry:
                     task_id=task_id, session_id=session_id, thread_id=thread_id, agent_id=agent_id,
                     descriptor=descriptor, checkpoint=checkpoint, preimage_hash=preimage_hash,
                 )
+            if self._active_session_ids is not None and handle.status in ACTIVE_TASK_STATUSES:
+                self._active_session_ids.add(session_id)
             if handle.status in {"pending", "running"}:
                 self._launch(handle)
             return handle
@@ -190,15 +193,19 @@ class BackgroundTaskRegistry:
         return handle
 
     async def start(self) -> None:
+        active_session_ids: set[str] = set()
         for session_id in self._store.session_ids():
             with self._store.control(session_id) as control:
                 handles = control.list_background_tasks()
             for handle in handles:
                 if handle.status not in ACTIVE_TASK_STATUSES:
                     self._settle_lease(handle)
-                elif handle.status != "reconcile_required":
-                    self._handler(handle.descriptor).validate_checkpoint(handle.checkpoint)
-                    self._launch(handle)
+                else:
+                    active_session_ids.add(session_id)
+                    if handle.status != "reconcile_required":
+                        self._handler(handle.descriptor).validate_checkpoint(handle.checkpoint)
+                        self._launch(handle)
+        self._active_session_ids = active_session_ids
 
     async def stop(self) -> None:
         self._stopping = True
@@ -228,7 +235,19 @@ class BackgroundTaskRegistry:
             return [handle for handle in control.list_background_tasks() if handle.status not in ACTIVE_TASK_STATUSES]
 
     def list_active_handles(self) -> list[BackgroundTaskHandle]:
-        return [handle for session_id in self._store.session_ids() for handle in self.list_handles(session_id)]
+        # 启动恢复与本 registry 的准入确定候选；状态正文始终读取控制库。
+        # 与当前 catalog 相交，排除任务终结后已被删除的会话。
+        candidates = self._active_session_ids
+        if candidates is None:
+            session_ids = self._store.session_ids()
+        elif candidates:
+            session_ids = [session_id for session_id in self._store.session_ids() if session_id in candidates]
+        else:
+            return []
+        handles = [handle for session_id in session_ids for handle in self.list_handles(session_id)]
+        if candidates is not None:
+            self._active_session_ids = {handle.session_id for handle in handles}
+        return handles
 
     def residency_blockers(self, session_id: str, thread_id: str) -> tuple[ResidencyBlocker, ...]:
         with self._store.control(session_id, read_only=True) as control:
