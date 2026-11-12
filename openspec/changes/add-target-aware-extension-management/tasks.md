@@ -164,7 +164,8 @@
 
   - 2026-11-10 安装声明实时更新切片：设置页复用原安装 owner 的提交通知和命令 SSE 生命周期，按冻结目标推送完整 schema；同来源同路由分屏共享观察，最后视图关闭释放，撤权或工作区移除结束流。删除保存缺版本再补读链，普通保存只重建当前绑定字段，无轮询、第二库存或持久账本。真实 Gateway／三 Backend／正式 Workbench／Chromium 1 passed／116.51秒，另一窗口安装v3后原表单收到声明，跨组保存及普通参数保存零补读，原v1/v2隔离、解绑及引用卸载仍通过。根后端35项、最终前端19项／149断言通过；精确提交候选另有35项后端及19项前端通过，138份转换源码类型零诊断，根与候选协议一致性通过，正式79扩展构建及Ruff通过。候选额外页面在schema请求前被旧Copilot CLI插件扫描的FileService provider错误拦截，已交原Sol清理，不算页面通过；根首轮携带编辑器额外字段的严格请求失败已修并补回归。准确命令、源码指纹、成功与失败原件见 `out/tests/temp/2026/11/10/plugin_schema_events/artifacts/verification.json`。真实Relay、Windows／SSH／Electron未验，7.3／10.6保持未勾选。
 
-- [ ] 7.4 在原命令／Quick Input／Opener 接入自有插件管理与状态，迁齐 ext／MCP／设置入口及来源提示；需要重开资源时只消费原寻址 owner 的正式地址，不自造 grammar。
+- [x] 7.4 在原命令／Quick Input／Opener 接入自有插件管理与状态，迁齐 ext／MCP／设置入口及来源提示；需要重开资源时只消费原寻址 owner 的正式地址，不自造 grammar。
+  - 2026-11-12 按独立入口职责收口：当前完整正式Gateway／Backend／Workbench管理页1 passed／281.00秒，ext两个前缀使用自有库存、精确版本详情，ext install取消零写且不读库存，MCP搜索仍可用；设置命令／来源提示及配置URI重开复用前述settings与config_uri_opener证据，解析继续归原寻址owner，无新增grammar。双Gateway目标与迟到请求由同轮112.28秒页面独立验证。原件及正式79扩展构建见 `out/tests/temp/2026/11/12/plugin_target_closure/artifacts/verification.json`；不据此宣称Windows或真实SSH页面全部验收。
   - 2026-11-11 ext／安装目标生命周期：原ext两个前缀改为自有库存和安装Command，同次筛选复用一次读取，精确版本打开原详情；ext install不读库存。安装向导冻结原目标，受理前Gateway／凭据变化取消输入和目录读取、迟到确认零写，受理后只追踪原operation；明确4xx拒绝直接保留原错误及request_id，删除冗余结果查询。66项／438断言及最终安装18项／124断言短验通过，167份转换源码类型通过；正式79扩展构建及真实Gateway／Backend／Workbench单包完整管理页通过（同批另两入口因测试定位失败，未算全组通过）。最小复审无新库存／writer／安装模型，Windows／SSH页面／Electron未由本片验证。准确指纹、命令及构建收据见 `out/tests/temp/2026/11/11/plugin_quick_access/artifacts/verification.json` 和 `out/tests/temp/2026/11/11/plugin_install_target_lifetime/artifacts/verification.json`。
   - 2026-11-11 设置入口合并：原表单与来源 JSONC 命令共用 captureSettingsLocation，冻结 Gateway／route，并直接使用已有工作区镜像，删除重复目录请求；原凭据／Gateway 变化取消 Picker 和在途读取，迟到选择不能继续。原来源 owner、只读能力、JSONC writer／CAS 均复用；22项／186断言短验、167份实际转换源码类型及同批正式 Web 构建通过。短验明确使用 QuickInput／来源 owner 的 DI 边界，未把它称为真实页面／远端／Electron验收，7.4保持未勾选。最小复审无新缓存、writer或持久状态；命令、指纹、原始输出与适用范围见 `out/tests/temp/2026/11/11/settings_source_selection/artifacts/verification.json`。
   - 2026-11-10 旧Gallery引导收口：持续复用同一Luna max，删除测试欢迎页的扩展搜索、新手引导外部键位包探测／安装及聊天输入中的安装聊天扩展补全；保留测试原能力、主题选择及Agent／MCP补全。仅迁齐原sourceTransform接点，不建替代市场或兼容桥。最终定向4项通过、136份实际转换源码类型零诊断及正式79扩展Web构建通过；早期解析与未用声明失败原件均保留。主线程复审未混入并行图片认证修改；本片未称三个入口逐项真实浏览器验收，7.4／8组全范围仍保留。准确命令、指纹及全部原件见 `out/tests/temp/2026/11/10/legacy_host_boundary_luna_max/artifacts/legacy-extension-entry-*-final.*`。
@@ -185,7 +186,8 @@
   - 2026-11-10 旧 Agent Plugin 启动扫描收口：项目 sourceTransform 移除 Configured／Marketplace／Extension／Copilot CLI 四类 discovery 注册及其实现，保留原 ChatAgentService／PromptsService／AgentPluginService 消费者；不再启动时读取未注册原生路径配置，不以异常吞噬或 fallback 掩盖。Sol 实施、Luna max持续审查修正生成源码的运行时decorator及类型导入，并补断言。专用转换1项通过、140份实际转换源码类型通过，79个内置扩展的正式Workbench构建通过；原上游／reference未修改。准确命令、指纹和原始输出见 `out/tests/temp/2026/11/10/legacy_agent_plugin_discovery/artifacts/verification.json`。本片不将余下旧市场UI／推荐等清理认定为全部完成。
 - [x] 8.3 按第11／12组迁齐后删除 Backend 的 stdio／安装／Node 调试目标子进程创建、终端／浏览器直连分支及旧端口／启动配置；全仓查间接调用、脚本、锁依赖、协议和运行文档，不加兼容包装层，保留 python_exec／条件脚本／ffmpeg、存储快照内部原语及宿主动作的原实现。
   - 2026-11-11 物理删除闭包：Backend MCP 配置只接受 Gateway plugin 或 Streamable HTTP，`app/services/infrastructure/mcp/` 无 stdio client／spawn；stdio 桥仅在 MCP 插件。NodeDebug `launch_orchestrator` 通过 `NodeDebugPluginRuntime.launch()` 把目标启动、Inspector 和实际子进程退出交给 Gateway Debug 实例，Backend 保留 DAP／配置／断点／动作记录；Browser／Terminal owner 只经 `GatewayTransportConnection` 访问插件实例。`process-callsites.txt` 是 `app/` Python 进程调用清单；Gateway 插件的 Node/MCP 子进程由第4／5／11组 owner 与产品证据核对，旧脚本、协议和宿主消费者按8.1／8.2的迁移记录核对。12.2／12.3列出保留的业务进程例外。没有新包装层或双轨。未把真实 SSH／Windows／Electron等平台矩阵扩大为本项必要条件，其范围仍按对应任务保留。
-- [ ] 8.4 按真实 release 基线提供确有必要的显式数据升级或清晰不支持诊断；不自动转换 VSIX，不保留旧配置运行时双读，不无依据删既有历史迁移。
+- [x] 8.4 按真实 release 基线提供确有必要的显式数据升级或清晰不支持诊断；不自动转换 VSIX，不保留旧配置运行时双读，不无依据删既有历史迁移。
+  - 2026-11-12 用户明确确认“尚无正式发布版，按首次发布处理”；`release:policy list`为空与此一致，不伪造R_current／R_previous。本轮无需从开发中间态增加升级兼容，旧VSIX／旧运行配置仍按现行格式明确拒绝，不自动转换、不双读、不删用户数据；已有SQL／显式迁移保留。首次完整验收并实际发布后再登记基线。裁定与当前来源拒绝证据见 `out/tests/temp/2026/11/12/plugin_target_closure/artifacts/verification.json`。
 - [ ] 8.5 发行物提供明确版本的目标 Node／Python，自带及下载插件按受支持平台准备完整依赖／原生模块及必要资源；运行不借用系统 PATH、开发源码或 Electron Node。不再仅为插件安装携带 Bun／uv／node-gyp／编译工具，删除前核对其它真实消费者；清除无人消费的旧宿主产物，不要求用户自行安装环境。
 
 2026-11-09 固定发行 Node 切片：Linux 与 Windows npm runtime 统一随包交付固定 Node 22.17.0／ABI 127，原生依赖构建、插件 ZIP 及实际服务使用同一目标解释器；Windows 便携版直接复用相同 runtime，删除另行选择 Launcher Node 的分路。两平台 npm 文件清单包含 Node，源码开发入口保留其显式 Launcher Node 语义；发行 manifest 拒绝系统解释器回退。真实 Linux 固定归档已核官方摘要，npm pack 后移到新路径，清空 PATH 仍能解析包内 Node 并加载已有完整 ZIP 的 node-pty、实际输出；真实 Gateway 双语言插件安装／启用／调用／私有参数／重启／换版／有引用卸载流程为1 passed／30.39秒。首次隔离候选缺少测试配置的秘密环境引用而失败，补测试占位值后通过，未改产品默认值或测试断言。命令、源码指纹及原始成功／失败结果见 `out/tests/temp/2026/11/09/plugin_bundled_node/artifacts/`。这项验证未生成完整发行物、未封禁外网，也不代替源码外空缓存完整验收；精确候选打包合同67项与完整 Launcher 196项通过（包含12项 manifest／doctor 定向检查，不相加），两树相关 Node 语法检查通过。Windows／SSH／Electron 与完整 release 仍未验，8.5／9.8保持未勾选。
@@ -245,7 +247,8 @@
 
 - [x] 10.10 整包卸载按D7仅核原四类引用并复用删除互斥；关闭但未解除绑定仍阻塞，自身可释放投影先结清，完整封存正文／未绑定参数不占引用；未知来源拒绝且不启动Backend或后台扫描，解除后只删对应包版本，用户配置／快捷键／历史保留。
   - 2026-11-11 原四类卸载引用收口：active／pending、关闭未解绑、模板／未结创建、真实读取lease及未核退出均沿原owner与删除互斥；未知工作区owner明确拒绝且不启动Backend。实际解除后只删对应版本，用户配置、Skill封存和业务回执保留。复用 `plugin_distribution_loop/artifacts/pending-uninstall-verification.json`、`read-lease-verification.json`、`unbind-stop-proof-verification.json`、`workspace-update-uninstall-verification.json` 及 `legacy_host_boundary_luna_max/artifacts/workspace-uninstall-pth-followup-receipt.txt`（均在 `out/tests/temp/2026/11/10/`）。本项完成，无扫描器或引用账本。
-- [ ] 10.11 最小真实 Gateway／Workbench 场景覆盖纯声明插件、同包 Python／Node 插件、多目标同ID、独立启停／部分失败／旧回执、窗口释放及整包卸载；不把旧宿主证据当新合同验收。
+- [x] 10.11 最小真实 Gateway／Workbench 场景覆盖纯声明插件、同包 Python／Node 插件、多目标同ID、独立启停／部分失败／旧回执、窗口释放及整包卸载；不把旧宿主证据当新合同验收。
+  - 2026-11-12 最小产品组合按现有完整流程收口：本轮正式Gateway／Backend／Workbench管理页1 passed／281.00秒覆盖同包Python／Node、纯声明Skill、独立启停、失败与显式重试、旧状态回执、更新保旧、解绑及整包卸载；同轮双Gateway页面覆盖同ID目标隔离。窗口关闭、晚连接完整快照及同一实例继续调用由10.9既有正式页面1 passed／67.46秒和连接换代原件证明，未重复测试或使用旧宿主结果。证据入口 `out/tests/temp/2026/11/12/plugin_target_closure/artifacts/verification.json` 与本任务10.9原件；平台完整矩阵继续归9.8。
 - [x] 10.12 记录 UI 开启至实际可用及普通暖命令总耗时，沿原交互预算；schema 导出／hash 放注册变化边界，调用无重复审计／探活，插件关闭调用零启动。
 
 ## 11. 源码调试插件与原版 Debug UI
@@ -345,6 +348,7 @@
 2026-11-08 Terminal 新合同验收：4.1／4.2 已迁齐正式 ZIP、Workspace 配置交付、Backend→Gateway HTTP、精确实例 WS grant、Gateway attach 静态资产、测试及发行接线。隔离完整候选的 `candidate-terminal-core-v6.log` 证明真实 PTY 创建／执行／resize／Chromium attach、Backend 重启保留实例、owner_revision 撤权与重附加、插件重启和关闭；`candidate-resource-shutdown-v9.log` 2 passed 证明监听关闭前资源结清；`candidate-handoff-v10.log` 1 passed 证明 Launcher 换代保留实例及完整停机实际退出；消费者定向回归 v9 其余516项与 v10补验159项通过。Web真实类型、完整Workbench构建、协议生成一致性及Node打包检查已有同依赖通过原件，详见 `out/tests/temp/2026/11/08/terminal_plugin/artifacts/terminal-validation-ledger-final.json`。HEAD对照确认的既有 API文案／挂载fixture冲突／静态诊断未混作本片回归；Windows、SSH与源码目录外发行启动未验，跨Browser与范围隔离4.5仍未完成。
 
 2026-11-08 插件 Skill 来源切片：真实 Gateway ZIP 安装、Workspace 来源 CAS、双工作区隔离、原资源读／列举／搜索、模型 skill_load、v1 冻结／v2 切换、禁用／解绑／卸载及冷读原调用封存通过；纯声明零进程，代码重启不撤静态贡献。精确候选来源批117项、历史回归52项、最终重启／代理／联邦批30项分别通过，批次不相加；新增生产与测试类型零诊断，历史／导航旧类型及 lifespan Ruff 已对照 HEAD 无新增，协议生成一致性通过。原件和指纹见 `out/tests/temp/2026/11/08/plugin_skills/artifacts/verification-v1.json`。工具关联归并、Browser／Debug 正文迁移、真实 Relay／Windows 和 Workbench 完整验收未完成，宽项保持未勾选。
+
 
 ## 历史证据（旧方案，非当前任务或执行指令）
 
