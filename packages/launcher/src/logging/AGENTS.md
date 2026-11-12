@@ -6,9 +6,9 @@
 日志文件
 └── service-log.mjs
     ├── resolveServiceLogPath       选择显式日志路径或BOXTEAM_HOME默认位置
-    ├── rotateServiceLog            启动时按既有大小与份数轮转
-    ├── openServiceLogFile          异步锁定、轮转、打开与发布冻结文件身份
-    │   ├── openServiceLog          持久日志与前台输出的tee，持有描述符
+    ├── rotateServiceLog            启动及集中写入期间按既有大小与份数轮转
+    ├── openServiceLogFile          异步锁定、轮转、打开与发布当前文件身份
+    │   ├── openServiceLog          有背压的串行tee，关闭时排空并释放描述符
     │   └── ../detached-process.mjs 将描述符交给子进程stdio后关闭父端
     └── 测试
         ├── service-log.test.mjs        正常写入、外层接管与轮转
@@ -27,14 +27,15 @@
 
 # 规范
 
-- 前台与detached统一 await 日志打开入口，成功后各自负责关闭持有的描述符；交付前失败仍释放本次句柄。
+- 前台与detached统一 await 日志打开入口，集中 writer 关闭须 await 队列排空，原始描述符交付方负责关闭父端；交付前失败仍释放本次句柄。
 - `.owner.lock` 保持稳定 inode；Unix 对实际日志描述符持有 flock，后代继承输出时继续占有锁。Windows 在临界区使用原生独占共享探测核验实际句柄，不锁定日志正文妨碍写入。
 - `.owner.json` 原子发布文件身份与 owner；外部替换或无法核实的活动写入者明确拒绝。捕获标记必须同时核对冻结证明、真实 stdout/stderr、当前文件及 owner，不单凭环境标记跳过打开。
 - 共享合同加载和记录编码由 `src/shared/serverRuntimeLogging.mjs` 单点提供，文件 IO 显式接收所选 runtime 的合同。
 - 默认布局与轮转参数只在 `resources/logging/runtime-contract.json` 维护；源码入口使用显式根或运行时工作目录，发行 Launcher 使用选定 runtime 的 application root。
 - Launcher 与 Gateway 各自落盘；detached 捕获 Launcher 后，Gateway 不再向该捕获流 tee。Gateway handoff 共用原 sink，不在 generation 切换时重新打开或轮转文件。
 - 初始化、归属发布或所有权锁释放失败要释放未交付的日志句柄；多项失败按发生顺序保留原异常，cause 指向首个错误。归属正文未成功关闭不得发布，临时文件清理失败不能覆盖写入原因。
-- 同步日志写入必须处理短写，完整落盘调用成功后才交前台；这不表示fsync持久化，部分写入后失败也不声称已回滚。
+- 日志写入必须处理短写，完整落盘调用成功后才交前台；这不表示fsync持久化，部分写入后失败也不声称已回滚。串行 writer 的错误沿 Node 流立即交付，关闭仍保留原错误及描述符释放错误。
+- 集中 writer 按已写字节在下一次写入前轮转，单次输出保持完整；普通写入不重复 stat。轮转复用原 owner guard，预先打开并锁定新文件后同步切换路径、描述符和归属证明，避免复制全部正文。两路输出共用队列，Gateway 在背压时暂停对应管道；继承描述符的子进程仍只在退出后的重开入口轮转。
 - Windows沿用继承ACL，不把POSIX mode bits称为Windows权限验收。
 - 日志描述符由持有者负责关闭；故障注入只在独立Node中修改文件、创建和终止边界，不向宿主PID发送信号、不启动后台进程。
 - `service-log-errors.test.mjs`的输入与原始结果按`out/tests/packages/launcher/src/logging/service-log-errors/{workspace,artifacts}/<run_id>/<platform>/<scenario>/`独占留存；不在结束时删除现场，每次运行只保存一份共用的`observer.mjs`。每场景先保存input、Node原始stdout/stderr、准确命令和实际退出原因，再判断或解析。

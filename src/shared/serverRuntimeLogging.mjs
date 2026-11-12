@@ -7,8 +7,7 @@ const contracts = new Map();
 const runtimeInstanceId = randomUUID();
 let settings = null;
 let appliedRevision = null;
-let logSink = readRuntimeLogSink();
-let logDescriptors = [1, 2];
+let logWriter = { sink: readRuntimeLogSink(), descriptors: [1, 2] };
 
 function runtimeLogFileIdentity(descriptor) {
   const identity = fstatSync(descriptor, { bigint: true });
@@ -26,14 +25,9 @@ function runtimeLogSinkMatches(sink, descriptors) {
   return identities.every((identity) => identity.device === sink.device && identity.inode === sink.inode);
 }
 
-export function registerRuntimeLogSink(sink, descriptors) {
-  if (!Array.isArray(descriptors) || descriptors.length === 0 || descriptors.some((value) => !Number.isInteger(value) || value < 0)) {
-    throw new TypeError("产品日志去向缺少实际描述符");
-  }
-  const frozen = Object.freeze({ ...sink });
-  verifiedRuntimeLogSink(frozen, descriptors);
-  logSink = frozen;
-  logDescriptors = [...descriptors];
+export function registerRuntimeLogSink(writer) {
+  verifiedRuntimeLogSink(writer);
+  logWriter = writer;
 }
 
 function readRuntimeLogSink() {
@@ -47,8 +41,11 @@ function readRuntimeLogSink() {
   return Object.freeze(sink);
 }
 
-function verifiedRuntimeLogSink(sink = logSink, descriptors = logDescriptors) {
+function verifiedRuntimeLogSink({ sink, descriptors } = logWriter) {
   if (sink === null) return null;
+  if (!Array.isArray(descriptors) || descriptors.length === 0 || descriptors.some((value) => !Number.isInteger(value) || value < 0)) {
+    throw new TypeError("产品日志去向缺少实际描述符");
+  }
   if (!runtimeLogSinkMatches(sink, descriptors)) {
     throw new Error("受管进程实际日志描述符与冻结去向不一致");
   }

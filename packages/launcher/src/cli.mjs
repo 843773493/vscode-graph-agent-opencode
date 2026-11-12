@@ -175,7 +175,7 @@ export async function main(args) {
       throw new Error("Launcher 显式日志路径不能占用 Gateway 日志文件");
     }
     serviceLog = await openServiceLog({ boxteamHome, contract: logContract, environment: logEnvironment });
-    registerRuntimeLogSink(serviceLog.sink, serviceLog.descriptors);
+    registerRuntimeLogSink(serviceLog);
     const launcherLogger = createRuntimeLogger("launcher", "launcher", serviceLog.stderr, logContract);
     if (environment.BOXTEAM_SERVICE_LOG_PATH?.trim()) {
       environment.BOXTEAM_SERVICE_LOG_PATH = serviceLog.path;
@@ -215,9 +215,9 @@ export async function main(args) {
   } finally {
     try {
       try {
-        gatewayLog?.close();
+        await gatewayLog?.close();
       } finally {
-        serviceLog?.close();
+        await serviceLog?.close();
       }
     } finally {
       lock.release();

@@ -41,6 +41,7 @@ out/tests/packages/launcher/src/gateway/control-channel-encoding/
 # 可修改内容
 
 - Gateway进程监督、就绪观察、输出与信号转发、pending handoff和公开监听。
+- 输出流背压时暂停对应子进程管道，drain 后继续；generation 结束时移除 data 和 drain 监听，避免轮转期间持续缓存输出。
 - 对应职责的启动器测试，以及共享的监听器生命周期操作。
 
 # 不可修改内容

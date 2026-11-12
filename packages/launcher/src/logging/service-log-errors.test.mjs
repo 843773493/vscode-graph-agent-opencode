@@ -232,21 +232,23 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, l
     } else {
       serviceLog = await open();
       if (scenario === "write-failure") {
-        assert.throws(() => serviceLog.stdout.write("未落盘的日志"), (error) => error === writeError);
+        serviceLog.stdout.write("未落盘的日志");
+        await assert.rejects(serviceLog.close(), (error) => error === writeError);
+        serviceLog = undefined;
         assert.deepEqual(primaryWrites, []);
         assert.equal(fs.readFileSync(logPath).length, 0);
       } else {
         const stdout = Buffer.from("完整的stdout日志\n");
         const stderr = "完整的stderr日志\n";
-        assert.equal(serviceLog.stdout.write(stdout), false);
-        assert.equal(serviceLog.stderr.write(stderr), true);
+        serviceLog.stdout.write(stdout);
+        serviceLog.stderr.write(stderr);
+        await serviceLog.close();
+        serviceLog = undefined;
         assert.equal(primaryWrites[0], stdout);
         assert.equal(primaryWrites[1], stderr);
         assert.deepEqual(fs.readFileSync(logPath), Buffer.concat([stdout, Buffer.from(stderr)]));
         assert(fileWrites > 2, "真实文件边界应被强制拆成多次短写");
       }
-      serviceLog.close();
-      serviceLog = undefined;
       assert.equal(closeCalls, 1);
       assert.throws(() => fs.fstatSync(descriptor), { code: "EBADF" });
     }
@@ -258,7 +260,7 @@ async function observeServiceLogIo(scenario, fixtureRoot, logUrl, detachedUrl, l
     process.kill = originalKill;
     Object.defineProperty(process, "platform", { value: originalPlatform });
     syncBuiltinESMExports();
-    if (serviceLog) serviceLog.close();
+    if (serviceLog) await serviceLog.close();
     else if (descriptor !== undefined && closeCalls === 0) originals.closeSync(descriptor);
   }
 }
@@ -309,7 +311,7 @@ describe("Launcher服务日志文件IO与失败归属", () => {
   ]) {
     test.skipIf(process.platform === "win32")(description, () => runServiceLogIo(scenario));
   }
-  test("短写仍完整保存两路UTF8日志并保留前台返回值", () => runServiceLogIo("partial-writes"));
+  test("短写仍完整保存两路UTF8日志并排空前台输出", () => runServiceLogIo("partial-writes"));
   test("磁盘写入失败保留原异常且不伪造前台输出", () => runServiceLogIo("write-failure"));
   for (const [scenario, description] of [
     ["guard-close", "所有权锁关闭失败时释放未交付的日志句柄"],

@@ -74,7 +74,7 @@ describe("service log", async () => {
       const gateway = await openServiceLog({ ...options, role: 'gateway' });
       launcher.stdout.write('launcher only\\n');
       gateway.stdout.write('gateway 中文\\n'); gateway.stderr.write('gateway error\\n');
-      gateway.close(); launcher.close();
+      await gateway.close(); await launcher.close();
     `;
     const child = await spawnDetachedProcess({ command: "node", args: ["--input-type=module", "--eval", script],
       cwd: process.cwd(), environment: { ...process.env, [SERVICE_LOG_PATH_ENV]: outerPath }, logPath: outerPath, contract });
@@ -108,7 +108,7 @@ describe("service log", async () => {
 
     serviceLog.stdout.write("launcher ready\n");
     serviceLog.stderr.write("gateway warning\n");
-    serviceLog.close();
+    await serviceLog.close();
 
     expect(stdout).toEqual(["launcher ready\n"]);
     expect(stderr).toEqual(["gateway warning\n"]);
@@ -151,10 +151,36 @@ describe("service log", async () => {
       stderr: { write() {} },
     });
     serviceLog.stdout.write("new\n");
-    serviceLog.close();
+    await serviceLog.close();
 
     expect(readFileSync(logPath, "utf8")).toBe("new\n");
     expect(statSync(`${logPath}.1`).size).toBe(maxLogBytes);
+  });
+
+  test.each(["launcher", "gateway"])("%s 集中写入运行期间轮转，保留最新归档及文件归属", async (role) => {
+    const options = { boxteamHome: temporaryRoot(), role, environment: {},
+      contract: { ...contract, rotation: { ...contract.rotation, max_bytes: 8 } },
+      stdout: { write() {} }, stderr: { write() {} } };
+    const log = await openServiceLog(options);
+    const ownerId = log.sink.owner_id;
+    try {
+      for (let index = 0; index < 6; index += 1) {
+        await new Promise((resolve, reject) => (index % 2 ? log.stderr : log.stdout).write(
+          `记录-${index}\n`, (error) => error ? reject(error) : resolve(),
+        ));
+      }
+      expect(readFileSync(log.path, "utf8")).toBe("记录-5\n");
+      for (let index = 1; index <= 3; index += 1) {
+        expect(readFileSync(`${log.path}.${index}`, "utf8")).toBe(`记录-${5 - index}\n`);
+      }
+      expect(existsSync(`${log.path}.4`)).toBe(false);
+      expect(JSON.parse(readFileSync(`${log.path}.owner.json`, "utf8")).owner_id).toBe(ownerId);
+      expect(contract.sinkMatches(log.sink, log.descriptors)).toBe(true);
+      await expect(openServiceLog(options)).rejects.toThrow("活动写入者");
+    } finally { await log.close(); }
+    const reopened = await openServiceLog(options);
+    await reopened.close();
+    expect(readFileSync(`${log.path}.1`, "utf8")).toBe("记录-5\n");
   });
 
   test("活动文件达到阈值时拒绝另一 owner，关闭后才允许轮转", async () => {
@@ -168,9 +194,9 @@ describe("service log", async () => {
       await expect(openServiceLog(options)).rejects.toThrow("活动写入者");
       expect(statSync(log.path).ino).toBe(inode);
       for (const index of [1, 2, 3]) expect(readFileSync(`${log.path}.${index}`, "utf8")).toBe(`archive-${index}`);
-    } finally { log.close(); }
+    } finally { await log.close(); }
     const next = await openServiceLog(options);
-    next.close();
+    await next.close();
     expect(statSync(`${log.path}.1`).size).toBe(maxLogBytes);
     expect(readFileSync(`${log.path}.2`, "utf8")).toBe("archive-1");
   });
@@ -182,7 +208,7 @@ describe("service log", async () => {
     const options = { contract, environment: { [SERVICE_LOG_PATH_ENV]: target }, stdout: { write() {} }, stderr: { write() {} } };
     const log = await openServiceLog({ ...options, boxteamHome: firstHome });
     try { await expect(openServiceLog({ ...options, boxteamHome: secondHome })).rejects.toThrow("活动写入者"); }
-    finally { log.close(); }
+    finally { await log.close(); }
   });
 
   test.skipIf(process.platform === "win32")("外部替换活跃日志不能绕过文件身份核验", async () => {
@@ -192,11 +218,11 @@ describe("service log", async () => {
       renameSync(log.path, `${log.path}.moved`);
       writeFileSync(log.path, "replacement");
       await expect(openServiceLog(options)).rejects.toThrow("原日志文件身份已变化");
-      log.stdout.write("original writer\n");
+      await new Promise((resolve, reject) => log.stdout.write("original writer\n", (error) => error ? reject(error) : resolve()));
       expect(readFileSync(`${log.path}.moved`, "utf8")).toBe("original writer\n");
       expect(readFileSync(log.path, "utf8")).toBe("replacement");
       expect(existsSync(`${log.path}.1`)).toBe(false);
-    } finally { log.close(); }
+    } finally { await log.close(); }
   });
 
   test("Python 与 Node 对同一路径的活动写入证明一致", async () => {
@@ -211,11 +237,11 @@ describe("service log", async () => {
       result = spawnSync(python, ["-c", script], { env: environment, encoding: "utf8", timeout: 10000 });
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("活动写入者");
-    } finally { log.close(); }
+    } finally { await log.close(); }
     result = spawnSync(python, ["-c", script], { env: environment, encoding: "utf8", timeout: 10000 });
     expect(result.status).toBe(0);
     const next = await openServiceLog(options);
-    next.close();
+    await next.close();
   });
 
   test("Node 创建的冻结 sink 由 Python 的真实继承描述符核实", async () => {
@@ -269,7 +295,7 @@ describe("service log", async () => {
       }
     }
     expect(reopened).toBeDefined();
-    reopened.close();
+    await reopened.close();
   }, 15000);
 
   test("detached 子进程不能用被篡改的捕获证明接管文件", async () => {

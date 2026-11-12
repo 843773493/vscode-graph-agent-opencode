@@ -24,10 +24,10 @@ test("日志状态核实际描述符和路径替换，同时拒绝篡改设备�
     const sink={path:logPath,owner_id:'actual-owner',role:'terminal',source:'test',...contract.fileIdentity(descriptor)};
     const refusal=operation=>{try{operation();return null;}catch(error){return error.message;}};
     try {
-      const device=refusal(()=>registerRuntimeLogSink({...sink,device:sink.device+'1'},[descriptor]));
-      const inode=refusal(()=>registerRuntimeLogSink({...sink,inode:sink.inode+'1'},[descriptor]));
-      const redirected=refusal(()=>registerRuntimeLogSink(sink,[other]));
-      registerRuntimeLogSink(sink,[descriptor]);
+      const device=refusal(()=>registerRuntimeLogSink({sink:{...sink,device:sink.device+'1'},descriptors:[descriptor]}));
+      const inode=refusal(()=>registerRuntimeLogSink({sink:{...sink,inode:sink.inode+'1'},descriptors:[descriptor]}));
+      const redirected=refusal(()=>registerRuntimeLogSink({sink,descriptors:[other]}));
+      registerRuntimeLogSink({sink,descriptors:[descriptor]});
       const before=runtimeLoggingState('terminal');
       renameSync(logPath,logPath+'.moved');writeFileSync(logPath,'replacement');
       const replaced=refusal(()=>runtimeLoggingState('terminal'));

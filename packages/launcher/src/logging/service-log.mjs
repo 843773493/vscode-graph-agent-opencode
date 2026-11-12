@@ -5,6 +5,8 @@ import {
   mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { createLocker, Lock } from "@lickle/lock";
 
 export const SERVICE_LOG_PATH_ENV = "BOXTEAM_SERVICE_LOG_PATH";
@@ -130,14 +132,14 @@ export async function openServiceLogFile(logPath, contract, { role = "launcher",
     if (nativePlatform === "win32" && existsSync(logPath) && windowsLogHasOpenHandles(logPath)) {
       throw new Error(`日志仍有活动写入者，拒绝重开或轮转: ${logPath}`);
     }
-    const openLocked = async () => {
-      const descriptor = openSync(logPath, constants.O_RDWR | constants.O_CREAT | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0), 0o600);
+    const openLocked = async (target = logPath) => {
+      const descriptor = openSync(target, constants.O_RDWR | constants.O_CREAT | constants.O_APPEND | (constants.O_NOFOLLOW ?? 0), 0o600);
       try {
         if (nativePlatform !== "win32" && !await fileLock.tryLock(descriptor, Lock.Exclusive)) {
           throw new Error(`日志仍有活动写入者，拒绝重开或轮转: ${logPath}`);
         }
         // TODO: Windows 使用继承 ACL；不要把 POSIX mode bits 当作安全边界。
-        if (process.platform !== "win32") chmodSync(logPath, 0o600);
+        if (process.platform !== "win32") chmodSync(target, 0o600);
         return descriptor;
       } catch (error) {
         try { closeSync(descriptor); }
@@ -147,7 +149,7 @@ export async function openServiceLogFile(logPath, contract, { role = "launcher",
     };
     let descriptor = await openLocked();
     try {
-      const size = fstatSync(descriptor).size;
+      let size = fstatSync(descriptor).size;
       // 已确认没有旧写入者；轮转期间由 guard 阻止其他受管 owner 插入。
       if (size >= contract.rotation.max_bytes) {
         const previousDescriptor = descriptor;
@@ -155,11 +157,57 @@ export async function openServiceLogFile(logPath, contract, { role = "launcher",
         closeSync(previousDescriptor);
         rotateServiceLog(logPath, contract);
         descriptor = await openLocked();
+        size = 0;
       }
-      const sink = Object.freeze({ path: logPath, owner_id: randomUUID(), role, source,
+      let sink = Object.freeze({ path: logPath, owner_id: randomUUID(), role, source,
         ...contract.fileIdentity(descriptor) });
       publishLogOwnership(logPath, sink);
-      return { descriptor, sink, close() { closeSync(descriptor); } };
+      return {
+        get descriptor() { return descriptor; },
+        get sink() { return sink; },
+        async write(content) {
+          if (size >= contract.rotation.max_bytes) {
+            await withLogGuard(logPath, async () => {
+              if (!contract.sinkMatches(sink, [descriptor])) {
+                throw new Error(`日志文件身份已变化，拒绝轮转: ${logPath}`);
+              }
+              const temporary = `${logPath}.${randomUUID()}.tmp`;
+              let nextDescriptor;
+              const failures = [];
+              try {
+                // 等待新文件锁时保留旧文件；路径、描述符和诊断证明在同步段一起切换。
+                nextDescriptor = await openLocked(temporary);
+                const nextSink = Object.freeze({ ...sink, ...contract.fileIdentity(nextDescriptor) });
+                rotateServiceLog(logPath, contract);
+                renameSync(temporary, logPath);
+                const previousDescriptor = descriptor;
+                descriptor = nextDescriptor;
+                nextDescriptor = undefined;
+                sink = nextSink;
+                size = 0;
+                try { publishLogOwnership(logPath, sink); }
+                catch (error) { failures.push(error); }
+                try { closeSync(previousDescriptor); }
+                catch (error) { failures.push(error); }
+              } catch (error) { failures.push(error); }
+              if (nextDescriptor !== undefined) {
+                try { closeSync(nextDescriptor); }
+                catch (error) { failures.push(error); }
+              }
+              if (existsSync(temporary)) {
+                try { unlinkSync(temporary); }
+                catch (error) { failures.push(error); }
+              }
+              if (failures.length === 1) throw failures[0];
+              if (failures.length > 1) throw new AggregateError(failures, `日志轮转与清理均失败: ${logPath}`, { cause: failures[0] });
+            });
+          }
+          // 按写入边界轮转，保留完整 UTF-8 输出；普通写入不重复 stat。
+          size += content.byteLength;
+          writeFileSync(descriptor, content);
+        },
+        close() { closeSync(descriptor); },
+      };
     } catch (error) {
       if (descriptor !== null) {
         try { closeSync(descriptor); }
@@ -188,13 +236,33 @@ export async function openServiceLog({ boxteamHome, contract, environment = proc
   if (role === "launcher" && captured) return capturedServiceLog(logPath, environment, stdout, stderr, contract);
   const file = await openServiceLogFile(logPath, contract, { role,
     source: role === "launcher" && environment[SERVICE_LOG_PATH_ENV]?.trim() ? SERVICE_LOG_PATH_ENV : "default" });
-  const tee = (primary) => ({
-    write(value) {
+  // 两路输出共用一个有背压的队列，防止轮转期间交错写入或无界缓存。
+  const writer = new Writable({
+    objectMode: true,
+    write({ value, primary }, _encoding, callback) {
       const content = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
-      writeFileSync(file.descriptor, content);
-      return captured ? true : primary.write(value);
+      file.write(content).then(() => {
+        if (!captured) primary.write(value);
+      }).then(() => callback(), callback);
+    },
+    destroy(error, callback) {
+      try { file.close(); }
+      catch (closeError) {
+        callback(error ? new AggregateError([error, closeError], `日志写入与关闭均失败: ${logPath}`, { cause: error }) : closeError);
+        return;
+      }
+      callback(error);
     },
   });
-  return { path: logPath, sink: file.sink, descriptors: [file.descriptor],
-    stdout: tee(stdout), stderr: tee(stderr), close: file.close };
+  const tee = (primary) => ({
+    write(value, callback) { return writer.write({ value, primary }, callback); },
+    once(event, listener) { writer.once(event, listener); },
+    off(event, listener) { writer.off(event, listener); },
+  });
+  return { path: logPath,
+    get sink() { return file.sink; },
+    get descriptors() { return [file.descriptor]; },
+    stdout: tee(stdout), stderr: tee(stderr),
+    close() { writer.end(); return finished(writer, { cleanup: true }); },
+  };
 }

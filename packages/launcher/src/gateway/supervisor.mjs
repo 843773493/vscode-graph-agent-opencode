@@ -326,13 +326,28 @@ function activeGatewayEnvironment(environment) {
 }
 
 export function forwardGatewayOutput(child, stdout, stderr) {
-  const stdoutListener = (chunk) => stdout.write(chunk);
-  const stderrListener = (chunk) => stderr.write(chunk);
-  child.stdout?.on("data", stdoutListener);
-  child.stderr?.on("data", stderrListener);
+  const forward = (source, destination) => {
+    if (!source) return () => {};
+    let draining = false;
+    const resume = () => { draining = false; source.resume(); };
+    const write = (chunk) => {
+      if (destination.write(chunk) === false) {
+        source.pause();
+        draining = true;
+        destination.once("drain", resume);
+      }
+    };
+    source.on("data", write);
+    return () => {
+      source.off("data", write);
+      if (draining) destination.off("drain", resume);
+    };
+  };
+  const removeStdout = forward(child.stdout, stdout);
+  const removeStderr = forward(child.stderr, stderr);
   return () => {
-    child.stdout?.off("data", stdoutListener);
-    child.stderr?.off("data", stderrListener);
+    removeStdout();
+    removeStderr();
   };
 }
 
