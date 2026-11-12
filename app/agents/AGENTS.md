@@ -55,6 +55,7 @@ app/agents/
 
 # 规范
 
+- `llm_logging_middleware.py` 的异步调用在原上下文结束 upstream capture，日志组装、校验与写盘交既有受保护 worker，完成后才返回；handler 失败时后续取消不得替换原异常。共享写锁仅覆盖写入和轮转，避免并发 writer 相互删除待统计文件，不在锁内组装日志。
 - 与 LangGraph/DeepAgents 私有字段或私有方法交互时，应集中在适配器内，避免扩散到 business service。
 - `workspace_backend.py` 仅保留框架内部虚拟工作区。会话附件与工具输出通过共享资源导航读取精确单文件 URI；附件 capability 来自 emitting model-call 的原 assembly，不能改为遍历会话私有目录或借用普通文件 relay。
 - 运行时配置应通过 `ConfigService` 或显式参数传入。

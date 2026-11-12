@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from contextvars import Token
+from functools import partial
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
@@ -23,12 +24,14 @@ from app.core.bounded_json import bound_json_value
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.failures import execution_failure_message
 from app.core.path_utils import get_session_path_resolver, get_sessions_dir
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.domain.itemized.execution_admission import ExecutionAdmission
 
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)
 LLM_LOG_MAX_PAYLOAD_BYTES = 256 * 1024
 LLM_LOG_MAX_FILES = 128
 LLM_LOG_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+_LOG_WRITE_LOCK = Lock()
 
 
 class _MessageLog(BaseModel):
@@ -222,11 +225,11 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
                 payload["upstream"], max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
             ),
         }
-        log_file.write_text(
-            json.dumps(bounded_payload, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        self._prune_session_logs(log_file.parent)
+        serialized_log = json.dumps(bounded_payload, ensure_ascii=False, separators=(",", ":"))
+        # 序列化可并发，写入和轮转共用锁，避免另一 writer 删掉正在统计的文件。
+        with _LOG_WRITE_LOCK:
+            log_file.write_text(serialized_log, encoding="utf-8")
+            self._prune_session_logs(log_file.parent)
 
     @staticmethod
     def _prune_session_logs(log_dir: Path) -> None:
@@ -270,23 +273,13 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             response = handler(request)
             upstream_attempts = end_upstream_capture(capture_token)
         except BaseException as error:
-            self._record_failed_call(session_id, request, capture_token, error)
+            record_upstream_error(error)
+            upstream_attempts = end_upstream_capture(capture_token)
+            self._save_log(session_id, request, None, upstream_attempts, error)
             raise
         else:
             self._save_log(session_id, request, response, upstream_attempts)
             return response
-
-    def _record_failed_call(
-        self,
-        session_id: str,
-        request: ModelRequest[Any],
-        capture_token: Token[list[dict[str, Any]] | None],
-        error: BaseException,
-    ) -> None:
-        """归档失败的上游 attempt 与 LLM 日志；异常仍由调用方原样抛出。"""
-        record_upstream_error(error)
-        upstream_attempts = end_upstream_capture(capture_token)
-        self._save_log(session_id, request, None, upstream_attempts, error)
 
     async def awrap_model_call(
         self,
@@ -301,8 +294,13 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             response = await handler(request)
             upstream_attempts = end_upstream_capture(capture_token)
         except BaseException as error:
-            self._record_failed_call(session_id, request, capture_token, error)
+            record_upstream_error(error)
+            upstream_attempts = end_upstream_capture(capture_token)
+            # 原 handler 已失败，后续取消不能打断日志结算或替换它的异常。
+            await run_cleanup_shielded(
+                partial(run_sync_shielded, self._save_log, session_id, request, None, upstream_attempts, error)
+            )
             raise
         else:
-            self._save_log(session_id, request, response, upstream_attempts)
+            await run_sync_shielded(self._save_log, session_id, request, response, upstream_attempts)
             return response
