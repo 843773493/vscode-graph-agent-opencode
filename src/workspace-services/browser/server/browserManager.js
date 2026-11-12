@@ -215,6 +215,9 @@ export class BrowserManager {
       this.browsersById.set(session.id, session);
     }
     await this.persist();
+    for (const session of this.browsersById.values()) {
+      await this.stateStore.pruneDownloads(session.id, session.record.downloads || []);
+    }
   }
 
   async writeScreenshot(id, buffer) {

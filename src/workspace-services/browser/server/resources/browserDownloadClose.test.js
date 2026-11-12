@@ -25,7 +25,7 @@ function downloadSession(stage) {
         }
         records.push(browser.toRecord());
       },
-      stateStore: { deleteCheckpoint: async () => undefined },
+      stateStore: { deleteCheckpoint: async () => undefined, deleteDownloads: async () => undefined },
       runtimePool: { releaseContext: async () => undefined },
     },
     record: {

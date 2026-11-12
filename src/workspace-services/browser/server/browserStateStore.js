@@ -439,6 +439,43 @@ export class BrowserStateStore {
     return browserId;
   }
 
+  async deleteDownloads(browserId, downloads) {
+    for (const download of downloads) {
+      const filePath = this.resolveDownloadPath(browserId, download.download_id, download.filename);
+      try {
+        await rm(filePath, { force: true });
+      } catch (error) {
+        const cause = recordStorageFailure(this.workspaceId, "[browser-state-store] 删除过期下载失败", {
+          browserId, downloadId: download.download_id, filePath,
+        }, error);
+        throw Object.assign(new Error(
+          `删除过期下载失败: browser_id=${browserId}, download_id=${download.download_id}, code=${error.code}`,
+          { cause },
+        ), { code: error.code });
+      }
+    }
+  }
+
+  async pruneDownloads(browserId, downloads) {
+    const directory = path.join(this.downloadDir, this.assertBrowserId(browserId));
+    const retained = new Set(downloads.map(download => path.basename(
+      this.resolveDownloadPath(browserId, download.download_id, download.filename),
+    )));
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    // 只在启动尚未接纳下载时扫描，避免误删仍在 saveAs 的在途文件。
+    for (const entry of entries) {
+      if (entry.isFile() && /^download_[a-z0-9]+-.+$/s.test(entry.name) && !retained.has(entry.name)) {
+        await rm(path.join(directory, entry.name));
+      }
+    }
+  }
+
   // 文件名必须来自 owner 生成的安全字符集，避免 `../` 逃出产物目录。
   static assertSafeName(name) {
     if (typeof name !== "string" || name === "" || name !== path.basename(name)) {

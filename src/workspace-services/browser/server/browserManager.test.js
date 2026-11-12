@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { cpSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { BrowserManager, BrowserTransportGrantRejected } from "./browserManager.js";
@@ -26,6 +26,35 @@ function createOptions() {
 }
 
 describe("浏览器状态持久化", () => {
+  test("下载列表淘汰实际删除文件，重启回收未发布的残留而保留可访问下载", async () => {
+    const manager = createBrowserManagerWithStateWriter(null);
+    const browser = new BrowserSession({ manager, record: {
+      browser_id: `browser_${"d".repeat(32)}`, workspace_id: WORKSPACE_ID, status: "closed",
+      reconciliation_status: "verified", transport_owner_revision: 1,
+    } });
+    manager.browsersById.set(browser.id, browser);
+    const download = {
+      suggestedFilename: () => "report.txt", url: () => "https://example.test/report",
+      saveAs: async file => writeFileSync(file, "保留下载正文"),
+    };
+    for (let index = 0; index < 50; index += 1) await browser.handleDownload(download);
+    await Promise.all([browser.handleDownload(download), browser.handleDownload(download)]);
+    const directory = path.join(manager.stateStore.downloadDir, browser.id);
+    expect(browser.record.downloads).toHaveLength(50);
+    expect(readdirSync(directory)).toHaveLength(50);
+    const retained = structuredClone(browser.record.downloads);
+    writeFileSync(path.join(directory, "download_orphan-report.txt"), "崩溃后未发布的正文");
+    writeFileSync(path.join(directory, "unknown.txt"), "不属于下载文件的内容");
+    const cold = new BrowserManager({ workspaceRoot: manager.workspaceRoot, workspaceId: WORKSPACE_ID });
+    await cold.init();
+    expect(cold.get(browser.id).record.downloads).toEqual(retained);
+    expect(readdirSync(directory)).toHaveLength(51);
+    expect(readdirSync(directory)).not.toContain("download_orphan-report.txt");
+    for (const record of retained) {
+      expect(readFileSync(cold.download(browser.id, record.download_id).path, "utf8")).toBe("保留下载正文");
+    }
+  });
+
   test("保存恢复记录不调用展示快照，真实落盘后重建同一资源快照", async () => {
     const manager = createBrowserManagerWithStateWriter(null);
     const session = new BrowserSession({ manager, record: {
@@ -128,7 +157,7 @@ describe("浏览器状态持久化", () => {
   test("重启时缺少检查点的冻结浏览器明确标记为丢失", async () => {
     const manager = createBrowserManagerWithStateWriter(async () => undefined);
     manager.stateStore.readRecords = async () => [{
-      browser_id: "browser_missing_checkpoint",
+      browser_id: `browser_${"e".repeat(32)}`,
       workspace_id: WORKSPACE_ID, transport_owner_revision: 1,
       status: "running",
       resource_state: "frozen",
@@ -137,7 +166,7 @@ describe("浏览器状态持久化", () => {
 
     await manager.init();
 
-    expect(manager.get("browser_missing_checkpoint").record).toMatchObject({
+    expect(manager.get(`browser_${"e".repeat(32)}`).record).toMatchObject({
       status: "lost",
       resource_state: "lost",
       client_count: 0,

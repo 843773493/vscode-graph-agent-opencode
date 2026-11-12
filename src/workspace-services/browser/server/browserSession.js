@@ -1405,9 +1405,12 @@ export class BrowserSession extends EventEmitter {
       this.activeDownloads += 1;
       try {
         const record = await this.manager.writeDownload(this.id, download);
-        this.record.downloads = [record, ...(this.record.downloads || [])].slice(0, 50);
+        const downloads = [record, ...(this.record.downloads || [])];
+        this.record.downloads = downloads.slice(0, 50);
         this.record.updated_at = nowIso();
         await this.manager.persist();
+        // 先发布列表，再删除已不可访问的文件；崩溃残留由下次启动按权威列表清理。
+        await this.manager.stateStore.deleteDownloads(this.id, downloads.slice(50));
         this.emit("state", this.snapshot());
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
