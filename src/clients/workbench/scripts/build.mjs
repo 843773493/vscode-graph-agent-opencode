@@ -1,5 +1,6 @@
 import { buildSourcePlugin, sourceTransform } from './sourceTransform.mjs';
 import { buildExtensions } from './extensions.mjs';
+import { writeBuildMetadata } from './buildMetadata.mjs';
 import { build } from 'esbuild';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve, join, relative, dirname, extname, basename, sep } from 'node:path';
@@ -57,7 +58,7 @@ if (!values['assets-only']) {
   await build({ ...options, entryPoints: { main: entry }, splitting: true, chunkNames: 'chunks/[name]-[hash]',
     outdir: join(dist, 'out') }).then(async result => {
     recordAssets(result);
-    await writeFile(join(dist, 'build-meta.json'), JSON.stringify(result.metafile));
+    await writeBuildMetadata(join(dist, 'build-meta.json'), result.metafile);
   });
 }
 for (const entry of workers) {

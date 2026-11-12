@@ -46,3 +46,5 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 
 
 原用户 Node／Web Extension Host、VSIX／Gallery 安装与专用构建脚本已退役。浏览器 scanner 只保留产品内置贡献和派生缓存，原 Worker 与 Registry 继续运行；自有包管理沿原配置及 Gateway 插件 owner。
+
+`buildMetadata.mjs` 只按 esbuild 既有 inputs／outputs 字典流式写出原 metadata，避免构建末尾再申请整份 JSON 字符串；不删字段、不创建索引或改变资源分块身份。写入错误沿 pipeline 抛出，等价性由真实 esbuild 结果及其 analyzeMetafile 验证。
