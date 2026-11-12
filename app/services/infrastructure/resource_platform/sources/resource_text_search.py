@@ -39,17 +39,21 @@ def content_matches(
     if not options.is_regex and pattern.search(content, timeout=max(0, deadline - monotonic())) is None:
         return
     starts = [0, *(match.end() for match in re.finditer(r"\r\n?|\n", content))]
-    astral = [] if content.isascii() else [index for index, character in enumerate(content) if ord(character) > 0xFFFF]
+    astral = [] if content.isascii() else [match.start() for match in re.finditer(r"[\U00010000-\U0010ffff]", content)]
 
     def utf16_column(offset: int, row: int) -> int:
         return offset - starts[row] + 1 + bisect.bisect_left(astral, offset) - bisect.bisect_left(astral, starts[row])
 
-    def line_content(row: int) -> str:
-        return content[starts[row]:starts[row + 1] if row + 1 < len(starts) else len(content)].rstrip("\r\n")
+    def line_content(row: int, start: int = 0, length: int | None = None) -> str:
+        end = starts[row + 1] if row + 1 < len(starts) else len(content)
+        begin = starts[row] + start
+        if length is not None:
+            end = min(end, begin + length)
+        return content[begin:end].rstrip("\r\n")
 
     def context_line(row: int) -> ResourceNavigationContextDTO:
         check_deadline()
-        raw = line_content(row).encode("utf-8")
+        raw = line_content(row, length=request.max_snippet_bytes + 1).encode("utf-8")
         text = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
         return ResourceNavigationContextDTO(uri=uri, line=row + 1, text=text, truncated=len(raw) > request.max_snippet_bytes)
 
@@ -70,10 +74,10 @@ def content_matches(
                 skip_matches -= 1
                 yield None
             else:
-                line = line_content(row)
                 column = begin - starts[row]
                 start = max(0, column - request.max_snippet_bytes // 8)
-                raw = line[start:].encode("utf-8")
+                # 多取一个字符即可判断截断，避免每条命中重新编码整段长行。
+                raw = line_content(row, start, request.max_snippet_bytes + 1).encode("utf-8")
                 snippet = codecs.getincrementaldecoder("utf-8")().decode(raw[:request.max_snippet_bytes], final=False)
                 match = ResourceNavigationMatchDTO(uri=uri, line=row + 1, column=column + 1,
                     end_line=end_row + 1, end_column=end - starts[end_row] + 1,

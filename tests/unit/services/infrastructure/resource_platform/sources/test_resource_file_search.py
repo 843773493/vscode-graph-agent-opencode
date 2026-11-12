@@ -443,11 +443,12 @@ async def test_multiline_crlf_emoji_positions_are_codepoints_not_snippet_offsets
     assert not no_match.matches and not no_match.truncated
 
 
-async def test_clipped_snippet_keeps_utf16_coordinates_of_hidden_emoji_prefix(navigation_case):
+@pytest.mark.parametrize("suffix", ["", "汉" * 100000], ids=["short", "long-line"])
+async def test_clipped_snippet_keeps_utf16_coordinates_of_hidden_emoji_prefix(navigation_case, suffix):
     owner, workspace, uri = navigation_case
-    (workspace / "text.txt").write_text("😀" * 100 + "needle", encoding="utf-8")
+    (workspace / "text.txt").write_text("😀" * 100 + "needle" + suffix, encoding="utf-8")
     page = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode="content",
-        query="needle", max_snippet_bytes=16), local_gateway_id=GATEWAY_ID)
+        query="needle", max_snippet_bytes=16, max_bytes=512 * 1024), local_gateway_id=GATEWAY_ID)
     match, = page.matches
     assert (match.column, match.end_column, match.snippet_start_column) == (101, 107, 99)
     assert (match.utf16_column, match.utf16_end_column, match.snippet_start_utf16_column) == (201, 207, 197)
