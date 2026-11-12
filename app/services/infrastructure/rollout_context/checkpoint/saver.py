@@ -450,16 +450,6 @@ class RolloutCheckpointSaver(
             checkpoint_ns=checkpoint_ns,
         )
 
-    def history_read_lease(
-        self,
-        session_id: str,
-        thread_id: str,
-    ) -> AbstractAsyncContextManager[None]:
-        """历史异步入口借用同一 reader 准入，未物化状态仍交给原历史规则。"""
-        return self._context_reader.read_lease(
-            session_id, thread_id, allow_unmaterialized=True,
-        )
-
     def bootstrap_history(
         self,
         session_id: str,

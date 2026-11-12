@@ -7221,8 +7221,9 @@ async def test_local_capture_waiters_do_not_borrow_another_task_shared_hold(
             assert release_writer.wait(timeout=2)
 
     async def read() -> TurnHistoryPageDTO:
-        async with context.saver.history_read_lease(source.session_id, thread_id):
-            return context.saver.load_history(source.session_id, thread_id, TurnHistoryLoadRequest())
+        return await production_fork_container.session_turn_history_service.load_history(
+            source.session_id, TurnHistoryLoadRequest(), thread_id=thread_id,
+        )
 
     operation = asyncio.create_task(context.forks.fork(request))
     probe = None
@@ -7259,6 +7260,10 @@ async def test_local_capture_waiters_do_not_borrow_another_task_shared_hold(
             writer.result(timeout=1)
             assert page.items
             assert storage.jsonl_path(source.session_id, thread_id=thread_id).read_bytes() == original
+            # 取消留下未完成快照；同键重试明确拒绝并结清原期限。
+            release_capture.set()
+            with pytest.raises(IncompleteForkSourceCaptureError):
+                await context.forks.fork(request)
         finally:
             release_capture.set()
             release_writer.set()

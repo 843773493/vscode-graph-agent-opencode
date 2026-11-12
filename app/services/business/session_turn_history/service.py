@@ -65,12 +65,12 @@ class SessionTurnHistoryService:
             await observe_phase(thread_id, "history.read.guarded", details={
                 "session_id": session_id, "thread_id": thread_id, "kind": "bootstrap",
             })
-            async with self._checkpointer.history_read_lease(session_id, thread_id):
-                latest, older_cursor, projection_epoch = self._checkpointer.bootstrap_history(
-                    session_id,
-                    thread_id,
-                    policy=history_loading,
-                )
+            latest, older_cursor, projection_epoch = await run_sync_shielded(
+                self._checkpointer.bootstrap_history,
+                session_id,
+                thread_id,
+                policy=history_loading,
+            )
             pending = await self._job_service.list_pending_summaries(
                 session_id,
                 limit=_BOOTSTRAP_ACTIVE_JOB_LIMIT,
@@ -130,13 +130,13 @@ class SessionTurnHistoryService:
             await observe_phase(thread_id, "history.read.guarded", details={
                 "session_id": session_id, "thread_id": thread_id, "kind": "history",
             })
-            async with self._checkpointer.history_read_lease(session_id, thread_id):
-                page = self._checkpointer.load_history(
-                    session_id,
-                    thread_id,
-                    request,
-                    policy=history_loading,
-                )
+            page = await run_sync_shielded(
+                self._checkpointer.load_history,
+                session_id,
+                thread_id,
+                request,
+                policy=history_loading,
+            )
             return page.model_copy(update={"thread_id": thread_id})
 
     async def list_tool_results(self, session_id: str, thread_id: str, *, after: int = 0,
@@ -144,9 +144,10 @@ class SessionTurnHistoryService:
                                 view_revision: int | None = None) -> ThreadToolResultListDTO:
         async with self._session_service.session_read_admission(session_id):
             thread_id = await self._session_service.resolve_thread(session_id, thread_id)
-            async with self._checkpointer.history_read_lease(session_id, thread_id):
-                return self._checkpointer.list_history_tool_results(session_id, thread_id, after=after,
-                    limit=limit, view_id=view_id, view_revision=view_revision)
+            return await run_sync_shielded(
+                self._checkpointer.list_history_tool_results, session_id, thread_id,
+                after=after, limit=limit, view_id=view_id, view_revision=view_revision,
+            )
 
     async def search_messages(
         self, session_id: str, thread_id: str, request: TurnMessageSearchRequest,
