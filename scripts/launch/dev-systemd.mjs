@@ -1,6 +1,7 @@
 import path from "node:path";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../packages/launcher/src/gateway/supervisor.mjs";
+import { MANAGER_START_TIMEOUT_MS } from "./dev-readiness.mjs";
 
 import {
   developmentSystemdUnitName,
@@ -161,7 +162,7 @@ function isManagerReady(unit, state) {
   }
 }
 
-export async function waitForGateway(unit, timeoutMs = 120_000) {
+export async function waitForGateway(unit, timeoutMs = MANAGER_START_TIMEOUT_MS) {
   const deadline = performance.now() + timeoutMs;
   let lastError = null;
   while (performance.now() < deadline) {

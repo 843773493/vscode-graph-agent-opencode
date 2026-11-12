@@ -1,6 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
+// 外层须覆盖 Gateway 启动，以及前端资源构建和入口预热。
+export const MANAGER_START_TIMEOUT_MS = 300_000;
+
 export async function waitForHttpOk({
   url,
   label,
@@ -67,7 +70,7 @@ export async function waitForHttpOk({
   );
 }
 
-export async function waitForDetachedReady({ child, readyFile, logPath, timeoutMs = 120_000 }) {
+export async function waitForDetachedReady({ child, readyFile, logPath, timeoutMs = MANAGER_START_TIMEOUT_MS }) {
   const deadlineMonotonicMs = performance.now() + timeoutMs;
   while (performance.now() < deadlineMonotonicMs) {
     if (child.exitCode !== null || child.signalCode !== null) {

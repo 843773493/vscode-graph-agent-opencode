@@ -27,6 +27,9 @@ import {
 
 import { waitForDetachedReady, waitForHttpOk } from "./dev-readiness.mjs";
 
+// /health 还要等待 Workbench 资源构建和 Vite 入口预热，不能只按 HTTP 服务启动计时。
+const FRONTEND_START_TIMEOUT_MS = 180_000;
+
 const cliArguments = process.argv.slice(2);
 const developmentLayout = resolveDevelopmentLayout({ args: cliArguments });
 const {
@@ -491,7 +494,7 @@ async function main() {
         headers: { "X-BoxTeam-Workspace-Id": backendWorkspaceId },
       });
     } else if (serviceMode === "web") {
-      await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend" });
+      await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend", timeoutMs: FRONTEND_START_TIMEOUT_MS });
     } else {
       await waitForHttpOk({
         url: `http://${host}:${ports.gateway}/api/gateway/health`,
@@ -502,7 +505,7 @@ async function main() {
       if (serviceMode === "all") {
         const frontend = spawnProcess("bun", workbenchArguments, webRoot, environment);
         processes.push(frontend);
-        await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend" });
+        await waitForHttpOk({ url: `http://${host}:${ports.frontend}/health`, label: "frontend", timeoutMs: FRONTEND_START_TIMEOUT_MS });
       }
     }
     if (detachedReadyFile !== null) {

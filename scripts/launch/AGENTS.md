@@ -21,7 +21,7 @@ Windows/macOS 的 detached manager 在 `out/development-runtime/detached-ready.j
 
 `dev-systemd.mjs status` 的 Gateway 单次HTTP观测使用独立2秒期限，并取消未消费响应正文；这是状态查询的观察预算，不代表启动就绪或systemd停止期限。
 
-`dev.mjs`的各服务探针统一调用`dev-readiness.mjs`，默认HTTP观察预算90秒、detached manager记录预算120秒；请求头、目标进程和路径由调用方显式传入。请求、轮询与迟到响应判断共用`performance.now()`的单调期限；HTTP请求按剩余预算取消，只看状态码并取消未消费的正文，健康响应后再次核对进程退出事实。detached记录仍按子进程PID匹配，未写完的JSON允许下一次观察。观察超时不终止服务；同步文件读取和被阻塞的事件循环不因此获得硬取消能力，也不涉及fork的业务期限。
+`dev.mjs`的各服务探针统一调用`dev-readiness.mjs`，默认HTTP观察预算90秒；前端须等待 Workbench 资源构建和 Vite 入口预热，预算180秒。systemd 与 detached manager 的外层启动预算统一为300秒，覆盖顺序启动的 Gateway 与前端；请求头、目标进程和路径由调用方显式传入。请求、轮询与迟到响应判断共用`performance.now()`的单调期限；HTTP请求按剩余预算取消，只看状态码并取消未消费的正文，健康响应后再次核对进程退出事实。detached记录仍按子进程PID匹配，未写完的JSON允许下一次观察。观察超时不终止服务；同步文件读取和被阻塞的事件循环不因此获得硬取消能力，也不涉及fork的业务期限。
 
 detached manager启动失败后，终止请求成功时原样抛出启动异常；终止请求也失败时，`AggregateError.errors`按顺序保留启动和清理两份原异常，`cause`指向启动异常。`dev-detached-lifetime.test.mjs`通过AST提取实际入口函数并注入文件、进程和信号替身，不执行开发编排或操作用户服务；该证据只覆盖异常交付与清理调用，不能替代真实进程退出确认。
 

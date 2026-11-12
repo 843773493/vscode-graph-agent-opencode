@@ -12,12 +12,12 @@ import {
 import { randomUUID } from "node:crypto";
 
 import { resolveDevelopmentLayout } from "./dev-environment.mjs";
+import { MANAGER_START_TIMEOUT_MS } from "./dev-readiness.mjs";
 import { terminateDetachedProcess } from "../../packages/launcher/src/detached-process.mjs";
 import { resolveServiceLogPath } from "../../packages/launcher/src/logging/service-log.mjs";
 import { loadRuntimeLogContract } from "../../src/shared/serverRuntimeLogging.mjs";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../packages/launcher/src/gateway/supervisor.mjs";
 
-const MANAGER_START_TIMEOUT_MS = 120_000;
 const MANAGER_STOP_GRACE_MS = GATEWAY_SHUTDOWN_TIMEOUT_MS + 20_000;
 const MANAGER_STOP_FORCE_MS = 5_000;
 const STATUS_GATEWAY_TIMEOUT_MS = 2_000;
