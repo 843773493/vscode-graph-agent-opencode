@@ -20,6 +20,8 @@
 
 `test_media_reopen` 通过规范 URI 进入原 Opener／媒体 resolver 与官方隔离 Webview，A/B 同名 WAV 以实际解码时长区分归属；原视频 fixture 核尺寸、时长、复制零新增正文读取、关闭重开和正常刷新恢复。普通媒体输入是文件预备，模型回放只供后端启动且要求零调用；不替换 Worker、媒体内容或业务响应，不把页面通过称为 Electron 或无扩展名附件重开验收。
 
+`test_attachment_media_reopen` 从真实消息上传并执行生成附件，复制原件的无扩展名 `/original/content` URI 后经原 Opener 重开图片、音频和视频；两工作区同名 WAV 用实际解码时长区分 owner。核复制零正文读取、原 HEAD／GET／Range、MIME、名称、request_id、分屏及正常重载；浏览器阶段不执行模型或写文件，不替换媒体与隔离 Worker，不代替 PDF、Windows、远端或 Electron 验收。
+
 `web_extensions_cache_browser.test.mjs` 在真实 Chromium `isWeb=true` 下，经正式 `sourceTransform` 运行原 system／custom builtin scanner、manifest、FileService 与 URI identity，核派生缓存跳过坏项并在坏正文或读取失败时沿原扫描入口回退。缓存内容只作为该读取场景的故障预备，不覆盖用户 profile 扫描或安装行为，也不称作 Gateway 或扩展宿主验收。
 
 pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Workbench 构建继续使用 Bun；Windows 实测 Bun 会在 `chromium.launch()` 挂起，不能以增加超时替代正确运行时。保留原进程外超时、内存保护和业务断言。
