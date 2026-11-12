@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Iterable, Iterator
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -20,9 +20,8 @@ from .trace_index_compaction import _AnyEvent
 _TRACE_STREAM_BATCH_BYTES = 512 * 1024
 
 
-def parse_trace_event_lines(*, session_id: str, lines: Iterable[str]) -> list[Event]:
+def iter_trace_event_lines(*, session_id: str, lines: Iterable[str]) -> Iterator[Event]:
     """逐行解析 trace，并保留格式损坏优先于事件协议错误的归因顺序。"""
-    events: list[Event] = []
     first_schema_error: tuple[dict[str, object], ValidationError] | None = None
     for source_line in lines:
         line = source_line.strip()
@@ -41,16 +40,16 @@ def parse_trace_event_lines(*, session_id: str, lines: Iterable[str]) -> list[Ev
         if first_schema_error is not None:
             continue
         try:
-            events.append(_AnyEvent.model_validate(raw_event).root)
+            event = _AnyEvent.model_validate(raw_event).root
         except ValidationError as error:
             first_schema_error = (raw_event, error)
-            events.clear()
+        else:
+            yield event
     if first_schema_error is not None:
         raw_event, error = first_schema_error
         raise RuntimeError(
             f"Trace 事件协议无效: session_id={session_id} event={raw_event!r}"
         ) from error
-    return events
 
 
 def _read_trace_batch(

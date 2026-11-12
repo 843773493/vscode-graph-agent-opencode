@@ -12,6 +12,7 @@ from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import validate_workspace_id
 from app.schemas.event import (
     Event,
@@ -119,11 +120,8 @@ class RuntimeService:
         result.interrupted_resources = interrupted_jobs + interrupted_background
         return result
 
-    async def reconcile_stale_executions(self) -> int:
-        """保留首个 Provider 前的原 runtime 准入，恢复安全 checkpoint，其余执行标为丢失。"""
-        self._startup_reconciliation_errors = []
-        reconciled = 0
-        resumed_job_ids: set[str] = set()
+    def _read_trace_job_owners(self) -> dict[str, tuple[str, str]]:
+        """完整校验历史，只保留恢复需要的 Job 归属，不驻留事件正文。"""
         terminal_types = {
             "job_completed",
             "job_cancelled",
@@ -132,28 +130,31 @@ class RuntimeService:
         }
         job_owners: dict[str, tuple[str, str]] = {}
         lifecycle_jobs_by_session: dict[str, set[str]] = {}
-        event: Event | None = None
         for session_id in self._trace_event_store.list_session_ids():
             lifecycle_jobs: set[str] = set()
-            for event in self._trace_event_store.read_events(session_id):
-                if event.type in {"job_created", "job_started"}:
+            owner_error: RuntimeError | None = None
+            for event in self._trace_event_store.iter_events(session_id):
+                if event.type in {"job_created", "job_started"} and owner_error is None:
                     owner = (event.payload.session_id, event.payload.thread_id)
                     phase = event.type.removeprefix("job_")
                     if owner[0] != session_id:
-                        raise RuntimeError(
+                        owner_error = RuntimeError(
                             f"Job {phase} owner 与 Trace 会话冲突: job_id={event.job_id!r}, "
                             f"trace_session={session_id!r}, owner={owner!r}"
                         )
-                    previous = job_owners.setdefault(event.job_id, owner)
-                    if previous != owner:
-                        raise RuntimeError(
-                            f"同一 Job 的 {phase} owner 漂移: job_id={event.job_id!r}, "
-                            f"previous={previous!r}, current={owner!r}"
-                        )
+                    else:
+                        previous = job_owners.setdefault(event.job_id, owner)
+                        if previous != owner:
+                            owner_error = RuntimeError(
+                                f"同一 Job 的 {phase} owner 漂移: job_id={event.job_id!r}, "
+                                f"previous={previous!r}, current={owner!r}"
+                            )
                 if event.type == "job_started" or event.type in terminal_types:
                     lifecycle_jobs.add(event.job_id)
             lifecycle_jobs_by_session[session_id] = lifecycle_jobs
-            event = None
+            # 保留完整文件格式／协议错误优先于 owner 冲突的原归因顺序。
+            if owner_error is not None:
+                raise owner_error
 
         # 先校验全部 Trace 的 owner，再调用恢复端口或写入终态，避免跨会话冲突留下部分副作用。
         for session_id, lifecycle_jobs in lifecycle_jobs_by_session.items():
@@ -164,6 +165,15 @@ class RuntimeService:
                         f"Job 终态 Trace 与 started owner 冲突: job_id={job_id!r}, "
                         f"trace_session={session_id!r}, owner={owner!r}"
                     )
+
+        return job_owners
+
+    async def reconcile_stale_executions(self) -> int:
+        """保留首个 Provider 前的原 runtime 准入，恢复安全 checkpoint，其余执行标为丢失。"""
+        self._startup_reconciliation_errors = []
+        reconciled = 0
+        resumed_job_ids: set[str] = set()
+        job_owners = await run_sync_shielded(self._read_trace_job_owners)
 
         records = await self._pending_request_store.records()
         for record in records:

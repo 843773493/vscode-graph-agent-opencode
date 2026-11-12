@@ -40,7 +40,7 @@ from app.services.infrastructure.turn_history.trace_search import (
     search_trace_events,
 )
 from app.services.infrastructure.turn_history.trace_stream import (
-    parse_trace_event_lines,
+    iter_trace_event_lines,
     stream_trace_records,
 )
 from app.services.infrastructure.turn_history.trace_writer import (
@@ -188,11 +188,10 @@ class TraceEventStore:
         after_event_id: str | None = None,
         tail_limit: int | None = None,
     ) -> list[Event]:
-        events = self._read_file_events(
+        events = list(self.iter_events(
             session_id,
-            self._trace_file(session_id),
             tail_limit=tail_limit if after_event_id is None else None,
-        )
+        ))
         return events_after_cursor(session_id, events, after_event_id)
 
     def read_terminal_job_statuses(
@@ -386,22 +385,24 @@ class TraceEventStore:
                 f"size={final_offset}"
             )
 
-    def _read_file_events(
+    def iter_events(
         self,
         session_id: str,
-        file: Path,
         *,
         tail_limit: int | None = None,
-    ) -> list[Event]:
+    ) -> Iterator[Event]:
+        """逐行消费完整 Trace；调用方须耗尽迭代器才能完成历史校验。"""
+        file = self._trace_file(session_id)
         if not file.exists():
-            return []
+            return
         if tail_limit is not None:
-            return parse_trace_event_lines(
+            yield from iter_trace_event_lines(
                 session_id=session_id,
                 lines=self._read_last_lines(file, tail_limit),
             )
-        with file.open(encoding="utf-8") as stream:
-            return parse_trace_event_lines(session_id=session_id, lines=stream)
+        else:
+            with file.open(encoding="utf-8") as stream:
+                yield from iter_trace_event_lines(session_id=session_id, lines=stream)
 
     @staticmethod
     def _read_last_lines(file: Path, limit: int) -> list[str]:

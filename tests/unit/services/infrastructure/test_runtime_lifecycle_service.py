@@ -509,14 +509,14 @@ async def test_startup_releases_other_session_request_bodies_before_recovery(
         await store.append(session_id, queued)
         runtime._pending_request_store.add_started(request)
     payloads: dict[str, list[weakref.ReferenceType[JobCreatedPayload]]] = {}
-    original_read = store.read_events
+    original_read = store.iter_events
 
     def observed_read(session_id: str):
-        events = original_read(session_id)
-        payloads.setdefault(session_id, [
-            weakref.ref(event.payload) for event in events if event.type == "job_created"
-        ])
-        return events
+        references = payloads.setdefault(session_id, [])
+        for event in original_read(session_id):
+            if event.type == "job_created":
+                references.append(weakref.ref(event.payload))
+            yield event
 
     async def observed_checkpoint(job: JobState) -> str:
         # 执行任何恢复回调前已校验所有 owner，并释放其他会话的 Trace 正文。
@@ -528,7 +528,7 @@ async def test_startup_releases_other_session_request_bodies_before_recovery(
         calls.append(("pending_checkpoint", job))
         return "checkpoint-original"
 
-    monkeypatch.setattr(store, "read_events", observed_read)
+    monkeypatch.setattr(store, "iter_events", observed_read)
     monkeypatch.setattr(runtime, "_pending_tool_checkpoint_id", observed_checkpoint)
 
     assert await runtime.reconcile_stale_executions() == 0
