@@ -8,6 +8,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langgraph.checkpoint.base import CheckpointTuple
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.core.checkpoint_config import build_checkpoint_config
@@ -30,8 +31,8 @@ from app.services.business.job.lifecycle import (
 )
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
+from app.services.business.session_turn_history.visible_page import visible_message_page
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
-    acheckpoint_messages,
     message_snapshot,
     message_snapshot_metadata,
 )
@@ -83,6 +84,24 @@ class SessionTurnReplayService:
         target_message_id: str,
         request: MessageReplayRequest,
     ) -> MessageReplayAccepted:
+        return await self._replay(session_id, target_message_id, request, by_turn=False)
+
+    async def replay_turn(
+        self,
+        session_id: str,
+        turn_id: str,
+        request: MessageReplayRequest,
+    ) -> MessageReplayAccepted:
+        return await self._replay(session_id, turn_id, request, by_turn=True)
+
+    async def _replay(
+        self,
+        session_id: str,
+        target_id: str,
+        request: MessageReplayRequest,
+        *,
+        by_turn: bool,
+    ) -> MessageReplayAccepted:
         if not request.acknowledge_context_only:
             raise ValueError(
                 "必须确认：操作会移除目标消息及其后的会话上下文，但不会撤销工作区文件修改"
@@ -96,22 +115,43 @@ class SessionTurnReplayService:
             async with self._job_service.thread_input_admission(session_id, owner.thread_id):
                 await self._assert_thread_idle(owner)
                 session = await self._session_service.get(session_id)
-                visible_messages = (
-                    await self._message_service.list(session_id=session_id, limit=100_000)
-                ).items
+                # 同一次输入准入内，目标验证与回退共用已恢复的完整快照。
+                latest = await self._message_service.load_checkpoint_tuple(
+                    session_id, owner.thread_id,
+                )
+                visible_messages: list[MessageDTO] = []
+                if latest is not None:
+                    visible_messages = visible_message_page(
+                        self._message_service.visible_messages_from_checkpoint(
+                            session_id, owner.thread_id, latest,
+                        ),
+                        session_id=session_id,
+                        thread_id=owner.thread_id,
+                        checkpoint_id=latest.checkpoint["id"],
+                        limit=100_000,
+                        cursor=None,
+                    ).items
                 target_index = next(
                     (
                         index
                         for index, message in enumerate(visible_messages)
-                        if message.message_id == target_message_id
+                        if (
+                            message.role == MessageRole.user
+                            and message.metadata.get("turn_id") == target_id
+                            if by_turn
+                            else message.message_id == target_id
+                        )
                     ),
                     -1,
                 )
-                if target_index < 0:
+                if latest is None or target_index < 0:
+                    if by_turn:
+                        raise ValueError(f"当前有效上下文中不存在目标 Turn: turn_id={target_id}")
                     raise ValueError(
-                        f"目标用户消息不在当前有效上下文中: message_id={target_message_id}"
+                        f"目标用户消息不在当前有效上下文中: message_id={target_id}"
                     )
                 target = visible_messages[target_index]
+                target_message_id = target.message_id
                 if target.role != MessageRole.user:
                     raise ValueError("轮次操作只能以用户消息为目标")
                 target_turn_id = target.metadata.get("turn_id")
@@ -141,6 +181,7 @@ class SessionTurnReplayService:
                 with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
                     removed_message_count = await self._append_replay_checkpoint(
                         owner=owner,
+                        latest=latest,
                         target_message_id=target_message_id,
                         target_turn_id=target_turn_id,
                         action=request.action,
@@ -159,33 +200,6 @@ class SessionTurnReplayService:
                     workspace_changes_reverted=False,
                     notice=CONTEXT_ONLY_NOTICE,
                 )
-
-    async def replay_turn(
-        self,
-        session_id: str,
-        turn_id: str,
-        request: MessageReplayRequest,
-    ) -> MessageReplayAccepted:
-        """以用户可见的 Turn ID 解析目标，内部再定位用户消息。"""
-        visible_messages = (
-            await self._message_service.list(session_id=session_id, limit=100_000)
-        ).items
-        target = next(
-            (
-                message
-                for message in visible_messages
-                if message.role == MessageRole.user
-                and message.metadata.get("turn_id") == turn_id
-            ),
-            None,
-        )
-        if target is None:
-            raise ValueError(f"当前有效上下文中不存在目标 Turn: turn_id={turn_id}")
-        return await self.replay(
-            session_id,
-            target.message_id,
-            request,
-        )
 
     async def _assert_thread_idle(self, owner: MutationIntentOwner) -> None:
         active = [
@@ -284,16 +298,12 @@ class SessionTurnReplayService:
         self,
         *,
         owner: MutationIntentOwner,
+        latest: CheckpointTuple,
         target_message_id: str,
         target_turn_id: str,
         action: str,
     ) -> int:
-        latest = await self._checkpointer.aget_tuple(
-            build_checkpoint_config(owner.thread_id)
-        )
-        if latest is None:
-            raise ValueError("当前会话没有可回退的 checkpoint")
-        latest_messages = await acheckpoint_messages(self._checkpointer, latest)
+        latest_messages = latest.checkpoint["channel_values"]["messages"]
         target_raw_index = self._message_index(latest_messages, target_message_id)
         if target_raw_index < 0:
             raise ValueError(

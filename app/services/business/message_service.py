@@ -93,7 +93,7 @@ class MessageService(MessageContentProjectionMixin):
         """解析会话的权威 main thread id；缺指针时保持 KeyError 语义。"""
         return self._main_thread_resolver(session_id)
 
-    async def _load_checkpoint_tuple(
+    async def load_checkpoint_tuple(
         self,
         session_id: str,
         thread_id: str,
@@ -119,11 +119,11 @@ class MessageService(MessageContentProjectionMixin):
         cursor: str | None = None,
     ) -> CursorPage[MessageDTO]:
         thread_id = self._resolve_main_thread_id(session_id)
-        checkpoint_tuple = await self._load_checkpoint_tuple(session_id, thread_id)
+        checkpoint_tuple = await self.load_checkpoint_tuple(session_id, thread_id)
         if checkpoint_tuple is None:
             return CursorPage(items=[], next_cursor=None, has_more=False)
         return visible_message_page(
-            self._visible_messages_from_checkpoint(
+            self.visible_messages_from_checkpoint(
                 session_id, thread_id, checkpoint_tuple
             ),
             session_id=session_id,
@@ -345,7 +345,7 @@ class MessageService(MessageContentProjectionMixin):
         if self._checkpointer is None:
             raise RuntimeError("MessageService 未配置 checkpointer，无法读取 Agent Context")
 
-        checkpoint_tuple = await self._load_checkpoint_tuple(session_id, thread_id)
+        checkpoint_tuple = await self.load_checkpoint_tuple(session_id, thread_id)
         if checkpoint_tuple is None:
             return {
                 "records": [],
@@ -482,7 +482,7 @@ class MessageService(MessageContentProjectionMixin):
                 raise RuntimeError("MessageService 未配置 checkpointer，无法读取 Agent State")
             return []
 
-        tup = await self._load_checkpoint_tuple(
+        tup = await self.load_checkpoint_tuple(
             session_id, self._resolve_main_thread_id(session_id)
         )
         if tup is None:
@@ -502,7 +502,7 @@ class MessageService(MessageContentProjectionMixin):
         if self._checkpointer is None:
             return []
         thread_id = self._resolve_main_thread_id(session_id)
-        checkpoint_tuple = await self._load_checkpoint_tuple(session_id, thread_id)
+        checkpoint_tuple = await self.load_checkpoint_tuple(session_id, thread_id)
         if checkpoint_tuple is None:
             return []
         raw_messages = checkpoint_tuple.checkpoint.get("channel_values", {}).get(
@@ -510,13 +510,13 @@ class MessageService(MessageContentProjectionMixin):
         )
         if not isinstance(raw_messages, list):
             return []
-        return self._visible_messages_from_checkpoint(
+        return self.visible_messages_from_checkpoint(
             session_id,
             thread_id,
             checkpoint_tuple,
         )
 
-    def _visible_messages_from_checkpoint(
+    def visible_messages_from_checkpoint(
         self,
         session_id: str,
         thread_id: str,

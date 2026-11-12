@@ -133,7 +133,7 @@ async def test_cold_history_releases_topology_but_guards_handles_until_delete(
             return acquired
 
         close_snapshot = RolloutReadSnapshot.close
-        load_checkpoint = container.message_service._load_checkpoint_tuple
+        load_checkpoint = container.message_service.load_checkpoint_tuple
 
         async def load_guarded(*args, **kwargs):
             if message_url is not None and reading_history.get():
@@ -161,7 +161,7 @@ async def test_cold_history_releases_topology_but_guards_handles_until_delete(
         monkeypatch.setattr("app.core.session_subtree_delete.observe_phase", observe)
         monkeypatch.setattr(RolloutReadSnapshot, "close", close_guarded)
         monkeypatch.setattr(_CrossProcessFileLock, "__aenter__", acquire_observed)
-        monkeypatch.setattr(container.message_service, "_load_checkpoint_tuple", load_guarded)
+        monkeypatch.setattr(container.message_service, "load_checkpoint_tuple", load_guarded)
 
         async def read_history():
             # 作用域标记随 to_thread 传播；同步 close 不查询不存在的事件循环。
