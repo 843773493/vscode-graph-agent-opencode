@@ -27,7 +27,6 @@ import {
   writeRuntimeSizeReport,
 } from "./runtime-release-assets.mjs";
 import { installWindowsPythonDependencies } from "./windows-python-dependencies.mjs";
-import { rebuildWindowsNodePty } from "./windows-node-pty-build.mjs";
 import {
   downloadPinnedWindowsPython,
   downloadPinnedWindowsNode,
@@ -123,15 +122,6 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
     },
   });
   if (!crossBuild) {
-    // Windows 原生构建只运行受控 node-gyp，不允许任何依赖安装 hook。
-    // 把应用目录映射到短盘符，避免 MSVC 在深层 staging 中创建中间文件失败。
-    rebuildWindowsNodePty({
-      applicationRoot,
-      nodeExecutable,
-      pythonExecutable: path.join(runtimePackageRoot, "python", "python.exe"),
-      nodeGypEntrypoint: path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"),
-      run,
-    });
     run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
       cwd: applicationRoot,
     });

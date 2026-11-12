@@ -89,10 +89,6 @@ function installNodeDependencies(applicationRoot, nodeExecutable) {
     cwd: applicationRoot,
     env: { ...process.env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1" },
   });
-  const nodePtyRoot = path.join(applicationRoot, "node_modules", "node-pty");
-  run(nodeExecutable, [path.join(projectRoot, "node_modules/node-gyp/bin/node-gyp.js"), "rebuild"], {
-    cwd: nodePtyRoot,
-  });
   run(nodeExecutable, ["--input-type=module", "--eval", "await import('./src/shared/serverPluginRuntime.mjs');"], {
     cwd: applicationRoot,
   });

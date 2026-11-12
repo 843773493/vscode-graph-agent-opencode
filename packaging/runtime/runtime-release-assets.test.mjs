@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { BOXTEAM_VERSION } from "./versions.mjs";
+import { BOXTEAM_VERSION, NODE_RUNTIME_DEPENDENCIES } from "./versions.mjs";
 import { stampReleasePackageManifest } from "./runtime-release-assets.mjs";
 
 const projectRoot = process.cwd();
@@ -42,6 +42,9 @@ describe("发布包版本注入", () => {
       readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
     );
     expect(BOXTEAM_VERSION).toBe(rootPackage.version);
+    const runtimeDependencies = JSON.parse(readFileSync(path.join(projectRoot, "packaging/runtime/node-package.json"), "utf8")).dependencies;
+    expect(runtimeDependencies).toEqual(NODE_RUNTIME_DEPENDENCIES);
+    expect(runtimeDependencies).not.toHaveProperty("node-pty");
     const root = createManifestPackage("runtime-manifest-version", {
       name: "@boxteam/runtime-linux-x64",
       description: "runtime",
@@ -388,6 +391,8 @@ async function observeBuilderPackageStaging(builderUrl, mode, launcherSourceRoot
     bunExecutable, nodeExecutable, nodeGypEntrypoint, uvExecutable, pythonExecutable,
   }]);
   assert.deepEqual(pluginPackCalls, expectedPluginOptions, "两个预构建 ZIP 必须使用同一目标 runtime 与明确工具路径");
+  assert(!buildEvents.some(event => event.includes("node-gyp") || event.includes("subst.exe")),
+    "应用不再重复构建插件 ZIP 独占的原生依赖");
   const nodeDependencyInstall = buildEvents.findIndex((event) => event.startsWith("bun install --production"));
   assert(nodeDependencyInstall >= 0, "构建入口必须先准备产品 Node 依赖");
   assert(nodeDependencyInstall < buildEvents.indexOf("developer-tools.zip"));
