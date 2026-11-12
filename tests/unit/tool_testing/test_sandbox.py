@@ -27,12 +27,12 @@ def test_attempt_directory_filter_keeps_relative_private_and_symlink_boundaries(
     alias = attempt_root / "alias.txt"
     alias.symlink_to(public)
     with paths.private_path_filter(root_uri=paths.workspace_uri) as is_private:
-        assert not is_private(public) and not is_private(alias)
-        assert is_private(attempt_root / ".boxteam") and is_private(outside)
+        assert not is_private(public, public.resolve()) and not is_private(alias, alias.resolve())
+        assert is_private(attempt_root / ".boxteam", (attempt_root / ".boxteam").resolve()) and is_private(outside, outside.resolve())
         alias.unlink()
         alias.symlink_to(outside)
         # 根可复用，但每次分类必须观察节点当前的实际路径。
-        assert is_private(alias)
+        assert is_private(alias, alias.resolve())
     assert paths.is_private(alias, root_uri=paths.workspace_uri)
 
 

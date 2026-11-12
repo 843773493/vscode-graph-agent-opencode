@@ -30,9 +30,8 @@ class ToolTestFilePaths(WorkspaceFilePaths):
             bindings=None,
         )
 
-    def _private_path_filter(self, *, root_uri: str | None = None) -> tuple[Path, Callable[[Path], bool]]:
-        def is_private(target: Path) -> bool:
-            resolved = Path(os.path.realpath(target))
+    def _private_path_filter(self, *, root_uri: str | None = None) -> tuple[Path, Callable[[Path, Path], bool]]:
+        def is_private(target: Path, resolved: Path) -> bool:
             if not target.is_relative_to(self.workspace) or not resolved.is_relative_to(self.workspace):
                 return True
             return any(

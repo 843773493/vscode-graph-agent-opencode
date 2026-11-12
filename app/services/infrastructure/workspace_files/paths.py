@@ -195,7 +195,7 @@ class WorkspaceFilePaths:
                                     tail_segments=(parsed.tail_segments[0], *parts),
                                     gateway_authority=parsed.gateway_authority)
 
-    def _private_path_filter(self, *, root_uri: str | None = None) -> tuple[Path, Callable[[Path], bool]]:
+    def _private_path_filter(self, *, root_uri: str | None = None) -> tuple[Path, Callable[[Path, Path], bool]]:
         if root_uri is not None and parse_resource_uri(root_uri).kind == "attachments":
             root, _ = self.resolve(resource_uri.file_uri_root(root_uri), materialize=False)
             attachment_scope = True
@@ -205,9 +205,7 @@ class WorkspaceFilePaths:
         root_parts = tuple(map(os.path.normcase, root.parts))
         root_depth = len(root_parts)
 
-        def is_private(target: Path) -> bool:
-            # 分类保留循环/断链的 symlink 节点；真正访问仍经 resolve/safe_join 明确失败。
-            resolved = Path(os.path.realpath(target))
+        def is_private(target: Path, resolved: Path) -> bool:
             # 按路径段比较归属，避免逐 child 构造整条祖先 Path 链。
             target_parts = tuple(map(os.path.normcase, target.parts))
             resolved_parts = tuple(map(os.path.normcase, resolved.parts))
@@ -222,21 +220,22 @@ class WorkspaceFilePaths:
     def is_private(self, target: Path, *, root_uri: str | None = None) -> bool:
         """单路径及长期事件流即时取根，使用与目录扫描相同的私有边界规则。"""
         _root, is_private = self._private_path_filter(root_uri=root_uri)
-        return is_private(target)
+        # 分类保留循环/断链节点；实际访问仍经 resolve/safe_join 明确失败。
+        return is_private(target, Path(os.path.realpath(target)))
 
     @contextmanager
-    def private_path_filter(self, *, root_uri: str) -> Iterator[Callable[[Path], bool]]:
+    def private_path_filter(self, *, root_uri: str) -> Iterator[Callable[[Path, Path], bool]]:
         """只在一次同步目录扫描内复用根，结束前重核，不跨请求缓存。"""
         # URI、附件 catalog locator 和私有根不应为每个 child 重复解析。
-        # child 的 realpath 仍逐项核验；收尾重核根，拒绝扫描期间发生边界改写的结果。
+        # 调用者逐项解析 child 后交给同一判定；收尾重核根，拒绝扫描期间的边界改写。
         root, is_private = self._private_path_filter(root_uri=root_uri)
         yield is_private
         current_root, _is_private = self._private_path_filter(root_uri=root_uri)
         if current_root != root:
             raise ForbiddenError("目录扫描期间私有存储边界发生改变，请重新读取")
 
-    def require_public_path(self, target: Path, *, is_private: Callable[[Path], bool] | None = None) -> None:
-        if (is_private or self.is_private)(target):
+    def require_public_path(self, target: Path) -> None:
+        if self.is_private(target):
             raise ForbiddenError("私有存储只允许由业务 owner 访问")
 
     def require_access(self, target: Path, *, root_uri: str, for_write: bool = False) -> None:

@@ -266,7 +266,7 @@ class WorkspaceService:
             nonlocal fingerprint, count
             for entry in directory_entries:
                 child = target_path / entry.name
-                if child in staging or is_private(child):
+                if child in staging or is_private(child, Path(os.path.realpath(child))):
                     continue
                 node = self._entry_to_file_node(entry, display_path, scope=scope)
                 fingerprint ^= int(digest({field: node[field] for field in ("name", "kind", "size", "modified_at")}), 16)

@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, NamedTuple
@@ -404,7 +405,7 @@ class ResourceNavigation:
                     elif request.search_mode == "content":
                         included = match is not None
                     elif request.search_mode == "glob":
-                        included = child_node.resource_shape == "file" and self._glob_matches(name, request.query)
+                        included = child_node.resource_shape == "file" and self._glob_pattern(request.query).match(name)
                     elif request.search_mode == "fuzzy":
                         included = child_node.resource_shape == "file" and is_subsequence(fuzzy_query, name.casefold())
                     else:
@@ -518,16 +519,17 @@ class ResourceNavigation:
             next_cursor=self._encode_cursor(binding, SearchPosition(offset + len(matches), 0, version)) if truncated else None), request, deadline)
 
     @staticmethod
-    def _glob_matches(name: str, pattern: str) -> bool:
+    @lru_cache(maxsize=256)
+    def _glob_pattern(pattern: str) -> wcglob.WcMatcher[str]:
         # 保留原 glob 在各层目录匹配文件的语义；模式从不参与目标解析。
-        return wcglob.globmatch(name, "**/" + pattern.lstrip("/"), flags=wcglob.GLOBSTAR | wcglob.BRACE | wcglob.DOTGLOB)
+        return wcglob.compile("**/" + pattern.lstrip("/"), flags=wcglob.GLOBSTAR | wcglob.BRACE | wcglob.DOTGLOB)
 
     def _file_included(self, name: str, request: ResourceNavigationRequest) -> bool:
         options = request.search_options
-        return ((request.file_glob is None or self._glob_matches(name, request.file_glob))
+        return ((request.file_glob is None or self._glob_pattern(request.file_glob).match(name))
                 and (options is None or (
-                    (not options.include_globs or any(self._glob_matches(name, pattern) for pattern in options.include_globs))
-                    and not any(self._glob_matches(name, pattern) for pattern in options.exclude_globs))))
+                    (not options.include_globs or any(self._glob_pattern(pattern).match(name) for pattern in options.include_globs))
+                    and not any(self._glob_pattern(pattern).match(name) for pattern in options.exclude_globs))))
 
     @staticmethod
     def _text_pattern(request: ResourceNavigationRequest) -> regex.Pattern[str] | None:
@@ -572,7 +574,7 @@ class ResourceNavigation:
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         node: ResourceNavigationNodeDTO, request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
         excluded: frozenset[FileEntryIdentity], subtrees: frozenset[FileEntryIdentity], resume: SearchPosition,
-        is_private: Callable[[Path], bool] | None,
+        is_private: Callable[[Path, Path], bool] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, ContentMatch | None, SearchPosition]]:
         path = self._contained(root, children, parsed, is_private)
         candidates = self._walk(root, children, parsed, request, deadline, subtrees, is_private) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path)), _entry_identity(root.joinpath(*children), path)),))
@@ -616,7 +618,7 @@ class ResourceNavigation:
     def _file_matches(
         self, root: Path, parsed: ParsedResourceUri, child: ResourceNavigationNodeDTO, metadata: FileObservation,
         request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
-        is_private: Callable[[Path], bool] | None,
+        is_private: Callable[[Path, Path], bool] | None,
     ) -> Iterator[ContentMatch | None]:
         target = parse_resource_uri(child.uri)
         name = "/".join(target.tail_segments[len(parsed.tail_segments):]) or target.tail_segments[-1]
@@ -735,7 +737,7 @@ class ResourceNavigation:
     def _walk(
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         request: ResourceNavigationRequest, deadline: float, subtrees: frozenset[FileEntryIdentity],
-        is_private: Callable[[Path], bool] | None,
+        is_private: Callable[[Path, Path], bool] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, FileEntryIdentity]]:
         pending: list[tuple[tuple[str, ...], IgnoreScope | None]] = [(children, None)]
         visited: set[Path] = set()
@@ -794,10 +796,12 @@ class ResourceNavigation:
                 )
                 # 子根由自己的分支应用相对过滤及 ignore，不进入父根的扫描／输出配额。
                 entry_path = root.joinpath(*child_parts)
-                if subtrees and _entry_identity(entry_path, _resolve_path(child)) in subtrees:
+                # 分类阶段允许被排除的断链／循环链接；实际访问仍按原入口严格核验。
+                child_path = Path(os.path.realpath(child))
+                if subtrees and _entry_identity(entry_path, child_path) in subtrees:
                     continue
-                # 私有筛选复用本次根；真正输出节点仍由 _contained 重核访问。
-                if is_private is not None and is_private(child):
+                # 私有筛选与后续归属判定消费同一次实际路径解析。
+                if is_private is not None and is_private(child, child_path):
                     continue
                 if request.search_mode == "content" and child.name in {".git", "node_modules", ".boxteam"} and (
                     request.search_options is None or request.search_options.ignore_mode == "default"
@@ -805,13 +809,17 @@ class ResourceNavigation:
                     continue
                 name = "/".join(child_parts[len(children):])
                 if request.search_options is not None and any(
-                    self._glob_matches(name, pattern) or self._glob_matches(name + "/", pattern)
+                    self._glob_pattern(pattern).match(name) or self._glob_pattern(pattern).match(name + "/")
                     for pattern in request.search_options.exclude_globs
                 ):
                     continue
                 if scope is not None and scope.excludes(child_parts, child.is_dir()):
                     continue
-                child_path = self._contained(root, child_parts, parsed, is_private)
+                # 当前目录已由 _contained 核验根和祖先；每个 child 只解析一次实际路径。
+                if child.is_symlink():
+                    child_path = self._contained(root, child_parts, parsed, is_private)
+                elif not child_path.is_relative_to(root):
+                    raise ResourceUriResolveError("capability_denied", "文件节点越出已公布根")
                 child_node = self._node(parse_resource_uri(uri), child_path)
                 # 仅校验续页前缀的可变视图，不作为文件内容 hash 或历史 revision。
                 yield child_node, FileObservation(self._stat(child_path), scope.version if scope is not None else ()), _entry_identity(entry_path, child_path)
@@ -905,7 +913,7 @@ class ResourceNavigation:
         return collection
 
     def _contained(self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
-                   is_private: Callable[[Path], bool] | None = None) -> Path:
+                   is_private: Callable[[Path, Path], bool] | None = None) -> Path:
         resolved_root = _resolve_path(root)
         if resolved_root != root:
             raise ResourceUriResolveError("capability_denied", "固定资源根已被符号链接替换")
@@ -914,7 +922,11 @@ class ResourceNavigation:
             raise ResourceUriResolveError("capability_denied", "文件节点越出已公布根")
         try:
             if parsed.kind == "files":
-                self._file_paths.require_public_path(resolved_root.joinpath(*children), is_private=is_private)
+                target = resolved_root.joinpath(*children)
+                if is_private is None:
+                    self._file_paths.require_public_path(target)
+                elif is_private(target, path):
+                    raise ForbiddenError("私有存储只允许由业务 owner 访问")
             elif parsed.kind == "attachments":
                 self._file_paths.require_access(resolved_root.joinpath(*children), root_uri=file_uri_root(parsed.display_uri))
         except ForbiddenError as error:

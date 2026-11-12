@@ -490,14 +490,15 @@ async def test_all_matches_page_within_one_line_and_bind_options(navigation_case
 
 
 @pytest.mark.parametrize("search_mode,query", [("content", "hit"), ("fuzzy", "mt")])
-async def test_path_filters_prune_excluded_subtree_and_skip_nonincluded_binary(navigation_case, search_mode, query):
+async def test_path_filters_prune_excluded_subtree_and_skip_nonincluded_binary(navigation_case, symbolic_link, search_mode, query):
     owner, workspace, uri = navigation_case
     for name in ("src/main.txt", "excluded/ignored.txt", "src/ignored.skip", "binary.dat"):
         file = workspace / name
         file.parent.mkdir(exist_ok=True)
         file.write_bytes(b"hit\n" if name.endswith("main.txt") else b"\xffinvalid UTF8")
+    symbolic_link(workspace / "loop", workspace / "loop")
     page = await owner.navigate(ResourceNavigationRequest(uri=uri, operation="search", search_mode=search_mode, query=query,
-        search_options={"include_globs": ["**/*.txt"], "exclude_globs": ["excluded/**"]}), local_gateway_id=GATEWAY_ID)
+        search_options={"include_globs": ["**/*.txt"], "exclude_globs": ["excluded/**", "loop"]}), local_gateway_id=GATEWAY_ID)
     assert [entry.uri for entry in page.entries] == [uri + "/src/main.txt"]
 
 
