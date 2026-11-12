@@ -20,6 +20,7 @@ export async function launchElectron({ run, result, usePage, extraArgs = [], obs
   const native = result.native = { launches: [], exits: [], consoleErrors: [], dialogs: [] };
   result.boundary += '；Linux 真实打包 ASAR，独立 cwd／空 PATH／同 profile 正常关窗重启，无开发服务器或 renderer bridge';
   let current, origin;
+  const preventedReloadDialogs = [];
   const close = async instance => {
     await observe('electron.nativeClose', async () => {
       const processHandle = instance.process();
@@ -73,7 +74,10 @@ export async function launchElectron({ run, result, usePage, extraArgs = [], obs
     });
     page.on('dialog', async dialog => {
       native.dialogs.push({ launch: number, type: dialog.type(), message: dialog.message() });
-      if (observeWillPreventUnload && dialog.type() === 'beforeunload') return;
+      if (observeWillPreventUnload && dialog.type() === 'beforeunload') {
+        preventedReloadDialogs.push(dialog);
+        return;
+      }
       if (dialog.type() === 'beforeunload') await dialog.accept();
       else await dialog.dismiss();
     });
@@ -101,6 +105,23 @@ export async function launchElectron({ run, result, usePage, extraArgs = [], obs
       if (!observeWillPreventUnload || !current) throw new Error('Electron will-prevent-unload observation is unavailable');
       native.willPreventUnload = await current.evaluate(({ BrowserWindow }) => [...BrowserWindow.getAllWindows()[0].webContents.__boxteamTestWillPreventUnload]);
       return native.willPreventUnload;
+    },
+    async settlePreventedReload() {
+      assert.ok(preventedReloadDialogs.length, '缺少实际 beforeunload 对话框');
+      const state = await current.evaluate(({ BrowserWindow }) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents;
+        return { loading: contents.isLoading(), events: contents.__boxteamTestWillPreventUnload };
+      });
+      assert.equal(state.loading, false);
+      assert.equal(state.events.at(-1)?.defaultPrevented, false);
+      for (const dialog of preventedReloadDialogs.splice(0)) {
+        try { await dialog.dismiss(); }
+        catch (cause) {
+          // Electron 45 已完成原生否决；dismiss 仍须结清 Playwright 的导航等待。
+          if (!String(cause).includes('Protocol error (Page.handleJavaScriptDialog): No dialog is showing')) throw cause;
+          native.dialogs.push({ launch: native.launches.length, type: 'beforeunload-settled', nativePrevented: true, driverError: String(cause) });
+        }
+      }
     },
     async reload() { await close(current); await open(); },
     async leave() { await close(current); },

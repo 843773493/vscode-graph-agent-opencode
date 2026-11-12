@@ -253,13 +253,13 @@ try {
   await chooseLanguage('English');
   const beforeDirtyCancellation = result.reloads.length;
   // Electron 由原生宿主处理 beforeunload；Web 沿真实 dialog dismiss。
-  // TODO：原生 run-2d0ecc047c9a 在第二组 dirty 断言失败，尚未核验下方新增的主进程事件观察；补验时保留双组断言。
   if (host.willPreventUnloadEvents) {
     const before = await host.willPreventUnloadEvents();
-    await reloadDialog.getByRole('button', { name: /重新加载|重载|Reload/ }).click();
+    await reloadDialog.getByRole('button', { name: /重新加载|重载|Reload/ }).click({ noWaitAfter: true });
     await expect.poll(host.willPreventUnloadEvents).toHaveLength(before.length + 1);
     result.dirtyReloadDialog = { willPreventUnload: await host.willPreventUnloadEvents() };
     expect(result.dirtyReloadDialog.willPreventUnload.at(-1).defaultPrevented).toBe(false);
+    await host.settlePreventedReload();
     expect(result.reloads.length).toBe(beforeDirtyCancellation);
     await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
     for (const group of await groups.all()) await expect(group.getByRole('tab', { name: /locale\.txt/ })).toHaveClass(/dirty/);
