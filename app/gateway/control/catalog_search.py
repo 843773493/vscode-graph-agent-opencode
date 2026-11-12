@@ -13,6 +13,7 @@ import httpx
 
 from app.core.failures import failure_detail
 from app.core.identifier import create_prefixed_id
+from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.registry.owners import workspace_owner
@@ -143,7 +144,7 @@ class GatewaySessionCatalogSearchService:
             raise RuntimeError("Gateway 会话目录索引同步器已经启动")
         for target in self._registry.targets():
             owner = workspace_owner(target)
-            snapshot = self._load_snapshot(owner)
+            snapshot = await run_sync_shielded(self._load_snapshot, owner)
             if snapshot is not None:
                 self._snapshots[owner] = snapshot
         self._stop_event.clear()
@@ -256,7 +257,9 @@ class GatewaySessionCatalogSearchService:
                 timeout=self._request_timeout_seconds,
             )
             response.raise_for_status()
-            exported = SessionCatalogExportDTO.model_validate(response.json()["data"])
+            exported = await run_sync_shielded(
+                lambda: SessionCatalogExportDTO.model_validate(response.json()["data"]),
+            )
             nodes_by_id = {node.node_id: node for node in exported.items}
             if len(nodes_by_id) != len(exported.items):
                 raise RuntimeError(f"工作区目录导出包含重复 node_id: {target.workspace_id}")
@@ -267,7 +270,11 @@ class GatewaySessionCatalogSearchService:
                 owner=owner, catalog_revision=exported.catalog_revision, revision=exported.revision,
                 updated_at=datetime.now(UTC), nodes_by_id=nodes_by_id,
             )
-            self._save_snapshot(snapshot)
+            await run_sync_shielded(self._save_snapshot, snapshot)
+            # 落盘期间允许控制面继续处理请求，发布前核验当前登记归属。
+            if (not self._registry.has_target(target.key)
+                or workspace_owner(self._registry.resolve(target.key)) != owner):
+                raise RuntimeError(f"会话目录同步期间登记归属已改变: {target.workspace_id}")
             self._snapshots[owner] = snapshot
             self._workspace_errors.pop(target.key, None)
             return snapshot
