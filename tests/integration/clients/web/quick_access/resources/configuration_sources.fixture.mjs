@@ -21,7 +21,7 @@ export async function configurationSourcesContract(mode) {
   const owners = targets.map(target => ({ gatewayId, workspaceId: target.workspace_id }));
   workspaceContext.publish({ ...previous, gatewayId, workspaces: targets, activeId: gatewayWorkspaceKey(owners[0]), loading: false, error: null });
   const ok = data => Response.json({ code: 0, data, request_id: 'configuration-source-contract' }, { headers: { 'X-Request-ID': 'configuration-source-contract' } });
-  let releaseRead, aborted = false, maximum = 0, active = 0;
+  let releaseRead, aborted = false, maximum = 0, active = 0, rowsBeforeCancel;
   installSessionApiFetchMock(async ({ path, init, method }) => {
     const headers = new Headers(init.headers), workspaceId = headers.get('X-BoxTeam-Workspace-Id');
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
@@ -73,7 +73,8 @@ export async function configurationSourcesContract(mode) {
   try {
     if (['close', 'identity'].includes(mode)) {
       await until(() => releaseRead);
-      if (mode === 'close') lifetime.dispose(); else invalidateGatewayToken(0);
+      if (mode === 'close') { rowsBeforeCancel = picker.items.map(item => item.id); lifetime.dispose(); }
+      else invalidateGatewayToken(0);
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
     } else {
       await until(() => !picker.busy && picker.items.length);
@@ -100,7 +101,7 @@ export async function configurationSourcesContract(mode) {
         await until(() => commands.length || errors.length);
       }
     }
-    return { requests, commands, errors, clipboard, aborted, maximum, owners,
+    return { requests, commands, errors, clipboard, aborted, maximum, owners, rowsBeforeCancel,
       rows: picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail, selectable: !!item.accept,
         buttons: item.buttons?.map(button => button.tooltip) ?? [] })) };
   } finally {

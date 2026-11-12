@@ -54,7 +54,7 @@ test('同名来源按完整owner区分，候选／高亮零正文读取与激活
 for (const mode of ['close', 'identity']) test(`${mode}取消真实读取且不发布迟到来源`, async () => {
   const result = await exercise(mode);
   expect(result.aborted).toBe(true); expect(parses(result)).toEqual([]); expect(result.references).toEqual([]);
-  if (mode === 'close') expect(result.rows).toEqual([]);
+  if (mode === 'close') expect(result.rows.map(item => item.id)).toEqual(result.rowsBeforeCancel);
   else expect(result.rows.map(item => item.id)).toEqual(['source-access-invalidated']);
 });
 test('范围取消保留原owner与发起组，且零打开', async () => {

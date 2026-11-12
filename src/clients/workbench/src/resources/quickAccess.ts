@@ -50,7 +50,10 @@ interface SourceRun {
   ownerError?: string;
   invalidated: boolean;
   signal: AbortSignal;
-  discovery?: Promise<SourcePick[]>;
+  discovery?: Promise<void>;
+  picks: SourcePick[][];
+  loading: boolean;
+  refresh?: () => void;
   thread?: { owner: WorkspaceOwner; session_id: string; thread_id: string };
   recipient?: ComposerResourceTarget | null;
   referencesOnly: boolean;
@@ -74,7 +77,8 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     const lifetime = new DisposableStore(), access = new CancellationTokenSource(token), controller = new AbortController();
     const run: SourceRun = { picker, owners: (options.searchOwners ?? (options.searchOwner ? [options.searchOwner] : [])).map(owner => ({ ...owner })),
       gatewayId: workspaceContext.getSnapshot().gatewayId, group: options.resourceGroup ?? this.groups.activeGroup.id,
-      ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal, referencesOnly: options.resourceReferencesOnly === true };
+      ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal, referencesOnly: options.resourceReferencesOnly === true,
+      picks: [], loading: true };
     this.run = run;
     const input = this.editors.activeEditor;
     const pane = this.editors.activeEditorPane;
@@ -87,6 +91,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       access.cancel();
       picker.activeItems = picker.selectedItems = [];
       picker.items = [{ id: 'source-access-invalidated', label: 'Gateway 或访问凭据已改变，请重新查找来源' }];
+      picker.busy = false;
     };
     lifetime.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
     lifetime.add(toDisposable(workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidate(); })));
@@ -118,26 +123,60 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     }));
     lifetime.add(access.token.onCancellationRequested(() => controller.abort()));
     // 发现只属于本次 provide；逐键取消只阻止旧筛选发布，结束时才取消实际读取。
-    lifetime.add(toDisposable(() => { controller.abort(); access.dispose(true); }));
+    lifetime.add(toDisposable(() => { controller.abort(); access.dispose(true); picker.busy = false; }));
     lifetime.add(super.provide(picker, access.token, options));
     lifetime.add(toDisposable(() => { picker.buttons = picker.buttons.filter(button => button !== scope && button !== back); if (this.run === run) this.run = undefined; }));
     return lifetime;
   }
 
-  protected override async _getPicks(filter: string, _disposables: DisposableStore, token: CancellationToken): Promise<SourcePick[]> {
-    const run = this.run!, picks = await (run.discovery ??= this.discover(run));
-    if (token.isCancellationRequested || run.invalidated) return [];
-    return picks.flatMap(item => {
+  protected override _getPicks(filter: string, _disposables: DisposableStore, token: CancellationToken): SourcePick[] | null {
+    const run = this.run!;
+    if (run.invalidated) return [{ id: 'source-access-invalidated', label: 'Gateway 或访问凭据已改变，请重新查找来源' }];
+    if (token.isCancellationRequested || run.signal.aborted) return null;
+    run.refresh = () => {
+      if (token.isCancellationRequested || run.signal.aborted || run.invalidated || this.run !== run) return;
+      const activeId = run.picker.activeItems[0]?.id, selected = new Set(run.picker.selectedItems.map(item => item.id));
+      const keep = run.picker.keepScrollPosition;
+      try {
+        run.picker.keepScrollPosition = true;
+        const picks = this.sourcePicks(run, filter);
+        run.picker.items = picks;
+        run.picker.selectedItems = picks.filter(item => selected.has(item.id));
+        if (activeId) run.picker.activeItems = picks.filter(item => item.id === activeId);
+        run.picker.busy = run.loading;
+      } finally { run.picker.keepScrollPosition = keep; }
+    };
+    run.discovery ??= this.discover(run).finally(() => { run.loading = false; run.refresh?.(); });
+    run.picker.busy = run.loading;
+    return this.sourcePicks(run, filter);
+  }
+
+  private sourcePicks(run: SourceRun, filter: string): SourcePick[] {
+    const picks = run.picks.flat().flatMap(item => {
       const candidate = run.referencesOnly ? item.resource ? { ...item, buttons: [], trigger: undefined } : { ...item, disabled: true } : item;
       if (item.filterLabel === undefined) return [candidate];
       const highlights = matchesFuzzy(filter, item.filterLabel);
       return filter && !highlights && !item.resourceId?.includes(filter) ? [] : [{ ...candidate, highlights: { label: highlights ?? undefined } }];
     });
+    if (run.loading) picks.push({ id: 'source-pending', label: '正在读取其余来源…', disabled: true });
+    return picks.length ? picks : [{ id: 'no-sources', label: '所选工作区没有匹配的来源' }];
   }
 
-  private async discover(run: SourceRun): Promise<SourcePick[]> {
-    if (!run.owners.length) return [{ id: 'source-owner-required', label: run.ownerError ?? '请先明确选择来源所属工作区',
-      detail: '使用“选择来源所属工作区”按钮；不会自动启动或激活目标' }];
+  private async discover(run: SourceRun): Promise<void> {
+    const collect = async (pending: Promise<SourcePick[]>): Promise<void> => {
+      // 槽位按原来源顺序分配，完成顺序只影响何时显示，不改变分组顺序。
+      const index = run.picks.length;
+      run.picks.push([]);
+      const picks = await pending;
+      if (run.signal.aborted || run.invalidated) return;
+      run.picks[index] = picks;
+      if (picks.length) run.refresh?.();
+    };
+    if (!run.owners.length) {
+      run.picks = [[{ id: 'source-owner-required', label: run.ownerError ?? '请先明确选择来源所属工作区',
+        detail: '使用“选择来源所属工作区”按钮；不会自动启动或激活目标' }]];
+      return;
+    }
     const limiter = new Limiter<SourcePick[]>(3);
     const failed = (owner: WorkspaceOwner, kind: string, cause: unknown): SourcePick[] => [{
       id: `${gatewayWorkspaceKey(owner)}/${kind}/failed`, label: `${kind}来源不可用：${cause instanceof Error ? cause.message : String(cause)}`,
@@ -178,7 +217,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
             const next = await read();
             run.signal.throwIfAborted();
             this.assertAccess(run);
-            run.discovery = Promise.resolve([...(await run.discovery!).filter(item => item.id !== id), ...next]);
+            run.picks = run.picks.map(picks => picks.flatMap(item => item.id === id ? next : [item]));
             return TriggerAction.REFRESH_PICKER;
           } catch (cause) {
             nextPage = undefined;
@@ -248,7 +287,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       const gatewayConfigurations = [...new Map(registeredOwners.map(owner => [owner.gatewayId, owner])).values()].map(owner =>
         limiter.queue(() => configurationPicks({ gateway_id: owner.gatewayId }, 'Gateway'))
           .catch(cause => failed(owner, 'Gateway 配置 ', cause)));
-      const results = await Promise.all(run.owners.map(async owner => {
+      const results = run.owners.map(async owner => {
         try {
           run.signal.throwIfAborted();
           const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
@@ -409,16 +448,13 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               };
             });
           }).catch(cause => failed(owner, 'MCP ', cause));
-          return (await Promise.all([agents, skills, gatewaySkills, localSkills, configuration, attachments, tools, changes, ...runtime, mcp])).flat();
-        } catch (cause) { return failed(owner, '', cause); }
-      }));
-      const gatewayResults = await Promise.all(gatewayConfigurations);
-      if (run.signal.aborted || run.invalidated) return [];
-      this.assertAccess(run);
-      return [...results.flat(), ...gatewayResults.flat()];
+          await Promise.all([agents, skills, gatewaySkills, localSkills, configuration, attachments, tools, changes, ...runtime, mcp].map(collect));
+        } catch (cause) { await collect(Promise.resolve(failed(owner, '', cause))); }
+      });
+      await Promise.all([...results, ...gatewayConfigurations.map(collect)]);
     } catch (cause) {
-      if (run.signal.aborted || run.invalidated) return [];
-      return [{ id: 'source-read-failed', label: `来源读取失败：${cause instanceof Error ? cause.message : String(cause)}` }];
+      if (run.signal.aborted || run.invalidated) return;
+      run.picks.push([{ id: 'source-read-failed', label: `来源读取失败：${cause instanceof Error ? cause.message : String(cause)}` }]);
     } finally { limiter.dispose(); }
   }
   private assertAccess(run: SourceRun): void {

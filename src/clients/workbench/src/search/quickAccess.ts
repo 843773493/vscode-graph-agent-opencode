@@ -1,4 +1,5 @@
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
+import { RunOnceScheduler } from '../../upstream/src/vs/base/common/async.js';
 import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
 import type { FuzzyScorerCache } from '../../upstream/src/vs/base/common/fuzzyScorer.js';
 import { DisposableStore, MutableDisposable, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
@@ -37,7 +38,7 @@ import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
-import { captureSearchOwner, type SearchInvocationOptions } from './target.js';
+import { captureSearchOwner, createSearchRootLoader, type loadSearchRoots, type SearchInvocationOptions } from './target.js';
 import { editorResourceOwner, rankResourcePicks, sameSearchOwner, type ResourcePick } from './quickAccessPicks.js';
 import type { NameSearchCategory, ContentSearchCategory, SearchCategory } from './quickAccessQuery.js';
 import { queryFederatedSearchBranches } from './quickAccessFederation.js';
@@ -71,6 +72,7 @@ interface AccessRun {
   normalized?: string;
   options: AccessOptions;
   cache: FuzzyScorerCache;
+  loadRoots: typeof loadSearchRoots;
   symbols?: GotoSymbolQuickAccessProvider;
   globalPicks?: { items: Pick<ResourcePick>[]; active: ResourcePick };
   symbolMode?: boolean;
@@ -116,7 +118,11 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     options = { ...options, contentCategories: options.contentCategories && [...new Set(options.contentCategories)] };
     const lifetime = new DisposableStore(), editorState = lifetime.add(this.instantiation.createInstance(PickerEditorState));
     const access = new CancellationTokenSource(token);
+    const rootAbort = new AbortController();
+    lifetime.add(access.token.onCancellationRequested(() => rootAbort.abort()));
+    lifetime.add(toDisposable(() => rootAbort.abort()));
     const run: AccessRun = { picker, token: access.token, group: options.searchGroup ?? this.groups.activeGroup.id, owners: [], editorState, options, cache: {},
+      loadRoots: createSearchRootLoader(rootAbort.signal),
       restoreId: options.searchRestore?.query === picker.value ? options.searchRestore.activeId : undefined };
     // Controller 在 provide 之后才 show，不能等异步请求后再读取焦点。
     if (!options.fileSearchDelegate) {
@@ -284,28 +290,38 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         if (run.globalPicks) run.globalPicks.items = accepted(items);
       } else this.publish(run, accepted(items));
     };
-    query.publish = publish;
-    branches = queryFederatedSearchBranches(run.owners, categories, filter, queryDisposables, queryCancellation.token, run.cache,
-      (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message, item.trace)
-        : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail, item.requestLog)
-          : item.kind === 'log' ? this.logPick(run, item.location, item.title, item.description, item.detail)
-          : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
-      current => { branches = current; publish(); },
-      value => { branchesBusy = value; updateBusy(); },
-      label => { if (queryAlive() && !run.symbolMode) run.picker.placeholder = run.options.placeholder
-        ?? `${this.contentMode ? '搜索正文 · ' + run.options.contentCategories!.join('、') : '查找' + (run.options.filesOnly ? '文件' : this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation);
-    if (includeSymbols) {
-      const provider = queryDisposables.add(this.instantiation.createInstance(WorkspaceSymbolsQuickAccess));
-      void provider.getScopedSymbolPicks(filter, { searchOwners: run.owners }, queryCancellation.token, (picks, busy) => {
-        symbolsBusy = busy;
-        symbolPicks = picks.map((pick, index) => ({ ...pick,
-          id: pick.symbol ? `workspace-symbol:${JSON.stringify([pick.symbol.location.uri.toString(), pick.symbol.location.range, pick.symbol.name, pick.symbol.kind, pick.symbol.containerName])}`
-            : `workspace-symbol-status:${index}:${pick.description ?? pick.label}` }));
-        publish();
-      }, { skipLocal: true, openToken: run.token, editorGroup: side => this.targetGroup(run, { alt: false, ctrlCmd: false, shift: false }, side) });
-    }
-    return accepted([...fast, ...branches.map(branch => branch.status), ...(includeSymbols
-      ? [{ type: 'separator' as const, label: '工作区符号' }, ...symbolPicks] : [])]);
+    const updates = queryDisposables.add(new RunOnceScheduler(publish, 16));
+    const refresh = () => {
+      if (!query.busy) { updates.cancel(); publish(); }
+      else if (!updates.isScheduled()) updates.schedule();
+    };
+    query.publish = () => { updates.cancel(); publish(); };
+    const search = () => {
+      branches = queryFederatedSearchBranches(run.owners, categories, filter, queryDisposables, queryCancellation.token, run.cache,
+        (item, owner) => item.kind === 'resource' ? this.resourcePick(run, item.resource, item.description, item.title, item.detail, undefined, item.message, item.trace)
+          : item.kind === 'session' ? this.sessionPick(run, owner, item.sessionId, item.title, item.description, item.detail, item.requestLog)
+            : item.kind === 'log' ? this.logPick(run, item.location, item.title, item.description, item.detail)
+            : this.folderPick(run, owner, item.nodeId, item.title, item.description, item.detail),
+        current => { branches = current; refresh(); },
+        value => { branchesBusy = value; updateBusy(); },
+        label => { if (queryAlive() && !run.symbolMode) run.picker.placeholder = run.options.placeholder
+          ?? `${this.contentMode ? '搜索正文 · ' + run.options.contentCategories!.join('、') : '查找' + (run.options.filesOnly ? '文件' : this.category ?? '会话、Thread 和文件')} · ${label}`; }, this.instantiation, run.loadRoots);
+      if (includeSymbols) {
+        const provider = queryDisposables.add(this.instantiation.createInstance(WorkspaceSymbolsQuickAccess));
+        void provider.getScopedSymbolPicks(filter, { searchOwners: run.owners }, queryCancellation.token, (picks, busy) => {
+          symbolsBusy = busy;
+          symbolPicks = picks.map((pick, index) => ({ ...pick,
+            id: pick.symbol ? `workspace-symbol:${JSON.stringify([pick.symbol.location.uri.toString(), pick.symbol.location.range, pick.symbol.name, pick.symbol.kind, pick.symbol.containerName])}`
+              : `workspace-symbol-status:${index}:${pick.description ?? pick.label}` }));
+          refresh();
+        }, { skipLocal: true, openToken: run.token, editorGroup: side => this.targetGroup(run, { alt: false, ctrlCmd: false, shift: false }, side) });
+      }
+    };
+    // 历史同步展示；目标文件无本地索引，沿原 Anything 的冷查询延迟合并连续输入。
+    if (this.contentMode) search();
+    else queryDisposables.add(new RunOnceScheduler(search, 200)).schedule();
+    updateBusy();
+    return accepted([...fast, { id: 'search-pending', label: '正在查询' }]);
   }
 
   private contentCategories(run: AccessRun, filter: string): ResourcePick[] {

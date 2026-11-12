@@ -33,6 +33,25 @@ const metadata = result => result.requests.filter(item => ['/api/v1/resources/ag
 const workspaceReads = result => result.requests.filter(item => item.path === '/api/gateway/workspaces');
 const skillRows = result => result.rows.filter(item => item.description?.startsWith('配置 Skill'));
 
+for (const mode of ['progressive', 'progressive-failure', 'progressive-close', 'progressive-identity']) test(`${mode}慢来源不阻塞已完成候选，筛选与勾选沿稳定身份保留`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors).toEqual([]);
+  expect(result.busy).toBe(false);
+  expect(result.snapshots[0].filter(item => item.label === 'AGENTS.md')).toHaveLength(2);
+  expect(result.snapshots[0].some(item => item.id === 'source-pending')).toBe(true);
+  expect(result.snapshots[0].some(item => item.description?.startsWith('配置 Skill · 工作区 0'))).toBe(false);
+  if (mode === 'progressive-close') expect(result.rows).toEqual(result.rowsBeforeCancel);
+  else if (mode === 'progressive-identity') expect(result.rows.map(item => item.id)).toEqual(['source-access-invalidated']);
+  else {
+    expect(result.rows.some(item => item.id === 'source-pending')).toBe(false);
+    expect(result.rows.filter(item => item.selectable).every(item => item.label === 'AGENTS.md')).toBe(true);
+    expect(result.selected).toEqual([result.selectedId]); expect(result.activeIds).toEqual([result.activeId]);
+    if (mode === 'progressive-failure') expect(result.rows.find(item => !item.selectable)).toMatchObject({
+      label: expect.stringContaining('具名来源边界失败'), detail: 'request_id: source-failure-id',
+    });
+  }
+});
+
 test('同名 Skill 按完整 owner 和原来源 URI 分别保留，浏览只读 metadata', async () => {
   const result = await exercise('browse'), skills = skillRows(result);
   expect(skills).toHaveLength(4); expect(new Set(skills.map(item => item.id)).size).toBe(4);
@@ -62,7 +81,8 @@ test('重新打开重新发现 owner 当前接受的 metadata', async () => {
 for (const mode of ['close', 'identity', 'gateway']) test(`${mode}取消在途 metadata，不发布迟到来源`, async () => {
   const result = await exercise(mode);
   expect(result.aborted).toBeGreaterThan(0); expect(result.references).toEqual([]); expect(result.opened).toEqual([]);
-  expect(result.rows.map(item => item.id)).toEqual(mode === 'close' ? [] : ['source-access-invalidated']);
+  if (mode === 'close') expect(result.rows).toEqual(result.rowsBeforeCancel);
+  else expect(result.rows.map(item => item.id)).toEqual(['source-access-invalidated']);
 });
 test('四个 owner 的四种 metadata 共用真实三并发，第四个请求等待空位', async () => {
   const result = await exercise('parallel');
@@ -92,7 +112,7 @@ for (const mode of ['local-mismatch', 'local-unsupported', 'local-unreadable']) 
 });
 test('关闭选择器实际取消本地metadata且不发布迟到候选', async () => {
   const result = await exercise('local-close');
-  expect(result.rows).toEqual([]); expect(result.aborted).toBeGreaterThan(0);
+  expect(result.rows).toEqual(result.rowsBeforeCancel); expect(result.aborted).toBeGreaterThan(0);
   expect(result.requests.some(item => item.path.includes('local-skills'))).toBe(true);
   expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
 });

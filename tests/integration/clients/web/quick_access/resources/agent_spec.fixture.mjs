@@ -19,7 +19,7 @@ const uri = `boxteam://workspace/${owners[0].workspaceId}/resources/agent-spec/r
 export async function agentSpecContract(mode) {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), itemButtons = new Emitter(), cancellation = new CancellationTokenSource();
   const requests = [], opened = [], references = [], errors = [], shows = [], choices = [], copied = [];
-  let releaseRead, releaseParse, aborted = false, released = 0, addedGroups = 0;
+  let releaseRead, releaseParse, aborted = false, released = 0, addedGroups = 0, rowsBeforeCancel;
   const targets = owners.map((owner, index) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
     name: `来源 ${index}`, status: mode === 'stopped' && index === 1 ? 'stopped' : 'ready' }));
   workspaceContext.publish({ ...previous, gatewayId: owners[0].gatewayId, loading: false, error: null,
@@ -92,7 +92,8 @@ export async function agentSpecContract(mode) {
   try {
     if (mode === 'close' || mode === 'identity') {
       await until(() => releaseRead);
-      if (mode === 'close') lifetime.dispose(); else invalidateGatewayToken(0);
+      if (mode === 'close') { rowsBeforeCancel = picker.items.map(item => item.id); lifetime.dispose(); }
+      else invalidateGatewayToken(0);
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
     } else {
       await until(() => !picker.busy && picker.items.length > 0);
@@ -121,7 +122,7 @@ export async function agentSpecContract(mode) {
         await until(() => opened.length || errors.length);
       }
     }
-    return { requests, opened, references, errors, shows, choices, copied, hidden: !!picker.hidden, aborted, released, addedGroups,
+    return { requests, opened, references, errors, shows, choices, copied, hidden: !!picker.hidden, aborted, released, addedGroups, rowsBeforeCancel,
       rows: picker.items.map(item => ({ id: item.id, label: item.label, highlights: item.highlights, selectable: !!item.accept,
         copy: !!item.buttons?.some(button => button.tooltip === '复制资源 URI') })) };
   } finally {

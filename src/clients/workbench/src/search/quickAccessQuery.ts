@@ -1,4 +1,5 @@
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
+import { prepareQuery } from '../../upstream/src/vs/base/common/fuzzyScorer.js';
 import type { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { ServiceCollection } from '../../upstream/src/vs/platform/instantiation/common/serviceCollection.js';
 import { IUriIdentityService } from '../../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
@@ -25,7 +26,10 @@ export function quickAccessFileQuery(filter: string, scope: SearchScope, instant
     const child = context.ownChild(instantiation.createChild(new ServiceCollection([IWorkspaceContextService, context])));
     const builder = child.createInstance(QueryBuilder);
     const identity = child.invokeFunction(accessor => accessor.get(IUriIdentityService)).extUri;
-    const query = validateQuery(builder.file(context.getWorkspace().folders, { filePattern: filter, maxResults: 50 }), identity);
+    // 沿原 Anything：多词先按首词召回，完整输入仍由原 scorer 评分和过滤。
+    const prepared = prepareQuery(filter);
+    const filePattern = prepared.values && prepared.values.length > 1 ? prepared.values[0].original : filter;
+    const query = validateQuery(builder.file(context.getWorkspace().folders, { filePattern, maxResults: 50 }), identity);
     return { category: 'file', operation: 'name', contract_version: 1, query: query.filePattern || '**/*',
       match_mode: query.shouldGlobMatchFilePattern || !query.filePattern ? 'glob' : 'fuzzy', limit: 50,
       diagnostic_targets: [],

@@ -150,9 +150,10 @@ export async function runtimeActionContract(mode) {
   try {
     if (mode.startsWith('pending-') || mode === 'mcp-pending-close') {
       await until(() => releaseRead);
+      const rowsBeforeCancel = picker.items.map(item => ({ id: item.id, label: item.label }));
       if (mode === 'pending-close' || mode === 'mcp-pending-close') lifetime.dispose(); else invalidateGatewayToken(0);
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
-      return { requests, aborted, rows: picker.items.map(item => ({ id: item.id, label: item.label })), errors };
+      return { requests, aborted, rows: picker.items.map(item => ({ id: item.id, label: item.label })), rowsBeforeCancel, errors };
     }
     await until(() => !picker.busy && picker.items.length === (mode === 'empty-title' ? 2 : mode.startsWith('mcp-') ? 6 : 4));
     const rows = picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail }));

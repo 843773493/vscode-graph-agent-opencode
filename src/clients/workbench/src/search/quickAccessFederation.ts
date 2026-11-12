@@ -83,7 +83,8 @@ function searchItems(page: WorkspaceSearchResultDTO, owner: WorkspaceOwner, labe
 
 export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], selected: readonly SearchCategory[], filter: string,
   disposables: DisposableStore, token: CancellationToken, cache: FuzzyScorerCache, map: (item: ResourceSearchItem, owner: WorkspaceOwner) => ResourcePick,
-  progress: (branches: SearchBranch[]) => void, busy: (value: boolean) => void, scopeLabel: (label: string) => void, instantiation: IInstantiationService): SearchBranch[] {
+  progress: (branches: SearchBranch[]) => void, busy: (value: boolean) => void, scopeLabel: (label: string) => void, instantiation: IInstantiationService,
+  loadRoots: typeof loadSearchRoots = loadSearchRoots): SearchBranch[] {
   const abort = new AbortController();
   disposables.add(toDisposable(() => abort.abort()));
   disposables.add(token.onCancellationRequested(() => abort.abort()));
@@ -152,7 +153,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
     try {
       const fileBranches = active.filter(branch => branch.category === '文件' && !fileQueries.has(branch));
       if (fileBranches.length) {
-        const roots = await loadSearchRoots(fileBranches.map(branch => branch.contextOwner), requestAbort.signal);
+        const roots = await loadRoots(fileBranches.map(branch => branch.contextOwner), requestAbort.signal);
         if (!alive()) return;
         roots.forEach((root, index) => {
           const branch = fileBranches[index];

@@ -53,7 +53,7 @@ test('凭据失效后旧MCP候选不能打开，关闭picker取消其目录实�
   const invalidated = await exercise('mcp-identity');
   expect(invalidated.errors).toHaveLength(1); expect(invalidated.mcpOpened).toEqual([]); expect(writes(invalidated)).toEqual([]);
   const closed = await exercise('mcp-pending-close');
-  expect(closed.aborted).toBe(true); expect(closed.rows).toEqual([]); expect(writes(closed)).toEqual([]);
+  expect(closed.aborted).toBe(true); expect(closed.rows).toEqual(closed.rowsBeforeCancel); expect(writes(closed)).toEqual([]);
 });
 for (const mode of ['focus', 'focus-browser']) test(`${mode}默认回车只聚焦所选owner与资源，不打开管理菜单或写入`, async () => {
   const result = await exercise(mode);
@@ -90,7 +90,8 @@ test('来源及运行资源发现共用三并发，不按种类另开队列', as
 });
 for (const mode of ['pending-close', 'pending-identity']) test(`${mode}取消运行资源实际读取并丢弃迟到清单`, async () => {
   const result = await exercise(mode); expect(result.aborted).toBe(true); expect(writes(result)).toEqual([]);
-  expect(result.rows.map(item => item.id)).toEqual(mode === 'pending-close' ? [] : ['source-access-invalidated']);
+  if (mode === 'pending-close') expect(result.rows).toEqual(result.rowsBeforeCancel);
+  else expect(result.rows.map(item => item.id)).toEqual(['source-access-invalidated']);
 });
 test('错误owner运行清单拒绝为可操作目标，其余来源保留', async () => {
   const result = await exercise('mismatch'); expect(writes(result)).toEqual([]);

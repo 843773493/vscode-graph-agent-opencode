@@ -4,6 +4,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../../upstream/src/vs/
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
+import { awaitWithAbort } from '../../../web/src/utils/abortable.js';
 import type { WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gateway } from '../agentApi.js';
 import { changeFileSource } from '../readonlyDocuments.js';
@@ -83,6 +84,30 @@ export async function loadSearchRoots(owners: readonly WorkspaceOwner[], signal:
       return { ...owner, rootUri: roots.workspace_uri, label: target.name };
     })));
   } finally { limiter.dispose(); }
+}
+
+/** 单次浮层共享已成功和在途的根读取；输入取消只停止等待，关闭浮层才取消实际读取。 */
+export function createSearchRootLoader(lifetime: AbortSignal): typeof loadSearchRoots {
+  type Result = PromiseSettledResult<SearchScope['workspaces'][number]>;
+  const roots = new Map<string, Promise<Result>>();
+  const key = (owner: WorkspaceOwner) => JSON.stringify([owner.gatewayId, owner.workspaceId]);
+  return async (owners, signal) => {
+    lifetime.throwIfAborted();
+    signal.throwIfAborted();
+    const missing = owners.filter(owner => !roots.has(key(owner)));
+    if (missing.length) {
+      const loading = loadSearchRoots(missing, lifetime).catch((reason: unknown): Result[] => missing.map(() => ({ status: 'rejected', reason })));
+      missing.forEach((owner, index) => {
+        const pending = loading.then(results => {
+          const result = results[index];
+          if (result.status === 'rejected') roots.delete(key(owner));
+          return result;
+        });
+        roots.set(key(owner), pending);
+      });
+    }
+    return await awaitWithAbort(Promise.all(owners.map(owner => roots.get(key(owner))!)), signal);
+  };
 }
 
 /** 原搜索视图需要完整范围；Quick Access 则逐根表达元数据失败。 */

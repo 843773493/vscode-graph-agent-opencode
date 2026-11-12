@@ -86,7 +86,7 @@ test('配置权限失败独立显示原request_id，其它owner仍可打开', as
 });
 for (const mode of ['close', 'identity']) test(`${mode}结束配置发现实际读取，丢弃迟到候选`, async () => {
   const result = await exercise(mode); expect(result.aborted).toBe(true); expect(result.commands).toEqual([]);
-  expect(result.rows.map(item => item.id)).toEqual(mode === 'close' ? [] : ['source-access-invalidated']);
+  expect(result.rows.map(item => item.id)).toEqual(mode === 'close' ? result.rowsBeforeCancel : ['source-access-invalidated']);
 });
 
 for (const mode of ['workspace', 'gateway', 'side', 'pinned', 'background', 'freeze']) test(`${mode}配置URI由正式目录定位来源后复用原JSONC命令`, async () => {

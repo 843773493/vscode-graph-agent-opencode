@@ -46,6 +46,36 @@ async function exercise(name, argument) {
   } finally { await context.close(); }
 }
 
+for (const mode of ['typing', 'retry']) test(`逐键 ${mode} 合并查询、同浮层复用成功文件根且重新打开后重读`, async () => {
+  const result = await exercise('typingSearchContract', mode);
+  expect(result.errors).toEqual([]); expect(result.synchronousHistory).toBe(true); expect(result.earlyRequests).toBe(0);
+  expect(result.firstCalls).toBe(mode === 'retry' ? 1 : 2); expect(result.firstRoots).toBe(1);
+  expect(result.rootReads).toBe(mode === 'retry' ? 3 : 2);
+  expect(result.metadata.filter(path => path === '/api/gateway/workspaces')).toHaveLength(mode === 'retry' ? 3 : 2);
+  expect(result.candidates).toHaveLength(1); expect(result.candidates[0]).toMatchObject({ label: 'main.ts', description: '逐键工作区 · src' });
+  expect(result.candidates[0].highlights.label.length).toBeGreaterThan(0);
+  expect(result.candidates[0].highlights.description.length).toBeGreaterThan(0);
+  expect(result.requests.every(request => request.queries.every(query => query.query === 'main' || query.query === 'main src'))).toBe(true);
+  expect(result.requests.filter(request => request.queries[0].category === 'file').every(request => request.queries[0].query === 'main')).toBe(true);
+  expect(result.publications).toBeLessThanOrEqual(4);
+});
+
+test('输入变更共享在途根读取，同时取消旧搜索并拒绝旧结果', async () => {
+  const result = await exercise('typingSearchContract', 'in-flight');
+  expect(result.errors).toEqual([]); expect(result.retained).toBe(true); expect(result.oldCancelled).toBe(true);
+  expect(result.rootReads).toBe(1); expect(result.registryReads).toBe(1); expect(result.requests).toHaveLength(3);
+  expect(result.requests.slice(1).every(request => request.queries.every(query => query.query === 'main'))).toBe(true);
+});
+
+for (const mode of ['close', 'identity', 'close-root']) test(`${mode} 取消待执行查询或实际根读取`, async () => {
+  const result = await exercise('typingSearchContract', mode);
+  expect(result.errors).toEqual([]); expect(result.busy).toBe(false);
+  expect(result.requests).toBe(mode === 'close-root' ? 1 : 0);
+  if (mode === 'close-root') expect(result.aborted).toBe(true);
+  else expect(result.metadata).toEqual([]);
+  if (mode === 'identity') expect(result.labels).toEqual(['Gateway 或访问凭据已改变，请重新打开快速访问']);
+});
+
 for (const mode of ['read-error-before-scope', 'read-error-after-scope']) test(`真实 Provider ${mode} 展示原网络原因与响应身份且零自动重试`, async () => {
   const result = await exercise('contentBranchContract', mode);
   expect(result.requests).toHaveLength(1);

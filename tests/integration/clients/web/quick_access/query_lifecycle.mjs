@@ -112,7 +112,23 @@ try {
       .filter({ hasText: target.workspace_id }).getByRole('checkbox').check();
     await quick.getByRole('button', { name: 'OK', exact: true }).click();
   };
-  await command('workbench.action.quickOpen', 'branchscope');
+  result.phase = 'typing-and-shared-roots';
+  await command('workbench.action.quickOpen', '');
+  const beforeTyping = result.requests.length;
+  await input.pressSequentially('typingprobe', { delay: 20 });
+  await expectStatus(a, '文件', '本次查询完成'); await inactive();
+  const typed = result.requests.slice(beforeTyping).filter(item => item.path === '/api/gateway/search');
+  expect(typed).toHaveLength(2); expect(typed.every(item => item.query === 'typingprobe')).toBe(true);
+  const rootReads = () => result.requests.filter(item => item.path === '/api/v1/workspace/files/roots').length;
+  const firstRootReads = rootReads();
+  expect(firstRootReads).toBe(1);
+  await input.fill('typingprobe src');
+  await expectStatus(a, '文件', '本次查询完成'); await inactive();
+  await expect(quick.locator('[data-quick-input-id$="/src/typingprobe.ts"]')).toHaveCount(1);
+  await expect(quick.locator('[data-quick-input-id$="/tests/typingprobe.ts"]')).toHaveCount(0);
+  expect(rootReads()).toBe(firstRootReads);
+  result.typingCoalescesAndReusesRoots = true;
+  await input.fill('branchscope');
   await expectStatus(a, '文件', '本次查询完成');
   expect(queries('branchscope').filter(item => item.path === '/api/gateway/search' && !item.categories.includes('file')).map(requestOwners)).toEqual([[owner(a)]]);
   expect(queries('branchscope').filter(item => item.categories?.includes('file')).map(requestOwners)).toEqual([[owner(a)]]);
@@ -206,7 +222,7 @@ try {
     await input.fill('branchscope');
     await page.waitForTimeout(250);
     expect(queries('branchscope').length).toBe(before);
-    await input.fill('branchscope A');
+    await input.fill('branchscope nomatchzzzz');
     await expectStatus(a, '文件', '没有匹配的资源');
     await input.fill('branchscope');
     await expect.poll(async () => (await searchFault(page, 'branchscope')).reads.filter(read => read.category === 'catalog' && read.received).length).toBe(2);
@@ -274,8 +290,9 @@ try {
   result.phase = 'identity-recovery-revokes-picks';
   const expire = async route => {
     if (searchRequest(route.request())?.query !== 'identityfail') { await route.continue(); return; }
+    expect(route.request().headers()['x-local-token']).toBeTruthy();
     await route.fulfill({ status: 401, contentType: 'application/json', headers: { 'X-Request-ID': 'req-injected-identity' },
-      body: JSON.stringify({ request_id: 'req-injected-identity', detail: '缺少 Gateway 访问凭据' }) });
+      body: JSON.stringify({ request_id: 'req-injected-identity', detail: 'invalid local token' }) });
   };
   const identityPattern = '**/api/gateway/search';
   await page.route(identityPattern, expire);

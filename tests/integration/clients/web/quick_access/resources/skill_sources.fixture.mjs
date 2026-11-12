@@ -51,7 +51,7 @@ export async function skillSourcesContract(mode) {
     const first = gateway === owners[0].gatewayId, skill = path.endsWith('skill-sources'), local = path.includes('local-skills'), currentRound = round;
     const result = () => {
       if (configuration) return ok({ sources: [] });
-      if (first && (mode === 'fail-skill' && skill || mode === 'fail-agent' && !skill && !local && !gatewaySkill || mode === 'fail-local' && local)) return Response.json({ detail: '具名来源边界失败', request_id: 'source-failure-id' },
+      if (first && ((mode === 'fail-skill' || mode === 'progressive-failure') && skill || mode === 'fail-agent' && !skill && !local && !gatewaySkill || mode === 'fail-local' && local)) return Response.json({ detail: '具名来源边界失败', request_id: 'source-failure-id' },
         { status: 503, headers: { 'X-Request-ID': 'source-failure-id' } });
       if (gatewaySkill) {
         if (mode === 'fail-gateway-skill' && first) return Response.json({ detail: '具名来源边界失败', request_id: 'source-failure-id' },
@@ -79,7 +79,8 @@ export async function skillSourcesContract(mode) {
     init.signal.addEventListener('abort', () => { aborted++; });
     let response;
     if (mode === 'parallel' && !parallelReleased) response = new Promise(resolve => { parallel.push(() => resolve(result())); });
-    else if ((skill && mode !== 'local-close' || local && mode === 'local-close') && first && !releaseRead && ['close', 'identity', 'gateway', 'filter-pending', 'scope-pending', 'local-close'].includes(mode)) {
+    else if ((skill && mode !== 'local-close' || local && mode === 'local-close') && first && !releaseRead &&
+      (['close', 'identity', 'gateway', 'filter-pending', 'scope-pending', 'local-close'].includes(mode) || mode.startsWith('progressive'))) {
       response = new Promise(resolve => { releaseRead = () => resolve(result()); });
     } else response = Promise.resolve(result());
     return response.finally(() => { active--; });
@@ -102,7 +103,9 @@ export async function skillSourcesContract(mode) {
       }
       return { object: {}, dispose() { released++; } };
     } }, {});
-  picker = { value: 'resource ', items: [], activeItems: [], selectedItems: [], buttons: [], keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' },
+  let currentItems = [];
+  picker = { value: 'resource ', get items() { return currentItems; }, set items(items) { currentItems = items; this.selectedItems = []; this.activeItems = []; },
+    activeItems: [], selectedItems: [], buttons: [], keyMods: { alt: mode === 'side', ctrlCmd: mode === 'pinned' },
     onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerButton: buttons.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { lifetime.dispose(); } };
   provider = new ResourceQuickAccess(quick, opener, groups, configuration, { error: cause => errors.push(String(cause)) }, {}, {});
@@ -113,15 +116,34 @@ export async function skillSourcesContract(mode) {
     throw new Error('Skill 来源合同未收敛');
   };
   const filter = async value => { picker.value = `resource ${value}`; changes.fire(picker.value); await until(() => !picker.busy); snapshots.push(rows()); };
-  let barrierRequests;
+  let barrierRequests, rowsBeforeCancel, selectedId, activeId;
   try {
     if (mode === 'parallel') {
       await until(() => parallel.length === 3); barrierRequests = requests.filter(item => item.path !== '/api/gateway/workspaces').length;
       parallelReleased = true; parallel.forEach(release => release());
     }
-    if (['close', 'identity', 'gateway', 'filter-pending', 'scope-pending', 'local-close'].includes(mode)) {
+    if (mode.startsWith('progressive')) {
+      await until(() => releaseRead && picker.items.some(item => item.label === 'AGENTS.md' && item.id.startsWith(gatewayWorkspaceKey(owners[1]))));
+      snapshots.push(rows());
+      const count = requests.length;
+      picker.value = 'resource ag'; changes.fire(picker.value);
+      const chosen = picker.items.find(item => item.label === 'AGENTS.md' && item.id.startsWith(gatewayWorkspaceKey(owners[1])));
+      picker.activeItems = picker.selectedItems = [chosen];
+      selectedId = activeId = chosen.id;
+      if (mode === 'progressive-close') { rowsBeforeCancel = rows(); lifetime.dispose(); }
+      else if (mode === 'progressive-identity') {
+        invalidateGatewayToken(0);
+        picker.value = 'resource AGENTS'; changes.fire(picker.value);
+      }
+      releaseRead();
+      if (mode === 'progressive-close' || mode === 'progressive-identity') await new Promise(resolve => setTimeout(resolve, 20));
+      else {
+        await until(() => !picker.busy);
+        if (requests.length !== count) throw new Error('增量筛选重复发现来源');
+      }
+    } else if (['close', 'identity', 'gateway', 'filter-pending', 'scope-pending', 'local-close'].includes(mode)) {
       await until(() => releaseRead);
-      if (mode === 'close' || mode === 'local-close') lifetime.dispose();
+      if (mode === 'close' || mode === 'local-close') { rowsBeforeCancel = rows(); lifetime.dispose(); }
       else if (mode === 'identity') invalidateGatewayToken(0);
       else if (mode === 'gateway') workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
       else if (mode === 'scope-pending') { buttons.fire(picker.buttons[0]); await until(() => shows.length); }
@@ -158,7 +180,8 @@ export async function skillSourcesContract(mode) {
       }
       await until(() => opened.length || errors.length);
     }
-    return { rows: rows(), requests, maximum, barrierRequests, aborted, opened, references, errors, shows, snapshots, released, documents };
+    return { rows: rows(), requests, maximum, barrierRequests, aborted, opened, references, errors, shows, snapshots, released, documents,
+      rowsBeforeCancel, selectedId, activeId, selected: picker.selectedItems.map(item => item.id), activeIds: picker.activeItems.map(item => item.id), busy: picker.busy };
   } finally {
     lifetime.dispose(); cancellation.dispose(true); provider.dispose(); opener.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(previous);
