@@ -7,14 +7,20 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
 
+from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
+)
+from tests.integration.clients.web.test_browser_view_sessions import (
+    browser_backend as browser_backend,  # noqa: PLC0414
 )
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
@@ -22,8 +28,11 @@ from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
 )
+from tests.integration.clients.web.test_workspace_metadata_bootstrap import metadata_data
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
+from tests.support.ports import integration_port_block_for_file
+from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
@@ -36,6 +45,26 @@ def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
     assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
     assert (assets / "version.json").is_file(), assets
     monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
+
+
+@pytest.fixture
+async def history_cache_case(
+    request: pytest.FixtureRequest,
+    browser_backend: tuple[str, Path, ModelStreamReplay],
+) -> AsyncIterator[tuple[httpx.AsyncClient, TestRunContext, ModelStreamReplay]]:
+    backend_url, workspace, replay = browser_backend
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    gateway = start_gateway_process(
+        workspace_root=workspace, default_backend_url=backend_url,
+        port=integration_port_block_for_file(Path(request.node.path)).port(20),
+        artifacts_dir=context.artifacts_dir / "cache-gateway",
+    )
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}",
+                                    headers={"X-Local-Token": "local-dev-token"}, timeout=60) as client:
+            yield client, context, replay
+    finally:
+        close_gateway_process(gateway)
 
 
 async def test_closed_resources_survive_history_reload_without_deleting_business_state(
@@ -79,3 +108,66 @@ async def test_closed_resources_survive_history_reload_without_deleting_business
     with provider.control._condition:
         calls = {key: count for key, count in provider.control._counters.items() if key.startswith("model_call/")}
     assert calls == {}, "浏览历史和编辑草稿不得触发模型调用"
+
+
+async def test_clear_thread_history_cache_preserves_business_and_recovery(
+    request: pytest.FixtureRequest,
+    history_cache_case: tuple[httpx.AsyncClient, TestRunContext, ModelStreamReplay],
+) -> None:
+    client, context, provider = history_cache_case
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "历史缓存清理验收需要 Chromium"
+    health = await metadata_data(client, "/api/gateway/health")
+    targets = await metadata_data(client, "/api/gateway/workspaces")
+    owner = targets["active_workspace"]
+    assert owner["gateway_id"] == health["gateway_id"]
+    client.headers.update({"X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
+                           "X-BoxTeam-Workspace-Id": owner["workspace_id"]})
+    endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
+    identities = []
+    for label in ("A", "B"):
+        response = await client.post("/api/v1/sessions", json={"title": f"缓存清理 {label}"})
+        assert response.status_code == 200, response.text
+        created = response.json()["data"]
+        session_id, thread_id = created["session_id"], created["thread_id"]
+        answer = f"缓存助手 {label} 的真实历史正文"
+        cassette = build_cassette(asset_id=f"history-cache-{label.lower()}", model="e2e-stub-model",
+            url=f"http://127.0.0.1:{endpoint}/v1/chat/completions",
+            frames=chat_completion_frames(response_id=f"history-cache-{label}", model="e2e-stub-model",
+                deltas=[{"role": "assistant", "content": answer}], finish_reason="stop"))
+        provider.control.plan_model_calls(session_id, thread_id,
+            cast(list[dict[str, object]], cassette.raw["interactions"]))
+        accepted = await client.post(f"/api/v1/sessions/{session_id}/threads/{thread_id}/messages",
+                                     json={"message": {"content": f"缓存用户 {label}"}, "run": {}})
+        assert accepted.status_code == 200, accepted.text
+        job_id = accepted.json()["data"]["job_id"]
+        async with asyncio.timeout(45):
+            while True:
+                job = await metadata_data(client, f"/api/v1/jobs/{job_id}")
+                assert job["status"] not in {"failed", "cancelled", "timed_out", "execution_lost"}, job
+                if job["status"] == "completed":
+                    break
+                await asyncio.sleep(0.1)
+        identities.append({**owner, "session_id": session_id, "thread_id": thread_id, "answer": answer})
+    output = context.artifacts_dir / "thread-cache-cleanup.json"
+    command = ["node", "tests/integration/clients/web/quick_access/thread_cache_cleanup.mjs"]
+    with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
+        completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
+            env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
+                 "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_CACHE_THREADS": json.dumps(identities),
+                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
+            capture_output=True, text=True, timeout=150, check=False)
+    (context.artifacts_dir / "cache-browser.stdout.raw").write_text(completed.stdout, encoding="utf-8")
+    (context.artifacts_dir / "cache-browser.stderr.raw").write_text(completed.stderr, encoding="utf-8")
+    (context.artifacts_dir / "cache-browser-process.json").write_text(json.dumps({
+        "command": command, "exit_code": completed.returncode,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = json.loads(output.read_text())
+    assert result["phase"] == "complete" and result["pageErrors"] == []
+    assert all(result[key] for key in ("commandDiscoverable", "cancelPreserved", "capturedOwnerCleared",
+                                      "otherThreadPreserved", "draftsRestored", "settingsRestored", "historyRebuilt"))
+    assert result["forbiddenWrites"] == []
+    with provider.control._condition:
+        calls = [count for key, count in provider.control._counters.items() if key.startswith("model_call/")]
+    assert sorted(calls) == [1, 1], "清理、打开和恢复不得新增模型调用"
