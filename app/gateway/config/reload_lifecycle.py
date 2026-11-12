@@ -325,7 +325,8 @@ class ReloadLifecycleMixin:
                 await prune
             except asyncio.CancelledError:
                 pass
-            self._event_prune_task = None
+            finally:
+                self._event_prune_task = None
     async def _reload_from_watcher(self) -> None:
         try:
             await self.reload()
