@@ -110,6 +110,7 @@ class SessionChangesService:
     async def list_changesets(self, session_id: str) -> SessionChangesetListDTO:
         def read() -> SessionChangesetListDTO:
             records = self._store.read_records(session_id)
+            reviewed_map = self._store.read_reviewed_map(session_id)
             # 同一次列表里的 all/Turn 可消费相同快照，只复用纯 diff 计算。
             build_diff = cache(build_unified_diff)
             items: list[SessionChangesetListItemDTO] = []
@@ -121,6 +122,7 @@ class SessionChangesService:
                     session_id=session_id,
                     changeset_id=changeset_id,
                     records=changeset_records(records, changeset_id),
+                    reviewed_map=reviewed_map,
                     build_diff=build_diff,
                 )
                 items.append(
@@ -157,6 +159,7 @@ class SessionChangesService:
                     self._store.read_records(session_id),
                     changeset_id,
                 ),
+                reviewed_map=self._store.read_reviewed_map(session_id),
                 persist=True,
             )
 
@@ -201,10 +204,10 @@ class SessionChangesService:
         session_id: str,
         changeset_id: str,
         records: list[StoredFileEdit],
+        reviewed_map: dict[str, bool],
         persist: bool = False,
         build_diff: Callable[..., str] = build_unified_diff,
     ) -> SessionChangesetDTO:
-        reviewed_map = self._store.read_reviewed_map(session_id)
         changes = aggregate_records(
             records,
             read_edit_text=lambda edit_id, phase: self._store.read_edit_text(
