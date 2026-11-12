@@ -12,7 +12,7 @@ import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/str
 import type { FederatedSearchContinuationDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
 import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
-import { canonicalFileQuery, fileOptions, openResources, resourceInFolder, validateQuery, validateTextQuery } from './query.js';
+import { canonicalFileQuery, fileOptions, openResources, resourceInFolder, resourceInQuery, validateQuery, validateTextQuery } from './query.js';
 
 /** 只把原文件 owner 的精确区间投影为搜索结果，不为片段再读一次正文。 */
 export function textMatch(hit: ResourceNavigationMatchDTO, previewOptions?: ITextSearchPreviewOptions): ITextSearchMatch {
@@ -81,35 +81,54 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
     // 冻结本代际覆盖集合；每个目标只发送其自身根内的规范身份。
     const coveredResources = [...models];
     const seen = new Set<string>();
-    const targets: { resource: URI; folder: IFolderQuery }[] = query.onlyOpenEditors
-      ? openResources(this.editors, query, identity).map(resource => ({ resource, folder: query.folderQueries.find(folder => resourceInFolder(resource, query, folder, identity))! }))
-      : query.folderQueries.map(folder => ({ resource: folder.folder, folder }));
+    const exactResources = query.onlyOpenEditors ? openResources(this.editors, query, identity)
+      : (query.extraFileResources ?? []).filter(resource => resourceInQuery(resource, query, identity)
+        && !query.folderQueries.some(folder => identity.isEqual(resource, folder.folder)));
+    const targets: { resource: URI; folder: IFolderQuery; exact: boolean }[] = [
+      ...(query.onlyOpenEditors || query.type === QueryType.Text ? exactResources : [])
+        .map(resource => ({ resource, folder: query.folderQueries.find(folder => resourceInFolder(resource, query, folder, identity))!, exact: true })),
+      ...(query.onlyOpenEditors ? [] : query.folderQueries.map(folder => ({ resource: folder.folder, folder, exact: false }))),
+    ];
     try {
-      const planned = targets.flatMap(({ resource: target, folder }) => {
+      // 原 FileSearchManager 直接匹配额外文件；名称发现不为这些已给定身份重读正文。
+      if (query.type === QueryType.File && !query.onlyOpenEditors) {
+        for (const resource of exactResources) {
+          const folder = query.folderQueries.find(folder => resourceInFolder(resource, query, folder, identity))!;
+          if (query.filePattern && !isFilePatternMatch({ relativePath: identity.relativePath(folder.folder, resource)!, searchPath: undefined },
+            query.filePattern, !query.shouldGlobMatchFilePattern)) continue;
+          if (query.exists || count >= maximum) return { results: [...results.values()], messages, limitHit: true };
+          results.set(this.resourceKey(resource), { resource });
+          count++;
+        }
+      }
+      const planned = targets.flatMap(({ resource: target, folder, exact }) => {
         if (query.type === QueryType.Text && models.has(target)) return [];
-        if (query.onlyOpenEditors && query.type === QueryType.File && query.filePattern && !isFilePatternMatch({
+        if (exact && query.type === QueryType.File && query.filePattern && !isFilePatternMatch({
           relativePath: identity.relativePath(folder.folder, target)!, searchPath: undefined,
         }, query.filePattern, !query.shouldGlobMatchFilePattern)) return [];
         const owner = workspaceFileSource(target);
         const options = fileOptions(query, folder, identity);
-        // 已打开文件已按原目录语义过滤；精确文件请求不重新把 include 当 basename 模式。
-        if (query.onlyOpenEditors) { options.include_globs = []; options.exclude_globs = []; options.excluded_subtree_uris = []; }
+        // 显式文件已按原目录语义过滤；不把相对目录模式重新应用到 basename。
+        if (exact) { options.include_globs = []; options.exclude_globs = []; options.excluded_subtree_uris = []; }
+        else options.excluded_resource_uris = exactResources.filter(resource => resourceInFolder(resource, query, folder, identity))
+          .map(resource => workspaceFileSource(resource).path).sort();
         if (query.type === QueryType.Text) Object.assign(options, {
           case_mode: query.contentPattern.isCaseSensitive ? 'sensitive' : 'insensitive',
           is_regex: !!query.contentPattern.isRegExp, whole_word: !!query.contentPattern.isWordMatch,
           word_separators: query.contentPattern.wordSeparators, is_multiline: !!query.contentPattern.isMultiline, all_matches: true,
           context_lines: query.surroundingContext ?? 0,
-          excluded_resource_uris: coveredResources.filter(resource => !query.onlyOpenEditors && resourceInFolder(resource, query, folder, identity))
-            .map(resource => workspaceFileSource(resource).path).sort(),
+          excluded_resource_uris: [...new Set([...options.excluded_resource_uris,
+            ...coveredResources.filter(resource => !exact && resourceInFolder(resource, query, folder, identity))
+              .map(resource => workspaceFileSource(resource).path)])].sort(),
         });
-        return [{ target, folder, owner, wire: { owner: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId },
+        return [{ target, folder, exact, owner, wire: { owner: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId },
           target: { uri: owner.path, search_options: options, max_bytes: query.type === QueryType.Text ? query.maxFileSize ?? 65536 : 65536 } } }];
       });
-      if (!planned.length) return { results: [], messages: [], limitHit: false };
+      if (!planned.length) return { results: [...results.values()], messages, limitHit: false };
       const operation = query.type === QueryType.Text ? 'content' : 'name';
       const byKey = new Map(planned.map(item => [searchBranchKey({ owner: item.wire.owner, category: 'file', operation, resource_uri: item.owner.path }), item]));
       // 页大小保持不变；后续只读未完成根，不因分支减少改变原 cursor 的绑定。
-      const pageLimit = Math.max(1, Math.min(500, Math.floor(1000 / planned.length), query.type === QueryType.File && query.exists ? 1 : Math.floor((maximum + 1) / planned.length)));
+      const pageLimit = Math.max(1, Math.min(500, Math.floor(1000 / planned.length), query.type === QueryType.File && query.exists ? 1 : Math.floor((maximum - count + 1) / planned.length)));
       const owners = [...new Map(planned.map(item => [JSON.stringify(item.wire.owner), item.wire.owner])).values()];
       const requestQuery = { category: 'file', operation, contract_version: 1,
         query: query.type === QueryType.Text ? query.contentPattern.pattern : query.onlyOpenEditors ? '**/*' : query.filePattern || '**/*',
@@ -131,7 +150,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           if (!event.branch?.branch) return;
           const plan = byKey.get(searchBranchKey(event.branch.branch));
           if (!plan) throw new Error('文件搜索返回了其它目录根');
-          const { owner, folder, target } = plan;
+          const { owner, folder, target, exact } = plan;
           if (event.type === 'branch') {
             const diagnostic = [event.branch.code && `code: ${event.branch.code}`, event.branch.message,
               event.branch.error_owner && `error_owner: ${event.branch.error_owner}`, event.branch.reason && `reason: ${event.branch.reason}`,
@@ -151,13 +170,14 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           if (event.type !== 'page') return;
           const page = event.page?.files;
           if (!page || page.node?.uri !== owner.path) throw new Error('文件搜索响应目标与请求不一致');
+          if (exact && page.node.resource_shape !== 'file') throw new Error('显式搜索文件返回了目录或其它资源');
           const canonical = new Map(page.entries.map(entry => [entry.uri, entry.canonical_uri ?? entry.uri]));
           const rows = query.type === QueryType.Text ? page.matches.map(hit => ({ uri: hit.uri, hit })) : page.entries
             .filter(entry => entry.resource_shape === 'file').map(entry => ({ uri: entry.uri, hit: undefined }));
           for (const row of rows) {
             if (source.token.isCancellationRequested) throw new CancellationError();
             const resource = workspaceFileUri(owner, canonical.get(row.uri) ?? row.uri, owner.root);
-            if (query.onlyOpenEditors && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件');
+            if (exact && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件');
             if (!resourceInFolder(resource, query, folder, identity)) throw new Error('文件搜索响应越过本次目录或过滤范围');
             if (models.has(resource)) continue;
             const key = this.resourceKey(resource);
@@ -175,7 +195,7 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           for (const line of page.contexts) {
             if (source.token.isCancellationRequested) throw new CancellationError();
             const resource = workspaceFileUri(owner, canonical.get(line.uri) ?? line.uri, owner.root);
-            if (query.onlyOpenEditors && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件的上下文');
+            if (exact && !identity.isEqual(resource, target)) throw new Error('精确文件搜索返回了其它文件的上下文');
             if (!resourceInFolder(resource, query, folder, identity)) throw new Error('文件搜索上下文越过本次目录或过滤范围');
             if (models.has(resource)) continue;
             const key = this.resourceKey(resource);

@@ -21,9 +21,15 @@ from tests.support.workspaces import (
 )
 
 
+@pytest.fixture
+def file_search_web_assets(request: pytest.FixtureRequest) -> Path:
+    prepared = os.getenv("BOXTEAM_SEARCH_WEB_ASSETS")
+    return Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
+
+
 async def test_dirty_model_coverage_reaches_target_before_page_allocation(
     request: pytest.FixtureRequest, integration_workspace_root_path: str,
-    integration_workspace_config_path: str, search_gateway_port: int, web_workbench_assets: Path,
+    integration_workspace_config_path: str, search_gateway_port: int, file_search_web_assets: Path,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "文件模型覆盖验收需要 Chromium"
@@ -40,11 +46,14 @@ async def test_dirty_model_coverage_reaches_target_before_page_allocation(
     (targets[0] / "b.coverage.txt").write_text("A remaining coverageword", encoding="utf-8")
     (targets[0] / "preview.txt").write_text(
         "preview header\n" + "p" * 1200 + "🧪 preview-target " + "q" * 2400 + "preview-tail-sentinel\n", encoding="utf-8")
+    dependency = targets[0] / "node_modules/open-dependency.txt"
+    dependency.parent.mkdir(exist_ok=True)
+    dependency.write_text("disk dependency value", encoding="utf-8")
     result_path = context.artifacts_dir / "model-coverage.json"
     gateway = await asyncio.to_thread(start_gateway_process,
         workspace_root=targets[0], default_backend_url=None, port=search_gateway_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
+        extra_env={"BOXTEAM_WEB_ASSETS": str(file_search_web_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
     command = ["node", "tests/integration/clients/web/quick_access/file_model_coverage.mjs"]
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
@@ -67,9 +76,11 @@ async def test_dirty_model_coverage_reaches_target_before_page_allocation(
         assert result["preview"]["extraReads"] == 0
         assert result["localOverflow"]["requests"] == 0
         assert len(result["exactLocalLimit"]["requests"]) == 2
+        assert result["ignoredOpenModel"]["foundDraft"] and result["ignoredOpenModel"]["diskOnlyUnmatched"]
         assert result["pageErrors"] == []
         # 搜索从未替用户保存草稿。
         assert targets[0].joinpath("a.coverage.txt").read_text() == "coverageword " * 20
         assert targets[1].joinpath("a.coverage.txt").read_text() == "coverageword " * 20
+        assert dependency.read_text(encoding="utf-8") == "disk dependency value"
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)

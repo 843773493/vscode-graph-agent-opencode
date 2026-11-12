@@ -139,7 +139,6 @@ export function resourceInFolder(resource: URI, query: ICommonQueryProps<URI>, f
     && identity.isEqualOrParent(other.folder, folder.folder) && identity.isEqualOrParent(resource, other.folder))) return false;
   const relative = identity.relativePath(folder.folder, resource)!;
   const options = fileOptions(query, folder, identity);
-  if ('contentPattern' in query && options.ignore_mode === 'default' && relative.split('/').some(part => ['.git', 'node_modules', '.boxteam'].includes(part))) return false;
   // 与原文件 owner 的 glob 根语义一致，也排除已被目录模式剪枝的子项。
   const match = (pattern: string, path: string) => glob.match('**/' + pattern.replace(/^\/+/, ''), path);
   const ancestors = relative.split('/').map((_, index, parts) => parts.slice(0, index + 1).join('/'));

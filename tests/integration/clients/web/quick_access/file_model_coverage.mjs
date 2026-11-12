@@ -66,7 +66,8 @@ try {
   const owners = targets.map(wireOwner);
   expect(targets[0].workspaceId).not.toBe(targets[1].workspaceId);
   result.targets = targets;
-  await writeWorkspaceSettings({ page, command }, { 'files.autoSave': 'off', 'search.maxResults': 2, 'search.useIgnoreFiles': false });
+  await writeWorkspaceSettings({ page, command }, { 'files.autoSave': 'off', 'search.maxResults': 2, 'search.useIgnoreFiles': false,
+    'search.exclude': { '**/node_modules': false } });
   const resource = owner => page.evaluate(owner => globalThis.workbench.URI.from({ scheme: 'boxteam-file', authority: owner.gatewayId,
     path: `/${owner.workspaceId}/${encodeURIComponent(owner.rootUri)}/a.coverage.txt` }).toString(), owner);
   result.phase = 'edit-through-real-text-editor';
@@ -259,6 +260,40 @@ try {
   expect(localRequests.find(item => sameOwner(wireOwner(item), owners[0])).search_options.excluded_resource_uris)
     .toEqual([targets[0].rootUri + '/a.coverage.txt']);
   result.exactLocalLimit = { probe, requests: localRequests, text: await complete.innerText() };
+  result.phase = 'opened-model-in-ignored-directory';
+  // 单独验证磁盘ignore；原默认search.exclude的显式glob仍应排除打开模型。
+  const dependency = await page.evaluate(owner => globalThis.workbench.URI.from({ scheme: 'boxteam-file', authority: owner.gatewayId,
+    path: `/${owner.workspaceId}/${encodeURIComponent(owner.rootUri)}/node_modules/open-dependency.txt` }).toString(), targets[0]);
+  await command('_workbench.open', dependency, [undefined, { pinned: true }]);
+  const dependencyEditor = page.locator('.editor-instance .monaco-editor').filter({ visible: true }).last();
+  await expect(dependencyEditor.locator('.view-lines')).toContainText('disk dependency value');
+  await dependencyEditor.locator('.view-lines').click();
+  await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.insertText('draft-dependency-marker');
+  await expect(dependencyEditor.locator('.view-lines')).toContainText('draft-dependency-marker');
+  const dependencyQuery = async query => {
+    const incoming = page.waitForRequest(request => new URL(request.url()).pathname === '/api/gateway/search'
+      && request.method() === 'POST' && request.postDataJSON().queries.some(item => item.query === query));
+    await command('search.action.openEditor', { query, location: 'new', triggerSearch: true,
+      scope: { version: 1, kind: 'workspace', workspaces: [targets[0]] }, contextLines: 0,
+      useExcludeSettingsAndIgnoreFiles: true });
+    const request = await incoming, receipt = await searchReceipt(request);
+    expect(receipt.status).toBe(200); expect(receipt.scope.owners).toEqual([owners[0]]);
+    const payload = request.postDataJSON();
+    expect(payload.queries[0].file_targets.every(item => sameOwner(item.owner, owners[0]))).toBe(true);
+    expect(payload.queries[0].file_targets.flatMap(item => item.target.search_options.excluded_resource_uris))
+      .toContain(targets[0].rootUri + '/node_modules/open-dependency.txt');
+    // 查询词正常传到目标；文件参数只传定位和排除身份，不上传打开模型正文。
+    expect(JSON.stringify(payload.queries[0].file_targets)).not.toContain('disk dependency value');
+    expect(JSON.stringify(payload.queries[0].file_targets)).not.toContain('draft-dependency-marker');
+    expect(receipt.pages.flatMap(event => event.page.files.matches)).toEqual([]);
+    return { receipt, text: await page.locator('.search-editor').filter({ visible: true }).last().locator('.view-lines').innerText() };
+  };
+  const dependencyDraft = await dependencyQuery('draft-dependency-marker');
+  expect(dependencyDraft.text).toContain('open-dependency.txt'); expect(dependencyDraft.text).toContain('draft-dependency-marker');
+  const dependencyDisk = await dependencyQuery('disk dependency value');
+  expect(dependencyDisk.text).not.toContain('open-dependency.txt');
+  result.ignoredOpenModel = { foundDraft: true, diskOnlyUnmatched: true, draft: dependencyDraft, disk: dependencyDisk,
+    boundary: '原文件编辑器修改未保存模型，真实Search Editor开启ignore；磁盘正文未上传或保存' };
   result.responses = { onlyAReceipt, receipt, pageA, pageB, small, beforeCoverage, changed };
   result.phase = 'passed';
 } catch (error) {
