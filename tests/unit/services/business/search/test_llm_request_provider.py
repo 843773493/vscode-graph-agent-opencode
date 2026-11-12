@@ -34,6 +34,9 @@ def provider(catalog: SessionCatalogService):
 async def test_provider_pages_original_session_records_and_binds_owner(catalog, provider):
     service, logs = provider
     sessions = catalog._session_service
+    for index in range(65):
+        sessions.path_resolver.catalog_store.create_folder(
+            f"ses_00000000000070008000{index:012x}", sessions.workspace_id, None, f"Folder {index}")
     owners = [await sessions.create(SessionCreateRequest(title=f"请求来源 {index}")) for index in range(2)]
     for owner in owners:
         directory = sessions.path_resolver.resolve_session_node_for_runtime(owner.session_id) / "logs" / "llm_requests"
@@ -47,6 +50,7 @@ async def test_provider_pages_original_session_records_and_binds_owner(catalog, 
     for _ in range(5):
         result = await service.search(request.model_copy(update={"cursor": cursor}), gateway_id=GATEWAY)
         assert result.llm_requests and result.domain_page is result.llm_requests
+        assert result.llm_requests.items or result.state == "complete"
         hits.extend(result.llm_requests.items)
         cursor = result.llm_requests.cursor
         if result.state == "complete":

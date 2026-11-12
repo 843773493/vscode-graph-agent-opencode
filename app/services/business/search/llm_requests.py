@@ -26,7 +26,7 @@ from app.services.infrastructure.llm_request_log_service import (
     LogSearchPosition,
 )
 
-MAX_SCANNED_NODES = 64
+MAX_SCANNED_SESSIONS = 64
 
 
 class _Cursor(BaseModel):
@@ -66,19 +66,24 @@ async def search_workspace_llm_requests(
         raise LLMRequestLogError("invalid_request_log_cursor", "position_out_of_bounds", "请求日志搜索 cursor 目录位置越界")
     budget = LogSearchBudget(check=admission.check)
     items: list[WorkspaceLLMRequestLogMatchDTO] = []
-    scanned_nodes = 0
+    scanned_nodes = scanned_sessions = 0
     reason = None
     continuable = True
     while state.node_offset < len(snapshot.items):
         reason = budget.limited_reason()
         if reason:
             break
-        if scanned_nodes >= MAX_SCANNED_NODES or len(items) >= request.limit:
-            reason = "scan_limit" if scanned_nodes >= MAX_SCANNED_NODES else "result_limit"
+        if len(items) >= request.limit:
+            reason = "result_limit"
             break
         node = snapshot.items[state.node_offset]
+        if node.session is not None and scanned_sessions >= MAX_SCANNED_SESSIONS:
+            reason = "scan_limit"
+            break
         scanned_nodes += 1
         if node.session is not None:
+            # Folder 仍计入节点统计，但不消耗实际日志来源的读取名额。
+            scanned_sessions += 1
             async with asyncio.timeout(admission.remaining()):
                 async with sessions.session_read_admission(node.node_id):
                     page = await run_sync_shielded(logs.search_session_logs, node.node_id, request.query,
