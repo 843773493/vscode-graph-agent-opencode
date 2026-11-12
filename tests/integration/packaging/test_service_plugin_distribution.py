@@ -22,6 +22,7 @@ import psutil
 import pytest
 from websockets.sync.client import connect
 
+from app.runtime.windows_fs import native_process_path
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.gateway.test_service_plugin_dependency_preparation import (
@@ -48,6 +49,11 @@ from tests.support.workspaces import (
 )
 
 pytestmark = pytest.mark.skipif(sys.platform not in {"linux", "win32"}, reason="本用例验证 Linux／Windows 发行物")
+
+
+def _process_path(path: Path) -> str:
+    """发行包放在正式测试目录深处时，用 Windows 短名启动子进程。"""
+    return native_process_path(path) if sys.platform == "win32" else str(path)
 
 
 @pytest.fixture
@@ -134,18 +140,23 @@ def distribution_gateway(request: pytest.FixtureRequest,
     empty_path.mkdir()
     environment = {key: value for key, value in os.environ.items()
         if key not in {"PYTHONPATH", "PYTHONHOME"} and not key.startswith(("BOXTEAM_", "UV_", "BUN_", "npm_"))}
+    # 保留 System32 供 node-pty 调用 taskkill，其余宿主 PATH 仍隔离。
+    runtime_path = os.pathsep.join((str(python.parent), str(python.parent / "DLLs"),
+        str(Path(os.environ["SystemRoot"]) / "System32"), str(empty_path))) if sys.platform == "win32" else str(empty_path)
     environment.update({"BOXTEAM_HOME": str(home), "HOME": str(runtime / "user-home"),
         "BOXTEAM_PROJECT_ROOT": str(application), "BOXTEAM_RUNTIME_MANIFEST": str(manifest_path),
         "BOXTEAM_DISTRIBUTION": manifest["distribution"], "BOXTEAM_NODE_BIN": str(node),
-        "BOXTEAM_PYTHON_BIN": str(python), "BOXTEAM_WEB_ASSETS": str(package / manifest["web_assets"]),
+        "BOXTEAM_PYTHON_BIN": _process_path(python), "BOXTEAM_WEB_ASSETS": str(package / manifest["web_assets"]),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": str(package / manifest["chromium_executable"]),
         "BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT": str(workspace), "WORKSPACE_ROOT": str(workspace),
         "BOXTEAM_GATEWAY_URL": gateway_url, "BOXTEAM_DEFAULT_BACKEND_PORT": str(backend_port),
-        "PATH": str(empty_path), "XDG_CACHE_HOME": str(runtime / "empty-cache"),
+        "PATH": runtime_path, "XDG_CACHE_HOME": str(runtime / "empty-cache"),
         "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(distribution_model_stream),
         "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1"})
-    command = [str(python), "-m", "configs.boxteam", "initialize", "--project-root", str(application)]
-    initialized = subprocess.run(command, cwd=application, env=environment,
+    process_cwd = Path(_process_path(application))
+    process_python = _process_path(python)
+    command = [process_python, "-m", "configs.boxteam", "initialize", "--project-root", str(application)]
+    initialized = subprocess.run(command, cwd=process_cwd, env=environment,
         text=True, capture_output=True, check=False, timeout=readiness_seconds)
     (context.artifacts_dir / "initialize.stdout.raw").write_text(initialized.stdout, encoding="utf-8")
     (context.artifacts_dir / "initialize.stderr.raw").write_text(initialized.stderr, encoding="utf-8")
@@ -161,10 +172,12 @@ def distribution_gateway(request: pytest.FixtureRequest,
     with (context.artifacts_dir / "gateway.stdout.raw").open("w") as stdout, (
         context.artifacts_dir / "gateway.stderr.raw"
     ).open("w") as stderr:
-        command = ([str(node), str(relocated / "launcher/bin/boxteam.mjs"), "--no-open"]
-            if launcher_input else [str(python), "-m", "app.runtime.http_server", "app.gateway.main:app",
+        runtime_node = _process_path(node)
+        launcher = relocated / "launcher/bin/boxteam.mjs"
+        command = ([runtime_node, _process_path(launcher), "--no-open"]
+            if launcher_input else [process_python, "-m", "app.runtime.http_server", "app.gateway.main:app",
                 "--host", "127.0.0.1", "--port", str(gateway_port), "--shutdown-on-stdin-eof"])
-        process = subprocess.Popen(command, cwd=application, env=environment,
+        process = subprocess.Popen(command, cwd=process_cwd, env=environment,
             stdin=subprocess.PIPE, text=True, stdout=stdout, stderr=stderr)
         try:
             if launcher_input:
@@ -195,8 +208,8 @@ def distribution_gateway(request: pytest.FixtureRequest,
         finally:
             if launcher_input:
                 # 正式停止命令等待Launcher PID消失；先收割本测试持有的Popen。
-                with subprocess.Popen([str(node), str(relocated / "launcher/bin/boxteam.mjs"), "stop"],
-                    cwd=application, env=environment, text=True, stdout=stdout, stderr=stderr) as stopper:
+                with subprocess.Popen([runtime_node, _process_path(launcher), "stop"],
+                    cwd=process_cwd, env=environment, text=True, stdout=stdout, stderr=stderr) as stopper:
                     process.wait(timeout=150)
                     assert stopper.wait(timeout=20) == 0
             else:
@@ -213,17 +226,19 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
     manifest = json.loads((distribution / "runtime-manifest.json").read_text(encoding="utf-8"))
     python = distribution / manifest["python_executable"]
     node = distribution / manifest["node"]["executable"]
-    python_target = subprocess.run([str(python), "-c",
+    python_target = subprocess.run([_process_path(python), "-c",
         "import json,platform,sys;print(json.dumps({'version':platform.python_version(),'abi':f'cp{sys.version_info.major}{sys.version_info.minor}'}))"],
         text=True, capture_output=True, check=True, timeout=10)
-    node_target = subprocess.run([str(node), "--print",
+    node_target = subprocess.run([_process_path(node), "--print",
         "JSON.stringify({version:process.versions.node,abi:process.versions.modules})"],
         text=True, capture_output=True, check=True, timeout=10)
     target = {**native_plugin_target(), "python": json.loads(python_target.stdout), "node": json.loads(node_target.stdout)}
 
-    def exchange(method: str, path: str, body: dict[str, object] | None = None) -> httpx.Response:
+    def exchange(method: str, path: str, body: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None) -> httpx.Response:
         request_id = f"distribution-plugin-{len(evidence)}"
-        response = client.request(method, path, json=body, headers={"X-Request-ID": request_id})
+        response = client.request(method, path, json=body,
+            headers={"X-Request-ID": request_id, **(headers or {})})
         assert response.headers["X-Request-ID"] == request_id
         payload = response.json()
         if "request_id" in payload:
@@ -429,13 +444,14 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
             "plugin_id": "debugging", "enabled": True}], workspace=True)
         require_exited({"terminal": terminal})
-        debug_plugin = states()["debugging"]
+        debug_plugin: dict | None = None
         deadline = time.monotonic() + 30
-        while debug_plugin["state"] != "ready":
-            assert debug_plugin["state"] != "failed", debug_plugin
+        while debug_plugin is None or debug_plugin["state"] != "ready":
+            assert debug_plugin is None or debug_plugin["state"] != "failed", debug_plugin
             assert time.monotonic() < deadline, debug_plugin
             time.sleep(0.1)
-            debug_plugin = states()["debugging"]
+            debug_plugin = states().get("debugging")
+        assert debug_plugin is not None
         owner = {"session_id": session["session_id"], "thread_id": session["thread_id"]}
         configured = exchange("POST", "/api/v1/debug/node/configurations", {**owner,
             "name": "源码外发行 Debug", "script_path": "distribution-debug.mjs", "working_directory": ".",
@@ -479,13 +495,33 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         require_exited({"debugging": restarted})
         deadline = time.monotonic() + 30
         while True:
-            browser_plugin = states()["browser"]
-            if browser_plugin["state"] == "ready":
+            browser_plugin = states().get("browser")
+            if browser_plugin is not None and browser_plugin["state"] == "ready":
                 break
-            assert browser_plugin["state"] != "failed" and time.monotonic() < deadline, browser_plugin
+            assert (browser_plugin is None or browser_plugin["state"] != "failed") and time.monotonic() < deadline, browser_plugin
             time.sleep(0.1)
-        browser_resource = exchange("POST", "/api/v1/resources/browsers", {**owner,
-            "retention_scope": "workspace", "title": "源码外发行 Browser", "url": "about:blank"}).raise_for_status().json()["data"]
+        browser_create = exchange("POST", "/api/v1/resources/browsers", {**owner,
+            "retention_scope": "workspace", "title": "源码外发行 Browser", "url": "about:blank"})
+        if browser_create.status_code == 503 and "browser_creation_paused_memory_pressure" in browser_create.text:
+            rejection = {"incident_observed_at_unix_ns": time.time_ns()}
+            try:
+                browser_process = psutil.Process(browser_plugin["instance"]["process_id"])
+                browser_port = int(browser_process.environ()["BOXTEAM_PLUGIN_PORT"])
+                rejection["health_requested_at_unix_ns"] = time.time_ns()
+                browser_health = httpx.get(f"http://127.0.0.1:{browser_port}/health", timeout=5, trust_env=False)
+                browser_health.raise_for_status()
+                rejection["health_received_at_unix_ns"] = time.time_ns()
+                rejection["browser_health"] = browser_health.json()
+            except (psutil.Error, KeyError, TypeError, ValueError, httpx.HTTPError) as error:
+                rejection["browser_health_capture_error"] = f"{type(error).__name__}: {error}"
+            if sys.platform == "win32":
+                try:
+                    rejection["windows_host_memory_observed_at_unix_ns"] = time.time_ns()
+                    rejection["windows_host_memory"] = psutil.virtual_memory()._asdict()
+                except psutil.Error as error:
+                    rejection["windows_host_memory_capture_error"] = f"{type(error).__name__}: {error}"
+            evidence.append({"browser_memory_pressure_rejection": rejection})
+        browser_resource = browser_create.raise_for_status().json()["data"]
         operated = exchange("POST", f"/api/v1/resources/{browser_resource['resource_id']}/browser-operation", {
             "expected_revision": browser_resource["owner_revision"], "thread": browser_resource["source_thread"],
             "action": "navigate", "payload": {"type": "url", "url": "data:text/html,<title>distribution-browser-api</title>"},
@@ -516,7 +552,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
                     "packages": [str(context.artifacts_dir / f"distribution-probe-{version}.zip")
                         for version in ("1.0.0", "2.0.0")],
                     "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png"), **native})}
-            command = [str(node), "tests/integration/packaging/service_plugin_distribution_workbench.mjs"]
+            command = [_process_path(node), "tests/integration/packaging/service_plugin_distribution_workbench.mjs"]
             if electron_asset and sys.platform == "linux":
                 command = ["/usr/bin/xvfb-run", "-a", *command]
             with chromium_temporary_environment(temporary) as browser_environment:
