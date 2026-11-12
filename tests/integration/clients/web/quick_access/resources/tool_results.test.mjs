@@ -32,6 +32,7 @@ async function exercise(mode) {
 }
 
 const lists = result => result.requests.filter(item => item.path.endsWith('/tool-results'));
+const listedToolRows = result => result.rows.filter(row => result.items.some(item => item.item_id === row.resourceId));
 test('浏览只读取精确 child Thread 的工具结果 metadata，筛选不重查或读取正文', async () => {
   const result = await exercise('browse');
   expect(lists(result)).toHaveLength(1);
@@ -49,21 +50,28 @@ test('续页按钮只发送一次请求，并固定首屏返回的 view 与 revi
   const result = await exercise('page'), requests = lists(result);
   expect(requests).toHaveLength(2);
   expect(new URLSearchParams(requests[1].query)).toEqual(new URLSearchParams('limit=100&after=2&view_id=view-child&view_revision=12'));
-  expect(result.rows.map(row => row.resourceId)).toEqual(result.items.map(item => item.item_id));
+  expect(listedToolRows(result).map(row => row.resourceId)).toEqual(result.items.map(item => item.item_id));
   expect(result.opened).toEqual([]); expect(result.errors).toEqual([]);
 });
 
 for (const mode of ['cancel', 'page-cancel']) test(`${mode}实际取消请求并丢弃迟到的工具 metadata`, async () => {
   const result = await exercise(mode);
   expect(result.aborted).toBe(true); expect(result.opened).toEqual([]); expect(result.errors).toEqual([]);
-  expect(result.rows.every(row => !row.selectable)).toBe(true);
+  if (mode === 'cancel') {
+    expect(listedToolRows(result)).toEqual([]);
+  } else {
+    expect(lists(result)).toHaveLength(2);
+    expect(listedToolRows(result).map(row => row.resourceId)).toEqual([result.items[0].item_id]);
+    expect(listedToolRows(result).some(row => row.resourceId === result.items[1].item_id)).toBe(false);
+  }
 });
 
 test('目录响应属于其他 Thread 时拒绝发布可接受候选', async () => {
   const result = await exercise('wrong-thread');
   expect(lists(result)).toHaveLength(1); expect(result.opened).toEqual([]);
   expect(result.rows.some(row => row.label.includes('工具结果目录响应不属于发起 Thread'))).toBe(true);
-  expect(result.rows.every(row => !row.selectable)).toBe(true);
+  expect(listedToolRows(result)).toEqual([]);
+  expect(result.rows.some(row => row.label === 'AGENTS.md' && row.selectable)).toBe(true);
 });
 
 test('接受冻结工具结果身份并沿原 Thread 传递 typed boxteamMessage', async () => {

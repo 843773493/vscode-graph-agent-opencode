@@ -1044,3 +1044,5 @@
 精确 Thread 的资源候选沿原历史 view／tool_calls 索引返回工具名称、canonical item、Turn 和调用身份；浏览不读取 canonical／完整结果正文，续页绑定原 view／revision，接受通过原 around 入口核验并补载精确 ToolRow。附件与工具结果共用原单次续页处理，消息与工具导航共用一个已核验结果状态；不伪造消息区间或 URI，不新增目录索引、正文缓存或执行入口。
 
 真实产品执行生成历史的后端检查 3 passed；导航与附件／变更合同 87 passed／391 断言，最终导航状态简化后补验 56 passed／250 断言。172 份实际 sourceTransform 源码类型检查、协议生成一致性、公开 OpenAPI 导出和新增 proto 格式／breaking 检查通过；完整 Workbench 页面、Windows、真实远端及 Electron 工具结果入口尚未验收，11.2 保持未勾选。原始输出位于 `out/tests/temp/2026/11/12/tool_result_resource_quick_access/artifacts/`。本次按用户要求在工作区统一提交／同步边界收口，完整页面验收仍待后续继续。
+
+收口补验：相同产品源码的正式 Workbench 构建通过（79 个内置 Web 扩展）；新增 Provider 短合同在按原 owner 限定混合来源行后 7 passed／44 断言，验证精确 child、固定 view 续页、取消与 typed 接受。完整页面仍未运行；短合同不替代真实页面。原件位于 `out/tests/integration/clients/web/quick_access/resources/test_tool_results/artifacts/2026/11/12/tool_results_slice/`，失败原件及 `rerun-01/` 均保留。
