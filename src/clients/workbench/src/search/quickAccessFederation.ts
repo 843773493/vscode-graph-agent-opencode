@@ -152,7 +152,7 @@ export function queryFederatedSearchBranches(owners: readonly WorkspaceOwner[], 
         !failed && !cancelled && state.message, state.code && `code: ${state.code}`,
         state.error_owner && `error_owner: ${state.error_owner}`, state.reason && `reason: ${state.reason}`,
         ...(state.diagnostics ?? []).map(notice => `${notice.severity}: ${notice.message} · code: ${notice.code} · owner: ${notice.owner}`),
-        state.http_status !== undefined && `http_status: ${state.http_status}`, `request_id: ${requestId}`].filter(Boolean).join(' · '),
+        typeof state.http_status === 'number' && `http_status: ${state.http_status}`, `request_id: ${requestId}`].filter(Boolean).join(' · '),
       ...((continuation || ((failed || cancelled) && state.retryable)) ? { buttons: [continuation ? moreButton : retryButton],
         trigger: async () => { await run([branch], continuation ? state.cursor : undefined); return TriggerAction.NO_ACTION; } } : {}) };
   };

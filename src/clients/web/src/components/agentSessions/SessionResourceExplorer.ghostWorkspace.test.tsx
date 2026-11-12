@@ -85,6 +85,7 @@ async function renderExplorer(options: {
   searchDiagnostics?: boolean;
   searchMixedDiagnostics?: boolean;
   searchNotices?: boolean;
+  searchHttpStatus?: null;
   searchOpen?: boolean;
   searchQuery?: string;
   onActivateWorkspace?: (workspaceId: string) => Promise<void>;
@@ -130,7 +131,10 @@ async function renderExplorer(options: {
           branches: [branch, ...(options.searchMixedDiagnostics ? [completed] : [])], returned_results: 0 } },
       ].map((payload, index) => {
         const event = FederatedSearchEventDTO.create({ ...payload, sequence: index + 1, request_id: "catalog-diagnostic-request" });
-        return `id: ${index + 1}\nevent: search\ndata: ${JSON.stringify(event)}\n\n`;
+        // 后端 JSON 的可选状态允许 null，不能只验生成类型省略字段的投影。
+        const wireEvent = options.searchHttpStatus === null && event.branch
+          ? { ...event, branch: { ...event.branch, http_status: null } } : event;
+        return `id: ${index + 1}\nevent: search\ndata: ${JSON.stringify(wireEvent)}\n\n`;
       }).join("");
       return new Response(frames, { headers: { "content-type": "text/event-stream", "X-Request-ID": "catalog-diagnostic-request" } });
     }
@@ -289,6 +293,19 @@ describe("工作区导航树的空态与加载态", () => {
 });
 
 describe("目录搜索分支诊断渲染", () => {
+  test("后端没有 HTTP 状态时不展示 null，仍保留原分支错误", async () => {
+    const { tree } = await renderExplorer({
+      nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
+      workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
+      searchOpen: true, searchQuery: "needle", searchDiagnostics: true, searchHttpStatus: null,
+    });
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 350)); });
+    const html = JSON.stringify(tree.toJSON());
+    for (const detail of ["code: owner_unavailable", "error_owner: search_transport", "reason: route_removed",
+      "request_id: catalog-diagnostic-request"]) expect(html).toContain(detail);
+    expect(html).not.toContain("http_status:");
+  });
+
   test("将错误字段和 notice 当纯文本显示，不把命令链接变成可执行链接", async () => {
     const { tree } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")],

@@ -383,13 +383,14 @@ for (const diagnostic of [
   { state: 'cancelled', code: 'cancelled', message: '原领域读取已停止', reason: 'original_cancel_reason', retryable: false },
   { state: 'failed', code: 'deadline', message: '原领域查询期限已到', error_owner: 'gateway_search', reason: 'deadline', retryable: true },
   { state: 'failed', code: 'upstream_error', message: '取消只是原始错误正文，不代表业务状态', error_owner: 'canonical_history', reason: 'read_failed', http_status: 500, retryable: false },
+  { state: 'failed', code: 'read_failed', message: '目标文件读取失败', error_owner: 'workspace_files', reason: 'permission_denied', http_status: null, retryable: false },
 ]) test(`原分支 ${diagnostic.state}/${diagnostic.code}/retryable=${diagnostic.retryable} 保留状态和独立重试语义`, async () => {
   const result = await exercise('branchStateContract', diagnostic), cancelled = diagnostic.state === 'cancelled';
   expect(result.statuses[0].label).toContain(cancelled ? '查询已取消：' : '查询失败：');
   expect(result.statuses[0].label).toContain(diagnostic.message);
   expect(result.statuses[0].detail).toContain('request_id: request-1');
   for (const field of ['code', 'error_owner', 'reason', 'http_status']) {
-    if (diagnostic[field] === undefined) expect(result.statuses[0].detail).not.toContain(`${field}:`);
+    if (diagnostic[field] == null) expect(result.statuses[0].detail).not.toContain(`${field}:`);
     else expect(result.statuses[0].detail).toContain(`${field}: ${diagnostic[field]}`);
   }
   expect(result.statuses[1].label).toContain('本次查询完成');

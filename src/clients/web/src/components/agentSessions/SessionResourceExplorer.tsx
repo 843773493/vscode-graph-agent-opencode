@@ -917,7 +917,7 @@ export default function SessionResourceExplorer({
                     workspace.branch.provider_id && `provider_id: ${workspace.branch.provider_id}`,
                     workspace.branch.error_owner && `error_owner: ${workspace.branch.error_owner}`,
                     workspace.branch.reason && `reason: ${workspace.branch.reason}`,
-                    workspace.branch.http_status !== undefined && `http_status: ${workspace.branch.http_status}`,
+                    typeof workspace.branch.http_status === 'number' && `http_status: ${workspace.branch.http_status}`,
                     `retryable: ${workspace.branch.retryable}`,
                     workspace.branch.cursor && `cursor: ${workspace.branch.cursor}`,
                     `allocated_results: ${workspace.branch.allocated_results}`,
