@@ -166,8 +166,15 @@ async def test_diff_and_source_models_share_references_and_restore(
         result = json.loads(result_path.read_text())
         for key in ("singleDiffRead", "splitShared", "readonly", "patch", "legacyMigrated", "diffRestored", "sourceRestored", "lastCloseRereads",
                     "sourceSplitShared", "editorGroupAndMru", "editorDirtyClose", "editorCloseIsolated", "textSymbolsAfterThread",
-                    "changesetBrowseOnly", "changesetOpened"):
+                    "changesetBrowseOnly", "changesetOpened", "pasteRestored"):
             assert result[key], key
+        assert [item["phase"] for item in result["pastes"]] == [
+            "paste-diff-original", "paste-diff-modified", "paste-patch",
+        ]
+        assert [item["content"] for item in result["pastes"][:2]] == ["history v1 line 01", "history v2 line 01"]
+        assert "+history v2 line 01" in result["pastes"][2]["content"]
+        assert "-history v1 line 01" in result["pastes"][2]["content"]
+        assert len(result["executions"]) == 2
         assert result["pageErrors"] == []
         assert [item["mode"] for item in result["readonlyRecovery"]] == ["unknown-version", "broken-json"]
         assert all(item["retainedAcrossReload"] and item["removedOnlyDisplayRecord"] and item["sourceReads"] == 0

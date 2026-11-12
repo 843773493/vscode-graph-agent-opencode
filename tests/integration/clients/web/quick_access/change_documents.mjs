@@ -9,7 +9,7 @@ const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
 if (!base || !output || !screenshot) throw new Error('只读模型验收缺少隔离目标或产物目录');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_change_documents.py');
-const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], consoleErrors: [], reads: [], sources: [], mcpReads: [], changesetLists: [], reviews: [],
+const result = { classification: 'Integration', phase: 'prepare', pageErrors: [], consoleErrors: [], reads: [], sources: [], mcpReads: [], changesetLists: [], reviews: [], executions: [], pastes: [],
   boundary: '真实Gateway／后端／正式Workbench；模型协议采用model_stream；产品创建更改及编辑器状态，仅恢复故障阶段改坏一条真实只读编辑器记录' };
 let page, failure;
 try {
@@ -23,6 +23,7 @@ try {
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push({ phase: result.phase, text: message.text() }); });
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (path.endsWith('/messages') && request.method() === 'POST') result.executions.push({ phase: result.phase, path });
     if (path.endsWith('/changesets')) result.changesetLists.push({ phase: result.phase, path,
       gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
     if (path.endsWith('/review')) result.reviews.push({ phase: result.phase, method: request.method(), path });
@@ -134,12 +135,43 @@ try {
   await modified.getByRole('textbox').focus(); await page.keyboard.insertText('UNEXPECTED MUTATION');
   await assertDiff(1); await expect(modified.locator('.view-lines[role="presentation"]')).not.toContainText('UNEXPECTED MUTATION');
   result.readonly = true;
+  // 原 Thread 保持可见；Diff 左右及 patch 的选择均交同一个草稿 writer。
+  await groups.nth(0).getByRole('tab').filter({ hasText: owner.title }).click();
+  const composer = thread.locator('textarea[data-testid="composer-input"]');
+  await expect(composer).toBeEnabled();
+  await expect(composer).toHaveValue('');
+  await expect(thread.locator('.session-change-file-main')).toBeVisible();
+  let pasted = '';
+  const paste = async (editor, expected, wholeDocument = false) => {
+    await editor.getByRole('textbox').focus();
+    await page.keyboard.press('ControlOrMeta+Home');
+    await page.keyboard.press(wholeDocument ? 'ControlOrMeta+A' : 'Shift+End');
+    const pending = command('boxteam.resource.pasteSelectionToChat');
+    await expect(quick).toContainText('选择接收草稿的 Thread');
+    await quick.getByRole('option').filter({ hasText: owner.threadId }).click();
+    await pending;
+    pasted += (pasted ? '\n' : '') + expected;
+    await expect(composer).toHaveValue(pasted);
+    expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+    expect(result.sources.filter(read => read.phase === result.phase)).toEqual([]);
+    expect(result.executions).toHaveLength(2);
+    result.pastes.push({ phase: result.phase, content: expected });
+  };
+  result.phase = 'paste-diff-original';
+  await paste(diff(1).locator('.editor.original'), 'history v1 line 01');
+  result.phase = 'paste-diff-modified';
+  await paste(modified, 'history v2 line 01');
   result.phase = 'open-original-patch';
   await command('boxteam.changes.openPatch');
   const text = () => groups.nth(1).locator('.editor-instance .monaco-editor').filter({ visible: true });
   await expect(text().locator('.view-lines')).toContainText('+history v2 line 01');
   result.patch = true;
+  result.phase = 'paste-patch';
+  await paste(text(), file.diff_text, true);
   await command('workbench.action.closeActiveEditor'); await assertDiff(1);
+  await groups.nth(0).getByRole('tab').filter({ hasText: 'diff-history.txt' }).click();
+  await assertDiff(0);
+  await command('workbench.action.focusSecondEditorGroup');
   result.phase = 'migrate-legacy-resource';
   const legacy = await page.evaluate(({ owner, file, changesetId }) => globalThis.workbench.URI.from({
     scheme: 'boxteam-change', authority: owner.workspaceId,
@@ -159,6 +191,11 @@ try {
   await assertDiff(0); await assertDiff(1);
   expect(result.reads.filter(read => read.phase === result.phase)).toHaveLength(1);
   result.diffRestored = true;
+  await groups.nth(0).getByRole('tab').filter({ hasText: owner.title }).click();
+  await expect(composer).toHaveValue(pasted);
+  result.pasteRestored = true;
+  await groups.nth(0).getByRole('tab').filter({ hasText: 'diff-history.txt' }).click();
+  await command('workbench.action.focusSecondEditorGroup');
   result.phase = 'readonly-source';
   await command('workbench.action.focusSecondEditorGroup');
   const source = `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/agent-spec/root/AGENTS.md`;

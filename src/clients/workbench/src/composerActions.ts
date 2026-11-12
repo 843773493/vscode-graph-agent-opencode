@@ -1,5 +1,5 @@
 import { URI } from '../upstream/src/vs/base/common/uri.js';
-import { getCodeEditor } from '../upstream/src/vs/editor/browser/editorBrowser.js';
+import { getCodeEditor, isDiffEditor } from '../upstream/src/vs/editor/browser/editorBrowser.js';
 import { Action2, MenuId, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
 import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
@@ -135,14 +135,17 @@ registerAction2(class AttachSourceReferences extends Action2 {
 
 registerAction2(class PasteSelectedContent extends Action2 {
   constructor() {
-    const context = ContextKeyExpr.and(resourceContext, ContextKeyExpr.has('editorHasSelection'));
+    const context = ContextKeyExpr.and(ContextKeyExpr.or(resourceContext, ContextKeyExpr.equals('resourceScheme', 'boxteam-change')), ContextKeyExpr.has('editorHasSelection'));
     super({ id: PASTE_SELECTED_CONTENT, title: { value: '将选定正文粘贴到聊天草稿…', original: 'Paste Selected Content to Chat…' },
       f1: true, precondition: context, menu: { id: MenuId.EditorContext, group: '9_cutcopypaste', when: context } });
   }
   async run(accessor: ServicesAccessor): Promise<void> {
-    const editor = getCodeEditor(accessor.get(IEditorService).activeTextEditorControl);
+    const control = accessor.get(IEditorService).activeTextEditorControl;
+    const editor = isDiffEditor(control)
+      ? (control.getOriginalEditor().hasTextFocus() ? control.getOriginalEditor() : control.getModifiedEditor())
+      : getCodeEditor(control);
     const model = editor?.getModel(), selection = editor?.getSelection();
-    if (!model || !supportsResourceReference(model.uri) || !selection || selection.isEmpty()) throw new Error('请先在支持的资源编辑器中选择正文');
+    if (!model || !(supportsResourceReference(model.uri) || model.uri.scheme === 'boxteam-change') || !selection || selection.isEmpty()) throw new Error('请先在支持的资源编辑器中选择正文');
     // 在任何 Quick Input 及异步步骤前取得实际正文；来源后来变化不替换这份选择。
     const text = model.getValueInRange(selection);
     await appendToThread(accessor, async () => text);
