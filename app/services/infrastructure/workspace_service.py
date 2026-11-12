@@ -266,7 +266,10 @@ class WorkspaceService:
             nonlocal fingerprint, count
             for entry in directory_entries:
                 child = target_path / entry.name
-                if child in staging or is_private(child, Path(os.path.realpath(child))):
+                if child in staging or is_private(
+                    child, Path(os.path.realpath(child))
+                    if os.name == "nt" or entry.is_symlink() else resolved_directory / entry.name,
+                ):
                     continue
                 node = self._entry_to_file_node(entry, display_path, scope=scope)
                 fingerprint ^= int(digest({field: node[field] for field in ("name", "kind", "size", "modified_at")}), 16)
@@ -276,12 +279,16 @@ class WorkspaceService:
         with (file_access(display_path, "目录扫描"),
               self.file_paths.private_path_filter(root_uri=display_path) as is_private,
               os.scandir(native_io_path(target_path)) as directory_entries):
+            # 普通 POSIX 成员只拼接本次已解析的父目录；链接及 Windows reparse point 仍完整解析。
+            resolved_directory = Path(os.path.realpath(target_path))
             # 分页 revision 仍消费全部公开成员；响应模型只为当前页构造。
             entries = heapq.nsmallest(
                 limit + 1,
                 observed_entries(directory_entries),
                 key=entry_key,
             )
+            if Path(os.path.realpath(target_path)) != resolved_directory:
+                raise WorkspaceFileOperationConflictError("目录扫描期间路径发生改变，请重新读取目录")
         page = entries[:limit]
         next_cursor = (
             entry_key(page[-1])
