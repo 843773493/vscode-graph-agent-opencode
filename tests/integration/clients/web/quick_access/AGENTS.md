@@ -14,6 +14,8 @@
 
 文件搜索合同覆盖显式额外文件的名称／精确正文分支、owner隔离及目录分页前去重；HTTP页资产区分真实文件节点与目录。完整模型覆盖页面通过原文件编辑器修改node_modules中的未保存模型，沿真实Search Editor开启ignore，核本地正文、负命中、原Gateway请求及磁盘不变，不预写模型或替换业务响应。
 
+`test_recent_history` 由真实产品入口创建 A/B 同名 Session，打开 Thread／文件／来源后关闭，并经原 `prepareToClose()` 提交展示态再刷新；只读核原 IndexedDB 的 `history.entries`，不预写存储。冷启动从原范围选择器明确选择 A，不先打开资源补造历史；验证去重、单条移除不关闭 Tab／删除业务、两次恢复及 A/B 草稿。普通页面刷新未完成异步提交、导航默认范围、Electron 和异常退出不由该场景证明。
+
 `web_extensions_cache_browser.test.mjs` 在真实 Chromium `isWeb=true` 下，经正式 `sourceTransform` 运行原 system／custom builtin scanner、manifest、FileService 与 URI identity，核派生缓存跳过坏项并在坏正文或读取失败时沿原扫描入口回退。缓存内容只作为该读取场景的故障预备，不覆盖用户 profile 扫描或安装行为，也不称作 Gateway 或扩展宿主验收。
 
 pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Workbench 构建继续使用 Bun；Windows 实测 Bun 会在 `chromium.launch()` 挂起，不能以增加超时替代正确运行时。保留原进程外超时、内存保护和业务断言。

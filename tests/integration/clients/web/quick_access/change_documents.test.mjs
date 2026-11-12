@@ -204,6 +204,25 @@ test('有效来源恢复只交原工厂，工厂本身失败保留原错误而�
   receipt.checks.push('有效引用交原TextEditorService；下游基础设施错误不被误判为恢复记录损坏');
 });
 
+test('只读来源与更改向原历史交付稳定引用而无模型正文，其他文本输入保持原行为', () => {
+  const resources = [uri(), m.URI.from({ scheme: 'boxteam-source', authority: owner.gatewayId,
+    path: `/${owner.workspaceId}/${encodeURIComponent(file.file_path)}/说明.md` }), m.URI.parse('unrelated:/original')];
+  for (const resource of resources) {
+    const input = new m.TextResourceEditorInput(resource, '历史标签', '原来源', undefined, '不应进入历史的正文', {}, {}, {},
+      { onDidChangeFileSystemProviderRegistrations: m.Event.None, onDidChangeFileSystemProviderCapabilities: m.Event.None },
+      { onDidChangeFormatters: m.Event.None }, { onDidChangeReadonly: m.Event.None }, {}, { onDidChange: m.Event.None });
+    try {
+      const untyped = input.toUntyped();
+      if (resource.scheme === 'unrelated') expect(untyped).toBeUndefined();
+      else {
+        expect(untyped).toEqual({ resource, label: '历史标签', description: '原来源', options: { override: input.editorId } });
+        expect(JSON.stringify(untyped)).not.toContain('不应进入历史的正文');
+      }
+    } finally { input.dispose(); }
+  }
+  receipt.checks.push('原输入公开toUntyped只交项目稳定引用；不序列化正文、不改变其它scheme');
+});
+
 test('并发两侧与多引用只读一次变更集，释放一份仍可用，最后释放后重开真实读取', async () => {
   await fixture(async f => {
     f.state.paused = Promise.withResolvers();

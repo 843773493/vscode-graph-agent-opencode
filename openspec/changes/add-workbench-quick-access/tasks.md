@@ -169,6 +169,7 @@
 覆盖规范：历史和缓存必须保持展示用途；展示态迁移必须保持单一恢复链与身份隔离。
 
 - [ ] 13.1 复用原资源／命令历史及输入记忆配置，按身份隔离；从历史移除、关闭 Tab 和删除业务资源相互独立，不持久化 token／临时 endpoint。
+  - 2026-11-12 原最近资源历史子链：已有稳定输入与 resolver 的 Thread／文件／来源／更改纳入原 HistoryService 的 untyped input 持久化；只读输入补齐不含正文的引用投影，去重沿原 URI identity，不伪造文件 Provider、不新增历史存储或格式。10项只读模型合同211断言、174份真实转换源码类型与79扩展正式Web构建通过；真实Gateway／Backend／Workbench页面1 passed／41.57秒。产品创建A/B同名Session，经实际打开、关闭、原prepareToClose提交与两次刷新，核原IndexedDB记录、明确A范围的关闭历史、重开无重复、移除不关闭Tab／删除业务及两边草稿恢复，零正文搜索和模型执行。首轮确证只读输入缺toUntyped；后续未提交刷新、观察器误读目标标记及冷启动无范围的失败原件保留，仅纠正相应测试边界。证据与最小复审见 `out/tests/temp/2026/11/12/recent_history/artifacts/verification.json`。未验Electron／异常退出／默认导航冷启动／真实远端及全部命令记忆合同，宽项继续未勾选；本地提交，不同步或push。
 - [ ] 13.2 为实际变化的编辑器／历史格式实施一次显式版本迁移，保留可核验身份、每组视图及既有草稿／working-copy 恢复，之后只写新格式。
 - [ ] 13.3 对缺失身份、已删资源和损坏／未知版本提供明确反馈和展示记录移除，不清空全部存储、不扫描磁盘重建或猜同名目标。
   - 2026-11-12 只读来源／更改恢复子链：原 TextResource serializer 保留损坏 JSON、未知版本及无身份记录的原件和具体原因，原 EditorPlaceholder 只关闭选中展示记录；正常引用继续原输入工厂，服务故障保持原错误，不建立恢复数据库或重复历史清理。9项真实 resolver／EditorGroupModel 合同206断言、172份实际转换源码类型、正式79扩展Web构建及真实Gateway／Backend／Chromium页面通过（1 passed／95.31秒）；产品先生成更改与正常组状态，再只破坏一条来源记录，核两次恢复、零来源读取、相邻Diff保留及单独移除。原关闭join／导航取消诊断和前四次失败原件如实保留，不宣称console零错误；未验Windows／真实远端／Electron，整项仍未完成。准确命令、源码指纹与最小复审见 `out/tests/temp/2026/11/12/readonly_recovery/artifacts/verification.json`。

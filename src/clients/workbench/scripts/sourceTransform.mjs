@@ -30,6 +30,8 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/platform/quickinput/common/quickAccess.ts',
   'src/vs/platform/quickinput/browser/helpQuickAccess.ts',
   'src/vs/workbench/services/search/common/queryBuilder.ts',
+  'src/vs/workbench/services/history/browser/historyService.ts',
+  'src/vs/workbench/common/editor/textResourceEditorInput.ts',
   'src/vs/workbench/contrib/search/browser/search.contribution.ts',
   'src/vs/workbench/contrib/search/browser/searchQuickAccess.contribution.ts',
   'src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.ts',
@@ -123,6 +125,26 @@ export function sourceTransform(root, productConfiguration, extensions) {
     contents = transformSettingsTreeScope(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);
     contents = transformExtensionWorkspaceSymbols(root, path, contents, replaceOnce);
+    if (path === join(upstream, 'src/vs/workbench/services/history/browser/historyService.ts')) {
+      // 已有稳定输入与 resolver 的项目资源沿原历史存储；不为最近记录另建账本。
+      contents = replaceOnce(contents, "import { mainWindow } from '../../../../base/browser/window.js';",
+        "import { mainWindow } from '../../../../base/browser/window.js';\n\nconst boxteamHistorySchemes = new Set(['boxteam-thread', 'boxteam-file', 'boxteam-source', 'boxteam-change']);");
+      contents = replaceOnce(contents, 'resource?.scheme === this.pathService.defaultUriScheme;',
+        'resource?.scheme === this.pathService.defaultUriScheme || !!resource && boxteamHistorySchemes.has(resource.scheme);');
+      // Thread 与只读内容由原编辑器 resolver 管理，不要求虚假的文件系统 Provider 才能去重。
+      contents = replaceOnce(contents, '!this.fileService.hasProvider(inputResource)) {',
+        '!this.fileService.hasProvider(inputResource) && !boxteamHistorySchemes.has(inputResource.scheme)) {');
+    }
+    if (path === join(upstream, 'src/vs/workbench/common/editor/textResourceEditorInput.ts')) {
+      // 来源与更改已有稳定引用和原输入工厂；历史只保存引用，不复制模型正文。
+      contents = replaceOnce(contents, '\n\toverride getName(): string {', `
+  override toUntyped(): IUntypedEditorInput | undefined {
+    if (this.resource.scheme !== 'boxteam-source' && this.resource.scheme !== 'boxteam-change') return super.toUntyped();
+    return { resource: this.resource, label: this.getName(), description: this.getDescription(), options: { override: this.editorId } };
+  }
+
+\toverride getName(): string {`);
+    }
     if (path === join(upstream, 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts')) {
       contents = replaceOnce(contents,
         "import { AgentPluginDiscoveryPriority, IAgentPluginService, agentPluginDiscoveryRegistry } from '../common/plugins/agentPluginService.js';",
