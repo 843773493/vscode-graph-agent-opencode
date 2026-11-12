@@ -17,6 +17,7 @@ import { NavigationSurface } from './react/navigationView.js';
 import type { GatewayWorkspaceRequestTarget } from '../../web/src/api/workspaceIdentity.js';
 import type { GatewayDiagnosticLogLocateRequest } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import type { WorkspaceAction } from './search/workspaceActions.js';
+import type { SessionAction } from './search/sessionActions.js';
 
 /** 原版视图只管理布局；完整导航及菜单复用既有 React 产品。 */
 export class SessionNavigation extends ViewPane {
@@ -49,6 +50,10 @@ export class SessionNavigation extends ViewPane {
   revealDiagnosticLog(request: GatewayDiagnosticLogLocateRequest): void {
     if (!this.surface) throw new Error('Gateway 诊断视图尚未挂载');
     this.surface.revealDiagnosticLog(request);
+  }
+  runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void): Promise<void> {
+    if (!this.surface) throw new Error('会话导航尚未挂载');
+    return this.surface.runSessionAction(action, sessionId, title, workspaceKey, assertAccess);
   }
   revealFolder(target: GatewayWorkspaceRequestTarget, nodeId: string, focus: boolean): Promise<void> {
     if (!this.surface) throw new Error('会话导航尚未挂载');

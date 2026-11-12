@@ -49,6 +49,7 @@ import type { TurnMessageMatchDTO, LLMRequestLogMatchDTO, TraceMatchDTO } from '
 import type { GatewayDiagnosticLogLocateRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { WorkspaceSymbolsQuickAccess } from './symbolsQuickAccess.js';
 import { COPY_RESOURCE_URI, supportsResourceReference } from '../resourceActions.js';
+import { sessionActionCommands, type SessionAction } from './sessionActions.js';
 
 const contentChoices: readonly { id: string; label: ContentSearchCategory; description: string }[] = [
   { id: 'content-category-message', label: '会话消息', description: '用户输入和助手正文 · main / child' },
@@ -142,7 +143,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     };
     this.watchIdentity(lifetime, invalidate);
     picker.placeholder = options.placeholder ?? (this.contentMode ? `搜索正文 · ${options.contentCategories?.join('、') || '请选择类别'} · ${run.owners.map(owner => owner.workspaceId).join('、')}` : options.filesOnly ? '查找文件' : `查找${this.category ?? '会话、Thread 和文件'} · ${run.owners.map(owner => owner.workspaceId).join('、') || '请选择工作区'}`);
-    if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !picker.quickNavigate) {
+    if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !options.sessionSelection && !picker.quickNavigate) {
       const button = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择搜索范围' };
       picker.buttons = [...picker.buttons, button];
       lifetime.add(picker.onDidTriggerButton(selected => { if (selected === button) this.report(this.chooseScope(run)); }));
@@ -433,6 +434,14 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private sessionPick(run: AccessRun, owner: WorkspaceOwner, sessionId: string, title: string, description: string, detail: string, requestLog?: LLMRequestLogMatchDTO): ResourcePick {
+    const target = { owner: { ...owner }, sessionId };
+    const selection = run.options.sessionSelection;
+    const side = !selection && run.options.includeOpenToSideButton !== false;
+    const manage = !selection && !requestLog && !run.options.handleAccept;
+    const action = (kind: SessionAction) => {
+      this.assertAccess(run);
+      this.report(this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(sessionActionCommands[kind], target)));
+    };
     const open = async (mods: IKeyMods, background: boolean, side = false) => {
       this.assertAccess(run);
       const group = this.targetGroup(run, mods, side);
@@ -440,14 +449,20 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       const main = await gateway.mainThread(workspaceKey, sessionId);
       await this.open(run, new ThreadInput({ ...owner, workspaceKey, sessionId, threadId: main.thread_id, title }), mods, background, false, group, undefined, requestLog);
     };
-    return { id: requestLog ? `request:${searchOwnerKey(owner)}/${sessionId}/${requestLog.reference!.file_name}/${requestLog.reference!.start_codepoint}` : `session:${searchOwnerKey(owner)}/${sessionId}`, label: title, description, detail,
+    return { id: requestLog ? `request:${searchOwnerKey(owner)}/${sessionId}/${requestLog.reference!.file_name}/${requestLog.reference!.start_codepoint}` : `session:${searchOwnerKey(owner)}/${sessionId}`, sessionTarget: target, label: title, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.commentDiscussion),
-      buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }],
-      trigger: (_index, mods) => { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; },
-      accept: (mods, event) => this.report(open(mods, event.inBackground)) };
+      buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }] : []),
+        ...(manage ? [{ iconClass: ThemeIcon.asClassName(Codicon.edit), tooltip: '重命名会话' }, { iconClass: ThemeIcon.asClassName(Codicon.trash), tooltip: '永久删除会话' }] : [])],
+      trigger: (index, mods) => {
+        if (side && index === 0) { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; }
+        if (manage) { action(index === Number(side) ? 'rename' : 'delete'); return TriggerAction.CLOSE_PICKER; }
+        return TriggerAction.NO_ACTION;
+      },
+      accept: selection ? () => {} : (mods, event) => this.report(open(mods, event.inBackground)) };
   }
 
   private folderPick(run: AccessRun, owner: WorkspaceOwner, nodeId: string, label: string, description: string, detail: string): ResourcePick {
+    if (run.options.sessionSelection) return { id: `folder:${searchOwnerKey(owner)}/${nodeId}`, label, description, detail, pickable: false };
     return { id: `folder:${searchOwnerKey(owner)}/${nodeId}`, label, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.folder),
       accept: (_mods, event) => this.report((async () => {

@@ -15,6 +15,7 @@ export function contentBranchContract(mode) { return federatedBranchContract(mod
 export function nameBranchContract({ mode, category }) { return federatedBranchContract(mode, category); }
 export function cursorRejectionContract(rejection) { return federatedBranchContract('cursor-rejection', rejection.category, rejection); }
 export function branchStateContract(diagnostic) { return federatedBranchContract('terminal-state', '会话消息', diagnostic); }
+export function sessionPickerContract(mode) { return federatedBranchContract(mode, '会话'); }
 
 async function federatedBranchContract(mode, category, diagnostic) {
   const originalFetch = globalThis.fetch, before = workspaceContext.getSnapshot();
@@ -106,6 +107,39 @@ async function federatedBranchContract(mode, category, diagnostic) {
   };
   let busy = false, updates = 0, label;
   try {
+    if (mode.startsWith('session-')) {
+      class SessionProvider extends WorkspaceQuickAccess {
+        static PREFIX = 'session ';
+        get category() { return '会话'; }
+      }
+      const changes = lifetime.add(new Emitter()), accepts = lifetime.add(new Emitter()), buttons = lifetime.add(new Emitter());
+      const calls = [], commands = [], errors = [], group = { id: 7 };
+      const groups = { activeGroup: group, groups: [], getGroup: () => group };
+      const editors = { openEditor() { throw new Error('会话选择或管理按钮不得打开编辑器'); } };
+      const picker = { value: 'session needle', items: [], selectedItems: [], activeItems: [], buttons: [],
+        keyMods: { alt: false, ctrlCmd: false }, onDidChangeValue: changes.event, onDidAccept: accepts.event,
+        onDidHide: Event.None, onDidChangeActive: Event.None, onDidTriggerButton: Event.None,
+        onDidTriggerItemButton: buttons.event, onDidTriggerSeparatorButton: Event.None,
+        hide() { calls.push('hide'); } };
+      const provider = lifetime.add(new SessionProvider({
+        createInstance: ctor => new PickerEditorState(editors, groups),
+        invokeFunction: callback => callback({ get: () => ({ executeCommand(id, target) { commands.push({ id, target }); return Promise.resolve(); } }) }),
+      }, editors, groups, { getHistory: () => [] }, { getValue: () => undefined }, {}, {}, {}, {},
+      { error: cause => errors.push(String(cause)) }, {}, {}));
+      lifetime.add(provider.provide(picker, token.token, { searchOwners: owners, sessionSelection: mode === 'session-selection' }));
+      await until(() => connections.length === 1);
+      const first = connections[0]; scope(first); page(first, 0, 2); page(first, 1, 2); end(first, [state(0), state(1)]);
+      await until(() => !picker.busy && picker.items.some(item => item.sessionTarget));
+      const sessions = picker.items.filter(item => item.sessionTarget), folder = picker.items.find(item => item.id?.startsWith('folder:'));
+      if (mode === 'session-selection') { picker.selectedItems = [sessions[1]]; accepts.fire({ inBackground: false }); }
+      else {
+        const tooltip = mode === 'session-delete' ? '永久删除会话' : '重命名会话';
+        buttons.fire({ item: sessions[1], button: sessions[1].buttons.find(button => button.tooltip === tooltip) });
+      }
+      return { calls, commands, errors, requests: connections.map(connection => connection.request),
+        candidates: sessions.map(item => ({ target: item.sessionTarget, buttons: item.buttons.map(button => button.tooltip) })),
+        folder: { hasAccept: typeof folder?.accept === 'function', pickable: folder?.pickable } };
+    }
     if (mode === 'multi-selection') {
       const changes = lifetime.add(new Emitter()), accepts = lifetime.add(new Emitter());
       let items = [];

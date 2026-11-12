@@ -8,8 +8,9 @@ import { workspaceFileSource } from '../workspaceFiles.js';
 import { changeFileSource } from '../readonlyDocuments.js';
 import { sourceDocumentSource } from '../sourceDocuments.js';
 import type { IRange } from '../../upstream/src/vs/editor/common/core/range.js';
+import type { SessionActionTarget } from './sessionActions.js';
 
-export interface ResourcePick extends IAnythingQuickPickItem { id: string; range?: { selection: IRange; decoration: IRange } }
+export interface ResourcePick extends IAnythingQuickPickItem { id: string; sessionTarget?: SessionActionTarget; range?: { selection: IRange; decoration: IRange } }
 
 /** 只反转已有内部投影，公开资源 URI 仍交目标 owner 解析。 */
 export function editorResourceOwner(resource: URI): WorkspaceOwner | undefined {

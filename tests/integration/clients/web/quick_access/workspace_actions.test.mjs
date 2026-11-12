@@ -138,6 +138,6 @@ test('已移除 owner 明确失败，不执行其它同名候选', async () => {
 for (const mode of ['action-identity', 'action-gateway']) test(`${mode} 废弃旧目标执行权`, async () => {
   const result = await exercise(mode);
   expect(result.calls).toEqual([]); expect(result.errors).toHaveLength(1);
-  expect(result.errors[0]).toContain('身份');
+  expect(result.errors[0]).toContain(mode === 'action-identity' ? '访问凭据已改变' : 'Gateway 或访问凭据不可用');
   expect(result.requests).toHaveLength(1);
 });

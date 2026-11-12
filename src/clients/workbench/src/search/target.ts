@@ -20,6 +20,8 @@ import type { AnythingQuickAccessProviderRunOptions, IQuickAccessOptions } from 
 /** 同一次模式转接保留发起归属，不重新采样后来获得焦点的编辑器。 */
 export interface SearchInvocationOptions extends AnythingQuickAccessProviderRunOptions {
   searchOwner?: WorkspaceOwner;
+  /** 会话管理的只选择模式：接受不打开 Thread，也不提供写入或侧开按钮。 */
+  sessionSelection?: boolean;
   pluginCommandOwner?: { gatewayId: string; workspaceId?: string };
   pluginCommandContext?: readonly [string, unknown][];
   searchOwnerError?: string;

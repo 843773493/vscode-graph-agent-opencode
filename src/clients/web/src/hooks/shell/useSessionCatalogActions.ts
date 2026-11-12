@@ -1,5 +1,5 @@
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { catalogOutboxParentCreation } from "../../state/session/sessionCatalogOutbox";
 import {
   DEFAULT_SESSION_TITLE,
@@ -92,6 +92,9 @@ export function useSessionCatalogActions({
   const [nameDialog, setNameDialog] = useState<SessionNameDialogState | null>(null);
   const [nameDialogSubmitting, setNameDialogSubmitting] = useState(false);
   const [nameDialogError, setNameDialogError] = useState<string | null>(null);
+  // 命令的身份检查覆盖整个原对话框；取消或 owner 接受后结束临时调用，不另存业务状态。
+  const nameDialogAction = useRef<{ assertAccess?: () => void; complete: () => void }>();
+  useEffect(() => () => nameDialogAction.current?.complete(), []);
   const [sessionCatalogRefreshVersions, setSessionCatalogRefreshVersions] =
     useState<ReadonlyMap<string, number>>(new Map());
 
@@ -117,6 +120,8 @@ export function useSessionCatalogActions({
   });
 
   const createSessionInCatalog = async (workspaceId?: string | null) => {
+    nameDialogAction.current?.complete();
+    nameDialogAction.current = undefined;
     setNameDialog(null);
     setNameDialogError(null);
     // 顶部“新建会话”属于当前 Gateway 工作区；只有尚未激活工作区时
@@ -293,36 +298,46 @@ export function useSessionCatalogActions({
     sessionId: string,
     currentTitle: string,
     workspaceId: string,
-  ) => {
+    assertAccess?: () => void,
+  ): Promise<void> => {
+    if (nameDialogSubmitting) return Promise.reject(new Error("会话重命名正在提交，请等待原操作结算"));
+    assertAccess?.();
+    nameDialogAction.current?.complete();
+    const closed = new Promise<void>((complete) => { nameDialogAction.current = { assertAccess, complete }; });
     setNameDialog({
       sessionId,
       workspaceId,
       initialTitle: currentTitle || "新会话",
     });
     setNameDialogError(null);
+    return closed;
   };
-  const removeSession = (
+  const removeSession = async (
     sessionId: string,
     title: string,
     workspaceId: string,
+    assertAccess?: () => void,
   ) => {
     const label = title || sessionId;
-    void confirm({
-      title: "永久删除会话",
-      message: `永久删除会话“${label}”。如果它包含子会话，将级联删除整棵子会话树及其消息、检查点、日志、附件和运行资源。此操作无法撤销。`,
-      confirmText: "删除",
-      danger: true,
-    }).then(async (confirmed) => {
+    try {
+      assertAccess?.();
+      const confirmed = await confirm({
+        title: "永久删除会话",
+        message: `永久删除会话“${label}”。如果它包含子会话，将级联删除整棵子会话树及其消息、检查点、日志、附件和运行资源。此操作无法撤销。`,
+        confirmText: "删除",
+        danger: true,
+      });
       if (!confirmed) {
         return;
       }
+      assertAccess?.();
       await deleteSession(sessionId, workspaceId);
       // 生命周期动作已刷新并对账被删会话的真实父分支；会话集合变化再驱动
       // sessionCatalogSyncKeys 刷新其余已展开分支。
-    }).catch((error: unknown) => {
+    } catch (error) {
       setStatus(`删除会话失败: ${errorMessage(error)}`);
       if (!isErrorReported(error)) onError(`删除会话失败 (${workspaceId}/${sessionId}): ${errorMessage(error)}`);
-    });
+    }
   };
   const changeSessionParent = async (
     workspaceId: string,
@@ -338,20 +353,28 @@ export function useSessionCatalogActions({
     }
     setNameDialog(null);
     setNameDialogError(null);
+    nameDialogAction.current?.complete();
+    nameDialogAction.current = undefined;
   };
   const submitNameDialog = (title: string) => {
-    if (!nameDialog) {
+    if (!nameDialog || nameDialogSubmitting) {
       return;
     }
 
     setNameDialogSubmitting(true);
     setNameDialogError(null);
-    const action = renameSession(nameDialog.sessionId, title, nameDialog.workspaceId);
+    const dialogAction = nameDialogAction.current;
+    const action = Promise.resolve().then(() => {
+      dialogAction?.assertAccess?.();
+      return renameSession(nameDialog.sessionId, title, nameDialog.workspaceId);
+    });
 
     void action
       .then(() => {
         invalidateSessionCatalog(nameDialog.workspaceId);
         setNameDialog(null);
+        dialogAction?.complete();
+        nameDialogAction.current = undefined;
       })
       .catch((error: unknown) => {
         setNameDialogError(errorMessage(error));

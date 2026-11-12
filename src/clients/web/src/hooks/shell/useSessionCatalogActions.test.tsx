@@ -23,9 +23,11 @@ interface MountOptions {
   activeSessionId?: string | null;
   gatewayWorkspaces?: GatewayWorkspace[];
   confirmResult?: boolean;
+  confirm?: () => Promise<boolean>;
   confirmResults?: boolean[];
   removalFailure?: Error | ((force: boolean) => Error | undefined);
   deleteSession?: Parameters<typeof useSessionCatalogActions>[0]["deleteSession"];
+  renameSession?: Parameters<typeof useSessionCatalogActions>[0]["renameSession"];
   forkSessionContext?: Parameters<typeof useSessionCatalogActions>[0]["forkSessionContext"];
   onForkCreated?: Parameters<typeof useSessionCatalogActions>[0]["onForkCreated"];
   renderForkDialog?: boolean;
@@ -78,6 +80,7 @@ function mountHook(options: MountOptions = {}) {
       gatewayWorkspaces: options.gatewayWorkspaces ?? [],
       confirm: async (input) => {
         confirmations.push(input);
+        if (options.confirm) return options.confirm();
         return options.confirmResults?.[confirmations.length - 1] ?? options.confirmResult ?? true;
       },
       setStatus: (text) => statuses.push(text),
@@ -107,6 +110,7 @@ function mountHook(options: MountOptions = {}) {
         if (renameShouldFail) {
           throw new Error("重命名被后端拒绝");
         }
+        await options.renameSession?.(sessionId, title, workspaceId);
       },
       forkSessionContext: options.forkSessionContext ?? (async () => { throw new Error("此目录测试未装配 fork"); }),
       onForkCreated: options.onForkCreated,
@@ -194,7 +198,7 @@ describe("会话目录编排链路", () => {
     const mounted = mountHook();
     await mounted.mount();
 
-    act(() => mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1")));
+    act(() => { void mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1")); });
     expect(mounted.hook().nameDialog).toEqual({
       sessionId: "ses-1",
       workspaceId: workspaceKey("ws-1"),
@@ -219,7 +223,7 @@ describe("会话目录编排链路", () => {
     await mounted.mount();
 
     const before = mounted.hook().sessionCatalogRefreshVersions.get(workspaceKey("ws-1")) ?? 0;
-    act(() => mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1")));
+    act(() => { void mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1")); });
     await act(async () => {
       mounted.hook().submitNameDialog("新标题");
       await Promise.resolve();
@@ -228,6 +232,81 @@ describe("会话目录编排链路", () => {
 
     expect(mounted.hook().nameDialog).toBeNull();
     expect(mounted.hook().sessionCatalogRefreshVersions.get(workspaceKey("ws-1"))).toBe(before + 1);
+  });
+
+  test("重命名命令在原对话框取消后才释放，取消不写目录", async () => {
+    const mounted = mountHook();
+    await mounted.mount();
+    let completed = false;
+    act(() => { void mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1")).then(() => { completed = true; }); });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    await act(async () => { mounted.hook().closeNameDialog(); });
+    expect(completed).toBe(true);
+    expect(mounted.renamed).toEqual([]);
+  });
+
+  test("重命名提交前身份失效保留原对话框，不能写入新身份", async () => {
+    const mounted = mountHook();
+    await mounted.mount();
+    let valid = true;
+    act(() => { void mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1"), () => {
+      if (!valid) throw new Error("发起身份已失效");
+    }); });
+    valid = false;
+    await act(async () => { mounted.hook().submitNameDialog("新标题"); });
+    expect(mounted.renamed).toEqual([]);
+    expect(mounted.hook().nameDialogError).toBe("发起身份已失效");
+    expect(mounted.hook().nameDialog?.sessionId).toBe("ses-1");
+  });
+
+  test("已受理重命名仍等原 writer 结算，不因身份改变重放或撤销", async () => {
+    let release!: () => void;
+    const accepted = new Promise<void>(resolve => { release = resolve; });
+    const mounted = mountHook({ renameSession: () => accepted });
+    await mounted.mount();
+    let valid = true, completed = false;
+    act(() => { void mounted.hook().openRenameDialog("ses-1", "旧标题", workspaceKey("ws-1"), () => {
+      if (!valid) throw new Error("身份失效");
+    }).then(() => { completed = true; }); });
+    await act(async () => { mounted.hook().submitNameDialog("新标题"); });
+    valid = false;
+    act(() => { mounted.hook().closeNameDialog(); });
+    expect(completed).toBe(false);
+    expect(mounted.hook().nameDialogSubmitting).toBe(true);
+    await act(async () => { release(); });
+    expect(completed).toBe(true);
+    expect(mounted.renamed).toEqual([["ses-1", "新标题", workspaceKey("ws-1")]]);
+    expect(mounted.hook().nameDialogError).toBeNull();
+  });
+
+  test("删除确认期间身份失效，不调用原 writer", async () => {
+    let release!: (confirmed: boolean) => void;
+    const mounted = mountHook({ confirm: () => new Promise(resolve => { release = resolve; }) });
+    await mounted.mount();
+    let valid = true;
+    const pending = mounted.hook().removeSession("ses-1", "标题", workspaceKey("ws-1"), () => {
+      if (!valid) throw new Error("删除发起身份已失效");
+    });
+    valid = false;
+    await act(async () => { release(true); await pending; });
+    expect(mounted.deleted).toEqual([]);
+    expect(mounted.errors).toEqual([`删除会话失败 (${workspaceKey("ws-1")}/ses-1): 删除发起身份已失效`]);
+  });
+
+  test("删除命令只等待原 owner 结算，不额外刷新或重放", async () => {
+    let release!: () => void;
+    const accepted = new Promise<void>(resolve => { release = resolve; });
+    const mounted = mountHook({ deleteSession: () => accepted });
+    await mounted.mount();
+    let completed = false;
+    const pending = mounted.hook().removeSession("ses-1", "标题", workspaceKey("ws-1")).then(() => { completed = true; });
+    await act(async () => { await Promise.resolve(); });
+    expect(completed).toBe(false);
+    await act(async () => { release(); await pending; });
+    expect(completed).toBe(true);
+    expect(mounted.deleted).toEqual([["ses-1", workspaceKey("ws-1")]]);
+    expect(mounted.hook().sessionCatalogRefreshVersions.size).toBe(0);
   });
 
   test("删除工作区必须等用户确认后才发起", async () => {
@@ -612,7 +691,7 @@ describe("托管工作区删除的完整组确认", () => {
     });
     await mounted.mount();
     await act(async () => { mounted.hook().removeWorkspace(workspaceKey("ws-a"), "A"); });
-    expect(mounted.removalRequests.map(([, force]) => force)).toEqual([undefined, true]);
+    expect(mounted.removalRequests.map(([, , force]) => force)).toEqual([undefined, true]);
     expect(mounted.statuses).toEqual([]);
   });
   test("阻塞回执重复成员时拒绝 force 确认", async () => {
