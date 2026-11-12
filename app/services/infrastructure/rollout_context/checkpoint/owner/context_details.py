@@ -155,34 +155,38 @@ class ContextDetailOwnerMixin:
         thread_id: str,
         *,
         expired_before: datetime,
-        checkpoint_ns: str = "",
+        checkpoint_ns: str | None = "",
     ) -> tuple[DetailRef, ...]:
-        """只清理未被 sealed assembly 引用的过期 detail。"""
+        """只清理无 sealed assembly/activation 引用的过期详情；None 覆盖线程全部 namespace。"""
+        if checkpoint_ns is None:
+            return tuple(
+                ref
+                for namespace in self._storage.assemblies.expired_context_detail_namespaces(
+                    session_id, thread_id, expired_before=expired_before,
+                )
+                for ref in self.gc_context_plan_details(
+                    session_id, thread_id, expired_before=expired_before, checkpoint_ns=namespace,
+                )
+            )
         candidates = self._storage.assemblies.list_expired_context_plan_details(
             session_id,
             thread_id,
             expired_before=expired_before,
             checkpoint_ns=checkpoint_ns,
         )
-        referenced = self._storage.assemblies.find_referenced_context_details(
-            session_id,
-            thread_id,
-            detail_refs=candidates,
-            checkpoint_ns=checkpoint_ns,
-        )
-        removable = tuple(
-            detail_ref
-            for detail_ref in candidates
-            if detail_ref not in referenced
-        )
-        # 先提交可恢复 tombstone；标记失败时绝不能先删除正文。若进程在
-        # 标记后崩溃，registry 的 GC candidates 必须允许重试物理清理。
-        self._storage.assemblies.mark_context_plan_details_unavailable(
-            session_id,
-            thread_id,
-            detail_refs=removable,
-            checkpoint_ns=checkpoint_ns,
-        )
+        if not candidates:
+            return ()
+        # 引用检查与tombstone共用原线程写锁，避免正常并发seal使周期任务失败。
+        # 文件回收放在锁外；新seal已经不能再引用unavailable详情。
+        with self._storage.storage._lock(thread_id, checkpoint_ns, session_id=session_id):
+            referenced = self._storage.assemblies.find_referenced_context_details(
+                session_id, thread_id, detail_refs=candidates, checkpoint_ns=checkpoint_ns,
+            )
+            removable = tuple(ref for ref in candidates if ref not in referenced)
+            # 先提交可恢复tombstone，物理删除失败或崩溃后仍由同一候选入口重试。
+            self._storage.assemblies.mark_context_plan_details_unavailable(
+                session_id, thread_id, detail_refs=removable, checkpoint_ns=checkpoint_ns,
+            )
         return self._detail_store.gc(
             session_id=session_id,
             thread_id=thread_id,

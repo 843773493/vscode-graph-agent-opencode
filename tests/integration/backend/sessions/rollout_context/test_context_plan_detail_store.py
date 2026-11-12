@@ -362,8 +362,10 @@ def test_detail_read_rejects_symlink_target(
         )
 
 
+@pytest.mark.parametrize("checkpoint_ns", ["", "nested"])
 def test_owner_gc_removes_expired_file_and_leaves_unavailable_tombstone(
     detail_sessions: Path,
+    checkpoint_ns: str,
 ) -> None:
     saver = RolloutCheckpointSaver(detail_sessions)
     record = saver._detail_store.write(
@@ -375,6 +377,7 @@ def test_owner_gc_removes_expired_file_and_leaves_unavailable_tombstone(
         visibility="internal",
         detail={"value": "过期详情"},
         retention_days=0,
+        checkpoint_ns=checkpoint_ns,
     )
     saver._storage.assemblies.register_context_plan_details((record,))
     target = _thread_node(detail_sessions, SESSION_ID) / record.relative_path
@@ -384,6 +387,7 @@ def test_owner_gc_removes_expired_file_and_leaves_unavailable_tombstone(
         SESSION_ID,
         _main_thread_id(detail_sessions, SESSION_ID),
         expired_before=datetime.now(UTC) + timedelta(seconds=1),
+        checkpoint_ns=None,
     )
 
     assert removed == (record.detail_ref,)

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from app.core.path_utils import get_session_path_resolver
+from app.core.session_lifecycle_gate import SessionLifecycleGate
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
@@ -59,6 +62,8 @@ class RolloutCheckpointRuntime:
         tool_outputs: ToolOutputStore | None = None,
     ) -> None:
         self.sessions_dir = Path(sessions_dir).resolve()
+        self._path_resolver = get_session_path_resolver(self.sessions_dir)
+        self._lifecycle_gate = SessionLifecycleGate(self.sessions_dir)
         self.serde = serde or JsonPlusSerializer()
         self.storage = RolloutContextStore(
             self.sessions_dir,
@@ -84,12 +89,35 @@ class RolloutCheckpointRuntime:
             context_reader=self.context_reader,
             history_reader=self.history_reader,
             detail_store=self.context_plan_detail_store,
-            node_debug_store=NodeDebugSessionStore(
-                get_session_path_resolver(self.sessions_dir)
-            ),
+            node_debug_store=NodeDebugSessionStore(self._path_resolver),
             node_debug_workspace_config=node_debug_workspace_config,
             attachment_store=attachment_store,
         )
+
+    async def prune_context_plan_details(self) -> int:
+        """按catalog逐会话回收；取消和删除均等待当前worker结算，不读取历史JSONL。"""
+        removed = 0
+        expired_before = datetime.now(UTC)
+        nodes = await run_sync_shielded(self._path_resolver.list_nodes, kind="session")
+        for node in nodes:
+            async with self._lifecycle_gate.shared(node.node_id):
+                try:
+                    current = await run_sync_shielded(self._path_resolver.get_node, node.node_id)
+                except KeyError:
+                    # 列举后进入删除的会话由原删除owner回收整个节点。
+                    continue
+                if current.state != "active":
+                    continue
+                owners = await run_sync_shielded(
+                    self.storage.checkpoints.list_checkpoint_owners, session_id=node.node_id,
+                )
+                for owner in owners:
+                    refs = await run_sync_shielded(
+                        self.saver.gc_context_plan_details, owner.session_id, owner.thread_id,
+                        expired_before=expired_before, checkpoint_ns=None,
+                    )
+                    removed += len(refs)
+        return removed
 
 
 __all__ = ["RolloutCheckpointRuntime"]

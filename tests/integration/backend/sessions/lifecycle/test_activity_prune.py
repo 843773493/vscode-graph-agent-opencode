@@ -232,6 +232,25 @@ async def test_periodic_retention_in_mounted_workspace(
     try:
         await state["after_http_startup"]()
         selected = mounted_case.containers[-1]
+        with workspace_context(selected.workspace_id, selected.workspace_root, session_catalog=selected.session_catalog):
+            session = await selected.session_service.create(SessionCreateRequest(title="周期详情回收"))
+            empty = await selected.session_service.create(SessionCreateRequest(title="不物化空线程"))
+        resolver = selected.session_service.path_resolver
+        empty_rollout = resolver.resolve_thread_node(empty.session_id, resolver.main_thread_id(empty.session_id)) / "rollout"
+        assert not empty_rollout.exists()
+        thread = resolver.main_thread_id(session.session_id)
+        detail_paths = []
+        for namespace, days in (("", 0), ("nested", 0), ("nested", 30)):
+            record = selected.rollout_checkpoint_runtime.context_plan_detail_store.write(
+                session_id=session.session_id, thread_id=thread,
+                assembly_id=f"retention-{namespace}-{days}", detail_kind="assembly_snapshot",
+                retention_class="assembly_audit", visibility="internal", detail={"retention_days": days},
+                retention_days=days, checkpoint_ns=namespace,
+            )
+            selected.rollout_checkpoint_runtime.storage.assemblies.register_context_plan_details((record,))
+            path = resolver.resolve_thread_node(session.session_id, thread) / record.relative_path
+            assert path.is_file()
+            detail_paths.append(path)
         snapshot = await selected.log_service.write_html_snapshot(LogSnapshotRecord(session_id=None, html="过期快照"))
         metadata = selected.workspace_root / f".boxteam/logs/webview/{snapshot.snapshot_id}.json"
         payload = json.loads(metadata.read_text())
@@ -273,5 +292,10 @@ async def test_periodic_retention_in_mounted_workspace(
             while metadata.exists():
                 await asyncio.sleep(0.01)
         assert not metadata.with_suffix(".html").exists()
+        async with asyncio.timeout(5):
+            while any(path.exists() for path in detail_paths[:2]):
+                await asyncio.sleep(0.01)
+        assert detail_paths[-1].is_file()
+        assert not empty_rollout.exists()
     finally:
         await lifetime.__aexit__(None, None, None)

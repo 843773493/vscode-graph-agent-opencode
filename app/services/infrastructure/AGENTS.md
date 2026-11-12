@@ -85,6 +85,7 @@ infrastructure/
 - 保持实现可替换，优先通过协议向上暴露能力。
 - 失败时直接抛错，避免“看起来成功”的假默认值。
 - HTML快照按metadata创建时刻保留30天，过期读取返回不存在；工作区每小时任务在worker中删除metadata和HTML，并回收超过30天的未发布HTML。只通过catalog逐会话定位并持有原生命周期gate，不递归发现未知会话；回收不读取HTML正文、不在普通读取中扫描目录。
+- Context detail复用每小时任务，经RolloutCheckpointRuntime持原Session生命周期gate逐会话、逐已发布Thread和namespace调用原GC owner；worker只删除已过期且无封存引用的正文，不裁剪恢复依赖、不新建空rollout、不在请求路径回收。
 - 不要引入与 `app/core/` 职责重复的内容。
 - 会话专属持久化必须先通过统一会话路径解析器取得物理会话节点，再使用该节点下的对应子目录；禁止拼接或假设 `${workspace_abs_path}/.boxteam/sessions/{session_id}/` 固定路径。
 - 新增会话存储时必须同时考虑会话移动、删除、导出和迁移，确保操作解析后的整个会话目录即可完整处理数据。

@@ -87,6 +87,22 @@ def _referenced(
 class DetailRetentionMixin:
     """GC 只允许处理无 sealed 引用的 detail，先持久标记再删除文件。"""
 
+    def expired_context_detail_namespaces(
+        self, session_id: str, thread_id: str, *, expired_before: datetime,
+    ) -> tuple[str, ...]:
+        """从既有线程库枚举过期详情的 namespace，不物化空线程或扫描正文。"""
+        try:
+            with self._storage.open_read_snapshot(session_id, thread_id, None) as snapshot:
+                rows = snapshot.connection.execute(
+                    "SELECT DISTINCT checkpoint_ns FROM context_plan_details "
+                    "WHERE status IN ('available','unavailable') "
+                    "AND expires_at IS NOT NULL AND expires_at < ? ORDER BY checkpoint_ns",
+                    (expired_before.isoformat(),),
+                ).fetchall()
+        except RolloutNotMaterializedError:
+            return ()
+        return tuple(strict_text(row[0], field="checkpoint_ns", allow_empty=True) for row in rows)
+
     def list_expired_context_plan_details(
         self,
         session_id: str,

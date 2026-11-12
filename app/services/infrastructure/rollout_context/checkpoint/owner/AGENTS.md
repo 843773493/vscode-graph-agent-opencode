@@ -20,4 +20,5 @@ source overlay 与 CSM 控制状态、reconciliation ledger、resource activatio
 
 - context owner 只拥有 plan/assembly/view port，持久化细节归 durable 与 storage owner。
 - 每个 owner 事实源唯一；发现双 owner 必须合并，不得并存。
+- 详情GC保留sealed/terminal assembly及activation引用；引用检查和tombstone沿原线程写锁提交，物理删除在锁外执行并可重试。显式None namespace用于后台遍历该线程库的全部过期详情namespace，不物化空rollout。
 
