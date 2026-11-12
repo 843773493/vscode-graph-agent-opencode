@@ -23,7 +23,7 @@ from app.core.bounded_json import bound_json_value
 from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id, validate_thread_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
-from app.core.shielded_cleanup import run_cleanup_shielded
+from app.core.shielded_cleanup import run_cleanup_shielded, run_sync_shielded
 from app.domain.message_stream.errors import MessageStreamError
 from app.domain.message_stream.projection import (
     apply_event,
@@ -1749,36 +1749,41 @@ class MessageStreamStore:
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """返回游标之后的事件；``limit`` 为空表示不截断，供 SSE 续播使用。"""
-        state = await self.get_state(turn_stream_id)
-        self._raise_if_cursor_ahead(
-            state,
-            turn_stream_id=turn_stream_id,
-            after_seq=after_seq,
-        )
-        path = self._stream_path(session_id, turn_stream_id)
-        records = self._read_records(
-            path,
-            expected_session_id=session_id,
-            expected_turn_stream_id=turn_stream_id,
-        )
-        events = [
-            copy.deepcopy(record.event)
-            for record in records
-            if int(record.event.get("event_seq", 0)) > after_seq
-        ]
-        if events and int(events[0]["event_seq"]) > after_seq + 1:
-            raise MessageStreamCursorGoneError(
+        # 日志读取会修剪未提交尾部；原 Turn 锁须覆盖读取及取消后的 worker 结算。
+        async with self._lock_for(turn_stream_id):
+            state = await self.get_state(turn_stream_id)
+            self._raise_if_cursor_ahead(
+                state,
                 turn_stream_id=turn_stream_id,
                 after_seq=after_seq,
-                first_seq=int(events[0]["event_seq"]),
             )
-        if not events and after_seq < int(state["snapshot_seq"]):
-            raise MessageStreamCursorGoneError(
-                turn_stream_id=turn_stream_id,
-                after_seq=after_seq,
-                first_seq=int(state["snapshot_seq"]),
-            )
-        return events if limit is None else events[:limit]
+            path = self._stream_path(session_id, turn_stream_id)
+
+            def read() -> list[dict[str, Any]]:
+                # 完整校验日志，只保留续点后的事件；JSON 解码产生独立对象，无需再复制正文。
+                events = [
+                    record.event
+                    for record in self._iter_records(
+                        path, expected_session_id=session_id,
+                        expected_turn_stream_id=turn_stream_id,
+                    )
+                    if int(record.event["event_seq"]) > after_seq
+                ]
+                if events and int(events[0]["event_seq"]) > after_seq + 1:
+                    raise MessageStreamCursorGoneError(
+                        turn_stream_id=turn_stream_id,
+                        after_seq=after_seq,
+                        first_seq=int(events[0]["event_seq"]),
+                    )
+                if not events and after_seq < int(state["snapshot_seq"]):
+                    raise MessageStreamCursorGoneError(
+                        turn_stream_id=turn_stream_id,
+                        after_seq=after_seq,
+                        first_seq=int(state["snapshot_seq"]),
+                    )
+                return events if limit is None else events[:limit]
+
+            return await run_sync_shielded(read)
 
     @staticmethod
     def _raise_if_cursor_ahead(

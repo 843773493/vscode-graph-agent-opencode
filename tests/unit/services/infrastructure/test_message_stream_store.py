@@ -1580,15 +1580,17 @@ async def test_commit_failure_before_persist_does_not_publish_or_recover_delta(
     def fail_encode(*_: object, **__: object) -> str:
         raise OSError("模拟 event/checkpoint 编码失败")
 
-    monkeypatch.setattr(
-        "app.services.infrastructure.message_stream_store.json.dumps",
-        fail_encode,
-    )
-    with pytest.raises(OSError, match="编码"):
-        await writer.commit(
-            "block.delta",
-            {"block_id": "block_1", "operation": "append", "text": "不会发布"},
+    # 全局 JSON 注入只覆盖被测提交，不污染 pytest 的性能记录及收尾。
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "app.services.infrastructure.message_stream_store.json.dumps",
+            fail_encode,
         )
+        with pytest.raises(OSError, match="编码"):
+            await writer.commit(
+                "block.delta",
+                {"block_id": "block_1", "operation": "append", "text": "不会发布"},
+            )
 
     state = await store.get_state(writer.turn_stream_id)
     assert state["snapshot_seq"] == 1
@@ -1685,6 +1687,46 @@ async def test_fsync_failure_reloads_uncertain_append_before_next_commit(
     restarted_state = await restarted_store.get_state(restarted_writer.turn_stream_id)
     assert restarted_state["snapshot_seq"] == seqs[-1]
     assert restarted_state["blocks"][0]["text"] in {"边界事件后续事件", "后续事件"}
+
+
+@pytest.mark.asyncio
+async def test_cancelled_event_read_settles_before_following_append(
+    message_stream_store: MessageStreamStoreCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _, session_id = message_stream_store
+    writer = await store.open(session_id=session_id, thread_id=store._path_resolver.main_thread_id(session_id),
+                              turn_id="job_cancelled_read")
+    path = store._stream_path(session_id, writer.turn_stream_id)
+    entered, release = threading.Event(), threading.Event()
+    original_open = Path.open
+
+    def blocked_open(target: Path, mode: str = "r", *args, **kwargs):
+        if target == path and mode == "rb":
+            entered.set()
+            assert release.wait(3), "事件读取阻塞了事件循环，无法释放读取屏障"
+        return original_open(target, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", blocked_open)
+    reader = asyncio.create_task(store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id))
+    following = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        reader.cancel()
+        await asyncio.sleep(0)
+        reader.cancel()
+        following = asyncio.create_task(writer.commit("block.delta", {
+            "block_id": "block_read", "operation": "append", "text": "后续内容",
+        }))
+        await asyncio.sleep(0.02)
+        assert not reader.done() and not following.done()
+    finally:
+        release.set()
+        settled = await asyncio.gather(reader, *([following] if following else []), return_exceptions=True)
+    assert isinstance(settled[0], asyncio.CancelledError)
+    assert isinstance(settled[1], dict) and settled[1]["event_seq"] == 2
+    events = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
+    assert [event["event_seq"] for event in events] == [1, 2]
+    assert events[-1]["payload"]["text"] == "后续内容"
 
 
 @pytest.mark.asyncio
