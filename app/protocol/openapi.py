@@ -135,7 +135,7 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionTurnBootstrapDTO", "TurnHistoryLoadRequest", "TurnHistoryPageDTO", "ThreadAttachmentListDTO", "TurnToolResultDTO", "ThreadToolResultListDTO",
         "TurnMessageSearchRequest", "TurnMessageSearchResultsDTO",
         "WorkspaceMessageSearchResultsDTO",
-        "LLMRequestLogReferenceDTO", "LLMRequestLogLocationDTO", "WorkspaceLLMRequestLogSearchResultsDTO",
+        "LLMRequestLogSummaryDTO", "LLMRequestLogReferenceDTO", "LLMRequestLogLocationDTO", "WorkspaceLLMRequestLogSearchResultsDTO",
         "TraceReferenceDTO", "TraceLocationDTO", "WorkspaceTraceSearchResultsDTO",
         "SessionChangesetListDTO", "SessionChangesetDTO", "SessionFileReviewRequest", "SessionFileReviewResultDTO",
         "SessionContextReadRequest", "SessionContextReadResultDTO", "SessionContextSearchRequest", "SessionContextSearchResultDTO",

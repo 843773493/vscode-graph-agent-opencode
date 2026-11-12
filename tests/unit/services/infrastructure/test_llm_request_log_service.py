@@ -52,12 +52,15 @@ def test_list_session_logs_reads_request_and_response(
 
     records = LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)
 
-    assert [record.timestamp for record in records] == [1000, 2000]
+    assert [record.recorded_at for record in records] == [1000, 2000]
     assert [record.file_name for record in records] == [first.name, second.name]
     assert all("file_path" not in record.model_dump() for record in records)
-    assert records[0].request["messages"][0]["content"] == "前一个"
-    assert records[0].response["result"][0]["content"] == "响应一"
-    assert records[0].upstream == {"attempts": []}
+    assert records[0].size_bytes == first.stat().st_size
+    record = LLMRequestLogService(sessions_dir=sessions_dir).read_session_log(session_id, records[0].file_name)
+    assert record.timestamp == 1000
+    assert record.request["messages"][0]["content"] == "前一个"
+    assert record.response["result"][0]["content"] == "响应一"
+    assert record.upstream == {"attempts": []}
 
 
 def test_list_session_logs_returns_empty_without_log_files(
@@ -85,8 +88,11 @@ def test_list_session_logs_exposes_invalid_log_file(
     request_log_directory.mkdir(parents=True)
     (request_log_directory / "1000.json").write_text("[]", encoding="utf-8")
 
+    service = LLMRequestLogService(sessions_dir=sessions_dir)
+    summary, = service.list_session_logs(session_id)
+    assert summary.file_name == "1000.json"
     with pytest.raises(TypeError, match="不是 JSON object"):
-        LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)
+        service.read_session_log(session_id, summary.file_name)
 
 
 def test_list_session_logs_exposes_missing_response(
@@ -107,7 +113,7 @@ def test_list_session_logs_exposes_missing_response(
     )
 
     with pytest.raises(TypeError, match="缺少 response object"):
-        LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)
+        LLMRequestLogService(sessions_dir=sessions_dir).read_session_log(session_id, "1000000001.json")
 
 
 @pytest.mark.parametrize("timestamp", [None, "1000", 1000.0, True])
@@ -125,7 +131,7 @@ def test_log_body_requires_epoch_milliseconds_without_filename_fallback(
     write_llm_request_log(session_directory, 1_000_000_001, log_payload)
 
     with pytest.raises(TypeError, match="timestamp 必须是 epoch 毫秒整数"):
-        LLMRequestLogService(sessions_dir=sessions_dir).list_session_logs(session_id)
+        LLMRequestLogService(sessions_dir=sessions_dir).read_session_log(session_id, "1000000001.json")
 
 
 @pytest.fixture

@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.testing.model_stream import load_scenario
+from tests.support.api_helpers import read_llm_request_logs
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.paths import output_root_for_test
@@ -176,11 +177,7 @@ async def test_default_responses_replay_runs_complete_tool_loop(
     messages = messages_response.json()["data"]["items"]
     assert last_assistant_message(messages) == EXPECTED_FINAL_TEXT
 
-    logs_response = await client.get(
-        f"/api/v1/sessions/{session_id}/llm-request-logs"
-    )
-    assert logs_response.status_code == 200, logs_response.text
-    logs = logs_response.json()["data"]
+    logs = await read_llm_request_logs(client, session_id)
     assert len(logs) == 2
     attempts = [log["upstream"]["attempts"][0] for log in logs]
     assert all(attempt["call_type"] == "aresponses" for attempt in attempts)

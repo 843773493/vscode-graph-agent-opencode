@@ -5,6 +5,7 @@ import type {
   CursorPage,
   InterruptSessionResult,
   LLMRequestLogRecord,
+  LLMRequestLogSummaryDTO,
   Message,
   MessageReplayAccepted,
   MessageReplayRequest,
@@ -49,8 +50,7 @@ export async function locateLLMRequestLog(
 
 const AGENT_STATE_TIMEOUT_MS = 10000;
 const SESSION_HISTORY_TIMEOUT_MS = 10000;
-// 请求日志按会话整目录读取，文件多时比普通查询慢；沿用全局默认上限，
-// 避免后端卡死时前端 loading 永远不落地（面板无超时、无重试入口）。
+// 列表只读取目录摘要；单条完整正文沿用有界请求超时。
 const LLM_REQUEST_LOG_TIMEOUT_MS = DEFAULT_API_REQUEST_TIMEOUT_MS;
 const ATTACHMENT_TEXT_DECODE_CHUNK_BYTES = 16 * 1024;
 
@@ -218,8 +218,8 @@ export async function getLLMRequestLogs(
   sessionId: string,
   workspaceId?: string | null,
   signal?: AbortSignal,
-): Promise<LLMRequestLogRecord[]> {
-  const data = await requestJson<APIResponse<LLMRequestLogRecord[]>>(
+): Promise<LLMRequestLogSummaryDTO[]> {
+  const data = await requestJson<APIResponse<LLMRequestLogSummaryDTO[]>>(
     port,
     `/api/v1/sessions/${encodeURIComponent(sessionId)}/llm-request-logs`,
     {
@@ -229,6 +229,15 @@ export async function getLLMRequestLogs(
     },
   );
   return unwrapApiData(data);
+}
+
+export async function getLLMRequestLog(
+  port: number, sessionId: string, fileName: string, workspaceId: string | null, signal?: AbortSignal,
+): Promise<LLMRequestLogRecord> {
+  return unwrapApiData(await requestJson<APIResponse<LLMRequestLogRecord>>(
+    port, `/api/v1/sessions/${encodeURIComponent(sessionId)}/llm-request-logs/${encodeURIComponent(fileName)}`,
+    { headers: workspaceHeader(workspaceId), signal, timeoutMs: LLM_REQUEST_LOG_TIMEOUT_MS },
+  ));
 }
 
 function validateAcceptedMessage(accepted: MessageRunAccepted, action: string): void {

@@ -33,6 +33,7 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.api_helpers import read_llm_request_logs
 from tests.support.api_waiters import wait_for_job_done
 
 
@@ -128,12 +129,9 @@ async def _job_request_log(
     session_id: str,
     job_id: str,
 ) -> dict:
-    response = await client.get(
-        f"/api/v1/sessions/{session_id}/llm-request-logs"
-    )
-    assert response.status_code == 200
+    logs = await read_llm_request_logs(client, session_id)
     matching_logs = [
-        log for log in response.json()["data"] if log.get("job_id") == job_id
+        log for log in logs if log.get("job_id") == job_id
     ]
     assert matching_logs
     return matching_logs[-1]["request"]
@@ -144,10 +142,9 @@ async def _job_llm_log(
     session_id: str,
     job_id: str,
 ) -> dict:
-    response = await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
-    assert response.status_code == 200
+    logs = await read_llm_request_logs(client, session_id)
     matching_logs = [
-        log for log in response.json()["data"] if log.get("job_id") == job_id
+        log for log in logs if log.get("job_id") == job_id
     ]
     assert matching_logs
     return matching_logs[-1]
@@ -158,10 +155,9 @@ async def _job_llm_logs(
     session_id: str,
     job_id: str,
 ) -> list[dict]:
-    response = await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
-    assert response.status_code == 200
+    logs = await read_llm_request_logs(client, session_id)
     matching_logs = [
-        log for log in response.json()["data"] if log.get("job_id") == job_id
+        log for log in logs if log.get("job_id") == job_id
     ]
     assert matching_logs
     return matching_logs

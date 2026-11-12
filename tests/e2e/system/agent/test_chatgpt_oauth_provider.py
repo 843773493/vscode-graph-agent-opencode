@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
+from tests.support.api_helpers import read_llm_request_logs
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.paths import output_root_for_test
 from tests.support.processes.workspace import (
@@ -225,11 +226,7 @@ async def test_backup_4_chatgpt_oauth_hits_prompt_cache_with_stable_session(
     assert assistant_message["metadata"]["provider_id"] == "backup_4"
     assert assistant_message["metadata"]["custom_llm_provider"] == "chatgpt"
 
-    logs_response = await client.get(
-        f"/api/v1/sessions/{session_id}/llm-request-logs"
-    )
-    assert logs_response.status_code == 200, logs_response.text
-    logs = logs_response.json()["data"]
+    logs = await read_llm_request_logs(client, session_id)
     logs_by_job = {
         job_id: [log for log in logs if log.get("job_id") == job_id]
         for job_id in (first_job_id, second_job_id, third_job_id)

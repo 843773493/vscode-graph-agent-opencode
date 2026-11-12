@@ -31,15 +31,11 @@ describe("RequestLogPanel", () => {
     const logCount = INITIAL_VISIBLE_REQUEST_LOG_COUNT + 2;
     const html = renderToStaticMarkup(
       <RequestLogPanel
+        apiPort={8011} workspaceId="workspace-test"
         logs={Array.from({ length: logCount }, (_, index) => {
           const timestamp = index + 1;
-          return requestLogRecordFixture({
-            session_id: "ses_requests",
-            job_id: `job_${timestamp}`,
-            timestamp,
-            file_name: `${timestamp}.json`,
-            request: { model_name: `model-${timestamp}`, messages: [] },
-          });
+          return { session_id: "ses_requests", recorded_at: timestamp, size_bytes: timestamp * 1024,
+            file_name: `${timestamp}.json` };
         })}
         loading={false}
         error={null}
@@ -52,15 +48,17 @@ describe("RequestLogPanel", () => {
     );
 
     expect(html).toContain("向上滚动加载更早请求");
-    expect(html).not.toContain(">model-1<");
-    expect(html).not.toContain(">model-2<");
-    expect(html.indexOf("model-3")).toBeLessThan(html.indexOf("model-12"));
+    expect(html).not.toContain("第 1 次");
+    expect(html).not.toContain("第 2 次");
+    expect(html.indexOf("第 3 次")).toBeLessThan(html.indexOf("第 12 次"));
+    expect(html).toContain("展开读取正文");
     expect(html).toContain("已显示 10");
   });
 
   test("加载失败时给出可见错误与重试入口，而不是只留一句失败文案", () => {
     const html = renderToStaticMarkup(
       <RequestLogPanel
+        apiPort={8011} workspaceId="workspace-test"
         logs={[]}
         loading={false}
         error="请求超时: /api/v1/sessions/ses_requests/llm-request-logs"

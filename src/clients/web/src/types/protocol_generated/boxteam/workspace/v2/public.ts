@@ -3682,6 +3682,15 @@ export interface SessionGeneratorImportRequest_WorkspaceIdsEntry {
   value: string;
 }
 
+/** 仅描述文件目录项；不读取或校验尚未展开的正文。 */
+export interface LLMRequestLogSummaryDTO {
+  session_id: string;
+  file_name: string;
+  /** 文件名记录的 epoch 纳秒换算为毫秒，与正文的 handler timestamp 分开。 */
+  recorded_at: number;
+  size_bytes: number;
+}
+
 function createBaseAPIResponse(): APIResponse {
   return { code: undefined, message: undefined, data: undefined, request_id: "" };
 }
@@ -26927,6 +26936,50 @@ export const SessionGeneratorImportRequest_WorkspaceIdsEntry: MessageFns<
     const message = createBaseSessionGeneratorImportRequest_WorkspaceIdsEntry();
     message.key = object.key ?? "";
     message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseLLMRequestLogSummaryDTO(): LLMRequestLogSummaryDTO {
+  return { session_id: "", file_name: "", recorded_at: 0, size_bytes: 0 };
+}
+
+export const LLMRequestLogSummaryDTO: MessageFns<LLMRequestLogSummaryDTO> = {
+  fromJSON(object: any): LLMRequestLogSummaryDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      file_name: isSet(object.file_name) ? globalThis.String(object.file_name) : "",
+      recorded_at: isSet(object.recorded_at) ? globalThis.Number(object.recorded_at) : 0,
+      size_bytes: isSet(object.size_bytes) ? globalThis.Number(object.size_bytes) : 0,
+    };
+  },
+
+  toJSON(message: LLMRequestLogSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.file_name !== "") {
+      obj.file_name = message.file_name;
+    }
+    if (message.recorded_at !== 0) {
+      obj.recorded_at = Math.round(message.recorded_at);
+    }
+    if (message.size_bytes !== 0) {
+      obj.size_bytes = Math.round(message.size_bytes);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LLMRequestLogSummaryDTO>, I>>(base?: I): LLMRequestLogSummaryDTO {
+    return LLMRequestLogSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LLMRequestLogSummaryDTO>, I>>(object: I): LLMRequestLogSummaryDTO {
+    const message = createBaseLLMRequestLogSummaryDTO();
+    message.session_id = object.session_id ?? "";
+    message.file_name = object.file_name ?? "";
+    message.recorded_at = object.recorded_at ?? 0;
+    message.size_bytes = object.size_bytes ?? 0;
     return message;
   },
 };

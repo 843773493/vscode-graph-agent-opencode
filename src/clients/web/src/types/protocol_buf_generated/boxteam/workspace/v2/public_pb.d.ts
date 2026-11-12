@@ -15763,3 +15763,38 @@ export declare type SessionGeneratorImportRequest = Message<"boxteam.workspace.v
  */
 export declare const SessionGeneratorImportRequestSchema: GenMessage<SessionGeneratorImportRequest>;
 
+/**
+ * 仅描述文件目录项；不读取或校验尚未展开的正文。
+ *
+ * @generated from message boxteam.workspace.v2.LLMRequestLogSummaryDTO
+ */
+export declare type LLMRequestLogSummaryDTO = Message<"boxteam.workspace.v2.LLMRequestLogSummaryDTO"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: string file_name = 2;
+   */
+  fileName: string;
+
+  /**
+   * 文件名记录的 epoch 纳秒换算为毫秒，与正文的 handler timestamp 分开。
+   *
+   * @generated from field: int64 recorded_at = 3;
+   */
+  recordedAt: bigint;
+
+  /**
+   * @generated from field: int64 size_bytes = 4;
+   */
+  sizeBytes: bigint;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.LLMRequestLogSummaryDTO.
+ * Use `create(LLMRequestLogSummaryDTOSchema)` to create a new message.
+ */
+export declare const LLMRequestLogSummaryDTOSchema: GenMessage<LLMRequestLogSummaryDTO>;
+

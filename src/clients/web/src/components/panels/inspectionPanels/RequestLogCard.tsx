@@ -274,10 +274,12 @@ const RequestLogCard = React.memo(function RequestLogCard({
   log,
   chronologicalIndex,
   initiallyOpen = false,
+  onClose,
 }: {
   log: LLMRequestLogRecord;
   chronologicalIndex?: number;
   initiallyOpen?: boolean;
+  onClose?: () => void;
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   const display = useMemo(() => buildRequestLogDisplay(log), [log]);
@@ -292,7 +294,7 @@ const RequestLogCard = React.memo(function RequestLogCard({
         type="button"
         className="request-log-card-summary request-log-collapse-summary"
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => { if (open && onClose) onClose(); else setOpen(!open); }}
       >
         <span className="request-log-card-heading">
           <span className="panel-index">{chronologicalIndex === undefined ? log.file_name : `第 ${chronologicalIndex + 1} 次`}</span>

@@ -14,7 +14,7 @@ import ChatPanel from "../panels/ChatPanel";
 import { FRONTEND_EVENT_QUEUE_LIMIT } from "../../state/traceEvents";
 import type { SessionTurnTimeline } from "../../state/session/turnTimeline";
 import type {
-  LLMRequestLogRecord,
+  LLMRequestLogSummaryDTO,
   Session,
   SessionChangeset,
   SessionChangesSummary,
@@ -84,7 +84,7 @@ interface ContentViewSlotsProps extends Pick<
   onCloseTraceNavigation?: () => void;
   requestLogNavigation?: RequestLogNavigation;
   onCloseRequestLogNavigation?: () => void;
-  requestLogs: LLMRequestLogRecord[];
+  requestLogs: LLMRequestLogSummaryDTO[];
   requestLogsLoading: boolean;
   requestLogsError: string | null;
   requestLogsLoadedAt: string | null;
@@ -256,6 +256,8 @@ export default function ContentViewSlots({
       </ContentViewSlot>
       <ContentViewSlot visible={contentView === "requests"} mountAfterFirstVisit>
         <RequestLogPanel
+          key={activeSessionCacheKey}
+          apiPort={apiPort} workspaceId={workspaceId}
           navigation={requestLogNavigation} onCloseNavigation={onCloseRequestLogNavigation}
           logs={requestLogs}
           loading={requestLogsLoading}

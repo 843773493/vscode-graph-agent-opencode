@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app.testing.model_stream import load_scenario
+from tests.support.api_helpers import read_llm_request_logs
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.paths import output_root_for_test
@@ -211,11 +212,7 @@ async def test_chat_replay_records_reasoning_and_tool_call_loop(
         "再整理一份 Chat Completions 可复查的最终答复。"
     )
 
-    logs_response = await client.get(
-        f"/api/v1/sessions/{session_id}/llm-request-logs"
-    )
-    assert logs_response.status_code == 200, logs_response.text
-    logs = logs_response.json()["data"]
+    logs = await read_llm_request_logs(client, session_id)
     assert len(logs) == 2
     assert all(log["job_id"] == job_id for log in logs)
     upstream_attempts = [

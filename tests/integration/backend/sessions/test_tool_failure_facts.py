@@ -26,6 +26,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - 使用当前文件的隔离工作区。
 )
+from tests.support.api_helpers import read_llm_request_logs
 
 
 @pytest.fixture
@@ -179,13 +180,13 @@ async def test_canonical_rejection_keeps_dynamic_fields_out_of_public_execution_
     assert result.payload["tool_outcome"] == "unknown" and result.payload["execution_confirmed"] is False
     root = f"/api/v1/sessions/{session_id}/turns/{accepted['turn_id']}/message-stream"
     snapshot = await case.client.get(root + "/snapshot", params={"thread_id": thread_id})
-    logs = await case.client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
+    logs = await read_llm_request_logs(case.client, session_id)
     traces = await case.client.get(f"/api/v1/sessions/{session_id}/traces", params={"thread_id": thread_id})
-    for response in (snapshot, logs, traces):
+    for response in (snapshot, traces):
         assert response.status_code == 200, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
     assert snapshot.json()["data"]["stream_status"] == "failed"
-    public = json.dumps([failed, result.payload, snapshot.json(), logs.json(), traces.json()], ensure_ascii=False)
+    public = json.dumps([failed, result.payload, snapshot.json(), logs, traces.json()], ensure_ascii=False)
     assert "private-canonical-field.sqlite" not in public
     checkpoints = list(case.container.checkpointer.list(None))
     assert "private-canonical-field.sqlite" not in repr(checkpoints)
@@ -271,12 +272,12 @@ async def test_web_dependency_failure_keeps_native_diagnostics_out_of_execution_
     assert snapshot.status_code == 200, snapshot.text
     frozen_stream = snapshot.json()["data"]
     assert frozen_stream["stream_status"] == "failed"
-    logs = await case.client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
+    logs = await read_llm_request_logs(case.client, session_id)
     traces = await case.client.get(f"/api/v1/sessions/{session_id}/traces", params={"thread_id": thread_id})
-    for response in (snapshot, logs, traces):
+    for response in (snapshot, traces):
         assert response.status_code == 200, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"]
-    public = json.dumps([job, result.payload, frozen_stream, logs.json(), traces.json(), case.requests()], ensure_ascii=False)
+    public = json.dumps([job, result.payload, frozen_stream, logs, traces.json(), case.requests()], ensure_ascii=False)
     assert location.name not in public and str(location) not in public
     checkpoints = list(case.container.checkpointer.list(None))
     assert location.name not in repr(checkpoints)

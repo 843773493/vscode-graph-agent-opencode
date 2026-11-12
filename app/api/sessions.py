@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
@@ -59,6 +59,7 @@ from app.schemas.internal_v2.llm_request_log import (
     LLMRequestLogLocationDTO,
     LLMRequestLogRecordDTO,
     LLMRequestLogReferenceDTO,
+    LLMRequestLogSummaryDTO,
 )
 from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
@@ -574,21 +575,42 @@ async def locate_session_trace(
 
 @router.get(
     "/{session_id}/llm-request-logs",
-    response_model=APIResponse[list[LLMRequestLogRecordDTO]],
-    summary="获取会话完整 LLM 请求响应日志",
+    response_model=APIResponse[list[LLMRequestLogSummaryDTO]],
+    summary="获取会话 LLM 请求响应日志目录摘要",
 )
 async def list_session_llm_request_logs(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    llm_request_log_service: LLMRequestLogService = Depends(
-        get_llm_request_log_service
-    ),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    llm_request_log_service: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
-        result = await run_sync_shielded(llm_request_log_service.list_session_logs, session_id)
+        async with sessions.session_read_admission(session_id):
+            result = await run_sync_shielded(llm_request_log_service.list_session_logs, session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/{session_id}/llm-request-logs/{file_name}", response_model=APIResponse[LLMRequestLogRecordDTO])
+async def read_session_llm_request_log(
+    session_id: CanonicalSessionId,
+    file_name: Annotated[str, Path(pattern=r"^[0-9]+\.json$")],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    logs: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    sessions: Annotated[SessionService, Depends(get_session_service)],
+):
+    try:
+        async with sessions.session_read_admission(session_id):
+            result = await run_sync_shielded(logs.read_session_log, session_id, file_name)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

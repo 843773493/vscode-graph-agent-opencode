@@ -3,7 +3,7 @@ import type { SessionViewState } from "../state/sessionViewState";
 import type {
   Agent,
   GatewayWorkspace,
-  LLMRequestLogRecord,
+  LLMRequestLogSummaryDTO,
   Message,
   Session,
   SessionChangeset,
@@ -187,7 +187,7 @@ export interface AppState {
   turnTimelinesBySession: Map<string, SessionTurnTimeline>;
   traceEvents: TraceEvent[];
   messageStreamsByTurnStream?: Map<string, MessageStreamState>;
-  llmRequestLogs: LLMRequestLogRecord[];
+  llmRequestLogs: LLMRequestLogSummaryDTO[];
   llmRequestLogsLoadedAt: string | null;
   llmRequestLogsLoading: boolean;
   llmRequestLogsError: string | null;

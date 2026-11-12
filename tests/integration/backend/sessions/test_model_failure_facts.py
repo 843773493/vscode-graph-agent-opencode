@@ -70,7 +70,10 @@ async def test_provider_rejection_keeps_native_diagnostics_out_of_history_and_tr
     logs_response = await case.client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
     assert logs_response.status_code == 200, logs_response.text
     assert logs_response.headers["X-Request-ID"] == logs_response.json()["request_id"]
-    log, = logs_response.json()["data"]
+    summary, = logs_response.json()["data"]
+    logs_response = await case.client.get(f"/api/v1/sessions/{session_id}/llm-request-logs/{summary['file_name']}")
+    assert logs_response.status_code == 200, logs_response.text
+    log = logs_response.json()["data"]
     assert log["job_id"] == job_id
     assert "stage=execution-provider" in log["response"]["error"]
     attempt, = log["upstream"]["attempts"]

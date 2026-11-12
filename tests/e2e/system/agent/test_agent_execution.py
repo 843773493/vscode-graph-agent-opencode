@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from tests.support.api_helpers import read_llm_request_logs
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.trace import get_trace_payload
 
@@ -96,11 +97,7 @@ async def test_llm_request_log_round_trip(
     job_data = await wait_for_job_done(client, job_id)
     assert job_data["status"] in {"completed", "succeeded"}
 
-    logs_response = await client.get(
-        f"/api/v1/sessions/{session_id}/llm-request-logs"
-    )
-    assert logs_response.status_code == 200
-    logs = logs_response.json()["data"]
+    logs = await read_llm_request_logs(client, session_id)
     matching_logs = [log for log in logs if log.get("job_id") == job_id]
     assert matching_logs
 

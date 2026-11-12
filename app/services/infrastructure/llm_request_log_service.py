@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.atomic_fs import native_io_path
+from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.llm_request_log import (
@@ -21,6 +22,7 @@ from app.schemas.internal_v2.llm_request_log import (
     LLMRequestLogMatchDTO,
     LLMRequestLogRecordDTO,
     LLMRequestLogReferenceDTO,
+    LLMRequestLogSummaryDTO,
 )
 
 MAX_LOG_RECORD_BYTES = 1024 * 1024
@@ -90,7 +92,7 @@ class LLMRequestLogService:
     def _directory(self, session_id: str) -> Path:
         return native_io_path(self._path_resolver.resolve_session_node_for_runtime(session_id) / "logs" / "llm_requests")
 
-    def list_session_logs(self, session_id: str) -> list[LLMRequestLogRecordDTO]:
+    def list_session_logs(self, session_id: str) -> list[LLMRequestLogSummaryDTO]:
         directory = self._directory(session_id)
         try:
             stat = directory.stat()
@@ -98,7 +100,18 @@ class LLMRequestLogService:
             return []
         if not S_ISDIR(stat.st_mode):
             raise NotADirectoryError(f"LLM 请求日志路径不是目录: {directory}")
-        return [self._read_log_file(path, session_id) for path in sorted(directory.glob("*.json"), key=self._log_sort_key)]
+        return [LLMRequestLogSummaryDTO(
+            session_id=session_id, file_name=path.name,
+            recorded_at=self._timestamp_ns_from_filename(path) // 1_000_000,
+            size_bytes=path.stat().st_size,
+        ) for path in sorted(directory.glob("*.json"), key=self._log_sort_key)]
+
+    def read_session_log(self, session_id: str, file_name: str) -> LLMRequestLogRecordDTO:
+        path = self._directory(session_id) / file_name
+        try:
+            return self._decode_log(path.read_bytes(), path, session_id)
+        except FileNotFoundError as error:
+            raise NotFoundError(f"LLM 请求日志不存在或已被裁剪: {file_name}") from error
 
     def search_session_logs(
         self, session_id: str, query: str, *, limit: int,
@@ -211,9 +224,6 @@ class LLMRequestLogService:
         if len(raw) > max_bytes:
             raise LLMRequestLogError("stale_request_log_reference", "record_size_limit", "LLM 请求日志超出本次读取字节上限，无法核验原版本")
         return raw
-
-    def _read_log_file(self, log_file: Path, session_id: str) -> LLMRequestLogRecordDTO:
-        return self._decode_log(native_io_path(log_file).read_bytes(), log_file, session_id)
 
     def _decode_log(self, raw_bytes: bytes, log_file: Path, session_id: str) -> LLMRequestLogRecordDTO:
         raw = json.loads(raw_bytes.decode("utf-8"))

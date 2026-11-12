@@ -9,6 +9,13 @@ from app.schemas.canonical_params import CanonicalSessionId
 LLMRequestLogLimit = Literal["result_limit", "scan_limit", "byte_limit", "deadline", "item_size_limit"]
 
 
+class LLMRequestLogSummaryDTO(BaseModel):
+    session_id: str
+    file_name: str
+    recorded_at: int = Field(description="文件名记录的 epoch 纳秒换算为毫秒，不代表正文的 handler timestamp")
+    size_bytes: int = Field(ge=0)
+
+
 class LLMRequestLogRecordDTO(BaseModel):
     session_id: str
     job_id: str | None = None

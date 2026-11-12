@@ -27,6 +27,7 @@ from app.core.workspace_identity import load_or_create_workspace_id, read_worksp
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from tests.support.api_helpers import read_llm_request_logs
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.processes.workspace import (
@@ -321,9 +322,7 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
     assert custom_tool_end_payloads[-1]["result"] == "4568"
     assert custom_tool_end_payloads[-1].get("tool_output") is None
 
-    logs_response = await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
-    assert logs_response.status_code == 200
-    logs = logs_response.json()["data"]
+    logs = await read_llm_request_logs(client, session_id)
     assert len(logs) >= 2
     for log in logs:
         tool_names = _tool_names_from_llm_log(log)
@@ -453,11 +452,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
     read_start = line_offset - 1
     assert read_start <= LARGE_TEST_TARGET_LINE_INDEX < read_start + read_limit
 
-    logs_response = await client.get(
-        f"/api/v1/sessions/{session_id}/llm-request-logs"
-    )
-    assert logs_response.status_code == 200
-    logs = logs_response.json()["data"]
+    logs = await read_llm_request_logs(client, session_id)
     tool_messages = [
         message
         for log in logs
@@ -605,9 +600,7 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
             == EXTENSION_TOOL_INVOKER_NAME
         )
 
-    logs_response = await client.get(f"/api/v1/sessions/{reader_session_id}/llm-request-logs")
-    assert logs_response.status_code == 200
-    logs = logs_response.json()["data"]
+    logs = await read_llm_request_logs(client, reader_session_id)
     invoked_custom_tools = set().union(
         *[_custom_tool_targets_from_llm_log(log) for log in logs]
     )

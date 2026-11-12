@@ -6052,3 +6052,15 @@ class SessionGeneratorImportRequest(_message.Message):
     workspace_ids: _containers.ScalarMap[str, str]
     runs: _containers.RepeatedCompositeFieldContainer[LegacyGenerationRun]
     def __init__(self, task_id: _Optional[str] = ..., source_hash: _Optional[str] = ..., configuration: _Optional[_Union[PersistentTaskConfigurationDTO, _Mapping]] = ..., revision: _Optional[int] = ..., lifecycle: _Optional[str] = ..., reason: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., next_run_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., workspace_ids: _Optional[_Mapping[str, str]] = ..., runs: _Optional[_Iterable[_Union[LegacyGenerationRun, _Mapping]]] = ...) -> None: ...
+
+class LLMRequestLogSummaryDTO(_message.Message):
+    __slots__ = ("session_id", "file_name", "recorded_at", "size_bytes")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    FILE_NAME_FIELD_NUMBER: _ClassVar[int]
+    RECORDED_AT_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    file_name: str
+    recorded_at: int
+    size_bytes: int
+    def __init__(self, session_id: _Optional[str] = ..., file_name: _Optional[str] = ..., recorded_at: _Optional[int] = ..., size_bytes: _Optional[int] = ...) -> None: ...

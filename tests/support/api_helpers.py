@@ -38,4 +38,18 @@ def checkpoint_fixture(
     return checkpoint
 
 
-__all__ = ["checkpoint_fixture", "create_session"]
+async def read_llm_request_logs(client: httpx.AsyncClient, session_id: str) -> list[dict]:
+    """审计测试显式读取摘要对应的全部正文，不改变产品的按需读取入口。"""
+    response = await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
+    assert response.status_code == 200, response.text
+    assert response.json()["request_id"] == response.headers["X-Request-ID"]
+    records = []
+    for summary in response.json()["data"]:
+        detail = await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs/{summary['file_name']}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["request_id"] == detail.headers["X-Request-ID"]
+        records.append(detail.json()["data"])
+    return records
+
+
+__all__ = ["checkpoint_fixture", "create_session", "read_llm_request_logs"]

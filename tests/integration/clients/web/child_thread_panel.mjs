@@ -402,7 +402,11 @@ try {
   let sessionLogItems;
   await waitUntil(async () => {
     const logs = await api(page, `/api/v1/sessions/${result.sessionId}/llm-request-logs`, { headers: workspaceHeaders });
-    sessionLogItems = Array.isArray(logs.data) ? logs.data : logs.data.items;
+    sessionLogItems = [];
+    for (const summary of logs.data) {
+      const detail = await api(page, `/api/v1/sessions/${result.sessionId}/llm-request-logs/${encodeURIComponent(summary.file_name)}`, { headers: workspaceHeaders });
+      sessionLogItems.push(detail.data);
+    }
     return sessionLogItems.length >= 5;
   }, "冻结任务、原父调用及自动回报的模型日志", 60_000);
   const childThreads = await api(

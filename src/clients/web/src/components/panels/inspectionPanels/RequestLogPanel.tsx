@@ -1,11 +1,9 @@
 import React, { useMemo, useState, useLayoutEffect, useRef } from "react";
 import type { RequestLogNavigation } from "../../../hooks/runtime/useRequestLogNavigation";
 import { formatDateTime } from "../../../utils/format";
-import {
-  buildRequestLogKeyFlowFromOrderedLogs,
-  type RequestLogKeyFlow,
-} from "../../../state/requestLogDisplay/index";
-import type { LLMRequestLogRecord } from "../../../types/backend";
+import type { RequestLogKeyFlow } from "../../../state/requestLogDisplay/index";
+import type { LLMRequestLogSummaryDTO } from "../../../types/backend";
+import { useRequestLogDetail, useRequestLogChain } from "../../../hooks/runtime/useRequestLogLoader";
 import { useScrollWindow } from "../../eventQueue/useScrollWindow";
 import RequestLogCard from "./RequestLogCard";
 
@@ -19,7 +17,7 @@ const RequestLogKeyFlowSummary = React.memo(function RequestLogKeyFlowSummary({
   customToolResults,
   finalText,
 }: RequestLogKeyFlow) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   if (
     acceptedSkillLoads.length === 0 &&
     customInvokerNames.length === 0 &&
@@ -93,6 +91,7 @@ const RequestLogKeyFlowSummary = React.memo(function RequestLogKeyFlowSummary({
 });
 
 export default function RequestLogPanel({
+  apiPort, workspaceId,
   navigation,
   onCloseNavigation,
   logs,
@@ -106,7 +105,9 @@ export default function RequestLogPanel({
 }: {
   navigation?: RequestLogNavigation;
   onCloseNavigation?: () => void;
-  logs: LLMRequestLogRecord[];
+  apiPort: number;
+  workspaceId: string | null;
+  logs: LLMRequestLogSummaryDTO[];
   loading: boolean;
   error: string | null;
   loadedAt: string | null;
@@ -115,23 +116,14 @@ export default function RequestLogPanel({
   active: boolean;
   onRetryRequestLogs: () => void;
 }) {
-  const { displayLogs, keyFlow } = useMemo(() => {
-    const displayLogs = [...logs].sort(
-      (left, right) => left.timestamp - right.timestamp,
-    );
-    return {
-      displayLogs,
-      keyFlow: buildRequestLogKeyFlowFromOrderedLogs(displayLogs),
-    };
-  }, [logs]);
   const { firstVisibleIndex, handleListScroll, listRef } = useScrollWindow({
     active,
     scopeKey,
-    itemCount: displayLogs.length,
+    itemCount: logs.length,
     initialVisibleCount: INITIAL_VISIBLE_REQUEST_LOG_COUNT,
     olderBatchSize: OLDER_REQUEST_LOG_BATCH_SIZE,
   });
-  const renderedLogs = displayLogs.slice(firstVisibleIndex);
+  const renderedLogs = logs.slice(firstVisibleIndex);
   const hasOlderLogs = firstVisibleIndex > 0;
   if (navigation) return <LocatedRequestLog key={`${navigation.match.reference?.file_name}/${navigation.match.reference?.start_codepoint}`} navigation={navigation} onClose={onCloseNavigation} />;
   // 请求视图是逐次审计模型输入、输出和请求组成来源的入口。
@@ -165,7 +157,7 @@ export default function RequestLogPanel({
         </div>
       ) : null}
 
-      {!error && displayLogs.length > 0 ? (
+      {!error && logs.length > 0 ? (
         <div
           className="panel-list"
           ref={listRef}
@@ -176,11 +168,11 @@ export default function RequestLogPanel({
               向上滚动加载更早请求
             </div>
           ) : null}
-          <RequestLogKeyFlowSummary {...keyFlow} />
+          <RequestLogChain key={loadedAt} logs={logs} apiPort={apiPort} workspaceId={workspaceId} active={active} />
           {renderedLogs.map((log, index) => (
-            <RequestLogCard
-              key={`${log.file_name}-${log.timestamp}-${index}`}
-              log={log}
+            <RequestLogEntry
+              key={`${log.file_name}-${loadedAt}`}
+              summary={log} apiPort={apiPort} workspaceId={workspaceId} active={active}
               chronologicalIndex={firstVisibleIndex + index}
             />
           ))}
@@ -189,13 +181,47 @@ export default function RequestLogPanel({
 
       {!loading && !error && logs.length === 0 ? (
         <div className="empty-state">
-          当前会话还没有 .boxteam/logs/llm_requests 记录
+          当前会话还没有 LLM 请求响应日志
         </div>
       ) : null}
     </section>
   );
 }
 
+
+function RequestLogEntry({ summary, apiPort, workspaceId, active, chronologicalIndex }: {
+  summary: LLMRequestLogSummaryDTO; apiPort: number; workspaceId: string | null;
+  active: boolean; chronologicalIndex: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const { log, error } = useRequestLogDetail(apiPort, workspaceId, summary.session_id, summary.file_name, open && active);
+  if (open && active && log) return <RequestLogCard log={log} chronologicalIndex={chronologicalIndex}
+    initiallyOpen onClose={() => setOpen(false)} />;
+  return <article className={`panel-card request-log-card${open ? " is-open" : ""}`}>
+    <button type="button" className="request-log-card-summary request-log-collapse-summary"
+      aria-expanded={open} onClick={() => setOpen(!open)}>
+      <span className="request-log-card-heading"><span className="panel-index">第 {chronologicalIndex + 1} 次</span>
+        <span>{formatDateTime(new Date(summary.recorded_at).toISOString())}</span></span>
+      <span>{(summary.size_bytes / 1024).toFixed(1)} KiB · 展开读取正文</span>
+    </button>
+    {open && error ? <div role="alert">读取请求日志失败：{error}
+      <button type="button" onClick={() => setOpen(false)}>关闭后重试</button></div>
+      : open ? <div role="status">正在读取本条请求日志…</div> : null}
+  </article>;
+}
+
+function RequestLogChain({ logs, apiPort, workspaceId, active }: {
+  logs: LLMRequestLogSummaryDTO[]; apiPort: number; workspaceId: string | null; active: boolean;
+}) {
+  const { loading, load, flow, error } = useRequestLogChain(logs, apiPort, workspaceId, active);
+  if (flow) return <RequestLogKeyFlowSummary {...flow} />;
+  return <section className="panel-card request-log-key-flow">
+    <button type="button" disabled={loading} onClick={load}>
+      {loading ? "正在读取完整请求链路…" : "读取请求链路（需要全部日志正文）"}
+    </button>
+    {error ? <div role="alert">请求链路读取失败：{error}</div> : null}
+  </section>;
+}
 
 function LocatedRequestLog({ navigation, onClose }: { navigation: RequestLogNavigation; onClose?: () => void }) {
   const mark = useRef<HTMLElement>(null);

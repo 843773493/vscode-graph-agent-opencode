@@ -183,7 +183,15 @@ async def _audit_log_api(
         artifacts / f"{phase}-llm-request-logs.json",
     )
     assert payload["request_id"] == request_id, "Gateway 与工作区后端必须透传同一个 request_id"
-    records = payload["data"]
+    records = []
+    for summary in payload["data"]:
+        detail = _response(
+            await client.get(f"/api/v1/sessions/{session_id}/llm-request-logs/{summary['file_name']}",
+                             headers={"X-Request-ID": request_id}),
+            artifacts / f"{phase}-llm-request-{summary['file_name']}",
+        )
+        assert detail["request_id"] == request_id
+        records.append(detail["data"])
     paths = sorted((session_node / "logs" / "llm_requests").glob("*.json"), key=lambda path: int(path.stem))
     assert len(records) == len(paths)
     for record, path in zip(records, paths, strict=True):

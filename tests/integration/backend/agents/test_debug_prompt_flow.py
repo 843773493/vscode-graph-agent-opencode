@@ -26,6 +26,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import read_llm_request_logs
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.messages import last_assistant_message
@@ -705,10 +706,8 @@ async def test_prompt_drives_agent_debug_tools_through_real_backend(
     assert "入口断点停在 state.counter += 2 之前" in request_history
     assert "worker 断点停在 state.counter += 10 之前" in request_history
 
-    logs_response = await scripted_client.get(f"/api/v1/sessions/{session_id}/llm-request-logs")
-    assert logs_response.status_code == 200, logs_response.text
-    logs = logs_response.json()["data"]
-    assert isinstance(logs, list) and logs, logs
+    logs = await read_llm_request_logs(scripted_client, session_id)
+    assert logs
     logged_requests = [log["request"] for log in logs]
     assert {request["model_name"] for request in logged_requests} == {"debug-e2e-model"}
     exposed_tool_names = [

@@ -2299,7 +2299,11 @@ async function loadPersistedEvidence(owner) {
   });
   const items = messages?.data?.items ?? [];
   for (const message of items) assert.equal(message.thread_id, threadId, "MessageDTO 必须保留请求选定的 main owner");
-  const logItems = Array.isArray(logs?.data) ? logs.data : logs?.data?.items ?? [];
+  const logItems = [];
+  for (const summary of logs.data) {
+    const detail = await api(page, `/api/v1/sessions/${sessionId}/llm-request-logs/${encodeURIComponent(summary.file_name)}`, { headers });
+    logItems.push(detail.data);
+  }
   const historyTurns = history?.data?.items ?? [];
   const canonicalActivity = historyTurns.map((turn) => {
     const parts = (turn.response_parts ?? []).filter((part) => part.kind !== "final_text");

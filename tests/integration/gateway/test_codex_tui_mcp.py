@@ -29,7 +29,7 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
 from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     mcp_plugin_tool_restrictions as mcp_plugin_tool_restrictions,  # noqa: PLC0414 - mcp_plugin_case 的 fixture 依赖
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, read_llm_request_logs
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.plugin_package import install_plugin_async
 from tests.support.trace import get_trace_payload
@@ -275,9 +275,8 @@ async def test_agent_uses_codex_tui_mcp_through_gateway_plugin(
     admission = response.json()["data"]
     await wait_for_job_done(case.client, admission["job_id"], max_attempts=120)
 
-    logs_response = await case.client.get(f"/api/v1/sessions/{session}/llm-request-logs")
-    logs_response.raise_for_status()
-    invocation = _required_tool_call(logs_response.json()["data"], name="invoke_extension_tool")
+    logs = await read_llm_request_logs(case.client, session)
+    invocation = _required_tool_call(logs, name="invoke_extension_tool")
     invocation_arguments = json.loads(invocation["arguments"])
     assert invocation_arguments == {"tool_name": tool_id, "arguments": {}}
     traces_response = await case.client.get(f"/api/v1/sessions/{session}/traces")

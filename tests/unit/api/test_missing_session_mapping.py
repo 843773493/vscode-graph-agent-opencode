@@ -226,13 +226,14 @@ async def test_list_session_traces_maps_missing_session_to_404() -> None:
 
 
 @pytest.mark.asyncio
-async def test_llm_request_logs_maps_missing_session_to_404() -> None:
+async def test_llm_request_logs_maps_missing_session_to_404(read_session_service) -> None:
     with pytest.raises(HTTPException) as captured:
         await sessions_api.list_session_llm_request_logs(
             MISSING,
             _="local",
             request_id="req",
             llm_request_log_service=_FakeLlmLogService(),
+            sessions=read_session_service,
         )
 
     assert captured.value.status_code == 404
