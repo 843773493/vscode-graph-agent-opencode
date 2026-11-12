@@ -121,6 +121,23 @@ message ConfigSourceEditDTO {
   bool layer_imported = 6;
 }
 
+message ConfigSourceFanoutWorkspaceDTO {
+  string workspace_id = 1;
+  string status = 2;
+  google.protobuf.Value layer_revision = 3;
+  google.protobuf.Value layer_digest = 4;
+  google.protobuf.Value result = 5;
+  google.protobuf.Value error = 6;
+}
+
+message ConfigSourceFanoutDTO {
+  int64 source_generation = 1;
+  string fanout_id = 2;
+  string result = 3;
+  repeated ConfigSourceFanoutWorkspaceDTO workspaces = 4;
+  string coverage = 5;
+}
+
 message ConfigSourceDocumentDTO {
   string gateway_id = 1;
   string workspace_id = 2;
@@ -142,6 +159,7 @@ message ConfigSourceDocumentDTO {
   repeated ConfigSourceOriginDTO origins = 18;
   ConfigReloadStatusDTO status = 19;
   optional ConfigSourceEditDTO edit = 20;
+  optional ConfigSourceFanoutDTO fanout = 21;
 }
 
 message ConfigSourcePreflightDTO {

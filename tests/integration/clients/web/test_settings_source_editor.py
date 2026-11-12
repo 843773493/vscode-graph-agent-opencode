@@ -83,6 +83,8 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["phase"] == "complete" and not result["pageErrors"]
         assert result["gateway_saved"] and result["workspace_saved"]
+        assert result["shared_user_source"]["preview_scope_shown"]
+        assert result["shared_user_source"]["result"] == "unchanged"
         assert result["conflict_kept_draft"] and result["unknown_not_replayed"]
         assert result["readonly"] and result["frozen_owner"]
         assert result["original_settings_form_saved"] and result["draft_restored_after_reload"]

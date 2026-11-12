@@ -110,7 +110,7 @@ class ConfigSourceLayersMixin:
     def _read_effective_config(
         self,
         *,
-        workspace_source: dict[str, object] | None = None,
+        source_override: tuple[str, dict[str, object]] | None = None,
         import_sources: bool = True,
         source_payloads: dict[str, dict[str, object]] | None = None,
     ) -> tuple[
@@ -119,14 +119,17 @@ class ConfigSourceLayersMixin:
         tuple[ConfigSource, ...],
         Path,
     ]:
+        source_details: list[ConfigSource] = []
+
         def read_override(*, config_key: str, path: Path) -> dict[str, object] | None:
-            if config_key == "workspace_root_mutable_override" and workspace_source is not None:
-                payload = workspace_source
+            if source_override is not None and config_key == source_override[0]:
+                payload = source_override[1]
             elif import_sources:
                 payload = self._read_shared_override(config_key=config_key, path=path)
             else:
                 require_settled_config_migration(path)
                 payload = parse_stable_config_file(read_stable_config_file(path))
+            source_details.append(self._config_source(path=path, config_key=config_key))
             if (
                 payload is not None
                 and config_key in {
@@ -147,98 +150,86 @@ class ConfigSourceLayersMixin:
                 source_payloads[config_key] = payload or {}
             return payload
 
-        config_path = self._get_workspace_config_path()
-        source_paths: list[Path] = [self._inline_config_path]
-        source_details: list[ConfigSource] = [
-            ConfigSource(
-                uri=self._inline_source_uri(),
-                layer="inline",
-                precedence=0,
-                loaded=True,
-                source_key=_INLINE_SOURCE_KEY,
-            ),
-        ]
-        config = self._read_config_source(self._inline_config_path)
-        if source_payloads is not None:
-            source_payloads["inline"] = config
-        source_configs = {self._inline_config_path: config}
-        user_override = read_override(
-            config_key="workspace_mutable_override",
-            path=config_path,
-        )
-        source_details.append(
-            self._config_source(
-                path=config_path,
+        try:
+            config_path = self._get_workspace_config_path()
+            source_paths: list[Path] = [self._inline_config_path]
+            source_details.extend([
+                ConfigSource(
+                    uri=self._inline_source_uri(),
+                    layer="inline",
+                    precedence=0,
+                    loaded=True,
+                    source_key=_INLINE_SOURCE_KEY,
+                ),
+            ])
+            config = self._read_config_source(self._inline_config_path)
+            if source_payloads is not None:
+                source_payloads["inline"] = config
+            source_configs = {self._inline_config_path: config}
+            user_override = read_override(
                 config_key="workspace_mutable_override",
+                path=config_path,
             )
-        )
-        if user_override is not None:
-            source_configs[config_path] = user_override
-            config = merge_json_objects(
-                config,
-                user_override,
-            )
-            self._append_source_path(source_paths, config_path)
+            if user_override is not None:
+                source_configs[config_path] = user_override
+                config = merge_json_objects(
+                    config,
+                    user_override,
+                )
+                self._append_source_path(source_paths, config_path)
 
-        local_config_path = self._get_workspace_local_config_path()
-        local_override = read_override(
-            config_key="workspace_local_mutable_override",
-            path=local_config_path,
-        )
-        source_details.append(
-            self._config_source(
-                path=local_config_path,
+            local_config_path = self._get_workspace_local_config_path()
+            local_override = read_override(
                 config_key="workspace_local_mutable_override",
+                path=local_config_path,
             )
-        )
-        if local_override is not None:
-            config = merge_json_objects(
-                config,
-                local_override,
-            )
-            self._append_source_path(source_paths, local_config_path)
+            if local_override is not None:
+                config = merge_json_objects(
+                    config,
+                    local_override,
+                )
+                self._append_source_path(source_paths, local_config_path)
 
-        schema_path: Path | None = None
-        if self._workspace_root is not None:
-            schema_path = self._resolve_schema_path(source_configs=source_configs)
-            legacy_workspace_path = (
-                self._workspace_root / ".boxteam" / "boxteam.jsonc"
-            )
-            if legacy_workspace_path.is_file():
-                raise RuntimeError(
-                    "发现旧版工作区配置；普通配置读取不会自动迁移。请显式运行 "
-                    "`python -m configs.boxteam migrate --workspace "
-                    f"{self._workspace_root}`。文件: {legacy_workspace_path}"
+            schema_path: Path | None = None
+            if self._workspace_root is not None:
+                schema_path = self._resolve_schema_path(source_configs=source_configs)
+                legacy_workspace_path = (
+                    self._workspace_root / ".boxteam" / "boxteam.jsonc"
                 )
-            workspace_path = get_workspace_config_path(self._workspace_root)
-            workspace_override = read_override(
-                config_key="workspace_root_mutable_override",
-                path=workspace_path,
-            )
-            source_details.append(
-                self._config_source(
-                    path=workspace_path,
+                if legacy_workspace_path.is_file():
+                    raise RuntimeError(
+                        "发现旧版工作区配置；普通配置读取不会自动迁移。请显式运行 "
+                        "`python -m configs.boxteam migrate --workspace "
+                        f"{self._workspace_root}`。文件: {legacy_workspace_path}"
+                    )
+                workspace_path = get_workspace_config_path(self._workspace_root)
+                workspace_override = read_override(
                     config_key="workspace_root_mutable_override",
+                    path=workspace_path,
                 )
-            )
-            if workspace_override is not None:
-                config = merge_json_objects(config, workspace_override)
-                self._append_source_path(source_paths, workspace_path)
-        if self._workspace_state_store is not None or self._runtime_config_overrides:
-            source_details.append(self._runtime_override_source())
-        if self._runtime_config_overrides:
-            config["ui"] = merge_json_objects(
-                config.get("ui", {})
-                if isinstance(config.get("ui", {}), dict)
-                else {},
-                self._runtime_config_overrides,
-            )
-        if source_payloads is not None:
-            source_payloads[self._RUNTIME_OVERRIDE_CONFIG_KEY] = {"ui": dict(self._runtime_config_overrides)}
-        self._validate_agent_tool_policies(config)
-        if schema_path is None:
-            schema_path = self._resolve_schema_path(source_configs=source_configs)
-        return config, tuple(source_paths), tuple(source_details), schema_path
+                if workspace_override is not None:
+                    config = merge_json_objects(config, workspace_override)
+                    self._append_source_path(source_paths, workspace_path)
+            if self._workspace_state_store is not None or self._runtime_config_overrides:
+                source_details.append(self._runtime_override_source())
+            if self._runtime_config_overrides:
+                config["ui"] = merge_json_objects(
+                    config.get("ui", {})
+                    if isinstance(config.get("ui", {}), dict)
+                    else {},
+                    self._runtime_config_overrides,
+                )
+            if source_payloads is not None:
+                source_payloads[self._RUNTIME_OVERRIDE_CONFIG_KEY] = {"ui": dict(self._runtime_config_overrides)}
+            self._validate_agent_tool_policies(config)
+            if schema_path is None:
+                schema_path = self._resolve_schema_path(source_configs=source_configs)
+            return config, tuple(source_paths), tuple(source_details), schema_path
+        except Exception as error:
+            if import_sources:
+                cast("ConfigService", self)._record_shared_source_application(sources=tuple(source_details),
+                    result="failed", error=f"Workspace 配置来源读取失败: error={type(error).__name__}")
+            raise
 
     def _runtime_override_source(self) -> ConfigSource:
         # runtime_override 是逻辑来源；物理 carrier 不属于来源身份，且没有来源文件，
@@ -614,8 +605,6 @@ class ConfigSourceLayersMixin:
                     source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
                     source_generation=prior.source_generation,
                     workspace_id=workspace_id,
-                    # TODO: `_read_effective_config` 后续来源/策略检查若失败，此时本层已物化，
-                    # 但 source_details 尚未返回，需让该失败边界携带本次冻结详情后再结清。
                     status="applying" if is_current else "superseded",
                     layer_revision=(materialized.layer_revision if is_current else None),
                     layer_digest=(materialized.layer_digest if is_current else None),

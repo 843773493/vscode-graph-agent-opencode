@@ -130,11 +130,11 @@ Workbench 展示设置、Gateway runtime 配置、Workspace 配置、会话设�
 
 ### Requirement: Workspace 用户来源修改必须显示实际 fan-out
 
-用户级 Workspace source SHALL 只影响该目标环境原合同覆盖的工作区，提交前展示影响范围；各 workspace 保留独立 CAS、候选、revision 与结果。部分冲突及停止工作区追赶 SHALL 明确展示，不伪造跨工作区事务、不自动扩大到其它 Gateway 的默认值。
+用户级 Workspace source SHALL 按实际读取来源文件的 Workspace 生效，默认同一原生目标机器及 Home 共享，不以 Gateway 登记范围限定。提交前 SHALL 说明该共享范围及已观察消费者，不能把已观察名单当完整清单或替其它工作区预先承诺校验结果。各 Workspace 自行监听文件、独立校验并沿原 reload 决定生效时机，保留独立 CAS、候选、revision 与结果；fan-out 仅作汇总，不由 Gateway 逐个驱动。部分冲突及尚未报告本代结果的消费者 SHALL 明确展示，停止的在下次启动追赶；其它 Home 的来源不受修改，不伪造跨工作区事务或新增配置成员账本。
 
 #### Scenario: 用户 source 更新发生部分冲突
 - **WHEN** B 环境的用户 source 更新影响 B1/B2，B1 成功、B2 冲突，B3 已停止
-- **THEN** 展示同一 fan-out 的独立结果与 B3 待追赶状态，不回滚 B1、不伪报全部成功，A 环境配置不被修改
+- **THEN** 展示同一 fan-out 的独立结果；B3 已有历史观察但尚未报告本代结果时显示 `unobserved`，说明下次启动自行追赶，不据此推断其存活状态或补造 pending；不回滚 B1、不伪报全部成功，A 环境配置不被修改
 
 ### Requirement: 远端配置必须在远端授权并持有唯一有效事实
 

@@ -86,5 +86,16 @@ export function sourceStatus(document: SourceDocument): string {
   const status = document.status, edit = document.edit;
   return `来源 ${document.source_key} · ${edit ? `来源${edit.source_saved ? '已保存' : '未保存'} · 层${edit.layer_imported ? '已导入' : '未导入'} · 提交 ${edit.idempotency_key} / ${edit.state} · ` : ''}`
     + `active=${document.active_revision ?? '无'} · pending=${status?.pending_revision ?? '无'} · ${status?.restart_required ? '需要重启' : '无需重启'}`
-    + ` · ${status?.reason ?? ''} ${status?.last_error ?? ''}`;
+    + ` · ${status?.reason ?? ''} ${status?.last_error ?? ''}` + sourceFanoutStatus(document);
+}
+
+export function sourceFanoutStatus(document: SourceDocument): string {
+  if (!('workspace_id' in document) || document.source_key !== 'workspace_mutable_override') return '';
+  const fanout = 'fanout' in document ? document.fanout : undefined;
+  const scope = `\n共享用户来源：同一 Home 中读取此文件的 Workspace 各自监听、校验和应用，不受 Gateway 登记限制。停止的 Workspace 在下次启动时追赶。`;
+  if (!fanout) return scope + '\n尚无来源观察记录，其他工作区的应用结果未知。';
+  return scope
+    + `\n历史已观察工作区（并非完整名单，无法据此判断是否仍在使用；未报告本代结果的状态未知）：${fanout.workspaces.map(item =>
+      `${item.workspace_id}: ${item.status === 'unobserved' ? '本代尚未观察' : item.result ?? item.status}${item.error ? ' · ' + item.error : ''}`).join('；') || '暂无'}`
+    + `\nfan-out ${fanout.fanout_id} · 已观察范围结果 ${fanout.result}`;
 }

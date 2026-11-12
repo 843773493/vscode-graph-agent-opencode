@@ -88,6 +88,7 @@ try {
     await expect(quick.locator('input').first()).toHaveValue('resource ');
     await quick.locator('input').first().fill('resource ' + source);
     await expect(resourceSource(source, gatewayScope)).toBeVisible();
+    await expect(quick.locator('.monaco-list-row').filter({ hasText: '正在读取其余来源' })).toHaveCount(0);
   };
   result.phase = 'resource-discovery';
   const readsBeforeDiscovery = result.sourceReads.length;
@@ -116,6 +117,31 @@ try {
   assert(gatewayDocument.jsonc.includes('// Gateway 来源注释'));
   assert(gatewayDocument.edit === null || gatewayDocument.edit === undefined);
   result.gateway_saved = true;
+
+  result.phase = 'shared-workspace-source-save';
+  const sharedPath = '/api/v1/config/sources/workspace_mutable_override';
+  const sharedBefore = await api(sharedPath, { headers: workspaceHeaders });
+  assert.equal(sharedBefore.writable, true);
+  await showSources('workspace_mutable_override');
+  await resourceSource('workspace_mutable_override', false).click();
+  await expect(tab).toContainText('workspace_mutable_override.jsonc');
+  await replace(sharedBefore.jsonc + '\n// 共享用户来源经正式编辑器保存\n');
+  const sharedSaved = command('workbench.action.files.save');
+  await expect(modal).toContainText('共享用户来源：同一 Home');
+  await expect(modal).toContainText('不受 Gateway 登记限制');
+  await expect(modal).toContainText('并非完整名单');
+  await modal.getByRole('button', { name: '保存来源', exact: true }).click();
+  await sharedSaved;
+  await expect(tab).not.toHaveClass(/\bdirty\b/);
+  const sharedAfter = await api(sharedPath, { headers: workspaceHeaders });
+  assert(sharedAfter.jsonc.includes('// 共享用户来源经正式编辑器保存'));
+  assert(sharedAfter.fanout.source_generation > sharedBefore.fanout.source_generation);
+  assert.equal(sharedAfter.fanout.coverage, 'observed_only');
+  const sharedResult = sharedAfter.fanout.workspaces.find(item => item.workspace_id === active.workspace_id);
+  assert.equal(sharedResult.status, 'applied');
+  assert.equal(sharedResult.result, 'unchanged');
+  result.shared_user_source = { generation: sharedAfter.fanout.source_generation,
+    fanout_id: sharedAfter.fanout.fanout_id, result: sharedResult.result, preview_scope_shown: true };
 
   result.phase = 'workspace-save-with-frozen-owner';
   await showSources(); await resourceSource('workspace_root_mutable_override', false).click({ modifiers: ['Alt'] });

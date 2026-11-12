@@ -23,11 +23,14 @@ from app.schemas.internal_v2.config import (
     ConfigSourceDocumentDTO,
     ConfigSourceEditDTO,
     ConfigSourceEditRequest,
+    ConfigSourceFanoutDTO,
+    ConfigSourceFanoutWorkspaceDTO,
     ConfigSourceLayerViewDTO,
     ConfigSourceOriginDTO,
     ConfigSourcePreflightDTO,
 )
 from app.services.infrastructure.config import (
+    SHARED_USER_WORKSPACE_SOURCE_KEY,
     ConfigRestartRequiredError,
     ConfigSnapshot,
 )
@@ -57,9 +60,28 @@ if TYPE_CHECKING:
     from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 _WORKSPACE_SOURCE = "workspace_root_mutable_override"
+_USER_SOURCE = "workspace_mutable_override"
+_WRITABLE_SOURCES = frozenset({_WORKSPACE_SOURCE, _USER_SOURCE})
 
 
 class ConfigSourceEditMixin:
+    def _source_fanout(self, source_key: str, generation: int | None = None) -> ConfigSourceFanoutDTO | None:
+        service = cast("ConfigService", self)
+        owner = service._source_owner
+        if source_key != _USER_SOURCE or owner is None:
+            return None
+        generation = generation if generation is not None else owner.high_water_mark()
+        if generation == 0:
+            return None
+        records = owner.list_fanout(source_generation=generation)
+        workspaces = [ConfigSourceFanoutWorkspaceDTO(workspace_id=record.workspace_id,
+            status=record.status, layer_revision=record.layer_revision, layer_digest=record.layer_digest,
+            result=record.result, error=record.error) for record in records]
+        return ConfigSourceFanoutDTO(source_generation=generation,
+            fanout_id=owner.get(source_key=SHARED_USER_WORKSPACE_SOURCE_KEY, source_generation=generation).fanout_id,
+            result=("unobserved" if not records else "applied" if all(record.status == "applied" for record in records)
+                    else "fanout_partial"), workspaces=workspaces)
+
     @staticmethod
     def get_source_document_key(*, layer: ConfigSourceLayer, precedence: int) -> str:
         """文档目录使用来源权威键，不把诊断的 nullable key 或持久化 baseline 当作标识。"""
@@ -77,16 +99,21 @@ class ConfigSourceEditMixin:
         pending = store.list_unfinished_source_edit_candidates(config_domain=service._CONFIG_DOMAIN, candidate_digest=snapshot.revision)
         if not pending:
             return None
-        file = read_stable_config_file(get_workspace_config_path(root))
         active = store.get_active_config_snapshot(service._CONFIG_DOMAIN)
         baseline, _, _, _ = service._source_baseline(snapshot)
-        selected = baseline.get(_WORKSPACE_SOURCE)
-        if active is None or not isinstance(selected, dict):
+        if active is None:
             return None
         payload = prepare_config_for_persistence(snapshot.to_dict())
         for candidate in pending:
             intent = candidate.source_edit
-            if intent is None or intent.get("source_key") != _WORKSPACE_SOURCE or file.digest != intent["file_digest"]:
+            if intent is None or intent.get("source_key") not in _WRITABLE_SOURCES:
+                continue
+            source_key = str(intent["source_key"])
+            path, _, _ = self._source_target(source_key)
+            assert path is not None
+            file = read_stable_config_file(path)
+            selected = baseline.get(source_key)
+            if not isinstance(selected, dict) or file.digest != intent["file_digest"]:
                 continue
             base_revision = intent["base_layer_revision"]
             target_revision = (int(base_revision) if isinstance(base_revision, int) else 0) + (intent["base_layer_digest"] != intent["file_digest"])
@@ -95,7 +122,7 @@ class ConfigSourceEditMixin:
             if (selected.get("layer_revision"), selected.get("layer_digest")) != (target_revision, intent["file_digest"]):
                 continue
             if candidate.payload == payload and all(
-                key == _WORKSPACE_SOURCE or baseline.get(key) == value for key, value in candidate.source_baseline.items()
+                key == source_key or baseline.get(key) == value for key, value in candidate.source_baseline.items()
             ):
                 verify_stable_config_file(file)
                 return candidate
@@ -133,6 +160,7 @@ class ConfigSourceEditMixin:
         record = store.get_source_layer(source_key)
         active = store.get_active_config_snapshot(service._CONFIG_DOMAIN)
         edit = None
+        fanout_generation = None
         if idempotency_key is not None:
             pending = store.get_pending_config_candidate(
                 config_domain=service._CONFIG_DOMAIN, idempotency_key=idempotency_key,
@@ -147,10 +175,15 @@ class ConfigSourceEditMixin:
                     source_saved=intent.get("stage") == "imported" or (file is not None and file.digest == intent["file_digest"]),
                     layer_imported=intent.get("stage") == "imported" or (record is not None and record.layer_digest == intent["file_digest"]),
                 )
+                selected = pending.source_baseline.get(source_key)
+                if intent.get("stage") == "imported" and isinstance(selected, dict):
+                    generation = selected.get("source_generation")
+                    if isinstance(generation, int):
+                        fanout_generation = generation
         layer, _ = _SOURCE_LAYER_AUTHORITY[source_key]
         return ConfigSourceDocumentDTO(
             gateway_id=gateway_id, workspace_id=workspace_id, source_key=source_key,
-            layer=layer, writable=source_key == _WORKSPACE_SOURCE,
+            layer=layer, writable=source_key in _WRITABLE_SOURCES,
             jsonc=redact_source_text(text),
             file_presence=file.presence if file is not None else "absent",
             file_digest=file.digest if file is not None else None,
@@ -164,11 +197,11 @@ class ConfigSourceEditMixin:
             source_effective=cast(dict[str, object], redact_source_payload(source_effective)),
             layers=[ConfigSourceLayerViewDTO(
                 source_key=key, layer=_SOURCE_LAYER_AUTHORITY[key][0], precedence=_SOURCE_LAYER_AUTHORITY[key][1],
-                writable=key == _WORKSPACE_SOURCE,
+                writable=key in _WRITABLE_SOURCES,
                 payload=cast(dict[str, object], redact_source_payload(payload)),
             ) for key, payload in source_payloads.items()],
             origins=[ConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(source_payloads, source_effective)],
-            status=service.get_reload_status_dto(), edit=edit,
+            status=service.get_reload_status_dto(), edit=edit, fanout=self._source_fanout(source_key, fanout_generation),
         )
 
     def _check_source_edit(
@@ -177,7 +210,7 @@ class ConfigSourceEditMixin:
     ) -> StableConfigFile:
         service = cast("ConfigService", self)
         path, root, store = self._source_target(source_key)
-        if source_key != _WORKSPACE_SOURCE or path is None:
+        if source_key not in _WRITABLE_SOURCES or path is None:
             raise ValueError("此来源未提供文件 writer，只允许读取")
         if (request.gateway_id != gateway_id or request.workspace_id != read_workspace_id(root)
                 or request.source_key != source_key):
@@ -215,7 +248,7 @@ class ConfigSourceEditMixin:
         file = self._check_source_edit(source_key, gateway_id, request, accepted)
         original = file.raw_bytes.decode("utf-8") if file.raw_bytes is not None else "{}\n"
         text = restore_source_text(request.jsonc, original)
-        candidate = service._build_candidate_snapshot(workspace_source=parse_source_text(text), import_sources=False)
+        candidate = service._build_candidate_snapshot(source_override=(source_key, parse_source_text(text)), import_sources=False)
         verify_stable_config_file(file)
         return text, candidate
 
@@ -243,7 +276,7 @@ class ConfigSourceEditMixin:
     ) -> ConfigSourceDocumentDTO:
         service = cast("ConfigService", self)
         path, _, store = self._source_target(source_key)
-        if source_key != _WORKSPACE_SOURCE or path is None:
+        if source_key not in _WRITABLE_SOURCES or path is None:
             raise ValueError("此来源未提供文件 writer，只允许读取")
         request_digest = config_revision(request.model_dump())
         pending = store.get_pending_config_candidate(
@@ -254,9 +287,6 @@ class ConfigSourceEditMixin:
                 raise ConfigConflictError("来源编辑幂等键已绑定其它请求")
             if pending.state != "candidate_validated" or store.get_config_apply_claim(config_domain=service._CONFIG_DOMAIN) is not None:
                 return self.get_source_document(source_key=source_key, gateway_id=gateway_id, idempotency_key=request.idempotency_key)
-        path, _, _ = self._source_target(source_key)
-        if path is None:
-            raise ValueError("Workspace 来源没有可编辑文件")
         previous_file = read_stable_config_file(path)
         previous_source = parse_source_text(
             previous_file.raw_bytes.decode("utf-8") if previous_file.raw_bytes is not None else "{}\n"
@@ -306,6 +336,9 @@ class ConfigSourceEditMixin:
                 verify_stable_config_file(file)
                 if file.digest != intent["file_digest"]:
                     atomic_write_bytes(file.path, text.encode("utf-8"))
+                if source_key == _USER_SOURCE and service._source_owner is not None:
+                    service._source_owner.observe(uri=None, presence="present",
+                        layer_digest=str(intent["file_digest"]), origin="source-writer")
                 service._remove_released_plugin_private_inputs(previous_source)
                 return True
 

@@ -522,6 +522,83 @@ export declare type ConfigSourceEditDTO = Message<"boxteam.workspace.v2.ConfigSo
 export declare const ConfigSourceEditDTOSchema: GenMessage<ConfigSourceEditDTO>;
 
 /**
+ * @generated from message boxteam.workspace.v2.ConfigSourceFanoutWorkspaceDTO
+ */
+export declare type ConfigSourceFanoutWorkspaceDTO = Message<"boxteam.workspace.v2.ConfigSourceFanoutWorkspaceDTO"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: string status = 2;
+   */
+  status: string;
+
+  /**
+   * @generated from field: google.protobuf.Value layer_revision = 3;
+   */
+  layerRevision?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value layer_digest = 4;
+   */
+  layerDigest?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value result = 5;
+   */
+  result?: Value | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Value error = 6;
+   */
+  error?: Value | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourceFanoutWorkspaceDTO.
+ * Use `create(ConfigSourceFanoutWorkspaceDTOSchema)` to create a new message.
+ */
+export declare const ConfigSourceFanoutWorkspaceDTOSchema: GenMessage<ConfigSourceFanoutWorkspaceDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ConfigSourceFanoutDTO
+ */
+export declare type ConfigSourceFanoutDTO = Message<"boxteam.workspace.v2.ConfigSourceFanoutDTO"> & {
+  /**
+   * @generated from field: int64 source_generation = 1;
+   */
+  sourceGeneration: bigint;
+
+  /**
+   * @generated from field: string fanout_id = 2;
+   */
+  fanoutId: string;
+
+  /**
+   * @generated from field: string result = 3;
+   */
+  result: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ConfigSourceFanoutWorkspaceDTO workspaces = 4;
+   */
+  workspaces: ConfigSourceFanoutWorkspaceDTO[];
+
+  /**
+   * @generated from field: string coverage = 5;
+   */
+  coverage: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ConfigSourceFanoutDTO.
+ * Use `create(ConfigSourceFanoutDTOSchema)` to create a new message.
+ */
+export declare const ConfigSourceFanoutDTOSchema: GenMessage<ConfigSourceFanoutDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.ConfigSourceDocumentDTO
  */
 export declare type ConfigSourceDocumentDTO = Message<"boxteam.workspace.v2.ConfigSourceDocumentDTO"> & {
@@ -624,6 +701,11 @@ export declare type ConfigSourceDocumentDTO = Message<"boxteam.workspace.v2.Conf
    * @generated from field: optional boxteam.workspace.v2.ConfigSourceEditDTO edit = 20;
    */
   edit?: ConfigSourceEditDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ConfigSourceFanoutDTO fanout = 21;
+   */
+  fanout?: ConfigSourceFanoutDTO | undefined;
 };
 
 /**

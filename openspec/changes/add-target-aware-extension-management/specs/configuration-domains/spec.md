@@ -4,7 +4,9 @@
 
 Workspace SHALL（必须）分别维护 `user`、`user_local`、`workspace` 和 runtime override 的 payload、`layer_revision`、`layer_digest`、来源路径和 CAS 基线，不得把 `workspace.jsonc` 与 `workspace_local.jsonc` 合并成一个来源层。有效配置仍按既有优先级合并；source layer 更新不等于 active snapshot 更新。用户级 `workspace.jsonc` 是一个共享 source，写入或 watcher 导入必须生成 `fanout_id`；显式 source writer 直接分配该关联键，直接人工编辑则由 watcher 按规范化 source path 与 post-write layer digest 派生。该键只用于 fan-out 关联/幂等，不得充当 commit revision、event cursor 或内容 digest。
 
-每个 Workspace 必须独立执行 layer/active CAS，并分别分配自己的 candidate_id、commit_revision 和配置事件。运行中的 Workspace 立即尝试导入，未运行的 Workspace 在下次启动时追赶同一 source generation；跨 Workspace 不得伪造一个 SQLite 全局事务。一个 Workspace 冲突不得回滚其他 Workspace 的成功导入，跨 Workspace 汇总结果可报告为 `fanout_partial`，但该名称只属于 fan-out 诊断汇总，不属于单 Workspace 配置事件的 `result` 枚举。被更高优先级层遮蔽的 source layer 仍更新自身 layer revision/digest，但 effective digest 不变并返回 `unchanged`。
+用户来源的实际影响范围 SHALL 由实际读取这份文件的 Workspace 决定；默认同一原生目标机器、同一 BoxTeam Home 共享该来源，不按 Gateway 登记范围限定。存活 Workspace SHALL 自行监听用户级 `workspace.jsonc`、`workspace_local.jsonc` 及本工作区来源，独立校验并沿原 reload 链决定热应用、下一任务或重启生效。Gateway 重启或工作区登记在另一 Gateway 不改变来源归属，也不要求 Gateway 逐个驱动生效。
+
+每个 Workspace 必须独立执行 layer/active CAS，并分别分配自己的 candidate_id、commit_revision 和配置事件。运行中的 Workspace 自行尝试导入，未运行的 Workspace 在下次启动时追赶同一 source generation；跨 Workspace 不得伪造一个 SQLite 全局事务。一个 Workspace 冲突不得回滚其他 Workspace 的成功导入，跨 Workspace 汇总结果可报告为 `fanout_partial`，但该名称只属于 fan-out 诊断汇总，不属于单 Workspace 配置事件的 `result` 枚举。汇总仅报告来源 owner 已观察到的消费者及各自结果，不以管理列表冒充完整影响范围，不新增成员登记或 Gateway 分发机制。被更高优先级层遮蔽的 source layer 仍更新自身 layer revision/digest，但 effective digest 不变并返回 `unchanged`。
 
 #### Scenario: 用户级 Workspace JSONC fan-out
 - **WHEN** 用户修改一次 `workspace.jsonc`，且多个 Workspace 中有的正在运行、有的已停止
@@ -16,7 +18,7 @@ Workspace SHALL（必须）分别维护 `user`、`user_local`、`workspace` 和 
 
 #### Scenario: API/UI 指定配置范围
 - **WHEN** API/UI 修改 Workspace 配置
-- **THEN** 请求必须明确是单 Workspace 的 `workspace`/`user_local`/runtime override，或是用户级 source；原单 Workspace 层物化／runtime override 请求只写目标 SQLite；显式来源文件编辑由原 source writer 先执行文件 CAS／原子保存，再沿原导入和候选链物化目标层；用户级 source 请求先原子写 JSONC 再触发 fan-out。入口不得隐式改写其它层或多个 SQLite，文件已保存不代表 active 已生效
+- **THEN** 请求必须明确是单 Workspace 的层物化／runtime override，或是用户级共享来源文件、本工作区来源文件；原单 Workspace 层物化／runtime override 请求只写目标 SQLite；显式来源文件编辑由原 source writer 先执行文件 CAS／原子保存，再沿原导入和候选链物化目标层；共享文件由各 Workspace 自行监听并应用，fan-out 只关联和汇总结果。入口不得隐式改写其它层或多个 SQLite，文件已保存不代表 active 已生效
 
 #### Scenario: 明确编辑单工作区来源文件
 - **WHEN** 用户选择指定 Gateway／workspace 的 workspace 来源文件，以文件及层／active 基线保存一个覆盖片段

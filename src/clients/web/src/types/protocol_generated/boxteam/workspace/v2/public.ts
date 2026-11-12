@@ -126,6 +126,23 @@ export interface ConfigSourceEditDTO {
   layer_imported: boolean;
 }
 
+export interface ConfigSourceFanoutWorkspaceDTO {
+  workspace_id: string;
+  status: string;
+  layer_revision: any | undefined;
+  layer_digest: any | undefined;
+  result: any | undefined;
+  error: any | undefined;
+}
+
+export interface ConfigSourceFanoutDTO {
+  source_generation: number;
+  fanout_id: string;
+  result: string;
+  workspaces: ConfigSourceFanoutWorkspaceDTO[];
+  coverage: string;
+}
+
 export interface ConfigSourceDocumentDTO {
   gateway_id: string;
   workspace_id: string;
@@ -147,6 +164,7 @@ export interface ConfigSourceDocumentDTO {
   origins: ConfigSourceOriginDTO[];
   status: ConfigReloadStatusDTO | undefined;
   edit?: ConfigSourceEditDTO | undefined;
+  fanout?: ConfigSourceFanoutDTO | undefined;
 }
 
 export interface ConfigSourcePreflightDTO {
@@ -4458,6 +4476,120 @@ export const ConfigSourceEditDTO: MessageFns<ConfigSourceEditDTO> = {
   },
 };
 
+function createBaseConfigSourceFanoutWorkspaceDTO(): ConfigSourceFanoutWorkspaceDTO {
+  return {
+    workspace_id: "",
+    status: "",
+    layer_revision: undefined,
+    layer_digest: undefined,
+    result: undefined,
+    error: undefined,
+  };
+}
+
+export const ConfigSourceFanoutWorkspaceDTO: MessageFns<ConfigSourceFanoutWorkspaceDTO> = {
+  fromJSON(object: any): ConfigSourceFanoutWorkspaceDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      layer_revision: isSet(object?.layer_revision) ? object.layer_revision : undefined,
+      layer_digest: isSet(object?.layer_digest) ? object.layer_digest : undefined,
+      result: isSet(object?.result) ? object.result : undefined,
+      error: isSet(object?.error) ? object.error : undefined,
+    };
+  },
+
+  toJSON(message: ConfigSourceFanoutWorkspaceDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.layer_revision !== undefined) {
+      obj.layer_revision = message.layer_revision;
+    }
+    if (message.layer_digest !== undefined) {
+      obj.layer_digest = message.layer_digest;
+    }
+    if (message.result !== undefined) {
+      obj.result = message.result;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceFanoutWorkspaceDTO>, I>>(base?: I): ConfigSourceFanoutWorkspaceDTO {
+    return ConfigSourceFanoutWorkspaceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceFanoutWorkspaceDTO>, I>>(
+    object: I,
+  ): ConfigSourceFanoutWorkspaceDTO {
+    const message = createBaseConfigSourceFanoutWorkspaceDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.status = object.status ?? "";
+    message.layer_revision = object.layer_revision ?? undefined;
+    message.layer_digest = object.layer_digest ?? undefined;
+    message.result = object.result ?? undefined;
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseConfigSourceFanoutDTO(): ConfigSourceFanoutDTO {
+  return { source_generation: 0, fanout_id: "", result: "", workspaces: [], coverage: "" };
+}
+
+export const ConfigSourceFanoutDTO: MessageFns<ConfigSourceFanoutDTO> = {
+  fromJSON(object: any): ConfigSourceFanoutDTO {
+    return {
+      source_generation: isSet(object.source_generation) ? globalThis.Number(object.source_generation) : 0,
+      fanout_id: isSet(object.fanout_id) ? globalThis.String(object.fanout_id) : "",
+      result: isSet(object.result) ? globalThis.String(object.result) : "",
+      workspaces: globalThis.Array.isArray(object?.workspaces)
+        ? object.workspaces.map((e: any) => ConfigSourceFanoutWorkspaceDTO.fromJSON(e))
+        : [],
+      coverage: isSet(object.coverage) ? globalThis.String(object.coverage) : "",
+    };
+  },
+
+  toJSON(message: ConfigSourceFanoutDTO): unknown {
+    const obj: any = {};
+    if (message.source_generation !== 0) {
+      obj.source_generation = Math.round(message.source_generation);
+    }
+    if (message.fanout_id !== "") {
+      obj.fanout_id = message.fanout_id;
+    }
+    if (message.result !== "") {
+      obj.result = message.result;
+    }
+    if (message.workspaces?.length) {
+      obj.workspaces = message.workspaces.map((e) => ConfigSourceFanoutWorkspaceDTO.toJSON(e));
+    }
+    if (message.coverage !== "") {
+      obj.coverage = message.coverage;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceFanoutDTO>, I>>(base?: I): ConfigSourceFanoutDTO {
+    return ConfigSourceFanoutDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceFanoutDTO>, I>>(object: I): ConfigSourceFanoutDTO {
+    const message = createBaseConfigSourceFanoutDTO();
+    message.source_generation = object.source_generation ?? 0;
+    message.fanout_id = object.fanout_id ?? "";
+    message.result = object.result ?? "";
+    message.workspaces = object.workspaces?.map((e) => ConfigSourceFanoutWorkspaceDTO.fromPartial(e)) || [];
+    message.coverage = object.coverage ?? "";
+    return message;
+  },
+};
+
 function createBaseConfigSourceDocumentDTO(): ConfigSourceDocumentDTO {
   return {
     gateway_id: "",
@@ -4480,6 +4612,7 @@ function createBaseConfigSourceDocumentDTO(): ConfigSourceDocumentDTO {
     origins: [],
     status: undefined,
     edit: undefined,
+    fanout: undefined,
   };
 }
 
@@ -4510,6 +4643,7 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
         : [],
       status: isSet(object.status) ? ConfigReloadStatusDTO.fromJSON(object.status) : undefined,
       edit: isSet(object.edit) ? ConfigSourceEditDTO.fromJSON(object.edit) : undefined,
+      fanout: isSet(object.fanout) ? ConfigSourceFanoutDTO.fromJSON(object.fanout) : undefined,
     };
   },
 
@@ -4575,6 +4709,9 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
     if (message.edit !== undefined) {
       obj.edit = ConfigSourceEditDTO.toJSON(message.edit);
     }
+    if (message.fanout !== undefined) {
+      obj.fanout = ConfigSourceFanoutDTO.toJSON(message.fanout);
+    }
     return obj;
   },
 
@@ -4606,6 +4743,9 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
       : undefined;
     message.edit = (object.edit !== undefined && object.edit !== null)
       ? ConfigSourceEditDTO.fromPartial(object.edit)
+      : undefined;
+    message.fanout = (object.fanout !== undefined && object.fanout !== null)
+      ? ConfigSourceFanoutDTO.fromPartial(object.fanout)
       : undefined;
     return message;
   },

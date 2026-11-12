@@ -60,12 +60,12 @@ class ConfigSnapshotMixin:
         self,
         *,
         validate_schema: bool = True,
-        workspace_source: dict[str, object] | None = None,
+        source_override: tuple[str, dict[str, object]] | None = None,
         import_sources: bool = True,
         source_payloads: dict[str, dict[str, object]] | None = None,
     ) -> ConfigSnapshot:
         config, source_paths, source_details, schema_path = self._read_effective_config(
-            workspace_source=workspace_source, import_sources=import_sources, source_payloads=source_payloads,
+            source_override=source_override, import_sources=import_sources, source_payloads=source_payloads,
         )
         try:
             require_current_workspace_config(config)
@@ -102,8 +102,14 @@ class ConfigSnapshotMixin:
 
     def validate_workspace_config(self) -> None:
         snapshot = self._require_snapshot()
-        validate_config_payload(snapshot.to_dict(), schema=self._load_schema())
-        self._validate_agent_tool_policies(snapshot.to_dict())
+        try:
+            validate_config_payload(snapshot.to_dict(), schema=self._load_schema())
+            self._validate_agent_tool_policies(snapshot.to_dict())
+        except Exception as error:
+            if self._loaded_source == "source":
+                cast("ConfigService", self)._record_shared_source_application(sources=snapshot.source_details,
+                    result="failed", error=f"Workspace 初始配置校验失败: error={type(error).__name__}")
+            raise
         if self._workspace_state_store is None:
             return
         active = self._workspace_state_store.get_active_config_snapshot(
@@ -401,9 +407,11 @@ class ConfigSnapshotMixin:
             active = store.get_active_config_snapshot(service._CONFIG_DOMAIN)
             if active is None or active.candidate_id != health_proof.get("candidate_id"):
                 raise ConfigConflictError("Workspace pending promotion 的 active candidate 不匹配")
-            service._record_shared_source_application(
-                sources=self._persisted_source_details(active.source_baseline)[0], result="applied")
-            service._remove_released_plugin_private_inputs(payload)
+            try:
+                service._record_shared_source_application(
+                    sources=self._persisted_source_details(active.source_baseline)[0], result="applied")
+            finally:
+                service._remove_released_plugin_private_inputs(payload)
 
         return self._pending_restart.resolve_pending_restart(
             candidate_ref=candidate_ref,

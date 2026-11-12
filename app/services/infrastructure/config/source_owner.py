@@ -424,49 +424,30 @@ class WorkspaceSourceOwner:
             raise RuntimeError("source owner fanout 提交后无法读取")
         return record
 
-    def summary(
-        self,
-        *,
-        workspace_ids: tuple[str, ...],
-        source_generation: int | None = None,
-        source_key: str = SHARED_USER_WORKSPACE_SOURCE_KEY,
-    ) -> dict[str, object]:
-        if source_generation is None:
-            source_generation = self.high_water_mark(source_key=source_key)
-        records = {
-            workspace_id: self._optional_fanout(
-                source_key=source_key,
-                source_generation=source_generation,
-                workspace_id=workspace_id,
-            )
-            for workspace_id in workspace_ids
-        }
-        missing = tuple(
-            workspace_id for workspace_id, record in records.items() if record is None
-        )
-        pending = tuple(
-            workspace_id
-            for workspace_id, record in records.items()
-            if record is not None and record.status in {"pending", "applying"}
-        )
-        failed = tuple(
-            workspace_id
-            for workspace_id, record in records.items()
-            if record is not None and record.status in {"conflict", "failed", "blocked"}
-        )
-        result = (
-            "fanout_partial"
-            if missing or pending or failed
-            else "applied"
-        )
-        return {
-            "source_key": source_key,
-            "source_generation": source_generation,
-            "result": result,
-            "missing_workspace_ids": missing,
-            "pending_workspace_ids": pending,
-            "failed_workspace_ids": failed,
-        }
+    def list_fanout(self, *, source_generation: int) -> tuple[SourceFanoutRecord, ...]:
+        """历史消费者缺本代报告时明确未知；不据 Gateway 登记补造待应用成员。"""
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT observed.source_key, ?, observed.workspace_id,
+                       COALESCE(current.status, 'unobserved'), current.layer_revision,
+                       current.layer_digest, current.result, current.error,
+                       COALESCE(current.updated_at, observed.updated_at)
+                FROM (
+                    SELECT source_key, workspace_id, MAX(updated_at) AS updated_at
+                    FROM config_source_fanout WHERE source_key = ? GROUP BY source_key, workspace_id
+                ) AS observed
+                LEFT JOIN config_source_fanout AS current
+                  ON current.source_key = observed.source_key AND current.workspace_id = observed.workspace_id
+                 AND current.source_generation = ?
+                ORDER BY observed.workspace_id
+                """,
+                (source_generation, SHARED_USER_WORKSPACE_SOURCE_KEY, source_generation),
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(self._fanout_from_row(row) for row in rows)
 
     def _optional_fanout(
         self,
@@ -490,6 +471,10 @@ class WorkspaceSourceOwner:
             connection.close()
         if row is None:
             return None
+        return self._fanout_from_row(row)
+
+    @staticmethod
+    def _fanout_from_row(row: sqlite3.Row) -> SourceFanoutRecord:
         return SourceFanoutRecord(
             source_key=str(row[0]),
             source_generation=int(row[1]),

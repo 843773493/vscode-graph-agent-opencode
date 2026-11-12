@@ -156,6 +156,23 @@ class ConfigSourceEditDTO(BaseModel):
     layer_imported: bool
 
 
+class ConfigSourceFanoutWorkspaceDTO(BaseModel):
+    workspace_id: str
+    status: str
+    layer_revision: int | None
+    layer_digest: str | None
+    result: str | None
+    error: str | None
+
+
+class ConfigSourceFanoutDTO(BaseModel):
+    coverage: Literal["observed_only"] = "observed_only"
+    source_generation: int
+    fanout_id: str
+    result: str
+    workspaces: list[ConfigSourceFanoutWorkspaceDTO]
+
+
 class ConfigSourceDocumentDTO(BaseModel):
     gateway_id: str
     workspace_id: str
@@ -177,6 +194,7 @@ class ConfigSourceDocumentDTO(BaseModel):
     origins: list[ConfigSourceOriginDTO]
     status: ConfigReloadStatusDTO
     edit: ConfigSourceEditDTO | None
+    fanout: ConfigSourceFanoutDTO | None = None
 
 
 class ConfigSourcePreflightDTO(BaseModel):

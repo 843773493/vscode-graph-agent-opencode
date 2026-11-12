@@ -30,7 +30,7 @@ async function declarations(path, names) {
   });
   return ts.transpile(selected.join('\n'), { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
 }
-const ownerCode = await declarations('src/clients/workbench/src/settings/sourceOwner.ts', ['sourceBaseline', 'sourceStatus', 'ConfigurationSourceOwner']);
+const ownerCode = await declarations('src/clients/workbench/src/settings/sourceOwner.ts', ['sourceBaseline', 'sourceStatus', 'sourceFanoutStatus', 'ConfigurationSourceOwner']);
 const filesCode = await declarations('src/clients/workbench/src/settings/sourceEditor.ts', ['configSourceScheme', 'configSourceEditorUri', 'sourceLocation', 'ConfigurationSourceFiles']);
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprints.json'), JSON.stringify(fingerprints, null, 2) + '\n'));
 
@@ -46,11 +46,11 @@ function fixture({ confirm }) {
     return call.method === 'PUT' ? { ...document, jsonc: call.intent.jsonc,
       edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true } } : document;
   };
-  const { ConfigurationSourceOwner, sourceBaseline, sourceStatus } = new Function('gateway',
-    `${ownerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus };`)({ request: transport });
+  const { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus } = new Function('gateway',
+    `${ownerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus };`)({ request: transport });
   const environment = { VSBuffer, Event, CancellationError, getErrorMessage, Disposable, parse, dirname, resolvePath, URI,
     FilePermission, FileType, FileSystemProviderCapabilities, FileSystemProviderErrorCode, createFileSystemProviderError,
-    HttpRequestError, ConfigurationSourceOwner, sourceBaseline, sourceStatus };
+    HttpRequestError, ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus };
   const { ConfigurationSourceFiles } = new Function(...Object.keys(environment), `${filesCode}\nreturn { ConfigurationSourceFiles };`)(...Object.values(environment));
   const files = new ConfigurationSourceFiles({ confirm }, { info() {}, error() {} });
   const target = { gateway_id: document.gateway_id, gateway_connection_id: 'original-route' };
@@ -102,4 +102,22 @@ test('同一 URI 重选连接时，在途保存结清原路由，后续读取使
   await f.files.query(f.resource);
   expect(new URL(f.calls.at(-1).path, 'http://fixture').searchParams.get('gateway_connection_id')).toBe('new-route');
   expect(writes[0].intent.gateway_id).toBe('gateway-a');
+});
+
+test('共享来源预览说明观察范围，未上报结果不伪报成功', () => {
+  const { sourceFanoutStatus } = new Function(`${ownerCode}\nreturn { sourceFanoutStatus };`)();
+  const document = { workspace_id: 'workspace-a', source_key: 'workspace_mutable_override',
+    fanout: { coverage: 'observed_only', source_generation: 2, fanout_id: 'original-fanout', result: 'fanout_partial', workspaces: [
+      { workspace_id: 'workspace-a', status: 'applied', result: 'unchanged' },
+      { workspace_id: 'workspace-b', status: 'conflict', result: 'conflict', error: '候选基线冲突' },
+      { workspace_id: 'workspace-c', status: 'unobserved' },
+    ] } };
+  const status = sourceFanoutStatus(document);
+  expect(status).toContain('不受 Gateway 登记限制');
+  expect(status).toContain('并非完整名单');
+  expect(status).toContain('workspace-a: unchanged');
+  expect(status).toContain('workspace-b: conflict · 候选基线冲突');
+  expect(status).toContain('workspace-c: 本代尚未观察');
+  expect(status).toContain('original-fanout');
+  expect(sourceFanoutStatus({ ...document, fanout: undefined })).toContain('应用结果未知');
 });

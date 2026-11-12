@@ -24,7 +24,7 @@ function declaration(path, text, name) {
   return ts.transpile(printed, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
 }
 
-const sourceOwnerCode = ['sourceBaseline', 'sourceStatus', 'ConfigurationSourceOwner']
+const sourceOwnerCode = ['sourceBaseline', 'sourceStatus', 'sourceFanoutStatus', 'ConfigurationSourceOwner']
   .map(name => declaration(sourceOwnerPath, sourceOwnerSource, name)).join('\n');
 const saveCode = declaration(sourcePath, source, 'saveSourceEdit');
 const sourceOwnerFactory = new Function('gateway',

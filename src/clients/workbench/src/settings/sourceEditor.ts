@@ -14,7 +14,7 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../upstream/s
 import { IFilesConfigurationService } from '../../upstream/src/vs/workbench/services/filesConfiguration/common/filesConfigurationService.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
-import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceTarget, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus, type SourceTarget, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
 
 export const configSourceScheme = 'boxteam-config-source';
 
@@ -203,7 +203,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     try {
       const preflight = await owner.preflight(intent);
       const accepted = await this.dialogs.confirm({ type: 'question', message: '保存目标配置来源？', primaryButton: '保存来源',
-        detail: `${owner.target.gateway_id}${owner.target.workspace_id ? ' · 工作区 ' + owner.target.workspace_id : ' · Gateway'} · ${edit.sourceKey}\n变更：${preflight.changed_paths.join('、') || '来源格式或被遮蔽的覆盖'}\n保存与运行生效分别报告。` });
+        detail: `${owner.target.gateway_id}${owner.target.workspace_id ? ' · 工作区 ' + owner.target.workspace_id : ' · Gateway'} · ${edit.sourceKey}\n当前工作区变更：${preflight.changed_paths.join('、') || '来源格式或被遮蔽的覆盖'}\n保存与运行生效分别报告。${sourceFanoutStatus(preflight.document!)}` });
       if (!accepted.confirmed) throw new CancellationError();
       saving = true; edit.submissionKey = intent.idempotency_key;
       const saved = await owner.save(intent);
