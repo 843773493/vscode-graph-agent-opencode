@@ -80,6 +80,9 @@ def trace_http(catalog, provider):
 
 async def test_provider_continues_across_sessions_and_locates_exact_event(catalog, provider, records):
     service, traces = provider
+    for index in range(65):
+        catalog._path_resolver.catalog_store.create_folder(
+            f"ses_00000000000070008000{index:012x}", catalog.workspace_id, None, f"Folder {index}")
     request = WorkspaceSearchRequest(workspace_id=catalog.workspace_id, category="trace", operation="content",
         match_mode="literal", query="trace😀", limit=1)
     cursor = None
@@ -87,6 +90,7 @@ async def test_provider_continues_across_sessions_and_locates_exact_event(catalo
     for _ in range(8):
         result = await service.search(request.model_copy(update={"cursor": cursor}), gateway_id=GATEWAY)
         assert result.traces is result.domain_page and result.result_count == len(result.traces.items)
+        assert result.traces.items or result.state == "complete"
         hits.extend(result.traces.items)
         cursor = result.cursor
         if result.state == "complete":
