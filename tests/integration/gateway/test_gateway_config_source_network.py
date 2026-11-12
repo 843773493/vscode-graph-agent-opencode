@@ -13,10 +13,9 @@ from app.gateway.federation.ports import principal_ref_for_gateway
 from tests.integration.gateway.test_target_gateway_routing import (
     TargetGatewayNetwork,
     _observations,
-    target_gateway_network,
 )
 
-__all__ = ["target_gateway_network"]
+pytest_plugins = ["tests.integration.gateway.test_target_gateway_routing"]
 
 
 def test_paired_gateway_principal_edits_only_native_gateway_source(

@@ -16,10 +16,9 @@ from tests.harness.python.web_workbench import (
 from tests.integration.gateway.test_target_gateway_routing import (
     TargetGatewayNetwork,
 )
-from tests.integration.gateway.test_target_gateway_routing import (
-    target_gateway_network as target_gateway_network,  # noqa: PLC0414
-)
 from tests.support.paths import chromium_temporary_environment
+
+pytest_plugins = ["tests.integration.gateway.test_target_gateway_routing"]
 
 
 @pytest.fixture(autouse=True)

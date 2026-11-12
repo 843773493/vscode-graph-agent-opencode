@@ -13,10 +13,9 @@ from app.gateway.federation.ports import principal_ref_for_gateway
 from tests.integration.gateway.test_target_gateway_routing import (
     TargetGatewayNetwork,
     _observations,
-    target_gateway_network,
 )
 
-__all__ = ["target_gateway_network"]
+pytest_plugins = ["tests.integration.gateway.test_target_gateway_routing"]
 
 
 def test_gateway_source_relay_keeps_native_target_and_original_submission(
