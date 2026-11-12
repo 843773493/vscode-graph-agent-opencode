@@ -7,6 +7,7 @@ import { IconLabel } from '../../../../../src/clients/workbench/upstream/src/vs/
 import { Event, Emitter } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
 import { WorkspaceQuickAccess } from '../../../../../src/clients/workbench/src/search/quickAccess.js';
+import { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';
 import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 
 /** 真实名称／正文分支与共享 SSE 消费器，只有 Gateway 网络响应为显式装具。 */
@@ -16,6 +17,7 @@ export function nameBranchContract({ mode, category }) { return federatedBranchC
 export function cursorRejectionContract(rejection) { return federatedBranchContract('cursor-rejection', rejection.category, rejection); }
 export function branchStateContract(diagnostic) { return federatedBranchContract('terminal-state', '会话消息', diagnostic); }
 export function sessionPickerContract(mode) { return federatedBranchContract(mode, '会话'); }
+export function threadPickerContract(mode) { return federatedBranchContract(mode, 'Thread'); }
 
 async function federatedBranchContract(mode, category, diagnostic) {
   const originalFetch = globalThis.fetch, before = workspaceContext.getSnapshot();
@@ -107,37 +109,43 @@ async function federatedBranchContract(mode, category, diagnostic) {
   };
   let busy = false, updates = 0, label;
   try {
-    if (mode.startsWith('session-')) {
-      class SessionProvider extends WorkspaceQuickAccess {
-        static PREFIX = 'session ';
-        get category() { return '会话'; }
+    if (mode.startsWith('session-') || mode.startsWith('thread-')) {
+      const prefix = category === 'Thread' ? 'thread ' : 'session ';
+      class NameProvider extends WorkspaceQuickAccess {
+        static PREFIX = prefix;
+        get category() { return category; }
       }
       const changes = lifetime.add(new Emitter()), accepts = lifetime.add(new Emitter()), buttons = lifetime.add(new Emitter());
       const calls = [], commands = [], errors = [], group = { id: 7 };
       const groups = { activeGroup: group, groups: [], getGroup: () => group };
       const editors = { openEditor() { throw new Error('会话选择或管理按钮不得打开编辑器'); } };
-      const picker = { value: 'session needle', items: [], selectedItems: [], activeItems: [], buttons: [],
+      const picker = { value: prefix + 'needle', items: [], selectedItems: [], activeItems: [], buttons: [],
         keyMods: { alt: false, ctrlCmd: false }, onDidChangeValue: changes.event, onDidAccept: accepts.event,
         onDidHide: Event.None, onDidChangeActive: Event.None, onDidTriggerButton: Event.None,
         onDidTriggerItemButton: buttons.event, onDidTriggerSeparatorButton: Event.None,
         hide() { calls.push('hide'); } };
-      const provider = lifetime.add(new SessionProvider({
+      const history = mode === 'thread-recent-fork' ? [lifetime.add(new ThreadInput({ ...owners[1], workspaceKey: '旧路由',
+        sessionId: 'same-session', threadId: 'same-child-2', title: 'needle Child 2' }))] : [];
+      const provider = lifetime.add(new NameProvider({
         createInstance: ctor => new PickerEditorState(editors, groups),
         invokeFunction: callback => callback({ get: () => ({ executeCommand(id, target) { commands.push({ id, target }); return Promise.resolve(); } }) }),
-      }, editors, groups, { getHistory: () => [] }, { getValue: () => undefined }, {}, {}, {}, {},
+      }, editors, groups, { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {}, {},
       { error: cause => errors.push(String(cause)) }, {}, {}));
       lifetime.add(provider.provide(picker, token.token, { searchOwners: owners, sessionSelection: mode === 'session-selection' }));
       await until(() => connections.length === 1);
       const first = connections[0]; scope(first); page(first, 0, 2); page(first, 1, 2); end(first, [state(0), state(1)]);
-      await until(() => !picker.busy && picker.items.some(item => item.sessionTarget));
-      const sessions = picker.items.filter(item => item.sessionTarget), folder = picker.items.find(item => item.id?.startsWith('folder:'));
-      if (mode === 'session-selection') { picker.selectedItems = [sessions[1]]; accepts.fire({ inBackground: false }); }
+      const isCandidate = item => category === 'Thread' ? item.resource?.scheme === 'boxteam-thread' : !!item.sessionTarget;
+      await until(() => !picker.busy && picker.items.some(isCandidate));
+      const candidates = picker.items.filter(isCandidate), folder = picker.items.find(item => item.id?.startsWith('folder:'));
+      const target = candidates.find(item => category === 'Thread' ? item.resource.authority === owners[1].gatewayId
+        : item.sessionTarget.owner.gatewayId === owners[1].gatewayId);
+      if (mode === 'session-selection') { picker.selectedItems = [target]; accepts.fire({ inBackground: false }); }
       else {
-        const tooltip = mode === 'session-delete' ? '永久删除会话' : mode === 'session-fork' ? '创建上下文分支' : '重命名会话';
-        buttons.fire({ item: sessions[1], button: sessions[1].buttons.find(button => button.tooltip === tooltip) });
+        const tooltip = mode === 'session-delete' ? '永久删除会话' : mode.endsWith('fork') ? '创建上下文分支' : '重命名会话';
+        buttons.fire({ item: target, button: target.buttons.find(button => button.tooltip === tooltip) });
       }
       return { calls, commands, errors, requests: connections.map(connection => connection.request),
-        candidates: sessions.map(item => ({ target: item.sessionTarget, buttons: item.buttons.map(button => button.tooltip) })),
+        candidates: candidates.map(item => ({ target: item.sessionTarget, resource: item.resource?.toString(), buttons: item.buttons.map(button => button.tooltip) })),
         folder: { hasAccept: typeof folder?.accept === 'function', pickable: folder?.pickable } };
     }
     if (mode === 'multi-selection') {

@@ -9,7 +9,7 @@ import { workspaceContext } from '../../../../../src/clients/workbench/src/works
 import { gatewayWorkspaceKey } from '../../../../../src/clients/web/src/api/workspaceIdentity.js';
 import { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
-export { sessionPickerContract } from './federated_branches.fixture.mjs';
+export { sessionPickerContract, threadPickerContract } from './federated_branches.fixture.mjs';
 
 const owners = ['a', 'b'].map(letter => ({ gatewayId: `gateway_${letter.repeat(32)}`, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
 const sessionId = `ses_${'c'.repeat(32)}`;

@@ -30,6 +30,8 @@ pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Work
 
 `session_actions.test.mjs` 运行真实 Session 命令、HTTP 客户端和原 Provider；仅宿主服务、网络响应及导航 writer 边界为装具，复用已有联邦响应资产核只选择与候选按钮，以及分支命令的精确 child／显式展示快照。`test_session_actions.py` 经产品 API 创建 Session，从正式 Workbench 的候选按钮、原导航右键及命令面板执行重命名／删除，沿原 React 对话框、确认和目录 outbox 核真实回执、取消零写入及不打开未选 Thread；模型回放只供启动，要求零模型调用。不预写历史或浏览器业务状态，不代替 Electron 或 Windows 验收。
 
+Thread 分支候选合同同时运行真实名称查询与最近编辑器投影，核同名跨 Gateway 的精确 child、最近项移除／复制／分支按钮索引及零编辑器打开；不以宿主装具代替完整页面的 fork 发布验收。
+
 `default_contract` 在浏览器中运行真实 Provider，只有 Picker 事件及宿主服务替身，用于调用参数、取消与接受的合同检查；不能将它称为原 Chat／空文件编辑器或完整页面验收。`default_access` 经真实 Gateway 创建关键状态，和原搜索／恢复场景一起使用正式 Workbench 构建。
 
 `quick_access_controller.fixture` 经同一 sourceTransform 运行真实 QuickAccessController，仅替换 Picker 事件和读取服务边界；覆盖多选确认、勾选后 Esc 取消 reader，以及原单选和 show 的行为，不替代原 QuickPick 的真实 DOM 或 Composer 页面验证。

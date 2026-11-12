@@ -19,14 +19,18 @@ let browser;
 beforeAll(async () => {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? Bun.which('chromium'),
     headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  browser.on('disconnected', () => console.info('会话动作合同 Chromium 已断开'));
   run.addCleanup('会话动作合同 Chromium', () => browser.close());
 });
 afterAll(() => run.close());
 async function exercise(mode, name = 'sessionActionContract') {
+  console.info(`会话动作合同 ${mode}：创建页面`);
   const page = await browser.newPage(), errors = [];
   page.on('pageerror', cause => errors.push(String(cause)));
+  page.on('crash', () => console.error(`会话动作合同 ${mode}：Chromium 页面崩溃`));
   try {
     await page.goto(server.url.href);
+    console.info(`会话动作合同 ${mode}：执行真实命令或 Provider`);
     const result = await page.evaluate(({ mode, name }) => import('/session-actions.mjs').then(module => module[name](mode)), { mode, name });
     expect(errors).toEqual([]);
     return result;
@@ -95,4 +99,18 @@ for (const mode of ['fork-origin', 'fork-explicit']) test(`${mode} 分支命令�
     source: mode === 'fork-origin' ? { threadId: `thr_${'d'.repeat(32)}` }
       : { threadId: 'explicit-child', itemId: 'explicit-item', sourceViewId: 'explicit-view', sourceViewRevision: 7 } }]);
   expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/workspaces', `/api/v1/sessions/ses_${'c'.repeat(32)}`]);
+});
+
+for (const mode of ['thread-fork', 'thread-recent-fork']) test(`${mode} 同名跨Gateway候选只从指定child创建分支，不打开编辑器`, async () => {
+  const result = await exercise(mode, 'threadPickerContract');
+  expect(result.errors).toEqual([]); expect(result.requests).toHaveLength(1);
+  expect(result.requests[0].queries.map(query => query.category)).toEqual(['thread']);
+  expect(result.candidates).toHaveLength(2);
+  expect(result.commands).toEqual([{ id: 'boxteam.session.fork', target: {
+    owner: { gatewayId: `gateway_${'b'.repeat(32)}`, workspaceId: '019a0000-0000-7000-8000-000000000001' },
+    sessionId: 'same-session', source: { threadId: 'same-child-2' },
+  } }]);
+  const target = result.candidates.find(item => item.resource.includes(`gateway_${'b'.repeat(32)}`));
+  expect(target.buttons).toEqual(['在侧边打开', ...(mode === 'thread-recent-fork' ? ['从最近打开中移除'] : []), '复制资源 URI', '创建上下文分支']);
+  expect(result.calls).toEqual(['hide']);
 });

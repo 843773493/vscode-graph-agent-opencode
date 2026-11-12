@@ -412,6 +412,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const side = run.options.includeOpenToSideButton !== false;
     const dirty = editor && isEditorInput(editor) && editor.isDirty() && !editor.isSaving();
     const copyReference = !run.options.fileSearchDelegate && !run.options.handleAccept && supportsResourceReference(resource);
+    const forkThread = copyReference && resource.scheme === 'boxteam-thread' && !message && !trace;
     const input = editor ?? { resource, label: title, options: message ? { boxteamMessage: message } as ThreadEditorOptions : trace ? { boxteamTrace: trace } as ThreadEditorOptions : undefined };
     return { id: message ? `${resource.toString()}#${message.reference!.item_id}/${message.reference!.start_codepoint}`
       : trace ? `${resource.toString()}#trace/${trace.reference!.event_id}/${trace.reference!.start_codepoint}` : resource.toString(), resource, editor, label: title, description, detail,
@@ -419,13 +420,22 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
       iconClass: ThemeIcon.asClassName(resource.scheme === 'boxteam-thread' ? Codicon.commentDiscussion : Codicon.file),
       buttons: [...(side ? [{ iconClass: ThemeIcon.asClassName(Codicon.splitHorizontal), tooltip: '在侧边打开' }] : []),
         ...(editor ? [{ iconClass: ThemeIcon.asClassName(dirty ? Codicon.circleFilled : Codicon.close), tooltip: '从最近打开中移除', alwaysVisible: !!dirty }] : []),
-        ...(copyReference ? [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }] : [])],
+        ...(copyReference ? [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }] : []),
+        ...(forkThread ? [{ iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: '创建上下文分支' }] : [])],
       trigger: (index, mods) => {
         if (side && index === 0) { this.report(this.open(run, input, mods, false, true)); return TriggerAction.CLOSE_PICKER; }
         if (editor && index === Number(side)) { this.history.removeFromHistory(editor); return TriggerAction.REMOVE_ITEM; }
         if (copyReference && index === Number(side) + Number(!!editor)) {
           this.assertAccess(run);
           this.report(this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(COPY_RESOURCE_URI, resource)));
+        }
+        if (forkThread && index === Number(side) + Number(!!editor) + Number(copyReference)) {
+          this.assertAccess(run);
+          const owner = ThreadInput.fromResource(resource).owner;
+          this.report(this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(sessionActionCommands.fork, {
+            owner: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId }, sessionId: owner.sessionId, source: { threadId: owner.threadId },
+          })));
+          return TriggerAction.CLOSE_PICKER;
         }
         return TriggerAction.NO_ACTION;
       },
