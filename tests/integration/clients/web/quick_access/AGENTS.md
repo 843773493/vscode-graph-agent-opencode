@@ -18,6 +18,8 @@
 
 同页 Thread 恢复负例先经产品打开两组并恢复原草稿，页面卸载后只破坏 B 的一条真实序列化记录，分别注入未知版本、缺失 owner 与坏 JSON；原错误占位页保留具体原因，两次恢复不读取 B，单条移除保留 A、B 业务和草稿。该明确故障注入不代表正常流程预写浏览器状态，也不代替 Electron 固定 profile 验收。
 
+`test_media_reopen` 通过规范 URI 进入原 Opener／媒体 resolver 与官方隔离 Webview，A/B 同名 WAV 以实际解码时长区分归属；原视频 fixture 核尺寸、时长、复制零新增正文读取、关闭重开和正常刷新恢复。普通媒体输入是文件预备，模型回放只供后端启动且要求零调用；不替换 Worker、媒体内容或业务响应，不把页面通过称为 Electron 或无扩展名附件重开验收。
+
 `web_extensions_cache_browser.test.mjs` 在真实 Chromium `isWeb=true` 下，经正式 `sourceTransform` 运行原 system／custom builtin scanner、manifest、FileService 与 URI identity，核派生缓存跳过坏项并在坏正文或读取失败时沿原扫描入口回退。缓存内容只作为该读取场景的故障预备，不覆盖用户 profile 扫描或安装行为，也不称作 Gateway 或扩展宿主验收。
 
 pytest 启动的 Playwright 页面驱动统一使用 Node，依赖管理与 Workbench 构建继续使用 Bun；Windows 实测 Bun 会在 `chromium.launch()` 挂起，不能以增加超时替代正确运行时。保留原进程外超时、内存保护和业务断言。
