@@ -17,7 +17,7 @@ def import_legacy_goals(store: PersistentTaskStore) -> int:
     paths = store._goal_paths()
     candidates: list[tuple[str, str, Path, SessionCreationRecord | None]] = [
         (node.node_id, node.main_thread_id, paths.resolve_session_node(node.node_id), None)
-        for node in paths.list_nodes() if node.kind == "session" and node.state == "active"
+        for node in paths.list_nodes(kind="session") if node.state == "active"
     ]
     for record in paths.catalog_store.list_preparing_creation_records(workspace_id=store.workspace_id, purpose="context_fork"):
         # record 可能先于物理准备提交；没有旧文件的记录仍交给原 creation owner 恢复。

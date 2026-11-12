@@ -299,6 +299,7 @@ class SessionCatalogPathResolver:
         self,
         *,
         include_deleting: bool = False,
+        kind: Literal["session", "folder"] | None = None,
     ) -> list[SessionCatalogNode]:
         """按 node_id 稳定序返回 catalog 根可达节点。
 
@@ -307,7 +308,7 @@ class SessionCatalogPathResolver:
         整棵目录的读取。删除恢复链路如需完整视图显式传 ``True``。
         """
         self._ensure_consistency_verified()
-        return self._store.read_reachable_nodes(include_deleting=include_deleting)
+        return self._store.read_reachable_nodes(include_deleting=include_deleting, kind=kind)
 
     @staticmethod
     def _nearest_session_ancestor_from_map(
@@ -366,11 +367,13 @@ class SessionCatalogPathResolver:
                 )
         self._consistency_verified = True
 
-    def list_nodes(self) -> list[SessionCatalogNodeProjection]:
-        """返回 SQLite catalog 全量节点投影（按 node_id 稳定排序）。"""
+    def list_nodes(
+        self, *, kind: Literal["session", "folder"] | None = None,
+    ) -> list[SessionCatalogNodeProjection]:
+        """返回 SQLite catalog 指定类型节点投影（按 node_id 稳定排序）。"""
         return [
             self._project_node(node)
-            for node in self._list_all_catalog_nodes()
+            for node in self._list_all_catalog_nodes(kind=kind)
         ]
 
     def catalog_snapshot(

@@ -240,10 +240,10 @@ class AttachmentIngestRecoveryMixin:
 
     async def recover_pending_ingests(self, *, messages: AttachmentMessageReader) -> int:
         """启动时以权威 Session catalog 枚举，复用同一定点恢复入口。"""
-        _, nodes = await run_sync_shielded(self._path_resolver.catalog_store.read_nodes_snapshot)
+        _, nodes = await run_sync_shielded(self._path_resolver.catalog_store.read_nodes_snapshot, kind="session")
         count = 0
         for node in nodes:
-            if node.kind == "session" and node.state == "active":
+            if node.state == "active":
                 count += (await self.recover_idle_session(node.node_id, messages=messages)).count("settled-pin")
         return count
 

@@ -299,9 +299,9 @@ class SessionCommunicationService:
         gc_task = asyncio.create_task(self.observations.gc_loop(), name="communication-observation-gc")
         self._tasks.add(gc_task)
         gc_task.add_done_callback(self._finished)
-        _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot()
+        _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot(kind="session")
         for node in nodes:
-            if node.kind == "session" and node.state == "active":
+            if node.state == "active":
                 await self.admit_session(node.node_id)
                 with closing(self._store(node.node_id)) as store:
                     pending = store.list_pending_communication_outboxes()

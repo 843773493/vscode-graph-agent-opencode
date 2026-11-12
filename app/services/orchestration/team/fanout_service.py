@@ -285,8 +285,8 @@ class TeamFanoutService:
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
-        _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot()
-        session_ids = [node.node_id for node in nodes if node.kind == "session" and node.state == "active"]
+        _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot(kind="session")
+        session_ids = [node.node_id for node in nodes if node.state == "active"]
         for session_id in session_ids:
             with self._factory.for_owner_session(session_id) as thread_owner:
                 control = thread_owner.control_store

@@ -167,9 +167,7 @@ class FileTreeSettingsService:
         defaults = self._read_shortcuts(
             self._workspace_settings_path, source="workspace"
         )
-        for node in self._path_resolver.list_nodes():
-            if node.kind != "session":
-                continue
+        for node in self._path_resolver.list_nodes(kind="session"):
             settings_path = (
                 self._path_resolver.resolve_session_node(node.node_id)
                 / "ui"

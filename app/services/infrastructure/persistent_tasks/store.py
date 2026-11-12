@@ -119,7 +119,7 @@ class PersistentTaskStore(TaskGoals):
         with closing(self._store.connection()) as connection:
             rows = connection.execute("SELECT task_id,application_type,owner_session_id FROM persistent_tasks "
                                       "WHERE workspace_id=? AND retired_at IS NULL ORDER BY created_at,task_id", (self.workspace_id,)).fetchall()
-            active = {node.node_id for node in self._goal_paths().list_nodes() if node.kind == "session" and node.state == "active"} if any(row["application_type"] == "goal" for row in rows) else set()
+            active = {node.node_id for node in self._goal_paths().list_nodes(kind="session") if node.state == "active"} if any(row["application_type"] == "goal" for row in rows) else set()
             return [self._view(connection, row["task_id"]) for row in rows
                     if row["application_type"] == "automation" or row["owner_session_id"] in active]
 

@@ -1700,9 +1700,7 @@ class MessageStreamStore:
     async def reconcile_unfinished_streams(self, *, resumed_job_ids: frozenset[str] | set[str] = frozenset()) -> int:
         """在后端重启时把没有终态的消息流标记为 execution_lost。"""
         reconciled = 0
-        for node in self._path_resolver.list_nodes():
-            if node.kind != "session":
-                continue
+        for node in self._path_resolver.list_nodes(kind="session"):
             stream_dir = (
                 self._path_resolver.resolve_session_node(node.node_id)
                 / "message_streams"

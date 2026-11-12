@@ -24,8 +24,8 @@ class BackgroundWorkStore:
         self._lifecycle = SessionLifecycleGate(sessions_dir)
 
     def session_ids(self) -> list[str]:
-        _revision, nodes = self._resolver.catalog_store.read_nodes_snapshot()
-        return [node.node_id for node in nodes if node.kind == "session" and node.state == "active"]
+        _revision, nodes = self._resolver.catalog_store.read_nodes_snapshot(kind="session")
+        return [node.node_id for node in nodes if node.state == "active"]
 
     def resolve_thread(self, session_id: str, thread_id: str) -> None:
         self._resolver.resolve_thread_node(session_id, thread_id)

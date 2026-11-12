@@ -192,6 +192,26 @@ def tree(store: SessionCatalogStore) -> CatalogTree:
 # ----------------------------------------------------------------------
 
 
+def test_node_kind_filter_preserves_snapshot_and_reachability(
+    store: SessionCatalogStore, tree: CatalogTree,
+) -> None:
+    store.set_node_state(tree.folder_b, "deleting")
+    revision, all_nodes = store.read_nodes_snapshot()
+    for kind, expected in (
+        ("session", [tree.session_s1, tree.session_s2, tree.session_s3, tree.session_s4, tree.session_s5]),
+        ("folder", [tree.folder_a, tree.folder_b]),
+    ):
+        filtered_revision, nodes = store.read_nodes_snapshot(kind=kind)
+        assert filtered_revision == revision
+        assert nodes == [node for node in all_nodes if node.node_id in expected]
+        assert [node.node_id for node in nodes] == sorted(expected)
+        assert store.read_reachable_nodes(include_deleting=True, kind=kind) == nodes
+        hidden_id = tree.session_s3 if kind == "session" else tree.folder_b
+        assert [node.node_id for node in store.read_reachable_nodes(include_deleting=False, kind=kind)] == sorted(
+            node_id for node_id in expected if node_id != hidden_id
+        )
+
+
 def test_validate_session_id_accepts_uuid_v7_profile() -> None:
     validate_session_id(make_session_id())
 

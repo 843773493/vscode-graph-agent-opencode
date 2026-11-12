@@ -304,10 +304,10 @@ class SessionService:
 
     async def recover_context_controls(self) -> int:
         """启动时按权威 catalog 定点终结崩溃遗留控制，不扫描物理目录。"""
-        _, nodes = self._path_resolver.catalog_store.read_nodes_snapshot()
+        _, nodes = self._path_resolver.catalog_store.read_nodes_snapshot(kind="session")
         count = 0
         for node in nodes:
-            if node.kind != "session" or node.state != "active":
+            if node.state != "active":
                 continue
             async with (
                 self._navigation_topology_gate.shared(),

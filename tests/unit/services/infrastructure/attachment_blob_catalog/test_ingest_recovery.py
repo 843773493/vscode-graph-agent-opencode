@@ -159,13 +159,13 @@ async def test_startup_snapshot_finishes_before_recovery_or_cancellation(
     catalog = store._path_resolver.catalog_store
     snapshot = catalog.read_nodes_snapshot
 
-    def read_snapshot():
+    def read_snapshot(*, kind):
         loop.call_soon_threadsafe(entered.set)
         if not release.wait(3):
             expired.append(True)
             raise TimeoutError("启动快照阻塞事件循环")
         assert threading.get_ident() != event_thread
-        return snapshot()
+        return snapshot(kind=kind)
 
     with monkeypatch.context() as patch:
         patch.setattr(catalog, "read_nodes_snapshot", read_snapshot)

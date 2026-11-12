@@ -1186,9 +1186,9 @@ class SessionContextForkService:
                 SessionForkRequest.model_validate(json.loads(record.request_intent_json)["request"]),
                 key=record.session_creation_idempotency_key, session_id=record.session_id, thread_id=record.main_thread_id,
             )
-        _, nodes = self._session_service.path_resolver.catalog_store.read_nodes_snapshot()
+        _, nodes = self._session_service.path_resolver.catalog_store.read_nodes_snapshot(kind="session")
         for node in nodes:
-            if node.kind != "session" or node.state != "active":
+            if node.state != "active":
                 continue
             with self._threads.for_owner_session(node.node_id) as thread_owner:
                 control = thread_owner.control_store

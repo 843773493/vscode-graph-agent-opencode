@@ -323,9 +323,9 @@ class RuntimeSourceDispatcher:
 
     async def start(self) -> None:
         """backend startup 只消费 catalog/thread 与 pending 状态索引。"""
-        _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot()
+        _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot(kind="session")
         for node in nodes:
-            if node.kind != "session" or node.state != "active":
+            if node.state != "active":
                 continue
             session_id = node.node_id
             async with self._sessions.session_write_admission(session_id):

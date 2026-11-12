@@ -103,8 +103,7 @@ class TraceEventStore:
     def list_session_ids(self) -> list[str]:
         return sorted(
             node.node_id
-            for node in self._path_resolver.list_nodes()
-            if node.kind == "session"
+            for node in self._path_resolver.list_nodes(kind="session")
         )
 
     def _message_trace_file(self, session_id: str) -> Path:

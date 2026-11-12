@@ -296,9 +296,8 @@ class SessionCatalogService(SessionCatalogReadService):
         """返回父节点下同名 folder 投影（只读查询，不构成写路径）。"""
         return [
             node
-            for node in self._path_resolver.list_nodes()
-            if node.kind == "folder"
-            and node.parent_node_id == parent_node_id
+            for node in self._path_resolver.list_nodes(kind="folder")
+            if node.parent_node_id == parent_node_id
             and node.name == name
         ]
 

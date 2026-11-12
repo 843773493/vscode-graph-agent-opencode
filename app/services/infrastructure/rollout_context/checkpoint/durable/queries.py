@@ -69,7 +69,7 @@ class RolloutCheckpointQueriesMixin:
         resolver = self._storage._path_resolver
         owners: list[MutationIntentOwner] = []
         session_ids = ([session_id] if session_id is not None else
-                       [node.node_id for node in resolver.list_nodes() if node.kind == "session"])
+                       [node.node_id for node in resolver.list_nodes(kind="session")])
         for owner_session_id in session_ids:
             main_thread_id = resolver.main_thread_id(owner_session_id)
             session_node = resolver.resolve_session_node(owner_session_id)

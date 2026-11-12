@@ -19,6 +19,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from app.core.identifier import validate_thread_id
 from app.core.session_catalog_store._schema import (
@@ -163,8 +164,9 @@ class CatalogQueriesMixin:
 
     def read_nodes_snapshot(
         self, *, check: Callable[[], None] | None = None,
+        kind: Literal["session", "folder"] | None = None,
     ) -> tuple[int, list[SessionCatalogNode]]:
-        """在同一只读事务中返回 navigation revision 与全部节点行。"""
+        """在同一只读事务中返回 navigation revision 与指定类型节点行。"""
         with self.read_transaction() as connection:
             if check is not None:
                 check()
@@ -178,7 +180,9 @@ class CatalogQueriesMixin:
                 )
             nodes: list[SessionCatalogNode] = []
             with closing(connection.execute(
-                f"SELECT {_NODE_COLUMNS} FROM nodes ORDER BY node_id"
+                f"SELECT {_NODE_COLUMNS} FROM nodes "
+                "WHERE (? IS NULL OR kind = ?) ORDER BY node_id",
+                (kind, kind),
             )) as rows:
                 for row in rows:
                     if check is not None:
@@ -188,6 +192,7 @@ class CatalogQueriesMixin:
 
     def read_reachable_nodes(
         self, *, include_deleting: bool,
+        kind: Literal["session", "folder"] | None = None,
     ) -> list[SessionCatalogNode]:
         """同一读快照从根枚举，按稳定 ID 返回节点及所需的删除中子树。"""
         with self.read_transaction() as connection:
@@ -203,9 +208,10 @@ class CatalogQueriesMixin:
                     WHERE ? OR child.state = 'active'
                 )
                 SELECT {_NODE_COLUMNS} FROM nodes
-                WHERE node_id IN (SELECT node_id FROM reachable) ORDER BY node_id
+                WHERE node_id IN (SELECT node_id FROM reachable)
+                    AND (? IS NULL OR kind = ?) ORDER BY node_id
                 """,
-                (include_deleting, include_deleting),
+                (include_deleting, include_deleting, kind, kind),
             ).fetchall()
             return [self._node_from_row(row) for row in rows]
 

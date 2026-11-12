@@ -272,8 +272,8 @@ class PendingRequestStore:
 
     async def migrate_all(self) -> int:
         migrated = 0
-        for node in self._path_resolver.list_nodes():
-            if node.kind == "session" and self._legacy_path(node.node_id).exists():
+        for node in self._path_resolver.list_nodes(kind="session"):
+            if self._legacy_path(node.node_id).exists():
                 await self.migrate_schema(node.node_id)
                 migrated += 1
         return migrated

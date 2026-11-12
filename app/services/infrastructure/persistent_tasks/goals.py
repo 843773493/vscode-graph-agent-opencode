@@ -116,8 +116,8 @@ class TaskGoals:
 
     def goal_list(self) -> list[SessionGoalDTO]:
         # 发布可见性归原 catalog；preparing、aborted、deleting 均不能被恢复调度。
-        active = {node.node_id: node.main_thread_id for node in self._goal_paths().list_nodes()
-                  if node.kind == "session" and node.state == "active"}
+        active = {node.node_id: node.main_thread_id for node in self._goal_paths().list_nodes(kind="session")
+                  if node.state == "active"}
         with closing(self._store.connection()) as connection:
             sessions = connection.execute("SELECT owner_session_id FROM persistent_tasks WHERE workspace_id=? "
                                           "AND application_type='goal' AND retired_at IS NULL", (self.workspace_id,)).fetchall()

@@ -136,9 +136,9 @@ class ThreadInitialExecutionService:
                     reset_current_gateway_id(gateway_token)
 
     async def start(self) -> None:
-        _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot()
+        _revision, nodes = self._sessions.path_resolver.catalog_store.read_nodes_snapshot(kind="session")
         for node in nodes:
-            if node.kind == "session" and node.state == "active":
+            if node.state == "active":
                 await self.bind_owner(node.node_id)
 
     async def on_event(self, event: Event) -> None:

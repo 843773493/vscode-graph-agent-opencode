@@ -673,9 +673,9 @@ class CommunicationObservationService:
         resolver = self._communication._sessions.path_resolver
         now = self._clock.utc_now()
         next_expiry = None
-        _revision, nodes = resolver.catalog_store.read_nodes_snapshot()
+        _revision, nodes = resolver.catalog_store.read_nodes_snapshot(kind="session")
         for node in nodes:
-            if node.kind != "session" or node.state != "active":
+            if node.state != "active":
                 continue
             try:
                 async with self._communication._sessions.session_write_admission(node.node_id):
@@ -692,9 +692,9 @@ class CommunicationObservationService:
 
     async def _schedule_recovery(self) -> None:
         service = self._communication
-        _revision, nodes = service._sessions.path_resolver.catalog_store.read_nodes_snapshot()
+        _revision, nodes = service._sessions.path_resolver.catalog_store.read_nodes_snapshot(kind="session")
         for node in nodes:
-            if node.kind != "session" or node.state != "active":
+            if node.state != "active":
                 continue
             try:
                 async with self._gate().shared(node.node_id):
