@@ -258,6 +258,20 @@ class MessageContentProjectionMixin:
         return True
 
     @staticmethod
+    def _agent_state_records(messages: Sequence[object], *, context_name: str) -> list[dict[str, object]]:
+        records: list[dict[str, object]] = []
+        for message in messages:
+            if isinstance(message, BaseMessage):
+                records.append(MessageContentProjectionMixin._message_to_agent_state_record(message))
+            elif isinstance(message, Mapping):
+                records.append(MessageContentProjectionMixin._mapping_to_agent_state_record(message))
+            else:
+                raise TypeError(
+                    f"{context_name} messages 中出现不支持的消息类型: {type(message).__name__}"
+                )
+        return MessageContentProjectionMixin._dedupe_consecutive_agent_state_records(records)
+
+    @staticmethod
     def _message_to_agent_state_record(message: BaseMessage) -> dict[str, object]:
         extracted = MessageContentProjectionMixin._extract_content(message)
         raw_content = getattr(message, "content", "")

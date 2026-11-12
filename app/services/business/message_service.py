@@ -336,18 +336,7 @@ class MessageService(MessageContentProjectionMixin):
                 raw_messages,
                 canonical_items,
             )
-        records: list[dict[str, object]] = []
-        for message in raw_messages:
-            if isinstance(message, BaseMessage):
-                records.append(self._message_to_agent_state_record(message))
-                continue
-            if isinstance(message, Mapping):
-                records.append(self._mapping_to_agent_state_record(message))
-                continue
-            raise TypeError(
-                f"Agent State messages 中出现不支持的消息类型: {type(message).__name__}"
-            )
-        return self._dedupe_consecutive_agent_state_records(records)
+        return await run_sync_shielded(self._agent_state_records, raw_messages, context_name="Agent State")
 
     async def get_agent_context_state(
         self, session_id: str, thread_id: str
@@ -400,20 +389,10 @@ class MessageService(MessageContentProjectionMixin):
                 raise ValueError("_summarization_event 缺少 summary_message")
             effective_messages = apply_summarization_event(raw_messages, event)
 
-        records: list[dict[str, object]] = []
-        for message in effective_messages:
-            if isinstance(message, BaseMessage):
-                records.append(self._message_to_agent_state_record(message))
-            elif isinstance(message, Mapping):
-                records.append(self._mapping_to_agent_state_record(message))
-            else:
-                raise TypeError(
-                    "Agent Context messages 中出现不支持的消息类型: "
-                    f"{type(message).__name__}"
-                )
+        records = await run_sync_shielded(self._agent_state_records, effective_messages, context_name="Agent Context")
 
         return {
-            "records": self._dedupe_consecutive_agent_state_records(records),
+            "records": records,
             "checkpoint_id": str(checkpoint.get("id") or ""),
             "raw_message_count": len(raw_messages),
             "compacted": compacted,
@@ -422,13 +401,17 @@ class MessageService(MessageContentProjectionMixin):
 
     async def get_agent_state_messages(self, session_id: str) -> AgentStateMessagesDTO:
         records = await self.list_agent_state_records(session_id, strict=True)
+
+        def encode_jsonl() -> str:
+            return "\n".join(
+                json.dumps(public_message_record(record), ensure_ascii=False, separators=(",", ":"))
+                for record in records
+            )
+
         return AgentStateMessagesDTO(
             session_id=session_id,
             message_count=len(records),
-            jsonl="\n".join(
-                json.dumps(public_message_record(record), ensure_ascii=False, separators=(",", ":"))
-                for record in records
-            ),
+            jsonl=await run_sync_shielded(encode_jsonl),
         )
 
     def execution_output_for_job(self, session_id: str, *, thread_id: str, job_id: str) -> tuple[str, InternalDisplayProvenance]:
