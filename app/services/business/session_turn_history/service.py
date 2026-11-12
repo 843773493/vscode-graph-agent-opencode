@@ -5,6 +5,7 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.turn_history import TurnSessionLookupProtocol
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.phase_observer import observe_phase
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.turn import (
     SessionTurnBootstrapDTO,
@@ -153,8 +154,9 @@ class SessionTurnHistoryService:
     ) -> TurnMessageSearchResultsDTO:
         async with self._session_service.session_read_admission(session_id):
             thread_id = await self._session_service.resolve_thread(session_id, thread_id)
-            async with self._checkpointer.history_read_lease(session_id, thread_id):
-                return self._checkpointer.search_history_messages(session_id, thread_id, request, budget=budget)
+            return await run_sync_shielded(
+                self._checkpointer.search_history_messages, session_id, thread_id, request, budget=budget,
+            )
 
 
 __all__ = ["SessionTurnHistoryService"]
