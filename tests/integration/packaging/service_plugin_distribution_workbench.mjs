@@ -262,6 +262,10 @@ try {
   for (const plugin of ['python', 'node']) {
     const before = await slots();
     await open('2.0.0', plugin); await saveBinding('切换到此版本（保留开关）', '配置：启用 @2.0.0');
+    await expect.poll(async () => {
+      const slot = (await slots())[plugin];
+      return slot?.binding.package_version === '2.0.0' ? slot.state : undefined;
+    }, { timeout: 20_000 }).toBe('ready');
     const current = await slots();
     assert.equal(current[plugin].binding.package_version, '2.0.0');
     assert.notEqual(current[plugin].instance.instance_id, before[plugin].instance.instance_id);
