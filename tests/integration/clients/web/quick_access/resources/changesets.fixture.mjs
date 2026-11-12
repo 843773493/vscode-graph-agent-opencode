@@ -2,8 +2,12 @@ import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { CommandsRegistry } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
 import { IClipboardService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/clipboard/common/clipboardService.js';
+import { IEditorService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IQuickInputService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
 import { ThreadInput } from '../../../../../../src/clients/workbench/src/threadInput.js';
+import { ThreadPane } from '../../../../../../src/clients/workbench/src/threadPane.js';
+import '../../../../../../src/clients/workbench/src/composerActions.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
 import { gatewayWorkspaceKey } from '../../../../../../src/clients/web/src/api/workspaceIdentity.js';
 import { invalidateGatewayToken } from '../../../../../../src/clients/web/src/api/http.js';
@@ -12,7 +16,7 @@ import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../.
 // 运行真实 Provider 和 HTTP 客户端；EditorService 只记录目标，完整面板／Diff另经正式页面验收。
 export async function changesetContract(mode, kind = 'changeset') {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), itemButtons = new Emitter();
-  const cancellation = new CancellationTokenSource(), requests = [], opened = [], errors = [], copied = [];
+  const cancellation = new CancellationTokenSource(), requests = [], opened = [], errors = [], copied = [], drafts = [[], []];
   const attachment = { file_id: 'boxteam://workspace/019a0000-0000-7000-8000-000000000001/resources/attachments/att_' + 'a'.repeat(32) + '/original/content',
     directory_uri: 'boxteam://workspace/019a0000-0000-7000-8000-000000000001/resources/attachments/att_' + 'a'.repeat(32), name: '原图片.png', content_type: 'image/png', availability: 'available' };
   const owners = ['a', 'b'].map(letter => ({ gatewayId: `gateway_${letter.repeat(32)}`, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
@@ -22,6 +26,20 @@ export async function changesetContract(mode, kind = 'changeset') {
   const origin = new ThreadInput({ ...owners[1], sessionId: 'ses_origin', threadId: 'thr_child', workspaceKey: '', title: '原child' });
   const editors = { activeEditor: mode === 'no-thread' ? undefined : origin,
     async openEditor(input, options, group) { opened.push({ owner: { ...input.owner }, options, group }); } };
+  class Pane extends ThreadPane {
+    constructor(index) {
+      super({ id: index + 7 }, {}, { getColorTheme: () => ({}), onDidColorThemeChange: Event.None }, { onWillSaveState: Event.None });
+      this.target = { input: origin, conversation: { captureDraft: () => ({ append: async text => drafts[index].push(text) }) } };
+    }
+    get threadTarget() { return this.target; }
+  }
+  const panes = mode.startsWith('attach') ? [new Pane(0), new Pane(1)] : [];
+  if (panes.length) {
+    if (mode === 'attach-not-ready') panes[0].target = undefined;
+    editors.activeEditorPane = mode.startsWith('attach-select') ? undefined : panes[0];
+    editors.visibleEditorPanes = panes;
+  }
+  let recipientSelections = 0;
   let releaseRead, releaseParse, aborted = false, groupsAdded = 0;
   installSessionApiFetchMock(async ({ path: pathname, url, init, method }) => {
     const query = new URL(url, 'http://127.0.0.1').search;
@@ -30,7 +48,7 @@ export async function changesetContract(mode, kind = 'changeset') {
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ path, method, gatewayId, workspaceId, ...(body ? { body } : {}) });
     if (path === '/api/gateway/resource-addresses/parse') {
-      if (mode === 'copy-identity') await new Promise(resolve => { releaseParse = resolve; });
+      if (['copy-identity', 'attach-identity'].includes(mode)) await new Promise(resolve => { releaseParse = resolve; });
       return ok({ gateway_id: mode === 'copy-mismatch' ? owners[0].gatewayId : body.resource_gateway_id,
         scope: 'workspace', scope_id: owners[1].workspaceId, kind: 'attachments', uri: attachment.file_id,
         reference_uri: `boxteam://${body.resource_gateway_id}/workspace/${owners[1].workspaceId}/resources/attachments/att_${'a'.repeat(32)}/original/content` });
@@ -71,6 +89,11 @@ export async function changesetContract(mode, kind = 'changeset') {
   const commands = { executeCommand(id, ...args) {
     return CommandsRegistry.getCommand(id).handler({ get(service) {
       if (service === IClipboardService) return { writeText: async value => { copied.push(value); } };
+      if (service === IEditorService) return editors;
+      if (service === IQuickInputService) return { pick: async items => {
+        recipientSelections++;
+        return mode === 'attach-select-cancel' ? undefined : items[0];
+      } };
       throw new Error(`复制附件不应取得其它宿主服务：${service}`);
     } }, ...args);
   } };
@@ -101,6 +124,13 @@ export async function changesetContract(mode, kind = 'changeset') {
           else invalidateGatewayToken(0);
           releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
         }
+      } else if (mode.startsWith('attach')) {
+        const pick = picker.items.find(item => item.resourceId === attachment.file_id);
+        editors.activeEditorPane = panes[1];
+        if (mode === 'attach-closed') panes[0].target = undefined;
+        itemButtons.fire({ item: pick, button: pick.buttons.find(button => button.tooltip === '将资源 URI 加入聊天草稿') });
+        if (mode === 'attach-identity') { await until(() => releaseParse); invalidateGatewayToken(0); releaseParse(); }
+        await until(() => drafts[0].length || errors.length || recipientSelections && mode === 'attach-select-cancel');
       } else if (mode.startsWith('copy')) {
         const pick = picker.items.find(item => item.resourceId === attachment.file_id);
         editors.activeEditor = new ThreadInput({ ...owners[0], sessionId: 'ses_later', threadId: 'thr_later', workspaceKey: '', title: '后来打开' });
@@ -118,11 +148,12 @@ export async function changesetContract(mode, kind = 'changeset') {
         await until(() => opened.length || errors.length);
       }
     }
-    return { requests, opened, errors, copied, groupsAdded, aborted, owner: origin.owner,
+    return { requests, opened, errors, copied, drafts, recipientSelections, groupsAdded, aborted, owner: origin.owner,
       attachment, rows: picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail, selectable: !!item.accept,
         copyable: !!item.buttons?.some(button => button.tooltip === '复制资源 URI') })) };
   } finally {
     lifetime.dispose(); cancellation.dispose(true); provider.dispose(); changes.dispose(); accepts.dispose(); itemButtons.dispose();
+    for (const pane of panes) pane.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(previous);
   }
 }

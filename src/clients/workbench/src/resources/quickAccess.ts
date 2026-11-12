@@ -26,13 +26,14 @@ import { listWorkspaceResources, type ResourceAction, type WorkspaceResourceDTO 
 import { resourceActionLabels, workspaceResourceName } from '../../../web/src/hooks/workspace/resourceActions.js';
 import { getMcpCatalog } from '../../../web/src/api/mcpConnections.js';
 import { gateway } from '../agentApi.js';
-import type { ThreadEditorOptions } from '../threadPane.js';
+import { ThreadPane, type ThreadEditorOptions } from '../threadPane.js';
 import type { ResourceOpenOptions } from '../resourceOpener.js';
 import { chooseSearchOwners } from '../search/quickAccessScope.js';
 import type { SearchInvocationOptions } from '../search/target.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
-import { COPY_RESOURCE_URI } from '../resourceActions.js';
+import { ATTACH_RESOURCE_URI, COPY_RESOURCE_URI } from '../resourceActions.js';
+import type { ComposerResourceTarget } from '../composerActions.js';
 import { sourceDocumentUri } from '../sourceDocuments.js';
 import { resourceActionCommand, resourceFocusCommand } from './runtimeActions.js';
 import { openWorkspaceMcpServerCommand } from '../mcp/commands.js';
@@ -40,7 +41,7 @@ import { ConfigurationSourceOwner, type SourceTarget } from '../settings/sourceO
 import { openConfigurationSourceCommand, type ConfigurationSourceOpenRequest } from '../settings/commands.js';
 
 interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string; resourceId?: string }
-interface ResourceAccessOptions extends SearchInvocationOptions { resourceGroup?: number; resourceThread?: SourceRun['thread'] }
+interface ResourceAccessOptions extends SearchInvocationOptions { resourceGroup?: number; resourceThread?: SourceRun['thread']; resourceRecipient?: ComposerResourceTarget | null }
 interface SourceRun {
   picker: IQuickPick<SourcePick, { useSeparators: true }>;
   owners: readonly WorkspaceOwner[];
@@ -51,6 +52,7 @@ interface SourceRun {
   signal: AbortSignal;
   discovery?: Promise<SourcePick[]>;
   thread?: { owner: WorkspaceOwner; session_id: string; thread_id: string };
+  recipient?: ComposerResourceTarget | null;
 }
 
 /** 来源候选沿固定根导航发现本地文件，配置 Skill 只消费 accepted metadata。 */
@@ -74,6 +76,9 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal };
     this.run = run;
     const input = this.editors.activeEditor;
+    const pane = this.editors.activeEditorPane;
+    run.recipient = options.resourceRecipient !== undefined ? options.resourceRecipient
+      : pane instanceof ThreadPane ? { pane, target: pane.threadTarget } : null;
     run.thread = options.resourceThread && { ...options.resourceThread, owner: { ...options.resourceThread.owner } };
     if (!run.thread && input instanceof ThreadInput) run.thread = { owner: { ...input.owner }, session_id: input.owner.sessionId, thread_id: input.owner.threadId };
     const invalidate = () => {
@@ -98,7 +103,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
           const owners = await chooseSearchOwners(this.quick, run.owners);
           if (invalidated) throw new Error('访问凭据已改变，请重新选择来源所属工作区');
           this.assertAccess(run);
-          const providerOptions: ResourceAccessOptions = { ...options, searchOwners: owners ?? run.owners, resourceGroup: run.group, resourceThread: run.thread };
+          const providerOptions: ResourceAccessOptions = { ...options, searchOwners: owners ?? run.owners, resourceGroup: run.group, resourceThread: run.thread, resourceRecipient: run.recipient };
           this.quick.quickAccess.show(value, { providerOptions });
         } finally { release(); }
       })());
@@ -242,10 +247,12 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
                 detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${thread.thread_id} · ${attachment.file_id}`,
                 accept: attachment.availability === 'unavailable' ? undefined : threadResourceAccept(owner, { resourceTab: 'files', selectedAttachment: frozen }),
                 buttons: attachment.availability === 'unavailable' ? undefined
-                  : [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }],
-                trigger: () => {
+                  : [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' },
+                    { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: '将资源 URI 加入聊天草稿' }],
+                trigger: index => {
                   this.assertAccess(run);
-                  this.report(this.commands.executeCommand(COPY_RESOURCE_URI, URI.parse(frozen.file_id), { ...owner }));
+                  this.report(this.commands.executeCommand(index === 0 ? COPY_RESOURCE_URI : ATTACH_RESOURCE_URI,
+                    URI.parse(frozen.file_id), { ...owner }, run.recipient));
                   return TriggerAction.NO_ACTION;
                 },
               };

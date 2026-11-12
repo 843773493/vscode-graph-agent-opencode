@@ -197,10 +197,11 @@ async def test_thread_attachment_quick_access_paginates_and_opens_original_previ
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert all(result[key] for key in (
-        "browseOnly", "filterAndCancel", "pagination", "copyWithoutRead", "textPreview", "mediaPreview", "sideFocus", "stateRestored",
+        "browseOnly", "filterAndCancel", "pagination", "copyWithoutRead", "attachWithoutRead", "textPreview", "mediaPreview", "sideFocus", "stateRestored",
     ))
     assert [item["fileId"] for item in result["copiedReferences"]] == [result["textFileId"], result["mediaFileId"]]
     assert all(item["request_id"] == item["header"] for item in result["copiedReferences"])
+    assert result["messageWrites"] == []
     assert result["browseContentReads"] == []
     assert result["workspaceContentReads"] == []
     pages = result["attachmentPages"]

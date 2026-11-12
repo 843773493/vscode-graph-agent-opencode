@@ -64,6 +64,17 @@ test('发起组已关闭时不创建空分屏或改投活动组', async () => {
 });
 
 const attachmentLists = result => result.requests.filter(item => item.path.includes('/attachments?'));
+for (const mode of ['attach', 'attach-closed', 'attach-not-ready', 'attach-identity', 'attach-select', 'attach-select-cancel']) test(`${mode}附件引用复用原Composer并保持发起者与取消边界`, async () => {
+  const result = await exercise(mode, 'attachment');
+  expect(result.opened).toEqual([]); expect(result.copied).toEqual([]); expect(result.drafts[1]).toEqual([]);
+  expect(result.recipientSelections).toBe(mode.startsWith('attach-select') ? 1 : 0);
+  const writes = mode === 'attach' || mode === 'attach-select';
+  expect(result.drafts[0]).toEqual(writes ? [`boxteam://${result.owner.gatewayId}/workspace/${result.owner.workspaceId}/resources/attachments/att_${'a'.repeat(32)}/original/content`] : []);
+  expect(result.errors.length).toBe(['attach-closed', 'attach-not-ready', 'attach-identity'].includes(mode) ? 1 : 0);
+  const parsed = result.requests.filter(item => item.path.endsWith('/resource-addresses/parse'));
+  expect(parsed.length).toBe(['attach-closed', 'attach-not-ready', 'attach-select-cancel'].includes(mode) ? 0 : 1);
+  expect(result.requests.every(item => item.method === 'GET' || item.path.endsWith('/resource-addresses/parse'))).toBe(true);
+});
 test('附件只读精确Thread元数据，浏览筛选不读取或重建原件', async () => {
   const result = await exercise('browse', 'attachment');
   expect(attachmentLists(result)).toHaveLength(1); expect(result.opened).toEqual([]); expect(result.errors).toEqual([]);

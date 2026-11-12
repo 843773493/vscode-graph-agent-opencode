@@ -13,18 +13,25 @@ import { ThreadPane } from './threadPane.js';
 import { ThreadInput } from './threadInput.js';
 import type { SearchInvocationOptions } from './search/target.js';
 import { workspaceContext } from './workspaceContext.js';
+import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+
+/** 仅持有本次交互的原 Pane／草稿 owner；关闭或切换后原句柄不可复用。 */
+export interface ComposerResourceTarget {
+  pane: ThreadPane;
+  target: ThreadPane['threadTarget'];
+}
 
 const resourceContext = ContextKeyExpr.or(ContextKeyExpr.equals('resourceScheme', 'boxteam-file'), ContextKeyExpr.equals('resourceScheme', 'boxteam-source'));
 
 /** 接收者来自发起编辑器，或明确选择的可见 Thread；后续焦点不参与归属。 */
-async function appendToThread(accessor: ServicesAccessor, content: () => Promise<string | undefined>): Promise<void> {
+async function appendToThread(accessor: ServicesAccessor, content: () => Promise<string | undefined>, recipient?: ComposerResourceTarget | null): Promise<void> {
   const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService);
   const active = editors.activeEditorPane;
   const targets = editors.visibleEditorPanes.filter(pane => pane instanceof ThreadPane)
     .flatMap(pane => { const target = pane.threadTarget; return target ? [{ pane, target }] : []; });
   if (!targets.length) throw new Error('请先打开接收资源的 Thread');
-  const originating = active instanceof ThreadPane ? targets.find(item => item.pane === active) : undefined;
-  if (active instanceof ThreadPane && !originating) throw new Error('发起 Thread 尚未就绪');
+  const originating = recipient === undefined ? (active instanceof ThreadPane ? targets.find(item => item.pane === active) : undefined) : recipient;
+  if (recipient === undefined && active instanceof ThreadPane && !originating) throw new Error('发起 Thread 尚未就绪');
   const gatewayId = workspaceContext.getSnapshot().gatewayId;
   if (!gatewayId) throw new Error('尚未取得发起 Gateway 身份');
   let invalidated = false;
@@ -36,6 +43,7 @@ async function appendToThread(accessor: ServicesAccessor, content: () => Promise
       { title: '选择接收草稿的 Thread', placeHolder: '只加入所选草稿，不发送消息或启动执行' });
     if (!selected) return;
     const target = selected.target;
+    if (!target) throw new Error('发起 Thread 尚未就绪');
     if (selected.pane.threadTarget?.conversation !== target.conversation) throw new Error('接收 Thread 已关闭或改变，请重新选择');
     const draft = target.conversation.captureDraft();
     const text = await content();
@@ -53,13 +61,13 @@ registerAction2(class AttachResourceReference extends Action2 {
       menu: [{ id: MenuId.EditorTitleContext, group: '2_copy', when: resourceContext },
         { id: MenuId.EditorContext, group: '9_cutcopypaste', when: resourceContext }] });
   }
-  async run(accessor: ServicesAccessor, supplied?: URI): Promise<void> {
+  async run(accessor: ServicesAccessor, supplied?: URI, sourceOwner?: WorkspaceOwner, recipient?: ComposerResourceTarget | null): Promise<void> {
     if (supplied !== undefined && !URI.isUri(supplied)) throw new Error('引用需要明确的资源 URI');
     const editors = accessor.get(IEditorService), quick = accessor.get(IQuickInputService);
     const active = editors.activeEditor;
     const resource = supplied ?? EditorResourceAccessor.getCanonicalUri(active, { supportSideBySide: SideBySideEditor.PRIMARY });
-    if (resource && supportsResourceReference(resource) && (supplied || !(active instanceof ThreadInput))) {
-      await appendToThread(accessor, () => resourceReference(resource));
+    if (resource && (supportsResourceReference(resource) || resource.scheme === 'boxteam' && sourceOwner) && (supplied || !(active instanceof ThreadInput))) {
+      await appendToThread(accessor, () => resourceReference(resource, sourceOwner), recipient);
       return;
     }
     if (supplied || !(active instanceof ThreadInput)) throw new Error('此资源尚未提供规范引用能力');

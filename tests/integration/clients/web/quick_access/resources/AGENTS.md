@@ -30,6 +30,8 @@ Provider 合同区分单次 provide 的本地筛选与重新打开的当前发�
 
 同页附件候选直接复制文本与 PDF 的原 URI，核真实剪贴板、唯一 parser 的 owner／request_id、选择器焦点与零原件读取／新 Tab。合同另核跨 owner 焦点变化、归属错误和凭据失效零剪贴板写入；续页按钮使用共用候选的实际 label，不复制已删除的专用按钮名称。
 
+同一正式附件页从候选把文本与 PDF 引用追加到原 Composer，并核刷新恢复、零新增消息／模型执行及预览前零原件读取。原 Provider／Command 合同用真实 ThreadPane 子类和具名草稿 writer 边界覆盖焦点改变、接收者关闭／未就绪、凭据失效，以及全局明确选择／取消；不将边界装具当真实跨工作区页面。
+
 Session 分支页面经产品消息生成来源，再从未打开 Thread／Session 候选及原导航菜单取消，核零 fork 写入；完整历史复制发布 durable child 后，由 child 的原命令面板核精确来源。模型回放仅一次用于准备来源历史，不预写检查点或浏览器业务状态，不代替 Windows／真实远端／Electron 验收。
 
 Thread 引用页面经产品消息及 fork 创建 main／child，再从最近候选复制精确 URI；Composer 沿原文件多选只加入未打开文件的引用。核实际剪贴板、原 request_id、零额外正文读取和零新增执行；跨 Gateway 与错误归属由具名 HTTP／宿主合同装具验证，不把本机页面称为真实远端验收。

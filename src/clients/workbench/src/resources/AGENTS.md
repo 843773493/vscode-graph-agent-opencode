@@ -26,4 +26,6 @@ AGENTS／Skill 候选的复制按钮直接交原 `resourceActions` 命令，保�
 
 可用附件的复制按钮将原规范 file_id 和冻结 owner 交同一资源复制命令及 URI parser；不提前打开预览或读取原件，复制后保留选择器与焦点。不可用来源不展示复制动作。
 
+附件引用按钮复用原 Composer 命令，只追加规范 URI。provide 在 Quick Input 夺焦前捕获原 ThreadPane 和原草稿 owner，范围选择往返继续持有同一临时句柄；明确没有发起者时才使用原可见 Thread 选择器，后来获得焦点的 Thread 不成为默认接收者。关闭、未就绪或凭据变化均明确失败，不上传附件、不读原件、不发送消息。
+
 工具结果候选仅发现发起 Thread 的原历史元数据，续页携原 view 与 revision；接受复用原 around／ToolRow 的 typed 定位，浏览不读正文或重放工具，不伪造资源地址。

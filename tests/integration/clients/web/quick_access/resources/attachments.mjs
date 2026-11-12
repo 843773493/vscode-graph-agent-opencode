@@ -9,7 +9,7 @@ const fixture = JSON.parse(required('BOXTEAM_BROWSER_FIXTURE'));
 const output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/test_attachments.py');
 const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], attachmentPages: [], contentReads: [],
-  workspaceContentReads: [], browseContentReads: [], copiedReferences: [], initializationResponses: [],
+  workspaceContentReads: [], browseContentReads: [], copiedReferences: [], initializationResponses: [], messageWrites: [],
   boundary: '真实 Gateway／Backend 与正式 Workbench；消息通过产品 HTTP 入口上传，附件候选来自精确 Thread 分页，原文件读取仅在接受后由原预览执行' };
 const pending = [], collectionErrors = [], pageRequests = new WeakMap();
 let page, failure;
@@ -33,6 +33,7 @@ try {
   });
   page.on('request', request => {
     const url = new URL(request.url()), headers = request.headers();
+    if (request.method() === 'POST' && /\/threads\/[^/]+\/messages$/.test(url.pathname)) result.messageWrites.push(url.pathname);
     if (/^\/api\/v1\/sessions\/[^/]+\/threads\/[^/]+\/attachments$/.test(url.pathname)) {
       const observed = {
         phase: result.phase,
@@ -89,6 +90,9 @@ try {
   const thread = page.locator(threadSelector);
   await expect(thread).toBeVisible();
   await expect(thread.locator('textarea[data-testid="composer-input"]')).toBeEnabled({ timeout: 30_000 });
+  const composer = thread.locator('textarea[data-testid="composer-input"]');
+  const draftPrefix = '附件引用草稿 Ω';
+  await composer.fill(draftPrefix);
 
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   const rows = name => quick.locator('.monaco-list-row').filter({ hasText: name });
@@ -178,6 +182,22 @@ try {
   }
   expect(result.contentReads).toEqual([]); result.copyWithoutRead = true;
 
+  await phase('attach-reference');
+  let expectedDraft = draftPrefix;
+  for (const [name, fileId] of [[fixture.textName, result.textFileId], [fixture.mediaName, result.mediaFileId]]) {
+    await filter(name);
+    await rows(name).hover();
+    await rows(name).getByRole('button', { name: '将资源 URI 加入聊天草稿', exact: true }).click();
+    expectedDraft += `\n${fileId}`;
+    await expect(composer).toHaveValue(expectedDraft);
+    await expect(input).toBeFocused();
+    await expect(page.locator('.tabs-container .tab')).toHaveCount(tabsBeforeCopy);
+  }
+  expect(result.contentReads).toEqual([]);
+  expect(result.messageWrites).toEqual([]);
+  result.attachedDraft = expectedDraft;
+  result.attachWithoutRead = true;
+
   await phase('text-preview');
   await acceptCurrent(fixture.textName, result.textFileId);
   let preview = readRegion(fixture.textName);
@@ -215,6 +235,7 @@ try {
   await expect(activeThread.getByRole('tab', { name: '文件', exact: true })).toHaveAttribute('aria-selected', 'true');
   preview = page.locator('.editor-group-container.active').getByRole('region', { name: `附件预览：${fixture.mediaName}` });
   await expect(preview.locator('iframe[title^="PDF 附件："]')).toBeVisible({ timeout: 30_000 });
+  await expect(activeThread.locator('textarea[data-testid="composer-input"]')).toHaveValue(expectedDraft);
   result.stateRestored = true;
 
   await Promise.all(pending);
@@ -225,6 +246,7 @@ try {
   expect(result.attachmentPages.every(item => item.data.items.every(attachment => !('data_url' in attachment) && !('content' in attachment)))).toBe(true);
   expect(result.contentReads.every(item => item.variant === 'original')).toBe(true);
   expect(result.pageErrors).toEqual([]);
+  expect(result.messageWrites).toEqual([]);
   await phase('complete');
 } catch (cause) {
   failure = cause;
