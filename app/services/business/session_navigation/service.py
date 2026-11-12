@@ -11,6 +11,7 @@ from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store.contracts import CatalogTransactionHook
 from app.core.session_subtree_delete import SubtreeDeleteResult
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation.operations import (
     AutoSessionTitleCommand,
@@ -139,13 +140,12 @@ class SessionCatalogService(SessionCatalogReadService):
             include_self=True,
         )
 
-        if self._background_task_registry is not None:
-            target_ids = set(frozen_session_ids)
-            blockers = [
-                handle
-                for handle in self._background_task_registry.list_active_handles()
-                if handle.session_id in target_ids
-            ]
+        registry = self._background_task_registry
+        if registry is not None:
+            blockers = await run_sync_shielded(lambda: [
+                handle for session_id in frozen_session_ids
+                for handle in registry.list_handles(session_id)
+            ])
             if blockers:
                 raise RuntimeError(
                     "会话存在运行中后台任务，拒绝递归删除: "
