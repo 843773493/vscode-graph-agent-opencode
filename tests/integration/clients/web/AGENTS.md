@@ -40,6 +40,7 @@ web/
 - 服务替身和页面路由拦截必须显式记录，不能伪造成功状态。
 - 运行产物必须写入 `out/tests/integration/clients/web/`。
 - `test_basic_chat_tool_loop.py` 使用 `web_workbench_assets` 构建完整 Workbench，由真实 Gateway 提供静态资源；浏览器从会话树及资源面板打开 main/child，按原版编辑器组和精确 owner 定位 ShadowRoot 内控件。模型使用显式 model_stream 回放，因此属于 Integration；保留工具循环封存请求和双 Thread 并行输入隔离断言。
+  - Backend 与 Gateway 共用本场景隔离 Home，保留 runtime control token，默认 Gateway URL 使用该测试端口块；显式非默认 URL 不改写。普通聊天复用 prepared immutable developer-tools 包，经正式绑定入口启用 Terminal 和 Browser；同轮正式 Workbench 资产可显式复用，不能依赖旧 Home 残留或重复下载安装。
   - 活动选择消费公开 `active_workspace`，与 health 的 Gateway 身份及工作区持久 UUID 交叉核验；业务请求同时携带 `X-BoxTeam-Target-Gateway-Id` 与同一 UUID。工作区及会话目录节点使用完整 owner 的复合键，证据不再保存路由／业务双 ID；原准备失败装具仍在业务访问之前触发。
   - 标签生命周期通过真实单击／双击核对预览替换与固定，原版关闭按钮按 Tab 内的可访问角色及名称定位，不依赖上游图标类；关闭后核后端会话仍存在并可从导航重开。分屏先验证同一 Thread 两组的资源展开状态独立，再验证 main／child 草稿、模型并行与回复隔离；新增检查不替代原封存请求、真实文件写入和磁盘哈希断言。
   - 删除刷新回归先真实保存同一 Session 的两个分屏标签，再执行真实目录删除并核 committed／settled、标签及宿主释放；随后立即刷新，不提前 flush、不额外等待保存，要求保留会话可操作且不重新读取已删除 Session。

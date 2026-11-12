@@ -22,6 +22,9 @@ from tests.harness.python.web_workbench import (
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
     chat_backend as chat_backend,  # noqa: PLC0414 - 复用真实 Backend 与 model_stream 控制器。
 )
+from tests.integration.clients.web.test_basic_chat_tool_loop import (
+    chat_backend_boxteam_home as chat_backend_boxteam_home,  # noqa: PLC0414
+)
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
@@ -30,13 +33,30 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
+
+
+@pytest.fixture(autouse=True)
+def tool_results_web_assets(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
+    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
+    assert (assets / "version.json").is_file(), assets
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
+    return assets
 
 
 @pytest.mark.asyncio
 async def test_real_child_tool_result_quick_access_locates_original_tool_row(
     request: pytest.FixtureRequest,
     chat_backend: tuple[str, Path, ModelStreamReplay],
-    web_workbench_assets: Path,
+    chat_backend_boxteam_home: Path,
+    tool_results_web_assets: Path,
+    prepared_developer_tools_package: Path,
 ) -> None:
     backend_url, workspace, replay = chat_backend
     chromium = (
@@ -48,12 +68,14 @@ async def test_real_child_tool_result_quick_access_locates_original_tool_row(
     assert chromium, "工具结果 Quick Access 页面验收需要 Chromium"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     port_block = integration_port_block_for_file(Path(request.node.fspath))
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, chat_backend_boxteam_home)
     gateway = start_gateway_process(
         workspace_root=workspace,
         default_backend_url=backend_url,
         port=port_block.port(20),
         artifacts_dir=context.artifacts_dir / "gateway",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)},
+        boxteam_home=chat_backend_boxteam_home,
+        extra_env={"BOXTEAM_WEB_ASSETS": str(tool_results_web_assets)},
     )
     result_path = context.artifacts_dir / "tool-results-browser.json"
     screenshot_path = context.artifacts_dir / "tool-results-browser.png"
@@ -78,14 +100,30 @@ async def test_real_child_tool_result_quick_access_locates_original_tool_row(
             assert workspaces_response.status_code == 200, workspaces_response.text
             workspace_id = workspaces_response.json()["data"]["active_workspace"]["workspace_id"]
             assert workspaces_response.json()["data"]["active_workspace"]["gateway_id"] == health["gateway_id"]
+            await enable_developer_tools_plugins(
+                client, gateway_id=health["gateway_id"], workspace_id=workspace_id,
+                plugin_ids=("terminal", "browser"),
+            )
 
         fixture = {
             "gatewayId": health["gateway_id"],
             "workspaceId": workspace_id,
             "toolName": "large_test_output",
+            "toolCallId": "tool-result-quick-access-call",
         }
         model = "browser-chat-tool-loop-stub"
         endpoint = port_block.port(10)
+        fixture["seedInteraction"] = build_cassette(
+            asset_id="tool-result-quick-access-seed",
+            model=model,
+            url=f"http://127.0.0.1:{endpoint}/v1/chat/completions",
+            frames=chat_completion_frames(
+                response_id="tool-result-quick-access-seed",
+                model=model,
+                deltas=[{"role": "assistant", "content": "已准备上下文分支。"}],
+                finish_reason="stop",
+            ),
+        ).raw["interactions"][0]
         replies = [
             ({"tool_calls": [{
                 "index": 0,

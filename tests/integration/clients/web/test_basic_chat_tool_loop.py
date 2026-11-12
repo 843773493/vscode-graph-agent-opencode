@@ -33,6 +33,24 @@ from tests.support.processes.workspace import (
     close_backend_process,
     start_backend_process,
 )
+from tests.support.terminal_plugin import (
+    copy_prepared_developer_tools_package,
+    enable_developer_tools_plugins,
+)
+
+
+@pytest.fixture(scope="module")
+def chat_backend_boxteam_home(request: pytest.FixtureRequest) -> Path:
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    return context.boxteam_home_for_node(request.node.nodeid)
+
+
+@pytest.fixture
+def chat_loop_web_assets(request: pytest.FixtureRequest) -> Path:
+    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
+    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
+    assert (assets / "version.json").is_file(), assets
+    return assets
 
 
 @pytest.fixture(scope="module")
@@ -40,6 +58,7 @@ def chat_backend(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    chat_backend_boxteam_home: Path,
 ) -> Generator[tuple[str, Path, ModelStreamReplay], None, None]:
     port_block = integration_port_block_for_file(Path(request.node.fspath))
     workspace_root = Path(integration_workspace_root_path).resolve()
@@ -56,6 +75,9 @@ def chat_backend(
             "custom_llm_provider": "openai",
         }
     )
+    gateway_connection = config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})
+    if gateway_connection.get("url") in {None, "http://127.0.0.1:8014"}:
+        gateway_connection["url"] = f"http://127.0.0.1:{port_block.port(20)}"
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -77,9 +99,11 @@ def chat_backend(
             port=port_block.port(0),
             log_name="basic-chat-tool-loop-browser-backend",
             asgi_app="tests.support.e2e_control.backend_app:app",
+            boxteam_home=chat_backend_boxteam_home,
             env_overrides={
                 "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key",
                 "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{port_block.port(20)}",
+                "BOXTEAM_RUNTIME_CONTROL_TOKEN": LOCAL_TOKEN_HEADERS["X-Local-Token"],
                 **replay.environment,
             },
         )
@@ -93,7 +117,9 @@ def chat_backend(
 async def test_basic_chat_tool_loop_through_real_browser_composer(
     request: pytest.FixtureRequest,
     chat_backend: tuple[str, Path, ModelStreamReplay],
-    web_workbench_assets: Path,
+    chat_backend_boxteam_home: Path,
+    chat_loop_web_assets: Path,
+    prepared_developer_tools_package: Path,
 ) -> None:
     project_root = Path.cwd().resolve()
     backend_url, workspace_root, replay = chat_backend
@@ -108,12 +134,14 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
 
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     port_block = integration_port_block_for_file(Path(request.node.fspath))
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, chat_backend_boxteam_home)
     gateway = start_gateway_process(
         workspace_root=workspace_root,
         default_backend_url=backend_url,
         port=port_block.port(20),
+        boxteam_home=chat_backend_boxteam_home,
         extra_env={
-            "BOXTEAM_WEB_ASSETS": str(web_workbench_assets)
+            "BOXTEAM_WEB_ASSETS": str(chat_loop_web_assets)
         },
     )
     artifacts = context.artifacts_dir
@@ -141,6 +169,10 @@ async def test_basic_chat_tool_loop_through_real_browser_composer(
                 item for item in workspaces.json()["data"]["items"]
                 if (item["gateway_id"], item["workspace_id"]) == (gateway_id, workspace_id)
             ]) == 1
+            await enable_developer_tools_plugins(
+                client, gateway_id=gateway_id, workspace_id=workspace_id,
+                plugin_ids=("terminal", "browser"),
+            )
 
         environment = os.environ.copy()
         responses = [
