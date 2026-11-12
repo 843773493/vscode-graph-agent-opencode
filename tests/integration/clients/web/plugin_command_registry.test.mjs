@@ -234,6 +234,54 @@ test('同逻辑命令共用dispatcher并按目标隔离声明，拒绝无效更�
   }
 });
 
+test('已接受的目标、版本和注册代际不受输入快照后续改写影响', async () => {
+  const target = { ...a };
+  const originalTarget = { ...target };
+  const item = publication(target, { revision: 'frozen-r1', version: '1.0.0', title: 'Frozen command',
+    location: 'editor/title', key: 'ctrl+[KeyF]' });
+  const accepted = snapshot(target, item);
+  const executions = [];
+  const registry = new m.PluginCommandContributions(() => ({ gatewayId: originalTarget.gateway_id, workspaceId: originalTarget.workspace_id }),
+    async (_accessor, source) => {
+      executions.push({ target: source.target, packageVersion: source.publication.binding.package_version,
+        instanceId: source.publication.instance_id, registrationId: source.registration.registration_id,
+        commandId: source.command.id, title: source.command.title });
+      return source.target.workspace_id;
+    });
+  const id = m.pluginCommandId(packageId, pluginId, commandId);
+  try {
+    registry.replace(target, accepted);
+    const action = sourceFor(m.MenuId.EditorTitle, id, originalTarget.workspace_id);
+    const source = action.pluginCommandArgs[0];
+    const dispatcher = m.CommandsRegistry.getCommand(id)?.handler;
+
+    target.gateway_id = 'mutated-gateway';
+    target.workspace_id = 'mutated-workspace';
+    accepted.gateway_id = 'mutated-gateway';
+    accepted.workspace_id = 'mutated-workspace';
+    item.binding.package_version = '2.0.0';
+    item.instance_id = 'new-instance';
+    item.state = 'failed';
+    item.commands[0].id = 'changed-command';
+    item.commands[0].title = 'Changed command';
+    item.commands[0].arguments_schema = { properties: { input: { type: 'string' } } };
+    item.commands[0].arguments_schema.properties.input.type = 'number';
+    item.registrations[0].registration_id = 'new-registration';
+
+    expect(Object.isFrozen(source.target)).toBe(true);
+    expect(Object.isFrozen(source.publication)).toBe(true);
+    expect(Object.isFrozen(source.publication.binding)).toBe(true);
+    expect(Object.isFrozen(source.command)).toBe(true);
+    expect(Object.isFrozen(source.registration)).toBe(true);
+    expect(await dispatcher({}, source)).toBe(originalTarget.workspace_id);
+    expect(executions).toEqual([{
+      target: originalTarget, packageVersion: '1.0.0', instanceId: `${originalTarget.workspace_id}:1.0.0:ready`,
+      registrationId: `${originalTarget.workspace_id}:1.0.0:ready:run`, commandId, title: 'Frozen command',
+    }]);
+    checks.push('接受后快照输入改写不改变动作目标、包版本、实例、命令或registration；旧动作恰好进入原dispatcher一次');
+  } finally { registry.dispose(); }
+});
+
 test('实际MenuItemAction.run给插件传冻结source，普通菜单保留resource args；登记失败只回滚本次新增', async () => {
   const executions = [];
   const ownerA = { gatewayId: a.gateway_id, workspaceId: a.workspace_id };
@@ -413,7 +461,7 @@ test('真实转换CommandService对自有命令绕过旧宿主发现，首次调
 });
 
 afterAll(async () => {
-  const status = checks.length === 5 ? 'passed' : 'failed';
+  const status = checks.length === 6 ? 'passed' : 'failed';
   const evidence = {
     boundary: '真实 PluginCommandContributions、原 CommandsRegistry/MenuRegistry/KeybindingsRegistry、sourceTransform 后的上游源码；平台模块值为显式 Linux/macOS/Windows 构建装具。未经过浏览器、Gateway、工作区后端或真实多目标网络。',
     upstreamCommit: pinnedUpstreamCommit,

@@ -75,13 +75,14 @@ function keybinding(value?: string) {
 
 export interface FrozenPluginCommand {
   readonly target: PluginContributionTarget;
-  readonly publication: PluginCommandPublication;
-  readonly command: PluginCommandContribution;
+  readonly publication: Pick<PluginCommandPublication, 'binding' | 'state' | 'error' | 'instance_id'>;
+  readonly command: Pick<PluginCommandContribution, 'id' | 'title'>;
   readonly registration?: PluginCommandRegistration;
 }
 class PluginCommandSource implements FrozenPluginCommand {
-  constructor(readonly target: PluginContributionTarget, readonly publication: PluginCommandPublication,
-    readonly command: PluginCommandContribution, readonly registration?: PluginCommandRegistration) { Object.freeze(this); }
+  constructor(readonly target: PluginContributionTarget,
+    readonly publication: Pick<PluginCommandPublication, 'binding' | 'state' | 'error' | 'instance_id'>,
+    readonly command: Pick<PluginCommandContribution, 'id' | 'title'>, readonly registration?: PluginCommandRegistration) { Object.freeze(this); }
 }
 interface Publication {
   signature: string;
@@ -162,12 +163,16 @@ export class PluginCommandContributions implements IDisposable {
       return { ...rule, condition: condition(rule.when),
         parsed: parsed.get(isMacintosh ? rule.mac ?? rule.key : isWindows ? rule.win ?? rule.key : rule.linux ?? rule.key) };
     });
+    const frozenTarget = Object.freeze({ ...target });
+    const frozenPublication = Object.freeze({ state: publication.state, error: publication.error,
+      instance_id: publication.instance_id, binding: Object.freeze({ ...binding }) });
     const commands = publication.commands.map(command => {
       const id = pluginCommandId(binding.package_id, binding.plugin_id, command.id);
       if (CommandsRegistry.getCommand(id) && !this.dispatchers.has(id)) throw new Error('插件命令不能覆盖已有入口：' + id);
       const registration = registrations.get(command.id);
       if (registration && registration.handler !== command.handler) throw new Error('插件处理者与声明不符');
-      const source = new PluginCommandSource(Object.freeze({ ...target }), publication, command, registration);
+      const source = new PluginCommandSource(frozenTarget, frozenPublication, Object.freeze({ id: command.id, title: command.title }),
+        registration && Object.freeze({ ...registration }));
       const available = publication.state === 'ready' && !!publication.instance_id && !!registration;
       const action: ICommandAction = { id, title: command.title, category: command.category,
         precondition: ContextKeyExpr.and(scope, condition(command.enablement), available ? undefined : ContextKeyExpr.false()),
