@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 from app.abstractions.internal_message import PreparedInternalMessage
+from app.core.shielded_cleanup import run_sync_shielded
+from app.domain.itemized.runtime_wakeup import RuntimeExecutionWakeup
 from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.schemas.internal_v2.job import JobDTO
 from app.services.business.persistent_tasks.goal import (
@@ -76,24 +78,35 @@ async def _finish_execution(runtime: PersistentTaskRuntime, session_id: str, *, 
         await goals.dispatch_continuation_if_active(session_id, job_id, dispatch)
 
 
-async def _recover_execution(runtime: PersistentTaskRuntime, goal: SessionGoalDTO) -> bool:
-    """沿原准入幂等身份追踪当前 revision，恢复丢失的终态消费。"""
+def _recovery_wakeup(runtime: PersistentTaskRuntime, goal: SessionGoalDTO) -> RuntimeExecutionWakeup | None:
+    """在 worker 沿原准入身份追踪当前 revision，不修改运行时状态。"""
     roots = (f"idle:{goal.goal_id}:{goal.revision}:goal_continuation",
              f"objective:{goal.revision}:goal_objective_updated")
     accepted = [wakeup for identity in roots if (wakeup := runtime._dispatcher.submitted(
         goal.session_id, goal.thread_id, idempotency_key=f"goal:{goal.goal_id}:{identity}",
     )) is not None]
     if not accepted:
-        return False
+        return None
     wakeup = max(accepted, key=lambda row: runtime._saver.execution_queue_record(
         row.session_id, row.thread_id, row.job_id,
     ).cursor.commit_id)
-    # TODO：深历史恢复仍逐个查询原准入；先保留正确归属，测量后优化索引读取。
     while (following := runtime._dispatcher.submitted(
         goal.session_id, goal.thread_id,
         idempotency_key=f"goal:{goal.goal_id}:{wakeup.job_id}:goal_continuation",
     )) is not None:
         wakeup = following
+    return wakeup
+
+
+async def _recover_execution(runtime: PersistentTaskRuntime, goal: SessionGoalDTO) -> bool:
+    """恢复丢失的终态消费；历史读取期间允许其他任务与用户操作继续。"""
+    wakeup = await run_sync_shielded(_recovery_wakeup, runtime, goal)
+    current = await runtime.goals.get(goal.session_id)
+    if current is None or (current.goal_id, current.revision) != (goal.goal_id, goal.revision):
+        return True
+    if wakeup is None:
+        return False
+    # 末次状态与归属登记不让出事件循环，避免完成事件先于归属登记被消费。
     progress = runtime._saver.runtime_execution_progress(wakeup)
     if progress.outcome == "unknown":
         runtime._goal_job_owners[wakeup.job_id] = goal.goal_id
