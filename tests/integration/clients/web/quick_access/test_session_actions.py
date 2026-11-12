@@ -25,6 +25,7 @@ from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
 )
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
+from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 
 
 @pytest.fixture(autouse=True)
@@ -38,8 +39,13 @@ def session_action_web_assets(request: pytest.FixtureRequest, monkeypatch: pytes
 async def test_session_management_uses_original_dialog_confirmation_and_outbox(
     request: pytest.FixtureRequest,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
+    prepared_developer_tools_package: Path,
 ) -> None:
     client, context, _, replay = metadata_case
+    copy_prepared_developer_tools_package(
+        prepared_developer_tools_package,
+        context.boxteam_home_for_node(request.node.nodeid),
+    )
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "会话管理验收需要 Chromium"
     result_path = context.artifacts_dir / "session-actions.json"
