@@ -80,11 +80,13 @@ class PersistentTaskService:
         return configuration.model_copy(update={"action": action, "trigger": trigger, "condition": condition})
 
     def get(self, task_id: str) -> PersistentTaskDTO:
-        task = self._store.get(task_id)
-        recovering = self.runtime.recovering(task_id)
+        return self._with_runtime(self._store.get(task_id))
+
+    def _with_runtime(self, task: PersistentTaskDTO) -> PersistentTaskDTO:
+        recovering = self.runtime.recovering(task.task_id)
         if task.application_type == "goal":
             return task.model_copy(update={"recovering": recovering, "phase": "recovering" if recovering else task.phase})
-        pending = self._store.runs(task_id, pending_only=True)
+        pending = self._store.runs(task.task_id, pending_only=True)
         phase = "recovering" if recovering else (pending[0].phase if pending else task.phase)
         return task.model_copy(update={"recovering": recovering, "phase": phase})
 
@@ -93,7 +95,7 @@ class PersistentTaskService:
         if session_id is not None:
             generated = self._store.generated_for_session(session_id)
             tasks = [task for task in tasks if task.task_id in generated or self._references_session(task, session_id)]
-        return [self.get(task.task_id) for task in tasks]
+        return [self._with_runtime(task) for task in tasks]
 
     def snapshot(self, session_id: str | None = None) -> PersistentTaskListDTO:
         return PersistentTaskListDTO(items=self.list(session_id), runtime=self.runtime.status())
