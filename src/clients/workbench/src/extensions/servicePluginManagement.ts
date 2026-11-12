@@ -660,7 +660,8 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
   const lifecycle = createManagementTargetLifecycle('原 Gateway 或访问凭据已改变，请重新打开插件安装', expectedEntryGatewayId);
   const { check, signal, token } = lifecycle;
   try {
-    const type = await quickInput.pick([{ label: 'ZIP 文件', kind: 'zip' }, { label: '开发目录', kind: 'directory' },
+    const type = await quickInput.pick([...(target.gateway_id === lifecycle.entryGatewayId
+      ? [{ label: 'ZIP 文件', kind: 'zip' }, { label: '开发目录', kind: 'directory' }] : []),
       { label: '自有来源', kind: 'source' }, { label: '查询安装操作', kind: 'query' }],
       { title: `插件安装 · ${pluginGatewayLabel(target)}`, canPickMany: false }, token);
     check();

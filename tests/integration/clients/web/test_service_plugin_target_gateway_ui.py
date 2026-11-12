@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import subprocess
+import sys
+import threading
 import time
 from collections.abc import Callable
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 from zipfile import ZipFile
 
 import commentjson
@@ -17,6 +22,7 @@ import psutil
 import pytest
 
 from app.gateway.federation.ports import principal_ref_for_gateway
+from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
@@ -139,9 +145,47 @@ def _wait_ready(client: httpx.Client, gateway_id: str, version: str) -> dict[str
     raise AssertionError(f"Gateway {gateway_id} 插件未进入 ready：{slot}")
 
 
+@pytest.fixture
+def plugin_source_server(request: pytest.FixtureRequest):
+    """仅自有目录／下载服务受控，包安装与运行仍经过真实目标 Gateway。"""
+    class Handler(SimpleHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if urlsplit(self.path).path != "/catalog":
+                return super().do_GET()
+            body = json.dumps({
+                "protocol_version": 1, "source_id": "target-ui", "catalog_revision": "target-ui-v1",
+                "items": [{"package_id": _PACKAGE_ID, "package_version": "3.0.0",
+                    "target": native_plugin_target("python"), "digest": "sha256:" + hashlib.sha256(package.read_bytes()).hexdigest(),
+                    "url": f"http://127.0.0.1:{server.server_port}/{package.name}", "filename": package.name}],
+                "next_cursor": None,
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    package = context.artifacts_dir / "target-ui-3.0.0.zip"
+    server = ThreadingHTTPServer(("127.0.0.1", 0), lambda *args, **kwargs: Handler(
+        *args, directory=str(context.artifacts_dir), **kwargs))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_gateway(
     target_gateway_network: TargetGatewayNetwork,
     web_workbench_assets: Path,
+    plugin_source_server: str,
 ) -> None:
     network = target_gateway_network
     context = network.context
@@ -166,9 +210,11 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
     package_a = context.artifacts_dir / "target-ui-2.0.0.zip"
     package_b_v1 = context.artifacts_dir / "target-ui-1.0.0.zip"
     package_b_v2 = context.artifacts_dir / "target-ui-2.0.0.zip"
+    package_b_v3 = context.artifacts_dir / "target-ui-3.0.0.zip"
     _write_package(package_a, "2.0.0")
     _write_package(package_b_v1, "1.0.0")
     _write_package(package_b_v2, "2.0.0")
+    _write_package(package_b_v3, "3.0.0")
     _install(client_a, gateway_a, package_a)
     _install(client_b, gateway_b, package_b_v1)
     _install(client_b, gateway_b, package_b_v2)
@@ -191,6 +237,9 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
 
     def configure_b(configuration: dict[str, object]) -> None:
         bind_gateway(configuration, "1.0.0", "B-before")
+        configuration["plugins"]["sources"] = {"entries": [{
+            "source_id": "target-ui", "protocol_version": 1, "base_url": plugin_source_server, "enabled": True,
+        }]}
         configuration["permissions"] = {"federation": {
             "default_effect": "deny",
             "rules": [{"capability": capability, "effect": "allow", "principal_ref": principal}
@@ -217,7 +266,9 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
     initial_a_instance = initial_a["instance"]
     initial_b_instance = initial_b["instance"]
     result_path = context.artifacts_dir / "target-gateway-plugin-ui.json"
-    command = ["bun", "tests/integration/clients/web/service_plugin_target_gateway_ui.mjs"]
+    supervisor = context.project_root / "app/runtime" / ("windows_job.py" if os.name == "nt" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
+        "--timeout-seconds", "240", "--", "bun", "tests/integration/clients/web/service_plugin_target_gateway_ui.mjs"]
     environment = os.environ | {
         "BOXTEAM_TARGET_PLUGIN_UI_FIXTURE": json.dumps({
             "baseUrl": str(client_a.base_url),
@@ -229,6 +280,7 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
             "versionA": "2.0.0",
             "versionB1": "1.0.0",
             "versionB2": "2.0.0",
+            "connectionId": connection["gateway_connection_id"],
             "initialBInstanceId": initial_b_instance["instance_id"],
             "resultPath": str(result_path),
         }),
@@ -242,7 +294,7 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
                 env=environment | temporary,
                 capture_output=True,
                 text=True,
-                timeout=240,
+                timeout=255,
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
@@ -253,7 +305,7 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
             (context.artifacts_dir / "browser-process.json").write_text(json.dumps({
                 "command": command,
                 "timed_out": True,
-                "timeout_seconds": 240,
+                "timeout_seconds": 255,
             }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             raise
     (context.artifacts_dir / "browser.stdout.raw").write_text(run.stdout, encoding="utf-8")
@@ -272,6 +324,14 @@ def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_
     assert result["inventoryA"] == ["2.0.0"]
     assert result["inventoryB"] == ["1.0.0", "2.0.0"]
     assert result["detailOwners"] == [gateway_b, gateway_a]
+    assert result["independentTargets"] == {"extensions": gateway_a, "settings": gateway_b}
+    assert result["lateInventory"] == {"gateway_id": gateway_b, "visible_gateway_id": gateway_a}
+    assert result["installation"]["gateway_id"] == gateway_b
+    assert result["installation"]["gateway_connection_id"] == connection["gateway_connection_id"]
+    assert result["installation"]["artifact"]["package_version"] == "3.0.0"
+    assert result["installation"]["status"] == "succeeded"
+    assert result["uninstall"]["uninstalled"] is True
+    assert result["uninstall"]["package_version"] == "3.0.0"
     assert result["delayedWrite"] == {
         "gateway_id": gateway_b,
         "status": 200,

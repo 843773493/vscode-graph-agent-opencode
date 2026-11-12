@@ -15,6 +15,13 @@ let releaseDelayedWrite;
 let delayedWriteResponse;
 let delayedWriteCommitted;
 let holdNextBWrite = false;
+let holdNextBInventory = false;
+let holdNextBInstall = false;
+let releaseInventory, inventorySeen, releaseInstall, installSeen;
+const inventoryReleased = new Promise(resolve => { releaseInventory = resolve; });
+const inventoryRead = new Promise(resolve => { inventorySeen = resolve; });
+const installReleased = new Promise(resolve => { releaseInstall = resolve; });
+const installAccepted = new Promise(resolve => { installSeen = resolve; });
 
 const delayedWriteReleased = new Promise(resolve => { releaseDelayedWrite = resolve; });
 const delayedWriteSeen = new Promise(resolve => { delayedWriteCommitted = resolve; });
@@ -44,6 +51,23 @@ try {
     delayedWriteResponse = { status: response.status(), body, headers };
     delayedWriteCommitted();
     await delayedWriteReleased;
+    await route.fulfill({ response });
+  });
+  await page.route(/\/api\/gateway\/service-plugins\/(inventory|install)$/, async route => {
+    const request = route.request(), body = request.postDataJSON();
+    if (body.gateway_id !== input.gatewayB) return route.continue();
+    const installing = new URL(request.url()).pathname.endsWith('/install');
+    if (installing ? !holdNextBInstall : !holdNextBInventory) return route.continue();
+    if (installing) holdNextBInstall = false; else holdNextBInventory = false;
+    // 只持有真实目标响应；安装仍由 B 受理，库存也由原安装 owner 读取。
+    const response = await route.fetch();
+    const envelope = await response.json();
+    if (installing) {
+      result.installation = { ...envelope.data, gateway_connection_id: body.gateway_connection_id,
+        response_status: response.status(), request_id: envelope.request_id, response_request_id: response.headers()['x-request-id'] };
+      installSeen();
+      await installReleased;
+    } else { inventorySeen(); await inventoryReleased; }
     await route.fulfill({ response });
   });
 
@@ -112,6 +136,7 @@ try {
     for (const version of versions) await expect(packageRow(version)).toBeVisible();
     await expect(view.locator('.service-plugin-package')).toHaveCount(versions.length);
   };
+  const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
 
   result.phase = 'title-target-b';
   await chooseTarget(input.remoteName);
@@ -133,6 +158,72 @@ try {
   const aOwner = await aDetails.locator('p').nth(1).textContent();
   assert.match(aOwner, new RegExp(input.gatewayA));
   result.detailOwners.push(input.gatewayA);
+
+  result.phase = 'independent-settings-target';
+  const selectingSettings = command('boxteam.settings.selectTarget');
+  await pick(input.remoteName);
+  assert.equal((await selectingSettings).gateway_id, input.gatewayB);
+  await waitForTargetInventory([input.versionA]);
+  const openingSettings = command('boxteam.settings.openTarget');
+  await expect(quick).toContainText(`Gateway ${input.gatewayB}`);
+  await page.keyboard.press('Escape');
+  await openingSettings;
+  result.independentTargets = { extensions: input.gatewayA, settings: input.gatewayB };
+
+  result.phase = 'late-b-inventory';
+  holdNextBInventory = true;
+  await chooseTarget(input.remoteName);
+  await inventoryRead;
+  await chooseTarget('本地');
+  await waitForTargetInventory([input.versionA]);
+  const delayedInventoryResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith('/service-plugins/inventory')
+    && response.request().postDataJSON().gateway_id === input.gatewayB);
+  releaseInventory();
+  await delayedInventoryResponse;
+  await waitForTargetInventory([input.versionA]);
+  result.lateInventory = { gateway_id: input.gatewayB, visible_gateway_id: input.gatewayA };
+
+  result.phase = 'install-b-while-showing-a';
+  await chooseTarget(input.remoteName);
+  await waitForTargetInventory([input.versionB1, input.versionB2]);
+  holdNextBInstall = true;
+  await view.getByRole('button', { name: '安装插件包', exact: true }).click();
+  await expect(quick.getByRole('option').filter({ hasText: 'ZIP 文件' })).toHaveCount(0);
+  await expect(quick.getByRole('option').filter({ hasText: '开发目录' })).toHaveCount(0);
+  await pick('自有来源');
+  await pick('target-ui');
+  await inputQuick(input.packageId);
+  await pick(`${input.packageId}@3.0.0`);
+  await installAccepted;
+  assert.equal(result.installation.response_status, 200, JSON.stringify(result.installation));
+  assert.equal(result.installation.request_id, result.installation.response_request_id);
+  assert.equal(result.installation.gateway_id, input.gatewayB);
+  await chooseTarget('本地');
+  await waitForTargetInventory([input.versionA]);
+  const installedResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith('/service-plugins/install')
+    && response.request().postDataJSON().gateway_id === input.gatewayB);
+  releaseInstall();
+  await installedResponse;
+  await expect(page.locator('.notifications-toasts')).toContainText(
+    `已在 原生 Gateway ${input.gatewayB}（连接 ${input.connectionId}） 安装 ${input.packageId}@3.0.0`);
+  const operation = await api('/api/gateway/service-plugins/install-operation', { method: 'POST', body: {
+    gateway_id: input.gatewayB, gateway_connection_id: input.connectionId, operation_id: result.installation.operation_id,
+  } });
+  result.installation = { ...operation, gateway_connection_id: input.connectionId };
+  await waitForTargetInventory([input.versionA]);
+  await chooseTarget(input.remoteName);
+  await waitForTargetInventory([input.versionB1, input.versionB2, '3.0.0']);
+  const uninstallResponse = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith('/service-plugins/uninstall'));
+  await packageRow('3.0.0').getByRole('button', { name: '卸载整个包', exact: true }).click();
+  await pick('卸载整包');
+  const uninstalled = await uninstallResponse;
+  assert.equal(uninstalled.status(), 200);
+  assert.equal(uninstalled.request().postDataJSON().gateway_id, input.gatewayB);
+  result.uninstall = (await uninstalled.json()).data;
+  await waitForTargetInventory([input.versionB1, input.versionB2]);
 
   result.phase = 'delayed-b-write';
   await chooseTarget(input.remoteName);
@@ -256,6 +347,9 @@ try {
   throw error;
 } finally {
   releaseDelayedWrite?.();
+  releaseInventory?.();
+  releaseInstall?.();
+  if (page) await page.unrouteAll({ behavior: 'wait' });
   if (page && result.phase !== 'complete') {
     const screenshotPath = input.resultPath.replace(/\.json$/, '-failure.png');
     try { await page.screenshot({ path: screenshotPath, fullPage: true }); result.screenshotPath = screenshotPath; }

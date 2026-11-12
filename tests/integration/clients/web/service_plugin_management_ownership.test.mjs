@@ -141,7 +141,7 @@ function createInstallCommand(request, picks, inputs, observed, options = {}) {
   const accessor = { get(token) {
     if (!accessorActive) throw new Error('服务 accessor 仅在同步命令调用期间有效');
     if (token === quickInputToken) return {
-      pick: async (_items, dialog, cancellation) => { await options.beforeInput?.(dialog, cancellation); return picks.shift(); },
+      pick: async (items, dialog, cancellation) => { await options.beforeInput?.(dialog, cancellation, items); return picks.shift(); },
       input: async (dialog, cancellation) => { await options.beforeInput?.(dialog, cancellation); return inputs.shift(); },
     };
     if (token === notificationToken) return notifications;
@@ -169,6 +169,18 @@ function operation(gatewayId = 'gateway-original', operationId = 'operation-orig
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprint.json'), `${JSON.stringify({
   path: sourcePath, sha256: sourceFingerprint,
 }, null, 2)}\n`));
+
+test('安装入口只为当前原生 Gateway 提供本机包，远端只提供自有来源与原操作查询', async () => {
+  for (const native of [true, false]) {
+    const calls = [], menus = [];
+    await createInstallCommand(async path => { calls.push(path); }, [], [], [], {
+      lifecycle: { gatewayId: native ? 'gateway-original' : 'entry-gateway', context: new Set(), auth: new Set() },
+      beforeInput: (_dialog, _token, items) => menus.push(items.map(item => item.kind)),
+    })();
+    expect(menus).toEqual([native ? ['zip', 'directory', 'source', 'query'] : ['source', 'query']]);
+    expect(calls).toEqual([]);
+  }
+});
 
 test('Gateway 就绪前不打开安装向导，就绪后使用同步取得的原命令服务', async () => {
   const ready = Promise.withResolvers(), entered = Promise.withResolvers();

@@ -45,6 +45,7 @@ export function createManagementTargetLifecycle(message: string, expectedEntryGa
     }
   };
   return {
+    entryGatewayId,
     token: cancellation.token,
     signal: controller.signal,
     check,
