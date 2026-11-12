@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from contextvars import ContextVar
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from threading import Event
@@ -380,7 +381,6 @@ class ResourceNavigation:
         matches: list[ResourceNavigationMatchDTO] = []
         contexts: dict[tuple[str, int], ResourceNavigationContextDTO] = {}
         seen: set[str] = set()
-        fuzzy_query = request.query.casefold() if request.search_mode == "fuzzy" and request.query is not None else ""
         # 预留固定长度的续页及截断字段，序列化后的实际正文仍在 _response 核验。
         response_bytes = self._size(ResourceNavigationResultDTO(
             node=node, truncated=True, next_cursor="x" * 512, truncation_reason="response_byte_limit",
@@ -398,44 +398,29 @@ class ResourceNavigation:
                             "canonical_uri": node.canonical_uri + child_node.uri[len(node.uri):],
                         })
                     match = hit.match if hit is not None else None
-                    relative = parse_resource_uri(child_node.uri).tail_segments[len(parsed.tail_segments):]
-                    name = "/".join(relative) or parsed.tail_segments[-1]
-                    if request.operation == "list":
-                        included = True
-                    elif request.search_mode == "content":
-                        included = match is not None
-                    elif request.search_mode == "glob":
-                        included = child_node.resource_shape == "file" and self._glob_pattern(request.query).match(name)
-                    elif request.search_mode == "fuzzy":
-                        included = child_node.resource_shape == "file" and is_subsequence(fuzzy_query, name.casefold())
-                    else:
-                        included = request.query in "/".join(parse_resource_uri(child_node.uri).tail_segments[1:])
-                    if included and request.operation == "search" and request.search_mode != "content":
-                        included = self._file_included(name, request)
-                    if included:
-                        additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts} if hit is not None else {}
-                        entry_bytes = 0 if child_node.uri in seen else len(child_node.model_dump_json().encode()) + 1
-                        if match is not None:
-                            entry_bytes += len(match.model_dump_json().encode()) + 1
-                        entry_bytes += sum(len(line.model_dump_json().encode()) + 1 for line in additions.values())
-                        reason = "entry_limit" if (len(matches) if request.search_mode == "content" else len(entries)) == request.limit else (
-                            "response_byte_limit" if response_bytes + entry_bytes > request.max_response_bytes else None
-                        )
-                        if reason is not None:
-                            if not entries:
-                                raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳一个文件节点及续页凭据", reason="response_byte_limit")
-                            # 续点指向首条未交付项；页预算不能推进越过该命中。
-                            cursor = self._encode_cursor(binding, position)
-                            result = ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values()),
-                                truncated=True, next_cursor=cursor, truncation_reason=reason)
-                            break
-                        if child_node.uri not in seen:
-                            entries.append(child_node)
-                            seen.add(child_node.uri)
-                        if match is not None:
-                            matches.append(match)
-                        contexts.update(additions)
-                        response_bytes += entry_bytes
+                    additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts} if hit is not None else {}
+                    entry_bytes = 0 if child_node.uri in seen else len(child_node.model_dump_json().encode()) + 1
+                    if match is not None:
+                        entry_bytes += len(match.model_dump_json().encode()) + 1
+                    entry_bytes += sum(len(line.model_dump_json().encode()) + 1 for line in additions.values())
+                    reason = "entry_limit" if (len(matches) if request.search_mode == "content" else len(entries)) == request.limit else (
+                        "response_byte_limit" if response_bytes + entry_bytes > request.max_response_bytes else None
+                    )
+                    if reason is not None:
+                        if not entries:
+                            raise ResourceFileOperationError("output_limit_exceeded", "响应预算不足以容纳一个文件节点及续页凭据", reason="response_byte_limit")
+                        # 续点指向首条未交付项；页预算不能推进越过该命中。
+                        cursor = self._encode_cursor(binding, position)
+                        result = ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values()),
+                            truncated=True, next_cursor=cursor, truncation_reason=reason)
+                        break
+                    if child_node.uri not in seen:
+                        entries.append(child_node)
+                        seen.add(child_node.uri)
+                    if match is not None:
+                        matches.append(match)
+                    contexts.update(additions)
+                    response_bytes += entry_bytes
                 else:
                     result = ResourceNavigationResultDTO(node=node, entries=tuple(entries), matches=tuple(matches), contexts=tuple(contexts.values()))
         except ForbiddenError as error:
@@ -494,7 +479,7 @@ class ResourceNavigation:
         consumed = 0
         truncated = False
         reason = None
-        for hit in self._content_matches(node, content, request, deadline, pattern):
+        for hit in self._content_matches(node.uri, content, request, deadline, pattern):
             if hit is None:
                 continue
             consumed += 1
@@ -577,23 +562,25 @@ class ResourceNavigation:
         is_private: Callable[[Path, Path], bool] | None,
     ) -> Iterator[tuple[ResourceNavigationNodeDTO, ContentMatch | None, SearchPosition]]:
         path = self._contained(root, children, parsed, is_private)
-        candidates = self._walk(root, children, parsed, request, deadline, subtrees, is_private) if node.resource_shape == "directory" else iter(((node, FileObservation(self._stat(path)), _entry_identity(root.joinpath(*children), path)),))
+        candidates = self._walk(root, children, parsed, request, deadline, subtrees, is_private) if node.resource_shape == "directory" else iter(((parsed, path, FileObservation(self._stat(path)), _entry_identity(root.joinpath(*children), path)),))
         root_stat = path.stat()
         prefix = hashlib.sha256(str((root_stat.st_dev, root_stat.st_ino, root_stat.st_mtime_ns)).encode())
         prefix_checked = not resume.prefix
         index = 0
+        fuzzy_query = request.query.casefold() if request.search_mode == "fuzzy" and request.query is not None else ""
         # TODO：目录前缀仍逐页观察；64 文件小页实测见 test_content_cursor_skips_completed_file_bodies。
         # 后续复用须沿原 watcher/cacheKey 生命周期，不能缓存另一份权威目录或绕过重启续页校验。
-        for child, metadata, identity in candidates:
+        for child, child_path, metadata, identity in candidates:
             self._check_deadline(deadline)
-            if request.search_options is not None and request.search_options.files_only and child.resource_shape != "file":
+            is_file = stat.S_ISREG(metadata.stat[2])
+            if request.search_options is not None and request.search_options.files_only and not is_file:
                 continue
             if identity in excluded:
                 continue
             index += 1
             # 文件观察值和 ignore 版本足以识别可变前缀；不重复序列化每条命中正文。
             previous_prefix = prefix.hexdigest()
-            prefix.update(json.dumps((child.uri, metadata), separators=(",", ":")).encode())
+            prefix.update(json.dumps((child.display_uri, metadata), separators=(",", ":")).encode())
             current_prefix = prefix.hexdigest()
             if index <= resume.offset:
                 continue
@@ -602,30 +589,46 @@ class ResourceNavigation:
                     raise ResourceFileOperationError("execution_failed", "目录已改变，不能沿旧 cursor 续页", reason="stale_cursor")
                 prefix_checked = True
             skipped = resume.matches if index == resume.offset + 1 else 0
+            name = "/".join(child.tail_segments[len(parsed.tail_segments):]) or parsed.tail_segments[-1]
+            if request.operation == "list" or request.search_mode == "content":
+                included = True
+            elif request.search_mode == "glob":
+                included = is_file and self._glob_pattern(request.query).match(name)
+            elif request.search_mode == "fuzzy":
+                included = is_file and is_subsequence(fuzzy_query, name.casefold())
+            else:
+                included = request.query in "/".join(child.tail_segments[1:])
+            if included and request.operation == "search" and request.search_mode != "content":
+                included = self._file_included(name, request)
             hits = self._file_matches(root, parsed, child, metadata, request, deadline, pattern, is_private) if (
-                request.operation == "search" and request.search_mode == "content" and child.resource_shape == "file"
+                request.operation == "search" and request.search_mode == "content" and is_file
             ) else iter((None,))
+            child_node = None
             for match_index, hit in enumerate(hits):
                 if skipped:
                     skipped -= 1
                     continue
-                yield child, hit, SearchPosition(index - 1, match_index, current_prefix if match_index else previous_prefix)
+                if not included or (request.operation == "search" and request.search_mode == "content" and hit is None):
+                    continue
+                # 非命中项只参与扫描和续点校验；实际交付时才构造完整结果。
+                if child_node is None:
+                    child_node = self._node(child, child_path)
+                yield child_node, hit, SearchPosition(index - 1, match_index, current_prefix if match_index else previous_prefix)
             if skipped:
                 raise ResourceFileOperationError("execution_failed", "文件内 cursor 的位置不存在", reason="stale_cursor")
         if not prefix_checked:
             raise ResourceFileOperationError("execution_failed", "目录已改变，旧 cursor 的位置不存在", reason="stale_cursor")
 
     def _file_matches(
-        self, root: Path, parsed: ParsedResourceUri, child: ResourceNavigationNodeDTO, metadata: FileObservation,
+        self, root: Path, parsed: ParsedResourceUri, child: ParsedResourceUri, metadata: FileObservation,
         request: ResourceNavigationRequest, deadline: float, pattern: regex.Pattern[str] | None,
         is_private: Callable[[Path, Path], bool] | None,
     ) -> Iterator[ContentMatch | None]:
-        target = parse_resource_uri(child.uri)
-        name = "/".join(target.tail_segments[len(parsed.tail_segments):]) or target.tail_segments[-1]
+        name = "/".join(child.tail_segments[len(parsed.tail_segments):]) or child.tail_segments[-1]
         if not self._file_included(name, request) or Path(name).suffix.lower() in _MEDIA_EXTENSIONS:
             yield None
             return
-        file = self._contained(root, target.tail_segments[1:], target, is_private)
+        file = self._contained(root, child.tail_segments[1:], child, is_private)
         data = self._read_bytes(file, request.max_bytes, deadline, before=metadata.stat)
         # 与既有 grep 一致跳过二进制；已知媒体不进入文本解码。
         if b"\0" in data:
@@ -637,17 +640,17 @@ class ResourceNavigation:
             content = data.decode("utf-8")
         except UnicodeDecodeError as error:
             raise ResourceFileOperationError("invalid_encoding", "搜索文件不是有效的 UTF-8 文本", reason="utf8") from error
-        yield from self._content_matches(child, content, request, deadline, pattern)
+        yield from self._content_matches(child.display_uri, content, request, deadline, pattern)
 
     def _content_matches(
-        self, child: ResourceNavigationNodeDTO, content: str, request: ResourceNavigationRequest,
+        self, uri: str, content: str, request: ResourceNavigationRequest,
         deadline: float, pattern: regex.Pattern[str] | None,
     ) -> Iterator[ContentMatch | None]:
         if pattern is None:
             raise ValueError("内容搜索缺少已编译查询")
         found = False
         try:
-            for hit in content_matches(child.uri, content, request, deadline, pattern, time.monotonic):
+            for hit in content_matches(uri, content, request, deadline, pattern, time.monotonic):
                 found = True
                 yield hit
         except TimeoutError as error:
@@ -738,7 +741,7 @@ class ResourceNavigation:
         self, root: Path, children: tuple[str, ...], parsed: ParsedResourceUri,
         request: ResourceNavigationRequest, deadline: float, subtrees: frozenset[FileEntryIdentity],
         is_private: Callable[[Path, Path], bool] | None,
-    ) -> Iterator[tuple[ResourceNavigationNodeDTO, FileObservation, FileEntryIdentity]]:
+    ) -> Iterator[tuple[ParsedResourceUri, Path, FileObservation, FileEntryIdentity]]:
         pending: list[tuple[tuple[str, ...], IgnoreScope | None]] = [(children, None)]
         visited: set[Path] = set()
         scanned = 0
@@ -820,10 +823,14 @@ class ResourceNavigation:
                     child_path = self._contained(root, child_parts, parsed, is_private)
                 elif not child_path.is_relative_to(root):
                     raise ResourceUriResolveError("capability_denied", "文件节点越出已公布根")
-                child_node = self._node(parse_resource_uri(uri), child_path)
+                metadata = self._stat(child_path)
+                if not (stat.S_ISDIR(metadata[2]) or stat.S_ISREG(metadata[2])):
+                    raise ResourceUriResolveError("capability_denied", "资源只公布普通文件与目录")
+                # 构造器已校验 URI；保留已知文件段，后续筛选不再反复解析同一地址。
+                child_uri = replace(parsed, display_uri=uri, tail_segments=(parsed.tail_segments[0], *child_parts))
                 # 仅校验续页前缀的可变视图，不作为文件内容 hash 或历史 revision。
-                yield child_node, FileObservation(self._stat(child_path), scope.version if scope is not None else ()), _entry_identity(entry_path, child_path)
-                if request.operation == "search" and child_node.resource_shape == "directory":
+                yield child_uri, child_path, FileObservation(metadata, scope.version if scope is not None else ()), _entry_identity(entry_path, child_path)
+                if request.operation == "search" and stat.S_ISDIR(metadata[2]):
                     pending.append((child_parts, scope))
             if request.operation == "list":
                 break
