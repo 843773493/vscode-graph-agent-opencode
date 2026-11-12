@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -134,6 +135,13 @@ async def test_real_screenshot_storage_failure_keeps_operation_and_retry(
         assert image.status_code == 200 and image.headers["content-type"] == "image/png"
         assert image.content.startswith(b"\x89PNG\r\n\x1a\n") and len(image.content) == saved["byte_length"]
         assert len(list(screenshots.glob("*.png"))) == 1
+        screenshot = screenshots / f"{browser_id}-{saved['screenshot_id']}.png"
+        expired_at = time.time() - 31 * 86400
+        os.utime(screenshot, (expired_at, expired_at))
+        expired = await gateway.client.get(f"{route}{saved['screenshot_url']}", params=params, headers=headers)
+        assert expired.status_code == 404
+        assert expired.json()["code"] == "browser_artifact_not_found"
+        assert str(root) not in expired.text
         run.write_result("passed", {
             "scope": "真实Gateway/Node/HTTP/Chromium截图、原生目录冲突与日志writer次错；未覆盖完整Workbench或Backend重启",
             "browser_id": browser_id, "failed_sink": fail_sink,

@@ -16,6 +16,7 @@ import {
   resolveRequiredWorkspaceRoot,
 } from "./browserManager.js";
 import { validateWorkspaceId } from "./workspaceIdentity.js";
+import { SCREENSHOT_RETENTION_MS } from "./browserStateStore.js";
 import { LatestPointerMoveDispatcher } from "./operations/latestPointerMoveDispatcher.js";
 import { encodeBinaryFrame, encodeServerMessage, parseClientMessage } from "./transport/protocol.js";
 
@@ -68,7 +69,7 @@ async function sendDownload(response, file, { browserId, artifactId, kind, media
     logger.error("[browser-backend] 读取浏览器产物失败", {
       browser_id: browserId, artifact_id: artifactId, kind, stage: failedStage, path: file.path,
     }, cause);
-    const missing = failedStage === "open" && cause.code === "ENOENT";
+    const missing = ["open", "retention"].includes(failedStage) && cause.code === "ENOENT";
     const error = new Error(
       `读取浏览器产物失败: browser_id=${browserId}, artifact_id=${artifactId}, kind=${kind}, stage=${failedStage}, code=${cause.code || "unknown"}`,
       { cause },
@@ -83,6 +84,10 @@ async function sendDownload(response, file, { browserId, artifactId, kind, media
     const fileStat = await handle.stat();
     if (!fileStat.isFile()) {
       throw Object.assign(new Error("浏览器产物不是普通文件"), { code: fileStat.isDirectory() ? "EISDIR" : "EINVAL" });
+    }
+    if (kind === "screenshot" && fileStat.mtimeMs <= Date.now() - SCREENSHOT_RETENTION_MS) {
+      stage = "retention";
+      throw Object.assign(new Error("截图已过期"), { code: "ENOENT" });
     }
     const headers = {
       "content-type": mediaType,
@@ -225,6 +230,7 @@ async function main() {
   const readJson = createJsonRequestReader(workspaceLogger);
   const manager = new BrowserManager({ workspaceRoot, workspaceId });
   await manager.init();
+  manager.startArtifactPrune();
   manager.startResourceGovernor({
     policy: {
       ...(process.env.BOXTEAM_BROWSER_IDLE_FREEZE_MS

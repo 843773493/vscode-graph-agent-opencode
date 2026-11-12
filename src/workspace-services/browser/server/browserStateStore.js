@@ -1,7 +1,7 @@
 import { createRuntimeLogger } from "../../../shared/serverRuntimeLogging.mjs";
 
 import path from "node:path";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, opendir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
 const logger = createRuntimeLogger("browser", "browser.browserStateStore");
@@ -32,6 +32,7 @@ export const DEFAULT_CHECKPOINT_LIMITS = Object.freeze({
 });
 
 const CHECKPOINT_SCAN_BATCH_SIZE = 64;
+export const SCREENSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function checkpointQuotaError(code, message, details) {
   const error = new Error(`${message}: ${Object.entries(details)
@@ -399,6 +400,22 @@ export class BrowserStateStore {
     }
     // 只返回不含文件系统路径的可寻址身份；真实路径仅在本调用栈内使用（裁定 D-A2/D-A3）。
     return { screenshot_id: screenshotId, byte_length: buffer.byteLength };
+  }
+
+  async pruneScreenshots() {
+    let directory;
+    try {
+      directory = await opendir(this.screenshotDir);
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    const cutoff = Date.now() - SCREENSHOT_RETENTION_MS;
+    for await (const entry of directory) {
+      if (!entry.isFile() || !/^browser_[a-f0-9]{32}-screenshot_[a-f0-9]{32}\.png$/.test(entry.name)) continue;
+      const file = path.join(this.screenshotDir, entry.name);
+      if ((await stat(file)).mtimeMs <= cutoff) await rm(file);
+    }
   }
 
   /** @returns {Promise<BrowserSavedDownload>} */

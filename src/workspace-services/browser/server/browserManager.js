@@ -2,6 +2,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
+import { setInterval } from "node:timers/promises";
 import { validateWorkspaceId } from "./workspaceIdentity.js";
 import { BrowserSession } from "./browserSession.js";
 import { DEFAULT_OPERATION_DRAIN_TIMEOUT_MS, drainBrowserExecutions } from "./browserRuntime.js";
@@ -97,6 +98,8 @@ export class BrowserManager {
     this.stateWriteRequested = false;
     this.stateWritePromise = null;
     this.persistTimer = null;
+    this.artifactPruneTask = null;
+    this.artifactPruneAbort = null;
     this.createAdmissionTail = Promise.resolve();
     this.closingRequested = false;
     this.shutdownPromise = null;
@@ -118,6 +121,26 @@ export class BrowserManager {
     this.resourceGovernor = new BrowserResourceGovernor({ manager: this, ...options });
     this.resourceGovernor.start();
     return this.resourceGovernor.snapshot();
+  }
+
+  startArtifactPrune() {
+    if (this.artifactPruneTask) return;
+    this.artifactPruneAbort = new AbortController();
+    this.artifactPruneTask = this.pruneArtifactsPeriodically(this.artifactPruneAbort.signal);
+    void this.artifactPruneTask.catch(error => logger.error("[browser-manager] 截图清理任务失败", {
+      workspace_id: this.workspaceId,
+    }, error));
+  }
+
+  async pruneArtifactsPeriodically(signal) {
+    await this.stateStore.pruneScreenshots();
+    try {
+      for await (const _ of setInterval(3_600_000, undefined, { signal, ref: false })) {
+        await this.stateStore.pruneScreenshots();
+      }
+    } catch (error) {
+      if (error.code !== "ABORT_ERR") throw error;
+    }
   }
 
   stopResourceGovernor() {
@@ -549,6 +572,7 @@ export class BrowserManager {
   } = {}) {
     this.closingRequested = true;
     this.stopResourceGovernor();
+    this.artifactPruneAbort?.abort();
     for (const session of this.browsersById.values()) session.closingRequested = true;
     if (!this.shutdownPromise) {
       // 唯一执行覆盖全部阶段；观察到期不取消原任务，也不启动第二批检查点或关闭。
@@ -585,6 +609,15 @@ export class BrowserManager {
   }
 
   async drainShutdown(reason, operationDrainTimeoutMs) {
+    if (this.artifactPruneTask) {
+      this.shutdownStage = "artifacts";
+      try {
+        await this.artifactPruneTask;
+      } finally {
+        this.artifactPruneTask = null;
+        this.artifactPruneAbort = null;
+      }
+    }
     const drainDeadline = performance.now() + operationDrainTimeoutMs;
     this.shutdownStage = "creations";
     if (!await drainBrowserExecutions(this.pendingCreations, Math.max(0, drainDeadline - performance.now()))) {
