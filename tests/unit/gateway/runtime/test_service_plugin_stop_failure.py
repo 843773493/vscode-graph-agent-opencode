@@ -89,6 +89,40 @@ async def blocked_plugin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         await skills.close()
 
 
+async def test_status_reads_use_exit_notification_without_polling_process(
+    blocked_plugin: tuple[GatewayPluginRuntime, list[Mock], PluginBinding],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, processes, binding = blocked_plugin
+    slot = owner.slots[owner.key(binding)]
+    process = processes[0]
+    process.is_alive.side_effect = AssertionError("状态读取不应重复探活")
+    process.process = Mock()
+    exited = asyncio.Event()
+
+    async def wait_exit(process_id: int) -> None:
+        assert slot.receipt is not None and process_id == slot.receipt.process_id
+        await exited.wait()
+
+    monkeypatch.setattr("app.gateway.runtime.service_plugins.runtime.wait_process_exit", wait_exit)
+    owner._watch_exit(slot)
+    try:
+        for _ in range(3):
+            assert PluginSlotStatusDTO.model_validate(slot.describe()).state == "ready"
+        changed = owner.changed
+        exited.set()
+        assert slot.exit_waiter is not None
+        await slot.exit_waiter
+        status = PluginSlotStatusDTO.model_validate(slot.describe())
+        assert status.state == "failed" and status.instance is not None
+        assert status.instance.instance_id == "instance-1"
+        assert status.error == "插件进程已退出；需显式重启，不自动重放在途操作"
+        assert slot.stopped.is_set() and changed.is_set()
+        process.process.poll.assert_called_once_with()
+    finally:
+        process.is_alive.side_effect = None
+
+
 @pytest.mark.parametrize("workspace_id", [None, "workspace-owner"])
 @pytest.mark.parametrize("operation", ["disable", "new-disabled", "switch-disabled"])
 async def test_disabled_candidate_checks_compatibility_except_when_closing_original_binding(

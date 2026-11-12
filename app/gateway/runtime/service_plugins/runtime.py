@@ -140,8 +140,6 @@ class PluginSlot:
                                    for command in self.declaration.contributes.commands} if self.declaration else {}
 
     def describe(self) -> dict[str, object]:
-        if self.process is not None and self.state == "ready" and not self.process.is_alive():
-            self.state, self.error = "failed", "插件进程已退出；需显式重启，不自动重放在途操作"
         return {"gateway_id": self.gateway_id, "instance_scope": "workspace" if self.binding.workspace_id is not None else "gateway",
                 "binding": self.binding.model_dump(mode="json"), "revision": self.revision,
                 "state": self.state, "error": self.error,
