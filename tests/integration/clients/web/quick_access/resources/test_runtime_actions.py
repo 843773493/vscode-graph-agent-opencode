@@ -102,7 +102,8 @@ async def test_manage_runtime_resources_without_opening_details(
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert all(result[key] for key in ("browseOnly", "cancelOnly", "directStop", "detachedWithoutDelete",
                                       "deletedSeparately", "originalReact", "revisionConflict", "ownerB",
-                                      "focusOtherWorkspace", "focusExactTerminal", "focusBrowserWithoutAttach"))
+                                      "focusOtherWorkspace", "focusExactTerminal", "focusBrowserWithoutAttach",
+                                      "sessionOwnerConflict", "sessionDetach"))
     assert result["forbiddenWrites"] == []
     with provider.control._condition:
         calls = {key: count for key, count in provider.control._counters.items() if key.startswith("model_call/")}

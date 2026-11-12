@@ -135,6 +135,7 @@
   - 原控制面发现复用有界查询；三个原Command交回导航hooks，菜单和控制中心同链。执行前只读`check_health=false`登记，不增加全目标健康探测；明确来源解析错误直接暴露，无owner才选择。25项定向合同、共享树Workbench真实类型、Ruff及正式构建通过；真实Gateway页面验证浏览／范围取消零写入、启动B不激活、独立切换及原导航切回，零模型调用／页面错误。证据`out/tests/temp/2026/11/05/workspace_quick_actions/artifacts/root-integration-037.json`。同批Composer提示断言失败另行修复，不宣称组合全绿；远程连接、多成员确认和Electron未由本页覆盖。
 - [ ] 11.5 接入终端／浏览器／MCP 等已有资源的查找、聚焦和原生命周期动作，保持 stop／detach／delete 区分及合法关联范围。
   - 2026-11-06 `resource ` 已接入原工作区终端／Browser 清单和上述五种独立管理动作；同名和空页面标题以稳定 ID 区分，所有来源 metadata 共用原三并发，单次发现后本地筛选、关闭／身份失效取消实际读取。74项受保护合同／464条断言、57份真实转换类型、Ruff／Pyright及正式Web构建通过；真实Gateway双工作区页面核浏览／二级取消零写入、stop保留关联、detach不删除、delete独立确认、原Browser按钮、旧revision409和B操作不切导航，pageErrors及模型调用均零。Web独立tsc仍为28条既存诊断，未新增。精确命令、源码指纹、原始失败归因和通过证据见 `out/tests/temp/2026/11/06/runtime_resource_actions/artifacts/verification.json`。精确聚焦、MCP、右侧Session资源动作及Electron／Windows运行资源管理继续未完成，不以本片勾整项。
+  - 2026-11-12 右侧 Session 资源的保留／关联／解除关联迁到同一资源 Command，冻结元数据中的 ID／revision；读取期间版本或凭据变化拒绝写入，最终由原 Session loader 权威重读。原 Session 停止／Browser wake 合同继续原入口。54项定向检查281条断言、172份真实转换源码类型、79扩展正式构建和完整运行资源页面通过；页面同时核跨工作区精确聚焦、浏览／二级取消零写入、stop／detach／delete区别、真实409及新Session旧版本拒绝后精确解除关联，零模型／页面错误。刷新收起详情及Browser重建抢焦点的失败原件、修正后的测试边界和最小复审见 `out/tests/temp/2026/11/12/session_runtime_actions/artifacts/verification.json`。仅关闭此子链，MCP／其它动作和跨平台仍不由本片证明，11.1／11.5／11.6／11.7保持未勾选。
 - [ ] 11.6 统一 pending／confirmed、完整权威替换、失败重新读取与未知结果对账，取消未接受步骤不写入，关闭已受理浮层不撤销／重放后端动作。
 - [ ] 11.7 验证未打开详情直接管理、显式 child 优先、任务 revision 冲突、目录 outbox 回执和预览无写副作用，移除迁齐后无消费者的同义执行链。
 

@@ -9,7 +9,6 @@ import { useThreadSessionRuntime } from '../../../web/src/hooks/session/useThrea
 import { useSessionResourcePolling } from '../../../web/src/hooks/session/useSessionResourceLoader.js';
 import { resourceThreadAssociations } from '../../../web/src/state/display/workspaceResourceDisplay.js';
 import { createSessionConnection } from '../../../web/src/api/gateway/sessionConnections.js';
-import { getWorkspaceResource, controlWorkspaceResource } from '../../../web/src/api/workspaceResources.js';
 import { buildGatewayAttachUrl } from '../../../web/src/utils/attachUrls.js';
 import { resourceFileRootUri } from '../../../web/src/utils/workspaceFileReferences.js';
 import { workspaceFileUri } from '../workspaceFiles.js';
@@ -18,6 +17,8 @@ import { ThreadInput } from '../threadInput.js';
 import type { AttachmentRef, InternalDisplayProvenance } from '../../../web/src/types/backend.js';
 import type { ChildThreadForkPoint } from '../../../web/src/components/panels/sessionPanels/ChildThreadConversation.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import type { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
+import { resourceActionCommand } from '../resources/runtimeActions.js';
 import { TaskView } from './taskView.js';
 import NodeDebugWorkbench from '../../../web/src/components/nodeDebug/NodeDebugWorkbench.js';
 import { useNodeDebugController } from '../../../web/src/hooks/nodeDebug/useNodeDebugController.js';
@@ -35,8 +36,8 @@ const resourceTab: Record<ThreadInput['resourceTab'], WorkspaceAuxiliaryTab> = {
 function reportResourceStatus(message: string): void { console.info('会话资源：', message); }
 
 /** 文件树、变更审阅和资源操作均使用旧前端完整组件。 */
-export function ResourceView({ input, runtime, editors, active, attachment, ratio, onUpdate, onFileOpenMenu, reportRequest, onForkThread, onError }: {
-  input: ThreadInput; runtime: Runtime; editors: IEditorService; active: boolean; attachment: AttachmentRef | null; ratio: number; onUpdate: () => void;
+export function ResourceView({ input, runtime, editors, commands, active, attachment, ratio, onUpdate, onFileOpenMenu, reportRequest, onForkThread, onError }: {
+  input: ThreadInput; runtime: Runtime; editors: IEditorService; commands: ICommandService; active: boolean; attachment: AttachmentRef | null; ratio: number; onUpdate: () => void;
   onFileOpenMenu: FileOpenMenuHandler;
   reportRequest: InternalDisplayProvenance | null;
   onForkThread: (threadId: string, point: ChildThreadForkPoint) => void;
@@ -148,7 +149,12 @@ export function ResourceView({ input, runtime, editors, active, attachment, rati
         onControl={content.controlSessionResource} onOpenTerminalPreview={id => openRuntime('terminal', id)} onOpenBrowserPreview={id => openRuntime('browser', id)}
         onCloseResourcePreview={async () => setPreview(null)}
         onOwnerControl={async (id, action, target) => {
-          try { await controlWorkspaceResource(0, owner.workspaceKey, await getWorkspaceResource(0, owner.workspaceKey, id), action, target ?? thread); }
+          const revision = resourceItems.find(item => item.resource_id === id)?.metadata.owner_revision;
+          try {
+            if (typeof revision !== 'number') throw new Error('会话资源缺少权威版本，请刷新后重新选择操作');
+            await commands.executeCommand(resourceActionCommand(action), { owner: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId },
+              resource: { resource_id: id, owner_revision: revision }, thread: target ?? thread });
+          }
           finally { await content.refreshSessionResources(owner.sessionId, { force: true }); }
         }}
         onCreateConnection={async (kind, target) => {

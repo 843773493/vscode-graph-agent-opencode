@@ -155,6 +155,46 @@ try {
   expect((await settle(browserResource.resource_id, 'promote', () => row.getByRole('button', { name: '保留到工作区', exact: true }).click())).retention_scope).toBe('workspace');
   expect((await current(a, browserResource.resource_id)).retention_scope).toBe('workspace');
   expect(resourceActions(result.phase)).toHaveLength(1); expect(resourceActions(result.phase)[0].path).toBe(`/api/v1/resources/${browserResource.resource_id}/promote`); result.originalReact = true;
+
+  await phase('session-prepare');
+  const sessionTerminal = await api('/api/v1/resources/terminals', a, { ...sessions[0], title: 'Session 原资源', retention_scope: 'thread' });
+  await command('_workbench.open', `boxteam://${a.gateway_id}/workspace/${a.workspace_id}/resources/session/${sessions[0].session_id}/threads/${sessions[0].thread_id}`);
+  const threadPane = page.locator(`section.boxteam-thread[data-session-id="${sessions[0].session_id}"][data-thread-id="${sessions[0].thread_id}"]`).filter({ visible: true });
+  await expect(threadPane.locator('textarea[data-testid="composer-input"]')).toBeEnabled();
+  const toggle = threadPane.getByRole('button', { name: '切换会话资源', exact: true });
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  const sessionPanel = threadPane.locator('.native-thread-resources');
+  await sessionPanel.getByRole('tab', { name: '运行与连接', exact: true }).click();
+  const sessionRow = sessionPanel.locator('.resource-tree-item[data-resource-kind="terminal"]');
+  await expect(sessionRow).toHaveCount(1);
+  await sessionRow.locator('.resource-tree-chevron').click();
+  await sessionRow.locator('details.resource-details > summary').click();
+  await expect(sessionRow.locator(`[title="${sessionTerminal.resource_id}"]`)).toBeVisible();
+  await phase('session-stale');
+  // 在原 Command 读取详细 owner 前并发发布新版；不替换任何产品响应。
+  await page.route(`**/api/v1/resources/${sessionTerminal.resource_id}`, async route => {
+    expect(route.request().method()).toBe('GET');
+    await api(`/api/v1/resources/${sessionTerminal.resource_id}/promote`, a, { expected_revision: sessionTerminal.owner_revision });
+    await route.continue();
+  }, { times: 1 });
+  await sessionRow.getByRole('button', { name: '解除关联', exact: true }).click();
+  await expect(sessionPanel.locator('.resource-notice')).toContainText('资源管理失败');
+  await expect(sessionPanel.locator('.resource-notice details')).toContainText('资源版本已变化');
+  // 原 loader 在强制重读时卸载资源行，刷新后重新展开权威版本。
+  await expect(sessionRow).toHaveCount(1);
+  await sessionRow.locator('.resource-tree-chevron').click();
+  await expect(sessionRow.getByText('保留到工作区', { exact: true })).toBeVisible();
+  expect(resourceActions(result.phase).map(item => item.path)).toEqual([`/api/v1/resources/${sessionTerminal.resource_id}/promote`]);
+  const retained = await current(a, sessionTerminal.resource_id);
+  expect(retained.thread_associations).toEqual([sessions[0]]); result.sessionOwnerConflict = true;
+  await phase('session-detach');
+  const detachedSessionResource = await settle(sessionTerminal.resource_id, 'detach', () => sessionRow.getByRole('button', { name: '解除关联', exact: true }).click());
+  expect(detachedSessionResource.thread_associations).toEqual([]);
+  expect(detachedSessionResource.status).toBe('running');
+  expect(resourceActions(result.phase)).toHaveLength(1);
+  expect(resourceActions(result.phase)[0]).toMatchObject({ owner: { gateway_id: a.gateway_id, workspace_id: a.workspace_id },
+    body: { expected_revision: retained.owner_revision, thread: sessions[0] } });
+  await expect(sessionRow).toHaveCount(0); result.sessionDetach = true;
   await phase('conflict'); const before = await current(a, browserResource.resource_id);
   await show(a, browserResource.resource_id);
   const stopPath = `/api/v1/resources/${browserResource.resource_id}/stop`;
@@ -171,6 +211,9 @@ try {
   await expect.poll(() => result.receipts.some(item => item.phase === 'conflict' && item.status === 409)).toBe(true);
   expect(resourceActions(result.phase)).toHaveLength(2); expect(resourceActions(result.phase)[1].body.expected_revision).toBe(before.owner_revision);
   await expect(page.locator('.notification-list-item-message').filter({ hasText: /版本|revision/ }).first()).toBeVisible(); result.revisionConflict = true;
+  // 并发解除关联会重建 Browser attach 页；结束预览后再开始独立的 B 管理场景。
+  await page.locator('.workspace-browser-panel').getByRole('button', { name: '关闭运行时预览', exact: true }).click();
+  await expect(page.locator('.workspace-browser-panel iframe')).toHaveCount(0);
   await phase('owner-B'); await show(b, terminals[1].resource_id);
   expect((await settle(terminals[1].resource_id, 'stop', () => quick.getByText('停止资源', { exact: true }).click())).status).toBe('terminated');
   expect((await current(b, terminals[1].resource_id)).status).toBe('terminated');

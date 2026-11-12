@@ -82,6 +82,11 @@ export async function runtimeActionContract(mode) {
       }
       return response();
     }
+    if (path === '/api/v1/resources/terminal_same' && method === 'GET') {
+      const response = () => ok(records[index][0]);
+      if (mode === 'reference-identity') return new Promise(resolve => { releaseRead = () => resolve(response()); });
+      return response();
+    }
     const match = path.match(/^\/api\/v1\/resources\/(terminal_same|browser_same)\/(promote|attach|detach|stop|delete)$/);
     if (match && method === 'POST') {
       if (mode === 'conflict') return Response.json({ detail: '资源 revision 冲突', request_id: 'runtime-conflict' }, { status: 409, headers: { 'X-Request-ID': 'runtime-conflict' } });
@@ -182,6 +187,8 @@ export async function runtimeActionContract(mode) {
     } else {
       const action = ['promote', 'attach', 'detach', 'delete'].includes(mode) ? mode : mode === 'delete-cancel' ? 'delete' : 'stop';
       const target = { owner: { ...owners[1] }, resource: structuredClone(records[1][0]) };
+      if (mode.startsWith('reference')) target.resource = { resource_id: target.resource.resource_id,
+        owner_revision: mode === 'reference-stale' ? 6 : target.resource.owner_revision };
       if (mode === 'illegal-attach') { target.resource.retention_scope = 'thread'; target.thread = { session_id: 'ses_wrong', thread_id: 'thr_wrong' }; }
       if (mode === 'source' || mode === 'source-mismatch') target.source = { workspaceKey: gatewayWorkspaceKey(owners[1]), resource: { ...target.resource, owner_revision: mode === 'source' ? 7 : 8 },
         async run(action, ref) { sourceCalls.push({ action, ref }); return { ...target.resource, owner_revision: 8 }; } };
@@ -191,6 +198,7 @@ export async function runtimeActionContract(mode) {
         await until(() => releaseRoutes); target.owner.gatewayId = owners[0].gatewayId; target.resource.owner_revision = 99;
         editors.activeEditor = undefined; workspaceContext.publish({ ...initial, activeId: gatewayWorkspaceKey(owners[0]) }); releaseRoutes();
       }
+      if (mode === 'reference-identity') { await until(() => releaseRead); invalidateGatewayToken(0); releaseRead(); }
       result = await operation;
     }
     return { requests, rows, choices, shows, errors, notices, confirmations, sourceCalls, focuses, mcpOpened, mcpOptions, result, discoveryCount, aborted, records, maximum };

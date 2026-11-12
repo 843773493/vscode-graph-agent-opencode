@@ -8,7 +8,7 @@ import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/
 import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { getWorkbenchContribution } from '../../upstream/src/vs/workbench/common/contributions.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
-import { controlWorkspaceResource, listWorkspaceResources, type ResourceAction, type ResourceThreadRef, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
+import { controlWorkspaceResource, getWorkspaceResource, listWorkspaceResources, type ResourceAction, type ResourceThreadRef, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { resourceActionLabels, settleWorkspaceResourceOperation, workspaceResourceName, type WorkspaceResourceActionSource } from '../../../web/src/hooks/workspace/resourceActions.js';
 import { gateway } from '../agentApi.js';
@@ -23,7 +23,7 @@ export const resourceActionCommand = (action: ResourceAction) => `boxteam.resour
 export const resourceFocusCommand = 'boxteam.resource.focus';
 export interface RuntimeResourceCommandTarget {
   owner: WorkspaceOwner;
-  resource: WorkspaceResourceDTO;
+  resource: WorkspaceResourceDTO | Pick<WorkspaceResourceDTO, 'resource_id' | 'owner_revision'>;
   thread?: ResourceThreadRef;
   source?: WorkspaceResourceActionSource;
 }
@@ -62,7 +62,8 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
       const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
       if (target.status !== 'ready') throw new Error(`资源工作区当前不可用（${target.status}），请明确启动或连接`);
     }
-    const resource = explicit?.resource ?? (await quick.pick(
+    const resource = explicit?.resource ? 'workspace_id' in explicit.resource ? explicit.resource
+      : await getWorkspaceResource(0, workspaceKey, explicit.resource.resource_id) : (await quick.pick(
       (await Promise.all(['terminal', 'browser'].map(kind => listWorkspaceResources(0, workspaceKey, kind as 'terminal' | 'browser'))))
         .flatMap(list => list.items).filter(item => item.available_actions.includes(action)).map(item => ({
           label: workspaceResourceName(item), description: `${item.kind} · ${item.status}`,
@@ -70,6 +71,7 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
         })), { title: resourceActionLabels[action], placeHolder: `${owner.gatewayId} · ${owner.workspaceId}` }))?.resource;
     if (!resource) return;
     assertAccess();
+    if (explicit && resource.owner_revision !== explicit.resource.owner_revision) throw new Error('资源版本已变化，请刷新后重新选择操作');
     if (resource.workspace_id !== owner.workspaceId) throw new Error('资源回执不属于明确选择的工作区');
     if (resource.kind !== 'terminal' && resource.kind !== 'browser') throw new Error('此管理入口只处理终端或浏览器资源');
     if (!resource.available_actions.includes(action)) throw new Error(`资源当前不支持${resourceActionLabels[action]}`);
@@ -120,7 +122,7 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
 
 registerAction2(class extends Action2 {
   constructor() { super({ id: resourceFocusCommand, title: { value: '聚焦工作区资源', original: 'Focus Workspace Resource' }, f1: false }); }
-  async run(accessor: ServicesAccessor, supplied: RuntimeResourceCommandTarget): Promise<void> {
+  async run(accessor: ServicesAccessor, supplied: RuntimeResourceCommandTarget & { resource: WorkspaceResourceDTO }): Promise<void> {
     const commands = accessor.get(ICommandService), views = accessor.get(IViewsService);
     const owner = { ...supplied.owner }, resource = structuredClone(supplied.resource);
     const initialGateway = workspaceContext.getSnapshot().gatewayId;

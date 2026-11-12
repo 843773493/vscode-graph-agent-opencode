@@ -175,7 +175,7 @@ function ThreadConversation({ input, seed, active, editors, commands, onUpdate, 
           input.resourceRatio = ratios.workspace_preview; setResourceRatio(ratios.workspace_preview);
         }, () => { stopResize.current = null; });
       }} /> : null}
-      <ResourceView input={input} runtime={runtime} editors={editors} active={active} attachment={input.selectedAttachment ?? null} ratio={resourceRatio} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError}
+      <ResourceView input={input} runtime={runtime} editors={editors} commands={commands} active={active} attachment={input.selectedAttachment ?? null} ratio={resourceRatio} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError}
         reportRequest={reportRequest} onForkThread={(threadId, point) => fork({ ...point, threadId })} /></div>
     </WorkspaceFileReferenceProvider>
   </ComposerContext.Provider></WarmConfirmProvider>;

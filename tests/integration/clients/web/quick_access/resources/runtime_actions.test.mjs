@@ -142,3 +142,19 @@ test('原组件临时句柄执行同一Action，命令不另发写入或建立�
   expect(result.errors).toEqual([]); expect(writes(result)).toEqual([]);
   expect(result.sourceCalls).toEqual([{ action: 'stop', ref: undefined }]); expect(result.result.owner_revision).toBe(8);
 });
+
+test('Session资源投影交同一Command解析原owner，保留用户选中的revision', async () => {
+  const result = await exercise('reference');
+  expect(result.errors).toEqual([]); expect(writes(result)).toHaveLength(1);
+  expect(writes(result)[0]).toMatchObject({ gateway: ownerB, path: '/api/v1/resources/terminal_same/stop', body: { expected_revision: 7 } });
+  expect(result.requests.filter(item => item.path === '/api/v1/resources/terminal_same')).toEqual([
+    expect.objectContaining({ method: 'GET', gateway: ownerB }),
+  ]);
+  expect(result.result.owner_revision).toBe(8);
+});
+for (const mode of ['reference-stale', 'reference-identity']) test(`${mode}解析Session投影后拒绝旧版本或失效身份，零写入`, async () => {
+  const result = await exercise(mode);
+  expect(writes(result)).toEqual([]); expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain(mode === 'reference-stale' ? '资源版本已变化' : '访问凭据已改变');
+  expect(result.requests.filter(item => item.path === '/api/v1/resources/terminal_same')).toHaveLength(1);
+});
