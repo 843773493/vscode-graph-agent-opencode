@@ -32,8 +32,11 @@ from tests.support.workspaces import (
 
 
 @pytest.fixture(autouse=True)
-def metadata_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path) -> None:
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
+def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
+    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
+    assert (assets / "version.json").is_file(), assets
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
 
 
 async def test_resource_actions_only_change_selected_thread_draft(
@@ -53,6 +56,10 @@ async def test_resource_actions_only_change_selected_thread_draft(
     install_test_workspace_config(workspace_root=other, config_path=workspace / ".boxteam/workspace.jsonc",
                                   schema_path=context.project_root / "configs/workspace_schema.jsonc")
     (other / "selection.txt").write_text("原选定正文😀\n下一行", encoding="utf-8")
+    (other / "AGENTS.md").write_text("来源选择不应读取 AGENTS 正文", encoding="utf-8")
+    skill = other / ".boxteam/skills/source-reference-skill/SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text("来源选择不应读取 Skill 正文", encoding="utf-8")
     result_path = context.artifacts_dir / "composer-resource-actions.json"
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "150", "--",
@@ -74,6 +81,7 @@ async def test_resource_actions_only_change_selected_thread_draft(
     assert result["phase"] == "complete" and result["pageErrors"] == []
     for key in ("cancelUnchanged", "referenceRecipient", "sourcePickerCancelUnchanged", "unopenedSourceReference",
                 "multiSourceFailureNoAppend", "multiSourceKeptRecipient", "originatingThreadKeptRecipient",
+                "sourceScopeCancelUnchanged", "sourceResourceCancelUnchanged", "sourceResourceBackUnchanged", "sourceResourcesKeptRecipient",
                 "pasteRecipient", "restoredDrafts", "sourceChangePreservesPaste"):
         assert result[key], key
     assert result["executions"] == []

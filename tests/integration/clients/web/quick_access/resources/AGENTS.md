@@ -41,3 +41,5 @@ Session 分支页面经产品消息生成来源，再从未打开 Thread／Sessi
 Thread 引用页面经产品消息及 fork 创建 main／child，再从最近候选复制精确 URI；Composer 沿原文件多选只加入未打开文件的引用。核实际剪贴板、原 request_id、零额外正文读取和零新增执行；跨 Gateway 与错误归属由具名 HTTP／宿主合同装具验证，不把本机页面称为真实远端验收。
 
 工具结果页面先经产品消息生成来源历史，再用原 fork 入口创建 child，并由 child 实际执行工具；不能用来源摘要冒充 child 的原工具行。发现按公开 metadata 的 `invoke_extension_tool` 标识，取消零正文读取，接受沿原 around 定位并展开原 ToolRow，核 owner／revision／canonical item／Turn／tool_call_id／request_id 及零重放。Backend 与 Gateway 共用该场景隔离 Home，普通业务验证复用已准备的不可变插件包，并沿正式绑定入口启用能力。
+
+来源多选合同同时执行原来源 Provider、Composer Command 和 URI 客户端，仅替换 HTTP／Picker／writer 的具名边界；覆盖跨 Gateway 来源、Gateway 配置、发起 child 附件、独立范围、两阶段取消与身份／接收者失效。真实 Composer 页面另核工作区 B 的 AGENTS／Skill 从未打开即加入 A 草稿及刷新恢复；不能把合同装具称为真实跨 Gateway 或 Electron 验收。

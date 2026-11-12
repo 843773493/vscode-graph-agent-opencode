@@ -161,6 +161,8 @@
 - [ ] 12.5 验证多 Thread 同时可见、跨工作区来源、二级返回、多选取消、不支持能力和来源变化，只有指定草稿变化且无隐式模型调用。
   - 2026-11-12 附件候选新增独立“将资源 URI 加入聊天草稿”按钮，复用原 Composer Command／URI parser／草稿 writer；provide 夺焦前捕获原 Pane 与接收者，范围选择往返保持同一临时句柄，发起时无 Thread 才明确选择。关闭、未就绪和凭据失效零追加，焦点改变不改投；不上传附件、不读原件或发送消息。39项原附件／变更合同206断言、最终6项引用反例54断言及原Composer多选4项35断言通过；172份实际转换源码类型、最终79扩展正式构建及真实Gateway／Backend／Workbench完整页1 passed／51.86秒，核文本／PDF引用、零新Tab／原件读取／新增执行及刷新草稿恢复，前后源码一致。最小复审无草稿注册表、第二存储或新恢复机制；首轮通过及一次非dist输出目录被拒绝的原件保留。准确命令、源码指纹与适用范围见 `out/tests/temp/2026/11/12/attachment_composer/artifacts/verification.json`。全局／跨工作区与失效反例仍是具名宿主合同，Windows／真实远端／Electron及固定版本未验，宽项继续未勾选。
 
+  - 2026-11-12 来源资源多选：新增独立Thread来源选择动作，复用原范围选择、resource Provider、唯一URI parser及Composer writer；AGENTS／Skill／有URI配置与当前Thread附件返回有序引用，全部解析成功后一次追加。原Quick Input返回保留范围，两阶段取消零写入；无URI及不可用项不准入，凭据／接收者失效拒绝，焦点切换不改投。最终来源合同11项72断言、附件／变更40项215断言、原Composer多选4项35断言、172份实际转换源码类型和79扩展正式构建通过；真实Gateway双工作区完整页1 passed／47.61秒，核B未打开AGENTS／Skill加入A草稿、返回／取消、零正文读取／新增执行及刷新恢复，pageErrors为空。审查代理四文件组合81项532断言通过，未复现原瞬时超时，未改装具或时限。最小复审无新目录／快照／草稿存储或双轨；精确命令、源码指纹、失败归因及原件见 `out/tests/temp/2026/11/12/source_reference_selection/artifacts/verification.json`。跨Gateway仍为具名边界合同，Windows／真实远端／Electron及固定版本未验，宽任务继续未勾选。
+
 ## 13. 展示态与恢复
 
 覆盖规范：历史和缓存必须保持展示用途；展示态迁移必须保持单一恢复链与身份隔离。

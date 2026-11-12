@@ -18,7 +18,8 @@ import { ConfigurationSourceOwner } from './settings/sourceOwner.js';
 export const COPY_RESOURCE_URI = 'boxteam.resource.copyUri';
 export const ATTACH_RESOURCE_URI = 'boxteam.resource.attachToChat';
 export const PASTE_SELECTED_CONTENT = 'boxteam.resource.pasteSelectionToChat';
-type ResourceReferenceOwner = { gatewayId: string; workspaceId?: string };
+export const ATTACH_SOURCE_URIS = 'boxteam.resource.selectSourcesForChat';
+export type ResourceReferenceOwner = { gatewayId: string; workspaceId?: string };
 
 export function supportsResourceReference(resource: URI): boolean {
   return resource.scheme === 'boxteam-file' || resource.scheme === 'boxteam-source' || resource.scheme === 'boxteam-thread' || resource.scheme === configSourceScheme;

@@ -32,7 +32,7 @@ import { chooseSearchOwners } from '../search/quickAccessScope.js';
 import type { SearchInvocationOptions } from '../search/target.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
-import { ATTACH_RESOURCE_URI, COPY_RESOURCE_URI } from '../resourceActions.js';
+import { ATTACH_RESOURCE_URI, COPY_RESOURCE_URI, type ResourceReferenceOwner } from '../resourceActions.js';
 import type { ComposerResourceTarget } from '../composerActions.js';
 import { sourceDocumentUri } from '../sourceDocuments.js';
 import { resourceActionCommand, resourceFocusCommand } from './runtimeActions.js';
@@ -40,8 +40,8 @@ import { openWorkspaceMcpServerCommand } from '../mcp/commands.js';
 import { ConfigurationSourceOwner, type SourceTarget } from '../settings/sourceOwner.js';
 import { openConfigurationSourceCommand, type ConfigurationSourceOpenRequest } from '../settings/commands.js';
 
-interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string; resourceId?: string }
-interface ResourceAccessOptions extends SearchInvocationOptions { resourceGroup?: number; resourceThread?: SourceRun['thread']; resourceRecipient?: ComposerResourceTarget | null }
+interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string; resourceId?: string; resource?: URI; resourceOwner?: ResourceReferenceOwner }
+export interface ResourceAccessOptions extends SearchInvocationOptions { resourceGroup?: number; resourceThread?: SourceRun['thread']; resourceRecipient?: ComposerResourceTarget | null; resourceReferencesOnly?: boolean; resourceReferenceBack?: () => void }
 interface SourceRun {
   picker: IQuickPick<SourcePick, { useSeparators: true }>;
   owners: readonly WorkspaceOwner[];
@@ -53,6 +53,7 @@ interface SourceRun {
   discovery?: Promise<SourcePick[]>;
   thread?: { owner: WorkspaceOwner; session_id: string; thread_id: string };
   recipient?: ComposerResourceTarget | null;
+  referencesOnly: boolean;
 }
 
 /** 来源候选沿固定根导航发现本地文件，配置 Skill 只消费 accepted metadata。 */
@@ -73,7 +74,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     const lifetime = new DisposableStore(), access = new CancellationTokenSource(token), controller = new AbortController();
     const run: SourceRun = { picker, owners: (options.searchOwners ?? (options.searchOwner ? [options.searchOwner] : [])).map(owner => ({ ...owner })),
       gatewayId: workspaceContext.getSnapshot().gatewayId, group: options.resourceGroup ?? this.groups.activeGroup.id,
-      ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal };
+      ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal, referencesOnly: options.resourceReferencesOnly === true };
     this.run = run;
     const input = this.editors.activeEditor;
     const pane = this.editors.activeEditorPane;
@@ -90,9 +91,16 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     lifetime.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
     lifetime.add(toDisposable(workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidate(); })));
     const scope = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: '选择来源所属工作区' };
-    picker.buttons = [...picker.buttons, scope];
-    picker.placeholder = '查找来源、终端、浏览器和 MCP · 浏览不读取正文或操作资源';
+    const back = run.referencesOnly && options.resourceReferenceBack ? this.quick.backButton : undefined;
+    picker.buttons = [...picker.buttons, ...(back ? [back] : run.referencesOnly ? [] : [scope])];
+    picker.placeholder = run.referencesOnly ? '选择来源资源 URI · 不读取正文或打开资源' : '查找来源、终端、浏览器和 MCP · 浏览不读取正文或操作资源';
     lifetime.add(picker.onDidTriggerButton(button => {
+      if (back && button === back) {
+        this.assertAccess(run);
+        options.resourceReferenceBack!();
+        picker.hide();
+        return;
+      }
       if (button !== scope) return;
       const value = picker.value;
       this.report((async () => {
@@ -112,7 +120,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     // 发现只属于本次 provide；逐键取消只阻止旧筛选发布，结束时才取消实际读取。
     lifetime.add(toDisposable(() => { controller.abort(); access.dispose(true); }));
     lifetime.add(super.provide(picker, access.token, options));
-    lifetime.add(toDisposable(() => { picker.buttons = picker.buttons.filter(button => button !== scope); if (this.run === run) this.run = undefined; }));
+    lifetime.add(toDisposable(() => { picker.buttons = picker.buttons.filter(button => button !== scope && button !== back); if (this.run === run) this.run = undefined; }));
     return lifetime;
   }
 
@@ -120,9 +128,10 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     const run = this.run!, picks = await (run.discovery ??= this.discover(run));
     if (token.isCancellationRequested || run.invalidated) return [];
     return picks.flatMap(item => {
-      if (item.filterLabel === undefined) return [item];
+      const candidate = run.referencesOnly ? item.resource ? { ...item, buttons: [], trigger: undefined } : { ...item, disabled: true } : item;
+      if (item.filterLabel === undefined) return [candidate];
       const highlights = matchesFuzzy(filter, item.filterLabel);
-      return filter && !highlights && !item.resourceId?.includes(filter) ? [] : [{ ...item, highlights: { label: highlights ?? undefined } }];
+      return filter && !highlights && !item.resourceId?.includes(filter) ? [] : [{ ...candidate, highlights: { label: highlights ?? undefined } }];
     });
   }
 
@@ -138,10 +147,13 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       const item: SourcePick = { id: `${gatewayWorkspaceKey(owner)}/${uri}`, label: available ? label : `${label}（来源不可用）`,
         filterLabel: label, description, detail: `${owner.gatewayId} · ${owner.workspaceId} · ${uri}${errorCode ? ` · ${errorCode}` : ''}` };
       if (available) {
-        item.buttons = [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }];
-        item.trigger = () => {
+        item.resource = sourceDocumentUri(owner, uri);
+        item.resourceOwner = { ...owner };
+        item.buttons = [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' },
+          { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: '将资源 URI 加入聊天草稿' }];
+        item.trigger = index => {
           this.assertAccess(run);
-          this.report(this.commands.executeCommand(COPY_RESOURCE_URI, sourceDocumentUri(owner, uri)));
+          this.report(this.commands.executeCommand(index === 0 ? COPY_RESOURCE_URI : ATTACH_RESOURCE_URI, item.resource, { ...owner }, run.recipient));
           return TriggerAction.NO_ACTION;
         };
         item.accept = (mods, event) => {
@@ -204,12 +216,14 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
           label, filterLabel: label, description: `配置来源 · ${name} · ${source.layer} · ${source.presence}`,
           detail: `${target.gateway_id}${target.workspace_id ? ` · ${target.workspace_id}` : ' · Gateway'}${source.uri ? ` · ${source.uri}` : ''}`,
           ...(source.uri ? {
-            buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }],
-            trigger: () => {
+            resource: URI.parse(source.uri), resourceOwner: { gatewayId: target.gateway_id, workspaceId: target.workspace_id },
+            buttons: [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' },
+              { iconClass: ThemeIcon.asClassName(Codicon.attach), tooltip: '将资源 URI 加入聊天草稿' }],
+            trigger: (index: number) => {
               this.assertAccess(run);
-              this.report(this.commands.executeCommand(COPY_RESOURCE_URI, URI.parse(source.uri!), {
+              this.report(this.commands.executeCommand(index === 0 ? COPY_RESOURCE_URI : ATTACH_RESOURCE_URI, URI.parse(source.uri!), {
                 gatewayId: target.gateway_id, workspaceId: target.workspace_id,
-              }));
+              }, run.recipient));
               return TriggerAction.NO_ACTION;
             },
           } : {}),
@@ -254,6 +268,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               return { id: JSON.stringify([owner.gatewayId, owner.workspaceId, thread.session_id, thread.thread_id, 'attachment', attachment.file_id]),
                 label: attachment.availability === 'unavailable' ? `${label}（来源不可用）` : label, filterLabel: label, resourceId: attachment.file_id,
                 description: `附件 · ${target.name} · ${attachment.content_type ?? 'application/octet-stream'}`,
+                ...(attachment.availability === 'unavailable' ? {} : { resource: URI.parse(attachment.file_id), resourceOwner: { ...owner } }),
                 detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${thread.thread_id} · ${attachment.file_id}`,
                 accept: attachment.availability === 'unavailable' ? undefined : threadResourceAccept(owner, { resourceTab: 'files', selectedAttachment: frozen }),
                 buttons: attachment.availability === 'unavailable' ? undefined
@@ -298,9 +313,9 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               '更多工具结果…', '继续读取同一历史视图的元数据', () => toolPicks(result)));
             return picks;
           };
-          const tools = run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
+          const tools = !run.referencesOnly && run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
             ? limiter.queue(() => toolPicks()).catch(cause => failed(owner, '工具结果 ', cause)) : Promise.resolve([]);
-          const changes = run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
+          const changes = !run.referencesOnly && run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
             ? limiter.queue(async () => {
               const thread = run.thread!;
               run.signal.throwIfAborted();
@@ -351,7 +366,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               return pick(owner, entry.node.uri, entry.name, `本地 Skill · ${target.name}`);
             });
           }).catch(cause => failed(owner, '本地 Skill ', cause));
-          const runtime = (['terminal', 'browser'] as const).map(kind => limiter.queue(async () => {
+          const runtime = (run.referencesOnly ? [] : ['terminal', 'browser'] as const).map(kind => limiter.queue(async () => {
             run.signal.throwIfAborted();
             const result = await listWorkspaceResources(0, key, kind, run.signal);
             if (result.workspace_id !== owner.workspaceId || result.items.some(item => item.workspace_id !== owner.workspaceId || item.kind !== kind)) {
@@ -371,7 +386,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
               };
             });
           }).catch(cause => failed(owner, kind === 'terminal' ? '终端' : '浏览器', cause)));
-          const mcp = limiter.queue(async () => {
+          const mcp = run.referencesOnly ? Promise.resolve([]) : limiter.queue(async () => {
             run.signal.throwIfAborted();
             const result = await getMcpCatalog(0, target, { refresh: false, signal: run.signal });
             const frozenTarget = { gateway_id: target.gateway_id, workspace_id: target.workspace_id, backend_id: target.backend_id };

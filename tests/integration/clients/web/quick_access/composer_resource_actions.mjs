@@ -25,6 +25,7 @@ try {
     if (request.method() === 'POST' && path.endsWith('/messages')) result.executions.push(path);
     if (request.method() === 'POST' && path === '/api/gateway/resource-addresses/parse') result.addresses.push({ phase: result.phase, body: request.postDataJSON() });
     if (request.method() === 'GET' && /\/workspace\/files\/(raw|content)$/.test(path)) result.reads.push({ phase: result.phase, path, url: request.url() });
+    if (request.method() === 'POST' && path === '/api/v1/resources/navigation') result.reads.push({ phase: result.phase, path, body: request.postDataJSON() });
   });
   await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' });
   await expect(page.locator('.native-session-navigation')).toBeVisible({ timeout: 30_000 });
@@ -63,6 +64,9 @@ try {
   const address = await api('/api/gateway/resource-addresses/parse', { method: 'POST', body: JSON.stringify({ uri: source, local_gateway_id: health.gateway_id }) });
   const file = await api(`/api/v1/workspace/files/content?path=${encodeURIComponent(source)}`, { headers: headers(sourceOwner) });
   expect(file.content).toBe('原选定正文😀\n下一行');
+  // 外部 API 准备的新登记交回正式页面初始化，不能直接改写控制面镜像。
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.native-session-navigation')).toContainText('Composer source B', { timeout: 30_000 });
   const sessions = [];
   for (const title of ['接收者 A1', '接收者 A2']) {
     const session = await api('/api/v1/sessions', { method: 'POST', headers: headers(receiverOwner), body: JSON.stringify({ title }) });
@@ -70,7 +74,12 @@ try {
     sessions.push({ ...session, threadId: thread.thread_id });
   }
   result.sourceOwner = sourceOwner; result.receiverOwner = receiverOwner; result.sessions = sessions;
-  const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
+  const command = (id, ...args) => {
+    const pending = page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
+    // 场景失败先保存原断言；清理关闭页面造成的未等候命令拒绝不能截断诊断落盘。
+    void pending.catch(() => {});
+    return pending;
+  };
   const threadUri = session => `boxteam://${receiverOwner.gateway_id}/workspace/${receiverOwner.workspace_id}/resources/session/${session.session_id}/threads/${session.threadId}`;
   const composer = index => page.locator(`section.boxteam-thread[data-session-id="${sessions[index].session_id}"][data-thread-id="${sessions[index].threadId}"]`).locator('textarea[data-testid="composer-input"]').filter({ visible: true });
   await command('_workbench.open', threadUri(sessions[0]));
@@ -217,6 +226,91 @@ try {
   expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
   expect(await page.locator('.tabs-container .tab').count()).toBe(tabsBeforeSourcePicker);
   result.multiSourceKeptRecipient = true;
+
+  const chooseSourceWorkspace = async () => {
+    await expect(quick).toContainText('选择快速访问搜索范围');
+    const checkboxes = quick.getByRole('checkbox');
+    for (const checkbox of await checkboxes.all()) await checkbox.uncheck();
+    await quick.locator('.monaco-list-row').filter({ hasText: 'Composer source B' }).getByRole('checkbox').check();
+    await quick.locator('input').press('Enter');
+    await expect(quick.locator('input')).toHaveAttribute('placeholder', '选择来源资源 URI · 不读取正文或打开资源');
+    await expect(quick.locator('.monaco-list-row').filter({ hasText: 'AGENTS.md' })).toBeVisible();
+  };
+  const selectSourceReferences = async () => {
+    await quick.locator('.monaco-list-row').filter({ hasText: 'AGENTS.md' }).getByRole('checkbox').check();
+    await quick.locator('.monaco-list-row').filter({ hasText: 'source-reference-skill' }).getByRole('checkbox').check();
+  };
+  phase('cancel-source-scope');
+  await command('workbench.action.focusFirstEditorGroup');
+  pending = command('boxteam.resource.selectSourcesForChat');
+  await expect(quick).toContainText('选择快速访问搜索范围');
+  await page.keyboard.press('Escape');
+  await pending;
+  await expect(composer(0)).toHaveValue(expectedA1);
+  expect(result.addresses.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  result.sourceScopeCancelUnchanged = true;
+
+  phase('cancel-source-resources');
+  pending = command('boxteam.resource.selectSourcesForChat');
+  await chooseSourceWorkspace();
+  await selectSourceReferences();
+  await page.keyboard.press('Escape');
+  await pending;
+  await expect(composer(0)).toHaveValue(expectedA1);
+  await expect(composer(1)).toHaveValue('A2 原草稿');
+  expect(result.addresses.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  result.sourceResourceCancelUnchanged = true;
+
+  phase('source-resource-back');
+  pending = command('boxteam.resource.selectSourcesForChat');
+  await chooseSourceWorkspace();
+  await selectSourceReferences();
+  await quick.getByRole('button', { name: /Back|返回/ }).click();
+  await expect(quick).toContainText('选择快速访问搜索范围');
+  await expect(quick.locator('.monaco-list-row').filter({ hasText: 'Composer source B' }).getByRole('checkbox')).toBeChecked();
+  await page.keyboard.press('Escape');
+  await pending;
+  await expect(composer(0)).toHaveValue(expectedA1);
+  expect(result.addresses.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  result.sourceResourceBackUnchanged = true;
+
+  phase('select-source-resources');
+  multiResponses = 0; multiHeld = false;
+  const sourceBarrier = Promise.withResolvers(), sourceReferences = [];
+  const holdSources = async route => {
+    const response = await route.fetch();
+    sourceReferences.push((await response.json()).data.reference_uri);
+    if (++multiResponses === 2) { multiHeld = true; await sourceBarrier.promise; }
+    await route.fulfill({ response });
+  };
+  await page.route('**/api/gateway/resource-addresses/parse', holdSources);
+  try {
+    pending = command('boxteam.resource.selectSourcesForChat');
+    await chooseSourceWorkspace();
+    await selectSourceReferences();
+    await quick.locator('input').press('Enter');
+    await expect.poll(() => multiHeld).toBe(true);
+    await expect(composer(0)).toHaveValue(expectedA1);
+    await command('workbench.action.focusSecondEditorGroup');
+    sourceBarrier.resolve();
+    await pending;
+  } finally {
+    sourceBarrier.resolve();
+    await page.unroute('**/api/gateway/resource-addresses/parse', holdSources);
+  }
+  const sourceParses = result.addresses.filter(read => read.phase === result.phase);
+  expect(sourceParses).toHaveLength(2);
+  expect(sourceParses.every(read => read.body.resource_gateway_id === sourceOwner.gateway_id
+    && read.body.uri.includes(sourceOwner.workspace_id))).toBe(true);
+  expectedA1 += '\n' + sourceReferences.join('\n');
+  await expect(composer(0)).toHaveValue(expectedA1);
+  await expect(composer(1)).toHaveValue('A2 原草稿');
+  expect(result.reads.filter(read => read.phase === result.phase)).toEqual([]);
+  expect(await page.locator('.tabs-container .tab').count()).toBe(tabsBeforeSourcePicker);
+  result.sourceResourcesKeptRecipient = true;
 
   phase('originating-thread-keeps-recipient');
   await command('workbench.action.focusFirstEditorGroup');
