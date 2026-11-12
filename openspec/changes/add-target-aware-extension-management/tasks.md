@@ -174,6 +174,9 @@
   - 2026-11-11 管理完整失败／重试闭环：沿原真实Gateway／Backend／正式Workbench安装同包Python／Node／纯Skill，安装3.0不改旧绑定，页面显式切版后真实插件首次ready身份失败，保留已提交3.0／enabled和failed原因及日志；旧实例访问409，刷新不回滚、不自动重试，只有页面显式restart创建第二次并ready。继续切回旧版、两scope独立重启、模板实际创建、关闭仍引用拒卸载、全部解绑及物理卸载，原参数保留；最终单项1 passed／205.85秒，批量首轮已通过不重复长跑。三次真实开关点击至ready完整耗时为3712.75／3765.40／4248.91ms，含确认、预检、CAS、交接和状态读取，单次样本不外推启动p95。结合9.6二十次暖命令p95及零附带发现／探活证据，10.12当前交互预算内完成；7.5本项Linux页面范围完成，Windows／真实SSH页面／Electron仍归9组未验。相关Pyright零诊断、Ruff／JS解析通过，同源码正式构建由产品fixture完成；最小复审只扩原装具，不新增生产状态／恢复器。首次计时把starting当ready的装具错误保留原件并修正为原期限内观察真实状态。准确命令、源码指纹及收据见 `out/tests/temp/2026/11/11/plugin_management_failure_loop/artifacts/verification.json`。
   - 2026-11-10 Workbench完整运行闭环：原单包场景升级为同包Python Gateway／Node Workspace真实插件，经页面安装、三范围CAS绑定、实际业务调用、启用／关闭态显式切版、刷新保留原实例、独立重启、停用仍引用409、解绑及卸载，核全部旧PID退出与物理版本目录删除；原批量部分失败、目标冻结、默认值只写模板及未知保存查询断言保持。精确完整Git归档2 passed／205.19秒，零pageErrors、单包零外部请求；暴露并修复reload时Gateway尚未就绪，以及await后使用失效ServicesAccessor两处真实缺陷。140份转换源码类型检查、正式Workbench构建、11项／55断言命令反例、两份Python类型零诊断、Ruff与语法通过，同源码构建复用。最小复审只复用原workspaceContext屏障，无新账本／fallback；Gateway范围页面显式restart、Windows／真实SSH／Electron和源码外发行未由本片完整验收，7.5宽项保持未勾选。tree、源码指纹、原件和失败归因见 `out/tests/temp/2026/11/10/plugin_management_loop/artifacts/ui-verification.json`。
 
+- [ ] 7.6 补齐当前规范要求的用户级 Workspace source writer、影响预览和逐工作区 fan-out 结果；复用原来源 owner、登记及各工作区候选／active，不把只读文档或 `applied/materialized` 原语视为完整实现。明确停止工作区追赶与部分冲突，保持插件运行绑定仅限明确工作区来源，不经共享层 fan-out。
+  - 2026-11-12 按当前157个场景核对确认缺口：`ConfigSourceEditMixin` 只允许工作区根来源写入；共享用户来源虽有 generation／fan-out 记录，但尚未接通完整范围预览、来源 writer 及实际 candidate／active 结果。影响范围定义已向用户询问，当前保持未实现，未放宽合法来源写入边界。
+
 ## 8. 旧体系物理删除与发行
 
 - [x] 8.1 根据 1.1 清单逐链删除项目的 VSIX 安装／scanner／profile 库存、Marketplace／Gallery／Open VSX、第三方 MCP Registry 和旧 Node 安装插件；迁齐生成物及测试后再删除，不能留死入口。
@@ -195,6 +198,7 @@
 ## 9. 验收、性能和复杂度复审
 
 - [ ] 9.1 为当前 specs 的场景建立最小证据映射；先定向合同／单元与真实类型，再按受影响纵向链运行真实 Gateway／目标工作区／完整 Workbench 产品流程，不默认全套串行。
+  - 2026-11-12 当前8份规范共157个场景已关联具名测试和36份已有原始收据，见 `out/tests/temp/2026/11/12/plugin_target_closure/artifacts/scenario-evidence.json`；映射仅用于定位证据，不宣称157项全通过。4个用户Workspace source相关场景明确缺实现，真实SSH新增环境解析／未知结果零重放、Windows发行与客户端平台键位另列待验，未来搜索Provider仅验证当前未开放时拒绝。本项待上述真实缺口收口后勾选。
 - [x] 9.2 用 Python／Node 两个真实插件验证同管理合同、范围隔离、同包独立进程、ready 身份、关闭／重启及实际退出；工具／命令／Skill 不触发启动，不以健康响应替代业务。
   - 2026-11-10 当前合同独立收口：Python／Node真实进程共用管理合同、独立启停／重启及版本切换均经原API／正式页面验证，ready核完整身份，旧PID退出且旧身份409。双workspace及gateway范围分别验收，纯Skill启停／换版全程instance与log为空；普通状态／业务及Skill读取不触发启动。原件见 `plugin_distribution_loop/artifacts/launcher-ui-verification.json`、`windows-stop-query-verification.json`、`ui-declarative-verification.json`；不将Linux页面扩为Windows页面或真实SSH。
 - [x] 9.3 真实验证终端命令／输出及重附加、浏览器操作／画面、MCP stdio 工具结果；核 Gateway 转发路径与 request_id、本次迁移执行链无 Backend spawn 旁路、跨工作区零资源混用；调试场景沿第11组验，python_exec／条件脚本／ffmpeg 不新增迁移测试，不宣称 Backend 所有内部进程皆移除。
