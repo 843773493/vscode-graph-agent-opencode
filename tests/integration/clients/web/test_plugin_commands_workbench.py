@@ -95,7 +95,8 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
             "requires": [{"extension_point": point, "version": 1} for point in ("commands", "menus", "keybindings", "configuration")],
             "contributes": {"commands": [command],
                 "menus": [{"id": "editor-menu", "location": "editor/context", "command_id": "execute", "group": "navigation"}],
-                "keybindings": [{"id": "execute-key", "command_id": "execute", "key": "ctrl+alt+shift+9", "mac": "cmd+alt+shift+9"}],
+                "keybindings": [{"id": "execute-key", "command_id": "execute", "key": "ctrl+alt+shift+9",
+                    "mac": "cmd+alt+shift+9", "win": "ctrl+alt+shift+w"}],
                 "configuration": {"type": "object", "required": ["output"], "additionalProperties": False,
                     "properties": {"output": {"type": "string"}}}}}]}
     packages = {}
@@ -103,7 +104,9 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
         manifest["version"] = version
         contributions = manifest["plugins"][0]["contributes"]
         contributions["commands"][0]["title"] = title
-        contributions["keybindings"][0].update(key=f"ctrl+alt+shift+{key}", mac=f"cmd+alt+shift+{key}")
+        win_key = "w" if key == "9" else "e"
+        contributions["keybindings"][0].update(key=f"ctrl+alt+shift+{key}", mac=f"cmd+alt+shift+{key}",
+            win=f"ctrl+alt+shift+{win_key}")
         archive_path = context.artifacts_dir / f"command-ui-{version}.zip"
         with zipfile.ZipFile(archive_path, "w") as archive:
             archive.writestr("plugin.jsonc", json.dumps(manifest))
@@ -124,7 +127,9 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
             result = subprocess.run(command_line, cwd=context.project_root, timeout=165, check=False, capture_output=True,
                 env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": executable,
                     "BOXTEAM_COMMAND_UI_INPUT": json.dumps({"baseUrl": f"http://127.0.0.1:{plugin_commands_port}",
-                        "artifacts": str(context.artifacts_dir), "packagePaths": packages, "output": str(output.resolve())})})
+                        "artifacts": str(context.artifacts_dir), "packagePaths": packages, "output": str(output.resolve()),
+                        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"})})
         (context.artifacts_dir / "browser.stdout.raw").write_bytes(result.stdout)
         (context.artifacts_dir / "browser.stderr.raw").write_bytes(result.stderr)
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command_line, "exit_code": result.returncode}), encoding="utf-8")
@@ -134,8 +139,8 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
         executions = [json.loads(line) for line in output.read_text().splitlines()]
         sample_count = receipt["workload"]["commandSamples"]
         assert sample_count == 20
-        assert [item["version"] for item in executions] == ["1.0.0"] * (4 + sample_count) + ["2.0.0"] * 3, receipt
-        assert len({item["call_id"] for item in executions}) == 7 + sample_count
+        assert [item["version"] for item in executions] == ["1.0.0"] * (4 + sample_count) + ["2.0.0"] * 4, receipt
+        assert len({item["call_id"] for item in executions}) == 8 + sample_count
         assert all(item["request_id"] for item in executions)
         trace = (context.artifacts_dir / "gateway/gateway.stderr.log").read_text(encoding="utf-8")
         durations = {request_id: float(seconds) * 1000 for seconds, request_id in re.findall(
@@ -161,6 +166,8 @@ def test_workbench_plugin_commands_lifecycle(request: pytest.FixtureRequest, web
             "boundary": "command包含Workbench命令入口至完整结果；reads为浏览器fetch至完整JSON；Gateway为原Trace中间件总耗时，含插件HTTP及日志，不称内部handler耗时",
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         assert receipt["windowReopenedSameInstance"] and receipt["installedVersionKeptBinding"]
+        assert receipt["clientPlatform"] == "Windows 浏览器 User-Agent 模拟；Gateway 仍运行在 Linux"
+        assert receipt["userOverrideTookPrecedence"]
         assert receipt["uninstalledVersions"] == ["1.0.0", "2.0.0"]
         assert all(not psutil.pid_exists(pid) for pid in receipt["exitedPids"])
         assert not (context.boxteam_home_for_node(request.node.nodeid) / "plugins/packages/proof.command-ui").exists()

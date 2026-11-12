@@ -13,8 +13,11 @@ let browser, page;
 try {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
   const openWindow = async () => {
-    page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
+    page = await browser.newPage({ viewport: { width: 1500, height: 1000 }, userAgent: input.userAgent });
     page.setDefaultTimeout(15_000);
+    const session = await page.context().newCDPSession(page);
+    await session.send('Network.setUserAgentOverride', { userAgent: input.userAgent, platform: 'Win32' });
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     page.on('pageerror', error => receipt.pageErrors.push(error.message));
     page.on('request', request => {
       if (request.url().includes('/service-plugins/')) receipt.requests.push({ url: request.url(), method: request.method(), body: request.postData() });
@@ -23,6 +26,10 @@ try {
     await expect(page.locator('#workbench .monaco-workbench')).toBeVisible();
   };
   await openWindow();
+  receipt.clientPlatform = 'Windows 浏览器 User-Agent 模拟；Gateway 仍运行在 Linux';
+  receipt.userAgent = await page.evaluate(() => navigator.userAgent);
+  assert.match(receipt.userAgent, /Windows NT/);
+  assert.equal(await page.evaluate(() => navigator.platform), 'Win32');
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const api = (path, options = {}) => page.evaluate(async ({ path, options }) => {
     const auth = await (await fetch('/api/gateway/auth/local-credential')).json();
@@ -144,14 +151,14 @@ try {
   await filePick.getByText('打开链接', { exact: true }).click();
   const editor = page.locator('.editor-instance .monaco-editor').filter({ visible: true }).first();
   await expect(editor).toBeVisible(); await editor.click();
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Alt+Shift+9' : 'Control+Alt+Shift+9');
+  await page.keyboard.press('Control+Alt+Shift+W');
   await expect.poll(countExecutions).toBe(3 + extraExecutions);
   receipt.phase = 'menu';
   await editor.click({ button: 'right' });
   const menu = page.getByRole('menuitem').filter({ hasText: '命令验收：执行' });
   await expect(menu).toBeVisible();
   await menu.press('Enter');
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Alt+Shift+9' : 'Control+Alt+Shift+9');
+  await page.keyboard.press('Control+Alt+Shift+W');
   await expect.poll(countExecutions).toBe(4 + extraExecutions);
   assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/events')).length, 2);
 
@@ -200,15 +207,43 @@ try {
   await palette.getByText('打开链接', { exact: true }).click();
   const updatedEditor = page.locator('.editor-instance .monaco-editor').filter({ visible: true }).first();
   await expect(updatedEditor).toBeVisible(); await updatedEditor.click();
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Alt+Shift+9' : 'Control+Alt+Shift+9');
+  await page.keyboard.press('Control+Alt+Shift+W');
   const current = await command(id, { value: 'after-old-key' });
   assert.equal(current.version, '2.0.0');
   assert.equal(current.pid, updated.instance.process_id);
   // 后续命令响应是旧键盘事件的顺序屏障；旧键位不得留下额外一次调用。
   assert.equal(await countExecutions(), 7 + extraExecutions);
   await updatedEditor.click();
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Alt+Shift+8' : 'Control+Alt+Shift+8');
+  await page.keyboard.press('Control+Alt+Shift+E');
   await expect.poll(countExecutions).toBe(8 + extraExecutions);
+
+  receipt.phase = 'user-keybinding-override';
+  await command('workbench.action.openGlobalKeybindingsFile');
+  const keybindingsEditor = page.locator('.editor-group-container.active .monaco-editor').filter({ visible: true }).last();
+  const keybindingsText = keybindingsEditor.locator('.view-lines').last();
+  await expect(keybindingsText).toBeVisible();
+  const userKeybindings = [
+    { key: 'ctrl+alt+shift+e', command: 'workbench.action.quickOpen' },
+    { key: 'ctrl+alt+shift+u', command: id },
+  ];
+  await page.evaluate(value => navigator.clipboard.writeText(value), JSON.stringify(userKeybindings, null, 2));
+  await keybindingsText.click();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.press('Control+V');
+  await command('workbench.action.files.save');
+  receipt.userKeybindings = userKeybindings;
+  await command('workbench.action.quickOpen', roots.workspace_uri + '/command-ui.txt');
+  const reopenedFile = page.locator('.quick-input-widget').filter({ visible: true });
+  await reopenedFile.getByText('打开链接', { exact: true }).click();
+  await expect(page.locator('.editor-instance .monaco-editor').filter({ visible: true })).toBeVisible();
+  await page.keyboard.press('Control+Alt+Shift+E');
+  const quickInput = page.locator('.quick-input-widget').filter({ visible: true });
+  await expect(quickInput).toBeVisible();
+  assert.equal(await countExecutions(), 8 + extraExecutions, '用户快捷键应覆盖插件提供的 Windows 默认键位');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+Alt+Shift+U');
+  await expect.poll(countExecutions).toBe(9 + extraExecutions);
+  receipt.userOverrideTookPrecedence = true;
 
   receipt.phase = 'disabled';
   await openPalette('命令验收：新版执行');
@@ -218,7 +253,7 @@ try {
   // 已打开的 pick 仍带原资格；接受也不能启动、改投或增加一次执行。
   await page.keyboard.press('Enter');
   await expect(palette).not.toBeVisible();
-  assert.equal(await countExecutions(), 8 + extraExecutions);
+  assert.equal(await countExecutions(), 9 + extraExecutions);
   await expect.poll(async () => {
     await openPalette('命令验收：新版执行');
     return palette.getByRole('option').filter({ hasText: '命令验收：新版执行' }).count();
@@ -246,7 +281,7 @@ try {
   // 每个窗口各一个 Gateway 和 workspace 持续流；普通命令没有额外发现。
   assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/events')).length, 4);
   assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/registrations')).length, 0);
-  assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/call')).length, 8 + extraExecutions);
+  assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/call')).length, 9 + extraExecutions);
   receipt.phase = 'complete';
 } catch (error) {
   receipt.error = String(error.stack ?? error); process.exitCode = 1;

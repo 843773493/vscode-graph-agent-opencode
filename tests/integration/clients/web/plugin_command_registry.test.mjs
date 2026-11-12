@@ -168,6 +168,7 @@ test('同逻辑命令共用dispatcher并按目标隔离声明，拒绝无效更�
     for (const invalid of [
       { ...itemA1, menus: [{ ...itemA1.menus[0], when: 'editorTextFocus && (' }] },
       { ...itemA1, menus: [{ ...itemA1.menus[0], when: 'privateContext' }] },
+      { ...itemA1, menus: [{ ...itemA1.menus[0], location: 'editor/unknown' }] },
       { ...itemA1, menus: [{ ...itemA1.menus[0], command_id: 'missing' }] },
       { ...itemA1, keybindings: [{ ...itemA1.keybindings[0], key: 'ctrl+UnknownKeyName' }] },
     ]) {
@@ -231,6 +232,37 @@ test('同逻辑命令共用dispatcher并按目标隔离声明，拒绝无效更�
     checks.push('单dispatcher、目标菜单/标题/启用条件隔离、同快照幂等、无效快照预校验原子性、声明更新和冻结参数失效、不可执行状态及单目标释放');
   } finally {
     registry.dispose();
+  }
+});
+
+test('已有产品命令占用插件命令ID时在发布前拒绝并保留原命令', async () => {
+  const target = { gateway_id: 'gateway-command-collision' };
+  const contributionId = 'existing-command';
+  const id = m.pluginCommandId(packageId, pluginId, contributionId);
+  const calls = [];
+  const originalHandler = (_accessor, ...args) => { calls.push(args); return 'original-command'; };
+  const original = m.CommandsRegistry.registerCommand(id, originalHandler);
+  const registry = new m.PluginCommandContributions(() => ({ gatewayId: target.gateway_id }),
+    async () => { throw new Error('冲突候选不得执行'); });
+  const item = publication(target, { revision: 'collision-r1', version: '1.0.0', title: 'Collision',
+    location: 'editor/context', key: 'ctrl+[KeyX]' });
+  item.commands[0].id = contributionId;
+  item.registrations[0].command_id = contributionId;
+  item.menus[0].command_id = contributionId;
+  item.keybindings[0].command_id = contributionId;
+
+  try {
+    expect(() => registry.replace(target, snapshot(target, item))).toThrow('插件命令不能覆盖已有入口');
+    expect(m.CommandsRegistry.getCommand(id)?.handler).toBe(originalHandler);
+    expect(await m.CommandsRegistry.getCommand(id).handler({}, 'still-original')).toBe('original-command');
+    expect(calls).toEqual([['still-original']]);
+    expect(commandEntries(m.MenuId.CommandPalette, id)).toHaveLength(0);
+    expect(commandEntries(m.MenuId.EditorContext, id)).toHaveLength(0);
+    expect(m.KeybindingsRegistry.getDefaultKeybindings().filter(binding => binding.command === id)).toHaveLength(0);
+    checks.push('预先存在的产品命令占用插件命名空间ID时，候选在注册前拒绝且原handler、菜单和快捷键保持');
+  } finally {
+    registry.dispose();
+    original.dispose();
   }
 });
 
@@ -461,7 +493,7 @@ test('真实转换CommandService对自有命令绕过旧宿主发现，首次调
 });
 
 afterAll(async () => {
-  const status = checks.length === 6 ? 'passed' : 'failed';
+  const status = checks.length === 7 ? 'passed' : 'failed';
   const evidence = {
     boundary: '真实 PluginCommandContributions、原 CommandsRegistry/MenuRegistry/KeybindingsRegistry、sourceTransform 后的上游源码；平台模块值为显式 Linux/macOS/Windows 构建装具。未经过浏览器、Gateway、工作区后端或真实多目标网络。',
     upstreamCommit: pinnedUpstreamCommit,
