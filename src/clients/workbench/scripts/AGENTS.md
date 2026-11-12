@@ -34,6 +34,8 @@ Web 与 Electron 共用的唯一完整 Code OSS 工作台入口。复用同级 w
 
 原 HistoryService 对已有稳定输入和 resolver 的 Thread／文件／来源／更改保存原 untyped resource input；只读 TextResourceEditorInput 只投影引用与标签，不保存模型正文。关闭、去重、移除与恢复继续用原历史存储和 URI identity，不为无文件系统 Provider 的业务资源伪造 Provider 或另建历史库；其它 scheme 保持原行为。
 
+业务文件 `boxteam-file` 沿原 WorkingCopyHistoryTracker、创建历史命令和 Timeline 保存与读取本地历史，保留 Gateway／Workspace 资源身份及原大小、启用和排除规则；不得投影为容器目录或另建文件快照库。
+
 ConfigurationCache 继续使用原 type／key、cacheHome 与单条目队列；目录准备和正文写入必须一起排队，防止迟到保存越过后发更新或删除。目录或写入失败保留原原因，不以返回成功掩盖；本地 workbench 设置仍不重复缓存，非本地配置由原消费者更新。FolderConfiguration 的默认值／scope／信任重解析只使用已加载正文，不重新读盘刷新原文缓存；首次 provider 就绪与真实文件变化仍由原 onDidFolderConfigurationChange 更新缓存。
 
 扩展 staging／发布的目录过滤仅检查复制源内部的相对路径；源码祖先目录名不得影响结果，路径分隔符使用当前平台约定。`extensions.test.mjs` 用真实文件复制验证祖先目录、内部测试／依赖排除及上游原件不变；不代替完整扩展编译与 Workbench 页面验收。

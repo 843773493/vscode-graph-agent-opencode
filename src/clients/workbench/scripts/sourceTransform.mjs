@@ -31,6 +31,9 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/platform/quickinput/browser/helpQuickAccess.ts',
   'src/vs/workbench/services/search/common/queryBuilder.ts',
   'src/vs/workbench/services/history/browser/historyService.ts',
+  'src/vs/workbench/services/workingCopy/common/workingCopyHistoryTracker.ts',
+  'src/vs/workbench/contrib/localHistory/browser/localHistoryCommands.ts',
+  'src/vs/workbench/contrib/localHistory/browser/localHistoryTimeline.ts',
   'src/vs/workbench/common/editor/textResourceEditorInput.ts',
   'src/vs/workbench/contrib/search/browser/search.contribution.ts',
   'src/vs/workbench/contrib/search/browser/searchQuickAccess.contribution.ts',
@@ -125,6 +128,19 @@ export function sourceTransform(root, productConfiguration, extensions) {
     contents = transformSettingsTreeScope(root, path, contents, replaceOnce);
     contents = transformExtensionTabs(root, path, contents, replaceOnce);
     contents = transformExtensionWorkspaceSymbols(root, path, contents, replaceOnce);
+    // 业务文件沿原本地历史保存、命令和时间线；不能投影为容器工作区而丢失 Gateway 归属。
+    if (path === join(upstream, 'src/vs/workbench/services/workingCopy/common/workingCopyHistoryTracker.ts')) {
+      contents = replaceOnce(contents, 'resource.scheme !== this.pathService.defaultUriScheme &&',
+        "resource.scheme !== this.pathService.defaultUriScheme && resource.scheme !== 'boxteam-file' &&");
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/localHistory/browser/localHistoryCommands.ts')) {
+      contents = replaceOnce(contents, 'resource?.scheme !== pathService.defaultUriScheme && resource?.scheme !== Schemas.vscodeUserData',
+        "resource?.scheme !== pathService.defaultUriScheme && resource?.scheme !== 'boxteam-file' && resource?.scheme !== Schemas.vscodeUserData");
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/localHistory/browser/localHistoryTimeline.ts')) {
+      contents = replaceOnce(contents, 'uri.scheme === this.pathService.defaultUriScheme || uri.scheme === Schemas.vscodeUserData',
+        "uri.scheme === this.pathService.defaultUriScheme || uri.scheme === 'boxteam-file' || uri.scheme === Schemas.vscodeUserData");
+    }
     if (path === join(upstream, 'src/vs/workbench/services/history/browser/historyService.ts')) {
       // 已有稳定输入与 resolver 的项目资源沿原历史存储；不为最近记录另建账本。
       contents = replaceOnce(contents, "import { mainWindow } from '../../../../base/browser/window.js';",

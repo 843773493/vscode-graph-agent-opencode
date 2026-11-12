@@ -26,9 +26,11 @@ from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
+    metadata_data,
+)
+from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_port_reservations as metadata_port_reservations,  # noqa: PLC0414
 )
-from tests.integration.clients.web.test_workspace_metadata_bootstrap import metadata_data
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
@@ -113,6 +115,7 @@ async def test_closed_resources_survive_history_reload_without_deleting_business
 async def test_clear_thread_history_cache_preserves_business_and_recovery(
     request: pytest.FixtureRequest,
     history_cache_case: tuple[httpx.AsyncClient, TestRunContext, ModelStreamReplay],
+    browser_backend: tuple[str, Path, ModelStreamReplay],
 ) -> None:
     client, context, provider = history_cache_case
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
@@ -123,6 +126,9 @@ async def test_clear_thread_history_cache_preserves_business_and_recovery(
     assert owner["gateway_id"] == health["gateway_id"]
     client.headers.update({"X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
                            "X-BoxTeam-Workspace-Id": owner["workspace_id"]})
+    roots = await metadata_data(client, "/api/v1/workspace/files/roots")
+    recovery_file = browser_backend[1] / "cache-protected.txt"
+    recovery_file.write_text("原始磁盘正文\n", encoding="utf-8")
     endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
     identities = []
     for label in ("A", "B"):
@@ -155,6 +161,7 @@ async def test_clear_thread_history_cache_preserves_business_and_recovery(
         completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
             env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
                  "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_CACHE_THREADS": json.dumps(identities),
+                 "BOXTEAM_CACHE_FILE_ROOT_URI": roots["workspace_uri"],
                  "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
             capture_output=True, text=True, timeout=150, check=False)
     (context.artifacts_dir / "cache-browser.stdout.raw").write_text(completed.stdout, encoding="utf-8")
@@ -168,6 +175,10 @@ async def test_clear_thread_history_cache_preserves_business_and_recovery(
     assert all(result[key] for key in ("commandDiscoverable", "cancelPreserved", "capturedOwnerCleared",
                                       "otherThreadPreserved", "draftsRestored", "settingsRestored", "historyRebuilt"))
     assert result["forbiddenWrites"] == []
+    assert all(result[key] for key in ("automaticLocalHistory", "manualLocalHistory", "timelineOwnerPreserved",
+                                      "localHistoryPreserved", "dirtyBackupRestored", "splitViewsRestored"))
+    assert recovery_file.read_text(encoding="utf-8").startswith("已保存的历史正文\n")
+    assert "尚未保存的正文" not in recovery_file.read_text(encoding="utf-8")
     with provider.control._condition:
         calls = [count for key, count in provider.control._counters.items() if key.startswith("model_call/")]
     assert sorted(calls) == [1, 1], "清理、打开和恢复不得新增模型调用"
