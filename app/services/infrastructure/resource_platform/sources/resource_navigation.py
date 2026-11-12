@@ -479,19 +479,23 @@ class ResourceNavigation:
         consumed = 0
         truncated = False
         reason = None
+        response_bytes = 0
         for hit in self._content_matches(node.uri, content, request, deadline, pattern, skip_matches=offset):
             consumed += 1
             if hit is None:
                 continue
             additions = {(line.uri, line.line): line for line in hit.context if (line.uri, line.line) not in contexts}
-            candidate = ResourceNavigationResultDTO(node=node, entries=(node,), matches=(*matches, hit.match),
-                contexts=(*contexts.values(), *additions.values()), truncated=True,
+            # 只编码新增正文；空数组的信封与累计字节数共同保留原分页预算。
+            entry_bytes = len(hit.match.model_dump_json().encode()) + bool(matches)
+            entry_bytes += sum(len(line.model_dump_json().encode()) + 1 for line in additions.values()) - bool(additions and not contexts)
+            envelope = ResourceNavigationResultDTO(node=node, entries=(node,), truncated=True,
                 next_cursor=self._encode_cursor(binding, SearchPosition(consumed, 0, version)), truncation_reason="response_byte_limit", view="live")
-            if len(matches) >= request.limit or self._size(candidate) > request.max_response_bytes:
+            if len(matches) >= request.limit or self._size(envelope) + response_bytes + entry_bytes > request.max_response_bytes:
                 truncated, reason = True, "entry_limit" if len(matches) >= request.limit else "response_byte_limit"
                 break
             matches.append(hit.match)
             contexts.update(additions)
+            response_bytes += entry_bytes
         if truncated and not matches:
             raise ResourceFileOperationError("output_limit_exceeded", "预算不足以容纳一条工具结果匹配", reason="response_byte_limit")
         if consumed < offset:
