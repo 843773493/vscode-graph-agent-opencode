@@ -6,6 +6,7 @@ import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation
 import { EditorResourceAccessor, SideBySideEditor } from '../upstream/src/vs/workbench/common/editor.js';
 import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
+import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import type { GatewayResourceAddressDTO, GatewayThreadAddressRequest } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { sourceDocumentSource } from './sourceDocuments.js';
@@ -22,9 +23,10 @@ export function supportsResourceReference(resource: URI): boolean {
 }
 
 /** 只反转内部编辑器投影；公开引用由统一寻址 owner 生成，不读取正文或打开资源。 */
-export async function resourceReference(resource: URI): Promise<string> {
+export async function resourceReference(resource: URI, resourceOwner?: WorkspaceOwner): Promise<string> {
   const thread = resource.scheme === 'boxteam-thread' ? ThreadInput.fromResource(resource).owner : undefined;
-  const source = resource.scheme === 'boxteam-file' ? workspaceFileSource(resource)
+  const source = resource.scheme === 'boxteam' && resourceOwner ? { ...resourceOwner, uri: resource.toString() }
+    : resource.scheme === 'boxteam-file' ? workspaceFileSource(resource)
     : resource.scheme === 'boxteam-source' ? sourceDocumentSource(resource) : undefined;
   const owner = thread ?? source;
   if (!owner) throw new Error('此资源尚未提供规范 URI 复制能力');
@@ -63,11 +65,11 @@ registerAction2(class CopyResourceUri extends Action2 {
       f1: true, precondition: referenceContext,
       menu: { id: MenuId.EditorTitleContext, group: '2_copy', when: referenceContext } });
   }
-  async run(accessor: ServicesAccessor, supplied?: URI): Promise<void> {
+  async run(accessor: ServicesAccessor, supplied?: URI, owner?: WorkspaceOwner): Promise<void> {
     if (supplied !== undefined && !URI.isUri(supplied)) throw new Error('复制资源引用需要明确的编辑器 URI');
     const resource = supplied ?? EditorResourceAccessor.getCanonicalUri(accessor.get(IEditorService).activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
     if (!resource) throw new Error('没有明确的资源引用目标');
     const clipboard = accessor.get(IClipboardService);
-    await clipboard.writeText(await resourceReference(resource));
+    await clipboard.writeText(await resourceReference(resource, owner));
   }
 });

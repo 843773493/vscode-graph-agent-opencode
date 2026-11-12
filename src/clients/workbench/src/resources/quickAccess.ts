@@ -4,6 +4,7 @@ import { Codicon } from '../../upstream/src/vs/base/common/codicons.js';
 import { matchesFuzzy } from '../../upstream/src/vs/base/common/filters.js';
 import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ThemeIcon } from '../../upstream/src/vs/base/common/themables.js';
+import { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { Action2, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
@@ -240,6 +241,13 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
                 description: `附件 · ${target.name} · ${attachment.content_type ?? 'application/octet-stream'}`,
                 detail: `${owner.gatewayId} · ${owner.workspaceId} · ${thread.session_id} · ${thread.thread_id} · ${attachment.file_id}`,
                 accept: attachment.availability === 'unavailable' ? undefined : threadResourceAccept(owner, { resourceTab: 'files', selectedAttachment: frozen }),
+                buttons: attachment.availability === 'unavailable' ? undefined
+                  : [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: '复制资源 URI' }],
+                trigger: () => {
+                  this.assertAccess(run);
+                  this.report(this.commands.executeCommand(COPY_RESOURCE_URI, URI.parse(frozen.file_id), { ...owner }));
+                  return TriggerAction.NO_ACTION;
+                },
               };
             });
             if (result.next_after) picks.push(continuePage(`${key}/attachments/after/${result.next_after}`, '更多附件…',

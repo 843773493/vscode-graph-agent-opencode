@@ -9,7 +9,7 @@ const fixture = JSON.parse(required('BOXTEAM_BROWSER_FIXTURE'));
 const output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/test_attachments.py');
 const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], attachmentPages: [], contentReads: [],
-  workspaceContentReads: [], browseContentReads: [],
+  workspaceContentReads: [], browseContentReads: [], copiedReferences: [], initializationResponses: [],
   boundary: '真实 Gateway／Backend 与正式 Workbench；消息通过产品 HTTP 入口上传，附件候选来自精确 Thread 分页，原文件读取仅在接受后由原预览执行' };
 const pending = [], collectionErrors = [], pageRequests = new WeakMap();
 let page, failure;
@@ -20,10 +20,17 @@ try {
   const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'), headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   run.addCleanup('Thread 附件 Chromium', () => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1700, height: 1100 } });
+  const context = await browser.newContext({ viewport: { width: 1700, height: 1100 }, permissions: ['clipboard-read', 'clipboard-write'] });
   run.addCleanup('Thread 附件 BrowserContext', () => context.close());
   page = await context.newPage(); page.setDefaultTimeout(20_000);
   page.on('pageerror', cause => result.pageErrors.push(String(cause)));
+  page.on('response', response => {
+    const url = new URL(response.url());
+    if (result.phase === 'initialize' && url.pathname.startsWith('/api/')) {
+      result.initializationResponses.push({ path: url.pathname, query: url.search,
+        status: response.status(), requestId: response.headers()['x-request-id'] });
+    }
+  });
   page.on('request', request => {
     const url = new URL(request.url()), headers = request.headers();
     if (/^\/api\/v1\/sessions\/[^/]+\/threads\/[^/]+\/attachments$/.test(url.pathname)) {
@@ -137,7 +144,7 @@ try {
   const more = quick.locator('.monaco-list-row').filter({ hasText: '更多附件…' });
   await expect(more).toBeVisible();
   await more.hover();
-  await more.getByRole('button', { name: '读取下一页附件', exact: true }).click();
+  await more.getByRole('button', { name: '更多附件…', exact: true }).click();
   await waitFor(() => result.attachmentPages.filter(item => item.phase === 'pagination').length === 2);
   await waitFor(() => Boolean(result.attachmentPages.find(item => item.phase === 'pagination' && item.after)?.data));
   const paginatedItems = result.attachmentPages.filter(item => item.phase === 'pagination').flatMap(item => item.data.items);
@@ -148,6 +155,28 @@ try {
   await filter(nextPage.items[0].name);
   expect(result.contentReads).toEqual([]);
   result.pagination = true;
+
+  await phase('copy-reference');
+  const tabsBeforeCopy = await page.locator('.tabs-container .tab').count();
+  for (const [name, fileId] of [[fixture.textName, result.textFileId], [fixture.mediaName, result.mediaFileId]]) {
+    await filter(name);
+    await rows(name).hover();
+    const received = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/gateway/resource-addresses/parse');
+    await rows(name).getByRole('button', { name: '复制资源 URI', exact: true }).click();
+    const response = await received, payload = await response.json();
+    expect(response.status()).toBe(200);
+    expect(response.request().postDataJSON()).toEqual({ uri: fileId, local_gateway_id: fixture.gatewayId, resource_gateway_id: fixture.gatewayId });
+    expect(payload.request_id).toBe(response.headers()['x-request-id']);
+    expect(payload.data).toMatchObject({ gateway_id: fixture.gatewayId, scope: 'workspace', scope_id: fixture.workspaceId, kind: 'attachments' });
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(payload.data.reference_uri);
+    expect(payload.data.reference_uri).toContain(`boxteam://${fixture.gatewayId}/workspace/${fixture.workspaceId}/resources/attachments/`);
+    result.copiedReferences.push({ fileId, request: response.request().postDataJSON(), data: payload.data,
+      request_id: payload.request_id, header: response.headers()['x-request-id'] });
+    await expect(quick).toBeVisible(); await expect(input).toBeFocused();
+    await expect(page.locator('.tabs-container .tab')).toHaveCount(tabsBeforeCopy);
+  }
+  expect(result.contentReads).toEqual([]); result.copyWithoutRead = true;
 
   await phase('text-preview');
   await acceptCurrent(fixture.textName, result.textFileId);
@@ -163,7 +192,7 @@ try {
   if (!firstMediaPage.data.items.some(item => item.name === fixture.mediaName)) {
     const mediaMore = quick.locator('.monaco-list-row').filter({ hasText: '更多附件…' });
     await mediaMore.hover();
-    await mediaMore.getByRole('button', { name: '读取下一页附件', exact: true }).click();
+    await mediaMore.getByRole('button', { name: '更多附件…', exact: true }).click();
     await waitFor(() => result.attachmentPages.some(item => item.phase === 'media-preview' && item.after && item.data));
   }
   await acceptCurrent(fixture.mediaName, result.mediaFileId, 'Alt+Enter');

@@ -20,9 +20,6 @@ import pytest
 
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.harness.python.web_workbench import (
-    web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
-)
 from tests.integration.backend.sessions.rollout_context.test_execution_history_storage import (
     HistoryTarget,
 )
@@ -50,8 +47,11 @@ async def attachment_browser_case(
 
 
 @pytest.fixture(autouse=True)
-def attachment_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path) -> None:
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
+def attachment_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
+    assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
+    assert (assets / "version.json").is_file(), assets
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
 
 
 def _api_data(response: httpx.Response) -> dict[str, object]:
@@ -197,8 +197,10 @@ async def test_thread_attachment_quick_access_paginates_and_opens_original_previ
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert all(result[key] for key in (
-        "browseOnly", "filterAndCancel", "pagination", "textPreview", "mediaPreview", "sideFocus", "stateRestored",
+        "browseOnly", "filterAndCancel", "pagination", "copyWithoutRead", "textPreview", "mediaPreview", "sideFocus", "stateRestored",
     ))
+    assert [item["fileId"] for item in result["copiedReferences"]] == [result["textFileId"], result["mediaFileId"]]
+    assert all(item["request_id"] == item["header"] for item in result["copiedReferences"])
     assert result["browseContentReads"] == []
     assert result["workspaceContentReads"] == []
     pages = result["attachmentPages"]

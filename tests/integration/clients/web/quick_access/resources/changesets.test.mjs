@@ -84,6 +84,23 @@ for (const mode of ['no-thread', 'excluded']) test(`${mode}附件没有明确入
 for (const mode of ['denied', 'wrong-owner', 'unavailable']) test(`${mode}附件不发布可接受的错误来源`, async () => {
   const result = await exercise(mode, 'attachment'); expect(result.opened).toEqual([]);
   expect(result.rows.every(item => !item.selectable)).toBe(true);
+  expect(result.rows.every(item => !item.copyable)).toBe(true);
+});
+test('附件候选直接复制原URI，保持来源Gateway而不打开媒体或读取原件', async () => {
+  const result = await exercise('copy', 'attachment');
+  expect(result.errors).toEqual([]); expect(result.opened).toEqual([]); expect(result.groupsAdded).toBe(0);
+  expect(result.copied).toEqual([`boxteam://${result.owner.gatewayId}/workspace/${result.owner.workspaceId}/resources/attachments/att_${'a'.repeat(32)}/original/content`]);
+  expect(result.requests.filter(item => item.method !== 'GET')).toEqual([{
+    path: '/api/gateway/resource-addresses/parse', method: 'POST', gatewayId: null, workspaceId: null,
+    body: { uri: result.attachment.file_id, local_gateway_id: `gateway_${'a'.repeat(32)}`, resource_gateway_id: result.owner.gatewayId },
+  }]);
+  expect(result.requests.some(item => item.path.endsWith('/content') || item.path === '/api/v1/resources/navigation')).toBe(false);
+});
+for (const mode of ['copy-mismatch', 'copy-identity']) test(`${mode}附件错误或迟到地址不写剪贴板`, async () => {
+  const result = await exercise(mode, 'attachment');
+  expect(result.copied).toEqual([]); expect(result.opened).toEqual([]);
+  expect(result.errors[0]).toContain(mode === 'copy-mismatch' ? '归属不匹配' : 'Gateway 或访问凭据已改变');
+  expect(result.requests.filter(item => item.method === 'POST')).toHaveLength(1);
 });
 for (const mode of ['close', 'identity']) test(`${mode}附件取消真实目录请求并丢弃迟到结果`, async () => {
   const result = await exercise(mode, 'attachment'); expect(result.aborted).toBe(true); expect(result.opened).toEqual([]);

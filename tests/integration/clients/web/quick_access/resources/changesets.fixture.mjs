@@ -1,5 +1,7 @@
 import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
+import { CommandsRegistry } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
+import { IClipboardService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/clipboard/common/clipboardService.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
 import { ThreadInput } from '../../../../../../src/clients/workbench/src/threadInput.js';
 import { workspaceContext } from '../../../../../../src/clients/workbench/src/workspaceContext.js';
@@ -10,7 +12,7 @@ import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../.
 // 运行真实 Provider 和 HTTP 客户端；EditorService 只记录目标，完整面板／Diff另经正式页面验收。
 export async function changesetContract(mode, kind = 'changeset') {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), itemButtons = new Emitter();
-  const cancellation = new CancellationTokenSource(), requests = [], opened = [], errors = [];
+  const cancellation = new CancellationTokenSource(), requests = [], opened = [], errors = [], copied = [];
   const attachment = { file_id: 'boxteam://workspace/019a0000-0000-7000-8000-000000000001/resources/attachments/att_' + 'a'.repeat(32) + '/original/content',
     directory_uri: 'boxteam://workspace/019a0000-0000-7000-8000-000000000001/resources/attachments/att_' + 'a'.repeat(32), name: '原图片.png', content_type: 'image/png', availability: 'available' };
   const owners = ['a', 'b'].map(letter => ({ gatewayId: `gateway_${letter.repeat(32)}`, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
@@ -20,12 +22,19 @@ export async function changesetContract(mode, kind = 'changeset') {
   const origin = new ThreadInput({ ...owners[1], sessionId: 'ses_origin', threadId: 'thr_child', workspaceKey: '', title: '原child' });
   const editors = { activeEditor: mode === 'no-thread' ? undefined : origin,
     async openEditor(input, options, group) { opened.push({ owner: { ...input.owner }, options, group }); } };
-  let releaseRead, aborted = false, groupsAdded = 0;
+  let releaseRead, releaseParse, aborted = false, groupsAdded = 0;
   installSessionApiFetchMock(async ({ path: pathname, url, init, method }) => {
     const query = new URL(url, 'http://127.0.0.1').search;
     const path = pathname.endsWith('/attachments') ? pathname + query : pathname;
     const headers = new Headers(init.headers), gatewayId = headers.get('X-BoxTeam-Target-Gateway-Id'), workspaceId = headers.get('X-BoxTeam-Workspace-Id');
-    requests.push({ path, method, gatewayId, workspaceId });
+    const body = init.body ? JSON.parse(String(init.body)) : undefined;
+    requests.push({ path, method, gatewayId, workspaceId, ...(body ? { body } : {}) });
+    if (path === '/api/gateway/resource-addresses/parse') {
+      if (mode === 'copy-identity') await new Promise(resolve => { releaseParse = resolve; });
+      return ok({ gateway_id: mode === 'copy-mismatch' ? owners[0].gatewayId : body.resource_gateway_id,
+        scope: 'workspace', scope_id: owners[1].workspaceId, kind: 'attachments', uri: attachment.file_id,
+        reference_uri: `boxteam://${body.resource_gateway_id}/workspace/${owners[1].workspaceId}/resources/attachments/att_${'a'.repeat(32)}/original/content` });
+    }
     if (path === '/api/gateway/workspaces') return ok({ items: targets });
     if (path.endsWith('/changesets') || path.includes('/attachments?')) {
       const selected = kind === 'attachment' ? path.includes('/attachments?') : path.endsWith('/changesets');
@@ -59,8 +68,14 @@ export async function changesetContract(mode, kind = 'changeset') {
     onDidTriggerButton: Event.None, onDidTriggerItemButton: itemButtons.event, onDidTriggerSeparatorButton: Event.None, hide() {} };
   const groups = { activeGroup: { id: 7 }, getGroup: id => mode === 'closed-group' ? undefined : { id },
     findGroup: () => undefined, addGroup: () => { groupsAdded++; return { id: 8 }; } };
+  const commands = { executeCommand(id, ...args) {
+    return CommandsRegistry.getCommand(id).handler({ get(service) {
+      if (service === IClipboardService) return { writeText: async value => { copied.push(value); } };
+      throw new Error(`复制附件不应取得其它宿主服务：${service}`);
+    } }, ...args);
+  } };
   const provider = new ResourceQuickAccess({}, {}, groups, { getValue: key => key === 'workbench.editor.openSideBySideDirection' ? 'right' : mode !== 'no-preview' },
-    { error: cause => errors.push(String(cause)) }, {}, editors);
+    { error: cause => errors.push(String(cause)) }, commands, editors);
   const lifetime = provider.provide(picker, cancellation.token, { searchOwners: mode === 'excluded' ? [owners[0]] : owners });
   const until = async predicate => { for (let i = 0; i < 300; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
     throw new Error('变更合同未收敛'); };
@@ -86,6 +101,12 @@ export async function changesetContract(mode, kind = 'changeset') {
           else invalidateGatewayToken(0);
           releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
         }
+      } else if (mode.startsWith('copy')) {
+        const pick = picker.items.find(item => item.resourceId === attachment.file_id);
+        editors.activeEditor = new ThreadInput({ ...owners[0], sessionId: 'ses_later', threadId: 'thr_later', workspaceKey: '', title: '后来打开' });
+        itemButtons.fire({ item: pick, button: pick.buttons.find(button => button.tooltip === '复制资源 URI') });
+        if (mode === 'copy-identity') { await until(() => releaseParse); invalidateGatewayToken(0); releaseParse(); }
+        await until(() => copied.length || errors.length);
       } else if (mode === 'browse') {
         const count = requests.length;
         picker.value = kind === 'attachment' ? 'resource 图片' : 'resource 更改'; changes.fire(picker.value); await until(() => !picker.busy);
@@ -97,8 +118,9 @@ export async function changesetContract(mode, kind = 'changeset') {
         await until(() => opened.length || errors.length);
       }
     }
-    return { requests, opened, errors, groupsAdded, aborted, owner: origin.owner,
-      attachment, rows: picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail, selectable: !!item.accept })) };
+    return { requests, opened, errors, copied, groupsAdded, aborted, owner: origin.owner,
+      attachment, rows: picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail, selectable: !!item.accept,
+        copyable: !!item.buttons?.some(button => button.tooltip === '复制资源 URI') })) };
   } finally {
     lifetime.dispose(); cancellation.dispose(true); provider.dispose(); changes.dispose(); accepts.dispose(); itemButtons.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(previous);

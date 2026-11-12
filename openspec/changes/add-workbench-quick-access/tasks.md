@@ -138,6 +138,7 @@
   - 2026-11-12 右侧 Session 资源的保留／关联／解除关联迁到同一资源 Command，冻结元数据中的 ID／revision；读取期间版本或凭据变化拒绝写入，最终由原 Session loader 权威重读。原 Session 停止／Browser wake 合同继续原入口。54项定向检查281条断言、172份真实转换源码类型、79扩展正式构建和完整运行资源页面通过；页面同时核跨工作区精确聚焦、浏览／二级取消零写入、stop／detach／delete区别、真实409及新Session旧版本拒绝后精确解除关联，零模型／页面错误。刷新收起详情及Browser重建抢焦点的失败原件、修正后的测试边界和最小复审见 `out/tests/temp/2026/11/12/session_runtime_actions/artifacts/verification.json`。仅关闭此子链，MCP／其它动作和跨平台仍不由本片证明，11.1／11.5／11.6／11.7保持未勾选。
 - [ ] 11.6 统一 pending／confirmed、完整权威替换、失败重新读取与未知结果对账，取消未接受步骤不写入，关闭已受理浮层不撤销／重放后端动作。
 - [ ] 11.7 验证未打开详情直接管理、显式 child 优先、任务 revision 冲突、目录 outbox 回执和预览无写副作用，移除迁齐后无消费者的同义执行链。
+  - 2026-11-12 Session 管理与 fork 的正式页面分别通过（26.31秒、62.55秒）：重命名／删除复用原确认和目录 outbox；未打开 Thread／Session 候选及导航 fork 取消均零写入，完整历史复制真实发布 durable child，child F1 保持精确来源。来源历史经一次 model_stream 产品执行生成，后续无额外执行；沿用已验正式构建及不可变插件包，未预写历史或浏览器状态。Ruff、MJS语法及差异检查通过，旧装具和断言失败原件保留；准确命令、结果与指纹见 `out/tests/temp/2026/11/12/session_fork_actions/artifacts/verification.json`。仅关闭这两个页面子项，MCP／其它动作和原生运行面继续未完成。
 
 ## 12. 引用与 Composer
 
@@ -153,6 +154,7 @@
   - 2026-11-11 Gateway／插件 Skill 复制引用：原 resourceReference 同时接受确切 Gateway Skill 和工作区来源，仍核 Gateway／scope／kind，复制与 Composer 共用唯一解析器，无正文重读或新打开链。41项来源合同／276断言、167份转换源码真实类型、79扩展正式构建及真实双Workspace产品页面通过；页面经安装绑定打开Skill后执行原复制命令并核实际剪贴板、冻结owner及零正文重读。错误owner和非Skill的Gateway来源明确拒绝；未代替Windows／真实远端页面／Electron或完整Composer选择验收，12.1仍保留。精确命令、指纹和复审见 `out/tests/temp/2026/11/11/plugin_skill_reference/artifacts/verification.json`。
   - 2026-11-12 Thread 复制引用完整页面收口：真实消息及 fork 创建 main／child，正式 Workbench 最近候选分别复制精确 URI，原 Composer 文件多选仍只附加未打开文件引用。组合页面2项通过、9项真实 Command／Provider 合同57条断言通过，核实际剪贴板、原 request_id、无额外正文读取／打开及零新增执行；跨 Gateway 仍为具名 HTTP 装具。只修测试导入排序并复用此前产品类型／正式构建，不重复已通过长页；证据见 `out/tests/temp/2026/11/12/thread_resource_reference/artifacts/verification.json`。固定版本、完整返回／能力矩阵和 Electron 仍未由本片证明，宽任务继续未勾选。
 - [ ] 12.4 粘贴保留选定正文，显式可复现引用由原 owner 核验版本；无法取得版本明确失败，不新增统一快照／冻结体系。
+  - 2026-11-12 可用附件候选的独立复制按钮复用原资源 Command／唯一 URI parser，直接传原 file_id 与冻结 owner；文本和 PDF 不提前打开或读取原件。正式 Gateway／Backend／Workbench 页面1 passed／51.34秒，核实际剪贴板、原 request_id、100+1分页、复制后焦点及零新Tab／正文读取，原预览／分屏／刷新保持。172份实际转换源码类型和79扩展正式构建通过；新增与原附件／变更／Thread合同通过，联合来源检查有两个场景及清理钩子5秒超时，单独来源19项140断言通过，未确定原超时原因。页面首次上游断连原件保留、未加重试；第二次按产品共用续页按钮迁齐旧装具后通过。最小复审无新URI／正文缓存／持久账本；证据见 `out/tests/temp/2026/11/12/attachment_reference/artifacts/verification.json`。本片不证明固定版本、通用媒体URI重开、Windows／真实远端／Electron，宽任务保持未勾选。
 - [ ] 12.5 验证多 Thread 同时可见、跨工作区来源、二级返回、多选取消、不支持能力和来源变化，只有指定草稿变化且无隐式模型调用。
 
 ## 13. 展示态与恢复
