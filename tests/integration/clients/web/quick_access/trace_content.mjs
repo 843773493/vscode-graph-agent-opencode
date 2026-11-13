@@ -54,7 +54,7 @@ try {
   }, { path, body });
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), workspace = await api('/api/v1/workspace');
   await api('/api/gateway/workspaces');
   const session = await api('/api/v1/sessions', { title: 'Trace 原文定位验收' });
@@ -82,6 +82,7 @@ try {
   await send(child, '生成仅属于 child 本轮执行的响应');
   result.phase = 'wait-navigation';
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('treeitem', { name: /^Trace 原文定位验收/ })).toBeVisible();
   expect(await page.locator(`section.boxteam-thread[data-thread-id="${child}"]`).count()).toBe(0);
   result.phase = 'choose-category';
@@ -178,7 +179,7 @@ try {
   const deletedResponse = await deleted, deletedPayload = await deletedResponse.json();
   expect(deletedPayload.request_id).toBe(deletedResponse.headers()['x-request-id']);
   expect(deletedPayload.detail).toMatchObject({ owner: 'trace_event_store', code: 'stale_trace_reference', reason: 'file_deleted' });
-  await expect(pane.getByRole('alert')).toContainText('命中的 Trace 文件已删除');
+  await expect(pane.getByRole('alert')).toContainText('命中的 Trace 已删除');
   await expect(mark).toHaveCount(0);
   expect(result.searches).toHaveLength(beforeDeletion);
   expect(result.fullTraces).toHaveLength(0);

@@ -24,6 +24,9 @@ from tests.integration.clients.web.test_basic_chat_tool_loop import (
 from tests.integration.clients.web.test_basic_chat_tool_loop import (
     chat_backend_boxteam_home as chat_backend_boxteam_home,  # noqa: PLC0414
 )
+from tests.integration.clients.web.test_basic_chat_tool_loop import (
+    chat_loop_web_assets as chat_loop_web_assets,  # noqa: PLC0414
+)
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import integration_port_block_for_file
@@ -44,7 +47,7 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
     request: pytest.FixtureRequest, chat_backend: tuple[str, Path, ModelStreamReplay],
     chat_backend_boxteam_home: Path,
     prepared_developer_tools_package: Path,
-    web_workbench_assets: Path, search_gateway_port: int,
+    chat_loop_web_assets: Path, search_gateway_port: int,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "Trace 正文验收需要 Chromium"
@@ -54,7 +57,7 @@ async def test_trace_content_opens_unloaded_child_and_reuses_original_event(
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=workspace,
         default_backend_url=backend_url, port=search_gateway_port,
         artifacts_dir=context.artifacts_dir / "gateway", boxteam_home=chat_backend_boxteam_home,
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets)})
+        extra_env={"BOXTEAM_WEB_ASSETS": str(chat_loop_web_assets)})
     model = "browser-chat-tool-loop-stub"
     endpoint = integration_port_block_for_file(Path(request.node.path)).port(10)
     texts = ["准备 fork", "开头😀\n" + "a" * 12000 + QUERY + "\n第二处" + QUERY + "\n结束", "后续执行已完成"]

@@ -22,13 +22,13 @@
 
 ### Requirement: Trace 正文查询复用原事件存储
 
-工作区搜索 SHALL 提供独立 `trace/content` 类别，由原 TraceEventStore 在 catalog 中发现 Session，复用原 JSONL 分页、事件解析、文件锁及 Job／Thread 归属索引。查询不读取 Gateway 自有运行日志，不触发执行恢复，不新增日志副本或持久搜索索引。匹配采用区分大小写的非重叠字面量，正文是原事件按现有 schema 字段顺序、两空格缩进且保留 Unicode 的 JSON；位置使用从零开始、右端不包含的 Unicode 码点区间。每个 Session 从最新完整事件向前读取，单事件内按正文位置正序返回。
+工作区搜索 SHALL 提供独立 `trace/content` 类别，由原 TraceEventStore 在 catalog 中发现 Session，复用其唯一 SQLite 事件正文、分页、解析和 Job／Thread 归属索引；一次读取在原数据库事务中取得一致快照。查询不读取 Gateway 自有运行日志，不触发执行恢复，不新增日志副本或持久搜索索引。匹配采用区分大小写的非重叠字面量，正文是原事件按现有 schema 字段顺序、两空格缩进且保留 Unicode 的 JSON；位置使用从零开始、右端不包含的 Unicode 码点区间。每个 Session 从最新完整事件向前读取，单事件内按正文位置正序返回。
 
 每页 SHALL 最多检查 64 个目录节点、128 条事件、读取 8 MiB 正文窗口，正文调度预算为一秒，并服从请求剩余总期限；沿用原 Trace 页的 512 KiB 单窗口／单事件读取上限。达到预算 SHALL 披露扫描量、原因和适用续点；无法跨过的单事件超限不返回循环 cursor。阻塞读取在取消后 SHALL 先结算，再释放 Session 读准入。
 
-续页 SHALL 绑定 Gateway、workspace、原查询、catalog revision、当前 Session 的文件观察版本及事件／正文位置。文件追加、删除或观察版本变化时明确拒绝；同一事件内继续时额外核对该行完整内容版本。文件观察版本不是整份历史的内容摘要，不承诺检测人为保留文件元数据的任意修改。各 Session 使用其实际读取时的快照，已完成 Session 的新增事件需重新查询。
+续页 SHALL 绑定 Gateway、workspace、原查询、catalog revision、当前 Session 的 Trace 存储身份、提交 revision 及事件／正文位置。事件追加、删除、改写或存储替换导致版本变化时明确拒绝；同一事件内继续时额外核对该条完整内容版本。存储 revision 由原数据库维护，不使用文件 mtime／size 或整份历史摘要代替。各 Session 使用其实际读取时的快照，已完成 Session 的新增事件需重新查询。
 
-命中 SHALL 使用原 Session 资源 URI，独立携带 Session、实际 Thread、event ID、原行字节区间、完整行内容版本及正文码点位置。实际 Thread 来自原已提交 Job 事实，Goal 沿原合同归 main，不从裸 ID 或展示路径猜测。精确定位 SHALL 在原 Session 读准入和文件锁内只读该行，核验完整内容版本、事件、Thread 及位置，返回原 Trace 详情及临时搜索原文。删除、裁剪、改写、错误归属或越界 SHALL 明确拒绝，不改投最新事件或会话顶部；该定位不要求整份日志保持未追加。
+命中 SHALL 使用原 Session 资源 URI，独立携带 Session、实际 Thread、event ID、原记录的逻辑字节区间、完整记录内容版本及正文码点位置；逻辑区间由原 Trace owner 发布，不是 SQLite 文件物理偏移。实际 Thread 来自原已提交 Job 事实，Goal 沿原合同归 main，不从裸 ID 或展示路径猜测。精确定位 SHALL 在原 Session 读准入和数据库读取事务内只读目标记录，核验完整内容版本、事件、Thread 及位置，返回原 Trace 详情及临时搜索原文。删除、裁剪、改写、错误归属或越界 SHALL 明确拒绝，不改投最新事件或会话顶部；该定位不要求其它事件保持未追加。
 
 续点错误 SHALL 保留 `owner=trace_event_store`、`code`、`reason` 和原详细消息：输入错误使用 HTTP 400 `invalid_trace_search_cursor`，版本变化使用 HTTP 409 `stale_trace_search_cursor`，旧命中引用使用 HTTP 409 `stale_trace_reference`。Gateway 沿原分支保留原 HTTP 状态、输入续点及本次 request_id，不解析提示文字推断原因。
 
