@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { createMessageStreamState } from "./state";
 import { messageStreamToResponseParts } from "./responseProjection";
+import { applyMessageStreamEvent } from "./eventReducer";
 
 describe("消息流响应投影排序", () => {
   test("乱序执行仍优先保留 canonical 工具并按生命周期合并排序", () => {
@@ -57,6 +58,14 @@ describe("消息流响应投影排序", () => {
       "block_after_tool",
     ]);
     expect(parts[1]?.text).toBe("权威结果");
+
+    const updated = applyMessageStreamEvent(state, {
+      event_id: "evt_arguments", event_seq: 1, type: "tool_call",
+      session_id: "ses_1", thread_id: "thr_1", turn_id: "turn_1", turn_stream_id: "strm_1",
+      payload: { tool_call_id: "call_1", arguments: { path: "changed.md" } },
+    });
+    expect(messageStreamToResponseParts(updated)[0]?.arguments).toBe('{"path":"changed.md"}');
+    expect(messageStreamToResponseParts(state)).toEqual(parts);
   });
 
   test("同优先级执行按生命周期序号和 execution id 稳定选择", () => {

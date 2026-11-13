@@ -11,6 +11,21 @@ import type {
   MessageStreamToolExecution,
 } from "./types";
 
+// reducer 和快照水合只替换参数对象；正文增量无需再次编码历史参数。
+// 弱引用随原参数释放，不额外保留历史消息流。
+const argumentJson = new WeakMap<object, string>();
+
+function toolArgumentsText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!value) return "";
+  if (typeof value !== "object") return JSON.stringify(value);
+  const cached = argumentJson.get(value);
+  if (cached !== undefined) return cached;
+  const text = JSON.stringify(value);
+  argumentJson.set(value, text);
+  return text;
+}
+
 type MessageStreamResponseEntity =
   | {
     kind: "block";
@@ -176,9 +191,7 @@ export function messageStreamToResponseParts(
         text: "",
         tool_call_id: execution.tool_call_id,
         tool_name: execution.tool_name,
-        arguments: typeof argumentsValue === "string"
-          ? argumentsValue
-          : argumentsValue ? JSON.stringify(argumentsValue) : "",
+        arguments: toolArgumentsText(argumentsValue),
         outcome_unknown: outcomeUnknown,
         completion_reason: execution.completion_reason,
         final: status === "completed",
@@ -219,9 +232,9 @@ export function messageStreamToResponseParts(
       text: "",
       tool_call_id: toolCallId,
       tool_name: stringValue(toolCall.tool_name) ?? "tool",
-      arguments: typeof argumentsValue === "string"
-        ? argumentsValue
-        : isRecord(argumentsValue) ? JSON.stringify(argumentsValue) : "",
+      arguments: typeof argumentsValue === "string" || isRecord(argumentsValue)
+        ? toolArgumentsText(argumentsValue)
+        : "",
       outcome_unknown: false,
       final: true,
     });
