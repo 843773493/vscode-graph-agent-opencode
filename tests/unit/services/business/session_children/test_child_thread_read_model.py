@@ -58,7 +58,7 @@ async def test_list_child_threads_is_a_guarded_sqlite_snapshot_during_real_publi
 
         def pause_after_member_row(control, row):
             if (
-                threading.current_thread().name == "child-list-reader"
+                not resume_reader.is_set()
                 and control.database_path == owner.control_store.database_path
                 and row["delegation_id"] == delegation_id
             ):

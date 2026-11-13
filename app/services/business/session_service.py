@@ -432,6 +432,9 @@ class SessionService:
         旧 delegated child Session 链路已下线，不再读 manifest。
         """
         await self.get(session_id)
+        return await run_sync_shielded(self._list_child_threads, session_id)
+
+    def _list_child_threads(self, session_id: str) -> ChildThreadListDTO:
         control_database = (
             self._path_resolver.resolve_session_node(session_id)
             / "session-control.sqlite"
@@ -455,9 +458,9 @@ class SessionService:
                 record.child_thread_id: record
                 for record in control.list_fork_thread_creations(state="published")
             }
+        self._path_resolver.resolve_thread_nodes(session_id, [thread.thread_id for thread in threads])
         items: list[ChildThreadSummaryDTO] = []
         for thread in threads:
-            self._path_resolver.resolve_thread_node(session_id, thread.thread_id)
             member = members.get(thread.thread_id)
             intent = intents.get(thread.thread_id)
             fork = forks.get(thread.thread_id)

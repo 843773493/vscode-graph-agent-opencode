@@ -26,7 +26,7 @@ folder 无物理目录；Gateway 只消费受控 catalog export）。
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -528,21 +528,21 @@ class SessionCatalogPathResolver:
             self._resolved_thread_nodes.reset(token)
 
     def resolve_thread_node(self, session_id: str, thread_id: str) -> Path:
-        """按受检 SessionThread 解析线程资源目录。
+        """按受检 SessionThread 解析线程资源目录。"""
+        return self.resolve_thread_nodes(session_id, [thread_id])[thread_id]
 
-        - main thread 使用 workspace catalog 冻结的 ``main_thread_id``，
-          物理节点为 ``threads/{main_thread_id}``，不接受线程别名；
-        - 非 main thread 的可见性和物理 locator 由 owner Session 的
-          ``session-control.sqlite`` 共同校验：先读取已发布
-          ``thread_catalog`` child row，再读取同一发布事务冻结的
-          ``thread_creation_records.final_relative_locator``；不扫描
-          ``threads/``，也不从日期桶猜测路径。
-        """
-        validate_thread_id(thread_id)
+    def resolve_thread_nodes(self, session_id: str, thread_ids: Sequence[str]) -> dict[str, Path]:
+        """同批定位只打开一次父控制库；逐线程仍校验发布事实、冻结 locator 和目录。"""
         nodes = self._resolved_thread_nodes.get()
-        key = (session_id, thread_id)
-        if nodes is not None and key in nodes:
-            return nodes[key]
+        resolved: dict[str, Path] = {}
+        for thread_id in thread_ids:
+            validate_thread_id(thread_id)
+            key = (session_id, thread_id)
+            if nodes is not None and key in nodes:
+                resolved[thread_id] = nodes[key]
+        pending = [thread_id for thread_id in thread_ids if thread_id not in resolved]
+        if not pending:
+            return resolved
         session_dir = self.resolve_session_node(session_id)
         node = self._store.get_node(session_id)
         control_path = session_dir / CONTROL_DATABASE_NAME
@@ -550,27 +550,29 @@ class SessionCatalogPathResolver:
             raise RuntimeError(
                 "Session control 数据库缺失或不是普通文件，拒绝解析 "
                 f"thread（fail closed）: session_id={session_id}, "
-                f"thread_id={thread_id}"
+                f"thread_id={pending[0]}"
             )
         control_store = SessionControlStore(control_path, read_only=True)
         try:
-            if thread_id == node.main_thread_id:
-                control_store.verify_matches_catalog_main_thread(thread_id)
-                locator = f"threads/{thread_id}"
-            else:
-                locator = control_store.get_published_child_thread_locator(thread_id)
+            for thread_id in pending:
+                if thread_id == node.main_thread_id:
+                    control_store.verify_matches_catalog_main_thread(thread_id)
+                    locator = f"threads/{thread_id}"
+                else:
+                    locator = control_store.get_published_child_thread_locator(thread_id)
+                thread_path = session_dir / locator
+                if (session_dir / "threads").is_symlink() or not thread_path.is_dir() or thread_path.is_symlink():
+                    raise RuntimeError(
+                        "已发布 thread 的冻结 locator 缺失或不是普通目录，"
+                        f"拒绝解析（fail closed）: session_id={session_id}, "
+                        f"thread_id={thread_id}"
+                    )
+                resolved[thread_id] = thread_path
+                if nodes is not None:
+                    nodes[(session_id, thread_id)] = thread_path
         finally:
             control_store.close()
-        thread_path = session_dir / locator
-        if (session_dir / "threads").is_symlink() or not thread_path.is_dir() or thread_path.is_symlink():
-            raise RuntimeError(
-                "已发布 thread 的冻结 locator 缺失或不是普通目录，"
-                f"拒绝解析（fail closed）: session_id={session_id}, "
-                f"thread_id={thread_id}"
-            )
-        if nodes is not None:
-            nodes[key] = thread_path
-        return thread_path
+        return resolved
 
     def resolve_session_node_for_runtime(self, session_id: str) -> Path:
         """运行时解析会话目录，统一走 SQLite catalog 路径校验。"""

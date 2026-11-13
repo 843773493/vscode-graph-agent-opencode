@@ -466,6 +466,17 @@ class TestReadMethods:
             created_at=JUNE_1,
         )
         assert resolver.resolve_thread_node(session_id, thread_id) == thread_dir
+        main_id = resolver.main_thread_id(session_id)
+        with resolver.thread_resolution_scope():
+            assert resolver.resolve_thread_nodes(session_id, [main_id, thread_id]) == {
+                main_id: session_dir / "threads" / main_id,
+                thread_id: thread_dir,
+            }
+            shutil.rmtree(thread_dir)
+            assert resolver.resolve_thread_node(session_id, thread_id) == thread_dir
+        # 同一同步操作可以复用；后续操作必须再次验证本次读取的目录。
+        with pytest.raises(RuntimeError, match="冻结 locator 缺失"):
+            resolver.resolve_thread_nodes(session_id, [main_id, thread_id])
 
     @pytest.mark.asyncio
     async def test_resolve_thread_node_non_main_missing_threads_root_fail_closed(

@@ -353,6 +353,11 @@ async def list_session_child_threads(
             result.teams = (await team_service.list_teams(
                 requester_session_id=session_id, requester_thread_id=main_thread_id,
             )).items
+            outcomes = await run_sync_shielded(
+                saver.runtime_execution_outcomes, session_id,
+                {item.thread_id: item.report_execution_id for item in result.items
+                 if item.report_execution_id is not None and item.admission_state == "bound"},
+            )
             for item in result.items:
                 snapshot = residency_tracker.snapshot(session_id, item.thread_id)
                 item.runtime = ChildThreadRuntimeDTO(
@@ -362,7 +367,7 @@ async def list_session_child_threads(
                     blockers=[{"kind": blocker.kind, "reason": blocker.reason} for blocker in snapshot.blockers],
                 )
                 if item.report_execution_id is not None and item.admission_state == "bound":
-                    item.report_status = saver.runtime_execution_outcome(session_id, item.thread_id, item.report_execution_id)
+                    item.report_status = outcomes[item.thread_id]
                     if item.report_status in {"completed", "completed_empty"}:
                         item.status = "completed"
                     elif item.report_status in {"failed", "cancelled", "interrupted", "execution_lost"}:

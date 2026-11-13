@@ -495,6 +495,16 @@ class RuntimeExecutionOwnerMixin:
     def runtime_execution_outcome(self, session_id: str, thread_id: str, execution_id: str) -> str:
         return self._storage.executions.runtime_execution_outcome(session_id, thread_id, execution_id)
 
+    def runtime_execution_outcomes(self, session_id: str, executions: Mapping[str, str]) -> dict[str, str]:
+        """同批复用已核验的线程路径，结果仍从每个线程的权威 rollout 库读取。"""
+        resolver = self._storage.storage._path_resolver
+        with resolver.thread_resolution_scope():
+            resolver.resolve_thread_nodes(session_id, list(executions))
+            return {
+                thread_id: self.runtime_execution_outcome(session_id, thread_id, execution_id)
+                for thread_id, execution_id in executions.items()
+            }
+
     def runtime_execution_progress(self, wakeup: RuntimeExecutionWakeup) -> RuntimeExecutionProgress:
         return self._storage.executions.runtime_execution_progress(wakeup)
 
