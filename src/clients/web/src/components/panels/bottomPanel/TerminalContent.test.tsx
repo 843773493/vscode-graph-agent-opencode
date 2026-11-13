@@ -105,9 +105,11 @@ describe("TerminalContent 终端连接兜底", () => {
     // 刚挂载时只显示 iframe，不应立刻报超时。
     expect(findFrameFallback(renderer)).toBeUndefined();
 
-    act(() => {
-      jest.advanceTimersByTime(15_000);
-    });
+    // 模拟每两秒取得内容相同的新列表对象，不能因此无限延长 iframe 的期限。
+    for (let elapsed = 0; elapsed < 16_000; elapsed += 2_000) {
+      act(() => { jest.advanceTimersByTime(2_000); });
+      act(() => renderer.update(<TerminalContent {...panelProps([entry("workspace_test", "terminal_ready")])} />));
+    }
 
     const fallback = findFrameFallback(renderer);
     expect(fallback).toBeDefined();
@@ -125,6 +127,7 @@ describe("TerminalContent 终端连接兜底", () => {
     )[0]!;
 
     act(() => frame.props.onLoad());
+    act(() => renderer.update(<TerminalContent {...panelProps([entry("workspace_test", "terminal_ready")])} />));
     act(() => {
       jest.advanceTimersByTime(60_000);
     });

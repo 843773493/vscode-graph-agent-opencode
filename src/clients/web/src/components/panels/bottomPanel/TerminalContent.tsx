@@ -83,8 +83,10 @@ export function TerminalContent({
     }
   }, [currentThread?.session_id, currentThread?.thread_id, selectedEntry?.resource_id, selectedEntry?.owner_revision, selectedEntry?.status, selectedEntry?.reconciliation_status, selectedEntry?.retention_scope, selectedEntry?.thread_associations, threadTargetUnavailable, workspaceId]);
 
+  const frameUrl = attach && "url" in attach ? attach.url : null;
+  // 轮询会替换完整资源对象；就绪期限只随实际 iframe 地址或显式重试重新开始。
   useEffect(() => {
-    if (!attach || "error" in attach) {
+    if (!frameUrl) {
       setFrameStatus("stalled");
       return;
     }
@@ -93,7 +95,7 @@ export function TerminalContent({
       setFrameStatus((current) => (current === "loading" ? "stalled" : current));
     }, TERMINAL_FRAME_READY_TIMEOUT_MS);
     return () => window.clearTimeout(timerId);
-  }, [attach, frameReloadToken]);
+  }, [frameUrl, frameReloadToken]);
 
   const controlSelectedTerminal = async (action: ResourceAction, thread?: ResourceThreadRef) => {
     if (!selectedEntry || threadTargetUnavailable) return;
