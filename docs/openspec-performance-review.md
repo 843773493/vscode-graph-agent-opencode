@@ -85,7 +85,7 @@
 
 ## 证据入口
 
-- 规范：`openspec/changes/enforce-interactive-latency-budgets/`。
+- 规范：`openspec/changes/archive/2026-11-13-enforce-interactive-latency-budgets/`。
 - 定向命令：`bun run test:matrix -- --suite=e2e-web-interactive-latency`。
 - 最新正式原样本／浏览器输出／源码与构建收据：`out/tests/e2e/clients/web/test_interactive_latency/runs/run-1bd5f356f776/nodes/node-540209378b75/artifacts/`。
 - 本次准确命令、源码首尾指纹及实际退出码：`out/tests/temp/interactive_latency_current_20261105/artifacts/product-1793856490071999727.json`。
