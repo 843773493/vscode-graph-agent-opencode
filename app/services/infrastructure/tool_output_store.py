@@ -4,13 +4,13 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import uuid
-from collections import deque
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
+from itertools import islice
 from pathlib import Path
 
+import regex
 from langchain_core.messages import ToolMessage
 
 from app.abstractions.resource_file_content import ResourceFileContent
@@ -24,8 +24,9 @@ DEFAULT_MAX_OUTPUT_LINES = 2_000
 DEFAULT_MAX_OUTPUT_BYTES = 50 * 1024
 _OUTPUT_COMPARISON_CHUNK_BYTES = 64 * 1024
 TOOL_OUTPUT_ARTIFACT_KEY = "tool_output"
-# 与 str.splitlines() 的边界一致，逐行取样时不创建全量行列表。
-_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+# 与 str.splitlines() 的边界一致，从两端取样时不扫描中间行。
+_LINE_BREAK_PATTERN = regex.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+_REVERSE_LINE_BREAK_PATTERN = regex.compile(_LINE_BREAK_PATTERN.pattern, regex.REVERSE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,9 +276,17 @@ def _file_matches_bytes(path: Path, expected: bytes) -> bool:
         return stream.read(1) == b""
 
 
-def _iter_source_lines(text: str) -> Iterator[str]:
+def _iter_source_lines(text: str, *, reverse: bool = False) -> Iterator[str]:
     """按 splitlines 的边界产出行，避免复制整份文本的行列表。"""
     if not text:
+        return
+    if reverse:
+        end = len(text)
+        for line_break in _REVERSE_LINE_BREAK_PATTERN.finditer(text):
+            if line_break.end() != len(text):
+                yield text[line_break.end():end]
+            end = line_break.start()
+        yield text[:end]
         return
     start = 0
     for line_break in _LINE_BREAK_PATTERN.finditer(text):
@@ -296,14 +305,10 @@ def _preview_parts(
     """只抽取并编码一次首尾行，不随结构化预览的字节预算重复扫描正文。"""
     head_line_count = (max_lines + 1) // 2
     tail_line_count = max_lines // 2
-    head_lines: list[str] = []
-    tail_lines: deque[str] = deque(maxlen=max(0, tail_line_count))
-    for line_index, line in enumerate(_iter_source_lines(text)):
-        if line_index < head_line_count:
-            head_lines.append(line)
-        tail_lines.append(line)
+    head_lines = islice(_iter_source_lines(text), head_line_count)
+    tail_lines = list(islice(_iter_source_lines(text, reverse=True), tail_line_count))
     head = "\n".join(head_lines).encode("utf-8")[:max_bytes]
-    tail = "\n".join(tail_lines).encode("utf-8") if tail_line_count else b""
+    tail = "\n".join(reversed(tail_lines)).encode("utf-8")
     return head, tail
 
 
