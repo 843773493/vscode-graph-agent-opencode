@@ -24,6 +24,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.support.processes.workspace import (
     ensure_local_port_available,
     terminate_process,
@@ -132,7 +133,7 @@ async def test_signal_exit_bounds_http_drain_and_reports_timeout(
             assert elapsed < 5
             assert "http_server_drain_timeout" not in diagnostics
         if kind == "terminal":
-            state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
+            state = read_terminal_state(root / ".boxteam/terminal-manager/terminals.sqlite")
             assert state["terminals"] == [], "不完整的创建请求不得产生资源或恢复记录"
         else:
             state = json.loads((root / f".boxteam/{kind}-manager/{kind}s.json").read_text())

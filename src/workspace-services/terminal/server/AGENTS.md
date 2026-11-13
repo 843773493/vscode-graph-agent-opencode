@@ -17,7 +17,8 @@ server/
 │   ├── terminalOutputMultiplexer.js 模型与客户端输出游标、重放和广播
 │   ├── terminalUtf8Output.js       UTF-8字节上限、尾部保留与事件切块
 │   └── *.test.js                  字节边界、窗口、控制顺序与编码复用
-├── terminalStateStore.js          工作区内终端记录的文件读写
+├── terminalStateStore.js          已提交记录的差异观察与线程交接
+├── storage/                      SQLite事务、schema和显式旧JSON导入
 └── *.test.js                      对应模块的单元测试
 ```
 
@@ -75,11 +76,11 @@ Worker退出诊断也复用同一函数，日志次错延至原进程树停止�
 
 Manager拥有唯一在途状态保存：同轮请求共享批次确认，再取当前终端记录串行写入；写入期间新增请求由下一轮快照覆盖。每个调用只等待包含其状态的批次成功，后续输出不延长此前等待。快照或writer的同步、异步异常交给当前及尚未开始批次的等待方，不追溯已确认调用；释放在途Promise、保留待写标记，让后续显式保存可恢复，不缓存旧异常或自动重试。同尺寸resize也必须提交失败后尚未落盘的状态，或等待既有在途保存；干净的同尺寸请求不重复写入。
 
-StateStore的`TerminalStateWriteSnapshot`只承载Manager本轮恢复记录；`stateFileMetadata`加入权威工作区身份和文件schema，原生writer逐条消费同一快照的JSON编码，避免整份历史缓冲同步编码阻塞事件循环，最后以rename原子发布。顶层`updated_at`在Manager开始组装本轮快照、逐条读取`toRecord()`之前生成，不是各资源的更新时间，也不表示写盘完成；类型直接引用Session的记录返回值，不复制一套字段定义。
+StateStore的`TerminalStateWriteSnapshot`只承载Manager本轮恢复记录；`.boxteam/terminal-manager/terminals.sqlite`是唯一恢复事实，使用SQLite WAL。主线程保留最近成功提交的不可变记录引用，仅比较字段和顺序，将变化记录交给独立Worker编码与事务写入，不复制未变化的输出正文。每批的增删、顺序和`updated_at`一起提交，确认后才推进差异观察；Worker意外失败后丢弃观察，下次显式操作重新读库。顶层`updated_at`在Manager组装记录前生成，不表示提交完成。关闭在最终保存后关闭数据库和Worker。
 
-StateStore按实际读写阶段发布workspace/artifact/stage/code，真实位置与完整原异常保留在日志和cause；只有读取正文的ENOENT表示尚无记录。在编码、临时写入或发布失败后清理本次临时文件，正式状态继续保留旧字节。清理也失败时，用`AggregateError`按发生顺序保留两份原异常，并将写入异常作为`cause`，不能覆盖主失败或伪报发布成功。这里只结束本次文件操作，Manager释放在途保存后仍允许下一次显式请求，不自动重试或恢复临时正文。
+StateStore按实际阶段发布workspace/artifact/stage/code，真实位置与完整原异常保留在日志和cause。事务失败回滚整批，保留已提交记录，Manager释放在途保存后仍允许下一次显式请求，不自动重试。回滚或诊断也失败时通过AggregateError保留原异常，公开主错误码和阶段不变。真实PTY/HTTP验收通过SQLite事务失败核原进程身份、解除故障后的同尺寸保存和真实资源回收。
 
-唯一`operationError`同时处理诊断writer次错：正常日志保持直接cause，日志失败时把原cause和诊断异常按顺序放入AggregateError；已有发布／清理双错仍作为内层cause整体保留，公开主错误码及阶段保持。真实PTY/HTTP验收通过原resize制造发布冲突，核原进程身份、故障解除后的同尺寸保存和真实资源回收；不将此证据扩大到创建失败或Backend重启。
+旧schema 3 JSON只允许停止终端服务后显式一次性导入：从应用根目录执行`node src/workspace-services/terminal/server/storage/importLegacyState.mjs --workspace <绝对工作区路径> --workspace-id <UUID>`。命令核对现有工作区身份、全部记录和唯一身份，要求目标库不存在，通过独占临时数据库和拒绝覆盖的原子发布完成导入；原JSON保留作离线原件。普通链路只有SQLite；目标库缺失但存在旧JSON时明确要求导入，不自动迁移、不双读双写。
 
 Session的`toRecord()`是恢复事实的唯一组装入口，供Manager落盘；原始输出只存`buffer`一份。`snapshot()`在该记录上补齐`display_buffer`、当前`client_count`和`pty_worker_pid`供HTTP/WebSocket/模型读取；这些派生或连接观察不写入状态文件。恢复时从原始输出计算展示、从当前句柄取得连接信息，不维护第二份展示正文或持久连接状态。
 

@@ -21,6 +21,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux PTY父子及信号；不代替Windows验收")
@@ -40,8 +41,9 @@ def terminal_service(integration_backend_port: int, monkeypatch: pytest.MonkeyPa
         (control / "log-parent").write_text("真实ENOTDIR", encoding="utf-8")
         preload = control / "exit-diagnostics.mjs"
         preload.write_text("""
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 
 // 故障仅在原生退出、信号、真实Worker错误事件及诊断writer；不替换停止算法或状态。
@@ -60,8 +62,10 @@ if (path.basename(process.argv[1] || "") === "backend.js") {
   const root = process.env.BOXTEAM_TEST_PROJECT_ROOT;
   process.on("unhandledRejection", reason => {
     // 只观察原致命处理器开始前的产品文件，不处理或改变拒绝。
-    const state = JSON.parse(readFileSync(path.join(process.env.WORKSPACE_ROOT,
-      ".boxteam/terminal-manager/terminals.json"), "utf8"));
+    const db = new DatabaseSync(path.join(process.env.WORKSPACE_ROOT,
+      ".boxteam/terminal-manager/terminals.sqlite"), { readOnly: true });
+    const state = { terminals: db.prepare("SELECT payload FROM terminal_records ORDER BY position").all().map(row => JSON.parse(row.payload)) };
+    db.close();
     writeFileSync(path.join(control, "before-fatal.json"), JSON.stringify({ message: reason.message, state }));
   });
   const write = process.stderr.write.bind(process.stderr);
@@ -192,7 +196,7 @@ while True: signal.pause()
                 await asyncio.sleep(0.02)
         async with asyncio.timeout(8):
             while True:
-                record = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())["terminals"][0]
+                record = read_terminal_state(root / ".boxteam/terminal-manager/terminals.sqlite")["terminals"][0]
                 if record["status"] == "exited":
                     break
                 await asyncio.sleep(0.02)
@@ -261,10 +265,10 @@ while True: signal.pause()
         identities = [{"pid": process.pid, "created_at": process.create_time()} for process in tracked]
         (control / "fail-stop").touch()
         (control / "fail-worker").touch()
-        state_file = root / ".boxteam/terminal-manager/terminals.json"
+        state_file = root / ".boxteam/terminal-manager/terminals.sqlite"
         async with asyncio.timeout(8):
             while True:
-                record = json.loads(state_file.read_text())["terminals"][0]
+                record = read_terminal_state(state_file)["terminals"][0]
                 if record["status"] == "exited" and record["release_reason"] == "pty_exit_cleanup_failed" and not executing(worker):
                     break
                 await asyncio.sleep(0.02)
@@ -300,7 +304,7 @@ while True: signal.pause()
             assert snapshot["reconciliation_status"] == "verified"
             assert snapshot["os_pid"] == original["os_pid"] and snapshot["transport_owner_revision"] == 4
             assert all(not executing(process) for process in tracked)
-            record = json.loads(state_file.read_text())["terminals"][0]
+            record = read_terminal_state(state_file)["terminals"][0]
             assert all(snapshot[key] == value for key, value in record.items())
             assert len((control / "starts.jsonl").read_text().splitlines()) == 1
             # 已核实终态重复请求不再触及任何进程，也不创建新执行。
@@ -350,10 +354,10 @@ while not Path({str(control / 'exit-pty')!r}).exists(): time.sleep(0.02)
             observed = await client.get(f"/api/terminals/{terminal_id}")
             assert observed.status_code == 200, observed.text
             assert observed.json()["data"]["pty_worker_pid"] == worker.pid, "退出未确认时必须保留原Worker句柄"
-            state_file = root / ".boxteam/terminal-manager/terminals.json"
+            state_file = root / ".boxteam/terminal-manager/terminals.sqlite"
             async with asyncio.timeout(8):
                 while True:
-                    record = json.loads(state_file.read_text())["terminals"][0]
+                    record = read_terminal_state(state_file)["terminals"][0]
                     if record["release_reason"] == "pty_exit_cleanup_failed":
                         break
                     await asyncio.sleep(0.02)
@@ -377,7 +381,7 @@ while not Path({str(control / 'exit-pty')!r}).exists(): time.sleep(0.02)
             assert snapshot["status"] == ("terminated" if action == "kill" else "deleted")
             assert snapshot["reconciliation_status"] == "verified" and snapshot["pty_worker_pid"] is None
             assert all(not executing(process) for process in tracked)
-            record = json.loads(state_file.read_text())["terminals"][0]
+            record = read_terminal_state(state_file)["terminals"][0]
             assert all(snapshot[key] == value for key, value in record.items())
             assert len((control / "starts.jsonl").read_text().splitlines()) == 1
             run.write_result("passed", {"action": action, "identities": identities,
@@ -421,7 +425,7 @@ while not Path({str(control / 'exit-pty')!r}).exists(): time.sleep(0.02)
         assert all(snapshot[key] == original[key] for key in (
             "os_pid", "process_session_id", "process_start_time", "transport_owner_revision", "created_at",
         ))
-        record = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())["terminals"][0]
+        record = read_terminal_state(root / ".boxteam/terminal-manager/terminals.sqlite")["terminals"][0]
         assert all(snapshot[key] == value for key, value in record.items())
         assert backend.poll() is None
         run.write_result("passed", {"identities": identities, "scope": "真实HTTP/PTY和原Worker正常自发退出；不代Gateway/Web或Windows"})

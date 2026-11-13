@@ -21,6 +21,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="核对Linux原生PTY与/proc，不替代Windows验收")
@@ -133,7 +134,7 @@ async def test_startup_failure_requires_tree_and_worker_stop_before_receipt(
         (service.control / "fail-sink").touch()
     headers = service.headers
     payload = {"workspace_id": service.workspace_id, "owner_revision": 7, "command": sys.executable}
-    state_file = service.root / ".boxteam/terminal-manager/terminals.json"
+    state_file = service.root / ".boxteam/terminal-manager/terminals.sqlite"
     async with httpx.AsyncClient(base_url=service.url, headers=headers, timeout=15) as client:
         peer = await client.post("/api/terminals", json=payload | {
             "terminal_id": peer_id, "args": ["-c", "import time; time.sleep(300)"],
@@ -164,7 +165,7 @@ async def test_startup_failure_requires_tree_and_worker_stop_before_receipt(
             snapshot = current.json()["data"]
             assert snapshot["os_pid"] == root["pid"]
             assert snapshot["transport_owner_revision"] == 7
-            records = json.loads(state_file.read_text(encoding="utf-8"))["terminals"]
+            records = read_terminal_state(state_file)["terminals"]
             record = next(record for record in records if record["terminal_id"] == terminal_id)
             assert record["os_pid"] == root["pid"]
             assert record["process_session_id"] == root["processSessionId"]
@@ -197,7 +198,7 @@ async def test_startup_failure_requires_tree_and_worker_stop_before_receipt(
                 assert snapshot["status"] == "terminated" and snapshot["reconciliation_status"] == "verified"
                 assert snapshot["pty_worker_pid"] is None
                 assert all(not is_executing(identity) for identity in observed.values())
-            records = json.loads(state_file.read_text(encoding="utf-8"))["terminals"]
+            records = read_terminal_state(state_file)["terminals"]
             record = next(record for record in records if record["terminal_id"] == terminal_id)
             assert all(record[key] == snapshot[key] for key in record)
             (service.control / "fail-sink").unlink(missing_ok=True)
@@ -218,8 +219,8 @@ async def test_cwd_rejection_keeps_not_created_receipt_and_same_target_retry(
     headers = service.headers
     file = service.root / "not-a-directory.txt"
     file.write_text("不能因诊断故障改写原件", encoding="utf-8")
-    state_file = service.root / ".boxteam/terminal-manager/terminals.json"
-    original_state = state_file.read_bytes()
+    state_file = service.root / ".boxteam/terminal-manager/terminals.sqlite"
+    original_state = read_terminal_state(state_file)
     if fail_sink:
         (service.control / "fail-sink").touch()
     terminal_id = f"term_{uuid4().hex}"
@@ -239,7 +240,7 @@ async def test_cwd_rejection_keeps_not_created_receipt_and_same_target_retry(
             }
         assert (await client.get("/api/terminals")).json()["data"] == []
         assert not (service.control / "starts.jsonl").exists(), "cwd拒绝不能启动真实PTY"
-        assert state_file.read_bytes() == original_state
+        assert read_terminal_state(state_file) == original_state
         assert file.read_text(encoding="utf-8") == "不能因诊断故障改写原件"
         diagnostics = [json.loads(line)["chunk"] for line in (service.control / "diagnostics.jsonl").read_text().splitlines()]
         assert len(diagnostics) == 4
@@ -302,7 +303,7 @@ async def test_late_native_identity_and_verified_worker_receipt_settle_original_
                 "resource_id": terminal_id, "workspace_id": service.workspace_id, "owner_revision": 7,
                 "outcome": "failed", "resource": snapshot,
             }
-        record, = json.loads((service.root / ".boxteam/terminal-manager/terminals.json").read_text())["terminals"]
+        record, = read_terminal_state(service.root / ".boxteam/terminal-manager/terminals.sqlite")["terminals"]
         assert all(snapshot[key] == value for key, value in record.items())
         service.run.write_result("passed", {"lose_proof": lose_proof, "observed": observed,
                                            "before_shutdown": before, "receipt": receipts, "after": snapshot,

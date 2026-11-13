@@ -15,6 +15,7 @@ async function prepareManager(t) {
   cpSync(path.join(process.cwd(), "tests/fixtures/workspaces/terminal_cwd_workspace"), root, { recursive: true });
   const { workspace_id: workspaceId } = JSON.parse(await readFile(path.join(root, ".boxteam/workspace-identity.json"), "utf8"));
   const manager = new TerminalManager({ workspaceRoot: root, workspaceId });
+  t.after(() => manager.stateStore.close());
   await manager.init();
   return manager;
 }
@@ -92,7 +93,7 @@ test("迟到就绪仍进入同一关闭；重复信号观察不重复启动或�
     const session = manager.get(options.terminalId);
     assert.equal(session.status, "running");
     assert.equal(session.ptyProcess, null);
-    const record = JSON.parse(await readFile(manager.stateFile, "utf8")).terminals[0];
+    const record = (await manager.stateStore.readRecords())[0];
     assert.equal(record.reconciliation_status, "reconcile_required");
     assert.equal(record.release_reason, "original");
   } finally {

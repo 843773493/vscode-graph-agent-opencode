@@ -22,6 +22,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="本组核对Linux原生PTY及POSIX信号；不代替Windows SIGBREAK验收")
@@ -114,8 +115,8 @@ async def test_signal_wait_timeout_keeps_original_creation_and_retryable_manager
             queued = asyncio.create_task(client.post("/api/terminals", json=payload | {"terminal_id": queued_id}))
             await asyncio.sleep(0.05)
             # 取正式创建生成的状态路径；不手填恢复记录。
-            state_file = root / ".boxteam/terminal-manager/terminals.json"
-            state_before = state_file.read_bytes()
+            state_file = root / ".boxteam/terminal-manager/terminals.sqlite"
+            state_before = read_terminal_state(state_file)
             requested_signal = getattr(signal, signal_name)
             started = time.monotonic()
             process.send_signal(requested_signal)
@@ -136,7 +137,7 @@ async def test_signal_wait_timeout_keeps_original_creation_and_retryable_manager
             peer_current = await client.get(f"/api/terminals/{peer_id}")
             assert peer_current.json()["data"]["os_pid"] == peer.json()["data"]["os_pid"]
             assert len((await client.get("/api/terminals")).json()["data"]) == 2
-            assert state_file.read_bytes() == state_before
+            assert read_terminal_state(state_file) == state_before
             assert not (control / "shutdowns.jsonl").exists()
             late = await client.post("/api/terminals", json=payload | {"terminal_id": late_id})
             assert late.status_code == 503, late.text
@@ -152,7 +153,7 @@ async def test_signal_wait_timeout_keeps_original_creation_and_retryable_manager
             assert refused.json()["creation_receipt"]["resource_id"] == queued_id
             process.send_signal(requested_signal)
             assert await asyncio.to_thread(process.wait, timeout=8) == 128 + requested_signal
-            records = json.loads(state_file.read_text())["terminals"]
+            records = read_terminal_state(state_file)["terminals"]
             assert {record["terminal_id"] for record in records} == {terminal_id, peer_id}
             assert all(record["reconciliation_status"] == "reconcile_required" for record in records)
             stops = [json.loads(line) for line in (control / "shutdowns.jsonl").read_text().splitlines()]

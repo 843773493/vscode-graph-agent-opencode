@@ -12,8 +12,8 @@ import pytest
 
 from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
-    stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.integration.workspace_services.terminal.test_terminal_shutdown_signals import (
     TerminalService,
     wait_file,
@@ -36,7 +36,7 @@ async def test_native_creation_before_ready_keeps_cold_unknown_intent(terminal_s
     headers = plugin.headers
     payload = {"terminal_id": terminal_id, "workspace_id": workspace_id, "owner_revision": 7,
                "command": sys.executable, "args": ["-c", workload(control, ignore_sigterm=False)]}
-    state_file = root / ".boxteam/terminal-manager/terminals.json"
+    state_file = root / ".boxteam/terminal-manager/terminals.sqlite"
     async with httpx.AsyncClient(base_url=url, headers=headers, timeout=15, trust_env=False) as client:
         creating = asyncio.create_task(client.post("/api/terminals", json=payload))
         restarted = None
@@ -47,7 +47,7 @@ async def test_native_creation_before_ready_keeps_cold_unknown_intent(terminal_s
             worker = process_identity(native["worker_pid"])
             assert child is not None and worker is not None
             assert all(is_executing(identity) for identity in (native, child, worker))
-            record, = json.loads(state_file.read_bytes())["terminals"]
+            record, = read_terminal_state(state_file)["terminals"]
             assert record["terminal_id"] == terminal_id and record["transport_owner_revision"] == 7
             assert record["status"] == "created" and record["reconciliation_status"] == "unknown"
             for field in ("os_pid", "process_group_id", "process_session_id", "process_start_time", "started_at"):
@@ -79,7 +79,7 @@ async def test_native_creation_before_ready_keeps_cold_unknown_intent(terminal_s
             assert response.status_code == 500, response.text
             response = await client.post("/api/terminals", json=payload)
             assert response.status_code == 500 and "creation_receipt" not in response.json(), response.text
-            final, = json.loads(state_file.read_bytes())["terminals"]
+            final, = read_terminal_state(state_file)["terminals"]
             for field in ("terminal_id", "transport_owner_revision", "status", "reconciliation_status", "created_at",
                           "os_pid", "process_group_id", "process_session_id", "process_start_time"):
                 assert final[field] == record[field]
@@ -92,5 +92,7 @@ async def test_native_creation_before_ready_keeps_cold_unknown_intent(terminal_s
             if not creating.done():
                 creating.cancel()
                 await asyncio.gather(creating, return_exceptions=True)
-            if restarted is not None:
-                await asyncio.to_thread(stop_terminal_plugin_service, restarted)
+            if restarted is not None and restarted.process.poll() is None:
+                # 未核实创建按既有合同拒绝正常shutdown；只回收本例重启的Node，不改记录。
+                restarted.process.kill()
+                assert await asyncio.to_thread(restarted.process.wait, timeout=5) == -9

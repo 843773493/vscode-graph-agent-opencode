@@ -12,6 +12,7 @@ import psutil
 from app.core.identifier import create_uuid_hex
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import TerminalPluginService
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.support.ports import TEST_FILE_PORT_BLOCK_SIZE
 from tests.support.workspaces import prepare_test_workspace
 
@@ -136,8 +137,8 @@ def wait_terminal_process_metadata(plugin: TerminalPluginService, terminal_id: s
 
 
 def terminal_state_record(workspace_root: str, terminal_id: str) -> dict[str, object]:
-    state_file = Path(workspace_root) / ".boxteam" / "terminal-manager" / "terminals.json"
-    raw = json.loads(state_file.read_text(encoding="utf-8"))
+    state_file = Path(workspace_root) / ".boxteam" / "terminal-manager" / "terminals.sqlite"
+    raw = read_terminal_state(state_file)
     for terminal in raw["terminals"]:
         if terminal.get("terminal_id") == terminal_id:
             return terminal

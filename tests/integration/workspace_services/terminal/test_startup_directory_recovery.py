@@ -22,6 +22,7 @@ from app.services.infrastructure.external_resource_leases import (
 )
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.integration.backend.sessions.test_attachment_directory_entry import upload
 from tests.integration.workspace_services.terminal.test_terminal_startup_cleanup import (
     is_executing,
@@ -113,8 +114,8 @@ async def test_unverified_startup_keeps_directory_until_original_management_stop
         observed = await wait_observed(control)
         assert all(not is_executing(identity) for identity in observed.values())
         original_workload = (control / "workload.json").read_bytes()
-        state_file = root / ".boxteam/terminal-manager/terminals.json"
-        native, = json.loads(state_file.read_text())["terminals"]
+        state_file = root / ".boxteam/terminal-manager/terminals.sqlite"
+        native, = read_terminal_state(state_file)["terminals"]
         assert native["status"] == "created" and native["reconciliation_status"] == "unknown"
         assert native["os_pid"] == observed["root"]["pid"]
         store.release_thread_references(session_id, message.thread_id)
@@ -149,7 +150,7 @@ async def test_unverified_startup_keeps_directory_until_original_management_stop
             holder_id="request:directory-proof", operation_id="directory-proof",
         )
         assert stopped["status"] == "terminated" and stopped["reconciliation_status"] == "verified"
-        final_native, = json.loads(state_file.read_text())["terminals"]
+        final_native, = read_terminal_state(state_file)["terminals"]
         assert final_native["terminal_id"] == rid
         assert final_native["status"] == "terminated" and final_native["reconciliation_status"] == "verified"
         for field in ("os_pid", "process_group_id", "process_session_id", "process_start_time", "created_at"):

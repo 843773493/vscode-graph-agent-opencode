@@ -20,6 +20,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.support.workspaces import prepare_default_test_workspace
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="真实Linux进程元数据与PTY；不代其它平台验收")
@@ -157,8 +158,8 @@ async def test_native_process_failure_keeps_unknown_identity_and_management_retr
         for key in ("os_pid", "pty_worker_pid", "process_group_id", "process_session_id", "process_start_time", "transport_owner_revision", "created_at"):
             assert current[key] == original[key]
         assert all(process.is_running() and process.status() != psutil.STATUS_ZOMBIE for process in observed_processes)
-        state_file = root / ".boxteam/terminal-manager/terminals.json"
-        persisted = json.loads(state_file.read_text())["terminals"][0]
+        state_file = root / ".boxteam/terminal-manager/terminals.sqlite"
+        persisted = read_terminal_state(state_file)["terminals"][0]
         assert all(current[key] == value for key, value in persisted.items())
         attempts = [json.loads(line)["chunk"] for line in (control / "attempts.jsonl").read_text().splitlines()]
         assert len(attempts) == (2 if stage.endswith("-probe") else 1)

@@ -4,6 +4,7 @@ import asyncio
 import json
 import shlex
 import signal
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -719,48 +720,37 @@ async def test_pre_ready_exit_reaps_term_resistant_descendant(
 
 
 @pytest.mark.asyncio
-async def test_shutdown_persist_failure_still_exits_manager(
+async def test_shutdown_persist_failure_allows_explicit_retry(
     e2e_workspace_root_path: str,
     e2e_backend_port: int,
     terminal_run_context: TestRunContext,
 ) -> None:
     backend_port, _frontend_port = terminal_ports_with_offset(e2e_backend_port, 90)
-    workspace_root = create_terminal_scenario_workspace(
-        e2e_workspace_root_path, "shutdown_failure"
-    )
-    workspace_id = load_or_create_workspace_id(Path(workspace_root))
+    workspace_root = create_terminal_scenario_workspace(e2e_workspace_root_path, "shutdown_failure")
     service = start_terminal_plugin_service(
-        backend_port=backend_port,
-        workspace_root=workspace_root,
-        artifacts_dir=terminal_run_context.artifacts_dir,
+        backend_port=backend_port, workspace_root=workspace_root, artifacts_dir=terminal_run_context.artifacts_dir,
     )
-    manager_path = Path(workspace_root) / ".boxteam" / "terminal-manager"
-    backup_path = Path(workspace_root) / ".boxteam" / "terminal-manager-backup"
+    state_file = Path(workspace_root) / ".boxteam/terminal-manager/terminals.sqlite"
+    with sqlite3.connect(state_file) as connection:
+        connection.execute("CREATE TRIGGER fail_shutdown BEFORE UPDATE ON terminal_state BEGIN SELECT RAISE(ABORT, 'shutdown-save-failure'); END")
     try:
-        async with httpx.AsyncClient(
-            base_url=service.http_url,
-            headers=service.headers,
-            timeout=5,
-        ) as client:
-            response = await client.post(
-                "/api/terminals",
-                json={
-                    "workspace_id": workspace_id,
-                    "terminal_id": f"term_{create_uuid_hex()}",
-                    "owner_revision": 1,
-                    "title": "shutdown failure",
-                    "cwd": str(Path(workspace_root).resolve()),
-                },
-            )
-            response.raise_for_status()
-
-        manager_path.rename(backup_path)
-        manager_path.write_text("阻止状态目录写入", encoding="utf-8")
         service.process.send_signal(signal.SIGTERM)
-        assert service.process.wait(timeout=10) != 0
+        async with asyncio.timeout(8):
+            while True:
+                diagnostics = "\n".join(file.read_text() for file in terminal_run_context.artifacts_dir.glob("terminal-plugin-*.stderr.log"))
+                if "关闭失败，保留原任务与 HTTP 管理入口" in diagnostics:
+                    break
+                assert service.process.poll() is None
+                await asyncio.sleep(0.02)
+        assert "stage=事务写入" in diagnostics and "shutdown-save-failure" in diagnostics
+        async with httpx.AsyncClient(base_url=service.http_url, headers=service.headers, timeout=5) as client:
+            response = await client.get("/api/terminals")
+            assert response.status_code == 200 and response.json()["data"] == []
+        with sqlite3.connect(state_file) as connection:
+            connection.execute("DROP TRIGGER fail_shutdown")
+        service.process.send_signal(signal.SIGTERM)
+        assert await asyncio.to_thread(service.process.wait, timeout=8) == 128 + signal.SIGTERM
     finally:
-        if manager_path.is_file():
-            manager_path.unlink()
-        if backup_path.exists():
-            backup_path.rename(manager_path)
+        with sqlite3.connect(state_file) as connection:
+            connection.execute("DROP TRIGGER IF EXISTS fail_shutdown")
         stop_terminal_plugin_service(service)

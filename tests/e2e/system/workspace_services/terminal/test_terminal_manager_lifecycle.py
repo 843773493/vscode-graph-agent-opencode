@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import signal
 import subprocess
@@ -28,6 +27,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 
 
 class ProcessSnapshot(NamedTuple):
@@ -141,10 +141,8 @@ def _reap_registered_process(record: dict[str, object]) -> None:
 def _assert_preserved_transport(
     root: str, original: dict[str, object], workspace_id: str
 ) -> dict[str, object]:
-    state = json.loads(
-        (Path(root) / ".boxteam/terminal-manager/terminals.json").read_text()
-    )
-    assert state["schema_version"] == 3 and state["workspace_id"] == workspace_id
+    state = read_terminal_state(Path(root) / ".boxteam/terminal-manager/terminals.sqlite")
+    assert state["schema_version"] == 1 and state["workspace_id"] == workspace_id
     record = terminal_state_record(root, str(original["terminal_id"]))
     assert not {
         "session_id",

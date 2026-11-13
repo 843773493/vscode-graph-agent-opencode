@@ -14,6 +14,7 @@ import pytest
 from app.core.atomic_fs import native_io_path
 from app.core.resource_uri import file_uri_child, parse_resource_uri
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.integration.backend.sessions.attachments.process_lifecycle import (
     directory_snapshot,
 )
@@ -93,8 +94,8 @@ async def test_startup_unknown_survives_backend_loss_until_management_proof(
     assert response.status_code == 500, response.text
     observed = await wait_observed(control)
     assert all(not is_executing(identity) for identity in observed.values())
-    state_file = case.workspace / ".boxteam/terminal-manager/terminals.json"
-    native, = json.loads(state_file.read_bytes())["terminals"]
+    state_file = case.workspace / ".boxteam/terminal-manager/terminals.sqlite"
+    native, = read_terminal_state(state_file)["terminals"]
     rid = native["terminal_id"]
     assert native["status"] == "created" and native["reconciliation_status"] == "unknown"
     for field, system_field in (("os_pid", "pid"), ("process_group_id", "processGroupId"),
@@ -141,7 +142,7 @@ async def test_startup_unknown_survives_backend_loss_until_management_proof(
     assert settled_operation == {**operation, "status": "settled", "updated_at": settled_operation["updated_at"]}
     settled_directory = directory_lease(case, attachment_id)
     assert settled_directory == {**directory_use, "status": "settled", "updated_at": settled_directory["updated_at"]}
-    final, = json.loads(state_file.read_bytes())["terminals"]
+    final, = read_terminal_state(state_file)["terminals"]
     for field in ("os_pid", "process_group_id", "process_session_id", "process_start_time", "created_at"):
         assert final[field] == native[field]
     assert final["transport_owner_revision"] == stopped["owner_revision"]

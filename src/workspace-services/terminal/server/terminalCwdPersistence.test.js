@@ -73,8 +73,10 @@ test("外部绝对 cwd 经真实创建、落盘和恢复后仍传给同一 PTY �
   assert.deepEqual(workerDirectories, [externalCwd]);
   await manager.shutdown();
 
-  const raw = await readFile(path.join(workspaceRoot, ".boxteam", "terminal-manager", "terminals.json"), "utf8");
-  const [persistedRecord] = JSON.parse(raw).terminals;
+  const records = await manager.stateStore.readRecords();
+  await manager.stateStore.close();
+  const raw = JSON.stringify(records);
+  const [persistedRecord] = records;
   assert.equal(persistedRecord.cwd_relative, path.relative(workspaceRoot, externalCwd));
   assert.ok(persistedRecord.cwd_relative.startsWith(`..${path.sep}`));
   assert.equal("cwd" in persistedRecord, false);

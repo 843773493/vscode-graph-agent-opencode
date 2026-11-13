@@ -15,6 +15,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_backend import (
     TerminalPluginService,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.integration.workspace_services.test_http_shutdown_deadline import (
     service as service,  # noqa: PLC0414
 )
@@ -73,8 +74,9 @@ async def test_authenticated_control_shuts_down_original_workspace_service(
             assert accepted == {"data": payload | {"accepted": True}}
     assert await asyncio.to_thread(process.wait, 8) == 0
     ensure_local_port_available(port, service_name=f"已关闭的 {kind} 管理进程")
-    state_file = root / f".boxteam/{kind}-manager/{'terminals' if kind == 'terminal' else f'{kind}s'}.json"
-    state = json.loads(state_file.read_text(encoding="utf-8"))
+    state = read_terminal_state(root / ".boxteam/terminal-manager/terminals.sqlite") if kind == "terminal" else json.loads(
+        (root / f".boxteam/{kind}-manager/{kind}s.json").read_text(encoding="utf-8"),
+    )
     assert state["terminals" if kind == "terminal" else f"{kind}s"] == []
     (run.artifacts_dir / f"runtime-shutdown-{kind}.json").write_text(json.dumps({
         "kind": kind, "identity": payload, "accepted": accepted, "exit_code": process.returncode,

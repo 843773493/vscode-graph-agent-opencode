@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from tests.harness.python.terminal_backend import start_terminal_plugin_service
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.integration.workspace_services.terminal.test_terminal_startup_cleanup import (
     TerminalService,
     is_executing,
@@ -36,7 +37,7 @@ async def test_late_creation_without_stop_proof_can_reconcile_original_identity(
         (service.control / marker).touch()
     (service.control / "mode").write_text("late-native-identity")
     headers = service.process.headers
-    state_file = service.root / ".boxteam/terminal-manager/terminals.json"
+    state_file = service.root / ".boxteam/terminal-manager/terminals.sqlite"
     async with httpx.AsyncClient(base_url=service.url, headers=headers, timeout=15, trust_env=False) as client:
         creation = await client.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": service.workspace_id, "owner_revision": 7,
@@ -46,7 +47,7 @@ async def test_late_creation_without_stop_proof_can_reconcile_original_identity(
         assert "creation_receipt" not in creation.json()
         observed = await wait_observed(service.control)
         assert all(not is_executing(identity) for identity in observed.values())
-        original, = json.loads(state_file.read_text())["terminals"]
+        original, = read_terminal_state(state_file)["terminals"]
         assert original["status"] == "created" and original["reconciliation_status"] == "unknown"
         assert original["os_pid"] == observed["root"]["pid"]
         for field, native in [("process_group_id", "processGroupId"),
@@ -90,7 +91,7 @@ async def test_late_creation_without_stop_proof_can_reconcile_original_identity(
             for field in ("os_pid", "process_group_id", "process_session_id", "process_start_time",
                           "created_at", "transport_owner_revision"):
                 assert final[field] == original[field]
-            record, = json.loads(state_file.read_text())["terminals"]
+            record, = read_terminal_state(state_file)["terminals"]
             assert all(final[key] == value for key, value in record.items())
         assert (service.control / "workload.json").read_bytes() == original_workload
         assert all(not is_executing(identity) for identity in observed.values())

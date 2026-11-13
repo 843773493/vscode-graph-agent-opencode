@@ -536,6 +536,7 @@ export class TerminalManager {
     }
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) throw new AggregateError(failures, "Terminal Manager 关闭失败", { cause: failures[0] });
+    await this.stateStore.close();
     this.shutdownStage = "complete";
   }
 }

@@ -35,6 +35,7 @@ from tests.integration.test_terminal_owner_tool_invocation import (
 from tests.integration.test_terminal_owner_tool_invocation import (
     terminal_workspace_root_path as terminal_workspace_root_path,  # noqa: PLC0414
 )
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 from tests.support.workspace_tool_runtime import WorkspaceToolRuntime
 
 
@@ -237,7 +238,7 @@ async def _assert_workspace_completion(
             assert any(str(sink_error) in note for note in failure.__notes__)
         else:
             assert "diagnostic_sink_error" not in detail
-    for text in (*leases.notification_errors, json.dumps(result), leases._state_path.read_text()):
+    for text in (*leases.notification_errors, json.dumps(result), json.dumps(read_lease_snapshot(leases._state_path))):
         assert "lease-event-secret" not in text and "ledger-log-secret" not in text
     assert await store.process_pending_directories() == ()
     assert not directory.exists()

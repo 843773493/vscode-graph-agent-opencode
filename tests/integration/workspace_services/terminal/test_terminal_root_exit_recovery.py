@@ -17,6 +17,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.integration.workspace_services.terminal.test_terminal_exit_diagnostics import (
     TerminalService,
     executing,
@@ -67,10 +68,10 @@ os._exit(0)
         assert os.getsid(child.pid) == original["process_session_id"]
         (control / "fail-stop").touch()
         (control / "fail-worker").touch()
-        state_file = root / ".boxteam/terminal-manager/terminals.json"
+        state_file = root / ".boxteam/terminal-manager/terminals.sqlite"
         async with asyncio.timeout(8):
             while True:
-                record = json.loads(state_file.read_text())["terminals"][0]
+                record = read_terminal_state(state_file)["terminals"][0]
                 if record["status"] == "exited" and record["reconciliation_status"] == "unknown" and not executing(worker):
                     break
                 await asyncio.sleep(0.02)
@@ -81,7 +82,7 @@ os._exit(0)
             while Path(f"/proc/{root_process.pid}").exists():
                 await asyncio.sleep(0.02)
         assert executing(child) and os.getsid(child.pid) == original["process_session_id"]
-        before = state_file.read_bytes()
+        before = read_terminal_state(state_file)
         active_plugin = plugin
         if cold:
             stop_terminal_plugin_service(plugin)
@@ -107,7 +108,7 @@ os._exit(0)
             assert final["reconciliation_status"] == "verified" and final["pty_worker_pid"] is None
             assert final["os_pid"] == original["os_pid"] and final["transport_owner_revision"] == 4
             assert all(not executing(process) for process in tracked)
-            final_record = json.loads(state_file.read_text())["terminals"][0]
+            final_record = read_terminal_state(state_file)["terminals"][0]
             assert all(final[key] == value for key, value in final_record.items())
             assert len((control / "starts.jsonl").read_text().splitlines()) == 1
             repeated = await (client.post(f"/api/terminals/{terminal_id}/kill", json={}) if action == "kill"
@@ -115,7 +116,7 @@ os._exit(0)
             assert repeated.status_code == 200, repeated.text
             if action == "kill":
                 assert repeated.json()["data"]["killed"] is False
-            assert state_file.read_bytes() != before
+            assert read_terminal_state(state_file) != before
             run.write_result("passed", {"cold": cold, "action": action, "identities": identities,
                                        "before": unknown, "after": final,
                                        "scope": "Linux真实PTY根缺失及原SID后代停止；不代Windows、Python lease或无PID创建接管"})

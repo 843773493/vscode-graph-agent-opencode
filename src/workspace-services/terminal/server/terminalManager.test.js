@@ -17,7 +17,16 @@ import { resolveTerminalCwd, TerminalSession, validateTerminalRecord } from "./t
 
 const workspaceRunRoot = path.join(process.cwd(), "out/tests/src/workspace-services/terminal/server/terminalManager/workspace", randomUUID());
 // 在文件级结束钩子清理本次运行，其他测试进程和历史正式产物保持独立。
-after(() => rmSync(workspaceRunRoot, { recursive: true, force: true }));
+const managers = new Set();
+after(async () => {
+  for (const manager of managers) await manager.stateStore.close();
+  rmSync(workspaceRunRoot, { recursive: true, force: true });
+});
+function createManager(options) {
+  const manager = new TerminalManager(options);
+  managers.add(manager);
+  return manager;
+}
 
 function createTerminalTestWorkspace() {
   const root = path.join(workspaceRunRoot, randomUUID());
@@ -30,7 +39,7 @@ function createTerminalTestWorkspace() {
 }
 
 test("取消创建沿原writer发布，排队的同身份创建及冷重启均不能越过取消", async () => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
   const release = Promise.withResolvers();
   manager.capacityLock = release.promise;
@@ -45,7 +54,7 @@ test("取消创建沿原writer发布，排队的同身份创建及冷重启均�
     release.resolve();
     await rejected;
   }
-  const cold = new TerminalManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
+  const cold = createManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
   await cold.init();
   assert.equal(cold.get(terminalId).snapshot().reconciliation_status, "verified");
   assert.equal((await cold.cancelCreation(terminalId, 7)).outcome, "not_created");
@@ -54,10 +63,10 @@ test("取消创建沿原writer发布，排队的同身份创建及冷重启均�
 });
 
 test("取消候选发布失败或仍等待writer时不能由普通快照核实", async (t) => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   await manager.init();
   const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
-  const before = await readFile(manager.stateFile);
+  const before = await manager.stateStore.readRecords();
   const original = new Error("取消意图发布失败");
   const entered = Promise.withResolvers(), release = Promise.withResolvers();
   const write = t.mock.method(manager.stateStore, "write", async () => {
@@ -68,7 +77,7 @@ test("取消候选发布失败或仍等待writer时不能由普通快照核实",
   try {
     await entered.promise;
     assert.equal(manager.get(terminalId).snapshot().reconciliation_status, "unknown");
-    assert.deepEqual(await readFile(manager.stateFile), before);
+    assert.deepEqual(await manager.stateStore.readRecords(), before);
   } finally { release.resolve(); await rejected; }
   assert.equal(manager.get(terminalId).snapshot().reconciliation_status, "unknown");
   write.mock.restore();
@@ -77,7 +86,7 @@ test("取消候选发布失败或仍等待writer时不能由普通快照核实",
 });
 
 test("取消证明不被终端历史配额回收，已有created意图不能取得未创建证明", async () => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   const id = `term_${randomUUID().replaceAll("-", "")}`;
   await manager.cancelCreation(id, 1);
   manager.get(id).updatedAt = "2000-01-01T00:00:00Z";
@@ -100,7 +109,7 @@ test("取消证明不被终端历史配额回收，已有created意图不能取�
 });
 
 test("原生创建之前必须等待同一unknown意图发布", async (t) => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
   const published = Promise.withResolvers();
   const release = Promise.withResolvers();
@@ -123,7 +132,7 @@ test("原生创建之前必须等待同一unknown意图发布", async (t) => {
   try {
     await published.promise;
     assert.equal(starts, 0);
-    const record = JSON.parse(await readFile(manager.stateFile, "utf8")).terminals[0];
+    const record = (await manager.stateStore.readRecords())[0];
     assert.equal(record.terminal_id, terminalId);
     assert.equal(record.transport_owner_revision, 7);
     assert.equal(record.status, "created");
@@ -139,7 +148,7 @@ test("原生创建之前必须等待同一unknown意图发布", async (t) => {
 
 for (const afterPublish of [false, true]) {
   test(`未派发的意图写入${afterPublish ? "发布后" : "发布前"}失败不启动PTY并关闭原身份`, async (t) => {
-    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
     const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
     const original = new Error("原意图写入失败");
     const write = manager.stateStore.write.bind(manager.stateStore);
@@ -157,7 +166,7 @@ for (const afterPublish of [false, true]) {
     assert.deepEqual(original.creationReceipt, {
       resource_id: terminalId, workspace_id: manager.workspaceId, owner_revision: 7, outcome: "not_created",
     });
-    const cold = new TerminalManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
+    const cold = createManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
     await cold.init();
     const record = cold.get(terminalId).snapshot();
     assert.equal(record.status, "deleted");
@@ -168,7 +177,7 @@ for (const afterPublish of [false, true]) {
 }
 
 test("未派发意图的关闭写入再失败保留两份原错且不签回执", async (t) => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
   const failures = [new Error("意图写入失败"), new Error("未派发收尾写入失败")];
   let writes = 0;
@@ -258,10 +267,10 @@ test("Terminal owner 拒绝旧记录格式且不迁移或覆盖原始数据", as
   })}\n`;
   await writeFile(stateFile, original, "utf8");
 
-  const manager = new TerminalManager({ workspaceRoot: root, workspaceId });
+  const manager = createManager({ workspaceRoot: root, workspaceId });
   await assert.rejects(manager.init(), (error) => {
     assert(error.message.includes("stage=记录核验"));
-    assert.match(error.cause.message, /终端状态文件版本不受支持/);
+    assert.match(error.cause.message, /显式导入/);
     return true;
   });
   assert.equal(await readFile(stateFile, "utf8"), original);
@@ -270,7 +279,7 @@ test("Terminal owner 拒绝旧记录格式且不迁移或覆盖原始数据", as
 test("终端落盘只保存一份原始输出，重启重建完整展示快照", async () => {
   const root = createTerminalTestWorkspace();
   const workspaceId = "00000000-0000-4000-8000-000000000001";
-  const manager = new TerminalManager({ workspaceRoot: root, workspaceId });
+  const manager = createManager({ workspaceRoot: root, workspaceId });
   const rawOutput = "__BOXTEAM_CMD_START_ab12__\r\n中文输出\r\n__BOXTEAM_CMD_DONE_ab12__:0\r\n";
   const session = new TerminalSession({
     manager,
@@ -303,14 +312,13 @@ test("终端落盘只保存一份原始输出，重启重建完整展示快照",
   assert.equal(summary.sequence, expectedSnapshot.sequence);
 
   await manager.persist();
-  const persisted = JSON.parse(await readFile(manager.stateFile, "utf8"));
-  const [record] = persisted.terminals;
+  const [record] = await manager.stateStore.readRecords();
   assert.equal(record.buffer, rawOutput);
   for (const field of ["display_buffer", "client_count", "pty_worker_pid"]) {
     assert.equal(Object.hasOwn(record, field), false, `持久记录不保存派生或连接字段 ${field}`);
   }
 
-  const restarted = new TerminalManager({ workspaceRoot: root, workspaceId });
+  const restarted = createManager({ workspaceRoot: root, workspaceId });
   await restarted.init();
   assert.deepEqual(restarted.get(session.id).snapshot(), expectedSnapshot);
   assert.deepEqual(restarted.get(session.id).outputMultiplexer.readAfter(7), {
@@ -338,7 +346,7 @@ test("重启只接受完全匹配的 PID、进程组、会话和启动时间", (
 });
 
 test("工作区达到 64 个 PTY 时拒绝创建且不隐式终止任何资源", async () => {
-  const manager = new TerminalManager({
+  const manager = createManager({
     workspaceRoot: createTerminalTestWorkspace(),
     workspaceId: "00000000-0000-4000-8000-000000000001",
   });
@@ -366,7 +374,7 @@ test("工作区达到 64 个 PTY 时拒绝创建且不隐式终止任何资源",
 });
 
 test("已完成命令的存活 shell 仍占用 PTY 上限", async () => {
-  const manager = new TerminalManager({
+  const manager = createManager({
     workspaceRoot: createTerminalTestWorkspace(),
     workspaceId: "00000000-0000-4000-8000-000000000001",
   });
@@ -382,7 +390,7 @@ test("已完成命令的存活 shell 仍占用 PTY 上限", async () => {
 });
 
 test("终端管理器只保留有界的近期终态历史", async () => {
-  const manager = new TerminalManager({
+  const manager = createManager({
     workspaceRoot: createTerminalTestWorkspace(),
     workspaceId: "00000000-0000-4000-8000-000000000001",
   });
@@ -411,7 +419,7 @@ test("终端管理器只保留有界的近期终态历史", async () => {
 
 for (const reconciliationStatus of ["unknown", "reconcile_required"]) {
   test(`删除仍待核实的记录不参与历史配额且冷启动继续保留: ${reconciliationStatus}`, async () => {
-    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
     const heldId = `term_${randomUUID().replaceAll("-", "")}`;
     const held = new TerminalSession({ manager, record: {
       terminal_id: heldId, workspace_id: manager.workspaceId, transport_owner_revision: 7,
@@ -432,7 +440,7 @@ for (const reconciliationStatus of ["unknown", "reconcile_required"]) {
     }
     await manager.persist();
     // 冷启动本身会调用原裁剪入口，不能先由测试筛掉历史或补回未知记录。
-    const cold = new TerminalManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
+    const cold = createManager({ workspaceRoot: manager.workspaceRoot, workspaceId: manager.workspaceId });
     await cold.init();
     assert.deepEqual(cold.get(heldId).toRecord(), original);
     assert.equal(cold.terminalsById.size, MAX_RETAINED_TERMINAL_HISTORY + 1);
@@ -444,14 +452,14 @@ for (const reconciliationStatus of ["unknown", "reconcile_required"]) {
       return true;
     });
     await cold.pruneTerminalHistory();
-    const records = JSON.parse(await readFile(cold.stateFile, "utf8")).terminals;
+    const records = (await cold.stateStore.readRecords());
     assert.deepEqual(records.find(record => record.terminal_id === heldId), original);
     assert.equal(records.length, MAX_RETAINED_TERMINAL_HISTORY + 1);
   });
 }
 
 test("完成 steering 返回统一的终端信封", async () => {
-  const manager = new TerminalManager({
+  const manager = createManager({
     workspaceRoot: createTerminalTestWorkspace(),
     workspaceId: "00000000-0000-4000-8000-000000000001",
   });
@@ -490,7 +498,7 @@ test("Terminal 显式 UUID 必填且与权威身份文件保持一致", async ()
   const root = createTerminalTestWorkspace();
   await verifyWorkspaceIdentity(root, "00000000-0000-4000-8000-000000000001");
   await assert.rejects(verifyWorkspaceIdentity(root, "00000000-0000-4000-8000-000000000002"), /权威身份文件不一致/);
-  const manager = new TerminalManager({ workspaceRoot: root, workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: root, workspaceId: "00000000-0000-4000-8000-000000000001" });
   await assert.rejects(manager.create({ workspaceId: "00000000-0000-4000-8000-000000000002" }), /身份不匹配/);
 });
 
@@ -503,7 +511,7 @@ test("Terminal 持久记录拒绝另一工作区 owner 与绝对 cwd_relative", 
 });
 
 test("停止但未删除的 owner 资源不会被历史裁剪", async () => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   for (let index = 0; index < MAX_RETAINED_TERMINAL_HISTORY + 10; index += 1) {
     const id = `term_stopped_${index}`;
     manager.terminalsById.set(id, { id, status: "terminated", toRecord: () => ({ terminal_id: id }) });
@@ -515,7 +523,7 @@ test("停止但未删除的 owner 资源不会被历史裁剪", async () => {
 
 test("grant 一次消费，过期或 owner 版本变化立即失效", async () => {
   const workspaceId = "00000000-0000-4000-8000-000000000001";
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId });
   const id = "term_00000000000070008000000000000001";
   const terminal = new TerminalSession({ manager, record: {
     terminal_id: id, workspace_id: workspaceId, transport_owner_revision: 1,
@@ -538,7 +546,7 @@ test("grant 一次消费，过期或 owner 版本变化立即失效", async () =
 });
 
 test("同轮保存只写最终状态，全部等待方在写入完成后返回", async () => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   let version = 0;
   const saved = [];
   manager.terminalsById.set("term_save", { toRecord: () => ({ version }) });
@@ -555,7 +563,7 @@ test("同轮保存只写最终状态，全部等待方在写入完成后返回",
 
 for (const fails of [false, true]) {
   test(`保存按批次确认，后续写入${fails ? "失败不追溯已确认调用" : "不延长已确认调用"}`, async () => {
-    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
     const entered = [Promise.withResolvers(), Promise.withResolvers()];
     const release = [Promise.withResolvers(), Promise.withResolvers()];
     let version = 1;
@@ -613,7 +621,7 @@ for (const fails of [false, true]) {
 
 for (const failureStage of ["snapshot", "sync_writer", "async_writer"]) {
   test(`${failureStage}失败传给全部等待方，修复后可再次保存`, async () => {
-    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
     const failure = new Error(`保存失败: ${failureStage}`);
     let shouldFail = true;
     let saved = null;
@@ -641,7 +649,7 @@ for (const failureStage of ["snapshot", "sync_writer", "async_writer"]) {
 }
 
 test("尺寸保存失败后的同值重试重新落盘，干净的同值请求不重复写入", async () => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
   const session = new TerminalSession({ manager, record: {
     terminal_id: "term_resize_retry", workspace_id: manager.workspaceId,
     transport_owner_revision: 1, reconciliation_status: "verified", cwd_relative: ".",
@@ -670,7 +678,7 @@ test("尺寸保存失败后的同值重试重新落盘，干净的同值请求�
 
 for (const fails of [false, true]) {
   test(`同尺寸请求等待在途保存${fails ? "失败" : "成功"}，不提前返回`, async () => {
-    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
     const session = new TerminalSession({ manager, record: {
       terminal_id: "term_resize_pending", workspace_id: manager.workspaceId,
       transport_owner_revision: 1, reconciliation_status: "verified", cwd_relative: ".",
@@ -711,7 +719,7 @@ for (const fails of [false, true]) {
 test("创建前目录拒绝回执绑定唯一 intent，重复身份不伪报未创建", async () => {
   const root = createTerminalTestWorkspace();
   const workspaceId = "00000000-0000-4000-8000-000000000001";
-  const manager = new TerminalManager({ workspaceRoot: root, workspaceId });
+  const manager = createManager({ workspaceRoot: root, workspaceId });
   const terminalId = `term_${randomUUID().replaceAll("-", "")}`;
   const options = { workspaceId, terminalId, ownerRevision: 1, cwd: path.join(root, "missing") };
   await assert.rejects(manager.create(options), (error) => {

@@ -1,7 +1,8 @@
 // 只在真实Worker就绪IPC交付前注入错误，不代填PTY、Session、进程身份或终态。
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -41,8 +42,10 @@ IsolatedPtyProcess.prototype.start = async function (options) {
   let processIdentity;
   worker.send = (...arguments_) => {
     if (lateIdentity && arguments_[0]?.type === "shutdown") {
-      const state = JSON.parse(readFileSync(path.join(process.env.WORKSPACE_ROOT,
-        ".boxteam/terminal-manager/terminals.json"), "utf8"));
+      const db = new DatabaseSync(path.join(process.env.WORKSPACE_ROOT,
+        ".boxteam/terminal-manager/terminals.sqlite"), { readOnly: true });
+      const state = { terminals: db.prepare("SELECT payload FROM terminal_records ORDER BY position").all().map(row => JSON.parse(row.payload)) };
+      db.close();
       appendFileSync(path.join(controlRoot, "shutdown-observations.jsonl"),
         `${JSON.stringify({ pid: this.pid, state })}\n`);
       emit("message", spawned);

@@ -1,9 +1,10 @@
-"""真实PTY的resize发布失败与日志次错保持同一资源，并允许原入口重试。"""
+"""真实PTY的resize事务失败与日志次错保持同一资源，并允许原入口重试。"""
 
 from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 from collections.abc import Iterator
 from contextlib import AsyncExitStack
@@ -21,6 +22,7 @@ from tests.harness.python.terminal_backend import (
     start_terminal_plugin_service,
     stop_terminal_plugin_service,
 )
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.support.workspaces import prepare_default_test_workspace
 
 
@@ -75,9 +77,8 @@ async def test_resize_storage_failure_preserves_native_identity_and_same_size_re
     plugin, root, control, run = terminal_service
     terminal_id = f"term_{uuid4().hex}"
     state_dir = root / ".boxteam/terminal-manager"
-    state_file = state_dir / "terminals.json"
-    backup = control / "original-terminals.json"
-    async with AsyncExitStack() as cleanup, httpx.AsyncClient(base_url=plugin.http_url, headers=plugin.headers, timeout=15, trust_env=False) as http:
+    state_file = state_dir / "terminals.sqlite"
+    async with httpx.AsyncClient(base_url=plugin.http_url, headers=plugin.headers, timeout=15, trust_env=False) as http, AsyncExitStack() as cleanup:
         response = await http.post("/api/terminals", json={
             "terminal_id": terminal_id, "workspace_id": load_or_create_workspace_id(root), "owner_revision": 1,
             "title": "状态存储诊断", "cwd": str(root), "command": sys.executable,
@@ -88,19 +89,17 @@ async def test_resize_storage_failure_preserves_native_identity_and_same_size_re
 
         def repair_fault() -> None:
             (control / "fail-sink").unlink(missing_ok=True)
-            if state_file.is_dir():
-                state_file.rmdir()
-            if backup.exists():
-                backup.replace(state_file)
+            with sqlite3.connect(state_file) as connection:
+                connection.execute("DROP TRIGGER IF EXISTS fail_save")
 
-        # 在资源清理前恢复原文件，失败验收也只能回收本例创建的PTY。
+        # 在资源清理前解除存储故障，失败验收也只能回收本例创建的PTY。
         cleanup.callback(repair_fault)
         created = response.json()["data"]
         root_process = psutil.Process(created["os_pid"])
         worker_process = psutil.Process(created["pty_worker_pid"])
-        original_bytes = state_file.read_bytes()
-        state_file.replace(backup)
-        state_file.mkdir()
+        original = read_terminal_state(state_file)
+        with sqlite3.connect(state_file) as connection:
+            connection.execute("CREATE TRIGGER fail_save BEFORE UPDATE ON terminal_records BEGIN SELECT RAISE(ABORT, 'storage-failure'); END")
         (control / "log-parent").write_text("原生日志次错", encoding="utf-8")
         if fail_sink:
             (control / "fail-sink").touch()
@@ -110,17 +109,16 @@ async def test_resize_storage_failure_preserves_native_identity_and_same_size_re
         current = (await http.get(f"/api/terminals/{terminal_id}")).json()["data"]
         attempts = [json.loads(line) for line in (control / "attempts.jsonl").read_text(encoding="utf-8").splitlines()]
         (run.artifacts_dir / "storage-failure.json").write_text(json.dumps({
-            "failure": payload, "current": current, "original_records": json.loads(original_bytes),
+            "failure": payload, "current": current, "original_records": original,
             "diagnostic_attempts": attempts,
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         assert payload["error"].startswith("写入终端状态失败:")
-        assert "artifact=terminal_records, stage=文件发布" in payload["error"]
+        assert "artifact=terminal_records, stage=事务写入, code=ERR_SQLITE_ERROR" in payload["error"]
         for key in ("terminal_id", "workspace_id", "transport_owner_revision", "os_pid", "process_session_id", "process_start_time", "pty_worker_pid", "status"):
             assert current[key] == created[key]
         assert current["cols"] == 101 and current["rows"] == 35
         assert root_process.is_running() and worker_process.is_running()
-        assert backup.read_bytes() == original_bytes and list(state_file.iterdir()) == []
-        assert not list(state_dir.glob("*.tmp"))
+        assert read_terminal_state(state_file) == original
         assert len(attempts) == 1 and str(state_file) in attempts[0]["chunk"]
         assert load_or_create_workspace_id(root) in attempts[0]["chunk"]
         for value in (payload, current):
@@ -129,19 +127,19 @@ async def test_resize_storage_failure_preserves_native_identity_and_same_size_re
                 assert json.dumps(private)[1:-1] not in serialized
 
         repair_fault()
-        assert state_file.read_bytes() == original_bytes
+        assert read_terminal_state(state_file) == original
         # 尺寸已经应用，但失败的落盘不能被同尺寸短路，必须重用原显式保存链。
         retried = await http.post(f"/api/terminals/{terminal_id}/resize", json={"cols": 101, "rows": 35})
         assert retried.status_code == 200, retried.text
         saved = retried.json()["data"]
         assert saved["os_pid"] == created["os_pid"] and saved["pty_worker_pid"] == created["pty_worker_pid"]
-        records = json.loads(state_file.read_text(encoding="utf-8"))["terminals"]
+        records = read_terminal_state(state_file)["terminals"]
         assert len(records) == 1 and records[0]["terminal_id"] == terminal_id
         assert records[0]["cols"] == 101 and records[0]["rows"] == 35
         assert all(records[0][key] == saved[key] for key in records[0])
     assert not root_process.is_running() or root_process.status() == psutil.STATUS_ZOMBIE
     assert not worker_process.is_running() or worker_process.status() == psutil.STATUS_ZOMBIE
     run.write_result("passed", {
-        "scope": "真实Node/HTTP/PTY、原生发布冲突、日志次错、同尺寸重试及原进程回收；不代Gateway/Web、创建失败窗口或进程重启",
+        "scope": "真实Node/HTTP/PTY、原生事务失败、日志次错、同尺寸重试及原进程回收；不代Gateway/Web、创建失败窗口或进程重启",
         "terminal_id": terminal_id, "failed_sink": fail_sink, "failed": payload, "retried": saved,
     })

@@ -22,6 +22,7 @@ from app.agents.tools.terminal import create_exec_command_tool, create_write_std
 from app.core.resource_uri import resource_display_uri
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
+from tests.harness.python.terminal_state import read_terminal_state
 from tests.support.ports import integration_port_block_for_file
 from tests.support.resource_owners.lease_storage import read_lease_snapshot
 from tests.support.workspace_tool_runtime import (
@@ -145,7 +146,7 @@ async def test_real_terminal_http_failures_keep_native_details_in_server_diagnos
         assert str(root) not in str(error)
         assert await client.list_resources() == []
     assert not_directory.read_text(encoding="utf-8") == "原件不能被终端创建改写"
-    state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
+    state = read_terminal_state(root / ".boxteam/terminal-manager/terminals.sqlite")
     assert state["terminals"] == []
     assert await owner.list_resources() == []
     # 真实 Python 创建入口消费同一正式拒绝，不能留下 phantom 资源或原 operation 占用。
@@ -210,7 +211,7 @@ async def test_real_terminal_startup_failure_preserves_identity_and_requires_sto
     record, = owner._store.all()
     rid = record.resource_id
     assert str(root) not in str(error)
-    state = json.loads((root / ".boxteam/terminal-manager/terminals.json").read_text())
+    state = read_terminal_state(root / ".boxteam/terminal-manager/terminals.sqlite")
     native, = state["terminals"]
     assert native["terminal_id"] == rid
     assert native["release_reason"] == "terminal_startup_failed"
@@ -361,9 +362,12 @@ async def test_real_terminal_tool_uses_one_cwd_for_native_paths_and_directory_ur
             receipts.append(result)
     state_files = [
         owner._store.path, owner.workspace_root / ".boxteam/resources.sqlite",
-        owner.workspace_root / ".boxteam/terminal-manager/terminals.json",
+        owner.workspace_root / ".boxteam/terminal-manager/terminals.sqlite",
     ]
-    before = {path: path.read_bytes() for path in state_files}
+    def persisted_states() -> dict[Path, object]:
+        return {path: read_terminal_state(path) if path.name == "terminals.sqlite" else path.read_bytes() for path in state_files}
+
+    before = persisted_states()
     rejected_uris = [
         resource_display_uri(
             scope="workspace", scope_id=str(uuid4()), kind="files", tail_segments=("root",),
@@ -377,7 +381,7 @@ async def test_real_terminal_tool_uses_one_cwd_for_native_paths_and_directory_ur
     for rejected_uri in rejected_uris:
         with pytest.raises(ValueError):
             await execute.ainvoke({"cmd": "printf SHOULD_NOT_RUN > unexpected.txt", "workdir": rejected_uri})
-        assert {path: path.read_bytes() for path in state_files} == before
+        assert persisted_states() == before
     if os.name != "nt":
         # 真实符号链接环经 Path.resolve 抛出含本机路径的 RuntimeError。
         loop = directory / "loop"
@@ -396,7 +400,7 @@ async def test_real_terminal_tool_uses_one_cwd_for_native_paths_and_directory_ur
                               and "stage=terminal_workdir" in record.getMessage())
             assert diagnostic.exc_info is not None
             assert diagnostic.exc_info[1] is rejected.value.__cause__
-            assert {path: path.read_bytes() for path in state_files} == before
+            assert persisted_states() == before
         finally:
             loop.unlink()
     assert set(owner._store.ids()) == {item["terminal_id"] for item in receipts}
