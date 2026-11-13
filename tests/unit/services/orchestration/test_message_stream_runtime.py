@@ -521,6 +521,9 @@ async def test_tool_call_delta_keeps_identity_and_can_be_claimed_by_tool_executi
     ("raw_args", "include_args", "expected_arguments", "expected_complete"),
     [
         pytest.param("{}", True, {}, True, id="empty-object-json"),
+        pytest.param(' {"nested": {"text": "}"}} \r\n', True, {"nested": {"text": "}"}}, True, id="nested-object-trailing-space"),
+        pytest.param('{"path":}', True, {"raw": '{"path":}'}, False, id="invalid-object-ending"),
+        pytest.param('"text}"', True, {"raw": '"text}"'}, False, id="non-object-brace-string"),
         pytest.param({}, True, {}, True, id="empty-object-mapping"),
         pytest.param(
             '{"raw":"value"}', True, {"raw": "value"}, True, id="raw-field-json"

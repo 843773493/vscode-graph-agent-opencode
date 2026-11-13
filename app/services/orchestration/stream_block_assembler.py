@@ -490,16 +490,16 @@ class StreamBlockAssemblyMixin:
         arguments: dict[str, object]
         arguments_complete = False
         if accumulated_args:
+            # 对象末尾只能是 } 和空白；未到边界时不反复解析全部参数前缀。
             try:
-                parsed = json.loads(accumulated_args)
+                parsed = json.loads(accumulated_args) if accumulated_args.rstrip().endswith("}") else None
             except json.JSONDecodeError:
-                arguments = {"raw": accumulated_args}
+                parsed = None
+            if isinstance(parsed, dict):
+                arguments = parsed
+                arguments_complete = True
             else:
-                if isinstance(parsed, dict):
-                    arguments = parsed
-                    arguments_complete = True
-                else:
-                    arguments = {"raw": accumulated_args}
+                arguments = {"raw": accumulated_args}
         elif isinstance(raw_args, Mapping):
             arguments = dict(raw_args)
             arguments_complete = True
