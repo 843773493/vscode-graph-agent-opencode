@@ -46,6 +46,7 @@ async def test_plain_info_warning_and_limited_state_reach_original_search_ui(
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
 ) -> None:
     client, context, workspace, provider = metadata_case
+    (workspace / "empty-search-directory").mkdir()
     for name in ("a", "b"):
         (workspace / f"notice-{name}.txt").write_text("c" * 2200 + "\nnoticeword " + "p" * 2200 + "\n", encoding="utf-8")
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
@@ -65,6 +66,20 @@ async def test_plain_info_warning_and_limited_state_reach_original_search_ui(
     result = json.loads(result_path.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert result["quickInfo"] and result["quickLimited"] and result["editorWarning"]
+    for name, expected_code, expected_reason in (
+        ("emptyDirectoryInvalidRegex", "execution_failed", "invalid_search_pattern"),
+        ("unsupportedCapabilityVersion", "unsupported_version", None),
+    ):
+        failure = result["gatewayFailures"][name]
+        assert failure["requestId"] == failure["responseRequestId"]
+        assert failure["pageCount"] == 0
+        assert failure["branch"]["state"] == "failed"
+        assert failure["branch"]["code"] == expected_code
+        assert failure["branch"]["http_status"] == 400
+        assert failure["branch"]["returned_results"] == 0
+        assert failure["branch"]["retryable"] is False
+        if expected_reason:
+            assert failure["branch"]["reason"] == expected_reason
     assert len(result["initialization"]) == 3
     assert all(item["requestId"] for item in result["initialization"])
     assert all((workspace / f"notice-{name}.txt").read_text().startswith("c" * 2200) for name in ("a", "b"))
