@@ -9,6 +9,7 @@ const targetGatewayId = params.get("target_gateway_id");
 const ownerApiBase = window.location.origin;
 let ownerResource = null;
 let grantLoading = false;
+let resumeLoading = false;
 let lastActionError = null;
 let gatewayToken = null;
 let backendRequestHeaders = {};
@@ -70,6 +71,8 @@ fitAddon.fit();
 
 let socket = null;
 let attached = false;
+let intersecting = false;
+let visible = false;
 let deleted = false;
 let snapshotDisplay = "";
 let currentTerminalStatus = null;
@@ -231,7 +234,7 @@ function send(message) {
 }
 
 function resizeRemote() {
-  if (resizeFrame !== null) {
+  if (!visible || resizeFrame !== null) {
     return;
   }
   resizeFrame = window.requestAnimationFrame(() => {
@@ -316,15 +319,18 @@ async function loadSnapshot() {
 }
 
 async function syncTerminalState() {
-  if (!terminalId || deleted) return;
-  const snapshot = acceptOwnerResource(await ownerRequest());
+  if (!terminalId || deleted || !visible) return;
+  const resource = await ownerRequest("?include_output=false");
+  if (!visible) return;
+  // 终态只在转换时补一份最终正文，后续状态检查不重复搬运输出。
+  const snapshot = resource.status !== "running" && resource.status !== currentTerminalStatus
+    ? await loadSnapshot() : acceptOwnerResource(resource);
   if (snapshot.status !== "running") {
     desiredAttached = false;
     attached = false;
     socket?.close();
     socket = null;
     setAttachButtonMode("detached");
-    renderSnapshot(snapshotDisplayBuffer(snapshot));
   }
   if (!lastActionError && !attached) setStatus(describeSnapshot(snapshot));
 }
@@ -346,18 +352,23 @@ async function ownerCommand(action) {
 }
 
 function startStatusPolling() {
-  if (statusPollTimer !== null) {
-    return;
-  }
-  statusPollTimer = window.setInterval(() => {
-    void syncTerminalState().catch((error) => {
-      setStatus(error instanceof Error ? error.message : String(error), true);
-    });
+  if (statusPollTimer !== null || !visible || deleted) return;
+  const timer = window.setTimeout(async () => {
+    try { await syncTerminalState(); }
+    catch (error) { setStatus(error instanceof Error ? error.message : String(error), true); }
+    finally {
+      // 隐藏后旧请求可能才返回，不能覆盖重新显示时排好的轮询。
+      if (statusPollTimer === timer) {
+        statusPollTimer = null;
+        startStatusPolling();
+      }
+    }
   }, 2000);
+  statusPollTimer = timer;
 }
 
-function detach() {
-  desiredAttached = false;
+function detach({ preserveIntent = false } = {}) {
+  if (!preserveIntent) desiredAttached = false;
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -376,6 +387,7 @@ function detach() {
 }
 
 async function attach() {
+  if (!visible) return;
   if (!terminalId) {
     setStatus("URL 缺少 terminalId 参数", true);
     return;
@@ -392,7 +404,7 @@ async function attach() {
   grantLoading = true;
   let grant;
   try {
-    await loadSnapshot();
+    acceptOwnerResource(await ownerRequest("?include_output=false"));
     const querySession = params.get("sessionId");
     const queryThread = params.get("threadId");
     if (Boolean(querySession) !== Boolean(queryThread)) throw new Error("Terminal 传输 Thread 参数不完整");
@@ -411,13 +423,14 @@ async function attach() {
     desiredAttached = false;
     return;
   } finally { grantLoading = false; }
-  if (!desiredAttached) return;
+  if (!desiredAttached || !visible) return;
   const currentSocket = new WebSocket(backendWsUrl(grant.service));
   socket = currentSocket;
   setAttachButtonMode("attaching");
   setStatus("正在连接终端...");
 
   socket.addEventListener("open", () => {
+    if (socket !== currentSocket || !visible) { currentSocket.close(); return; }
     fitAddon.fit();
     send({
       type: "attach",
@@ -432,6 +445,7 @@ async function attach() {
   });
 
   socket.addEventListener("message", (event) => {
+    if (socket !== currentSocket || !visible) return;
     const message = JSON.parse(event.data);
     if (message.type === "attached") {
       attached = true;
@@ -550,6 +564,47 @@ installTerminalUserActions({
   resizeTerminal: resizeRemote,
 });
 
+async function resumeVisibleTerminal() {
+  if (!visible || !gatewayToken || resumeLoading) return;
+  // 首次正文尚未返回时切换工作区，仍由原恢复取得快照并检查最新可见性。
+  resumeLoading = true;
+  try {
+    if (ownerResource === null) {
+      const snapshot = await loadSnapshot();
+      desiredAttached = snapshot.status === "running";
+    } else {
+      await syncTerminalState();
+    }
+    if (!visible) return;
+    resizeRemote();
+    if (desiredAttached) void attach();
+    startStatusPolling();
+  } finally {
+    resumeLoading = false;
+  }
+}
+
+function updateVisibility() {
+  const next = intersecting && !document.hidden;
+  if (visible === next) return;
+  visible = next;
+  if (visible) {
+    void resumeVisibleTerminal().catch(error => setStatus(error.message, true));
+  } else {
+    if (statusPollTimer !== null) window.clearTimeout(statusPollTimer);
+    statusPollTimer = null;
+    detach({ preserveIntent: true });
+  }
+}
+
+// 原生观察会穿过iframe祖先的hidden/display:none，覆盖工作区和面板切换。
+const visibilityObserver = new IntersectionObserver(([entry]) => {
+  intersecting = entry.isIntersecting;
+  updateVisibility();
+});
+visibilityObserver.observe(terminalContainer);
+document.addEventListener("visibilitychange", updateVisibility);
+
 // 扩展窗口通过父页面调整 iframe 尺寸时，终端窗口自身不会收到 window.resize。
 // 监听终端容器尺寸，避免终端仍沿用打开瞬间的窄列数，导致路径逐段折行。
 const terminalResizeObserver = new ResizeObserver(() => resizeRemote());
@@ -560,11 +615,13 @@ window.addEventListener("beforeunload", () => {
     window.cancelAnimationFrame(resizeFrame);
   }
   if (statusPollTimer !== null) {
-    window.clearInterval(statusPollTimer);
+    window.clearTimeout(statusPollTimer);
   }
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer);
   }
+  visibilityObserver.disconnect();
+  document.removeEventListener("visibilitychange", updateVisibility);
   terminalResizeObserver.disconnect();
 });
 
@@ -605,13 +662,7 @@ deleteButton.addEventListener("click", async () => {
 });
 
 void initializeGatewayAuth()
-  .then(() => loadSnapshot())
-  .then((snapshot) => {
-    if (snapshot?.status === "running") {
-      attach();
-    }
-    startStatusPolling();
-  })
+  .then(() => resumeVisibleTerminal())
   .catch((error) => {
     setStatus(error instanceof Error ? error.message : String(error), true);
     updateControls();

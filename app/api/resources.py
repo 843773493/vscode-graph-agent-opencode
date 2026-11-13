@@ -314,12 +314,12 @@ async def browser_operation(
 @router.get("/{resource_id}", response_model=APIResponse[WorkspaceResourceDTO])
 async def get_resource(
     *,
-    resource_id: str,
+    resource_id: str, include_output: bool = Query(True),
     _: str = Depends(verify_local_token), request_id: str = Depends(get_request_id),
     owner: Annotated[WorkspaceResourceOwner, Depends(get_workspace_resource_owner)],
 ):
     with _owner_errors():
-        result = await owner.get_resource(resource_id)
+        result = await owner.get_resource(resource_id, include_output=include_output)
     return APIResponse(data=WorkspaceResourceDTO.from_owner(result), request_id=request_id)
 
 

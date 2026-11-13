@@ -102,9 +102,17 @@ def test_terminal_api_delete_rejects_thread_association_without_side_effects(
 ) -> None:
     created = _create_terminal_resource(terminal_resource_api_client)
     resource_id = created["resource_id"]
+    terminal_owner_bundle.transport.records[resource_id].update(buffer="终端正文", display_buffer="终端正文", sequence=7)
     response = terminal_resource_api_client.get(f"/api/v1/resources/{resource_id}")
     assert response.status_code == 200, response.text
     associated = response.json()["data"]
+    assert associated["metadata"]["buffer"] == associated["metadata"]["display_buffer"] == "终端正文"
+    summary_response = terminal_resource_api_client.get(f"/api/v1/resources/{resource_id}?include_output=false")
+    assert summary_response.status_code == 200, summary_response.text
+    summary = summary_response.json()["data"]
+    assert "buffer" not in summary["metadata"] and "display_buffer" not in summary["metadata"]
+    assert summary["metadata"]["sequence"] == 7
+    assert {k: v for k, v in summary.items() if k != "metadata"} == {k: v for k, v in associated.items() if k != "metadata"}
     assert associated["workspace_id"] == WORKSPACE_ID
     assert associated["kind"] == "terminal"
     assert associated["status"] == "running"

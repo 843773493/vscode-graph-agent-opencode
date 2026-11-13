@@ -224,7 +224,7 @@ class WorkspaceResourceOwner:
                 f"kind={self.kind}；保留已提交观察与原占用，未取得完整清单"
             ) from error
 
-    async def get_resource(self, resource_id: str) -> ResourceSnapshot:
+    async def get_resource(self, resource_id: str, *, include_output: bool = True) -> ResourceSnapshot:
         # 详情的恢复、资源锁和清单共用一次预算，不在阶段切换时重新计时。
         # TODO(5.4)：同步存储与不合作取消仍须由原执行owner核实收敛。
         deadline = timeout(30)
@@ -236,7 +236,7 @@ class WorkspaceResourceOwner:
                     observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
                     runtime = observed.get(resource_id)
                     # Terminal 清单只含摘要；保留清单缺失语义，正文仅向所选资源读取。
-                    if runtime is not None and self.kind == "terminal":
+                    if runtime is not None and self.kind == "terminal" and include_output:
                         runtime = await self._transport.get_resource(resource_id)
                     observe_resource(record, runtime, self.kind)
                     await self._store.save(record)

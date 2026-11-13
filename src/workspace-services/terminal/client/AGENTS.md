@@ -6,6 +6,8 @@
 
 `main.js`从`./shared/commandText.js`读取唯一的命令文本过滤器；静态服务只公开该明确模块，不开放shared目录的任意文件。页面在输入边界沿用空值到空串的转换，原始输出、sequence及ACK合同不因展示过滤改变；后端提供display_buffer时直接消费该字段。
 
+页面只在实际可见时保持输出连接和状态轮询；原生 IntersectionObserver 覆盖 iframe 祖先隐藏，Page Visibility 覆盖文档隐藏。隐藏释放传输但保留用户的连接意图，恢复沿原 sequence 补读；不停止后台 PTY。状态轮询使用同一 owner 详情入口的 `include_output=false` 摘要，终态转换时补读最终正文；首次打开、显式刷新及 WebSocket 重同步仍取得正文，传输授权保留原资源投影。轮询等待上一轮结束，不并发堆积请求。
+
 ## 可修改内容
 
 - 可以新增或修改 HTML、CSS、浏览器端 JavaScript。
