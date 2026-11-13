@@ -439,28 +439,50 @@ class ExternalResourceLeaseLedger:
     ) -> None:
         """只有实际 owner 已核实的范围与运行事实能更新登记投影。"""
         with self._write_lock:
-            if lifetime_scope not in {"thread", "workspace"}:
-                raise ValueError(f"外部资源保留范围无效: {lifetime_scope}")
-            if status not in {"running", "stopped", "unknown", "orphaned"}:
-                raise ValueError(f"外部资源核实状态无效: {status}")
-            record = self._require_record(resource_id)
-            lease = None if unresolved_lease_id is None else self._leases.get(unresolved_lease_id)
-            if unresolved_lease_id is not None and (lease is None or lease.resource_id != resource_id):
-                raise ValueError(f"未知 operation 不属于此资源的原 lease: {unresolved_lease_id}")
-            # 列表读取会逐项同步；相同状态不重复提交账本。
-            if (record.lifetime_scope == lifetime_scope and record.status == status
-                    and (process is None or process == record.process)
-                    and (cleanup_failed is None or cleanup_failed == record.cleanup_failed)
-                    and (lease is None or lease.status not in {"active", "dispatching"})):
-                return
-            record = replace(record, lifetime_scope=lifetime_scope, status=status, updated_at=self._now(),
-                process=process if process is not None else record.process,
-                cleanup_failed=cleanup_failed if cleanup_failed is not None else record.cleanup_failed)
-            changed_leases = ()
-            if lease is not None and lease.status in {"active", "dispatching"}:
-                # 只保留本次未核实操作；同资源其它已返回的操作仍正常收尾。
-                changed_leases = (replace(lease, status="reconcile_required", updated_at=record.updated_at),)
-            self._commit(records=(record,), leases=changed_leases)
+            records, leases = self._external_state_changes(
+                resource_id, lifetime_scope=lifetime_scope, status=status,
+                unresolved_lease_id=unresolved_lease_id, process=process, cleanup_failed=cleanup_failed,
+            )
+            if records or leases:
+                self._commit(records=records, leases=leases)
+
+    def update_external_states(self, states: Iterable[tuple[str, str, str]]) -> None:
+        """一批被动观察完整核验后一次提交，不改变原 operation 占用。"""
+        with self._write_lock:
+            records: list[ResourceRecord] = []
+            for resource_id, lifetime_scope, status in states:
+                changed, _ = self._external_state_changes(resource_id, lifetime_scope=lifetime_scope, status=status)
+                records.extend(changed)
+            if records:
+                self._commit(records=records)
+
+    def _external_state_changes(
+        self, resource_id: str, *, lifetime_scope: str, status: str,
+        unresolved_lease_id: str | None = None,
+        process: ChildProcessState | None = None,
+        cleanup_failed: bool | None = None,
+    ) -> tuple[tuple[ResourceRecord, ...], tuple[ResourceLease, ...]]:
+        if lifetime_scope not in {"thread", "workspace"}:
+            raise ValueError(f"外部资源保留范围无效: {lifetime_scope}")
+        if status not in {"running", "stopped", "unknown", "orphaned"}:
+            raise ValueError(f"外部资源核实状态无效: {status}")
+        record = self._require_record(resource_id)
+        lease = None if unresolved_lease_id is None else self._leases.get(unresolved_lease_id)
+        if unresolved_lease_id is not None and (lease is None or lease.resource_id != resource_id):
+            raise ValueError(f"未知 operation 不属于此资源的原 lease: {unresolved_lease_id}")
+        if (record.lifetime_scope == lifetime_scope and record.status == status
+                and (process is None or process == record.process)
+                and (cleanup_failed is None or cleanup_failed == record.cleanup_failed)
+                and (lease is None or lease.status not in {"active", "dispatching"})):
+            return (), ()
+        record = replace(record, lifetime_scope=lifetime_scope, status=status, updated_at=self._now(),
+            process=process if process is not None else record.process,
+            cleanup_failed=cleanup_failed if cleanup_failed is not None else record.cleanup_failed)
+        changed_leases = ()
+        if lease is not None and lease.status in {"active", "dispatching"}:
+            # 只保留本次未核实操作；同资源其它已返回的操作仍正常收尾。
+            changed_leases = (replace(lease, status="reconcile_required", updated_at=record.updated_at),)
+        return (record,), changed_leases
 
     def _require_record(self, resource_id: str) -> ResourceRecord:
         record = self._records.get(resource_id)

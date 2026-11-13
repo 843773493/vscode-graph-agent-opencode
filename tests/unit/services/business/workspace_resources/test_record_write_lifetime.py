@@ -264,7 +264,7 @@ async def test_unstarted_creation_cleanup_survives_repeated_cancellation_and_exp
     with monkeypatch.context() as patch:
         patch.setattr(Path, "replace", publishing)
         if outcome == "ledger_error":
-            patch.setattr(owner._leases, "update_external_state", fail_ledger)
+            patch.setattr(owner._leases, "update_external_states", fail_ledger)
         creating = asyncio.create_task(resource_owner.create())
         try:
             await asyncio.wait_for(entered[0].wait(), 2)

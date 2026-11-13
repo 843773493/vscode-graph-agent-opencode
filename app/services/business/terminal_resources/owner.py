@@ -155,15 +155,16 @@ class TerminalResourceOwner(WorkspaceResourceOwner):
         attachment_id = parse_resource_uri(uri).tail_segments[0]
         return f"{terminal_id}:working-directory:{attachment_id}"
 
-    async def _sync_ledger(self, record: OwnedResourceRecord) -> None:
-        await super()._sync_ledger(record)
-        if (record.working_directory_uri is not None and record.reconciliation_status == "verified"
-                and record.status in STOPPED_STATUSES):
-            lease = self._leases.get_lease(self._directory_lease_id(record.resource_id, record.working_directory_uri))
-            if lease is not None and lease.status in {"active", "reconcile_required"}:
-                await self._leases.settle(lease.lease_id)
-            if self._working_directories is not None:
-                await self._working_directories.settle_working_directory(record.working_directory_uri)
+    async def _sync_ledger(self, *records: OwnedResourceRecord) -> None:
+        await super()._sync_ledger(*records)
+        for record in records:
+            if (record.working_directory_uri is not None and record.reconciliation_status == "verified"
+                    and record.status in STOPPED_STATUSES):
+                lease = self._leases.get_lease(self._directory_lease_id(record.resource_id, record.working_directory_uri))
+                if lease is not None and lease.status in {"active", "reconcile_required"}:
+                    await self._leases.settle(lease.lease_id)
+                if self._working_directories is not None:
+                    await self._working_directories.settle_working_directory(record.working_directory_uri)
 
     @asynccontextmanager
     async def operation(

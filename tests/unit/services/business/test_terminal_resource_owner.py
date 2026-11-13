@@ -41,7 +41,12 @@ def managed_directory(terminal_owner: TerminalOwnerFixture) -> str:
     async def admit(_target: Path) -> AsyncIterator[str | None]:
         yield uri
 
-    terminal_owner.owner._working_directories = SimpleNamespace(admit_working_directory=admit)
+    async def settle(reference: str) -> None:
+        assert reference == uri
+
+    terminal_owner.owner._working_directories = SimpleNamespace(
+        admit_working_directory=admit, settle_working_directory=settle,
+    )
     return uri
 
 

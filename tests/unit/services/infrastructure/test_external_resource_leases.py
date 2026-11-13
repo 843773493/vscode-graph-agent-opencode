@@ -83,7 +83,7 @@ def test_repeated_registration_preserves_identity_state_and_lease_without_writin
     assert restored.get("terminal") == record and restored.get_lease(lease.lease_id) == pending
 
 
-@pytest.fixture(params=["register", "acquire", "release", "settle", "turn", "reconcile", "unknown"])
+@pytest.fixture(params=["register", "acquire", "release", "settle", "turn", "reconcile", "unknown", "observations"])
 async def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[ExternalResourceLeaseLedger], Awaitable[object]]]:
     mutations: dict[str, Callable[[ExternalResourceLeaseLedger], object]] = {
         "register": lambda ledger: ledger.register_external(resource_id="new", kind="terminal", lifetime_scope="workspace"),
@@ -93,6 +93,7 @@ async def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[
         "turn": lambda ledger: ledger.release_turn_leases("turn-a"),
         "reconcile": lambda ledger: ledger.reconcile({"a": "stopped", "b": "running"}),
         "unknown": lambda ledger: ledger.update_external_state("a", lifetime_scope="thread", status="unknown", unresolved_lease_id="a1"),
+        "observations": lambda ledger: ledger.update_external_states([("a", "thread", "stopped"), ("b", "workspace", "unknown")]),
     }
     async def mutate(ledger: ExternalResourceLeaseLedger) -> object:
         result = mutations[request.param](ledger)
@@ -164,6 +165,10 @@ async def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_ope
         assert (ledger.get("a").status, ledger.get("a").lifetime_scope) == ("unknown", "thread")
         assert ledger.get_lease("a1").status == "reconcile_required"
         assert ledger.get_lease("a2").status == ledger.get_lease("b1").status == "active"
+    elif name == "observations":
+        assert (ledger.get("a").status, ledger.get("a").lifetime_scope) == ("stopped", "thread")
+        assert (ledger.get("b").status, ledger.get("b").lifetime_scope) == ("unknown", "workspace")
+        assert all(ledger.get_lease(key).status == "active" for key in ("a1", "a2", "b1"))
 
 
 @pytest.mark.parametrize("status", ["unknown", "orphaned"])

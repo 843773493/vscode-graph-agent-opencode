@@ -162,18 +162,30 @@ async def test_complete_and_other_transport_failures_keep_the_exact_lease(
     assert terminal_owner.owner._store.get(rid).reconciliation_status == "unknown"
 
 
+@pytest.mark.parametrize("entry", ["complete", "list"])
 async def test_workspace_completion_commits_verified_terminal_state_and_settles_only_directory_use(
-    terminal_owner: TerminalOwnerFixture, managed_directory: str,
+    terminal_owner: TerminalOwnerFixture, managed_directory: str, entry: str,
 ) -> None:
     created = await terminal_owner.create(scope="workspace")
     rid = str(created["resource_id"])
     attachment = parse_resource_uri(managed_directory).tail_segments[0]
     directory_lease, = terminal_owner.leases.leases_for_resource(attachment)
-    terminal_owner.transport.records[rid]["status"] = "terminated"
+    peer = await terminal_owner.create(scope="workspace")
+    peer_id = str(peer["resource_id"])
     async with terminal_owner.owner.operation(
         session_id=SESSION_A, thread_id=THREAD_A, holder_id="complete-holder", operation_id="complete-call",
     ) as operation:
-        result = await operation.complete_terminal(rid)
+        await operation.get_resource(rid)
+        terminal_owner.transport.records[rid]["status"] = "terminated"
+        terminal_owner.transport.records[peer_id]["status"] = "terminated"
+        if entry == "complete":
+            result = await operation.complete_terminal(rid)
+        else:
+            rows = await terminal_owner.owner.list_resources()
+            assert {row["resource_id"] for row in rows} == {rid, peer_id}
+            assert all(row["status"] == "terminated" for row in rows)
+            assert not terminal_owner.leases.leases_for_resource(attachment)
+            result = next(row for row in rows if row["resource_id"] == rid)
         assert result["status"] == "terminated"
         assert terminal_owner.owner._store.get(rid).status == "terminated"
         assert terminal_owner.leases.get_lease(directory_lease.lease_id).status == "settled"

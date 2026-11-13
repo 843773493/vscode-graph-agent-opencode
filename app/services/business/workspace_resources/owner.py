@@ -177,24 +177,44 @@ class WorkspaceResourceOwner:
                 if not records:
                     return []
                 await self.recover(record.resource_id for record in records)
-                # 一次清单请求不占任何资源锁；只在合并各自观察时短暂持有对应锁。
+                # 一次清单请求不占任何资源锁；合并观察时只持有当前小批次的锁。
                 records = tuple(self._require_owned_resource_record(record.resource_id) for record in records)
                 observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
                 result: list[ResourceSnapshot] = []
-                for before in records:
-                    async with self._resource_lock(before.resource_id):
-                        record = self._require_owned_resource_record(before.resource_id)
-                        if not matches(record) or (record.status == "deleted" and record.reconciliation_status == "verified"):
+                async def publish(batch: list[OwnedResourceRecord]) -> None:
+                    # 两个 owner 按原顺序持久化；取消等待本批结算，不在解锁后补账。
+                    await self._store.save(*batch)
+                    await self._sync_ledger(*batch)
+
+                for offset in range(0, len(records), 32):
+                    batch = records[offset:offset + 32]
+                    async with AsyncExitStack() as locks:
+                        # 与整组释放保持同一取锁顺序，结果仍沿原记录顺序生成。
+                        for resource_id in sorted(record.resource_id for record in batch):
+                            await locks.enter_async_context(self._resource_lock(resource_id))
+                        current: list[OwnedResourceRecord] = []
+                        for before in batch:
+                            record = self._require_owned_resource_record(before.resource_id)
+                            if not matches(record) or (record.status == "deleted" and record.reconciliation_status == "verified"):
+                                continue
+                            # 整批先核冲突，不能在本批其它资源冲突前发布部分观察。
+                            if record != before:
+                                raise ResourceConflict(f"外部资源列表读取期间状态已改变；请刷新: {record.resource_id}")
+                            observe_resource(record, observed.get(record.resource_id), self.kind)
+                            current.append(record)
+                        if not current:
                             continue
-                        # 同版本外部状态观察、未知占用等也能改变记录，不能只比较owner_revision。
-                        if record != before:
-                            raise ResourceConflict(f"外部资源列表读取期间状态已改变；请刷新: {record.resource_id}")
-                        runtime = observed.get(record.resource_id)
-                        observe_resource(record, runtime, self.kind)
-                        # TODO：逐项持久化仍重写全量JSON，后续测量大清单成本再优化写盘。
-                        await self._store.save(record)
-                        await self._sync_ledger(record)
-                        result.append(resource_projection(record, runtime, self.kind))
+
+                        publishing = asyncio.create_task(publish(current))
+                        try:
+                            await asyncio.shield(publishing)
+                        except asyncio.CancelledError as original:
+                            try:
+                                await run_cleanup_shielded(lambda publishing=publishing: publishing)
+                            except BaseException as failure:
+                                raise original from failure
+                            raise
+                        result.extend(resource_projection(record, observed.get(record.resource_id), self.kind) for record in current)
                 return sorted(result, key=lambda item: str(item["updated_at"]), reverse=True)
         except TimeoutError as error:
             if not deadline.expired():
@@ -1044,12 +1064,10 @@ class WorkspaceResourceOwner:
         # 原错误的两步收尾共用一次保护；排队和写盘期间的新取消不能跳过记录保存。
         await run_cleanup_shielded(persist)
 
-    async def _sync_ledger(self, record: OwnedResourceRecord) -> None:
+    async def _sync_ledger(self, *records: OwnedResourceRecord) -> None:
         syncing = asyncio.create_task(run_sync_shielded(
-            self._leases.update_external_state,
-            record.resource_id,
-            lifetime_scope=record.retention_scope,
-            status=lease_status(record),
+            self._leases.update_external_states,
+            [(record.resource_id, record.retention_scope, lease_status(record)) for record in records],
         ))
         try:
             await asyncio.shield(syncing)

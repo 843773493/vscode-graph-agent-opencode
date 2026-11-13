@@ -99,6 +99,7 @@ async def test_late_list_cannot_replace_a_committed_command(
     bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch, action: str,
 ) -> None:
     owner = bundle.owner
+    peer = await bundle.create()
     resource = await bundle.create()
     rid = str(resource["resource_id"])
     entered, release = asyncio.Event(), asyncio.Event()
@@ -111,6 +112,7 @@ async def test_late_list_cannot_replace_a_committed_command(
         return receipt
 
     monkeypatch.setattr(bundle.transport, "list_resources", list_receipt)
+    await bundle.transport.stop_resource(str(peer["resource_id"]))
     listing = asyncio.create_task(owner.list_resources())
     try:
         await asyncio.wait_for(entered.wait(), 2)
@@ -329,52 +331,62 @@ async def test_list_preserves_the_transport_own_timeout(
     assert caught.value is failure
 
 
-async def test_list_deadline_retains_already_committed_observations(
-    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch,
-    advance_clock,
+@pytest.mark.parametrize("interrupt", ["cancel", "timeout", "conflict"])
+async def test_interrupted_list_keeps_committed_batches_without_publishing_pending_batch(
+    bundle: TerminalOwnerFixture | BrowserOwnerFixture, monkeypatch: pytest.MonkeyPatch, advance_clock, interrupt: str,
 ) -> None:
     owner = bundle.owner
-    await bundle.create()
-    await bundle.create()
-    first, last = owner._store.all()
-    await bundle.transport.stop_resource(first.resource_id)
-    published = asyncio.Event()
-    save = owner._store.save
-    transport_list = bundle.transport.list_resources
-    lock = owner._resource_lock(last.resource_id)
-    acquired = False
-
-    async def saving(*records):
-        await save(*records)
-        if any(record.resource_id == first.resource_id for record in records):
-            published.set()
-
-    monkeypatch.setattr(owner._store, "save", saving)
+    resources = [await bundle.create() for _ in range(33)]
+    first, last = str(resources[0]["resource_id"]), str(resources[-1]["resource_id"])
+    for resource in resources:
+        await bundle.transport.stop_resource(str(resource["resource_id"]))
+    # 最后一项保持运行，用真实命令制造迟到清单冲突；取消场景等待它的原锁。
+    bundle.transport.records[last]["status"] = "running"
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = bundle.transport.list_resources
 
     async def receiving():
-        nonlocal acquired
-        result = await transport_list()
-        # 完成原冷恢复后才占锁，只挂起清单合并的第二项。
-        await lock.acquire()
-        acquired = True
-        return result
+        receipt = await original()
+        entered.set()
+        await release.wait()
+        return receipt
 
     monkeypatch.setattr(bundle.transport, "list_resources", receiving)
     pending = asyncio.create_task(owner.list_resources())
+    lock = owner._resource_lock(last)
+    locked = False
     try:
-        await asyncio.wait_for(published.wait(), 2)
-        advance_clock(31)
-        with pytest.raises(TimeoutError, match="列表等待超过 30 秒"):
-            await asyncio.wait_for(asyncio.shield(pending), 1)
-        committed = owner._store.get(first.resource_id)
-        assert committed.status == ("terminated" if isinstance(bundle, TerminalOwnerFixture) else "closed")
-        assert committed.reconciliation_status == "verified" and committed.owner_revision == first.owner_revision
-        assert owner._store.get(last.resource_id) == last
+        await asyncio.wait_for(entered.wait(), 2)
+        if interrupt == "conflict":
+            await bundle.command(last, action="promote", expected_revision=1)
+        else:
+            await lock.acquire()
+            locked = True
+        release.set()
+        if interrupt != "conflict":
+            async with asyncio.timeout(2):
+                while bundle.leases.get(first).status != "stopped":
+                    await asyncio.sleep(0.001)
+            if interrupt == "cancel":
+                pending.cancel("批间取消")
+                with pytest.raises(asyncio.CancelledError, match="批间取消"):
+                    await pending
+            else:
+                advance_clock(31)
+                with pytest.raises(TimeoutError, match="列表等待超过 30 秒"):
+                    await asyncio.wait_for(asyncio.shield(pending), 1)
+        else:
+            with pytest.raises(ResourceConflict, match="列表读取期间状态已改变"):
+                await asyncio.wait_for(pending, 2)
+        cold = type(owner._store)(workspace_root=bundle.root, workspace_id=owner.workspace_id, kind=owner.kind)
+        ledger = type(bundle.leases)(state_path=bundle.leases._state_path)
+        assert cold.get(first).status == ("terminated" if isinstance(bundle, TerminalOwnerFixture) else "closed")
+        assert ledger.get(first).status == "stopped"
+        assert cold.get(last).status == ledger.get(last).status == "running"
+        assert cold.get(last).owner_revision == (2 if interrupt == "conflict" else 1)
     finally:
+        release.set()
         pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
-        if acquired:
+        if locked:
             lock.release()
-    await asyncio.sleep(0)
-    assert owner._store.get(first.resource_id) == committed
-    assert owner._store.get(last.resource_id) == last
