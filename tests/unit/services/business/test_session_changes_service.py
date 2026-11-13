@@ -379,12 +379,34 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     assert second_turn.files[0].file_path == _uri(workspace_id, "src/first.txt")
     assert "+three" in second_turn.files[0].diff_text
 
+    # 后续删除抵消此前创建；All 摘要不能累加各次编辑的行数。
+    await service.record_tool_file_edit(
+        session_id=session.session_id, turn_id="job_3", tool_call_id="call_delete",
+        execution_id="run_delete", tool_name="delete_file",
+        before=FileEditSnapshot(_uri(workspace_id, "src/first.txt"), True,
+                                "one\ntwo\nthree\n", False, ""),
+    )
+    changesets = await service.list_changesets(session.session_id)
+    assert [(item.summary.files, item.summary.additions, item.summary.deletions)
+            for item in changesets.items] == [(1, 1, 0), (1, 0, 3), (1, 1, 0), (2, 3, 0)]
+    all_changes = await service.get_changeset(session_id=session.session_id, changeset_id="all")
+    assert all_changes.summary == changesets.items[0].summary
+    assert [file.file_path for file in all_changes.files] == [_uri(workspace_id, "src/second.txt")]
+
 
 @pytest.mark.asyncio
-async def test_counts_changed_lines_that_start_with_diff_prefixes(
+@pytest.mark.parametrize(("before_content", "after_content", "expected"), [
+    ("", "++added\n--removed\n", (1, 2, 0)),
+    ("before\r\n", "after\r\n", (1, 1, 1)),
+    ("same\r\n", "same\n", (0, 0, 0)),
+])
+async def test_counts_changed_lines_and_preserves_normalized_newlines(
     workspace_root: Path,
     workspace_id: str,
     session_service: SessionService,
+    before_content: str,
+    after_content: str,
+    expected: tuple[int, int, int],
 ) -> None:
     """正文以 ++/-- 开头时仍是变更行，不能被当成 diff 文件头丢弃。"""
     session = await session_service.create(SessionCreateRequest(title="prefix lines"))
@@ -395,8 +417,8 @@ async def test_counts_changed_lines_that_start_with_diff_prefixes(
     target = workspace_root / "src" / "counter.txt"
     target.parent.mkdir(parents=True)
 
-    before = FileEditSnapshot(_uri(workspace_id, "src/counter.txt"), False, "", True, "++added\n--removed\n")
-    target.write_text("++added\n--removed\n", encoding="utf-8")
+    before = FileEditSnapshot(_uri(workspace_id, "src/counter.txt"), bool(before_content), before_content, True, after_content)
+    target.write_text(after_content, encoding="utf-8")
     record = await service.record_tool_file_edit(
         session_id=session.session_id,
         turn_id="job_prefix",
@@ -407,16 +429,13 @@ async def test_counts_changed_lines_that_start_with_diff_prefixes(
     )
 
     assert record is not None
-    assert record.additions == 2
-    assert record.deletions == 0
-
+    changesets = await service.list_changesets(session.session_id)
     detail = await service.get_changeset(
         session_id=session.session_id,
         changeset_id="all",
     )
-    assert detail.summary.files == 1
-    assert detail.summary.additions == 2
-    assert detail.summary.deletions == 0
+    assert (detail.summary.files, detail.summary.additions, detail.summary.deletions) == expected
+    assert all(item.summary == detail.summary for item in changesets.items)
 
 @pytest.mark.asyncio
 async def test_internal_file_edits_stay_in_all_changes_and_have_no_turn_changeset(
@@ -594,7 +613,7 @@ async def test_dangling_workspace_and_gateway_change_uris_preserve_content_after
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("alias", ["edit_directory", "before_snapshot"])
+@pytest.mark.parametrize("alias", ["edit_directory", "before_snapshot", "diff_snapshot"])
 async def test_derived_snapshot_lookup_keeps_containment(workspace_root, session_service, recorded_file_change, alias):
     session, record, changes = recorded_file_change
     edit = changes / "edits" / record.edit_id
@@ -610,8 +629,9 @@ async def test_derived_snapshot_lookup_keeps_containment(workspace_root, session
     else:
         external = workspace_root / "external-snapshot.txt"
         external.write_text("SOURCE DECOY\n")
-        (edit / "before.txt").unlink()
-        (edit / "before.txt").symlink_to(external)
+        snapshot = edit / ("diff.patch" if alias == "diff_snapshot" else "before.txt")
+        snapshot.unlink()
+        snapshot.symlink_to(external)
     reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     with pytest.raises(ForbiddenError):
         await reopened.get_changeset(session_id=session.session_id, changeset_id="all")

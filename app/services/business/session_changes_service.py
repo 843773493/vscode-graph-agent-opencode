@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import cache
 
@@ -29,6 +28,7 @@ from app.services.business.session_changes_logic import (
     detect_change_kind,
     preview_session_file_content,
     sorted_turn_ids,
+    summarize_records,
 )
 from app.services.business.session_service import SessionService
 
@@ -110,30 +110,34 @@ class SessionChangesService:
     async def list_changesets(self, session_id: str) -> SessionChangesetListDTO:
         def read() -> SessionChangesetListDTO:
             records = self._store.read_records(session_id)
-            reviewed_map = self._store.read_reviewed_map(session_id)
-            # 同一次列表里的 all/Turn 可消费相同快照，只复用纯 diff 计算。
+            # 单次编辑从已保存 patch 取摘要；多次编辑仍按首尾快照计算净变化。
             build_diff = cache(build_unified_diff)
             items: list[SessionChangesetListItemDTO] = []
             for changeset_id in (
                 "all",
                 *(f"turn:{turn_id}" for turn_id in sorted_turn_ids(records)),
             ):
-                changeset = self._build_changeset(
-                    session_id=session_id,
-                    changeset_id=changeset_id,
-                    records=changeset_records(records, changeset_id),
-                    reviewed_map=reviewed_map,
+                summary = summarize_records(
+                    changeset_records(records, changeset_id),
+                    read_edit_text=lambda edit_id, phase: self._store.read_edit_text(
+                        session_id, edit_id, phase,
+                    ),
                     build_diff=build_diff,
                 )
+                change_kind, turn_id = changeset_kind_and_turn(changeset_id)
                 items.append(
                     SessionChangesetListItemDTO(
                         changeset_id=changeset_id,
-                        label=changeset.label,
-                        description=changeset.description,
-                        change_kind=changeset.change_kind,
-                        is_default=changeset.change_kind == "all",
-                        turn_id=changeset.turn_id,
-                        summary=changeset.summary,
+                        label="This Turn" if change_kind == "turn" else "All Changes",
+                        description=(
+                            f"显示任务 {turn_id} 中产生的文件变更"
+                            if change_kind == "turn"
+                            else "显示本会话内文件工具产生的全部可审查变更"
+                        ),
+                        change_kind=change_kind,
+                        is_default=change_kind == "all",
+                        turn_id=turn_id,
+                        summary=summary,
                     )
                 )
             return SessionChangesetListDTO(session_id=session_id, items=items)
@@ -206,7 +210,6 @@ class SessionChangesService:
         records: list[StoredFileEdit],
         reviewed_map: dict[str, bool],
         persist: bool = False,
-        build_diff: Callable[..., str] = build_unified_diff,
     ) -> SessionChangesetDTO:
         changes = aggregate_records(
             records,
@@ -218,11 +221,7 @@ class SessionChangesService:
         )
         files: list[SessionFileChangeDTO] = []
         for change in changes:
-            diff_text = build_diff(
-                file_path=change.file_path,
-                before_content=change.before_content or "",
-                after_content=change.after_content or "",
-            )
+            diff_text = change.diff_text
             additions, deletions = count_diff_lines(diff_text)
             if additions == 0 and deletions == 0:
                 continue

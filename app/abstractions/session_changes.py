@@ -45,6 +45,7 @@ class AggregatedFileChange:
     turn_ids: tuple[str, ...]
     before_content: str | None
     after_content: str | None
+    diff_text: str
 
 
 class SessionChangesStoreProtocol(Protocol):
@@ -65,7 +66,7 @@ class SessionChangesStoreProtocol(Protocol):
 
     def save_reviewed_map(self, session_id: str, reviewed: dict[str, bool]) -> None: ...
 
-    def read_edit_text(self, session_id: str, edit_id: str, phase: Literal["before", "after"]) -> str: ...
+    def read_edit_text(self, session_id: str, edit_id: str, phase: Literal["before", "after", "diff"]) -> str: ...
 
     def save_changeset_file(
         self,

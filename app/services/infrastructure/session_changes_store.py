@@ -81,7 +81,7 @@ class SessionChangesStore:
                         f"文件变更索引损坏: session_id={session_id}, line={line_number}"
                     ) from exc
                 record = StoredFileEdit(**data)
-                self._edit_dir_in(changes_dir, record.edit_id)
+                self._edit_path_in(changes_dir, record.edit_id)
                 if record.session_id != session_id:
                     raise ValueError(f"文件变更索引归属错误: session_id={session_id}, line={line_number}")
                 records.append(replace(record, file_path=self.normalize_file_reference(record.file_path)))
@@ -120,12 +120,16 @@ class SessionChangesStore:
             encoding="utf-8",
         )
 
-    def read_edit_text(self, session_id: str, edit_id: str, phase: Literal["before", "after"]) -> str:
-        if phase not in {"before", "after"}:
-            raise ValueError("文件变更快照阶段必须为 before 或 after")
-        file_path = safe_join(self._edit_dir(session_id, edit_id), f"{phase}.txt")
+    def read_edit_text(self, session_id: str, edit_id: str, phase: Literal["before", "after", "diff"]) -> str:
+        if phase not in {"before", "after", "diff"}:
+            raise ValueError("文件变更内容必须为 before、after 或 diff")
+        filename = "diff.patch" if phase == "diff" else f"{phase}.txt"
+        file_path = self._edit_path_in(self._session_changes_dir(session_id), edit_id, filename)
         try:
-            return native_io_path(file_path).read_text(encoding="utf-8")
+            with native_io_path(file_path).open(
+                encoding="utf-8", newline="" if phase == "diff" else None,
+            ) as handle:
+                return handle.read()
         except FileNotFoundError as exc:
             raise RuntimeError(
                 f"文件变更内容缺失: session_id={session_id}, edit_id={edit_id}, phase={phase}"
@@ -168,13 +172,13 @@ class SessionChangesStore:
         return self._path_resolver.resolve_session_node(session_id) / "changes"
 
     def _edit_dir(self, session_id: str, edit_id: str) -> Path:
-        return self._edit_dir_in(self._session_changes_dir(session_id), edit_id)
+        return self._edit_path_in(self._session_changes_dir(session_id), edit_id)
 
     @staticmethod
-    def _edit_dir_in(changes_dir: Path, edit_id: str) -> Path:
+    def _edit_path_in(changes_dir: Path, edit_id: str, *parts: str) -> Path:
         if re.fullmatch(r"edit_[0-9a-f]{12}", edit_id) is None:
             raise ValueError("文件变更 edit_id 格式错误")
-        return safe_join(changes_dir, "edits", edit_id)
+        return safe_join(changes_dir, "edits", edit_id, *parts)
 
     def _ensure_changes_dir(self, session_id: str) -> Path:
         changes_dir = self._session_changes_dir(session_id)

@@ -10,6 +10,7 @@ from typing import Literal
 from app.abstractions.session_changes import AggregatedFileChange, StoredFileEdit
 from app.schemas.internal_v2.session_changes import (
     SessionChangesetKind,
+    SessionChangesSummaryDTO,
     SessionFileChangeKind,
 )
 
@@ -95,7 +96,8 @@ def detect_change_kind(*, before_exists: bool, after_exists: bool) -> SessionFil
 def aggregate_records(
     records: list[StoredFileEdit],
     *,
-    read_edit_text: Callable[[str, Literal["before", "after"]], str],
+    read_edit_text: Callable[[str, Literal["before", "after", "diff"]], str],
+    build_diff: Callable[..., str] = build_unified_diff,
 ) -> list[AggregatedFileChange]:
     grouped: dict[str, list[StoredFileEdit]] = {}
     for record in records:
@@ -116,6 +118,14 @@ def aggregate_records(
             if last.after_exists
             else None
         )
+        diff_text = read_edit_text(first.edit_id, "diff") if len(ordered) == 1 else None
+        # 快照读取会统一 CR/CRLF。涉及这些换行时须比较规范化快照，不能直接展示原始 patch。
+        if diff_text is None or "\r" in diff_text:
+            diff_text = build_diff(
+                file_path=file_path,
+                before_content=before_content or "",
+                after_content=after_content or "",
+            )
         changes.append(
             AggregatedFileChange(
                 file_path=file_path,
@@ -139,9 +149,41 @@ def aggregate_records(
                 ),
                 before_content=before_content,
                 after_content=after_content,
+                diff_text=diff_text,
             )
         )
     return sorted(changes, key=lambda item: item.file_path)
+
+
+def summarize_records(
+    records: list[StoredFileEdit],
+    *,
+    read_edit_text: Callable[[str, Literal["before", "after", "diff"]], str],
+    build_diff: Callable[..., str] = build_unified_diff,
+) -> SessionChangesSummaryDTO:
+    grouped: dict[str, list[StoredFileEdit]] = {}
+    for record in records:
+        grouped.setdefault(record.file_path, []).append(record)
+    line_counts: list[tuple[int, int]] = []
+    snapshot_records: list[StoredFileEdit] = []
+    for file_records in grouped.values():
+        if len(file_records) == 1:
+            diff_text = read_edit_text(file_records[0].edit_id, "diff")
+            if "\r" not in diff_text:
+                line_counts.append(count_diff_lines(diff_text))
+                continue
+        snapshot_records.extend(file_records)
+    line_counts.extend(
+        count_diff_lines(change.diff_text)
+        for change in aggregate_records(
+            snapshot_records, read_edit_text=read_edit_text, build_diff=build_diff,
+        )
+    )
+    return SessionChangesSummaryDTO(
+        files=sum(bool(additions or deletions) for additions, deletions in line_counts),
+        additions=sum(additions for additions, _ in line_counts),
+        deletions=sum(deletions for _, deletions in line_counts),
+    )
 
 
 def sorted_turn_ids(records: list[StoredFileEdit]) -> list[str]:
