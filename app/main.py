@@ -220,10 +220,10 @@ app.include_router(runtime_logging_router(
     prefix="/api/v1/internal/runtime-logging", verify_token=verify_runtime_control_token,
 ))
 
-workspace_api = APIRouter(dependencies=[Depends(workspace_container_scope)])
+workspace_health_router = APIRouter()
 
 
-@workspace_api.get("/health", summary="健康检查")
+@workspace_health_router.get("/health", summary="健康检查")
 async def health(request: Request):
     container = get_workspace_container(request)
     container.persistent_task_runtime.assert_healthy()
@@ -240,7 +240,8 @@ async def health(request: Request):
     }
 
 
-for router in (
+workspace_routers = (
+    workspace_health_router,
     workspace_router,
     persistent_tasks_router,
     session_activity_router,
@@ -261,8 +262,7 @@ for router in (
     config_router,
     node_debug_router,
     message_stream_router,
-):
-    workspace_api.include_router(router)
+)
 
 # 两个载体均解析同一个显式 UUID；无 prefix 的调用必须带内部寻址头。
 def workspace_path_identity(workspace_id: str) -> str:
@@ -270,12 +270,18 @@ def workspace_path_identity(workspace_id: str) -> str:
     return workspace_id
 
 
-app.include_router(
-    workspace_api,
-    prefix="/api/v1/workspaces/{workspace_id}",
-    dependencies=[Depends(workspace_path_identity)],
-)
-app.include_router(workspace_api, prefix="/api/v1", include_in_schema=False)
+# 直接装配到最终路径，避免中间 APIRouter 重复构建全部依赖和响应字段。
+for router in workspace_routers:
+    app.include_router(
+        router,
+        prefix="/api/v1/workspaces/{workspace_id}",
+        dependencies=[Depends(workspace_path_identity), Depends(workspace_container_scope)],
+    )
+for router in workspace_routers:
+    app.include_router(
+        router, prefix="/api/v1", include_in_schema=False,
+        dependencies=[Depends(workspace_container_scope)],
+    )
 install_sse_openapi_components(app)
 
 

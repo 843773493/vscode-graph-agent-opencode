@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 import httpx
 import pytest
 import websockets
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.agents.custom_tools import CustomToolFactoryContext
@@ -31,11 +31,12 @@ from app.agents.tools.browser import (
     create_screenshot_page_tool,
     create_type_in_page_tool,
 )
+from app.api.deps import workspace_container_scope
 from app.container import AppContainer
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
-from app.main import workspace_api, workspace_http_exception_handler
+from app.main import workspace_http_exception_handler, workspace_routers
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
 from tests.harness.python.run_context import TestRunContext
@@ -251,7 +252,8 @@ def browser_application() -> FastAPI:
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.add_exception_handler(HTTPException, workspace_http_exception_handler)
-    application.include_router(workspace_api, prefix="/api/v1")
+    for router in workspace_routers:
+        application.include_router(router, prefix="/api/v1", dependencies=[Depends(workspace_container_scope)])
     return application
 
 
