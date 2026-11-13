@@ -157,18 +157,23 @@ async def test_navigation_rejects_private_root_retargeted_while_filtering(naviga
     public = workspace / "a.txt"
     public.write_text("scan", encoding="utf-8")
     (workspace / "b.txt").write_text("lookahead", encoding="utf-8")
-    original_realpath = paths_module.os.path.realpath
+    original_filter = owner._file_paths._private_path_filter
     changed = False
 
-    def retarget(path, *args, **kwargs):
-        nonlocal changed
-        if Path(path) == public and not changed:
-            changed = True
-            private.unlink()
-            private.symlink_to(new_store, target_is_directory=True)
-        return original_realpath(path, *args, **kwargs)
+    def retarget_filter(**kwargs):
+        root, is_private = original_filter(**kwargs)
 
-    monkeypatch.setattr(paths_module.os.path, "realpath", retarget)
+        def retarget(path, resolved):
+            nonlocal changed
+            if path == public and not changed:
+                changed = True
+                private.unlink()
+                private.symlink_to(new_store, target_is_directory=True)
+            return is_private(path, resolved)
+
+        return root, retarget
+
+    monkeypatch.setattr(owner._file_paths, "_private_path_filter", retarget_filter)
     with pytest.raises(ResourceUriResolveError) as failure:
         await owner.navigate(ResourceNavigationRequest(uri=uri, operation="list", limit=limit), local_gateway_id=GATEWAY_ID)
     assert changed

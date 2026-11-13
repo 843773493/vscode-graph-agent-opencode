@@ -659,7 +659,7 @@ class ResourceNavigation:
             raise ResourceFileOperationError("output_limit_exceeded", "文件内容匹配超过本次总期限", reason="deadline") from error
 
     @staticmethod
-    def _stat(path: Path) -> tuple[int, ...]:
+    def _stat(path: Path | os.DirEntry[str]) -> tuple[int, ...]:
         metadata = path.stat()
         return metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns
 
@@ -779,7 +779,7 @@ class ResourceNavigation:
                 except IgnorePatternError as error:
                     raise ResourceFileOperationError("execution_failed", str(error), reason="invalid_ignore_pattern") from error
             before = directory.stat().st_mtime_ns
-            bounded_children: list[Path] = []
+            bounded_children: list[os.DirEntry[str]] = []
             # Path.iterdir 在部分 Python 版本会先调用 listdir；scandir 才真正逐项消费。
             with os.scandir(directory) as children_stream:
                 for child in children_stream:
@@ -787,7 +787,7 @@ class ResourceNavigation:
                     scanned += 1
                     if scanned > request.scan_limit:
                         raise ResourceFileOperationError("output_limit_exceeded", "目录扫描达到本次节点上限，请缩小目标范围", reason="scan_limit")
-                    bounded_children.append(directory / child.name)
+                    bounded_children.append(child)
             if directory.stat().st_mtime_ns != before:
                 raise ResourceFileOperationError("execution_failed", "目录在枚举期间改变，请重新读取", reason="directory_changed")
             for child in sorted(bounded_children, key=lambda item: item.name):
@@ -809,21 +809,23 @@ class ResourceNavigation:
                     continue
                 # 子根由自己的分支应用相对过滤及 ignore，不进入父根的扫描／输出配额。
                 entry_path = root.joinpath(*child_parts)
-                # 名称已排除的节点不解析实际路径；实际访问仍按原入口严格核验。
-                child_path = Path(os.path.realpath(child))
+                child_entry = directory / child.name
+                metadata = child.stat(follow_symlinks=False)
+                # 普通节点位于已核验的实际目录下；链接和 Windows reparse point 才需重解析。
+                linked = stat.S_ISLNK(metadata.st_mode) or bool(
+                    getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                )
+                child_path = Path(os.path.realpath(child.path)) if linked else child_entry
                 if subtrees and _entry_identity(entry_path, child_path) in subtrees:
                     continue
                 # 私有筛选与后续归属判定消费同一次实际路径解析。
-                if is_private is not None and is_private(child, child_path):
+                if is_private is not None and is_private(child_entry, child_path):
                     continue
                 if scope is not None and scope.excludes(child_parts, child.is_dir()):
                     continue
-                # 当前目录已由 _contained 核验根和祖先；每个 child 只解析一次实际路径。
-                if child.is_symlink():
+                if linked:
                     child_path = self._contained(root, child_parts, parsed, is_private)
-                elif not child_path.is_relative_to(root):
-                    raise ResourceUriResolveError("capability_denied", "文件节点越出已公布根")
-                metadata = self._stat(child_path)
+                metadata = self._stat(child)
                 if not (stat.S_ISDIR(metadata[2]) or stat.S_ISREG(metadata[2])):
                     raise ResourceUriResolveError("capability_denied", "资源只公布普通文件与目录")
                 # 构造器已校验 URI；保留已知文件段，后续筛选不再反复解析同一地址。
