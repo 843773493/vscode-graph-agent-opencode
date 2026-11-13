@@ -386,6 +386,8 @@ export function useTurnVirtualScroller({
   }, []);
 
   const loadOlderMessages = React.useCallback(async () => {
+    // 消费本次上滚意图；前插后的列表布局回调不能延续为下一次读取。
+    userRequestedOlderRef.current = false;
     if (
       olderRequestActiveRef.current
       || loadingOlderMessages

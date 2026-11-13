@@ -163,6 +163,23 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
 }
 
 describe("Turn 虚拟列表滚动跟随", () => {
+  test("一次上滚只加载一批，前插布局回调不能继续读取历史", async () => {
+    let loaded = 0;
+    const h = navigationHarness([turn("latest", 2)], undefined, true, undefined, {
+      hasOlderMessages: true,
+      loadOlderMessages: async () => { loaded += 1; },
+    });
+    h.userScroll(0, "wheel");
+    await act(async () => h.state().handleStartReached());
+    expect(loaded).toBe(1);
+    h.update([turn("older", 1), turn("latest", 2)]);
+    await act(async () => h.state().handleStartReached());
+    expect(loaded).toBe(1);
+    h.userScroll(0, "wheel");
+    await act(async () => h.state().handleStartReached());
+    expect(loaded).toBe(2);
+  });
+
   test("无滚动视口的空历史没有可保存位置", () => {
     const h = navigationHarness([]);
     act(() => h.state().bindScroller(null));
