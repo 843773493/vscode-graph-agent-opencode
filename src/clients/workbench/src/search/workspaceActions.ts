@@ -15,11 +15,12 @@ import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 
 export const workspaceActionCommands = {
   activate: 'boxteam.workspace.activate', reconnect: 'boxteam.workspace.reconnect', start: 'boxteam.workspace.start',
+  details: 'boxteam.workspace.details',
 } as const;
 export type WorkspaceAction = keyof typeof workspaceActionCommands;
 export type WorkspaceActionHandlers = Record<WorkspaceAction, (workspaceKey: string) => Promise<void>>;
 
-/** 三个命令只把冻结目标交给原导航 owner；确认、队列与权威回读仍由原 hooks 负责。 */
+/** 命令只把冻结目标交给原导航 owner；确认、队列与权威回读仍由原 hooks 负责。 */
 async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceAction, explicit?: WorkspaceOwner): Promise<void> {
   // ServiceAccessor 只在同步命令入口有效，异步阶段仅使用已取得的服务句柄。
   const editors = accessor.get(IEditorService), quickInput = accessor.get(IQuickInputService), views = accessor.get(IViewsService);
@@ -68,6 +69,7 @@ for (const [action, titleKey] of [
   ['activate', 'workbench.workspaceAction.activate'],
   ['reconnect', 'workbench.workspaceAction.reconnect'],
   ['start', 'workbench.workspaceAction.start'],
+  ['details', 'workbench.workspaceAction.details'],
 ] as const) registerAction2(class extends Action2 {
   constructor() { super({ id: workspaceActionCommands[action], title: { value: t(titleKey), original: actionTitles[titleKey] }, f1: true }); }
   run(accessor: ServicesAccessor, owner?: WorkspaceOwner): Promise<void> { return runWorkspaceAction(accessor, action, owner); }

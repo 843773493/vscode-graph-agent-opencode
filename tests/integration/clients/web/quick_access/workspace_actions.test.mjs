@@ -80,9 +80,9 @@ for (const mode of ['scope-cancel', 'scope-confirm', 'action-cancel', 'action-se
   }
 });
 
-for (const action of ['activate', 'reconnect', 'start']) test(`明确 ${action} 经同一已注册命令和原视图 writer 边界`, async () => {
+for (const action of ['activate', 'reconnect', 'start', 'details']) test(`明确 ${action} 经同一已注册命令和原视图 writer 边界`, async () => {
   const result = await exercise(`action-${action}`);
-  expect(result.calls).toEqual([{ action, workspaceKey: keys[action === 'activate' ? 0 : 1] }]);
+  expect(result.calls).toEqual([{ action, workspaceKey: keys[action === 'activate' || action === 'details' ? 0 : 1] }]);
   expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/search/workspaces', '/api/gateway/workspaces']);
   expect(result.listUrls).toEqual(['/api/gateway/workspaces?check_health=false']);
   expect(result.requests[1]).toEqual({ path: '/api/gateway/workspaces', method: 'GET', params: { check_health: 'false' } });

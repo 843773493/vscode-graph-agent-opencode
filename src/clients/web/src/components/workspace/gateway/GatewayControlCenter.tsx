@@ -24,7 +24,7 @@ const GatewayInboundAccessPanel = lazy(() => import("./GatewayInboundAccessPanel
 const GatewayConnectionsPanel = lazy(() => import("./GatewayConnectionsPanel"));
 
 export type GatewayControlPage = "connections" | "credentials" | "theme" | "diagnostics" | "runtime";
-export interface GatewayControlRequest { page: GatewayControlPage }
+export interface GatewayControlRequest { page: GatewayControlPage; workspaceKey?: string; connectionId?: string }
 
 export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
@@ -71,9 +71,16 @@ export default function GatewayControlCenter({
   const [restartingDevelopment, setRestartingDevelopment] = useState(false);
   const [deviceRevision, setDeviceRevision] = useState(0);
   const [connectionRevision, setConnectionRevision] = useState(0);
-  const [diagnosticsConnectionId, setDiagnosticsConnectionId] = useState<string | null>(null);
+  const [diagnosticsTarget, setDiagnosticsTarget] = useState<{ connectionId: string | null; workspaceKey?: string }>({
+    connectionId: request?.connectionId ?? null, workspaceKey: request?.workspaceKey,
+  });
   const [activePage, setActivePage] = useState<GatewayControlPage>(request?.page ?? "connections");
-  useEffect(() => { if (request) setActivePage(request.page); }, [request]);
+  useEffect(() => {
+    if (request) {
+      setActivePage(request.page);
+      setDiagnosticsTarget({ connectionId: request.connectionId ?? null, workspaceKey: request.workspaceKey });
+    }
+  }, [request]);
   useEffect(() => { if (diagnosticLocation) setActivePage("diagnostics"); }, [diagnosticLocation]);
 
   const loadHealth = useCallback(async () => {
@@ -212,7 +219,9 @@ export default function GatewayControlCenter({
               <GatewayBackendRuntimePanel workspaces={workspaces} onStart={onStart} onStop={onStop} onSafeRestart={onSafeRestart} onForceRestart={onForceRestart} />
             ) : activePage === "diagnostics" ? (
               diagnosticLocation ? <GatewayDiagnosticLogLocation apiPort={apiPort} request={diagnosticLocation} workspaces={workspaces}
-                onClose={() => onCloseDiagnosticLocation?.()} /> : <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} initialConnectionId={diagnosticsConnectionId} />
+                onClose={() => onCloseDiagnosticLocation?.()} /> : <GatewayDiagnosticsPanel key={JSON.stringify(diagnosticsTarget)}
+                  apiPort={apiPort} workspaces={workspaces} initialConnectionId={diagnosticsTarget.connectionId}
+                  initialWorkspaceId={diagnosticsTarget.workspaceKey} />
             ) : activePage === "credentials" ? (
               <GatewayInboundAccessPanel apiPort={apiPort} revision={deviceRevision}
                 onAddDevice={() => setConnectionDialogMode("external-device")} />
@@ -250,7 +259,7 @@ export default function GatewayControlCenter({
           <GatewayConnectionsPanel apiPort={apiPort} gatewayId={health?.gateway_id ?? null} workspaces={workspaces}
             revision={connectionRevision} onAddSsh={onAddSsh} onRefresh={onRefresh}
             onRemoteGatewayReconnected={onRemoteGatewayReconnected} onOpenConfiguration={onOpenConfiguration}
-            onOpenLogs={connectionId => { setDiagnosticsConnectionId(connectionId); setActivePage("diagnostics"); }} />
+            onOpenLogs={connectionId => { setDiagnosticsTarget({ connectionId }); setActivePage("diagnostics"); }} />
 
             </>}
           </Suspense>

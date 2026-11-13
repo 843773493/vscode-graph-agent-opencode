@@ -462,6 +462,8 @@ export function createSessionCatalogOutboxRuntime(
         }
         throw error;
       }
+      // TODO：目录观察流目前持有到整个 runtime dispose；切走或折叠工作区仍保留 SSE，
+      // 会使该工作区的安全注销返回 proxy_stream 阻塞。需由目录 owner 补逐工作区释放；当前须刷新后注销。
       startObservation(runtimeDriver);
       // 恢复只取回本地 pending；对账错误保持可见，不丢命令，也不阻止目录显示。
       void driver.reconcile().catch((error: unknown) => {

@@ -19,6 +19,7 @@ interface GatewayDiagnosticsPanelProps {
   apiPort: number;
   workspaces: GatewayWorkspace[];
   initialConnectionId?: string | null;
+  initialWorkspaceId?: string;
 }
 
 function formatTime(value: string | null): string {
@@ -37,10 +38,11 @@ export default function GatewayDiagnosticsPanel({
   apiPort,
   workspaces,
   initialConnectionId = null,
+  initialWorkspaceId = "",
 }: GatewayDiagnosticsPanelProps) {
   const groups = useMemo(() => groupGatewayWorkspaces(workspaces), [workspaces]);
   const [gatewayConnectionId, setGatewayConnectionId] = useState<string | null>(initialConnectionId);
-  const [workspaceId, setWorkspaceId] = useState("");
+  const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId);
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<GatewayDiagnostics | null>(null);
   const [loading, setLoading] = useState(false);

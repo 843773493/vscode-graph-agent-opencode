@@ -159,6 +159,7 @@ export class WorkspaceControlQuickAccess extends PickerQuickAccessProvider<Works
     this.assertAccess(run);
     const value = run.picker.value, target = requireGatewayWorkspaceRequestTarget(workspaceContext.getSnapshot().workspaces, owner);
     const choices: { label: string; description?: string; action: WorkspaceAction | 'search' }[] = [
+      { label: t('workbench.workspaceAction.details'), action: 'details' },
       { label: t('quickAccess.workspace.searchHere'), description: t('quickAccess.workspace.searchHereHint'), action: 'search' },
     ];
     if (target.status === 'ready') choices.push({ label: t('quickAccess.workspace.switchHere'), action: 'activate' });

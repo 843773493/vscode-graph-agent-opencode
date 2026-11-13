@@ -22,6 +22,7 @@ import AgentSessionsFilterMenu from '../../agentSessions/AgentSessionsFilterMenu
 import AgentSessionsSessionTree from '../../agentSessions/AgentSessionsSessionTree';
 import { useAgentSessionsTreeState } from '../../agentSessions/useAgentSessionsTreeState';
 import WorkspaceRenameDialog from '../../workspace/WorkspaceRenameDialog';
+import WorkspaceDetailsDialog, { type WorkspaceDetailsTarget } from '../../workspace/WorkspaceDetailsDialog';
 import WorkspaceAddDialog from '../../workspace/WorkspaceAddDialog';
 import AnchoredOverlay from '../../overlays/AnchoredOverlay';
 import WarmActionDialog from '../../overlays/WarmActionDialog';
@@ -82,6 +83,11 @@ interface AgentSessionsPanelProps {
   onRemoveWorkspace: (workspaceId: string, workspaceName: string) => void;
   onAddWorkspace: (payload: AddManagedGatewayWorkspaceRequest) => Promise<void>;
   onOpenGatewayControl: () => void;
+  workspaceDetails: WorkspaceDetailsTarget | null;
+  onCloseWorkspaceDetails: () => void;
+  onOpenWorkspaceDetails: (workspaceKey: string) => Promise<void>;
+  onOpenWorkspaceSettings: (workspace: GatewayWorkspace, connectionId?: string) => Promise<void>;
+  onOpenWorkspaceLogs: (workspace: GatewayWorkspace, connectionId?: string) => Promise<void>;
   onReconnectWorkspace: (workspaceId: string) => Promise<void>;
   onStartWorkspace: (workspaceId: string) => Promise<void>;
   onStopWorkspace: (workspaceId: string) => Promise<void>;
@@ -152,6 +158,11 @@ export default function AgentSessionsPanel({
   onRemoveWorkspace,
   onAddWorkspace,
   onOpenGatewayControl,
+  workspaceDetails,
+  onCloseWorkspaceDetails,
+  onOpenWorkspaceDetails,
+  onOpenWorkspaceSettings,
+  onOpenWorkspaceLogs,
   onReconnectWorkspace,
   onStartWorkspace,
   onStopWorkspace,
@@ -650,6 +661,7 @@ export default function AgentSessionsPanel({
             setRenamingWorkspace(workspace);
           }}
           onCopyWorkspaceInformation={onCopyWorkspaceInformation}
+          onOpenWorkspaceDetails={onOpenWorkspaceDetails}
           onRemoveWorkspace={onRemoveWorkspace}
           onStartWorkspace={handleStartWorkspace}
           onStopWorkspace={onStopWorkspace}
@@ -662,6 +674,10 @@ export default function AgentSessionsPanel({
           onClose={() => setRenamingWorkspace(null)}
           onSubmit={onRenameWorkspace}
         />
+        {workspaceDetails ? <WorkspaceDetailsDialog key={workspaceDetails.workspaceKey} target={workspaceDetails}
+          workspaces={gatewayWorkspaces} onClose={onCloseWorkspaceDetails} onOpen={onActivateWorkspace}
+          onRename={setRenamingWorkspace} onRemove={onRemoveWorkspace}
+          onOpenSettings={onOpenWorkspaceSettings} onOpenLogs={onOpenWorkspaceLogs} /> : null}
         <WorkspaceAddDialog
           open={workspaceAddOpen}
           apiPort={apiPort}

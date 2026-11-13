@@ -126,6 +126,19 @@
   grid-column: 1 / -1;
 }
 
+.workspace-details-dialog .workspace-dialog-grid > div {
+  min-width: 0;
+}
+
+.workspace-details-dialog dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.workspace-details-dialog .workspace-dialog-actions {
+  flex-wrap: wrap;
+}
+
 .workspace-dialog-error {
   margin: 0 16px;
   padding: 8px 10px;

@@ -72,6 +72,7 @@ describe("会话「复制 ID → 粘贴移动」真实链路", () => {
             onRequestCreateSessionFolder={() => undefined}
             onCopySessionInformation={async () => undefined}
             onRenameWorkspace={() => undefined}
+            onOpenWorkspaceDetails={async () => undefined}
             onCopyWorkspaceInformation={async () => undefined}
             onRemoveWorkspace={() => undefined}
             onStartWorkspace={async () => undefined}
@@ -119,7 +120,7 @@ describe("会话「复制 ID → 粘贴移动」真实链路", () => {
         onRenameSession={() => undefined} onDeleteSession={() => undefined} onUnbindSession={() => undefined}
         onBindClipboardSession={reject} onForkSessionContext={reject} onCreateWorkspaceSession={reject}
         onRequestCreateSessionFolder={() => undefined} onCopySessionInformation={reject}
-        onRenameWorkspace={() => undefined} onCopyWorkspaceInformation={reject} onRemoveWorkspace={() => undefined}
+        onRenameWorkspace={() => undefined} onOpenWorkspaceDetails={async () => undefined} onCopyWorkspaceInformation={reject} onRemoveWorkspace={() => undefined}
         onStartWorkspace={reject} onStopWorkspace={reject} startingWorkspaceIds={new Set()}
         onStatusChange={message => statuses.push(message)} onError={message => errors.push(message)}
       /></WarmConfirmProvider>);

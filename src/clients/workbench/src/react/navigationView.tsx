@@ -7,6 +7,7 @@ import SessionNameDialog from '../../../web/src/components/overlays/SessionNameD
 import SessionContextForkDialog from '../../../web/src/components/overlays/SessionContextForkDialog.js';
 import GatewayControlCenter from '../../../web/src/components/workspace/gateway/GatewayControlCenter.js';
 import type { GatewayControlRequest } from '../../../web/src/components/workspace/gateway/GatewayControlCenter.js';
+import type { WorkspaceDetailsTarget } from '../../../web/src/components/workspace/WorkspaceDetailsDialog.js';
 import { useSessionCatalogActions } from '../../../web/src/hooks/shell/useSessionCatalogActions.js';
 import { useSessionInformationClipboard } from '../../../web/src/hooks/session/useSessionInformationClipboard.js';
 import { useWorkspaceInformationClipboard } from '../../../web/src/hooks/workspace/useWorkspaceInformationClipboard.js';
@@ -14,8 +15,8 @@ import { resolveAgentSessionsPreferences } from '../../../web/src/state/uiSettin
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { getSession } from '../../../web/src/api.js';
-import { HttpRequestError } from '../../../web/src/api/http.js';
-import type { Session } from '../../../web/src/types/backend.js';
+import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import type { GatewayWorkspace, Session } from '../../../web/src/types/backend.js';
 import { BACKGROUND_SETTING, DEFAULT_BACKGROUND, type AppearanceBackground } from '../../../web/src/theme/theme.js';
 import { readWorkbenchBackground } from '../theme.js';
 import { IConfigurationService, ConfigurationTarget } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
@@ -55,12 +56,14 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
 }) {
   const confirm = useWarmConfirm();
   const [gatewayOpen, setGatewayOpen] = useState(false);
+  const [workspaceDetails, setWorkspaceDetails] = useState<WorkspaceDetailsTarget | null>(null);
+  const [workspaceDiagnostics, setWorkspaceDiagnostics] = useState<GatewayControlRequest>();
   const [dismissedLocation, setDismissedLocation] = useState<GatewayDiagnosticLogLocateRequest>();
   const logLocation = diagnosticLocation !== dismissedLocation ? diagnosticLocation : undefined;
   useEffect(() => {
     if (diagnosticLocation) setGatewayOpen(true);
   }, [diagnosticLocation]);
-  useEffect(() => { if (gatewayControl) setGatewayOpen(true); }, [gatewayControl]);
+  useEffect(() => { if (gatewayControl) { setWorkspaceDiagnostics(undefined); setGatewayOpen(true); } }, [gatewayControl]);
   const [diagnostic, setDiagnostic] = useState<{ title: string; detail: string } | null>(null);
   const [activeEditor, setActiveEditor] = useState(() => editors.activeEditor);
   const gesture = useRef({ pinned: false, sideBySide: false });
@@ -108,17 +111,45 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     ? sessionScopeKey(activeEditor.owner.workspaceKey, activeEditor.owner.sessionId) : null;
   const runtime = useNavigationRuntime(created, notifyError, refreshEditors, activeSessionCacheKey);
   const { state, setStatus, reportError, setActiveSession, clearActiveSession } = runtime;
+  const showWorkspaceDetails = useCallback(async (workspaceKey: string) => {
+    requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, workspaceKey);
+    if (!state.browserViewScope) throw new Error(t('workbench.managementTarget.gatewayNotReady'));
+    setWorkspaceDetails({ workspaceKey, entryGatewayId: state.browserViewScope });
+  }, [state.gatewayWorkspaces, state.browserViewScope]);
+  useEffect(() => onGatewayTokenInvalidated(0, () => {
+    setWorkspaceDetails(null);
+  }), []);
+  useEffect(() => {
+    if (workspaceDetails && state.browserViewScope !== workspaceDetails.entryGatewayId) setWorkspaceDetails(null);
+  }, [state.browserViewScope, workspaceDetails]);
   const backendActions = useManagedBackendConfirmation({ apiPort: 0,
     onStart: runtime.startManagedGatewayWorkspaceBackend, onStop: runtime.stopManagedGatewayWorkspaceBackend,
     onSafeRestart: runtime.safeRestartManagedGatewayWorkspaceBackend, onForceRestart: runtime.forceRestartManagedGatewayWorkspaceBackend,
     onRefresh: runtime.refreshGatewayState });
   useEffect(() => {
-    bindWorkspaceActions({ activate: runtime.activateGatewayWorkspace, reconnect: runtime.reconnectGatewayWorkspace, start: backendActions.start });
+    bindWorkspaceActions({ activate: runtime.activateGatewayWorkspace, reconnect: runtime.reconnectGatewayWorkspace, start: backendActions.start, details: showWorkspaceDetails });
     return () => bindWorkspaceActions();
-  }, [bindWorkspaceActions, runtime.activateGatewayWorkspace, runtime.reconnectGatewayWorkspace, backendActions.start]);
+  }, [bindWorkspaceActions, runtime.activateGatewayWorkspace, runtime.reconnectGatewayWorkspace, backendActions.start, showWorkspaceDetails]);
   const activateWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.activate, workspaceOwnerFromKey(id)), [commands]);
   const reconnectWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.reconnect, workspaceOwnerFromKey(id)), [commands]);
   const startWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.start, workspaceOwnerFromKey(id)), [commands]);
+  const detailsWorkspace = useCallback((id: string) => commands.executeCommand<void>(workspaceActionCommands.details, workspaceOwnerFromKey(id)), [commands]);
+  const openWorkspaceSettings = async (workspace: GatewayWorkspace, connectionId?: string) => {
+    const current = requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, gatewayWorkspaceOwner(workspace));
+    if (current.connection_kind === 'remote_gateway' && !current.remote_gateways.some(connection => connection.gateway_connection_id === connectionId)) {
+      throw new Error(t('workbench.workspaceAction.identityChanged'));
+    }
+    await commands.executeCommand('boxteam.settings.openTarget', { gateway_id: current.gateway_id, name: current.name,
+      connection_kind: current.connection_kind, gateway_connection_id: connectionId }, { workspace_id: current.workspace_id });
+  };
+  const openWorkspaceLogs = async (workspace: GatewayWorkspace, connectionId?: string) => {
+    const current = requireGatewayWorkspaceRequestTarget(state.gatewayWorkspaces, gatewayWorkspaceOwner(workspace));
+    if (current.connection_kind === 'remote_gateway' && !current.remote_gateways.some(connection => connection.gateway_connection_id === connectionId)) {
+      throw new Error(t('workbench.workspaceAction.identityChanged'));
+    }
+    setWorkspaceDiagnostics({ page: 'diagnostics', workspaceKey: gatewayWorkspaceKey(current), connectionId });
+    setGatewayOpen(true);
+  };
   useEffect(() => { if (state.status) console.info(t('navigation.statusPrefix'), state.status); }, [state.status]);
   const openSession = useCallback(async (workspaceKey: string, sessionId: string, options = gesture.current) => {
     // 点击时冻结目标组和打开意图，不能让异步完成后的焦点改变会话归属。
@@ -203,8 +234,11 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       workspaceSwitching={state.workspaceSwitching} onActivateWorkspace={activateWorkspace} onSetWorkspaceParent={runtime.setWorkspaceParent}
       onRefreshWorkspaceSessions={runtime.refreshGatewayWorkspaceSessions} onRemoveWorkspace={actions.removeWorkspace}
       onAddWorkspace={runtime.addManagedGatewayWorkspace} onOpenGatewayControl={() => {
+        setWorkspaceDiagnostics(undefined);
         void commands.executeCommand('boxteam.gateway.connections').catch(cause => reportError(String(cause)));
       }}
+      workspaceDetails={workspaceDetails} onCloseWorkspaceDetails={() => setWorkspaceDetails(current => current === workspaceDetails ? null : current)}
+      onOpenWorkspaceDetails={detailsWorkspace} onOpenWorkspaceSettings={openWorkspaceSettings} onOpenWorkspaceLogs={openWorkspaceLogs}
       onReconnectWorkspace={reconnectWorkspace} onStartWorkspace={startWorkspace}
       onStopWorkspace={backendActions.stop} onRenameWorkspace={runtime.renameGatewayWorkspace}
       onCopySessionInformation={copySession} onCopyWorkspaceInformation={copyWorkspace} onSelectWorkspaceSession={openSession}
@@ -226,7 +260,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     {gatewayOpen ? <div className="native-navigation-dialog" role="dialog" aria-label={t('navigation.workspace.gatewayControl')}>
       <button type="button" className="sidebar-icon-button" aria-label={t('navigation.workspace.closeGatewayControl')} onClick={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }}><span className="codicon codicon-close" /></button>
       <GatewayControlCenter apiPort={0} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
-        request={gatewayControl}
+        request={workspaceDiagnostics ?? gatewayControl}
         onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
         onRemoteGatewayReconnected={notifyPluginCommandGatewayReconnected}
         onOpenConfiguration={async () => {
