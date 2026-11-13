@@ -8,12 +8,13 @@ import os
 from collections.abc import Iterator, KeysView
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Never
 
 from pydantic import ConfigDict, StrictInt, TypeAdapter, ValidationError
+from pydantic_core import to_json
 
 from app.abstractions.workspace_resources import ResourceKind, RetentionScope
 from app.core.failures import failure_detail
@@ -204,12 +205,12 @@ class ResourceRecordStore:
                 with self._io("write"):
                     self.path.parent.mkdir(parents=True, exist_ok=True)
                     pending = self.path.with_suffix(".tmp")
-                    with pending.open("w", encoding="utf-8") as stream:
-                        json.dump({
+                    with pending.open("wb") as stream:
+                        stream.write(to_json({
                             "schema_version": 1,
                             "workspace_id": self.workspace_id,
-                            "records": [asdict(record) for record in candidate.values()],
-                        }, stream, ensure_ascii=False, separators=(",", ":"))
+                            "records": list(candidate.values()),
+                        }))
                         stream.flush()
                         os.fsync(stream.fileno())
                     pending.replace(self.path)
