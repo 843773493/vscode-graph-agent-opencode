@@ -111,3 +111,7 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 同一语言场景只拒绝下一次真实展示 IndexedDB 写入，核具体原因和零重载，随后恢复原写入。脏文件取消经用户设置入口关闭 hotExit，再拒绝原 beforeunload，不能把 Application scope 设置写入工作区来假定生效；图片和 Markdown 均经原 Opener 与原预览控件验证双语。不新增生产测试 hook，不预写恢复状态。
 
 `bootstrap_localization.test.mjs` 使用实际 bootstrap、浏览器动态模块及当前完整词典，只有 main 求值观察器、具名资源503与Storage读取失败是显式替身。`locale_service.test.mjs` 经正式源码转换运行实际语言服务及宿主方法，在对话框、Storage写入与展示提交依赖注入取消／失败，核原错传播及零shutdown；两者不替代真实Gateway页面、原生Electron或完整发行验收。
+
+`test_workspace_actions` 的条件模式场景通过真实 Gateway 和正式 Workbench，遍历原帮助虚拟列表，核 term／task／debug／debug consoles 的真实空态、目标插件库存回执及安装来源选择后取消。mcpr／issue 按实际注册条件记录缺失，不把空列表或源码同源当作运行互通及 Electron 验收；POST 仅放行具名只读查询和订阅。可用 `BOXTEAM_WORKSPACE_ACTIONS_WEB_ASSETS` 显式复用本批不可变资产，保留主包指纹；Home、端口和进程仍归本用例隔离。
+
+`recent_history.mjs` 与真实 Electron 共用产品创建、原最近资源／命令历史及三项 preserveInput 配置的业务步骤；先关闭原搜索动作的选区种入以独立验证输入记忆。坏 JSON／未知版本／缺失 owner 只在离开产品文档后破坏一条真实 Thread 记录，重启保留原错并单条移除；正常状态不预写历史。凭据负例只改下一次真实 HTTP 发送边界的 token，401／原因／request_id 均由 Gateway 产生并原样返回。工作区通过原 managed API 删除登记、在隔离测试工作区搬迁及复用原路径，核旧稳定身份拒绝替代目标、重登记原 UUID 后恢复草稿；原 HistoryService 的打开失败单条移除行为保留，恢复从原规范 URI 进入。不新增产品 hook／IPC，不代替真实双 Gateway 切换或其它平台验收。

@@ -188,8 +188,11 @@
 
 - [ ] 14.1 按 design 六类 22 项交互基准验证自动焦点、提示、高亮、分层列表、行内 Tooltip、上下／翻页／首尾、Enter／修饰键、Esc 与返回。
 - [ ] 14.2 验证支持 Provider 的后台连续接受、失焦设置、取消定位预览恢复、IME／ARIA、主题、输入记忆及活动项／滚动保持，浏览器拦截键保留可用命令。
-- [ ] 14.3 按全功能矩阵核原生 term／task／debug／debug consoles／mcpr 的实际服务与项目 owner 映射；原服务缺条件不伪报互通，项目核心入口仍真实可用。
-- [ ] 14.4 核 ext／ext install／issue 的实际宿主及发行配置条件，记录可用或明确缺失原因，不为快速访问新增原生扩展体系或外部发行服务。
+- [x] 14.3 按全功能矩阵核原生 term／task／debug／debug consoles／mcpr 的实际服务与项目 owner 映射；原服务缺条件不伪报互通，项目核心入口仍真实可用。
+- [x] 14.4 核 ext／ext install／issue 的实际宿主及发行配置条件，记录可用或明确缺失原因，不为快速访问新增原生扩展体系或外部发行服务。
+  - 2026-11-13 条件 Provider 矩阵：正式 Workbench／真实 Gateway／Backend 页面通过，`run-85a9e739d002`，1 passed／154.44秒（含独占门排队）／exit0。键盘完整遍历原帮助虚拟列表，再进入 term、task、debug、debug consoles；核原服务空态及无匹配过滤，未创建原生终端／任务／Adapter，不将项目资源混入原列表。项目终端／Browser 的既有真实 owner 操作证据仍归11.5，项目持续任务与调试沿原专属命令。mcpr 因原 ChatContextKeys.enabled 未满足而未发布，不回退文件搜索伪报互通。
+  - ext 读取目标 Gateway 的真实插件库存，核精确 gateway_id、200、响应头／体 request_id 及隔离 Home 空库存；ext install 接受后进入同一安装器的 ZIP／开发目录／自有来源选择，取消后零业务写入。当前 browser Workbench 未导入上游 electron-browser 问题报告贡献，帮助无 issue，原 `_issues.getSystemStatus` 明确报告 browser 不支持 `--status`；不新增问题服务或承诺微软 Gallery。三条初始化 API 的 active owner／request_id、零页面错误、零外网请求和零模型调用均通过；只读 POST 库存、地址解析及两项订阅按原路由职责核验，其余写入仍拒绝。首轮误将空 filter 当无结果提示、次轮误将只读 POST SSE 当业务写入的装具失败保留，未改产品逻辑或放宽身份断言。
+  - Node语法、Ruff、Python真实类型和差异检查通过；复用本批79扩展正式构建及182份实际转换源码类型检查，main SHA-256 `3f74afceee3d73dabba5741531ab2476f08f9f8c8ac84fa53059446b655a0cc4`。准确命令、指纹、三轮原件、实际服务条件与最小实现复审见 `out/tests/temp/2026/11/13/conditional_quick_access/artifacts/verification.json`。本项完成当前 Web 条件映射；不将同源代码当作 Electron／Windows／真实远端运行互通证明，原生入口验收仍归15.4。仅本地提交，不同步分支或重启开发实例。
 
 ## 15. 产品验收与交付证据
 
