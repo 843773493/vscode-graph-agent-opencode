@@ -104,7 +104,8 @@ async def test_manage_runtime_resources_without_opening_details(
                                       "deletedSeparately", "originalReact", "revisionConflict", "ownerB",
                                       "focusOtherWorkspace", "focusExactTerminal", "focusBrowserWithoutAttach",
                                       "attachSelectionCancelled", "attachUnopenedThread", "detachSelectedThreadOnly",
-                                      "sessionOwnerConflict", "sessionDetach"))
+                                      "sessionOwnerConflict", "sessionDetach", "sessionStopConflict",
+                                      "sessionStopTerminal", "sessionStopBrowser", "sessionStopUnknown"))
     assert result["forbiddenWrites"] == []
     with provider.control._condition:
         calls = {key: count for key, count in provider.control._counters.items() if key.startswith("model_call/")}

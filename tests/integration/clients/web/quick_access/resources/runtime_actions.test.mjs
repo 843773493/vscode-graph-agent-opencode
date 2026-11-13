@@ -165,6 +165,15 @@ test('等待路由期间改变参数与焦点，原资源和revision仍冻结', 
   expect(result.errors).toEqual([]); expect(post).toHaveLength(1); expect(post[0].gateway).toBe(ownerB);
   expect(post[0].body.expected_revision).toBe(7);
 });
+for (const mode of ['command-owner-identity', 'command-owner-gateway-returned']) test(`${mode}工作区选择失效后不再读取或写入资源`, async () => {
+  const result = await exercise(mode);
+  expect(result.choices).toHaveLength(1);
+  expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新选择资源']);
+  const commandIndex = result.requests.findIndex(item => item.phase === 'command');
+  expect(commandIndex).toBeGreaterThanOrEqual(0);
+  expect(result.requests.slice(commandIndex + 1)).toEqual([]);
+  expect(writes(result)).toEqual([]); expect(result.sourceCalls).toEqual([]);
+});
 for (const mode of ['conflict', 'unknown']) test(`${mode}保留原因、只回读不重放`, async () => {
   const result = await exercise(mode);
   expect(writes(result)).toHaveLength(1); expect(result.errors.join('')).toContain(mode === 'conflict' ? 'revision 冲突' : '写入后断开');
@@ -190,6 +199,26 @@ test('Session资源投影交同一Command解析原owner，保留用户选中的r
     expect.objectContaining({ method: 'GET', gateway: ownerB }),
   ]);
   expect(result.result.owner_revision).toBe(8);
+});
+for (const kind of ['terminal', 'browser']) test(`Session ${kind}停止投影保持关联范围并复用原stop写入`, async () => {
+  const result = await exercise(`reference-stop-${kind}`);
+  expect(result.errors).toEqual([]); expect(writes(result)).toHaveLength(1);
+  expect(writes(result)[0]).toMatchObject({ path: `/api/v1/resources/${kind}_same/stop`, gateway: ownerB,
+    body: { expected_revision: 7 } });
+  expect(writes(result)[0].body.thread).toBeUndefined();
+  expect(result.records[1].find(item => item.kind === kind).thread_associations).toEqual([{ session_id: 'ses_source', thread_id: 'thr_child' }]);
+});
+test('Session停止投影已失去原Thread关联时不能执行工作区stop', async () => {
+  const result = await exercise('reference-stop-unassociated');
+  expect(result.errors).toEqual(['Error: 所选 Thread 不属于该资源的现有关联']);
+  expect(writes(result)).toEqual([]); expect(result.records[1][0].status).toBe('running');
+});
+test('Session停止回执丢失只回读原owner，保留已发生状态且不伪报确认', async () => {
+  const result = await exercise('reference-stop-unknown');
+  expect(writes(result)).toHaveLength(1); expect(result.errors.join('')).toContain('写入后断开');
+  expect(result.records[1][0]).toMatchObject({ status: 'terminated', owner_revision: 8 });
+  expect(result.requests.at(-1)).toMatchObject({ path: '/api/v1/resources', gateway: ownerB, method: 'GET' });
+  expect(result.notices.some(value => value.includes('已确认'))).toBe(false);
 });
 for (const mode of ['reference-stale', 'reference-identity']) test(`${mode}解析Session投影后拒绝旧版本或失效身份，零写入`, async () => {
   const result = await exercise(mode);

@@ -28,8 +28,10 @@ export async function runtimeActionContract(mode) {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
   const requests = [], errors = [], shows = [], choices = [], notices = [], confirmations = [], sourceCalls = [], focuses = [], threadSelections = [];
   const mcpOpened = [], mcpOptions = [];
+  const ownerSelection = mode.startsWith('command-owner-');
   const targets = owners.map((owner, i) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: `工作区 ${i}`, status: 'ready' }));
-  const initial = { ...previous, gatewayId: 'control-gateway', loading: false, error: null, workspaces: targets, activeId: gatewayWorkspaceKey(owners[0]) };
+  const initial = { ...previous, gatewayId: 'control-gateway', loading: false, error: null, workspaces: targets,
+    activeId: ownerSelection ? null : gatewayWorkspaceKey(owners[0]) };
   workspaceContext.publish(initial);
   let records = owners.map((_, i) => ['terminal', 'browser'].map(kind => record(kind, i))), releaseRoutes, releaseWrite, releaseChoice, releaseRead, aborted = false;
   if (mode === 'empty-title') for (const list of records) list.find(item => item.kind === 'browser').metadata.title = '';
@@ -83,8 +85,8 @@ export async function runtimeActionContract(mode) {
       }
       return response();
     }
-    if (path === '/api/v1/resources/terminal_same' && method === 'GET') {
-      const response = () => ok(records[index][0]);
+    if ((path === '/api/v1/resources/terminal_same' || path === '/api/v1/resources/browser_same') && method === 'GET') {
+      const response = () => ok(records[index].find(item => path.endsWith(`/${item.resource_id}`)));
       if (mode === 'reference-identity') return new Promise(resolve => { releaseRead = () => resolve(response()); });
       return response();
     }
@@ -97,7 +99,7 @@ export async function runtimeActionContract(mode) {
           status: match[2] === 'stop' ? resource.kind === 'terminal' ? 'terminated' : 'closed' : match[2] === 'delete' ? 'deleted' : resource.status,
           thread_associations: match[2] === 'detach' ? [] : resource.thread_associations };
         records[index] = records[index].map(item => item.resource_id === updated.resource_id ? updated : item);
-        if (mode === 'unknown') throw new TypeError('连接在写入后断开');
+        if (mode === 'unknown' || mode === 'reference-stop-unknown') throw new TypeError('连接在写入后断开');
         return ok(updated);
       };
       if (mode === 'accepted-close') {
@@ -121,6 +123,14 @@ export async function runtimeActionContract(mode) {
     return [{ resource }];
   } }, async pick(items, options) {
     choices.push({ title: options.title, items: items.map(item => ({ label: item.label, action: item.action, thread: item.thread })) });
+    if (ownerSelection && items[0]?.owner) {
+      if (mode === 'command-owner-identity') invalidateGatewayToken(0);
+      else {
+        workspaceContext.publish({ ...initial, gatewayId: owners[0].gatewayId });
+        workspaceContext.publish(initial);
+      }
+      return items[0];
+    }
     if (mode === 'action-cancel') return undefined;
     if (mode === 'action-gateway-returned') {
       lifetime.dispose();
@@ -136,7 +146,7 @@ export async function runtimeActionContract(mode) {
   const editors = { activeEditor: origin, editors: [origin], async openEditor(input) {
     mcpOpened.push({ name: input.mcpServer.name, target: input.mcpServer.catalog.target });
   } };
-  if (mode === 'attach-unopened' || mode.startsWith('attach-selection-')) { editors.activeEditor = undefined; editors.editors = []; }
+  if (mode === 'attach-unopened' || mode.startsWith('attach-selection-') || ownerSelection) { editors.activeEditor = undefined; editors.editors = []; }
   const notifications = { error: cause => errors.push(String(cause)), info: value => notices.push(value),
     status: value => { notices.push(value); return { close() { notices.push('pending-closed'); } }; } };
   const commands = { executeCommand(id, ...args) {
@@ -217,16 +227,18 @@ export async function runtimeActionContract(mode) {
     } else {
       const action = mode === 'attach-unopened' || mode === 'attach-explicit' || mode.startsWith('attach-selection-') ? 'attach'
         : ['promote', 'attach', 'detach', 'delete'].includes(mode) ? mode : mode === 'delete-cancel' ? 'delete' : 'stop';
-      const target = { owner: { ...owners[1] }, resource: structuredClone(records[1][0]) };
+      const target = { owner: { ...owners[1] }, resource: structuredClone(records[1][mode === 'reference-stop-browser' ? 1 : 0]) };
       if (mode.startsWith('reference')) target.resource = { resource_id: target.resource.resource_id,
         owner_revision: mode === 'reference-stale' ? 6 : target.resource.owner_revision };
+      if (mode.startsWith('reference-stop-')) target.thread = mode === 'reference-stop-unassociated'
+        ? { session_id: 'ses_other', thread_id: 'thr_other' } : { ...thread };
       if (mode === 'illegal-attach') { target.resource.retention_scope = 'thread'; target.thread = { session_id: 'ses_wrong', thread_id: 'thr_wrong' }; }
       if (mode === 'attach-explicit') target.thread = { session_id: 'ses_explicit', thread_id: 'thr_explicit_child' };
       if (mode === 'attach-selection-temporary') target.resource.retention_scope = 'thread';
       if (mode === 'source' || mode === 'source-mismatch') target.source = { workspaceKey: gatewayWorkspaceKey(owners[1]), resource: { ...target.resource, owner_revision: mode === 'source' ? 7 : 8 },
         async run(action, ref) { sourceCalls.push({ action, ref }); return { ...target.resource, owner_revision: 8 }; } };
       requests.push({ phase: 'command' });
-      const operation = commands.executeCommand(resourceActionCommand(mode === 'illegal-attach' ? 'attach' : action), target).catch(cause => errors.push(String(cause)));
+      const operation = commands.executeCommand(resourceActionCommand(mode === 'illegal-attach' ? 'attach' : action), ownerSelection ? undefined : target).catch(cause => errors.push(String(cause)));
       if (mode === 'freeze') {
         await until(() => releaseRoutes); target.owner.gatewayId = owners[0].gatewayId; target.resource.owner_revision = 99;
         editors.activeEditor = undefined; workspaceContext.publish({ ...initial, activeId: gatewayWorkspaceKey(owners[0]) }); releaseRoutes();

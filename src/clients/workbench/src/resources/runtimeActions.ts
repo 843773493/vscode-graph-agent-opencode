@@ -60,6 +60,7 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
         { title: t('workbench.resource.chooseWorkspace'), placeHolder: t('workbench.resource.chooseWorkspaceHint') }))?.owner;
     }
     if (!owner) return;
+    assertAccess();
     const workspaceKey = gatewayWorkspaceKey(owner);
     // 已挂载组件持有精确 owner 与 scope 句柄，不为原按钮重复查询控制面。
     if (!explicit?.source) {
@@ -81,6 +82,9 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
     if (resource.workspace_id !== owner.workspaceId) throw new Error(t('workbench.resource.ownerMismatch'));
     if (resource.kind !== 'terminal' && resource.kind !== 'browser') throw new Error(t('workbench.resource.unsupportedKind'));
     if (!resource.available_actions.includes(action)) throw new Error(t('workbench.resource.actionUnavailable', resourceActionLabels[action]));
+    if (action === 'stop' && explicit?.thread && !resource.thread_associations.some(ref => ref.session_id === explicit.thread!.session_id && ref.thread_id === explicit.thread!.thread_id)) {
+      throw new Error(t('workbench.resource.threadNotAssociated'));
+    }
     let thread = action === 'attach' || action === 'detach' ? explicit?.thread : undefined;
     if (action === 'attach' && !thread && originThread?.owner.gatewayId === owner.gatewayId && originThread.owner.workspaceId === owner.workspaceId) thread = originThread.thread;
     if (action === 'attach' && !thread) {

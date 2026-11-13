@@ -8,7 +8,7 @@ const required = name => { const value = process.env[name]; if (!value) throw ne
 const output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/test_runtime_actions.py');
 const result = { phase: 'initialize', pageErrors: [], requests: [], receipts: [], forbiddenWrites: [],
-  boundary: '正式Workbench、真实Gateway与两个托管Backend；Session和运行资源由产品API创建；不替换HTTP或预写数据库；model_stream仅供启动' };
+  boundary: '正式Workbench、真实Gateway与两个托管Backend；Session和运行资源由产品API创建；不替换响应或预写数据库，仅在真实Browser停止成功后丢弃一次HTTP回执；model_stream仅供启动' };
 const pending = [], collectionErrors = [];
 const phase = async value => { result.phase = value; await writeFile(output, JSON.stringify(result, null, 2) + '\n'); };
 let page, failure;
@@ -20,14 +20,14 @@ try {
   page.on('pageerror', cause => result.pageErrors.push(String(cause)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname, method = request.method(), headers = request.headers();
-    if (path.startsWith('/api/v1/resources')) result.requests.push({ phase: result.phase, path, method,
+    if (path.startsWith('/api/v1/resources') || /^\/api\/v1\/sessions\/[^/]+\/resources/.test(path)) result.requests.push({ phase: result.phase, path, method,
       owner: { gateway_id: headers['x-boxteam-target-gateway-id'], workspace_id: headers['x-boxteam-workspace-id'] },
       body: method === 'POST' ? request.postDataJSON() : undefined });
     if (method === 'POST' && /\/(messages|jobs)(\/|$)/.test(path)) result.forbiddenWrites.push({ phase: result.phase, path });
   });
   page.on('requestfinished', request => {
     const path = new URL(request.url()).pathname;
-    if (!path.startsWith('/api/v1/resources')) return;
+    if (!path.startsWith('/api/v1/resources') && !/^\/api\/v1\/sessions\/[^/]+\/resources/.test(path)) return;
     const observedPhase = result.phase;
     pending.push((async () => { const response = await request.response(), body = await response.json();
       result.receipts.push({ phase: observedPhase, path, status: response.status(), request_id: body.request_id,
@@ -36,15 +36,21 @@ try {
   });
   await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' });
   await expect(page.locator('.native-session-navigation')).toBeVisible({ timeout: 30_000 });
-  const api = (path, owner, body) => page.evaluate(async ({ path, owner, body }) => {
-    const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
-    const response = await fetch(path, { method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body),
+  // 准备、并发控制与只读核验只发一次HTTP请求，避免Chromium在408后隐式重发非幂等创建。
+  const api = async (path, owner, body) => {
+    const observedPhase = result.phase, method = body === undefined ? 'GET' : 'POST';
+    const credential = await (await page.request.get(new URL('/api/gateway/auth/local-credential', page.url()).href, { maxRetries: 0 })).json();
+    const recorded = path.startsWith('/api/v1/resources') || /^\/api\/v1\/sessions\/[^/]+\/resources/.test(path);
+    if (recorded) result.requests.push({ phase: observedPhase, path, method, owner, body });
+    const response = await page.request.fetch(new URL(path, page.url()).href, { method, data: body, maxRetries: 0,
       headers: { 'X-Local-Token': credential.data.token, 'Content-Type': 'application/json', ...(owner ? {
         'X-BoxTeam-Target-Gateway-Id': owner.gateway_id, 'X-BoxTeam-Workspace-Id': owner.workspace_id } : {}) } });
     const payload = await response.json();
-    if (!response.ok || payload.request_id !== response.headers.get('X-Request-ID')) throw new Error(JSON.stringify({ path, status: response.status, payload }));
+    const status = response.status(), header = response.headers()['x-request-id'];
+    if (recorded) result.receipts.push({ phase: observedPhase, path, status, request_id: payload.request_id, header, data: payload.data, detail: payload.detail });
+    if (!response.ok() || payload.request_id !== header) throw new Error(JSON.stringify({ path, status, payload }));
     return payload.data;
-  }, { path, owner, body });
+  };
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const health = await api('/api/gateway/health'), registered = await api('/api/gateway/workspaces?check_health=false');
   await phase('prepare');
@@ -84,6 +90,17 @@ try {
   const resourceActions = value => result.requests.filter(item => item.phase === value && item.method === 'POST'
     && /\/(promote|attach|detach|stop|delete)$/.test(item.path));
   const current = (owner, id) => api(`/api/v1/resources/${id}`, owner);
+  const revealResourceRow = async (rows, id) => {
+    for (const candidate of await rows.all()) {
+      const details = candidate.locator('.resource-tree-chevron');
+      if (await details.getAttribute('aria-expanded') !== 'true') await details.click();
+      const metadata = candidate.locator('details.resource-details');
+      if (await metadata.getAttribute('open') === null) await metadata.locator('summary').click();
+    }
+    const row = rows.filter({ has: page.locator(`[title="${id}"]`) });
+    await expect(row.locator(`[title="${id}"]`)).toBeVisible();
+    return row;
+  };
   const settle = async (id, action, trigger) => {
     const received = page.waitForResponse(response => response.request().method() === 'POST'
       && new URL(response.url()).pathname === `/api/v1/resources/${id}/${action}`, { timeout: 30_000 });
@@ -182,17 +199,14 @@ try {
   const browserRows = panel.locator('.resource-tree-item[data-resource-kind="browser"]');
   await expect(browserRows).toHaveCount(1);
   // 原资源ID位于展开详情，先只展开展示，再核精确ID后执行管理动作。
-  const details = browserRows.locator('.resource-tree-chevron');
-  if (await details.getAttribute('aria-expanded') !== 'true') await details.click();
-  const metadata = browserRows.locator('details.resource-details');
-  if (await metadata.getAttribute('open') === null) await metadata.locator('summary').click();
-  const row = browserRows.filter({ has: page.locator(`[title="${browserResource.resource_id}"]`) });
-  await expect(row.locator(`[title="${browserResource.resource_id}"]`)).toBeVisible();
+  const row = await revealResourceRow(browserRows, browserResource.resource_id);
   expect((await settle(browserResource.resource_id, 'promote', () => row.getByRole('button', { name: '保留到工作区', exact: true }).click())).retention_scope).toBe('workspace');
   expect((await current(a, browserResource.resource_id)).retention_scope).toBe('workspace');
   expect(resourceActions(result.phase)).toHaveLength(1); expect(resourceActions(result.phase)[0].path).toBe(`/api/v1/resources/${browserResource.resource_id}/promote`); result.originalReact = true;
 
   await phase('session-prepare');
+  // 收起底部预览，给右侧Session资源详情保留正常可操作的高度。
+  await command('workbench.action.closePanel');
   const sessionTerminal = await api('/api/v1/resources/terminals', a, { ...sessions[0], title: 'Session 原资源', retention_scope: 'thread' });
   await command('_workbench.open', `boxteam://${a.gateway_id}/workspace/${a.workspace_id}/resources/session/${sessions[0].session_id}/threads/${sessions[0].thread_id}`);
   const threadPane = page.locator(`section.boxteam-thread[data-session-id="${sessions[0].session_id}"][data-thread-id="${sessions[0].thread_id}"]`).filter({ visible: true });
@@ -213,8 +227,8 @@ try {
     await api(`/api/v1/resources/${sessionTerminal.resource_id}/promote`, a, { expected_revision: sessionTerminal.owner_revision });
     await route.continue();
   }, { times: 1 });
-  await sessionRow.getByRole('button', { name: '解除关联', exact: true }).click();
-  await expect(sessionPanel.locator('.resource-notice')).toContainText('资源管理失败');
+  await sessionRow.locator('.resource-action-cancel').click();
+  await expect(sessionPanel.locator('.resource-notice')).toContainText('未能终止。');
   await expect(sessionPanel.locator('.resource-notice details')).toContainText('资源版本已变化');
   // 原 loader 在强制重读时卸载资源行，刷新后重新展开权威版本。
   await expect(sessionRow).toHaveCount(1);
@@ -222,7 +236,7 @@ try {
   await expect(sessionRow.getByText('保留到工作区', { exact: true })).toBeVisible();
   expect(resourceActions(result.phase).map(item => item.path)).toEqual([`/api/v1/resources/${sessionTerminal.resource_id}/promote`]);
   const retained = await current(a, sessionTerminal.resource_id);
-  expect(retained.thread_associations).toEqual([sessions[0]]); result.sessionOwnerConflict = true;
+  expect(retained.thread_associations).toEqual([sessions[0]]); result.sessionOwnerConflict = true; result.sessionStopConflict = true;
   await phase('session-detach');
   const detachedSessionResource = await settle(sessionTerminal.resource_id, 'detach', () => sessionRow.getByRole('button', { name: '解除关联', exact: true }).click());
   expect(detachedSessionResource.thread_associations).toEqual([]);
@@ -231,6 +245,49 @@ try {
   expect(resourceActions(result.phase)[0]).toMatchObject({ owner: { gateway_id: a.gateway_id, workspace_id: a.workspace_id },
     body: { expected_revision: retained.owner_revision, thread: sessions[0] } });
   await expect(sessionRow).toHaveCount(0); result.sessionDetach = true;
+  await phase('session-stop-prepare');
+  const stopTerminal = await api('/api/v1/resources/terminals', a, { ...sessions[0], title: 'Session 停止终端', retention_scope: 'thread' });
+  const stopBrowser = await api('/api/v1/resources/browsers', a, { ...sessions[0], title: 'Session 停止浏览器', retention_scope: 'thread',
+    url: 'about:blank', viewport: { width: 640, height: 480 } });
+  await sessionPanel.getByRole('button', { name: '刷新后台连接', exact: true }).click();
+  const terminalStopRows = sessionPanel.locator('.resource-tree-item[data-resource-kind="terminal"]');
+  await expect(terminalStopRows).toHaveCount(1);
+  const terminalStopRow = await revealResourceRow(terminalStopRows, stopTerminal.resource_id);
+  await phase('session-stop-terminal');
+  const stoppedTerminal = await settle(stopTerminal.resource_id, 'stop', () => terminalStopRow.locator('.resource-action-cancel').click());
+  expect(stoppedTerminal.status).toBe('terminated'); expect(stoppedTerminal.thread_associations).toEqual([sessions[0]]);
+  expect(resourceActions(result.phase)).toHaveLength(1);
+  expect(resourceActions(result.phase)[0].body).toEqual({ expected_revision: stopTerminal.owner_revision });
+  await expect.poll(() => result.requests.some(item => item.phase === 'session-stop-terminal' && item.method === 'GET'
+    && item.path === `/api/v1/sessions/${sessions[0].session_id}/resources`)).toBe(true);
+  expect((await current(a, stopTerminal.resource_id)).status).toBe('terminated'); result.sessionStopTerminal = true;
+  await phase('session-stop-browser-unknown');
+  const browserStopRows = sessionPanel.locator('.resource-tree-item[data-resource-kind="browser"]');
+  await expect(browserStopRows).toHaveCount(2);
+  const browserStopRow = await revealResourceRow(browserStopRows, stopBrowser.resource_id);
+  // 只丢弃这次真实写入的HTTP回执；后端确已停止，原Command与Session loader必须对账且不能重放。
+  await page.route(`**/api/v1/resources/${stopBrowser.resource_id}/stop`, async route => {
+    expect(route.request().postDataJSON()).toEqual({ expected_revision: stopBrowser.owner_revision });
+    const response = await route.fetch(), payload = await response.json();
+    expect(response.status()).toBe(200); expect(payload.request_id).toBe(response.headers()['x-request-id']);
+    expect(payload.data.status).toBe('closed');
+    result.sessionStopUnknownReceipt = { status: response.status(), request_id: payload.request_id, header: response.headers()['x-request-id'], data: payload.data };
+    await route.abort('failed');
+  }, { times: 1 });
+  await browserStopRow.locator('.resource-action-cancel').click();
+  await expect(sessionPanel.locator('.resource-notice')).toContainText('未能关闭。');
+  await expect(sessionPanel.locator('.resource-notice details')).toContainText('fetch');
+  await expect.poll(() => result.requests.some(item => item.phase === 'session-stop-browser-unknown' && item.method === 'GET'
+    && item.path === `/api/v1/sessions/${sessions[0].session_id}/resources`)).toBe(true);
+  const stoppedBrowser = await current(a, stopBrowser.resource_id);
+  expect(stoppedBrowser.status).toBe('closed'); expect(stoppedBrowser.thread_associations).toEqual([sessions[0]]);
+  expect(resourceActions(result.phase)).toHaveLength(1);
+  expect(result.requests.filter(item => item.phase.startsWith('session-stop-') && item.method === 'POST' && item.path.includes('/control'))).toEqual([]);
+  result.sessionStopBrowser = true; result.sessionStopUnknown = true;
+  await command('boxteam.browser.focus');
+  // 恢复的 Browser attach 会聚焦地址栏；先正常结束预览，再进入独立资源管理场景。
+  await page.locator('.workspace-browser-panel').getByRole('button', { name: '关闭运行时预览', exact: true }).click();
+  await expect(page.locator('.workspace-browser-panel iframe')).toHaveCount(0);
   await phase('conflict'); const before = await current(a, browserResource.resource_id);
   await show(a, browserResource.resource_id);
   const stopPath = `/api/v1/resources/${browserResource.resource_id}/stop`;
@@ -247,9 +304,6 @@ try {
   await expect.poll(() => result.receipts.some(item => item.phase === 'conflict' && item.status === 409)).toBe(true);
   expect(resourceActions(result.phase)).toHaveLength(2); expect(resourceActions(result.phase)[1].body.expected_revision).toBe(before.owner_revision);
   await expect(page.locator('.notification-list-item-message').filter({ hasText: /版本|revision/ }).first()).toBeVisible(); result.revisionConflict = true;
-  // 并发解除关联会重建 Browser attach 页；结束预览后再开始独立的 B 管理场景。
-  await page.locator('.workspace-browser-panel').getByRole('button', { name: '关闭运行时预览', exact: true }).click();
-  await expect(page.locator('.workspace-browser-panel iframe')).toHaveCount(0);
   await phase('owner-B'); await show(b, terminals[1].resource_id);
   expect((await settle(terminals[1].resource_id, 'stop', () => quick.getByText('停止资源', { exact: true }).click())).status).toBe('terminated');
   expect((await current(b, terminals[1].resource_id)).status).toBe('terminated');

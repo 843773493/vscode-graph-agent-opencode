@@ -31,6 +31,7 @@ import WorkspaceFilePreviewArea from '../../../web/src/components/workspace/Work
 import { useWorkspacePreviewTabs } from '../../../web/src/hooks/workspace/useWorkspacePreviewTabs.js';
 import type { FileOpenMenuHandler } from '../../../web/src/components/workspace/fileTree/WorkspaceFileTreeContextMenu.js';
 import type { WebUiLayoutSettings } from '../../../web/src/types/backend.js';
+import type { ResourceAction, ResourceThreadRef } from '../../../web/src/api/workspaceResources.js';
 
 type Runtime = ReturnType<typeof useThreadSessionRuntime>;
 const resourceTab: Record<ThreadInput['resourceTab'], WorkspaceAuxiliaryTab> = { files: 'files', changes: 'changes', tasks: 'goal', connections: 'resources', debug: 'debug' };
@@ -89,6 +90,14 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
     if (item.kind === 'terminal' || item.kind === 'browser') return resourceThreadAssociations(item).some(candidate => candidate.session_id === owner.sessionId && candidate.thread_id === owner.threadId);
     return item.metadata.thread_id === owner.threadId || (!item.metadata.thread_id && state.currentSession?.thread_id === owner.threadId);
   });
+  const controlOwnerResource = async (id: string, action: ResourceAction, target: ResourceThreadRef = thread) => {
+    const revision = resourceItems.find(item => item.resource_id === id)?.metadata.owner_revision;
+    try {
+      if (typeof revision !== 'number') throw new Error(t('thread.resources.revisionMissing'));
+      await commands.executeCommand(resourceActionCommand(action), { owner: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId },
+        resource: { resource_id: id, owner_revision: revision }, thread: target });
+    } finally { await content.refreshSessionResources(owner.sessionId, { force: true }); }
+  };
   const openDebugThread = (threadId: string) => {
     void editors.openEditor(new ThreadInput({ ...owner, threadId, title: threadId }), {
       pinned: true, viewState: { resourcesVisible: true, resourceTab: 'debug' },
@@ -147,17 +156,11 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
       resourcePanel={<><ResourcePanel inlinePreview resources={resourceItems} loading={state.sessionResourcesLoading} error={state.sessionResourcesError}
         loadedAt={state.sessionResourcesLoadedAt} sessionId={owner.sessionId} workspaceId={owner.workspaceKey} mainThread={thread}
         activePreviewPath={preview?.path ?? null} onRefresh={() => void content.refreshSessionResources(owner.sessionId)}
-        onControl={content.controlSessionResource} onOpenTerminalPreview={id => openRuntime('terminal', id)} onOpenBrowserPreview={id => openRuntime('browser', id)}
+        onControl={(kind, id, action) => (kind === 'terminal' || kind === 'browser') && action === 'cancel'
+          ? controlOwnerResource(id, 'stop') : content.controlSessionResource(kind, id, action)}
+        onOpenTerminalPreview={id => openRuntime('terminal', id)} onOpenBrowserPreview={id => openRuntime('browser', id)}
         onCloseResourcePreview={async () => setPreview(null)}
-        onOwnerControl={async (id, action, target) => {
-          const revision = resourceItems.find(item => item.resource_id === id)?.metadata.owner_revision;
-          try {
-            if (typeof revision !== 'number') throw new Error(t('thread.resources.revisionMissing'));
-            await commands.executeCommand(resourceActionCommand(action), { owner: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId },
-              resource: { resource_id: id, owner_revision: revision }, thread: target ?? thread });
-          }
-          finally { await content.refreshSessionResources(owner.sessionId, { force: true }); }
-        }}
+        onOwnerControl={controlOwnerResource}
         onCreateConnection={async (kind, target) => {
           if (target.session_id !== owner.sessionId || target.thread_id !== owner.threadId) throw new Error(t('thread.resources.connectionOwnerMismatch'));
           const created = await createSessionConnection(0, owner.workspaceKey, target, kind);
