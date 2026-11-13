@@ -36,6 +36,7 @@ function entry(workspaceId: string, resourceId: string): WorkspaceResourceDTO {
 
 function panelProps(entries: WorkspaceResourceDTO[], threadTargetUnavailable = false) {
   return {
+    apiPort: 0,
     controller: {
       items: entries, loading: false, mutating: false, error: null, refresh: async () => {},
       control: async () => entries[0]!, create: async () => entries[0]!,

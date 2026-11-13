@@ -50,7 +50,8 @@ class TerminalTransportFake:
         return dict(self.records[terminal_id])
 
     async def list_resources(self) -> list[dict[str, object]]:
-        return [dict(record) for record in self.records.values()]
+        return [{key: value for key, value in record.items() if key not in {"buffer", "display_buffer"}}
+                for record in self.records.values()]
 
     async def cancel_creation(self, resource_id: str, *, owner_revision: int) -> dict[str, object]:
         record = self.records.get(resource_id)

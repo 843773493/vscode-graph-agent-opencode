@@ -235,6 +235,9 @@ class WorkspaceResourceOwner:
                     record = self._require_owned_resource_record(resource_id)
                     observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
                     runtime = observed.get(resource_id)
+                    # Terminal 清单只含摘要；保留清单缺失语义，正文仅向所选资源读取。
+                    if runtime is not None and self.kind == "terminal":
+                        runtime = await self._transport.get_resource(resource_id)
                     observe_resource(record, runtime, self.kind)
                     await self._store.save(record)
                     await self._sync_ledger(record)

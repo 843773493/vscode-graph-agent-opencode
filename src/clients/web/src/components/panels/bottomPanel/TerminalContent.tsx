@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import type { WorkspaceResourcesController } from "../../../hooks/workspace/useWorkspaceResources";
 import type { ResourceAction, ResourceThreadRef } from "../../../api/workspaceResources";
+import { getWorkspaceResource } from "../../../api/workspaceResources";
 import { buildGatewayAttachUrl } from "../../../utils/attachUrls";
 import { errorMessage } from "../../../utils/errorMessage";
 import { formatLocalTime } from "../../../utils/format";
@@ -14,6 +15,7 @@ export const TERMINAL_FRAME_READY_TIMEOUT_MS = 15_000;
 type TerminalFrameStatus = "loading" | "ready" | "stalled";
 
 interface TerminalContentProps {
+  apiPort: number;
   controller: WorkspaceResourcesController;
   currentThread: ResourceThreadRef | null;
   threadTargetUnavailable: boolean;
@@ -24,13 +26,37 @@ interface TerminalContentProps {
   renderToolbar: (tools: ReactNode) => ReactNode;
 }
 
+function TerminalFinalOutput({ apiPort, workspaceId, resourceId }: {
+  apiPort: number; workspaceId: string; resourceId: string;
+}) {
+  const [result, setResult] = useState<{ text?: string; error?: string } | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void getWorkspaceResource(apiPort, workspaceId, resourceId, controller.signal).then((resource) => {
+      if (controller.signal.aborted) return;
+      const text = resource.metadata?.display_buffer;
+      setResult({ text: typeof text === "string" ? text : undefined });
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setResult({ error: errorMessage(error) });
+    });
+    return () => controller.abort();
+  }, [apiPort, workspaceId, resourceId]);
+  if (!result) return <span>{t("bottom.terminal.loading")}</span>;
+  if (result.error) return <span>{result.error}</span>;
+  return result.text === undefined ? null : <pre className="terminal-panel-final-output">{result.text}</pre>;
+}
+
 /** 终端产品内容；标签、停靠和关闭由所在工作台提供。 */
 export function TerminalContent({
-  controller, currentThread, threadTargetUnavailable, workspaceId, workspaceName,
+  apiPort, controller, currentThread, threadTargetUnavailable, workspaceId, workspaceName,
   selectedTerminalId, onSelectTerminal, renderToolbar,
 }: TerminalContentProps) {
   const { items: entries, loading } = controller;
-  const onRefresh = () => void controller.refresh();
+  const [outputReloadToken, setOutputReloadToken] = useState(0);
+  const onRefresh = () => {
+    setOutputReloadToken((token) => token + 1);
+    void controller.refresh();
+  };
   const [retentionScope, setRetentionScope] = useState<"thread" | "workspace">("thread");
   const isMutating = controller.mutating;
   const [terminalListWidth, setTerminalListWidth] = useState<number | null>(null);
@@ -243,7 +269,10 @@ export function TerminalContent({
                       ? attach.error
                       : t("bottom.terminal.attach.timeoutDetail")}
                   </span>
-                  {attach && "error" in attach && typeof selectedEntry.metadata?.display_buffer === "string" ? <pre className="terminal-panel-final-output">{selectedEntry.metadata.display_buffer}</pre> : null}
+                  {attach && "error" in attach && workspaceId ? <TerminalFinalOutput
+                    key={`${workspaceId}:${selectedEntry.resource_id}:${selectedEntry.owner_revision}:${outputReloadToken}`}
+                    apiPort={apiPort} workspaceId={workspaceId} resourceId={selectedEntry.resource_id}
+                  /> : null}
                   {attach && "error" in attach ? null : (
                     <button
                       type="button"

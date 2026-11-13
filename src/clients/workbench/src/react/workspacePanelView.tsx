@@ -61,7 +61,7 @@ function WorkspaceConnections({ workspace, input, active, kind, commands, notifi
     {kind === 'browser' ? <WarmConfirmProvider><BrowserContent controller={controller} workspaceId={gatewayWorkspaceKey(workspace)}
       currentThread={currentThread} selectedId={selected} onSelect={setSelected} renderToolbar={toolbar} /></WarmConfirmProvider>
     : <section className="terminal-panel native-workspace-panel-product" data-testid="terminal-panel">
-    <TerminalContent controller={controller} currentThread={currentThread}
+    <TerminalContent apiPort={0} controller={controller} currentThread={currentThread}
       threadTargetUnavailable={false} workspaceId={gatewayWorkspaceKey(workspace)} workspaceName={workspace.name}
       selectedTerminalId={selected} onSelectTerminal={setSelected} renderToolbar={toolbar} />
     </section>}

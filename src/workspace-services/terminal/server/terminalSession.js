@@ -903,13 +903,22 @@ export class TerminalSession {
     };
   }
 
-  snapshot() {
+  summary() {
+    const record = this.toRecord();
+    delete record.buffer;
     return {
-      ...this.toRecord(),
+      ...record,
       reconciliation_status: this.creationCancellationPending ? "unknown" : this.reconciliationStatus,
       pty_worker_pid: this.ptyProcess?.workerPid ?? null,
-      display_buffer: stripCommandMarkerLines(this.buffer),
       client_count: this.outputMultiplexer.clientCount,
+    };
+  }
+
+  snapshot() {
+    return {
+      ...this.summary(),
+      buffer: this.buffer,
+      display_buffer: stripCommandMarkerLines(this.buffer),
     };
   }
 }

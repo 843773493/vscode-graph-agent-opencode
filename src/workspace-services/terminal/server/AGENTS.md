@@ -25,6 +25,8 @@ server/
 
 单终端行为归 Session，跨终端策略归 Manager；系统进程是否仍在执行由进程层判断。Linux 僵尸进程已停止执行，父进程尚未回收不构成终端停止失败。
 
+普通列表统一使用 Session 摘要，保留状态、命令、版本和输出游标，不携带 `buffer` 或 `display_buffer`，也不为列表过滤完整输出。原始缓冲仍由同一 Session 持有并持久化；单条详情、增量读取和 WebSocket 快照继续提供正文。
+
 ## 身份与传输授权
 
 `TerminalManager.terminalsById`按`terminal_id`保存`TerminalSession`资源实例，含仍保留的非运行记录；它不是聊天Session或Thread集合。管理器内部资源集合与跨层业务身份用具体资源名区分，不保留旧字段别名。

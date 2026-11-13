@@ -32,6 +32,20 @@ def terminal_owner(tmp_path: Path) -> TerminalOwnerFixture:
     return build_terminal_owner_fixture(tmp_path)
 
 
+async def test_list_has_command_summary_and_detail_has_selected_output(terminal_owner: TerminalOwnerFixture) -> None:
+    first, second = await terminal_owner.create(), await terminal_owner.create()
+    for item, text in ((first, "第一个终端输出"), (second, "第二个终端输出")):
+        terminal_owner.transport.records[item["resource_id"]].update(
+            buffer=text, display_buffer=text, last_command="printf output", sequence=7,
+        )
+    listed = await terminal_owner.owner.list_resources()
+    assert len(listed) == 2
+    assert all("buffer" not in item and "display_buffer" not in item for item in listed)
+    assert all(item["last_command"] == "printf output" and item["sequence"] == 7 for item in listed)
+    detail = await terminal_owner.owner.get_resource(first["resource_id"])
+    assert detail["buffer"] == detail["display_buffer"] == "第一个终端输出"
+
+
 @pytest.fixture
 def managed_directory(terminal_owner: TerminalOwnerFixture) -> str:
     """仅替换目录准入端口；Terminal owner、记录及持久 lease 均用真实实现。"""

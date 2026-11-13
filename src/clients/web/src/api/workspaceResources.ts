@@ -12,9 +12,9 @@ export async function listWorkspaceResources(port: number, workspaceId: string, 
   ));
 }
 
-export async function getWorkspaceResource(port: number, workspaceId: string, resourceId: string): Promise<WorkspaceResourceDTO> {
+export async function getWorkspaceResource(port: number, workspaceId: string, resourceId: string, signal?: AbortSignal): Promise<WorkspaceResourceDTO> {
   return unwrapApiData(await requestJson<APIResponse<WorkspaceResourceDTO>>(
-    port, `/api/v1/resources/${encodeURIComponent(resourceId)}`, { headers: workspaceHeader(workspaceId) },
+    port, `/api/v1/resources/${encodeURIComponent(resourceId)}`, { headers: workspaceHeader(workspaceId), signal },
   ));
 }
 

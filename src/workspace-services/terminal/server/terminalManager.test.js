@@ -296,6 +296,11 @@ test("终端落盘只保存一份原始输出，重启重建完整展示快照",
   const expectedSnapshot = session.snapshot();
   assert.equal(expectedSnapshot.buffer, rawOutput);
   assert.equal(expectedSnapshot.display_buffer, "中文输出\r\n");
+  const [summary] = manager.list();
+  assert.equal(Object.hasOwn(summary, "buffer"), false);
+  assert.equal(Object.hasOwn(summary, "display_buffer"), false);
+  assert.equal(summary.last_command, expectedSnapshot.last_command);
+  assert.equal(summary.sequence, expectedSnapshot.sequence);
 
   await manager.persist();
   const persisted = JSON.parse(await readFile(manager.stateFile, "utf8"));

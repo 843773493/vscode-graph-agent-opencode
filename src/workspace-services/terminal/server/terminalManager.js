@@ -156,7 +156,7 @@ export class TerminalManager {
 
   list() {
     return [...this.terminalsById.values()]
-      .map((session) => session.snapshot())
+      .map((session) => session.summary())
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
   }
 
