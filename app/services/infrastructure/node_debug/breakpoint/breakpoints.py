@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import stat
+from functools import cached_property
 from pathlib import Path
 
 from app.schemas.internal_v2.node_debug import (
@@ -10,105 +11,75 @@ from app.schemas.internal_v2.node_debug import (
 )
 
 
-def source_digest(path: Path, *, uri: str) -> str | None:
-    source = _source_bytes(path, uri)
-    return hashlib.sha256(source).hexdigest() if source is not None else None
+class BreakpointSource:
+    """一次源码观察；同文件的摘要、断点核对和锚点共用原始字节。"""
 
+    def __init__(self, path: Path, *, uri: str) -> None:
+        self.uri = uri
+        self._source = _source_bytes(path, uri)
+        self.digest = hashlib.sha256(self._source).hexdigest() if self._source is not None else None
 
-def anchor_breakpoint(
-    breakpoint: NodeDebugBreakpointDTO,
-    path: Path,
-    *,
-    uri: str,
-    line: int | None = None,
-    relocation_status: str = "current",
-    relocation_message: str | None = None,
-) -> NodeDebugBreakpointDTO:
-    source = _source_bytes(path, uri)
-    if source is None:
-        raise FileNotFoundError(f"源码断点文件不存在: {uri}")
-    return _anchor_source(
-        breakpoint, source, uri=uri, line=line,
-        relocation_status=relocation_status, relocation_message=relocation_message,
-    )
+    @cached_property
+    def _lines(self) -> list[str]:
+        if self._source is None:
+            raise FileNotFoundError(f"源码断点文件不存在: {self.uri}")
+        try:
+            return self._source.decode("utf-8").splitlines()
+        except UnicodeDecodeError as error:
+            raise RuntimeError(f"源码断点文件不是 UTF-8 文本: {self.uri}") from error
 
-
-def _anchor_source(
-    breakpoint: NodeDebugBreakpointDTO,
-    source: bytes,
-    *,
-    uri: str,
-    line: int | None = None,
-    relocation_status: str = "current",
-    relocation_message: str | None = None,
-) -> NodeDebugBreakpointDTO:
-    try:
-        source_lines = source.decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise RuntimeError(f"源码断点文件不是 UTF-8 文本: {uri}") from error
-    anchored_line = line or breakpoint.line
-    if anchored_line > len(source_lines):
-        raise ValueError(
-            f"源码断点行号超出文件范围: {breakpoint.path}:{anchored_line}，"
-            f"文件共 {len(source_lines)} 行"
+    def anchor(
+        self,
+        breakpoint: NodeDebugBreakpointDTO,
+    ) -> NodeDebugBreakpointDTO:
+        source_lines = self._lines
+        anchored_line = breakpoint.line
+        if anchored_line > len(source_lines):
+            raise ValueError(
+                f"源码断点行号超出文件范围: {breakpoint.path}:{anchored_line}，"
+                f"文件共 {len(source_lines)} 行"
+            )
+        return breakpoint.model_copy(
+            update={
+                "line": anchored_line,
+                "original_line": breakpoint.original_line or breakpoint.line,
+                "source_line": source_lines[anchored_line - 1],
+                "previous_line": source_lines[anchored_line - 2] if anchored_line > 1 else None,
+                "next_line": source_lines[anchored_line] if anchored_line < len(source_lines) else None,
+                "source_digest": self.digest,
+                "relocation_status": "current",
+                "relocation_message": None,
+            }
         )
-    return breakpoint.model_copy(
-        update={
-            "line": anchored_line,
-            "original_line": breakpoint.original_line or breakpoint.line,
-            "source_line": source_lines[anchored_line - 1],
-            "previous_line": (
-                source_lines[anchored_line - 2] if anchored_line > 1 else None
-            ),
-            "next_line": (
-                source_lines[anchored_line]
-                if anchored_line < len(source_lines)
-                else None
-            ),
-            "source_digest": hashlib.sha256(source).hexdigest(),
-            "relocation_status": relocation_status,
-            "relocation_message": relocation_message,
-        }
-    )
 
-
-def reconcile_breakpoint(
-    breakpoint: NodeDebugBreakpointDTO,
-    path: Path,
-    *,
-    uri: str,
-) -> NodeDebugBreakpointDTO:
-    source = _source_bytes(path, uri)
-    if source is None:
+    def reconcile(self, breakpoint: NodeDebugBreakpointDTO) -> NodeDebugBreakpointDTO:
+        if self._source is None:
+            return breakpoint.model_copy(
+                update={
+                    "verified": False,
+                    "actual_line": None,
+                    "relocation_status": "source_deleted",
+                    "relocation_message": f"断点源文件已删除: {breakpoint.path}",
+                }
+            )
+        if breakpoint.relocation_status in {"pending_update", "source_deleted"}:
+            # 文件恢复后仍须显式重设，不能把旧断点悄悄绑定到其它代码。
+            return breakpoint
+        if breakpoint.source_digest is None or breakpoint.source_line is None:
+            return self.anchor(breakpoint)
+        if self.digest == breakpoint.source_digest:
+            return breakpoint
         return breakpoint.model_copy(
             update={
                 "verified": False,
                 "actual_line": None,
-                "relocation_status": "source_deleted",
-                "relocation_message": f"断点源文件已删除: {breakpoint.path}",
+                "relocation_status": "pending_update",
+                "relocation_message": (
+                    "源码已变化，断点未自动重定位；请检查后重新设置 "
+                    f"{breakpoint.path}:{breakpoint.line}"
+                ),
             }
         )
-    if breakpoint.relocation_status in {"pending_update", "source_deleted"}:
-        # 源码变化后的断点必须由用户或 Agent 显式重新设置；即使文件恢复，
-        # 也不能根据旧锚点自动恢复，避免把断点悄悄绑定到错误代码。
-        return breakpoint
-    if breakpoint.source_digest is None or breakpoint.source_line is None:
-        return _anchor_source(breakpoint, source, uri=uri)
-    current_digest = hashlib.sha256(source).hexdigest()
-    if current_digest == breakpoint.source_digest:
-        return breakpoint
-
-    return breakpoint.model_copy(
-        update={
-            "verified": False,
-            "actual_line": None,
-            "relocation_status": "pending_update",
-            "relocation_message": (
-                "源码已变化，断点未自动重定位；请检查后重新设置 "
-                f"{breakpoint.path}:{breakpoint.line}"
-            ),
-        }
-    )
 
 
 def persistable_breakpoint(
@@ -189,10 +160,8 @@ def _source_bytes(path: Path, uri: str) -> bytes | None:
 
 
 __all__ = [
-    "anchor_breakpoint",
+    "BreakpointSource",
     "persistable_breakpoint",
     "portable_breakpoint",
-    "reconcile_breakpoint",
     "runtime_breakpoint",
-    "source_digest",
 ]

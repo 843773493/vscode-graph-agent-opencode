@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from app.core.failures import failure_detail
-from app.schemas.internal_v2.node_debug import NodeDebugBreakpointDTO
 from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
-    reconcile_breakpoint,
-    source_digest,
+    BreakpointSource,
 )
 from app.services.infrastructure.node_debug.runtime_state import (
     LIVE_NODE_DEBUG_RUNTIME_STATUSES,
@@ -43,7 +41,7 @@ class NodeDebugSourceReconciliation:
         digests = {}
         for path in paths:
             source, uri = self._file_paths.resolve(path, allow_external=False)
-            digests[path] = source_digest(source, uri=uri)
+            digests[path] = BreakpointSource(source, uri=uri).digest
         return digests
 
     async def reconcile(
@@ -58,17 +56,24 @@ class NodeDebugSourceReconciliation:
             if runtime is not None
             else self._session_state.pending_breakpoints((session_id, thread_id))
         )
-        reconciled: list[NodeDebugBreakpointDTO] = []
+        # 同文件一次读盘、一次摘要；按文件处理，正文不跨文件或跨请求驻留。
+        indices_by_path: dict[str, list[int]] = {}
+        for index, breakpoint in enumerate(breakpoints):
+            indices_by_path.setdefault(breakpoint.path, []).append(index)
+        reconciled = list(breakpoints)
+        digests: dict[str, str | None] = {}
+        for path, indices in indices_by_path.items():
+            source, uri = self._file_paths.resolve(path, allow_external=False)
+            observed = BreakpointSource(source, uri=uri)
+            digests[path] = observed.digest
+            for index in indices:
+                reconciled[index] = observed.reconcile(breakpoints[index])
+            del observed
         changed = False
         should_persist = False
         relocation_messages: list[str] = []
         invalidated_inspector_ids: list[tuple[str, str]] = []
-        for breakpoint in breakpoints:
-            source, uri = self._file_paths.resolve(breakpoint.path, allow_external=False)
-            next_breakpoint = reconcile_breakpoint(
-                breakpoint, source, uri=uri,
-            )
-            reconciled.append(next_breakpoint)
+        for breakpoint, next_breakpoint in zip(breakpoints, reconciled, strict=True):
             if next_breakpoint != breakpoint:
                 changed = True
                 should_persist = True
@@ -89,8 +94,10 @@ class NodeDebugSourceReconciliation:
             active = runtime.status in LIVE_NODE_DEBUG_RUNTIME_STATUSES
             changed_paths = set()
             for path, loaded_digest in runtime.loaded_source_digests.items():
-                source, uri = self._file_paths.resolve(path, allow_external=False)
-                if source_digest(source, uri=uri) != loaded_digest:
+                if path not in digests:
+                    source, uri = self._file_paths.resolve(path, allow_external=False)
+                    digests[path] = BreakpointSource(source, uri=uri).digest
+                if digests[path] != loaded_digest:
                     changed_paths.add(path)
             if active and changed_paths:
                 newly_changed_paths = changed_paths - runtime.source_changed_paths

@@ -21,10 +21,9 @@ from app.services.infrastructure.node_debug.breakpoint.breakpoint_expressions im
     inspector_breakpoint_condition,
 )
 from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
-    anchor_breakpoint,
+    BreakpointSource,
     persistable_breakpoint,
     portable_breakpoint,
-    reconcile_breakpoint,
     runtime_breakpoint,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
@@ -92,14 +91,14 @@ class NodeDebugConfigurationFactory:
             breakpoint_path, relative_path = self.resolve_script_path(breakpoint.path)
             normalized_breakpoints.append(
                 persistable_breakpoint(
-                    reconcile_breakpoint(
+                    BreakpointSource(
+                        breakpoint_path, uri=self._file_paths.reference(breakpoint_path),
+                    ).reconcile(
                         runtime_breakpoint(
                             NodeDebugConfigurationBreakpointDTO(
                                 **breakpoint.model_dump(exclude={"path"}), path=relative_path,
                             )
-                        ),
-                        breakpoint_path,
-                        uri=self._file_paths.reference(breakpoint_path),
+                        )
                     )
                 )
             )
@@ -189,9 +188,7 @@ class NodeDebugConfigurationFactory:
             hit_condition=breakpoint.hit_condition,
             log_message=breakpoint.log_message,
         )
-        return anchor_breakpoint(
-            breakpoint, script_path, uri=self._file_paths.reference(script_path)
-        )
+        return BreakpointSource(script_path, uri=self._file_paths.reference(script_path)).anchor(breakpoint)
 
     def resolve_script_path(self, raw_path: str) -> tuple[Path, str]:
         if not raw_path.strip():
