@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -193,6 +194,42 @@ async def test_clear_thread_history_cache_preserves_business_and_recovery(
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert_cache_cleanup_result(output, case)
+
+
+async def test_deleted_thread_recent_history_rejects_cached_content_and_same_name_replacement(
+    request: pytest.FixtureRequest,
+    cache_cleanup_case: ThreadCacheCleanupCase,
+) -> None:
+    case = cache_cleanup_case
+    context = case.context
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "已删除最近历史验收需要 Chromium"
+    output = context.artifacts_dir / "deleted-thread-history.json"
+    supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "120", "--",
+               "node", "tests/integration/clients/web/quick_access/deleted_thread_history.mjs"]
+    with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "deleted-history-chromium") as temporary:
+        completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
+            env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": case.gateway_url,
+                 "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_CACHE_THREADS": json.dumps(case.threads),
+                 "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
+            capture_output=True, text=True, timeout=135, check=False)
+    (context.artifacts_dir / "deleted-history-browser.stdout.raw").write_text(completed.stdout, encoding="utf-8")
+    (context.artifacts_dir / "deleted-history-browser.stderr.raw").write_text(completed.stderr, encoding="utf-8")
+    (context.artifacts_dir / "deleted-history-browser-process.json").write_text(json.dumps({
+        "command": command, "exit_code": completed.returncode,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = json.loads(output.read_text())
+    assert result["phase"] == "complete" and result["pageErrors"] == []
+    assert all(result[key] for key in ("oldTargetRejected", "oldCacheRemoved", "sameNameNotOpened", "historyRemovalOnly",
+                                      "survivorPreserved", "removalRestored"))
+    assert result["deleteReceipt"]["state"] == "committed" and result["deleteReceipt"]["settlement"] == "settled"
+    assert len(result["writes"]) == 1 and result["executions"] == []
+    with case.provider.control._condition:
+        calls = [count for key, count in case.provider.control._counters.items() if key.startswith("model_call/")]
+    assert sorted(calls) == [1, 1], "历史拒绝及移除不能重新执行消息"
+    assert case.recovery_file.read_text(encoding="utf-8") == "原始磁盘正文\n"
 
 
 def assert_cache_cleanup_result(output: Path, case: ThreadCacheCleanupCase) -> dict:

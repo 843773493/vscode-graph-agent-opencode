@@ -18,6 +18,8 @@
 
 同页 Thread 恢复负例先经产品打开两组并恢复原草稿，页面卸载后只破坏 B 的一条真实序列化记录，分别注入未知版本、缺失 owner 与坏 JSON；原错误占位页保留具体原因，两次恢复不读取 B，单条移除保留 A、B 业务和草稿。该明确故障注入不代表正常流程预写浏览器状态，也不代替 Electron 固定 profile 验收。
 
+`deleted_thread_history` 复用消息入口真实生成的两份历史，经原 Session Command、确认和目录 outbox 删除已关闭目标，再创建同名 Session；从原最近记录重开必须读取旧 owner 的真实 404、清除其聊天镜像并明确报错，不打开同名目标。仅移除旧最近记录仍保留错误 Tab、幸存 Thread 的正文与草稿及同名业务对象；浏览器存储只读，不预写缓存或替换业务响应。
+
 `test_media_reopen` 通过规范 URI 进入原 Opener／媒体 resolver 与官方隔离 Webview，A/B 同名 WAV 以实际解码时长区分归属；原视频 fixture 核尺寸、时长、复制零新增正文读取、关闭重开和正常刷新恢复。普通媒体输入是文件预备，模型回放只供后端启动且要求零调用；不替换 Worker、媒体内容或业务响应，不把页面通过称为 Electron 或无扩展名附件重开验收。
 
 `test_attachment_media_reopen` 从真实消息上传并执行生成附件，复制原件的无扩展名 `/original/content` URI 后经原 Opener 重开图片、音频和视频；两工作区同名 WAV 用实际解码时长区分 owner。核复制零正文读取、原 HEAD／GET／Range、MIME、名称、request_id、分屏及正常重载；浏览器阶段不执行模型或写文件，不替换媒体与隔离 Worker，不代替 PDF、Windows、远端或 Electron 验收。
