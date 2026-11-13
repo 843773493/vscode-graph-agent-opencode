@@ -13,12 +13,12 @@ import pytest
 
 from app.core.workspace_identity import read_workspace_id
 from tests.harness.python.run_context import TestRunContext
+from tests.harness.python.terminal_plugin import prepare_terminal_plugin_configuration
 from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.terminal_plugin import copy_prepared_developer_tools_package
-from tests.harness.python.terminal_plugin import prepare_terminal_plugin_configuration
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_test_workspace,
