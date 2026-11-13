@@ -29,7 +29,7 @@ app/api/
 │   ├── messages.py             Thread 消息
 │   ├── message_stream.py       消息执行流
 │   ├── session_turns.py        Thread 执行历史
-│   ├── persistent_tasks.py     工作区持久任务管理与完整快照事件流
+│   ├── persistent_tasks.py     工作区持久任务管理、运行摘要分页与精确更新事件流
 │   ├── jobs.py                 后台执行任务
 │   ├── agents.py               Agent 目录与选择
 │   ├── context.py              上下文资源
@@ -70,6 +70,6 @@ app/api/
 - 本目录的单元测试放在 `tests/unit/api/`，公开协议契约测试放在 `tests/contracts/api/`。
 - 精确 thread 历史请求的 execution 选择器及游标合同归 DTO/history owner；API 只校验与转发，不建立第二历史投影、伪造 Turn 或唤醒 cold runtime。
 - 消息流 HTTP 快照、事件分页及 SSE 恢复快照在线程中执行原严格协议投影；SSE 普通增量沿原顺序直接编码，不为每片创建线程任务。
-- 持久任务运行历史使用 FastAPI 同步路由线程池读取完整账本，保留原 DTO、运行顺序和错误映射，不在事件循环中查询全部历史。
+- 持久任务运行历史在线程池中按接受序号读取有界摘要页，正文只走单条详情；SSE 初始与 gap 快照携带在途运行基线，普通更新传递当前 task 与单条 run 摘要，不读取已完成历史。
 
 - `runtime_control.py` 共用本机控制凭据与 loopback 检查；隐藏进程关闭入口核 PID 和 Backend generation，拒绝浏览器来源，只调用原受管 HTTP server 的退出回调，不取得工作区服务图或声称已退出。

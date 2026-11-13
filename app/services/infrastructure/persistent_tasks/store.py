@@ -22,7 +22,10 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskDTO,
     PersistentTaskNotificationRequest,
     PersistentTaskRunDTO,
+    PersistentTaskRunListDTO,
+    PersistentTaskRunSummaryDTO,
     TaskDecisionDTO,
+    TaskDecisionSummaryDTO,
     TaskDeliveryDTO,
     TaskEvaluationDTO,
     TaskLifecycle,
@@ -40,6 +43,14 @@ _INSERT_RUN = (
     "INSERT INTO persistent_task_runs (run_id,task_id,task_revision,definition_revision,trigger_key,trigger_hash,"
     "request_id,check_only,phase,decision_json,delivery_json,error,created_at,updated_at,trigger_type,scheduled_for,trigger_payload_json) "
     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
+
+# 摘要不取触发输入、判断正文或尚未接受的准备消息。
+_RUN_SUMMARY = (
+    "SELECT run_sequence,run_id,task_id,definition_revision,check_only,phase,trigger_type,"
+    "scheduled_for,created_at,updated_at,error,delivery_json,evaluation_json,"
+    "json_remove(decision_json,'$.result') AS decision_json,"
+    "json_remove(generation_json,'$.prepared_message') AS generation_json FROM persistent_task_runs "
 )
 
 
@@ -308,6 +319,67 @@ class PersistentTaskStore(TaskGoals):
                                       (task_id,)).fetchall()
             return [self._run(row) for row in rows]
 
+    def _run_summary(self, row: sqlite3.Row) -> PersistentTaskRunSummaryDTO:
+        return PersistentTaskRunSummaryDTO(
+            **{key: row[key] for key in (
+                "run_id", "task_id", "run_sequence", "definition_revision", "check_only", "phase",
+                "trigger_type", "scheduled_for", "created_at", "updated_at", "error",
+            )},
+            decision=TaskDecisionSummaryDTO.model_validate_json(row["decision_json"]) if row["decision_json"] else None,
+            delivery=TaskDeliveryDTO.model_validate_json(row["delivery_json"]) if row["delivery_json"] else None,
+            evaluation=TaskEvaluationDTO.model_validate_json(row["evaluation_json"]) if row["evaluation_json"] else None,
+            generation=GENERATION_STATE.validate_json(row["generation_json"]).result(
+                run_id=row["run_id"], workspace_id=self.workspace_id, error=row["error"],
+            ) if row["generation_json"] else None,
+        )
+
+    def run_page(self, task_id: str, *, before: str | None = None, limit: int = 50) -> PersistentTaskRunListDTO:
+        if not 1 <= limit <= 100:
+            raise ValueError("运行记录每页数量必须在 1 到 100 之间")
+        with closing(self._store.connection()) as connection:
+            self._task(connection, task_id)
+            boundary = None
+            if before is not None:
+                cursor = connection.execute("SELECT run_sequence FROM persistent_task_runs WHERE task_id=? AND run_id=?",
+                                            (task_id, before)).fetchone()
+                if cursor is None:
+                    raise ValueError("运行记录游标不属于当前任务或已不存在")
+                boundary = cursor[0]
+            rows = connection.execute(
+                _RUN_SUMMARY + "WHERE task_id=? " + ("AND run_sequence<? " if boundary is not None else "")
+                + "ORDER BY run_sequence DESC LIMIT ?",
+                (task_id, boundary, limit + 1) if boundary is not None else (task_id, limit + 1),
+            ).fetchall()
+            page = rows[:limit]
+            return PersistentTaskRunListDTO(
+                items=[self._run_summary(row) for row in reversed(page)],
+                next_before=page[-1]["run_id"] if len(rows) > limit else None,
+            )
+
+    def run_summary(self, task_id: str, run_id: str) -> PersistentTaskRunSummaryDTO:
+        with closing(self._store.connection()) as connection:
+            self._task(connection, task_id)
+            row = connection.execute(_RUN_SUMMARY + "WHERE task_id=? AND run_id=?", (task_id, run_id)).fetchone()
+            if row is None:
+                raise KeyError(f"持久任务运行不存在: {run_id}")
+            return self._run_summary(row)
+
+    def active_run_summaries(self, task_id: str) -> list[PersistentTaskRunSummaryDTO]:
+        with closing(self._store.connection()) as connection:
+            rows = connection.execute(
+                _RUN_SUMMARY + "WHERE task_id=? AND phase IN ('pending','checking','delivering') ORDER BY run_sequence",
+                (task_id,),
+            ).fetchall()
+            return [self._run_summary(row) for row in rows]
+
+    def pending_phase(self, task_id: str) -> TaskRunPhase | None:
+        with closing(self._store.connection()) as connection:
+            row = connection.execute(
+                "SELECT phase FROM persistent_task_runs WHERE task_id=? AND phase IN ('pending','checking','delivering') "
+                "ORDER BY run_sequence LIMIT 1", (task_id,),
+            ).fetchone()
+            return row[0] if row is not None else None
+
     def run(self, task_id: str, run_id: str) -> PersistentTaskRunDTO:
         with closing(self._store.connection()) as connection:
             self._task(connection, task_id)
@@ -373,9 +445,9 @@ class PersistentTaskStore(TaskGoals):
             ))
             return self._run(connection.execute("SELECT * FROM persistent_task_runs WHERE run_id=?", (run_id,)).fetchone())
 
-    def schedule_due(self, now: datetime) -> list[str]:
+    def schedule_due(self, now: datetime) -> list[tuple[str, str]]:
         """计划触发和游标一次提交；中断只会保留两者或两者均不保留。"""
-        changed: list[str] = []
+        changed: list[tuple[str, str]] = []
         with self._transaction() as connection:
             rows = connection.execute(
                 "SELECT s.* FROM persistent_task_schedules s JOIN persistent_tasks t ON t.task_id=s.task_id "
@@ -398,15 +470,16 @@ class PersistentTaskStore(TaskGoals):
                     trigger_key = f"{task_id}:{schedule.kind}:{row['anchor_at']}:{scheduled_for.isoformat()}"
                     preimage = sha256_jcs({"trigger_key": trigger_key, "definition_revision": task.definition_revision})
                     missed = scheduled_for in skipped
+                    run_id = create_prefixed_id("ptrun")
                     connection.execute(_INSERT_RUN, (
-                        create_prefixed_id("ptrun"), task_id, task.revision, task.definition_revision,
+                        run_id, task_id, task.revision, task.definition_revision,
                         trigger_key, preimage, create_prefixed_id("req"), 0, "skipped" if missed else "pending", None, None,
                         "按 misfire=skip 跳过积压触发" if missed else None, now.isoformat(), now.isoformat(),
                         schedule.kind, scheduled_for.isoformat(), None,
                     ))
+                    changed.append((task_id, run_id))
                 connection.execute("UPDATE persistent_task_schedules SET next_run_at=? WHERE task_id=?",
                                    (following.isoformat(), task_id))
-                changed.append(task_id)
         return changed
 
     def next_schedule_at(self) -> datetime | None:

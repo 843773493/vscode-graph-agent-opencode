@@ -23,13 +23,13 @@ test('任务编辑首次保留原版本，冲突重读后保留草稿并允许�
   };
   let records = [initial];
   let publish: ((value: api.PersistentTaskSnapshot) => void) | undefined;
-  const snapshot = (): api.PersistentTaskSnapshot => ({ items: records, runtime: { state: 'running', recovering_tasks: 0 } });
+  const snapshot = (): api.PersistentTaskSnapshot => ({ items: records, active_runs: [], runtime: { state: 'running', recovering_tasks: 0 } });
   const watch = spyOn(api, 'watchPersistentTasks').mockImplementation(async (_port, _target, signal, listener) => {
     publish = listener; listener(snapshot());
     await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
   });
   const list = spyOn(api, 'listPersistentTasks').mockImplementation(async () => snapshot());
-  const history = spyOn(api, 'listPersistentTaskRuns').mockResolvedValue([]);
+  const history = spyOn(api, 'listPersistentTaskRuns').mockResolvedValue({ items: [] });
   const versions: number[] = [];
   const update = spyOn(api, 'updatePersistentTask').mockImplementation(async (_port, _target, task, configuration) => {
     versions.push(task.revision);

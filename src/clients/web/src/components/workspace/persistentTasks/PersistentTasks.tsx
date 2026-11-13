@@ -26,9 +26,9 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
   onAction: DispatchPersistentTaskAction;
   intent?: { task: PersistentTaskDTO; action: "details" | "history" | "edit"; sequence: number };
 }) {
-  const state = usePersistentTasks(apiPort, target, sessionId, active);
   // 工作区入口负责生成动作的通知策略；会话视图只观察，避免双重通知或导航。
-  const activityError = useGenerationActivity(apiPort, target, state.items, active && state.loaded && !sessionId && !intent, { onStatusChange, onOpenSession });
+  const activity = useGenerationActivity(apiPort, target, active && !sessionId && !intent, { onStatusChange, onOpenSession });
+  const state = usePersistentTasks(apiPort, target, sessionId, active, activity.observe);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [navigationError, setNavigationError] = useState<string | null>(null);
@@ -89,7 +89,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
       <button type="button" disabled={state.busy} onClick={() => void state.refresh()}>{t("tasks.list.refresh")}</button>
     </header>
     {navigationError ? <div role="alert">{navigationError}</div> : null}
-    {activityError ? <div role="alert">{activityError}</div> : null}
+    {activity.error ? <div role="alert">{activity.error}</div> : null}
     {state.error ? <div role="alert">{state.error}</div> : null}
     {!state.loaded && !state.error ? <p role="status">{t(sessionId ? "tasks.list.loadingSession" : "tasks.list.loadingWorkspace")}</p> : null}
     <TaskRuntimeStatus runtime={state.runtime} />
@@ -149,7 +149,10 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
             }}>{t("tasks.detail.openSession")}</button>
           </> : <div role="alert">{t("tasks.detail.unsupported", task.application_type, task.application_version)}</div>}
           <h4 ref={historyHeading} tabIndex={-1}>{t("tasks.history.title")}</h4>
-          {state.history?.loading ? <p role="status">{t("tasks.history.loading")}</p> : state.history?.error ? <div role="alert">{state.history.error}</div> : state.history?.runs.length ? <TaskRunHistory apiPort={apiPort} target={target} runs={state.history.runs} onOpenSession={onOpenSession} onOpenThread={onOpenThread} /> : <p className="persistent-task-hint">{t("tasks.history.empty")}</p>}
+          {state.history?.error ? <div role="alert">{state.history.error}</div> : null}
+          {state.history?.nextBefore ? <button disabled={state.history.loading} onClick={state.loadOlder}>{t("tasks.history.older")}</button> : null}
+          {state.history?.runs.length ? <TaskRunHistory apiPort={apiPort} target={target} runs={state.history.runs} onOpenSession={onOpenSession} onOpenThread={onOpenThread} /> : !state.history?.loading && !state.history?.error ? <p className="persistent-task-hint">{t("tasks.history.empty")}</p> : null}
+          {state.history?.loading ? <p role="status">{t("tasks.history.loading")}</p> : null}
         </> : <div className="persistent-task-empty"><span className="codicon codicon-checklist" aria-hidden="true" /><p>{t("tasks.detail.empty")}</p></div>}
       </div>
     </div>

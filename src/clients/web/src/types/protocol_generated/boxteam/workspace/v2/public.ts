@@ -3537,10 +3537,41 @@ export interface TaskRuntimeStatusDTO {
 export interface PersistentTaskListDTO {
   items: PersistentTaskDTO[];
   runtime: TaskRuntimeStatusDTO | undefined;
+  active_runs: PersistentTaskRunSummaryDTO[];
 }
 
 export interface PersistentTaskRunListDTO {
-  items: PersistentTaskRunDTO[];
+  items: PersistentTaskRunSummaryDTO[];
+  next_before?: string | undefined;
+}
+
+export interface TaskDecisionSummaryDTO {
+  decision: string;
+  reason: string;
+}
+
+export interface PersistentTaskRunSummaryDTO {
+  run_id: string;
+  task_id: string;
+  run_sequence: number;
+  definition_revision: number;
+  check_only: boolean;
+  phase: string;
+  trigger_type: string;
+  scheduled_for?: string | undefined;
+  created_at: string | undefined;
+  updated_at: string | undefined;
+  decision?: TaskDecisionSummaryDTO | undefined;
+  delivery?: TaskDeliveryDTO | undefined;
+  evaluation?: TaskEvaluationDTO | undefined;
+  generation?: SessionGenerationExecuteResultDTO | undefined;
+  error?: string | undefined;
+}
+
+export interface PersistentTaskChangedDTO {
+  task_id: string;
+  task?: PersistentTaskDTO | undefined;
+  run?: PersistentTaskRunSummaryDTO | undefined;
 }
 
 /** 生成器预览由目标工作区计算，只返回 catalog 导航与分配状态。 */
@@ -25861,7 +25892,7 @@ export const TaskRuntimeStatusDTO: MessageFns<TaskRuntimeStatusDTO> = {
 };
 
 function createBasePersistentTaskListDTO(): PersistentTaskListDTO {
-  return { items: [], runtime: undefined };
+  return { items: [], runtime: undefined, active_runs: [] };
 }
 
 export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
@@ -25869,6 +25900,9 @@ export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
     return {
       items: globalThis.Array.isArray(object?.items) ? object.items.map((e: any) => PersistentTaskDTO.fromJSON(e)) : [],
       runtime: isSet(object.runtime) ? TaskRuntimeStatusDTO.fromJSON(object.runtime) : undefined,
+      active_runs: globalThis.Array.isArray(object?.active_runs)
+        ? object.active_runs.map((e: any) => PersistentTaskRunSummaryDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -25879,6 +25913,9 @@ export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
     }
     if (message.runtime !== undefined) {
       obj.runtime = TaskRuntimeStatusDTO.toJSON(message.runtime);
+    }
+    if (message.active_runs?.length) {
+      obj.active_runs = message.active_runs.map((e) => PersistentTaskRunSummaryDTO.toJSON(e));
     }
     return obj;
   },
@@ -25892,27 +25929,32 @@ export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
     message.runtime = (object.runtime !== undefined && object.runtime !== null)
       ? TaskRuntimeStatusDTO.fromPartial(object.runtime)
       : undefined;
+    message.active_runs = object.active_runs?.map((e) => PersistentTaskRunSummaryDTO.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBasePersistentTaskRunListDTO(): PersistentTaskRunListDTO {
-  return { items: [] };
+  return { items: [], next_before: undefined };
 }
 
 export const PersistentTaskRunListDTO: MessageFns<PersistentTaskRunListDTO> = {
   fromJSON(object: any): PersistentTaskRunListDTO {
     return {
       items: globalThis.Array.isArray(object?.items)
-        ? object.items.map((e: any) => PersistentTaskRunDTO.fromJSON(e))
+        ? object.items.map((e: any) => PersistentTaskRunSummaryDTO.fromJSON(e))
         : [],
+      next_before: isSet(object.next_before) ? globalThis.String(object.next_before) : undefined,
     };
   },
 
   toJSON(message: PersistentTaskRunListDTO): unknown {
     const obj: any = {};
     if (message.items?.length) {
-      obj.items = message.items.map((e) => PersistentTaskRunDTO.toJSON(e));
+      obj.items = message.items.map((e) => PersistentTaskRunSummaryDTO.toJSON(e));
+    }
+    if (message.next_before !== undefined) {
+      obj.next_before = message.next_before;
     }
     return obj;
   },
@@ -25922,7 +25964,208 @@ export const PersistentTaskRunListDTO: MessageFns<PersistentTaskRunListDTO> = {
   },
   fromPartial<I extends Exact<DeepPartial<PersistentTaskRunListDTO>, I>>(object: I): PersistentTaskRunListDTO {
     const message = createBasePersistentTaskRunListDTO();
-    message.items = object.items?.map((e) => PersistentTaskRunDTO.fromPartial(e)) || [];
+    message.items = object.items?.map((e) => PersistentTaskRunSummaryDTO.fromPartial(e)) || [];
+    message.next_before = object.next_before ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTaskDecisionSummaryDTO(): TaskDecisionSummaryDTO {
+  return { decision: "", reason: "" };
+}
+
+export const TaskDecisionSummaryDTO: MessageFns<TaskDecisionSummaryDTO> = {
+  fromJSON(object: any): TaskDecisionSummaryDTO {
+    return {
+      decision: isSet(object.decision) ? globalThis.String(object.decision) : "",
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+    };
+  },
+
+  toJSON(message: TaskDecisionSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.decision !== "") {
+      obj.decision = message.decision;
+    }
+    if (message.reason !== "") {
+      obj.reason = message.reason;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TaskDecisionSummaryDTO>, I>>(base?: I): TaskDecisionSummaryDTO {
+    return TaskDecisionSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TaskDecisionSummaryDTO>, I>>(object: I): TaskDecisionSummaryDTO {
+    const message = createBaseTaskDecisionSummaryDTO();
+    message.decision = object.decision ?? "";
+    message.reason = object.reason ?? "";
+    return message;
+  },
+};
+
+function createBasePersistentTaskRunSummaryDTO(): PersistentTaskRunSummaryDTO {
+  return {
+    run_id: "",
+    task_id: "",
+    run_sequence: 0,
+    definition_revision: 0,
+    check_only: false,
+    phase: "",
+    trigger_type: "",
+    scheduled_for: undefined,
+    created_at: undefined,
+    updated_at: undefined,
+    decision: undefined,
+    delivery: undefined,
+    evaluation: undefined,
+    generation: undefined,
+    error: undefined,
+  };
+}
+
+export const PersistentTaskRunSummaryDTO: MessageFns<PersistentTaskRunSummaryDTO> = {
+  fromJSON(object: any): PersistentTaskRunSummaryDTO {
+    return {
+      run_id: isSet(object.run_id) ? globalThis.String(object.run_id) : "",
+      task_id: isSet(object.task_id) ? globalThis.String(object.task_id) : "",
+      run_sequence: isSet(object.run_sequence) ? globalThis.Number(object.run_sequence) : 0,
+      definition_revision: isSet(object.definition_revision) ? globalThis.Number(object.definition_revision) : 0,
+      check_only: isSet(object.check_only) ? globalThis.Boolean(object.check_only) : false,
+      phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
+      trigger_type: isSet(object.trigger_type) ? globalThis.String(object.trigger_type) : "",
+      scheduled_for: isSet(object.scheduled_for) ? globalThis.String(object.scheduled_for) : undefined,
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
+      updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
+      decision: isSet(object.decision) ? TaskDecisionSummaryDTO.fromJSON(object.decision) : undefined,
+      delivery: isSet(object.delivery) ? TaskDeliveryDTO.fromJSON(object.delivery) : undefined,
+      evaluation: isSet(object.evaluation) ? TaskEvaluationDTO.fromJSON(object.evaluation) : undefined,
+      generation: isSet(object.generation) ? SessionGenerationExecuteResultDTO.fromJSON(object.generation) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskRunSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.run_id !== "") {
+      obj.run_id = message.run_id;
+    }
+    if (message.task_id !== "") {
+      obj.task_id = message.task_id;
+    }
+    if (message.run_sequence !== 0) {
+      obj.run_sequence = Math.round(message.run_sequence);
+    }
+    if (message.definition_revision !== 0) {
+      obj.definition_revision = Math.round(message.definition_revision);
+    }
+    if (message.check_only !== false) {
+      obj.check_only = message.check_only;
+    }
+    if (message.phase !== "") {
+      obj.phase = message.phase;
+    }
+    if (message.trigger_type !== "") {
+      obj.trigger_type = message.trigger_type;
+    }
+    if (message.scheduled_for !== undefined) {
+      obj.scheduled_for = message.scheduled_for;
+    }
+    if (message.created_at !== undefined) {
+      obj.created_at = message.created_at;
+    }
+    if (message.updated_at !== undefined) {
+      obj.updated_at = message.updated_at;
+    }
+    if (message.decision !== undefined) {
+      obj.decision = TaskDecisionSummaryDTO.toJSON(message.decision);
+    }
+    if (message.delivery !== undefined) {
+      obj.delivery = TaskDeliveryDTO.toJSON(message.delivery);
+    }
+    if (message.evaluation !== undefined) {
+      obj.evaluation = TaskEvaluationDTO.toJSON(message.evaluation);
+    }
+    if (message.generation !== undefined) {
+      obj.generation = SessionGenerationExecuteResultDTO.toJSON(message.generation);
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskRunSummaryDTO>, I>>(base?: I): PersistentTaskRunSummaryDTO {
+    return PersistentTaskRunSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskRunSummaryDTO>, I>>(object: I): PersistentTaskRunSummaryDTO {
+    const message = createBasePersistentTaskRunSummaryDTO();
+    message.run_id = object.run_id ?? "";
+    message.task_id = object.task_id ?? "";
+    message.run_sequence = object.run_sequence ?? 0;
+    message.definition_revision = object.definition_revision ?? 0;
+    message.check_only = object.check_only ?? false;
+    message.phase = object.phase ?? "";
+    message.trigger_type = object.trigger_type ?? "";
+    message.scheduled_for = object.scheduled_for ?? undefined;
+    message.created_at = object.created_at ?? undefined;
+    message.updated_at = object.updated_at ?? undefined;
+    message.decision = (object.decision !== undefined && object.decision !== null)
+      ? TaskDecisionSummaryDTO.fromPartial(object.decision)
+      : undefined;
+    message.delivery = (object.delivery !== undefined && object.delivery !== null)
+      ? TaskDeliveryDTO.fromPartial(object.delivery)
+      : undefined;
+    message.evaluation = (object.evaluation !== undefined && object.evaluation !== null)
+      ? TaskEvaluationDTO.fromPartial(object.evaluation)
+      : undefined;
+    message.generation = (object.generation !== undefined && object.generation !== null)
+      ? SessionGenerationExecuteResultDTO.fromPartial(object.generation)
+      : undefined;
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBasePersistentTaskChangedDTO(): PersistentTaskChangedDTO {
+  return { task_id: "", task: undefined, run: undefined };
+}
+
+export const PersistentTaskChangedDTO: MessageFns<PersistentTaskChangedDTO> = {
+  fromJSON(object: any): PersistentTaskChangedDTO {
+    return {
+      task_id: isSet(object.task_id) ? globalThis.String(object.task_id) : "",
+      task: isSet(object.task) ? PersistentTaskDTO.fromJSON(object.task) : undefined,
+      run: isSet(object.run) ? PersistentTaskRunSummaryDTO.fromJSON(object.run) : undefined,
+    };
+  },
+
+  toJSON(message: PersistentTaskChangedDTO): unknown {
+    const obj: any = {};
+    if (message.task_id !== "") {
+      obj.task_id = message.task_id;
+    }
+    if (message.task !== undefined) {
+      obj.task = PersistentTaskDTO.toJSON(message.task);
+    }
+    if (message.run !== undefined) {
+      obj.run = PersistentTaskRunSummaryDTO.toJSON(message.run);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PersistentTaskChangedDTO>, I>>(base?: I): PersistentTaskChangedDTO {
+    return PersistentTaskChangedDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PersistentTaskChangedDTO>, I>>(object: I): PersistentTaskChangedDTO {
+    const message = createBasePersistentTaskChangedDTO();
+    message.task_id = object.task_id ?? "";
+    message.task = (object.task !== undefined && object.task !== null)
+      ? PersistentTaskDTO.fromPartial(object.task)
+      : undefined;
+    message.run = (object.run !== undefined && object.run !== null)
+      ? PersistentTaskRunSummaryDTO.fromPartial(object.run)
+      : undefined;
     return message;
   },
 };

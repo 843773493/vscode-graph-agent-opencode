@@ -3188,6 +3188,7 @@
   "tasks.history.loadingDetail": "正在读取冻结输入与执行证据…",
   "tasks.history.modelCall": "模型调用：",
   "tasks.history.notConsumed": "尚无输入进入派发请求的证据。",
+  "tasks.history.older": "加载更早运行",
   "tasks.history.openEvaluation": "打开判断 Thread",
   "tasks.history.openWork": "打开工作 Thread",
   "tasks.history.outcome": "工作执行：{0}",

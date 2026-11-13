@@ -64,7 +64,7 @@ def test_workspace_state_uses_workspace_boundary_and_activity_cursor(workspace_r
             item.event_id
             for item in store.read_activity_page(after=first.event_seq).records
         ] == [second.event_id]
-        assert store.diagnostics().schema_version == 24
+        assert store.diagnostics().schema_version == 25
     finally:
         store.close()
 
@@ -225,7 +225,8 @@ def test_old_task_migration_preserves_history_and_atomic_schedule_order(workspac
         assert tasks.get(task.task_id).next_run_at == due
         with closing(store.connection()) as connection:
             connection.execute("DROP TRIGGER stop_cursor")
-        assert tasks.schedule_due(due) == [task.task_id]
+        accepted, = tasks.schedule_due(due)
+        assert accepted == (task.task_id, tasks.runs(task.task_id)[-1].run_id)
         assert tasks.schedule_due(due) == []
         manual, automatic = tasks.runs(task.task_id)
         assert manual == run and automatic.scheduled_for == due and automatic.trigger_type == "interval"

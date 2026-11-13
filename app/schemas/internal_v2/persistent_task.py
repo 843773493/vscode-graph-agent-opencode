@@ -223,11 +223,14 @@ class AutomationTaskDTO(PersistentTaskDTO, frozen=True):
     goal: None = None
 
 
-class TaskDecisionDTO(BaseModel):
+class TaskDecisionSummaryDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     decision: Literal["wait", "proceed", "complete", "needs_attention"]
     reason: str = Field(min_length=1)
+
+
+class TaskDecisionDTO(TaskDecisionSummaryDTO):
     result: dict[str, JsonValue] = Field(default_factory=dict)
 
 
@@ -339,10 +342,36 @@ class TaskRuntimeStatusDTO(BaseModel, frozen=True):
     error: str | None = None
 
 
+class PersistentTaskRunSummaryDTO(BaseModel):
+    run_id: str
+    task_id: str
+    run_sequence: int
+    definition_revision: int
+    check_only: bool
+    phase: TaskRunPhase
+    trigger_type: Literal["manual", "interval", "cron", "external", "execution_end"]
+    scheduled_for: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    decision: TaskDecisionSummaryDTO | None = None
+    delivery: TaskDeliveryDTO | None = None
+    evaluation: TaskEvaluationDTO | None = None
+    generation: SessionGenerationExecuteResultDTO | None = None
+    error: str | None = None
+
+
 class PersistentTaskListDTO(BaseModel):
     items: list[PersistentTaskDTO]
     runtime: TaskRuntimeStatusDTO
+    active_runs: list[PersistentTaskRunSummaryDTO] = Field(default_factory=list)
 
 
 class PersistentTaskRunListDTO(BaseModel):
-    items: list[PersistentTaskRunDTO]
+    items: list[PersistentTaskRunSummaryDTO]
+    next_before: str | None = None
+
+
+class PersistentTaskChangedDTO(BaseModel):
+    task_id: str
+    task: PersistentTaskDTO | None = None
+    run: PersistentTaskRunSummaryDTO | None = None

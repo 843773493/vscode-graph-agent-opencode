@@ -5795,18 +5795,74 @@ class TaskRuntimeStatusDTO(_message.Message):
     def __init__(self, state: _Optional[str] = ..., recovering_tasks: _Optional[int] = ..., error: _Optional[str] = ...) -> None: ...
 
 class PersistentTaskListDTO(_message.Message):
-    __slots__ = ("items", "runtime")
+    __slots__ = ("items", "runtime", "active_runs")
     ITEMS_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_FIELD_NUMBER: _ClassVar[int]
+    ACTIVE_RUNS_FIELD_NUMBER: _ClassVar[int]
     items: _containers.RepeatedCompositeFieldContainer[PersistentTaskDTO]
     runtime: TaskRuntimeStatusDTO
-    def __init__(self, items: _Optional[_Iterable[_Union[PersistentTaskDTO, _Mapping]]] = ..., runtime: _Optional[_Union[TaskRuntimeStatusDTO, _Mapping]] = ...) -> None: ...
+    active_runs: _containers.RepeatedCompositeFieldContainer[PersistentTaskRunSummaryDTO]
+    def __init__(self, items: _Optional[_Iterable[_Union[PersistentTaskDTO, _Mapping]]] = ..., runtime: _Optional[_Union[TaskRuntimeStatusDTO, _Mapping]] = ..., active_runs: _Optional[_Iterable[_Union[PersistentTaskRunSummaryDTO, _Mapping]]] = ...) -> None: ...
 
 class PersistentTaskRunListDTO(_message.Message):
-    __slots__ = ("items",)
+    __slots__ = ("items", "next_before")
     ITEMS_FIELD_NUMBER: _ClassVar[int]
-    items: _containers.RepeatedCompositeFieldContainer[PersistentTaskRunDTO]
-    def __init__(self, items: _Optional[_Iterable[_Union[PersistentTaskRunDTO, _Mapping]]] = ...) -> None: ...
+    NEXT_BEFORE_FIELD_NUMBER: _ClassVar[int]
+    items: _containers.RepeatedCompositeFieldContainer[PersistentTaskRunSummaryDTO]
+    next_before: str
+    def __init__(self, items: _Optional[_Iterable[_Union[PersistentTaskRunSummaryDTO, _Mapping]]] = ..., next_before: _Optional[str] = ...) -> None: ...
+
+class TaskDecisionSummaryDTO(_message.Message):
+    __slots__ = ("decision", "reason")
+    DECISION_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    decision: str
+    reason: str
+    def __init__(self, decision: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+
+class PersistentTaskRunSummaryDTO(_message.Message):
+    __slots__ = ("run_id", "task_id", "run_sequence", "definition_revision", "check_only", "phase", "trigger_type", "scheduled_for", "created_at", "updated_at", "decision", "delivery", "evaluation", "generation", "error")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    DEFINITION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    CHECK_ONLY_FIELD_NUMBER: _ClassVar[int]
+    PHASE_FIELD_NUMBER: _ClassVar[int]
+    TRIGGER_TYPE_FIELD_NUMBER: _ClassVar[int]
+    SCHEDULED_FOR_FIELD_NUMBER: _ClassVar[int]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
+    DECISION_FIELD_NUMBER: _ClassVar[int]
+    DELIVERY_FIELD_NUMBER: _ClassVar[int]
+    EVALUATION_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    task_id: str
+    run_sequence: int
+    definition_revision: int
+    check_only: bool
+    phase: str
+    trigger_type: str
+    scheduled_for: _timestamp_pb2.Timestamp
+    created_at: _timestamp_pb2.Timestamp
+    updated_at: _timestamp_pb2.Timestamp
+    decision: TaskDecisionSummaryDTO
+    delivery: TaskDeliveryDTO
+    evaluation: TaskEvaluationDTO
+    generation: SessionGenerationExecuteResultDTO
+    error: str
+    def __init__(self, run_id: _Optional[str] = ..., task_id: _Optional[str] = ..., run_sequence: _Optional[int] = ..., definition_revision: _Optional[int] = ..., check_only: _Optional[bool] = ..., phase: _Optional[str] = ..., trigger_type: _Optional[str] = ..., scheduled_for: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., decision: _Optional[_Union[TaskDecisionSummaryDTO, _Mapping]] = ..., delivery: _Optional[_Union[TaskDeliveryDTO, _Mapping]] = ..., evaluation: _Optional[_Union[TaskEvaluationDTO, _Mapping]] = ..., generation: _Optional[_Union[SessionGenerationExecuteResultDTO, _Mapping]] = ..., error: _Optional[str] = ...) -> None: ...
+
+class PersistentTaskChangedDTO(_message.Message):
+    __slots__ = ("task_id", "task", "run")
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    TASK_FIELD_NUMBER: _ClassVar[int]
+    RUN_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    task: PersistentTaskDTO
+    run: PersistentTaskRunSummaryDTO
+    def __init__(self, task_id: _Optional[str] = ..., task: _Optional[_Union[PersistentTaskDTO, _Mapping]] = ..., run: _Optional[_Union[PersistentTaskRunSummaryDTO, _Mapping]] = ...) -> None: ...
 
 class SessionGenerationPreviewRequest(_message.Message):
     __slots__ = ("name", "title_template", "path_template", "session_title", "generated_at", "placement_kind", "placement_node_id", "session_strategy", "target_session_id")

@@ -9,6 +9,7 @@ from app.core.resource_uri import parse_session_thread_uri, thread_resource_uri
 from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.schemas.internal_v2.persistent_task import (
+    PersistentTaskChangedDTO,
     PersistentTaskCheckRequest,
     PersistentTaskConfigurationDTO,
     PersistentTaskControlRequest,
@@ -18,6 +19,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskNotificationRequest,
     PersistentTaskRunDetailDTO,
     PersistentTaskRunDTO,
+    PersistentTaskRunListDTO,
     PersistentTaskUpdateRequest,
     SessionGenerationActionDTO,
     TaskInputConsumptionDTO,
@@ -86,8 +88,8 @@ class PersistentTaskService:
         recovering = self.runtime.recovering(task.task_id)
         if task.application_type == "goal":
             return task.model_copy(update={"recovering": recovering, "phase": "recovering" if recovering else task.phase})
-        pending = self._store.runs(task.task_id, pending_only=True)
-        phase = "recovering" if recovering else (pending[0].phase if pending else task.phase)
+        pending = self._store.pending_phase(task.task_id)
+        phase = "recovering" if recovering else (pending or task.phase)
         return task.model_copy(update={"recovering": recovering, "phase": phase})
 
     def list(self, session_id: str | None = None) -> list[PersistentTaskDTO]:
@@ -98,7 +100,24 @@ class PersistentTaskService:
         return [self._with_runtime(task) for task in tasks]
 
     def snapshot(self, session_id: str | None = None) -> PersistentTaskListDTO:
-        return PersistentTaskListDTO(items=self.list(session_id), runtime=self.runtime.status())
+        items = self.list(session_id)
+        return PersistentTaskListDTO(
+            items=items, runtime=self.runtime.status(),
+            active_runs=[run for task in items if task.application_type == "automation"
+                         for run in self._store.active_run_summaries(task.task_id)],
+        )
+
+    def changed(self, task_id: str, run_id: str | None, session_id: str | None) -> PersistentTaskChangedDTO:
+        try:
+            task = self.get(task_id)
+        except KeyError:
+            # 通知排队期间任务可能已被所属会话退休，明确发布移除。
+            return PersistentTaskChangedDTO(task_id=task_id)
+        if (session_id is not None and not self._references_session(task, session_id)
+                and task_id not in self._store.generated_for_session(session_id)):
+            return PersistentTaskChangedDTO(task_id=task_id)
+        return PersistentTaskChangedDTO(task_id=task_id, task=task,
+                                        run=self._store.run_summary(task_id, run_id) if run_id else None)
 
     @staticmethod
     def _references_session(task: PersistentTaskDTO, session_id: str) -> bool:
@@ -161,8 +180,8 @@ class PersistentTaskService:
             self.runtime.notify(task_id, run.run_id)
             return run
 
-    def runs(self, task_id: str) -> list[PersistentTaskRunDTO]:
-        return self._store.runs(task_id)
+    def runs(self, task_id: str, *, before: str | None = None, limit: int = 50) -> PersistentTaskRunListDTO:
+        return self._store.run_page(task_id, before=before, limit=limit)
 
     @staticmethod
     def _thread_target(uri: str) -> TaskThreadTargetDTO:

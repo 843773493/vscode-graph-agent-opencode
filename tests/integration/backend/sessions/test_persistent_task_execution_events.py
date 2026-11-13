@@ -48,7 +48,9 @@ async def _event_runs(case: ModelReplayCase, task: dict, count: int) -> list[dic
             runs = response.json()["data"]["items"]
             if len(runs) >= count and all(run["phase"] not in {"pending", "checking", "delivering"} for run in runs):
                 assert len(runs) == count
-                return runs
+                details = [await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}") for run in runs]
+                assert all(detail.status_code == 200 for detail in details)
+                return [detail.json()["data"]["run"] for detail in details]
             await asyncio.sleep(0.02)
 
 
@@ -79,7 +81,9 @@ async def test_user_and_internal_execution_ends_share_original_identity_and_do_n
     assert _input(case, action_call, accepted["job_id"]) == [{"trigger_input": payload}]
     await case.container.job_event_bus.publish(accepted["job_id"], EventType.JOB_COMPLETED, {"session_id": source_id})
     assert await _event_runs(case, task, 1) == [first]
-    assert (await case.client.get(f"{ROOT}/{task['task_id']}/runs")).json()["data"]["items"] == [first]
+    summary, = (await case.client.get(f"{ROOT}/{task['task_id']}/runs")).json()["data"]["items"]
+    assert summary["run_id"] == first["run_id"] and summary["phase"] == first["phase"]
+    assert "trigger_payload" not in summary
 
     internal = await _create(case, _configuration(source_uri, "context_and_run"), "internal-source")
     await case.plan(source_id, [{"content": "内部工作完成。"}])

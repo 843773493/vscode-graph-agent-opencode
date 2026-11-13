@@ -223,7 +223,8 @@ async def test_import_retains_deleted_terminal_history_and_repeat_does_not_overw
     task = (await case.client.get(ROOT + "/gen_historical")).json()["data"]
     assert task["revision"] == 7 and task["lifecycle"] == "paused"
     run, = (await case.client.get(ROOT + "/gen_historical/runs")).json()["data"]["items"]
-    assert run["phase"] == "delivered" and run["trigger_key"] == "legacy-key"
+    assert run["phase"] == "delivered"
+    assert case.container.persistent_task_runtime.store.run(task["task_id"], run["run_id"]).trigger_key == "legacy-key"
     assert run["generation"]["job_id"] == "job_historical" and run["generation"]["message_id"] == "msg_historical"
     assert run["generation"]["outputs"] == [{"kind": "session", "workspace_id": workspace_id, "session_id": "ses_deleted", "title": "保留的历史标题", "navigation_path": ["原目录"]}]
     response = await case.client.get(ROOT, params={"session_id": "ses_deleted"})

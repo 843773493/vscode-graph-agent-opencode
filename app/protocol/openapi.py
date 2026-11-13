@@ -233,6 +233,7 @@ SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "SseErrorDTO": file_events_pb2.DESCRIPTOR.message_types_by_name["SseError"],
     "WorkspaceObservationFrameDTO": public_pb2.DESCRIPTOR.message_types_by_name["WorkspaceObservationFrameDTO"],
     "PersistentTaskListDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"],
+    "PersistentTaskChangedDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskChangedDTO"],
     # Session SSE 的信封经具名 adapter 转换，以下 payload 本身仍与 proto 同形。
     "JobProgressDTO": job_pb2.DESCRIPTOR.message_types_by_name["JobProgress"],
     "JobStepProgressDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["JobStepProgress"],

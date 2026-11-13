@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Annotated, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from pydantic_core import PydanticSerializationError
@@ -22,6 +22,7 @@ from app.core.exceptions import NotFoundError
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.generator_import import SessionGeneratorImportRequest
 from app.schemas.internal_v2.persistent_task import (
+    PersistentTaskChangedDTO,
     PersistentTaskCheckRequest,
     PersistentTaskControlRequest,
     PersistentTaskCreateRequest,
@@ -70,7 +71,9 @@ async def create_task(payload: PersistentTaskCreateRequest, request_id: RequestI
 
 
 @router.get("/events", response_class=StreamingResponse,
-            responses=sse_responses("当前工作区持久任务完整快照", {"snapshot": PersistentTaskListDTO}))
+            responses=sse_responses("持久任务初始快照与精确更新", {
+                "snapshot": PersistentTaskListDTO, "changed": PersistentTaskChangedDTO,
+            }))
 async def task_events(service: TaskService, session_id: str | None = None):
     channel = service.runtime.events
 
@@ -79,9 +82,12 @@ async def task_events(service: TaskService, session_id: str | None = None):
         try:
             yield "event: snapshot\ndata: " + service.snapshot(session_id).model_dump_json() + "\n\n"
             while True:
-                await subscription.next()
-                # gap 直接推送权威完整列表，不能用丢失通知猜测任务状态。
-                yield "event: snapshot\ndata: " + service.snapshot(session_id).model_dump_json() + "\n\n"
+                delivery = await subscription.next()
+                event = delivery.event
+                if delivery.gap or event.task_id is None:
+                    yield "event: snapshot\ndata: " + service.snapshot(session_id).model_dump_json() + "\n\n"
+                else:
+                    yield "event: changed\ndata: " + service.changed(event.task_id, event.run_id, session_id).model_dump_json() + "\n\n"
         finally:
             channel.unsubscribe(subscription)
 
@@ -124,9 +130,9 @@ async def check_task(task_id: str, payload: PersistentTaskCheckRequest, request_
 
 @router.get("/{task_id}/runs", response_model=APIResponse[PersistentTaskRunListDTO])
 def task_runs(task_id: str, request_id: RequestId,
-                    service: TaskService):
+              service: TaskService, before: str | None = None, limit: Annotated[int, Query(ge=1, le=100)] = 50):
     try:
-        return APIResponse(data=PersistentTaskRunListDTO(items=service.runs(task_id)), request_id=request_id)
+        return APIResponse(data=service.runs(task_id, before=before, limit=limit), request_id=request_id)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except (ValidationError, PydanticSerializationError):

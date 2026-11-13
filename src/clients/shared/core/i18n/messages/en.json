@@ -3188,6 +3188,7 @@
   "tasks.history.loadingDetail": "Loading frozen inputs and execution evidence…",
   "tasks.history.modelCall": "Model call:",
   "tasks.history.notConsumed": "No evidence yet that the input was included in a dispatched request.",
+  "tasks.history.older": "Load earlier runs",
   "tasks.history.openEvaluation": "Open evaluation Thread",
   "tasks.history.openWork": "Open work Thread",
   "tasks.history.outcome": "Work execution: {0}",

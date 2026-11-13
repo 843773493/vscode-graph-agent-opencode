@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as api from "../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../api/workspaceIdentity";
@@ -22,71 +22,68 @@ const task: api.PersistentTaskDTO = {
     } },
   },
 };
-function run(phase: string, sessionId?: string): api.PersistentTaskRunDTO {
+function run(phase: string, sessionId?: string): api.PersistentTaskRunSummaryDTO {
   return {
-    run_id: "run-original", task_id: task.task_id, task_revision: 1, definition_revision: 1, trigger_key: "trigger-original",
+    run_id: "run-original", task_id: task.task_id, run_sequence: 1, definition_revision: 1,
     trigger_type: "manual", check_only: false, phase, created_at: task.created_at, updated_at: task.updated_at,
     generation: { run_id: "run-original", status: phase === "delivered" ? "completed" : "queued",
       outputs: sessionId ? [{ kind: "session", workspace_id: "owner-one", session_id: sessionId, navigation_path: [] }] : [] },
   };
 }
 let renderer: ReactTestRenderer;
-let history: api.PersistentTaskRunDTO[];
-let items: api.PersistentTaskDTO[];
-let error: string | null;
+let activity: ReturnType<typeof useGenerationActivity>;
 const open = mock(async (_id: string) => {});
 const status = mock((_text: string) => {});
-let reader: ReturnType<typeof spyOn<typeof api, "listPersistentTaskRuns">>;
-function Probe({ owner, loaded = true }: { owner: GatewayWorkspaceRequestTarget; loaded?: boolean }) {
-  error = useGenerationActivity(8014, owner, items, loaded,
-    { onStatusChange: status, onOpenSession: open });
+function Probe({ owner, active = true }: { owner: GatewayWorkspaceRequestTarget; active?: boolean }) {
+  activity = useGenerationActivity(8014, owner, active, { onStatusChange: status, onOpenSession: open });
   return null;
 }
-async function update(owner = target, loaded = true) {
-  items = [{ ...task, workspace_id: owner.workspace_id! }];
-  await act(async () => { renderer.update(<Probe owner={owner} loaded={loaded} />); });
+async function baseline(runs: api.PersistentTaskRunSummaryDTO[]) {
+  await act(async () => { activity.observe({ snapshot: { items: [task], active_runs: runs, runtime: { state: "running", recovering_tasks: 0 } } }); });
+}
+async function changed(value: api.PersistentTaskRunSummaryDTO) {
+  await act(async () => { activity.observe({ changed: { task_id: task.task_id, task, run: value } }); });
 }
 beforeEach(async () => {
-  history = []; items = [task]; open.mockClear(); status.mockClear();
-  reader = spyOn(api, "listPersistentTaskRuns").mockImplementation(async () => history);
+  open.mockReset(); open.mockImplementation(async () => {}); status.mockClear();
   await act(async () => { renderer = create(<Probe owner={target} />); });
 });
-afterEach(() => { act(() => renderer.unmount()); reader.mockRestore(); });
+afterEach(() => { act(() => renderer.unmount()); });
 
-test("queued不变时输出首次出现仍打开会话，终态通知只发生一次", async () => {
-  history = [run("delivering")]; await update();
+test("queued不变时输出首次出现仍打开会话，初始输出不重放且终态通知只发生一次", async () => {
+  await baseline([run("delivering", "old-output")]);
   expect(open).not.toHaveBeenCalled();
-  history = [run("delivering", "session-generated")]; await update();
+  await baseline([run("delivering")]);
+  await changed(run("delivering", "session-generated"));
+  await changed(run("delivering", "session-generated"));
   expect(open.mock.calls).toEqual([["session-generated"]]);
-  await update();
-  expect(open).toHaveBeenCalledTimes(1);
-  history = [run("delivered", "session-generated")]; await update();
+  await changed(run("delivered", "session-generated"));
+  await changed(run("delivered", "session-generated"));
   expect(status.mock.calls).toEqual([["生成任务：已完成"]]);
-  await update();
-  expect(status).toHaveBeenCalledTimes(1);
   expect(open).toHaveBeenCalledTimes(1);
 });
 
-test("切换工作区后同名历史只建立新基线，旧请求迟到不能触发当前回调", async () => {
-  let finish: (value: api.PersistentTaskRunDTO[]) => void = () => { throw new Error("旧请求未开始"); };
-  reader.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-  await update();
-  const signal = reader.mock.calls[reader.mock.calls.length - 1][3];
-  const other = { ...target, workspace_id: "owner-two" };
-  history = [run("delivered", "session-old-in-two")]; await update(other);
-  expect(signal?.aborted).toBe(true);
+test("工作区切换后旧观察闭包不能触发回调，新快照只建立基线", async () => {
+  await baseline([]);
+  const previous = activity;
+  await act(async () => { renderer.update(<Probe owner={{ ...target, workspace_id: "owner-two" }} />); });
+  await baseline([run("delivering", "old-in-two")]);
+  await act(async () => { previous.observe({ changed: { task_id: task.task_id, task, run: run("delivered", "late-in-one") } }); });
   expect(open).not.toHaveBeenCalled(); expect(status).not.toHaveBeenCalled();
-  await act(async () => { finish([run("delivered", "session-late-in-one")]); });
-  expect(open).not.toHaveBeenCalled(); expect(status).not.toHaveBeenCalled();
-  history = [...history, { ...run("delivering", "session-new-in-two"), run_id: "new-run" }];
-  await update(other);
-  expect(open.mock.calls).toEqual([["session-new-in-two"]]);
-  expect(reader.mock.calls[reader.mock.calls.length - 1][1]).toEqual(other);
+  await changed({ ...run("delivering", "new-in-two"), run_id: "new-run", run_sequence: 2 });
+  expect(open.mock.calls).toEqual([["new-in-two"]]);
 });
 
-test("切换尚未加载的工作区时立即清除原工作区读取错误", async () => {
-  reader.mockRejectedValueOnce(new Error("原工作区读取失败"));
-  await update(); expect(error).toContain("原工作区读取失败");
-  await update({ ...target, workspace_id: "owner-two" }, false);
-  expect(error).toBeNull();
+test("隐藏后停止消费，恢复快照不重放旧输出；切换工作区立即清除旧错误", async () => {
+  open.mockRejectedValueOnce(new Error("打开失败"));
+  await baseline([]); await changed(run("delivering", "output"));
+  expect(activity.error).toContain("打开失败");
+  await act(async () => { renderer.update(<Probe owner={target} active={false} />); });
+  await changed({ ...run("delivering", "hidden"), run_id: "hidden" });
+  expect(open).toHaveBeenCalledTimes(1);
+  expect(activity.error).toBeNull();
+  await act(async () => { renderer.update(<Probe owner={target} />); });
+  await baseline([run("delivering", "output")]);
+  await changed(run("delivering", "output"));
+  expect(open).toHaveBeenCalledTimes(1);
 });

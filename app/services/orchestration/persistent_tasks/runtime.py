@@ -299,8 +299,8 @@ class PersistentTaskRuntime:
                         running.add_done_callback(lambda _task: self._wake.set())
                         self._inflight[key] = running
                 if self._accepting:
-                    for task_id in self.store.schedule_due(self.clock()):
-                        self.notify(task_id)
+                    for task_id, run_id in self.store.schedule_due(self.clock()):
+                        self.notify(task_id, run_id)
                 tasks = self.store.list_automations() if self._accepting else []
                 for task in tasks:
                     if task.task_id in self._inflight or task.task_id in self._waiting_checks:
@@ -387,11 +387,12 @@ class PersistentTaskRuntime:
                 return
             if page.records:
                 await observe_phase(task_id, "task.execution_source.read_before_accept", details={"task_id": task_id})
-            self.store.accept_execution_completions(task_id, expected_revision=task.revision, after_commit_id=cursor,
-                                                     page=page, now=self.clock())
+            run_ids = self.store.accept_execution_completions(task_id, expected_revision=task.revision, after_commit_id=cursor,
+                                                             page=page, now=self.clock())
             if page.records:
                 self.reconcile_execution_source(task_id)
-                self.notify(task_id)
+                for run_id in run_ids:
+                    self.notify(task_id, run_id)
 
     async def _process_run(self, run: PersistentTaskRunDTO) -> None:
         await observe_phase(run.run_id, "task.run.loaded", details={"task_id": run.task_id})

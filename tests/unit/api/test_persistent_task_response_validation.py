@@ -142,7 +142,7 @@ class TaskBoundaryService:
     async def check(self, task_id: str, request: object) -> NoReturn:
         self._fail("check")
 
-    def runs(self, task_id: str) -> NoReturn:
+    def runs(self, task_id: str, *, before: str | None = None, limit: int = 50) -> NoReturn:
         self._fail("runs")
 
     async def inspect_run(self, task_id: str, run_id: str) -> NoReturn:
@@ -343,7 +343,7 @@ def stored_run(
             now,
             request_id=REQUEST_ID,
         )
-        monkeypatch.setattr(service, "runs", store.runs)
+        monkeypatch.setattr(service, "runs", store.run_page)
         yield client, state, original
 
 
@@ -421,7 +421,47 @@ def test_real_store_validation_preserves_run_and_recovers_after_repair(
         )
     repaired = client.get(BASE + f"/{original.task_id}/runs")
     assert repaired.status_code == 200, repaired.text
-    assert repaired.json()["data"] == {"items": [original.model_dump(mode="json")]}
+    assert repaired.json()["data"]["next_before"] is None
+    repaired_run, = repaired.json()["data"]["items"]
+    assert repaired_run.pop("run_sequence") > 0
+    assert repaired_run == original.model_dump(mode="json", exclude={
+        "task_revision", "trigger_key", "request_id", "trigger_payload",
+    })
     assert (
         repaired.json()["request_id"] == repaired.headers["X-Request-ID"] == REQUEST_ID
     )
+
+
+def test_run_pages_are_bounded_and_stable_while_new_runs_arrive(stored_run):
+    client, state, original = stored_run
+    with closing(state.connection()) as connection, connection:
+        # 相同时间戳下仍按接受序号分页；大正文不进入摘要响应。
+        for index in range(120):
+            connection.execute(
+                "INSERT INTO persistent_task_runs "
+                "(run_id,task_id,task_revision,definition_revision,trigger_key,trigger_hash,check_only,phase,"
+                "created_at,updated_at,trigger_type,decision_json) "
+                "SELECT ?,task_id,task_revision,definition_revision,?,trigger_hash,check_only,'delivered',"
+                "created_at,updated_at,trigger_type,? FROM persistent_task_runs WHERE run_id=?",
+                (f"page-{index}", f"page-{index}", json.dumps({"decision": "complete", "reason": "完成", "result": {"text": "x" * 8192}}), original.run_id),
+            )
+    path = BASE + f"/{original.task_id}/runs"
+    response = client.get(path)
+    assert response.status_code == 200, response.text
+    page = response.json()["data"]
+    assert [run["run_id"] for run in page["items"]] == [f"page-{index}" for index in range(70, 120)]
+    assert "result" not in page["items"][0]["decision"] and "trigger_payload" not in page["items"][0]
+    with closing(state.connection()) as connection, connection:
+        connection.execute(
+            "INSERT INTO persistent_task_runs "
+            "(run_id,task_id,task_revision,definition_revision,trigger_key,trigger_hash,check_only,phase,created_at,updated_at,trigger_type) "
+            "SELECT 'new-run',task_id,task_revision,definition_revision,'new-run',trigger_hash,check_only,phase,created_at,updated_at,trigger_type "
+            "FROM persistent_task_runs WHERE run_id=?", (original.run_id,),
+        )
+    second = client.get(path, params={"before": page["next_before"]}).json()["data"]
+    assert [run["run_id"] for run in second["items"]] == [f"page-{index}" for index in range(20, 70)]
+    last = client.get(path, params={"before": second["next_before"]}).json()["data"]
+    assert [run["run_id"] for run in last["items"]] == [original.run_id, *[f"page-{index}" for index in range(20)]]
+    assert last["next_before"] is None
+    assert client.get(path, params={"before": "unknown-run"}).status_code == 400
+    assert client.get(path, params={"limit": 101}).status_code == 422

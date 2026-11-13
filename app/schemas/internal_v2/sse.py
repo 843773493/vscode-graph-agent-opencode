@@ -16,7 +16,10 @@ from app.schemas.gateway.service_plugin import (
     PluginRuntimeStatusDTO,
 )
 from app.schemas.internal_v2.config import ConfigEventDTO
-from app.schemas.internal_v2.persistent_task import PersistentTaskListDTO
+from app.schemas.internal_v2.persistent_task import (
+    PersistentTaskChangedDTO,
+    PersistentTaskListDTO,
+)
 from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.workspace import WorkspaceFileChangeBatchDTO
@@ -37,6 +40,7 @@ SSE_EVENT_MODELS: dict[str, type[BaseModel]] = {
         SseErrorDTO,
         WorkspaceObservationFrameDTO,
         PersistentTaskListDTO,
+        PersistentTaskChangedDTO,
         FederatedSearchEventDTO,
         ConfigEventDTO,
         PluginCommandSnapshotDTO,

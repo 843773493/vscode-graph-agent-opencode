@@ -91,7 +91,9 @@ async def _run(case: ModelReplayCase, task: dict, run: dict, phase: str = "deliv
             actual, = [row for row in response.json()["data"]["items"] if row["run_id"] == run["run_id"]]
             if actual["phase"] not in {"pending", "checking", "delivering"}:
                 assert actual["phase"] == phase, actual
-                return actual
+                detail = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}")
+                assert detail.status_code == 200, detail.text
+                return detail.json()["data"]["run"]
             await asyncio.sleep(0.02)
 
 
@@ -142,7 +144,9 @@ async def test_component_validation_revision_and_real_dry_run(source_case: Runti
     updated = response.json()["data"]
     assert (updated["revision"], updated["definition_revision"]) == (2, 2)
     assert updated["configuration"] == conflict
-    assert (await case.client.get(f"{ROOT}/{task['task_id']}/runs")).json()["data"]["items"] == [actual]
+    summary, = (await case.client.get(f"{ROOT}/{task['task_id']}/runs")).json()["data"]["items"]
+    assert summary["run_id"] == actual["run_id"] and summary["definition_revision"] == actual["definition_revision"]
+    assert "result" not in summary["decision"] and "trigger_payload" not in summary
     response = await case.client.post(f"{ROOT}/{task['task_id']}/control", json={"expected_revision": 1, "action": "pause"})
     assert response.status_code == 409, response.text
     paused = await _control(case, updated, "pause")
@@ -419,7 +423,7 @@ async def test_real_backend_restart_reconciles_accepted_action_before_revision_s
 
 
 @pytest.mark.asyncio
-async def test_real_http_sse_delivers_authoritative_task_snapshots(restart_source_case: RestartRuntimeSourceCase) -> None:
+async def test_real_http_sse_delivers_snapshot_then_precise_task_updates(restart_source_case: RestartRuntimeSourceCase) -> None:
     case = restart_source_case
     _session_id, _thread_id, target = await _target(case)
     task = await _create(case, _configuration(target))
@@ -432,7 +436,7 @@ async def test_real_http_sse_delivers_authoritative_task_snapshots(restart_sourc
         assert task["task_id"] in initial and '"lifecycle":"active"' in initial
         assert await anext(lines) == ""
         paused = await _control(case, task, "pause")
-        assert await anext(lines) == "event: snapshot"
+        assert await anext(lines) == "event: changed"
         latest = await anext(lines)
         assert paused["task_id"] in latest and '"lifecycle":"paused"' in latest
 

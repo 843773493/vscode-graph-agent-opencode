@@ -3464,10 +3464,42 @@ message TaskRuntimeStatusDTO {
 message PersistentTaskListDTO {
   repeated PersistentTaskDTO items = 1;
   TaskRuntimeStatusDTO runtime = 2;
+  repeated PersistentTaskRunSummaryDTO active_runs = 3;
 }
 
 message PersistentTaskRunListDTO {
-  repeated PersistentTaskRunDTO items = 1;
+  reserved 1;
+  repeated PersistentTaskRunSummaryDTO items = 2;
+  optional string next_before = 3;
+}
+
+message TaskDecisionSummaryDTO {
+  string decision = 1;
+  string reason = 2;
+}
+
+message PersistentTaskRunSummaryDTO {
+  string run_id = 1;
+  string task_id = 2;
+  int64 run_sequence = 3;
+  int64 definition_revision = 4;
+  bool check_only = 5;
+  string phase = 6;
+  string trigger_type = 7;
+  optional google.protobuf.Timestamp scheduled_for = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  optional TaskDecisionSummaryDTO decision = 11;
+  optional TaskDeliveryDTO delivery = 12;
+  optional TaskEvaluationDTO evaluation = 13;
+  optional SessionGenerationExecuteResultDTO generation = 14;
+  optional string error = 15;
+}
+
+message PersistentTaskChangedDTO {
+  string task_id = 1;
+  optional PersistentTaskDTO task = 2;
+  optional PersistentTaskRunSummaryDTO run = 3;
 }
 
 // 生成器预览由目标工作区计算，只返回 catalog 导航与分配状态。

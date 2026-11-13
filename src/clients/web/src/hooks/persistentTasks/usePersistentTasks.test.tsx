@@ -17,20 +17,20 @@ let renderer: ReactTestRenderer;
 let value: ReturnType<typeof usePersistentTasks>;
 let records: api.PersistentTaskDTO[];
 const healthy: api.TaskRuntimeStatusDTO = { state: "running", recovering_tasks: 0 };
-const snapshot = (items: api.PersistentTaskDTO[], runtime = healthy): api.PersistentTaskSnapshot => ({ items, runtime });
-const streams: Array<{ signal: AbortSignal; publish: (value: api.PersistentTaskSnapshot) => void; sessionId?: string }> = [];
+const snapshot = (items: api.PersistentTaskDTO[], runtime = healthy): api.PersistentTaskSnapshot => ({ items, runtime, active_runs: [] });
+const streams: Array<{ signal: AbortSignal; publish: (value: api.PersistentTaskSnapshot) => void; changed: (value: api.PersistentTaskChangedDTO) => void; sessionId?: string }> = [];
 const restores: Array<() => void> = [];
 function Probe({ owner, sessionId, active = true }: { owner: GatewayWorkspaceRequestTarget; sessionId?: string; active?: boolean }) { value = usePersistentTasks(8014, owner, sessionId, active); return null; }
 async function mount() { await act(async () => { renderer = create(<Probe owner={target} />); }); }
 
 beforeEach(() => {
   records = [original]; streams.length = 0;
-  const watch = spyOn(api, "watchPersistentTasks").mockImplementation(async (_port, _owner, signal, publish, sessionId) => {
-    streams.push({ signal, publish, sessionId }); publish(snapshot(records));
+  const watch = spyOn(api, "watchPersistentTasks").mockImplementation(async (_port, _owner, signal, publish, changed, sessionId) => {
+    streams.push({ signal, publish, changed, sessionId }); publish(snapshot(records));
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   });
   const list = spyOn(api, "listPersistentTasks").mockImplementation(async () => snapshot(records));
-  const history = spyOn(api, "listPersistentTaskRuns").mockResolvedValue([]);
+  const history = spyOn(api, "listPersistentTaskRuns").mockResolvedValue({ items: [] });
   restores.push(() => watch.mockRestore(), () => list.mockRestore(), () => history.mockRestore());
 });
 afterEach(() => { act(() => renderer?.unmount()); restores.splice(0).forEach((restore) => restore()); });
@@ -94,21 +94,23 @@ test("revision冲突后读回完整对象，保留后端错误且不伪造暂停
   expect(control.mock.calls[0][2]).toBe(original);
 });
 
-test("写入停止旧订阅；恢复中的暂停使用完整回执，迟到快照不能重新激活", async () => {
+test("写入保持状态订阅，较早操作回执不能覆盖已收到的新状态", async () => {
   records = [{ ...original, phase: "recovering", recovering: true }];
   const paused = { ...original, revision: 2, phase: "recovering", recovering: true, lifecycle: "paused" };
-  const control = spyOn(api, "controlPersistentTask").mockImplementation(async () => { records = [paused]; return paused; });
+  const settled = { ...paused, phase: "paused", recovering: false };
+  const control = spyOn(api, "controlPersistentTask").mockImplementation(async () => {
+    records = [paused];
+    streams[0].changed({ task_id: original.task_id, task: settled });
+    return paused;
+  });
   restores.push(() => control.mockRestore());
   await mount();
   const stream = streams[0];
-  await act(async () => { await value.run(value.items[0], "pause"); stream.publish(snapshot([original])); });
-  expect(stream.signal.aborted).toBe(true);
-  expect(value.items).toEqual([paused]);
-  await act(async () => { streams[streams.length - 1].publish(snapshot([{ ...paused, phase: "paused", recovering: false }])); });
-  expect(value.items[0].lifecycle).toBe("paused");
-  expect(value.items[0].recovering).toBe(false);
+  await act(async () => { await value.run(value.items[0], "pause"); });
+  expect(stream.signal.aborted).toBe(false);
+  expect(streams).toHaveLength(1);
+  expect(value.items).toEqual([settled]);
 });
-
 
 test("worker失败由完整快照替换，刷新和空列表均不能伪造恢复成功", async () => {
   await mount();
@@ -131,7 +133,33 @@ test("Goal 详情也从同一任务 ID 读取运行记录", async () => {
   records = [{ ...original, application_type: "goal", configuration: undefined }];
   await act(async () => { renderer = create(<Probe owner={target} sessionId="session-one" />); });
   await act(async () => { value.select(original.task_id); });
-  expect(api.listPersistentTaskRuns).toHaveBeenCalledWith(8014, target, original.task_id, expect.any(AbortSignal));
+  expect(api.listPersistentTaskRuns).toHaveBeenCalledWith(8014, target, original.task_id, expect.any(AbortSignal), undefined);
   expect(value.history?.runs).toEqual([]);
   expect(value.history?.loading).toBe(false);
+});
+
+
+test("分页保持接受顺序，实时更新只替换对应运行且不重读历史", async () => {
+  const run = (id: string, sequence: number, phase = "delivering"): api.PersistentTaskRunSummaryDTO => ({
+    run_id: id, task_id: original.task_id, run_sequence: sequence, definition_revision: 1,
+    check_only: false, phase, trigger_type: "manual", created_at: original.created_at, updated_at: original.updated_at,
+  });
+  const history = spyOn(api, "listPersistentTaskRuns").mockResolvedValue({ items: [run("second", 2)], next_before: "second" });
+  restores.push(() => history.mockRestore());
+  await mount();
+  await act(async () => { value.select(original.task_id); });
+  expect(value.history?.runs.map(item => item.run_id)).toEqual(["second"]);
+  const reads = history.mock.calls.length;
+  await act(async () => {
+    streams[0].changed({ task_id: "other", task: { ...original, task_id: "other" } });
+    streams[0].changed({ task_id: original.task_id, task: original, run: run("second", 2, "delivered") });
+    streams[0].changed({ task_id: original.task_id, task: original, run: run("third", 3) });
+  });
+  expect(history.mock.calls.length).toBe(reads);
+  expect(value.history?.runs.map(item => [item.run_id, item.phase])).toEqual([["second", "delivered"], ["third", "delivering"]]);
+  history.mockResolvedValueOnce({ items: [run("first", 1)] });
+  await act(async () => { value.loadOlder(); });
+  expect(history.mock.calls.at(-1)?.[4]).toBe("second");
+  expect(value.history?.runs.map(item => item.run_id)).toEqual(["first", "second", "third"]);
+  expect(value.history?.nextBefore).toBeUndefined();
 });

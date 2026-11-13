@@ -72,7 +72,7 @@ try {
   await page.locator(".editor-group-container").nth(0)
     .locator(`section.boxteam-thread[data-workspace-id="${fixture.otherOwner.workspaceId}"][data-session-id="${fixture.otherOwner.sessionId}"][data-thread-id="${fixture.otherOwner.threadId}"]`)
     .getByText("自动激活验收完成。", { exact: true }).waitFor();
-  await panel.getByText("会话动作：completed", { exact: true }).waitFor();
+  await panel.getByText("会话动作：已完成", { exact: true }).waitFor();
   assert.deepEqual(errors, []);
   await page.screenshot({ path: path.join(artifacts, "generation-auto-open.png"), fullPage: true });
   await writeFile(path.join(artifacts, "actual.json"), JSON.stringify({ before, accepted, noPageErrors: true }, null, 2));

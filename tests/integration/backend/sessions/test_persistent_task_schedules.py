@@ -59,7 +59,9 @@ async def _history(case, task: dict, count: int) -> list[dict]:
             runs = response.json()["data"]["items"]
             assert len(runs) <= count, runs
             if len(runs) == count and all(row["phase"] not in {"pending", "checking", "delivering"} for row in runs):
-                return runs
+                details = [await case.client.get(f"{ROOT}/{task['task_id']}/runs/{run['run_id']}") for run in runs]
+                assert all(detail.status_code == 200 for detail in details)
+                return [detail.json()["data"]["run"] for detail in details]
             await asyncio.sleep(0.02)
 
 
@@ -147,7 +149,7 @@ print(json.dumps({'decision':'proceed' if ready else 'wait','reason':'scheduled-
     task = response.json()["data"]
     assert task["task_id"] == task_id and task["definition_revision"] == 2
     assert datetime.fromisoformat(task["next_run_at"]) == anchor + timedelta(seconds=180)
-    assert (await case.client.get(f"{ROOT}/{task_id}/runs")).json()["data"]["items"] == initial
+    assert await _history(case, task, len(initial)) == initial
 
     signal = case.workspace / "ready.txt"
     signal.write_text("waiting", encoding="utf-8")
@@ -321,7 +323,9 @@ async def test_real_process_restart_reuses_committed_schedule_trigger(
     case.control.advance_wait(2)
     await asyncio.to_thread(case.control.acknowledged_match, "scheduled-loaded")
     before = (await case.client.get(f"{ROOT}/{task['task_id']}/runs")).json()["data"]["items"]
-    original = before[0]
+    detail = await case.client.get(f"{ROOT}/{task['task_id']}/runs/{before[0]['run_id']}")
+    assert detail.status_code == 200, detail.text
+    original = detail.json()["data"]["run"]
     assert original["phase"] == "pending" and original["scheduled_for"] is not None
     await case.restart(hard=True, while_stopped=lambda: _release_match(case, "scheduled-loaded"))
     actual = await _run(case, task, original)

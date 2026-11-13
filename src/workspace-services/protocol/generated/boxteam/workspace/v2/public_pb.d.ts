@@ -15128,6 +15128,11 @@ export declare type PersistentTaskListDTO = Message<"boxteam.workspace.v2.Persis
    * @generated from field: boxteam.workspace.v2.TaskRuntimeStatusDTO runtime = 2;
    */
   runtime?: TaskRuntimeStatusDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.PersistentTaskRunSummaryDTO active_runs = 3;
+   */
+  activeRuns: PersistentTaskRunSummaryDTO[];
 };
 
 /**
@@ -15141,9 +15146,14 @@ export declare const PersistentTaskListDTOSchema: GenMessage<PersistentTaskListD
  */
 export declare type PersistentTaskRunListDTO = Message<"boxteam.workspace.v2.PersistentTaskRunListDTO"> & {
   /**
-   * @generated from field: repeated boxteam.workspace.v2.PersistentTaskRunDTO items = 1;
+   * @generated from field: repeated boxteam.workspace.v2.PersistentTaskRunSummaryDTO items = 2;
    */
-  items: PersistentTaskRunDTO[];
+  items: PersistentTaskRunSummaryDTO[];
+
+  /**
+   * @generated from field: optional string next_before = 3;
+   */
+  nextBefore?: string | undefined;
 };
 
 /**
@@ -15151,6 +15161,139 @@ export declare type PersistentTaskRunListDTO = Message<"boxteam.workspace.v2.Per
  * Use `create(PersistentTaskRunListDTOSchema)` to create a new message.
  */
 export declare const PersistentTaskRunListDTOSchema: GenMessage<PersistentTaskRunListDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.TaskDecisionSummaryDTO
+ */
+export declare type TaskDecisionSummaryDTO = Message<"boxteam.workspace.v2.TaskDecisionSummaryDTO"> & {
+  /**
+   * @generated from field: string decision = 1;
+   */
+  decision: string;
+
+  /**
+   * @generated from field: string reason = 2;
+   */
+  reason: string;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.TaskDecisionSummaryDTO.
+ * Use `create(TaskDecisionSummaryDTOSchema)` to create a new message.
+ */
+export declare const TaskDecisionSummaryDTOSchema: GenMessage<TaskDecisionSummaryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskRunSummaryDTO
+ */
+export declare type PersistentTaskRunSummaryDTO = Message<"boxteam.workspace.v2.PersistentTaskRunSummaryDTO"> & {
+  /**
+   * @generated from field: string run_id = 1;
+   */
+  runId: string;
+
+  /**
+   * @generated from field: string task_id = 2;
+   */
+  taskId: string;
+
+  /**
+   * @generated from field: int64 run_sequence = 3;
+   */
+  runSequence: bigint;
+
+  /**
+   * @generated from field: int64 definition_revision = 4;
+   */
+  definitionRevision: bigint;
+
+  /**
+   * @generated from field: bool check_only = 5;
+   */
+  checkOnly: boolean;
+
+  /**
+   * @generated from field: string phase = 6;
+   */
+  phase: string;
+
+  /**
+   * @generated from field: string trigger_type = 7;
+   */
+  triggerType: string;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp scheduled_for = 8;
+   */
+  scheduledFor?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 9;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp updated_at = 10;
+   */
+  updatedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskDecisionSummaryDTO decision = 11;
+   */
+  decision?: TaskDecisionSummaryDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskDeliveryDTO delivery = 12;
+   */
+  delivery?: TaskDeliveryDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.TaskEvaluationDTO evaluation = 13;
+   */
+  evaluation?: TaskEvaluationDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.SessionGenerationExecuteResultDTO generation = 14;
+   */
+  generation?: SessionGenerationExecuteResultDTO | undefined;
+
+  /**
+   * @generated from field: optional string error = 15;
+   */
+  error?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskRunSummaryDTO.
+ * Use `create(PersistentTaskRunSummaryDTOSchema)` to create a new message.
+ */
+export declare const PersistentTaskRunSummaryDTOSchema: GenMessage<PersistentTaskRunSummaryDTO>;
+
+/**
+ * @generated from message boxteam.workspace.v2.PersistentTaskChangedDTO
+ */
+export declare type PersistentTaskChangedDTO = Message<"boxteam.workspace.v2.PersistentTaskChangedDTO"> & {
+  /**
+   * @generated from field: string task_id = 1;
+   */
+  taskId: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.PersistentTaskDTO task = 2;
+   */
+  task?: PersistentTaskDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.PersistentTaskRunSummaryDTO run = 3;
+   */
+  run?: PersistentTaskRunSummaryDTO | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.PersistentTaskChangedDTO.
+ * Use `create(PersistentTaskChangedDTOSchema)` to create a new message.
+ */
+export declare const PersistentTaskChangedDTOSchema: GenMessage<PersistentTaskChangedDTO>;
 
 /**
  * 生成器预览由目标工作区计算，只返回 catalog 导航与分配状态。

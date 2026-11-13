@@ -2,14 +2,14 @@ import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import { taskLabel as label } from "./taskPresentation";
 import { formatLocalTimestamp } from "../../../utils/format";
 import { useEffect, useState } from "react";
-import { inspectPersistentTaskRun, type PersistentTaskRunDTO, type PersistentTaskRunDetailDTO, type TaskThreadTargetDTO } from "../../../api/persistentTasks";
+import { inspectPersistentTaskRun, type PersistentTaskRunSummaryDTO, type PersistentTaskRunDetailDTO, type TaskThreadTargetDTO } from "../../../api/persistentTasks";
 import type { GatewayWorkspaceRequestTarget } from "../../../api/workspaceIdentity";
 import { errorMessage } from "../../../utils/errorMessage";
 
 const time = (value: string | undefined) => value ? formatLocalTimestamp(value) : "—";
 
 function RunDetail({ apiPort, target, run, onOpenThread }: {
-  apiPort: number; target: GatewayWorkspaceRequestTarget; run: PersistentTaskRunDTO;
+  apiPort: number; target: GatewayWorkspaceRequestTarget; run: PersistentTaskRunSummaryDTO;
   onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
 }) {
   const [version, setVersion] = useState(0);
@@ -40,7 +40,7 @@ function RunDetail({ apiPort, target, run, onOpenThread }: {
         : <p>{t("tasks.history.notConsumed")}</p>}
       {detail.execution_outcome ? <p>{t("tasks.history.outcome", label(detail.execution_outcome))}</p> : null}
       {detail.action_content ? <details open><summary>{t("tasks.history.content")}</summary><pre>{detail.action_content}</pre></details> : null}
-      {run.decision ? <details><summary>{t("tasks.history.decision")}</summary><pre>{JSON.stringify(run.decision.result, null, 2)}</pre></details> : null}
+      {detail.run?.decision ? <details><summary>{t("tasks.history.decision")}</summary><pre>{JSON.stringify(detail.run.decision.result, null, 2)}</pre></details> : null}
       <details><summary>{t("tasks.history.input")}</summary><pre>{JSON.stringify(detail.check_input, null, 2)}</pre></details>
       <details><summary>{t("tasks.history.configuration")}</summary><pre>{JSON.stringify(detail.configuration, null, 2)}</pre></details>
     </> : null}
@@ -48,7 +48,7 @@ function RunDetail({ apiPort, target, run, onOpenThread }: {
 }
 
 function RunRow({ apiPort, target, run, onOpenSession, onOpenThread }: {
-  apiPort: number; target: GatewayWorkspaceRequestTarget; run: PersistentTaskRunDTO;
+  apiPort: number; target: GatewayWorkspaceRequestTarget; run: PersistentTaskRunSummaryDTO;
   onOpenSession: (sessionId: string) => Promise<void>; onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -66,7 +66,7 @@ function RunRow({ apiPort, target, run, onOpenSession, onOpenThread }: {
 }
 
 export default function TaskRunHistory(props: {
-  apiPort: number; target: GatewayWorkspaceRequestTarget; runs: PersistentTaskRunDTO[];
+  apiPort: number; target: GatewayWorkspaceRequestTarget; runs: PersistentTaskRunSummaryDTO[];
   onOpenSession: (sessionId: string) => Promise<void>; onOpenThread: (target: TaskThreadTargetDTO) => Promise<void>;
 }) {
   return <ol className="persistent-task-runs">{props.runs.map((run) => <RunRow key={run.run_id} {...props} run={run} />)}</ol>;
