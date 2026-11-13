@@ -156,6 +156,7 @@
   - 2026-11-12 右侧 Session 资源的保留／关联／解除关联迁到同一资源 Command，冻结元数据中的 ID／revision；读取期间版本或凭据变化拒绝写入，最终由原 Session loader 权威重读。原 Session 停止／Browser wake 合同继续原入口。54项定向检查281条断言、172份真实转换源码类型、79扩展正式构建和完整运行资源页面通过；页面同时核跨工作区精确聚焦、浏览／二级取消零写入、stop／detach／delete区别、真实409及新Session旧版本拒绝后精确解除关联，零模型／页面错误。刷新收起详情及Browser重建抢焦点的失败原件、修正后的测试边界和最小复审见 `out/tests/temp/2026/11/12/session_runtime_actions/artifacts/verification.json`。仅关闭此子链，MCP／其它动作和跨平台仍不由本片证明，11.1／11.5／11.6／11.7保持未勾选。
 - [ ] 11.6 统一 pending／confirmed、完整权威替换、失败重新读取与未知结果对账，取消未接受步骤不写入，关闭已受理浮层不撤销／重放后端动作。
 - [ ] 11.7 验证未打开详情直接管理、显式 child 优先、任务 revision 冲突、目录 outbox 回执和预览无写副作用，移除迁齐后无消费者的同义执行链。
+  - 2026-11-13 非 MCP 动作收口：Session 终端／Browser 停止已迁至同一资源 Command，保持精确 Thread 关联、原 revision、stop／detach／delete 区别及 finally 原 loader 强制回读；Browser wake 和后台任务保留各自 Session 合同。完整产品页 20 项标志全部通过，页面错误、禁止写入及模型调用为空，3035 个输入前后未变；当前资源合同 46 项／273 断言、任务 27 项及原 Hook／loader／outbox 检查通过，185 份实际转换源码类型、Web 类型及规定构建通过。提交 `be6c85b51`／`d94b01af2`；逐项任务、20 个标志、完整命令、原件及最小复审见 `out/tests/temp/2026/11/13/quick_access_action_closure/artifacts/verification.json` 和同目录 `task-evidence-matrix-1.json`。当前 MCP 完整页面尚未通过，11.1／11.5／11.6／11.7 不据非 MCP 子片勾选。
   - 2026-11-12 Session 管理与 fork 的正式页面分别通过（26.31秒、62.55秒）：重命名／删除复用原确认和目录 outbox；未打开 Thread／Session 候选及导航 fork 取消均零写入，完整历史复制真实发布 durable child，child F1 保持精确来源。来源历史经一次 model_stream 产品执行生成，后续无额外执行；沿用已验正式构建及不可变插件包，未预写历史或浏览器状态。Ruff、MJS语法及差异检查通过，旧装具和断言失败原件保留；准确命令、结果与指纹见 `out/tests/temp/2026/11/12/session_fork_actions/artifacts/verification.json`。仅关闭这两个页面子项，MCP／其它动作和原生运行面继续未完成。
 
 ## 12. 引用与 Composer
@@ -227,7 +228,9 @@
   - 2026-11-13 最新范围加载／计数批次：完整Web真实类型退出0／39.79秒，185份实际转换源码类型退出0／86.56秒，79内置扩展正式Web构建退出0／97.11秒，两次1070输入前后无变化；main SHA256 `13e3702190e7fe51c4c3c9fa58d1a268560c597c1edef02ba1b261d866154f5c`。原件及输入指纹位于 `out/tests/temp/2026/11/13/search_scope_identity/artifacts/` 的 `web-types.json`、`workbench-typecheck.json`、`web-build.json` 和相应stdout／inputs文件；不替代后续只读Provider修复或MCP失败页面的验收。
   - 2026-11-08 类型验收收口：Web 的检查目标及标准库对齐实际 Workbench ES2024 构建，修齐既有测试的 owner、可选字段和异步返回类型，不关闭严格检查、不排除测试、不放宽身份／顺序／恢复断言。原29条诊断清零，完整Web真实类型检查和包含183份实际sourceTransform源码的正式Workbench类型检查均通过，8文件114项测试／441条断言及独占目录正式Web构建通过。后端本片无改动，最近切片Ruff／Pyright经原输入SHA核对复用；1001个客户端／构建输入验证期间无变化。准确命令、首轮字段遗漏及修复、原始输出、源码指纹和复用范围见 `out/tests/temp/2026/11/08/quick_access_type_gate/artifacts/verification-v1.json`。本项仅关闭静态与构建门，不替代15.3真实Gateway页面、15.4 Electron或其它业务验收；插件／扩展／MCP实现继续暂停。
 - [ ] 15.3 通过实际 Gateway、目标后端和 Workbench 浏览器入口核初始化三个 API 与 request_id，执行 Ctrl+P、Command Center、URI、引用和管理操作，保留请求范围及错误原件。
-- [ ] 15.4 在真实 Electron 打包产物核同一入口、快捷键、会话操作和重启缓存／范围恢复，不用开发服务器或浏览器 parity 替代桌面证明。
+- [x] 15.4 在真实 Electron 打包产物核同一入口、快捷键、会话操作和重启缓存／范围恢复，不用开发服务器或浏览器 parity 替代桌面证明。
+  - 2026-11-13 Linux 原生 Quick Access 完整闭环通过：`run-fc23e383a26d`，1 passed／83.81 秒；实际 Ctrl+P、单 owner 与明确 A+B 内容查询、Command Center、原 SearchView／SearchEditor 保存后正常关窗重启、恢复范围后再次查询均通过。所有重查请求逐条核精确 A+B 与响应 request_id；保存先观察 dirty，再调用产品保存命令并等待清洁，两次真实 Electron 均正常退出0，dialogs／pageErrors 为空。提交 `fdde58d59`／`411ab96ac`；准确命令、原始输出、进程退出及包指纹见 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/native-scope-final-verification.json`。复用 ASAR 为 `eace3c7b23c78a3fa9f62aa40cce520ab5e4824afc16aaebe7d8afef969d4876`，`e8163fea…` 是外层可执行文件而非另一个 ASAR。
+  - 会话删除及旧最近记录拒绝重开沿 `out/tests/temp/2026/11/13/native_recent_history/artifacts/verification.json` 的真实原生产品步骤；输入／命令历史、草稿／脏备份和分屏恢复分别沿 `history_identity` 与 `out/tests/temp/2026/11/12/thread_cache_native/artifacts/verification.json` 的独立原生原件。各收据绑定自己的不可变 development ASAR 和源码快照，不合称最新全部源码或正式发行验收；当前 MCP／新运行资源动作的完整集成仍由第11组与16.15追踪。本项没有更新 release、递增发行版本或同步分支。
 - [ ] 15.5 为规范全部场景和 design 全功能矩阵逐项关联准确证据，区分通过、未通过及真实条件缺失；保留源码指纹、命令、原始输出、退出码和未完成阶段。
 - [ ] 15.6 交付前核无重复默认 Provider、第二搜索／动作事实源、失联调用、静默错误或清缓存式迁移，保留其他人的改动；复核 OpenSpec 并仅按已证行为勾选任务。
 

@@ -20,7 +20,7 @@ React 挂载、释放、可见性、样式及浮层隔离；显式 owner 与原�
 
 主窗口底部面板的终端／Browser 管理按钮通过原资源 Hook 的临时句柄进入同一资源 Command，保持所选 owner／revision。命令不重复请求已挂载组件的工作区列表，不在 React 宿主新建 writer；原控制错误和身份失效通过所属通知出口显示。
 
-右侧 Session 资源的保留、关联及解除关联同样交资源 Command，只传明确 owner、资源 ID、选中 revision 和精确 Thread；读取完整资源后版本或凭据改变则拒绝写入，最终沿原 loader 重读。Session 原有停止／唤醒等动作保留各自业务合同，不以工作区管理动作替代 Browser wake。
+右侧 Session 资源的保留、关联、解除关联，以及终端／Browser 停止同样交资源 Command，只传明确 owner、资源 ID、选中 revision 和精确 Thread；读取完整资源后核关联，版本或凭据改变则拒绝写入，最终沿原 loader 强制重读。Browser wake 和后台任务控制保留各自 Session 业务合同。
 
 调试 Thread 导航通过原版 editor options 传递展开资源并选择调试的意图；新建与复用编辑器均应用该意图，保留其余展示态。
 
