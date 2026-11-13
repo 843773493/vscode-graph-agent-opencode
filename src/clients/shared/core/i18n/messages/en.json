@@ -3916,5 +3916,12 @@
   "configuration.entities.agentsTitle": "Agents",
   "workbench.settings.agents": "Manage Agent Definitions",
   "configuration.entities.setConfiguredDefault": "Use as configured default Agent in this source",
-  "plugins.noWorkspaces": "No workspaces in this Gateway"
+  "plugins.noWorkspaces": "No workspaces in this Gateway",
+  "configuration.entities.setSecret": "Set API key",
+  "configuration.entities.querySave": "Check original submission",
+  "configuration.entities.secretSettleDraft": "Save the current source draft first",
+  "configuration.entities.secretSettleDetail": "Passwords stay outside the text draft. Complete the existing save flow first, or cancel and discard your draft explicitly.",
+  "configuration.entities.secretTarget": "Enter an API key for Gateway {0} · workspace {1} · Provider {2}. It is saved to that target’s existing source only after confirmation.",
+  "configuration.entities.secretDraftChanged": "The source draft changed while entering the password. Resolve the draft before entering it again.",
+  "configuration.entities.saveInProgress": "A save is already in progress for this source. Wait for it to finish."
 }

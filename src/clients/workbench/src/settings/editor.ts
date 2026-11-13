@@ -106,6 +106,7 @@ export class SourceSettings extends Disposable {
     super();
     this.resource = configSourceEditorUri(location, location.source_key);
     this.buildFields();
+    this._register(configSourceFiles(files).onDidChangeSource(resource => { if (resource.toString() === this.resource.toString()) this.changed.fire(false); }));
     this._register(model.onDidChangeContent(() => this.changed.fire(false)));
     const reload = () => { this.buildFields(); this.changed.fire(true); };
     // 声明由安装事件更新；正式保存／还原只重建当前绑定的字段，不再补读库存。
@@ -119,6 +120,34 @@ export class SourceSettings extends Disposable {
     this.changed.fire(true);
   }
   get document(): SourceDocument { return configSourceFiles(this.files).currentDocument(this.resource); }
+  get pendingSubmission(): string | undefined { return configSourceFiles(this.files).pendingSubmission(this.resource); }
+  async querySubmission(): Promise<void> {
+    const version = this.model.textEditorModel!.getVersionId();
+    await configSourceFiles(this.files).query(this.resource);
+    if (this.pendingSubmission) throw new Error(t('settings.editor.originalSaveUnknown', this.pendingSubmission));
+    if (!this.model.isDirty() && this.model.textEditorModel!.getVersionId() === version) await this.model.revert();
+    this.changed.fire(false);
+  }
+  /** 密码仅构造瞬时请求，绝不进入文本模型或撤销／备份。 */
+  async saveProviderSecret(id: string, password: string, version: number, checkTarget: () => void): Promise<void> {
+    const check = () => {
+      checkTarget();
+      if (this.model.isDirty() || this.model.textEditorModel!.getVersionId() !== version) throw new Error(t('configuration.entities.secretDraftChanged'));
+    };
+    check();
+    const providers = at(this.readDraft(), ['llm', 'providers']);
+    const index = Array.isArray(providers) ? providers.findIndex(value => object(value).id === id) : -1;
+    if (index < 0) throw new Error(t('configuration.entities.definitionChanged', id));
+    const original = this.model.textEditorModel!.getValue();
+    const jsonc = applyEdits(original, setProperty(original, ['llm', 'providers', index, 'api_key'], password,
+      { insertSpaces: true, tabSize: 2, eol: original.includes('\r\n') ? '\r\n' : '\n' }));
+    try { await configSourceFiles(this.files).saveTransient(this.resource, jsonc, check); }
+    finally {
+      // 未知提交仍留原键；确定结果后只刷新未被后续编辑的干净模型，冲突也能显式重试。
+      if (!this.pendingSubmission && !this.model.isDirty() && this.model.textEditorModel!.getVersionId() === version) await this.model.revert();
+      this.changed.fire(false);
+    }
+  }
   unboundPluginParameters(): { packageId: string; pluginId: string; installation: 'declared' | 'unavailable' | 'unknown' }[] | undefined {
     const errors: ParseError[] = [];
     const payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);

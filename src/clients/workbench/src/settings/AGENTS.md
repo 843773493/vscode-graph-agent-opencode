@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-原设置输入的稳定目标、按编辑器组派生的来源 schema 投影和文本引用生命周期；默认 Agent 来源的选择、JSONC 单键编辑、来源预检和提交状态展示。`pluginConfiguration.ts` 持有自有插件唯一参数／绑定来源编辑流程，包详情与独立设置命令共用原预检、CAS 和私有输入链。`sourceOwner.ts` 统一表单和来源 JSONC 的原 owner 传输；`sourceEditor.ts` 只适配原 FileService／TextFileService，使用内部编辑器身份、原脏状态及备份中的 CAS／幂等键，不直接写来源文件。
+原设置输入的稳定目标、按编辑器组派生的来源 schema 投影和文本引用生命周期；默认 Agent 来源的选择、JSONC 单键编辑、来源预检和提交状态展示。`pluginConfiguration.ts` 持有自有插件唯一参数／绑定来源编辑流程，包详情与独立设置命令共用原预检、CAS 和私有输入链。`sourceOwner.ts` 统一表单和来源 JSONC 的原 owner 传输；`sourceEditor.ts` 只适配原 FileService／TextFileService，使用内部编辑器身份、原脏状态和备份中的 CAS。未结清的原提交键与连接路由沿 Workbench 本机存储保留，不直接写来源文件。
 
 # 不可修改内容
 
@@ -23,5 +23,7 @@
 设置标题只投影冻结归属和原 owner 已有保存／生效状态，不为展示轮询或重复读取配置。`entities.tsx` 在同一个 Settings Pane 内托管 Provider／Agent 表单，直接编辑原来源文本模型；定义 ID 不重命名，继承定义定位原来源，Provider 数组覆盖显式确认。只读来源禁用原表单控件；实际写入始终由原 source writer 判权，秘密参数使用原受保护参数入口。
 
 正式来源 JSONC 只显式保存；来源保存、层导入和运行生效分别展示。相对 schema 读取直接复用同一文档回执的 `json_schema`，不能把 schema 文件名当成另一个来源反复请求。查询提交不改变草稿基线；冲突显式重新预检，未知保存仅沿原键查询，不能把后续已变正文当作当前草稿已保存。
+
+Provider 密码仅作为原 source writer 的瞬时请求输入，不进入文本模型、撤销或备份。提交键在 PUT 前持久保存，恢复只查询原路由；回执仍在 applying 且尚未写入时保留原键。原提交结果按 edit 身份、source_saved 和文件版本判断，不比较明文与脱敏正文。保存后的占位归一只由原文本文件生命周期刷新干净模型，不覆盖后续草稿。
 
 打开来源 JSONC 的原命令同时消费明确目标／来源参数与交互选择，复用同一 owner 和编辑器投影。Quick Access 可指定原组、预览／固定、侧开或后台；异步读取前捕获选项，身份失效或原组关闭时拒绝打开，不重绑其它草稿。

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parse } from 'jsonc-parser';
@@ -10,6 +11,8 @@ const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
 assert(artifacts, '必须设置正式测试产物目录');
 const result = { phase: 'initialization', pageErrors: [], consoleErrors: [], writes: [], saves: [], modelRequests: [], initialization: [] };
 let browser, page;
+const secret = 'integration-secret-' + randomUUID();
+const safe = value => typeof value === 'string' ? value.replaceAll(secret, '[test-secret-redacted]') : JSON.parse(JSON.stringify(value).replaceAll(secret, '[test-secret-redacted]'));
 try {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
   page = await browser.newPage({ viewport: { width: 1400, height: 950 } });
@@ -17,7 +20,7 @@ try {
   page.on('pageerror', error => result.pageErrors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
   page.on('request', request => {
-    if (request.method() === 'PUT' && request.url().includes('/config/sources/')) result.writes.push(request.postDataJSON());
+    if (request.method() === 'PUT' && request.url().includes('/config/sources/')) result.writes.push(safe(request.postDataJSON()));
     if (/\/messages(?:\?|$)|\/chat\/completions|\/responses(?:\?|$)/.test(new URL(request.url()).pathname)) result.modelRequests.push(request.url());
   });
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
@@ -86,6 +89,116 @@ try {
   assert.equal(savedProvider.model, 'entities-model-edited');
   assert.equal(parse(result.writes.at(-1).jsonc).llm.providers.find(provider => provider.id === 'entities-provider').api_key, '${ENTITIES_MISSING_KEY}');
   assert(savedProvider.api_key.startsWith('boxteam-redacted:'), '公开来源文档继续隐藏凭据输入');
+  result.phase = 'secret-cancel';
+  const setSecret = () => form('providers').getByRole('button', { name: '设置 API 密钥', exact: true }).click();
+  let writeCount = result.writes.length;
+  await setSecret();
+  await expect(quick.locator('input[type="password"]')).toBeFocused();
+  await quick.locator('input[type="password"]').fill(secret);
+  await quick.locator('input[type="password"]').press('Escape');
+  await expect(quick).not.toBeVisible();
+  assert.equal(result.writes.length, writeCount);
+  await setSecret();
+  await input(secret);
+  await expect(modal).toContainText('保存目标配置来源');
+  assert(!(await modal.innerText()).includes(secret), '确认不能显示密码');
+  await modal.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(modal).not.toBeVisible();
+  assert.equal(result.writes.length, writeCount, '预检后取消仍零PUT');
+
+  result.phase = 'secret-external-conflict';
+  const externalSource = (await api(sourceUrl, fixture)).data;
+  const external = { gateway_id: fixture.gatewayId, workspace_id: fixture.workspaceId, source_key: location.source_key,
+    jsonc: externalSource.jsonc + '\n// 另一个配置编辑者的真实提交\n', base_file_digest: externalSource.file_digest,
+    base_layer_revision: externalSource.layer_revision, base_layer_digest: externalSource.layer_digest,
+    expected_active_revision: externalSource.active_revision, expected_active_digest: externalSource.active_digest, idempotency_key: randomUUID() };
+  await api(sourceUrl + '/preflight', fixture, { method: 'POST', body: JSON.stringify(external) });
+  await api(sourceUrl, fixture, { method: 'PUT', body: JSON.stringify(external) });
+  writeCount = result.writes.length;
+  const conflicted = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === sourceUrl + '/preflight' && response.status() === 409);
+  await setSecret(); await input(secret); await conflicted;
+  await expect(page.locator('.notification-list-item-message').filter({ hasText: '草稿已保留' })).toBeVisible();
+  assert.equal(result.writes.length, writeCount, '密码预检冲突不能发PUT');
+  // 冲突没有可保留的密码草稿，干净原模型重读后，下一次输入可沿新CAS正常提交。
+  result.phase = 'secret-unknown-reload';
+  let savedSecret, failedQueries = 0, dropQuery = true;
+  const sourceRoute = async route => {
+    const request = route.request(), url = new URL(request.url());
+    if (url.pathname !== sourceUrl) return route.continue();
+    if (request.method() === 'PUT') {
+      const response = await route.fetch();
+      assert.equal(response.status(), 200);
+      const envelope = await response.json();
+      savedSecret = envelope.data.edit;
+      assert(savedSecret.source_saved);
+      assert(!JSON.stringify(envelope).includes(secret), '真实保存回执不能包含密码');
+      return route.abort('failed');
+    }
+    if (request.method() === 'GET' && url.searchParams.has('idempotency_key') && dropQuery) {
+      failedQueries++;
+      return route.abort('failed');
+    }
+    return route.continue();
+  };
+  await page.route('**/api/v1/config/sources/**', sourceRoute);
+  await setSecret(); await input(secret);
+  await expect(modal).toContainText('保存目标配置来源');
+  await modal.getByRole('button', { name: '保存来源', exact: true }).click();
+  await expect.poll(() => failedQueries).toBeGreaterThan(0);
+  await expect(form('providers').getByRole('button', { name: '查询原提交', exact: true })).toBeVisible();
+  assert(savedSecret?.idempotency_key);
+  assert.equal(result.writes.length, writeCount + 1);
+  // 提交身份在PUT前已持久保存；重载时只让真实原键查询通过，不重放写入。
+  dropQuery = false;
+  const queryAfterReload = page.waitForResponse(response => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === sourceUrl
+    && new URL(response.url()).searchParams.get('idempotency_key') === savedSecret.idempotency_key);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const reconciled = await queryAfterReload, envelope = await reconciled.json();
+  assert.equal(reconciled.status(), 200);
+  assert.equal(envelope.request_id, reconciled.headers()['x-request-id']);
+  assert.equal(envelope.data.edit.idempotency_key, savedSecret.idempotency_key);
+  assert.equal(envelope.data.edit.source_saved, true);
+  assert.equal(envelope.data.edit.file_digest, envelope.data.file_digest);
+  await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
+  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
+  await expect(form('providers').getByRole('button', { name: '设置 API 密钥', exact: true })).toBeEnabled();
+  assert.equal(result.writes.length, writeCount + 1, '重开只查询，不重放密码PUT');
+  assert(!(await page.locator('body').innerText()).includes(secret));
+  await page.unroute('**/api/v1/config/sources/**', sourceRoute);
+  // 打开同一来源正文，再撤销；密码不能被放入原文本模型或撤销历史。
+  await form('providers').getByRole('button', { name: '打开来源 JSONC', exact: true }).click();
+  const sourceText = page.locator('.editor-instance:visible .monaco-editor .view-lines').last();
+  await expect(sourceText).toContainText('entities-provider');
+  assert(!(await sourceText.innerText()).includes(secret));
+  await command('undo');
+  assert(!(await sourceText.innerText()).includes(secret));
+  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
+  // 原Workbench存储与热退出备份只允许非秘密查询身份，不存密码正文。
+  await command('boxteam.flushViewState');
+  const leaked = await page.evaluate(async needle => {
+    if (Object.values(localStorage).some(value => value.includes(needle))) return true;
+    for (const { name } of await indexedDB.databases()) {
+      if (!name) continue;
+      const database = await new Promise((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      try {
+        for (const storeName of database.objectStoreNames) {
+          const transaction = database.transaction(storeName, 'readonly');
+          const values = await new Promise((resolve, reject) => { const request = transaction.objectStore(storeName).getAll(); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+          for (const value of values) {
+            const text = value instanceof ArrayBuffer ? new TextDecoder().decode(value)
+              : ArrayBuffer.isView(value) ? new TextDecoder().decode(value) : JSON.stringify(value);
+            if (text?.includes(needle)) return true;
+          }
+        }
+      } finally { database.close(); }
+    }
+    return false;
+  }, secret);
+  assert.equal(leaked, false, '本机工作台存储不能包含密码');
+  result.secret = { cancelledBeforeInputSubmit: true, cancelledAfterPreflight: true, externalConflictRecovered: true,
+    unknownRecoveredByOriginalKey: savedSecret.idempotency_key, puts: result.writes.length - writeCount, requestId: envelope.request_id };
   result.phase = 'agent-create';
   await page.locator('.settings-context-label').getByRole('link', { name: 'Agent 管理', exact: true }).click();
   await expect(form('agents')).toBeVisible();
@@ -109,7 +222,7 @@ try {
   }
   result.phase = 'agent-reload-remove';
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.locator('.settings-context-label')).toBeVisible({ timeout: 30000 });
+  await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
   await command('boxteam.settings.agents', location, 'entities-agent');
   await expect(form('agents').getByLabel('显示名', { exact: true })).toHaveValue('修改后的显示名');
   await form('agents').getByRole('button', { name: '移除本层定义', exact: true }).click();
@@ -161,8 +274,8 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'agent-definitions.png') });
   result.phase = 'completed';
 } catch (error) {
-  result.error = String(error?.stack ?? error); process.exitCode = 1;
-  if (page) { await page.screenshot({ path: path.join(artifacts, 'failure.png') }); result.body = await page.locator('body').innerText(); }
+  result.error = safe(String(error?.stack ?? error)); process.exitCode = 1;
+  if (page) { await page.screenshot({ path: path.join(artifacts, 'failure.png') }); result.body = safe(await page.locator('body').innerText()); }
 } finally {
   await writeFile(path.join(artifacts, 'result.json'), JSON.stringify(result, null, 2));
   await browser?.close();

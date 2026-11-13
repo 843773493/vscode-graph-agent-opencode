@@ -18,7 +18,7 @@ const text = (value: unknown): string => typeof value === 'string' ? value : '';
 
 /** 只投影当前来源草稿及下层原文，不在客户端重建一份生效配置。 */
 export function ConfigurationEntities({ kind, draft, document, selectedId, error, onSelect, onEdit,
-  onCreate, onRemove, onRestoreProviders, onSetDefaultAgent, onOpenSource, onOpenSessionSelection, onSave }: {
+  onCreate, onRemove, onRestoreProviders, onSetSecret, pendingSubmission, onQuerySubmission, onSetDefaultAgent, onOpenSource, onOpenSessionSelection, onSave }: {
   kind: DefinitionKind; draft?: DefinitionObject; document: ConfigSourceDocumentDTO; selectedId?: string; error?: string;
   onSelect: (id: string) => void;
   onEdit: (id: string, path: (string | number)[], value: unknown) => void;
@@ -26,6 +26,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, error
   onSetDefaultAgent: (id: string) => void;
   onOpenSource: (sourceKey?: string) => void; onSave: () => void;
   onOpenSessionSelection?: () => void;
+  onSetSecret?: (id: string) => void; pendingSubmission?: string; onQuerySubmission?: () => void;
 }) {
   const selectedLayer = document.layers.find(layer => layer.source_key === document.source_key);
   const lower = document.layers.filter(layer => selectedLayer && layer.precedence < selectedLayer.precedence).sort((a, b) => a.precedence - b.precedence);
@@ -81,6 +82,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, error
       <button type="button" onClick={() => onOpenSource()}>{t('configuration.entities.openJsonc')}</button>
       {onOpenSessionSelection ? <button type="button" onClick={onOpenSessionSelection}>{t('configuration.entities.openSessionSelection')}</button> : null}
     </div>
+    {pendingSubmission ? <p role="status">{t('settings.editor.originalSaveUnknown', pendingSubmission)} <button type="button" onClick={onQuerySubmission}>{t('configuration.entities.querySave')}</button></p> : null}
     <p>{t('configuration.entities.sourceBoundary', document.source_key)}</p>
     {selectedId !== undefined && !selected ? <p role="alert">{t('configuration.entities.definitionChanged', selectedId)}</p> : null}
     {error ? <p role="alert">{error}</p> : <div className="configuration-entity-columns">
@@ -100,6 +102,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, error
           <p>{t('configuration.entities.protocol', text(definitionValue(selected.value, ['api_mode', 'protocol'])))}</p>
           <p>{t('configuration.entities.credentialState', selected.value.auth ? t('configuration.entities.oauth') : selected.value.api_key ? t('configuration.entities.credentialConfigured') : t('configuration.entities.credentialMissing'))}</p>
           <p>{t('configuration.entities.credentialsHint')}</p>
+          {onSetSecret ? <button type="button" disabled={!editable || Boolean(pendingSubmission)} onClick={() => onSetSecret(selected.id)}>{t('configuration.entities.setSecret')}</button> : null}
         </> : <>
           {field(t('configuration.entities.name'), ['name'])}
           {field(t('configuration.entities.description'), ['description'], true)}

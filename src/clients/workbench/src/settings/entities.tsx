@@ -48,6 +48,9 @@ export class ConfigurationEntityView extends Disposable {
     let draft: Record<string, unknown> | undefined, error: string | undefined;
     try { draft = this.source.readDraft(); } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
     this.surface.render(<ConfigurationEntities kind={this.kind} selectedId={this.selectedId} draft={draft} document={document} error={error}
+      pendingSubmission={this.source.pendingSubmission}
+      onQuerySubmission={() => this.run(() => this.source.querySubmission())}
+      onSetSecret={id => this.run(() => this.setSecret(id))}
       onSelect={id => { this.selectedId = id; this.render(); }}
       onEdit={(id, path, value) => this.run(() => {
         const prefix = this.kind === 'agents' ? ['agents', id] : ['llm', 'providers', this.providerIndex(id)];
@@ -65,6 +68,24 @@ export class ConfigurationEntityView extends Disposable {
       onSave={() => this.run(async () => {
         if (!await this.source.model.save()) throw new Error(t('configuration.entities.saveIncomplete'));
       })} />);
+  }
+  private async setSecret(id: string): Promise<void> {
+    if (this.source.pendingSubmission) { await this.source.querySubmission(); return; }
+    if (this.source.model.isDirty()) {
+      const accepted = await this.dialogs.confirm({ type: 'question', message: t('configuration.entities.secretSettleDraft'),
+        detail: t('configuration.entities.secretSettleDetail'), primaryButton: t('configuration.entities.save') });
+      this.check();
+      if (!accepted.confirmed || !await this.source.model.save() || this.source.model.isDirty()) return;
+    }
+    const version = this.source.model.textEditorModel!.getVersionId();
+    let password = await this.quick.input({ title: t('configuration.entities.setSecret'), password: true,
+      prompt: t('configuration.entities.secretTarget', this.source.location.gateway_id, this.source.location.workspace_id!, id),
+      validateInput: async value => value ? undefined : t('configuration.entities.required') }, this.lifetime.token);
+    try {
+      this.check();
+      if (password === undefined) return;
+      await this.source.saveProviderSecret(id, password, version, () => this.check());
+    } finally { password = undefined; }
   }
   private async openSessionSelection(): Promise<void> {
     const kind = this.kind, location = this.source.location;

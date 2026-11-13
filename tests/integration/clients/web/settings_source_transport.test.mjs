@@ -5,7 +5,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import ts from '../../../../src/clients/workbench/node_modules/typescript/lib/typescript.js';
 import { VSBuffer } from '../../../../src/clients/workbench/upstream/src/vs/base/common/buffer.js';
-import { Event } from '../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
+import { Emitter, Event } from '../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
 import { CancellationError, getErrorMessage } from '../../../../src/clients/workbench/upstream/src/vs/base/common/errors.js';
 import { Disposable } from '../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
 import { parse } from '../../../../src/clients/workbench/upstream/src/vs/base/common/json.js';
@@ -38,7 +38,7 @@ const ownerCode = await declarations('src/clients/workbench/src/settings/sourceO
 const filesCode = await declarations('src/clients/workbench/src/settings/sourceEditor.ts', ['configSourceScheme', 'configSourceEditorUri', 'sourceLocation', 'ConfigurationSourceFiles']);
 afterAll(() => writeFile(join(run.artifactsDir, 'source-fingerprints.json'), JSON.stringify(fingerprints, null, 2) + '\n'));
 
-function fixture({ confirm }) {
+function fixture({ confirm, respond } = { confirm: async () => ({ confirmed: true }) }) {
   const calls = [], sourceKey = 'gateway_mutable_override';
   const document = { gateway_id: 'gateway-a', source_key: sourceKey, writable: true, jsonc: '{}\n',
     file_digest: 'file-1', layer_revision: 1, layer_digest: 'layer-1', active_revision: 1, active_digest: 'active-1',
@@ -46,20 +46,24 @@ function fixture({ confirm }) {
   const transport = async (path, options = {}) => {
     const call = { path, method: options.method ?? 'GET', intent: options.body && JSON.parse(options.body), headers: options.headers };
     calls.push(call);
+    if (respond) return respond(call, document);
     if (call.method === 'POST') return { document, changed_paths: [] };
     return call.method === 'PUT' ? { ...document, jsonc: call.intent.jsonc,
-      edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true } } : document;
+      edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true, file_digest: document.file_digest, state: 'active' } } : document;
   };
   const { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus } = localizedFunction('gateway',
     `${ownerCode}\nreturn { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus };`)({ request: transport });
-  const environment = { VSBuffer, Event, CancellationError, getErrorMessage, Disposable, parse, dirname, resolvePath, URI,
+  const environment = { VSBuffer, Emitter, Event, StorageScope: { WORKSPACE: 1 }, StorageTarget: { MACHINE: 1 }, CancellationError, getErrorMessage, Disposable, parse, dirname, resolvePath, URI,
     FilePermission, FileType, FileSystemProviderCapabilities, FileSystemProviderErrorCode, createFileSystemProviderError,
     HttpRequestError, ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus };
   const { ConfigurationSourceFiles } = localizedFunction(...Object.keys(environment), `${filesCode}\nreturn { ConfigurationSourceFiles };`)(...Object.values(environment));
-  const files = new ConfigurationSourceFiles({ confirm }, { info() {}, error() {} });
+  const stored = new Map(), notices = [];
+  const storage = { getObject: key => stored.get(key), store(key, value) { if (value === undefined) stored.delete(key); else stored.set(key, structuredClone(value)); }, async flush() {} };
+  const createFiles = () => new ConfigurationSourceFiles({ confirm }, { info: message => notices.push(message), error: message => notices.push(message), warn: message => notices.push(message) }, storage);
+  const files = createFiles();
   const target = { gateway_id: document.gateway_id, gateway_connection_id: 'original-route' };
   const resource = files.prepareEditor(target, sourceKey, document);
-  return { files, resource, calls, target, sourceKey, document };
+  return { files, resource, calls, target, sourceKey, document, stored, notices, createFiles };
 }
 const options = { create: false, overwrite: true, unlock: false };
 
@@ -124,4 +128,109 @@ test('共享来源预览说明观察范围，未上报结果不伪报成功', ()
   expect(status).toContain('workspace-c: 本代尚未观察');
   expect(status).toContain('original-fanout');
   expect(sourceFanoutStatus({ ...document, fanout: undefined })).toContain('应用结果未知');
+});
+
+
+test('瞬时密码在确认前取消不提交，也不留下持久输入或提交身份', async () => {
+  const f = fixture({ confirm: async () => ({ confirmed: false }) });
+  await f.files.readFile(f.resource);
+  await expect(f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {})).rejects.toBeInstanceOf(CancellationError);
+  expect(f.calls.map(call => call.method)).toEqual(['POST']);
+  expect([...f.stored]).toEqual([]);
+  expect(f.files.pendingSubmission(f.resource)).toBeUndefined();
+  expect(JSON.stringify(f.files.backup(f.resource))).not.toContain('transient-password');
+  expect(JSON.stringify(f.notices)).not.toContain('transient-password');
+});
+
+test('密码保存响应丢失按原 edit 和文件版本确认，脱敏正文不同仍只写一次', async () => {
+  let saved;
+  const f = fixture({ confirm: async () => ({ confirmed: true }), respond(call, document) {
+    if (call.method === 'POST') return { document, changed_paths: ['llm.providers.0.api_key'] };
+    if (call.method === 'PUT') {
+      saved = { ...document, jsonc: '{"api_key":"boxteam-redacted:/api_key"}', file_digest: 'original-file-2',
+        edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true, file_digest: 'original-file-2', state: 'active' } };
+      throw new Error('模拟已提交后的网络断开');
+    }
+    return saved;
+  } });
+  await f.files.readFile(f.resource);
+  await f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {});
+  expect(f.calls.map(call => call.method)).toEqual(['POST', 'PUT', 'GET']);
+  expect(new URL(f.calls.at(-1).path, 'http://fixture').searchParams.get('idempotency_key')).toBe(saved.edit.idempotency_key);
+  expect(f.files.currentDocument(f.resource).jsonc).not.toContain('transient-password');
+  expect(f.files.pendingSubmission(f.resource)).toBeUndefined();
+  expect([...f.stored]).toEqual([]);
+  expect(JSON.stringify(f.notices)).not.toContain('transient-password');
+});
+
+test('未知保存重开和重选路由后只沿原连接查询，恢复信息只有非秘密提交身份', async () => {
+  let saved, unavailable = true;
+  const f = fixture({ confirm: async () => ({ confirmed: true }), respond(call, document) {
+    if (call.method === 'POST') return { document, changed_paths: [] };
+    if (call.method === 'PUT') {
+      saved = { ...document, jsonc: '{"api_key":"boxteam-redacted:/api_key"}', file_digest: 'file-2',
+        edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true, file_digest: 'file-2', state: 'active' } };
+      throw new Error('模拟响应丢失');
+    }
+    if (unavailable) throw new Error('模拟查询断开');
+    return saved;
+  } });
+  await f.files.readFile(f.resource);
+  await expect(f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {})).rejects.toBeInstanceOf(AggregateError);
+  expect([...f.stored.values()]).toEqual([{ key: saved.edit.idempotency_key, gatewayConnectionId: 'original-route' }]);
+  expect(JSON.stringify([...f.stored])).not.toContain('transient-password');
+  expect(f.files.backup(f.resource).submissionKey).toBeUndefined();
+  f.files.prepareEditor({ ...f.target, gateway_connection_id: 'new-route' }, f.sourceKey, f.document);
+  await expect(f.files.query(f.resource)).rejects.toThrow('模拟查询断开');
+  expect(new URL(f.calls.at(-1).path, 'http://fixture').searchParams.get('gateway_connection_id')).toBe('original-route');
+  f.files.release(f.resource);
+  const restored = f.createFiles();
+  restored.prepareEditor({ ...f.target, gateway_connection_id: 'new-route' }, f.sourceKey, f.document);
+  await expect(restored.saveTransient(f.resource, '{"api_key":"new-password"}', () => {})).rejects.toThrow('仍未知');
+  unavailable = false;
+  await restored.readFile(f.resource);
+  const query = new URL(f.calls.at(-1).path, 'http://fixture');
+  expect(query.searchParams.get('gateway_connection_id')).toBe('original-route');
+  expect(query.searchParams.get('idempotency_key')).toBe(saved.edit.idempotency_key);
+  expect(restored.pendingSubmission(f.resource)).toBeUndefined();
+  expect(f.calls.filter(call => call.method === 'PUT')).toHaveLength(1);
+  expect([...f.stored]).toEqual([]);
+  restored.dispose(); f.files.dispose();
+});
+
+test('同一来源的瞬时密码和普通保存不会并行提交', async () => {
+  const entered = Promise.withResolvers(), accepted = Promise.withResolvers();
+  const f = fixture({ confirm: () => { entered.resolve(); return accepted.promise; } });
+  await f.files.readFile(f.resource);
+  const first = f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {});
+  await entered.promise;
+  await expect(f.files.writeFile(f.resource, VSBuffer.fromString('{"changed":true}').buffer, options)).rejects.toThrow('保存进行中');
+  accepted.resolve({ confirmed: true }); await first;
+  expect(f.calls.filter(call => call.method === 'PUT')).toHaveLength(1);
+});
+
+test('保存直接返回仍在 applying 的未写入回执时保留原键，恢复后继续只查询', async () => {
+  let receipt;
+  const f = fixture({ confirm: async () => ({ confirmed: true }), respond(call, document) {
+    if (call.method === 'POST') return { document, changed_paths: [] };
+    if (call.method === 'PUT') receipt = { ...document,
+      edit: { idempotency_key: call.intent.idempotency_key, source_saved: false, layer_imported: false, file_digest: 'candidate-file', state: 'applying' } };
+    return receipt;
+  } });
+  await f.files.readFile(f.resource);
+  await expect(f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {})).rejects.toThrow();
+  expect(f.files.pendingSubmission(f.resource)).toBe(receipt.edit.idempotency_key);
+  await f.files.query(f.resource);
+  expect(f.files.pendingSubmission(f.resource)).toBe(receipt.edit.idempotency_key);
+  f.files.release(f.resource);
+  const reopened = f.createFiles();
+  await reopened.readFile(f.resource);
+  expect(reopened.pendingSubmission(f.resource)).toBe(receipt.edit.idempotency_key);
+  await expect(reopened.saveTransient(f.resource, '{"api_key":"new-password"}', () => {})).rejects.toThrow('仍未知');
+  expect(f.calls.filter(call => call.method === 'PUT')).toHaveLength(1);
+  receipt = { ...receipt, file_digest: 'candidate-file', edit: { ...receipt.edit, source_saved: true, layer_imported: true, state: 'active' } };
+  await reopened.query(f.resource);
+  expect(reopened.pendingSubmission(f.resource)).toBeUndefined();
+  expect([...f.stored]).toEqual([]);
+  reopened.dispose(); f.files.dispose();
 });

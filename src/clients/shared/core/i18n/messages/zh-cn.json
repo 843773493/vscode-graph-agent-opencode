@@ -3916,5 +3916,12 @@
   "configuration.entities.agentsTitle": "Agent 管理",
   "workbench.settings.agents": "管理 Agent 定义",
   "configuration.entities.setConfiguredDefault": "设为本来源的配置默认 Agent",
-  "plugins.noWorkspaces": "此 Gateway 尚无工作区"
+  "plugins.noWorkspaces": "此 Gateway 尚无工作区",
+  "configuration.entities.setSecret": "设置 API 密钥",
+  "configuration.entities.querySave": "查询原提交",
+  "configuration.entities.secretSettleDraft": "先保存当前来源草稿",
+  "configuration.entities.secretSettleDetail": "密码不会进入文本草稿。请先沿原保存流程结清修改，或取消后自行撤销草稿。",
+  "configuration.entities.secretTarget": "为 Gateway {0} · 工作区 {1} · Provider {2} 输入 API 密钥；只在确认后保存到该目标原配置来源。",
+  "configuration.entities.secretDraftChanged": "来源草稿在密码输入期间已变化，请先处理草稿后重新输入。",
+  "configuration.entities.saveInProgress": "当前来源已有保存进行中，请等待原提交结清。"
 }

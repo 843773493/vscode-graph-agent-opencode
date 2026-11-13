@@ -379,7 +379,7 @@ function makeSource(locationValue) {
     ],
   };
   const reverted = new Emitter();
-  const model = makeTextFileModel(jsonc, value => reverted.fire(value)), provider = { currentDocument(resource) {
+  const model = makeTextFileModel(jsonc, value => reverted.fire(value)), provider = { onDidChangeSource: Event.None, currentDocument(resource) {
     if (resource.toString() !== configSourceEditorUri(locationValue, locationValue.source_key).toString()) throw new Error('来源资源身份不匹配');
     return document;
   } };
