@@ -1663,14 +1663,18 @@ class MessageStreamStore:
 
 
 
-    async def get_state(self, turn_stream_id: str) -> dict[str, Any]:
+    def _cached_state(self, turn_stream_id: str) -> dict[str, Any]:
+        """store 内部只读访问；检查水位和状态无需复制整份正文。"""
         cached = self._states.get(turn_stream_id)
         if cached is None:
             raise MessageStreamNotFoundError(
                 f"消息流不存在: turn_stream_id={turn_stream_id}"
             )
         self._touch_cached_state(turn_stream_id, cached)
-        return copy.deepcopy(cached)
+        return cached
+
+    async def get_state(self, turn_stream_id: str) -> dict[str, Any]:
+        return copy.deepcopy(self._cached_state(turn_stream_id))
 
     async def reconcile_job_tools(
         self, *, session_id: str, thread_id: str, job_id: str,
@@ -1793,7 +1797,7 @@ class MessageStreamStore:
         """返回已校验保留窗口中的事件；仅复制本页正文，不重扫磁盘历史。"""
         # 原 Turn 锁覆盖选页、正文复制及取消结算，不与裁剪或后续追加交错。
         async with self._lock_for(turn_stream_id):
-            state = await self.get_state(turn_stream_id)
+            state = self._cached_state(turn_stream_id)
             if state["session_id"] != session_id:
                 raise MessageStreamError(f"消息流关联键不匹配: session_id={session_id} turn_stream_id={turn_stream_id}")
             self._raise_if_cursor_ahead(state, turn_stream_id=turn_stream_id, after_seq=after_seq)
@@ -1839,7 +1843,7 @@ class MessageStreamStore:
     ) -> None:
         """SSE 建流前校验游标：越过最高水位必须 fail-closed，不能静默挂起连接。"""
         self._raise_if_cursor_ahead(
-            await self.get_state(turn_stream_id),
+            self._cached_state(turn_stream_id),
             turn_stream_id=turn_stream_id,
             after_seq=after_seq,
         )
@@ -1870,7 +1874,7 @@ class MessageStreamStore:
         subscription = await self.subscribe(turn_stream_id)
         last_seq = after_seq
         try:
-            replay_high_water = int((await self.get_state(turn_stream_id))["snapshot_seq"])
+            replay_high_water = int(self._cached_state(turn_stream_id)["snapshot_seq"])
             while True:
                 try:
                     initial_events = await self.list_events(
@@ -1897,7 +1901,7 @@ class MessageStreamStore:
             # 指到它已经收到的终态帧上，或终态之后只追加了 interrupt.rejected 这类
             # 非终态事件。此时必须立刻用控制帧收敛并关闭；否则生成器会永久阻塞在
             # 订阅队列上，SSE 连接既收不到帧也不结束。
-            if self._is_terminal_snapshot(await self.get_state(turn_stream_id)):
+            if self._is_terminal_snapshot(self._cached_state(turn_stream_id)):
                 snapshot_event, _ = await self._recovery_snapshot(turn_stream_id)
                 yield snapshot_event
                 return
