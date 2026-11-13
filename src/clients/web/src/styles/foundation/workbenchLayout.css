@@ -373,12 +373,8 @@ body.is-layout-resizing {
   font-size: 12px;
   line-height: 20px;
   text-align: right;
+  white-space: pre;
   user-select: none;
-}
-
-.workspace-preview-text-editor-line-numbers span {
-  display: block;
-  height: 20px;
 }
 
 .workspace-preview-text-editor {

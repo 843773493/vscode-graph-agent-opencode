@@ -215,6 +215,10 @@ export default function WorkspaceFilePreviewArea({
     () => needsEditorLineRows ? lineRows(activeEditorContent) : [],
     [activeEditorContent, needsEditorLineRows],
   );
+  const editorLineNumbers = useMemo(
+    () => activeEditorLines.map((_, index) => index + 1).join("\n"),
+    [activeEditorLines],
+  );
   const activeDebugLine = debugActiveFile && activeTab.path === debugExecutionPath
     ? debugExecutionLine
     : null;
@@ -400,9 +404,7 @@ export default function WorkspaceFilePreviewArea({
                 aria-hidden="true"
                 style={{ width: `${Math.max(2, String(activeEditorLines.length).length) + 2}ch` }}
               >
-                {activeEditorLines.map((_, index) => (
-                  <span key={index}>{index + 1}</span>
-                ))}
+                {editorLineNumbers}
               </div>
               <textarea
                 ref={editorRef}
