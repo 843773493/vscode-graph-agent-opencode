@@ -1,5 +1,5 @@
 // Integration：原 Markdown 扩展及隔离 Webview，真实 Gateway／FileService，无响应替身。
-import { chmod, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
@@ -368,6 +368,112 @@ export async function runWebviewResourceCache({ run, launch }) {
     result.identity = { rejection: credentialRejection, revokedDisplay: true, reopenedWithOriginalOwner: true,
       entriesBefore: entriesBeforeRevocation, entriesAfter: entriesAfterRevocation,
       rawReadsBefore: readsBeforeRevocation, rawReadsAfter: raw(cssUri).length };
+    result.phase = 'cached-owner-path-reused-by-other-workspace';
+    const cachedBeforeRelocation = (await inspectCache()).find(item => item.url === cachedStyle.url);
+    const readsBeforeRelocation = raw(cssUri).length;
+    const management = async (path, body, method = body === undefined ? 'GET' : 'POST', owner) => {
+      const receipt = await page.evaluate(async ({ path, body, method, owner }) => {
+        const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
+        const response = await fetch(path, { method, headers: { 'X-Local-Token': token,
+          'Content-Type': 'application/json', ...(owner ? {
+            'X-BoxTeam-Target-Gateway-Id': owner.gatewayId, 'X-BoxTeam-Workspace-Id': owner.workspaceId,
+          } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
+        return { status: response.status, header: response.headers.get('x-request-id'), body: await response.json() };
+      }, { path, body, method, owner });
+      expect(receipt.status, JSON.stringify(receipt)).toBe(200);
+      expect(receipt.header).toBeTruthy(); expect(receipt.body.request_id).toBe(receipt.header);
+      (result.management ??= []).push({ phase: result.phase, path, ...receipt });
+      return receipt.body.data;
+    };
+    await command('workbench.action.closeAllEditors');
+    const originalRegistration = (await management('/api/gateway/workspaces?check_health=false')).items.find(item =>
+      item.gateway_id === fixture.gatewayId && item.workspace_id === fixture.workspaceId);
+    expect(originalRegistration.backend_generation).toBeTruthy();
+    await management(`/api/gateway/managed-workspaces/${fixture.workspaceId}?force=true`, {
+      expected_backend_generation: originalRegistration.backend_generation,
+      expected_workspace_ids: originalRegistration.affected_workspace_ids,
+    }, 'DELETE');
+    const relocatedRoot = fixture.root + '-relocated';
+    await rename(fixture.root, relocatedRoot);
+    await rename(fixture.replacementRoot, fixture.root);
+    const replacement = (await management('/api/gateway/managed-workspaces', {
+      root_path: fixture.root, name: 'Webview same-path replacement',
+    })).items.find(item => item.name === 'Webview same-path replacement');
+    expect(replacement.gateway_id).toBe(fixture.gatewayId);
+    expect(replacement.workspace_id).not.toBe(fixture.workspaceId);
+    const beforeRejected = result.requests.length;
+    const missingOwnerResponse = page.waitForResponse(response => response.status() === 404
+      && new URL(response.url()).pathname === '/api/v1/workspace/files/references'
+      && response.request().headers()['x-boxteam-workspace-id'] === fixture.workspaceId);
+    const unavailableOwner = await command('_workbench.open', uri, [undefined, { pinned: true }])
+      .then(() => ({ succeeded: true }), error => ({ error: String(error) }));
+    expect(unavailableOwner.error).toContain('Gateway 工作区不存在');
+    const missingOwner = await missingOwnerResponse;
+    const missingOwnerBody = await missingOwner.json();
+    expect(missingOwnerBody.request_id).toBe(missingOwner.headers()['x-request-id']);
+    expect(missingOwnerBody.request_id).toBeTruthy();
+    expect(missingOwnerBody.detail).toContain('Gateway 工作区不存在');
+    expect(missingOwner.request().headers()['x-boxteam-target-gateway-id']).toBe(fixture.gatewayId);
+    expect(missingOwner.request().headers()['x-boxteam-workspace-id']).toBe(fixture.workspaceId);
+    expect(missingOwner.request().postDataJSON()).toEqual({ paths: [fixture.rootUri + '/webview-cache/preview.md'] });
+    await expect(page.locator('iframe.webview')).toHaveCount(0);
+    expect(result.requests.slice(beforeRejected)).toEqual([]);
+    const replacementOwner = { gatewayId: replacement.gateway_id, workspaceId: replacement.workspace_id };
+    const replacementRoots = await management('/api/v1/workspace/files/roots', undefined, 'GET', replacementOwner);
+    const replacementCss = replacementRoots.workspace_uri + '/webview-cache/style.css';
+    const replacementUri = await page.evaluate(({ owner, root }) => globalThis.workbench.URI.from({
+      scheme: 'boxteam-file', authority: owner.gatewayId,
+      path: `/${owner.workspaceId}/${encodeURIComponent(root)}/webview-cache/preview.md`,
+    }).toString(), { owner: replacementOwner, root: replacementRoots.workspace_uri });
+    await command('_workbench.open', replacementUri, [undefined, { pinned: true }]);
+    await command('markdown.showPreview');
+    await expect(probe()).toHaveText('替代目标的同名文件', { timeout: 60000 });
+    await expect(probe()).toHaveCSS('color', 'rgb(201, 202, 203)');
+    await expect.poll(() => raw(replacementCss).length).toBeGreaterThan(0);
+    for (const request of raw(replacementCss)) {
+      expect(request.headers['x-boxteam-target-gateway-id']).toBe(replacementOwner.gatewayId);
+      expect(request.headers['x-boxteam-workspace-id']).toBe(replacementOwner.workspaceId);
+    }
+    await expect.poll(async () => (await inspectCache()).some(item => item.url.includes(replacementOwner.workspaceId)
+      && item.url.includes('/webview-cache/style.css') && item.etag && item.bytes > 0)).toBe(true);
+    const cacheWithReplacement = await inspectCache();
+    const replacementEntry = cacheWithReplacement.find(item => item.url.includes(replacementOwner.workspaceId)
+      && item.url.includes('/webview-cache/style.css'));
+    expect(replacementEntry.url).not.toBe(cachedBeforeRelocation.url);
+    expect(replacementEntry.etag).not.toBe(cachedBeforeRelocation.etag);
+    expect(cacheWithReplacement).toContainEqual(cachedBeforeRelocation);
+    expect(raw(cssUri)).toHaveLength(readsBeforeRelocation);
+    result.phase = 'cached-owner-resolves-relocated-registration';
+    await command('workbench.action.closeAllEditors');
+    await management('/api/gateway/managed-workspaces', {
+      root_path: relocatedRoot, name: 'Webview relocated original',
+    });
+    const relocated = (await management('/api/gateway/workspaces?check_health=false')).items.find(item =>
+      item.gateway_id === fixture.gatewayId && item.workspace_id === fixture.workspaceId);
+    expect(relocated.gateway_id).toBe(fixture.gatewayId); expect(relocated.workspace_id).toBe(fixture.workspaceId);
+    expect(relocated.backend_generation).toBeTruthy();
+    expect(relocated.backend_generation).not.toBe(originalRegistration.backend_generation);
+    const replacementReads = raw(replacementCss).length;
+    await command('_workbench.open', uri, [undefined, { pinned: true }]);
+    await command('markdown.showPreview');
+    await expect(probe()).toHaveText('原文件 CSS 与字体', { timeout: 60000 });
+    await expect(probe()).toHaveCSS('color', 'rgb(101, 112, 123)');
+    await expect.poll(() => result.requests.some(item => item.phase === result.phase && item.body
+      && JSON.parse(item.body).uri === cssUri && JSON.parse(item.body).operation === 'describe'
+      && item.headers['x-boxteam-workspace-id'] === fixture.workspaceId
+      && item.headers['x-boxteam-target-gateway-id'] === fixture.gatewayId)).toBe(true);
+    const cachedAfterRelocation = (await inspectCache()).find(item => item.url === cachedStyle.url);
+    expect(cachedAfterRelocation).toEqual(cachedBeforeRelocation);
+    expect(raw(cssUri)).toHaveLength(readsBeforeRelocation);
+    expect(raw(replacementCss)).toHaveLength(replacementReads);
+    result.routing = { original: { workspaceId: fixture.workspaceId, root: fixture.root,
+      backendGeneration: originalRegistration.backend_generation },
+      replacement: { ...replacementOwner, root: fixture.root, cache: replacementEntry },
+      relocated: { workspaceId: relocated.workspace_id, root: relocatedRoot,
+        backendGeneration: relocated.backend_generation }, rejectedWithoutResourceReads: true,
+      rejection: { status: missingOwner.status(), body: missingOwnerBody, error: unavailableOwner.error },
+      cachedBefore: cachedBeforeRelocation, cachedAfter: cachedAfterRelocation,
+      rawReadsBefore: readsBeforeRelocation, rawReadsAfter: raw(cssUri).length };
     // TODO：固定隔离宿主的 trackFocus 在 iframe body 建立前可能抛错；保留断言，待上游修复。
     expect(result.pageErrors).toEqual([]);
     result.phase = 'complete';

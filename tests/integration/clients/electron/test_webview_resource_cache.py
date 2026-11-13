@@ -87,7 +87,7 @@ async def test_packaged_electron_image_and_webview_restart_cache(
                and entry["wireRequest"]["if-none-match"] == cold["response"]["etag"]
                and entry["response"]["etag"] == cold["response"]["etag"] for entry in reads[1:])
     assert len({entry["response"]["x-request-id"] for entry in reads}) == len(reads)
-    assert (workspace / "native-cache.png").read_bytes() == image
+    assert (Path(result["routing"]["relocated"]["root"]) / "native-cache.png").read_bytes() == image
     with provider.control._condition:
         calls = {key: count for key, count in provider.control._counters.items() if key.startswith("model_call/")}
     assert calls == {}, "原文件预览不应触发模型请求"

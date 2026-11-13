@@ -32,6 +32,7 @@ from tests.support.paths import chromium_temporary_environment
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_default_test_workspace,
+    prepare_test_workspace,
 )
 
 
@@ -87,8 +88,27 @@ async def prepare_webview_files(
     )
     shutil.copyfile(context.project_root / "src/clients/workbench/node_modules/@vscode/codicons/dist/codicon.ttf",
                     directory / "font.ttf")
+    replacement = prepare_test_workspace(
+        workspace_root=workspace.with_name("webview-cache-replacement"),
+        template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(),
+    )
+    install_test_workspace_config(
+        workspace_root=replacement, config_path=workspace / ".boxteam/workspace.jsonc",
+        schema_path=context.project_root / "configs/workspace_schema.jsonc",
+    )
+    replacement_files = replacement / "webview-cache"
+    replacement_files.mkdir()
+    (replacement_files / "preview.md").write_text(
+        '<link rel="stylesheet" href="./style.css">\n\n<p class="cache-probe">替代目标的同名文件</p>\n',
+        encoding="utf-8",
+    )
+    (replacement_files / "style.css").write_text(
+        '.cache-probe { color: rgb(201, 202, 203); }\n', encoding="utf-8",
+    )
     return {"gatewayId": owner["gateway_id"], "workspaceId": owner["workspace_id"],
-            "rootUri": roots["workspace_uri"], "directory": str(directory)}
+            "rootUri": roots["workspace_uri"], "directory": str(directory),
+            "root": str(target), "replacementRoot": str(replacement)}
 
 
 def assert_webview_result(result_path: Path) -> dict:
@@ -117,6 +137,13 @@ def assert_webview_result(result_path: Path) -> dict:
     assert identity["rejection"]["status"] == 401
     assert identity["revokedDisplay"] and identity["reopenedWithOriginalOwner"]
     assert identity["rawReadsBefore"] == identity["rawReadsAfter"]
+    routing = result["routing"]
+    assert routing["replacement"]["workspaceId"] != routing["original"]["workspaceId"]
+    assert routing["relocated"]["workspaceId"] == routing["original"]["workspaceId"]
+    assert routing["relocated"]["backendGeneration"] != routing["original"]["backendGeneration"]
+    assert routing["rejectedWithoutResourceReads"]
+    assert routing["cachedBefore"] == routing["cachedAfter"]
+    assert routing["rawReadsBefore"] == routing["rawReadsAfter"]
     return result
 
 
