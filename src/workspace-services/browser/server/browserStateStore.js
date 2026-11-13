@@ -87,9 +87,10 @@ export class BrowserStateStore {
     const execution = this.checkpointOperationTail.then(async () => {
       let stage = "目录核验";
       try {
-        await this.verifyCheckpointSizes();
+        await this.ensureCheckpointSizes();
         stage = "文件检查";
-        const metadata = await stat(filePath);
+        const metadata = await this.verifyCheckpointSize(browserId);
+        if (metadata === null) return null;
         if (metadata.size > this.checkpointLimits.perCheckpointMaxBytes) {
           throw checkpointQuotaError(
             "browser_checkpoint_too_large",
@@ -148,7 +149,9 @@ export class BrowserStateStore {
       const temporaryFile = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
       let projectedBytes;
       try {
-        await this.verifyCheckpointSizes();
+        await this.ensureCheckpointSizes();
+        stage = "文件检查";
+        await this.verifyCheckpointSize(browserId);
         const previousBytes = this.checkpointSizeBytesByBrowserId.get(browserId) || 0;
         const totalBytes = [...this.checkpointSizeBytesByBrowserId.values()].reduce((total, size) => total + size, 0);
         projectedBytes = totalBytes - previousBytes + sizeBytes;
@@ -201,11 +204,13 @@ export class BrowserStateStore {
 
   async deleteCheckpoint(browserId) {
     const execution = this.checkpointOperationTail.then(async () => {
-      await this.verifyCheckpointSizes();
+      await this.ensureCheckpointSizes();
       const filePath = this.checkpointPath(browserId);
       try {
+        await this.verifyCheckpointSize(browserId);
         await rm(filePath, { force: true });
       } catch (error) {
+        if (error?.code === "browser_checkpoint_index_changed_externally") throw error;
         const cause = recordStorageFailure(this.workspaceId, "[browser-state-store] 删除浏览器检查点失败", { browserId, filePath }, error);
         const wrapped = new Error(
           `删除浏览器检查点失败: browser_id=${browserId}, code=${error?.code || "browser_checkpoint_delete_failed"}`,
@@ -222,7 +227,7 @@ export class BrowserStateStore {
 
   async checkpointBudgetSnapshot() {
     const execution = this.checkpointOperationTail.then(async () => {
-      await this.verifyCheckpointSizes();
+      await this.ensureCheckpointSizes();
       const usedBytes = [...this.checkpointSizeBytesByBrowserId.values()].reduce((total, size) => total + size, 0);
       return {
         used_bytes: usedBytes,
@@ -240,21 +245,49 @@ export class BrowserStateStore {
   }
 
   async verifyCheckpointSizes() {
-    if (this.checkpointSizeBytesByBrowserId === null) {
-      await this.ensureCheckpointSizes();
-      return;
+    const execution = this.checkpointOperationTail.then(async () => {
+      if (this.checkpointSizeBytesByBrowserId === null) {
+        await this.ensureCheckpointSizes();
+        return;
+      }
+      const actual = await this.scanCheckpointSizes({ cleanupTemporaryFiles: false });
+      if (!sameCheckpointSizes(this.checkpointSizeBytesByBrowserId, actual)) {
+        throw checkpointQuotaError(
+          "browser_checkpoint_index_changed_externally",
+          "浏览器检查点目录绕过软件发生变化",
+          {
+            indexed_count: this.checkpointSizeBytesByBrowserId.size,
+            actual_count: actual.size,
+          },
+        );
+      }
+    });
+    this.checkpointOperationTail = execution.then(() => undefined, () => undefined);
+    await execution;
+  }
+
+  async verifyCheckpointSize(browserId) {
+    let metadata = null;
+    try {
+      metadata = await stat(this.checkpointPath(browserId));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
     }
-    const actual = await this.scanCheckpointSizes({ cleanupTemporaryFiles: false });
-    if (!sameCheckpointSizes(this.checkpointSizeBytesByBrowserId, actual)) {
+    // 非普通文件仍交给原生正文操作报错，不能把它当成检查点不存在。
+    const actualBytes = metadata?.isFile() ? metadata.size : null;
+    const indexedBytes = this.checkpointSizeBytesByBrowserId.get(browserId) ?? null;
+    if (actualBytes !== indexedBytes) {
       throw checkpointQuotaError(
         "browser_checkpoint_index_changed_externally",
-        "浏览器检查点目录绕过软件发生变化",
+        "浏览器检查点绕过软件发生变化",
         {
-          indexed_count: this.checkpointSizeBytesByBrowserId.size,
-          actual_count: actual.size,
+          browser_id: browserId,
+          indexed_bytes: indexedBytes,
+          actual_bytes: actualBytes,
         },
       );
     }
+    return metadata;
   }
 
   async scanCheckpointSizes({ cleanupTemporaryFiles }) {

@@ -113,7 +113,7 @@ describe("浏览器检查点错误归属", () => {
     const store = await createBrowserStateStoreForTest();
     const cause = Object.assign(new Error("目录项在列出后消失"), { code: "ENOENT" });
     const diagnostics = spyOn(process.stderr, "write").mockImplementation(() => {});
-    spyOn(store, "verifyCheckpointSizes").mockRejectedValueOnce(cause);
+    spyOn(store, "ensureCheckpointSizes").mockRejectedValueOnce(cause);
     const failure = await store.readCheckpoint("browser_missing").catch((error) => error);
     expect(failure.message).toBe("读取浏览器检查点失败: browser_id=browser_missing, stage=目录核验, code=ENOENT");
     expect(failure.cause).toBe(cause);
@@ -229,19 +229,26 @@ describe("浏览器检查点配额", () => {
     expect((await readdir(store.checkpointDir)).some((name) => name.endsWith(".tmp"))).toBe(false);
   });
 
-  test("配额索引建立后检测绕过软件的目录变更并明确拒绝", async () => {
+  test.each(["added", "changed", "deleted"])("未消费的%s留待完整核验，访问该检查点仍拒绝", async (change) => {
     const store = await createBrowserStateStoreForTest({
       perCheckpointMaxBytes: 1024,
       workspaceCheckpointMaxBytes: 4096,
     });
     await store.writeCheckpoint("browser_indexed", { browser_id: "browser_indexed" });
-    await writeFile(
-      store.checkpointPath("browser_external"),
-      JSON.stringify({ browser_id: "browser_external" }),
-    );
+    if (change !== "added") await store.writeCheckpoint("browser_external", { data: "原始字节" });
+    if (change === "deleted") await rm(store.checkpointPath("browser_external"));
+    else await writeFile(store.checkpointPath("browser_external"), JSON.stringify({ data: "外部改写的不同字节" }));
 
-    await expect(store.writeCheckpoint("browser_next", { browser_id: "browser_next" }))
+    await store.writeCheckpoint("browser_next", { browser_id: "browser_next" });
+    expect(await store.readCheckpoint("browser_indexed")).toEqual({ browser_id: "browser_indexed" });
+    for (const access of [
+      () => store.readCheckpoint("browser_external"),
+      () => store.writeCheckpoint("browser_external", { data: "不能覆盖" }),
+      () => store.deleteCheckpoint("browser_external"),
+    ]) await expect(access()).rejects.toMatchObject({ code: "browser_checkpoint_index_changed_externally" });
+    await expect(store.verifyCheckpointSizes())
       .rejects.toMatchObject({ code: "browser_checkpoint_index_changed_externally" });
+    expect(await store.readCheckpoint("browser_next")).toEqual({ browser_id: "browser_next" });
   });
 });
 

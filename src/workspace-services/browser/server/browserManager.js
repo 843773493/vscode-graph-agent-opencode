@@ -180,6 +180,7 @@ export class BrowserManager {
       throw new Error("Browser 工作区 UUID 与权威身份文件不一致");
     }
     const records = await this.stateStore.readRecords();
+    await this.stateStore.verifyCheckpointSizes();
     if (records === null) {
       await this.persist();
       return;
