@@ -59,6 +59,7 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/browser/parts/editor/editorPanes.ts',
   'src/vs/workbench/browser/parts/editor/editorWithViewState.ts',
   'src/vs/workbench/services/configuration/common/configurationCache.ts',
+  'src/vs/workbench/services/configuration/browser/configuration.ts',
   'src/vs/platform/workspaces/common/workspaces.ts',
   'src/vs/workbench/contrib/mediaPreview/browser/imagePreviewEditor.ts',
   'src/vs/platform/languagePacks/browser/languagePacks.ts',
@@ -477,6 +478,8 @@ export class AgentPluginService extends Disposable implements IAgentPluginServic
       const identity = 'const uriIdentityService = new UriIdentityService(fileService);';
       contents = replaceOnce(contents, identity, `${identity}\ninstallBackendFiles(fileService, uriIdentityService);`);
       contents = replaceOnce(contents, cacheSchemes, '[Schemas.file, Schemas.vscodeUserData, Schemas.tmp, workspaceFolder.scheme]');
+      contents = replaceOnce(contents, 'environmentService, fileService);\n\t\tconst workspaceService = new WorkspaceService',
+        'environmentService, fileService, logService);\n\t\tconst workspaceService = new WorkspaceService');
       // pagehide 的同步 shutdown 仍会产生延迟日志；数据库连接由浏览器随文档释放，不能提前关闭并中止事务。
       contents = replaceOnce(contents, closeDatabase, '// IndexedDB 连接随浏览器文档释放，保留关闭期间日志和设置写入的机会。');
       contents = `import { installBackendFiles } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\nimport { installWorkspaceFileSystem, workspaceFolder } from ${JSON.stringify(join(root, 'src/filesystem.js'))};\n` + contents;
@@ -624,7 +627,27 @@ if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`)
         'const textResourceEditorInput = normalizeReadonlyInput(input as IUntypedFileEditorInput);');
       contents = `import { normalizeReadonlyInput } from ${JSON.stringify(join(root, 'src/readonlyDocuments.js'))};\n` + contents;
     }
+    if (path === join(upstream, 'src/vs/workbench/services/configuration/browser/configuration.ts')) {
+      // 默认值／scope／信任变化只重解析已加载正文；真实文件变化仍由原 watcher 更新缓存。
+      contents = replaceOnce(contents, `const configurationModel = this.folderConfiguration.reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });
+\t\tthis.updateCache();
+\t\treturn configurationModel;`,
+        'return this.folderConfiguration.reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });');
+    }
     if (path === join(upstream, 'src/vs/workbench/services/configuration/common/configurationCache.ts')) {
+      contents = `import { ILogService } from '../../../../platform/log/common/log.js';\n` + contents;
+      // 两个原缓存类共享启动时已有的 logger，不引入另一套诊断存储。
+      contents = contents.replaceAll('private readonly fileService: IFileService\n',
+        'private readonly fileService: IFileService,\n\t\tprivate readonly logService: ILogService\n');
+      contents = replaceOnce(contents, 'new CachedConfiguration({ type, key }, this.cacheHome, this.fileService)',
+        'new CachedConfiguration({ type, key }, this.cacheHome, this.fileService, this.logService)');
+      contents = replaceOnce(contents, `} catch (e) {
+\t\t\treturn '';
+\t\t}`, `} catch (error) {
+\t\t\tif ((error as FileOperationError).fileOperationResult === FileOperationResult.FILE_NOT_FOUND) return '';
+\t\t\tthis.logService.error('[ConfigurationCache] Read failed', this.cachedConfigurationFileResource.toString(), error);
+\t\t\tthrow error;
+\t\t}`);
       const save = `\tasync save(content: string): Promise<void> {
 \t\tconst created = await this.createCachedFolder();
 \t\tif (created) {

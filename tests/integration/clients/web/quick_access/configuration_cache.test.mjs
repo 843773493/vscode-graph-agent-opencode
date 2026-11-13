@@ -36,7 +36,8 @@ async function fixture(callback) {
   const provider = new m.InMemoryFileSystemProvider();
   files.registerProvider('vscode-userdata', provider);
   const home = m.URI.parse('vscode-userdata:/Cache');
-  const cache = new m.ConfigurationCache(['file', 'vscode-userdata', 'tmp', 'workbench'], { cacheHome: home }, files);
+  const log = new m.NullLogService();
+  const cache = new m.ConfigurationCache(['file', 'vscode-userdata', 'tmp', 'workbench'], { cacheHome: home }, files, log);
   const entered = Promise.withResolvers(), release = Promise.withResolvers();
   const create = files.createFolder.bind(files);
   let first = true;
@@ -46,7 +47,7 @@ async function fixture(callback) {
     }
     return create(resource);
   });
-  try { await callback({ files, cache, home, gate, entered: entered.promise, release: () => release.resolve() }); }
+  try { await callback({ files, cache, home, log, gate, entered: entered.promise, release: () => release.resolve() }); }
   finally { release.resolve(); gate.mockRestore(); files.dispose(); provider.dispose(); }
 }
 
@@ -86,7 +87,7 @@ test('type／key／cacheHome隔离，A的迟到更新不阻塞或覆盖B', async
     await f.entered;
     const otherType = { type: 'workspaces', key: key.key };
     const otherKey = { ...key, key: 'resource-B' };
-    const profile = new m.ConfigurationCache([], { cacheHome: m.URI.joinPath(f.home, 'profile-B') }, f.files);
+    const profile = new m.ConfigurationCache([], { cacheHome: m.URI.joinPath(f.home, 'profile-B') }, f.files, f.log);
     await Promise.all([f.cache.write(otherType, 'workspace'), f.cache.write(otherKey, 'B'), profile.write(key, 'profile-B')]);
     expect(await f.cache.read(otherType)).toBe('workspace');
     expect(await f.cache.read(otherKey)).toBe('B');
@@ -105,6 +106,27 @@ test('本地持久设置不重复缓存，非本地资源仍沿原缓存资格�
     }
     expect(f.cache.needsCaching(m.URI.parse('boxteam-file://gateway-A/workspace-A/root/settings.json'))).toBe(true);
     receipt.checks.push('原needsCaching排除持久本地资源，业务资源仍可缓存；完整启动由真实页面核对');
+  });
+});
+
+test('没有配置缓存仍是正常未命中，实际拒读保留原错误和具名日志，重试不丢原件', async () => {
+  await fixture(async f => {
+    f.release();
+    const diagnostics = spyOn(f.log, 'error');
+    try {
+      expect(await f.cache.read(key)).toBe('');
+      expect(diagnostics).not.toHaveBeenCalled();
+      await f.cache.write(key, '原配置缓存');
+      const denied = new Error('配置缓存读取被拒绝');
+      const read = spyOn(f.files, 'readFile').mockRejectedValueOnce(denied);
+      try {
+        await expect(f.cache.read(key)).rejects.toBe(denied);
+        expect(diagnostics.mock.calls).toEqual([['[ConfigurationCache] Read failed',
+          m.URI.joinPath(f.home, 'CachedConfigurations', key.type, key.key, 'configuration.json').toString(), denied]]);
+      } finally { read.mockRestore(); }
+      expect(await f.cache.read(key)).toBe('原配置缓存');
+      receipt.checks.push('缺失保持未命中；实际拒读进入原LogService并保留同一错误，原件未删除且明确重试成功');
+    } finally { diagnostics.mockRestore(); }
   });
 });
 
