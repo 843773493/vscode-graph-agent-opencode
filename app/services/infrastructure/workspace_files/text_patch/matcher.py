@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from functools import cached_property
 
 from app.services.infrastructure.workspace_files.text_patch.models import Fuzz
 
@@ -51,85 +52,87 @@ def find_hint(lines: list[str], hint: str, start: int) -> int | None:
     return None
 
 
-def find_context(
-    path: str,
-    lines: list[str],
-    context: list[str],
-    start: int,
-    eof: bool,
-) -> FuzzMatch | None:
-    path = path.strip()
-    candidate_lines = lines[1:] if lines and path in lines[0] else lines
-    candidate_context = context[1:] if context and path in context[0] else context
-    if eof:
-        match = _find_context_core(
-            candidate_lines,
-            candidate_context,
-            max(0, len(candidate_lines) - len(candidate_context)),
-        )
-        if match is not None:
+class ContextMatcher:
+    """同一文件的各段共用规范化行，去空白视图仅在相应匹配阶段生成。"""
+
+    def __init__(self, path: str, lines: list[str]) -> None:
+        self.path = path.strip()
+        self.lines = lines[1:] if lines and self.path in lines[0] else lines
+
+    @cached_property
+    def canonical_lines(self) -> list[str]:
+        return [_canonicalize(line) for line in self.lines]
+
+    @cached_property
+    def trailing_lines(self) -> list[str]:
+        return [line.rstrip() for line in self.canonical_lines]
+
+    @cached_property
+    def stripped_lines(self) -> list[str]:
+        return [line.strip() for line in self.trailing_lines]
+
+    def find(self, context: list[str], start: int, eof: bool) -> FuzzMatch | None:
+        candidate_context = context[1:] if context and self.path in context[0] else context
+        canonical_context = [_canonicalize(line) for line in candidate_context]
+        if eof:
+            match = self._find_context_core(
+                canonical_context,
+                max(0, len(self.lines) - len(canonical_context)),
+            )
+            if match is not None:
+                return match
+            match = self._find_context_core(canonical_context, start)
+            if match is not None:
+                match.fuzz |= Fuzz.IGNORED_EOF_SIGNAL
             return match
-        match = _find_context_core(candidate_lines, candidate_context, start)
+        return self._find_context_core(canonical_context, start)
+
+    def _find_context_core(self, context: list[str], start: int) -> FuzzMatch | None:
+        if not context:
+            return FuzzMatch(start, Fuzz.NONE)
+        match = _find_exact(self.canonical_lines, context, start)
         if match is not None:
-            match.fuzz |= Fuzz.IGNORED_EOF_SIGNAL
-        return match
-    return _find_context_core(candidate_lines, candidate_context, start)
+            return FuzzMatch(match, Fuzz.NONE)
 
-
-def _find_context_core(
-    lines: list[str],
-    context: list[str],
-    start: int,
-) -> FuzzMatch | None:
-    if not context:
-        return FuzzMatch(start, Fuzz.NONE)
-    canonical_lines = [_canonicalize(line) for line in lines]
-    canonical_context = [_canonicalize(line) for line in context]
-    match = _find_exact(canonical_lines, canonical_context, start)
-    if match is not None:
-        return FuzzMatch(match, Fuzz.NONE)
-
-    trailing_lines = [line.rstrip() for line in canonical_lines]
-    trailing_context = [line.rstrip() for line in canonical_context]
-    match = _find_exact(trailing_lines, trailing_context, start)
-    fuzz = Fuzz.IGNORED_TRAILING_WHITESPACE
-    if match is not None:
-        return FuzzMatch(match, fuzz)
-
-    explicit_tab_context = [replace_explicit_tabs(line) for line in trailing_context]
-    if explicit_tab_context != trailing_context:
-        fuzz |= Fuzz.NORMALIZED_EXPLICIT_TAB
-        match = _find_exact(trailing_lines, explicit_tab_context, start)
+        trailing_context = [line.rstrip() for line in context]
+        match = _find_exact(self.trailing_lines, trailing_context, start)
+        fuzz = Fuzz.IGNORED_TRAILING_WHITESPACE
         if match is not None:
             return FuzzMatch(match, fuzz)
 
-    if len(context) == 1:
-        explicit_newline = replace_explicit_newlines(explicit_tab_context[0]).split("\n")
-        if explicit_newline != explicit_tab_context:
-            match = _find_exact(trailing_lines, explicit_newline, start)
+        explicit_tab_context = [replace_explicit_tabs(line) for line in trailing_context]
+        if explicit_tab_context != trailing_context:
+            fuzz |= Fuzz.NORMALIZED_EXPLICIT_TAB
+            match = _find_exact(self.trailing_lines, explicit_tab_context, start)
             if match is not None:
-                return FuzzMatch(match, fuzz | Fuzz.NORMALIZED_EXPLICIT_NL)
+                return FuzzMatch(match, fuzz)
 
-    stripped_lines = [line.strip() for line in trailing_lines]
-    stripped_context = [line.strip() for line in explicit_tab_context]
-    fuzz |= Fuzz.IGNORED_WHITESPACE
-    match = _find_exact(stripped_lines, stripped_context, start)
-    if match is not None:
-        return FuzzMatch(match, fuzz)
+        if len(context) == 1:
+            explicit_newline = replace_explicit_newlines(explicit_tab_context[0]).split("\n")
+            if explicit_newline != explicit_tab_context:
+                match = _find_exact(self.trailing_lines, explicit_newline, start)
+                if match is not None:
+                    return FuzzMatch(match, fuzz | Fuzz.NORMALIZED_EXPLICIT_NL)
 
-    max_distance = int(len(context) * EDIT_DISTANCE_ALLOWANCE_PER_LINE)
-    if max_distance <= 0:
+        stripped_context = [line.strip() for line in explicit_tab_context]
+        fuzz |= Fuzz.IGNORED_WHITESPACE
+        match = _find_exact(self.stripped_lines, stripped_context, start)
+        if match is not None:
+            return FuzzMatch(match, fuzz)
+
+        max_distance = int(len(context) * EDIT_DISTANCE_ALLOWANCE_PER_LINE)
+        if max_distance <= 0:
+            return None
+        fuzz |= Fuzz.EDIT_DISTANCE_MATCH
+        for index in range(max(0, start), len(self.stripped_lines) - len(stripped_context) + 1):
+            distance = 0
+            for offset, expected in enumerate(stripped_context):
+                distance += _levenshtein(self.stripped_lines[index + offset], expected, max_distance - distance)
+                if distance > max_distance:
+                    break
+            if distance <= max_distance:
+                return FuzzMatch(index, fuzz)
         return None
-    fuzz |= Fuzz.EDIT_DISTANCE_MATCH
-    for index in range(max(0, start), len(stripped_lines) - len(stripped_context) + 1):
-        distance = 0
-        for offset, expected in enumerate(stripped_context):
-            distance += _levenshtein(stripped_lines[index + offset], expected, max_distance - distance)
-            if distance > max_distance:
-                break
-        if distance <= max_distance:
-            return FuzzMatch(index, fuzz)
-    return None
 
 
 def _find_exact(lines: list[str], context: list[str], start: int) -> int | None:

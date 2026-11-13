@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.services.infrastructure.workspace_files.text_patch.matcher import (
+    ContextMatcher,
     IndentStyle,
-    find_context,
     find_hint,
     guess_indentation,
     indent_level,
@@ -114,6 +114,7 @@ class _Parser:
     ) -> PatchAction:
         action = PatchAction(type=ActionType.UPDATE)
         file_lines = text.split("\n")
+        matcher = ContextMatcher(path, file_lines)
         should_replace_explicit_tabs = not AVOID_EXPLICIT_TABS_REGEX.search(path.rstrip())
         search_index = 0
 
@@ -144,15 +145,13 @@ class _Parser:
             for fuzz_merge in range(section.fuzz_merges + 1):
                 if fuzz_merge:
                     section = _peek_next_section(self.lines, self.index, fuzz_merge)
-                match = find_context(
-                    path,
-                    file_lines,
+                match = matcher.find(
                     section.context,
                     search_index,
                     section.eof,
                 )
                 if match is None:
-                    match = find_context(path, file_lines, section.context, 0, section.eof)
+                    match = matcher.find(section.context, 0, section.eof)
                 if match is not None:
                     if fuzz_merge:
                         match.fuzz |= Fuzz.MERGED_OPERATOR_SECTION

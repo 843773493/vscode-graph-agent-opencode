@@ -219,7 +219,7 @@ def test_apply_patch_matches_unicode_punctuation_and_trailing_whitespace(
 ) -> None:
     workspace_root = empty_workspace_scope[1]
     target = workspace_root / "copy.txt"
-    target.write_text("title — old   \nnext\n", encoding="utf-8")
+    target.write_text("title — old   \nnext\nsecond — old   \nlast\n", encoding="utf-8")
 
     result = _apply(
         """*** Begin Patch
@@ -228,11 +228,15 @@ def test_apply_patch_matches_unicode_punctuation_and_trailing_whitespace(
 -title - old
 +title - new
  next
+@@
+-second - old
++second - new
+ last
 *** End Patch"""
     )
 
     assert int(result["fuzz"]) & int(Fuzz.IGNORED_TRAILING_WHITESPACE)
-    assert target.read_text(encoding="utf-8") == "title - new\nnext\n"
+    assert target.read_text(encoding="utf-8") == "title - new\nnext\nsecond - new\nlast\n"
 
 
 @pytest.mark.parametrize("first, second, accepted", [
