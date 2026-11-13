@@ -91,6 +91,12 @@ test('Gateway离开后切回也会锁存，阻止待处理工作区读取进入�
   expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/workspaces']);
   expect(writes(result)).toEqual([]);
 });
+test('任务列表返回前Gateway离开再回到原身份，不展示旧任务选择器', async () => {
+  const result = await exercise('command-list-gateway-returned');
+  expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新选择任务']);
+  expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/workspaces', '/api/v1/persistent-tasks']);
+  expect(result.choices).toEqual([]); expect(writes(result)).toEqual([]);
+});
 for (const action of ['details', 'history', 'edit']) test(`${action}只打开精确任务的原产品宿主`, async () => {
   const result = await exercise(action);
   expect(writes(result)).toEqual([]); expect(result.opened).toHaveLength(1);

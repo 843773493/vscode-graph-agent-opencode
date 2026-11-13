@@ -65,6 +65,7 @@ export async function workspaceControlContract(mode) {
       choices.push({ items: items.map(item => ({ label: item.label, action: item.action, owner: item.owner })), options });
       if (mode === 'scope-cancel' || mode === 'action-cancel') return undefined;
       if (mode === 'scope-confirm') return [items[1]];
+      if (mode === 'command-empty-gateway-returned') return new Promise(resolve => { releaseChoice = () => resolve(items[1]); });
       if (mode.startsWith('command-empty')) return mode.endsWith('cancel') ? undefined : items[1];
       const selected = items.find(item => item.action === mode.replace('action-', ''));
       if (mode === 'action-identity' || mode === 'action-gateway' || mode === 'action-gateway-returned') return new Promise(resolve => { releaseChoice = () => resolve(items.find(item => item.action === 'activate')); });
@@ -143,6 +144,12 @@ export async function workspaceControlContract(mode) {
         const explicit = mode === 'command-priority' ? owners[0] : mode === 'command-mutation' || mode === 'removed' ? owner : undefined;
         const action = mode === 'command-current' || mode === 'command-priority' ? 'activate' : 'start';
         const operation = commands.executeCommand(workspaceActionCommands[action], explicit);
+        if (mode === 'command-empty-gateway-returned') {
+          await until(() => releaseChoice);
+          workspaceContext.publish({ ...initial, gatewayId: null });
+          workspaceContext.publish(initial);
+          releaseChoice();
+        }
         if (mode === 'command-mutation' || mode === 'command-origin') {
           await until(() => releaseList); Object.assign(owner, owners[0]); Object.assign(origin.owner, owners[0]);
           workspaceContext.publish({ ...initial, activeId: gatewayWorkspaceKey(owners[0]) }); releaseList();

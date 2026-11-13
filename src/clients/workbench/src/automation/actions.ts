@@ -66,11 +66,16 @@ async function runTaskAction(accessor: ServicesAccessor, action: PersistentTaskA
     assertAccess();
     const target = requireGatewayWorkspaceRequestTarget(routes.items, owner);
     if (target.status !== 'ready') throw new Error(t('workbench.automation.workspaceUnavailable', target.status));
-    const task = explicit?.task ?? (await quick.pick(
-      (await listPersistentTasks(0, target, controller.signal)).items.filter(item => automationActions(item).includes(action)).map(item => ({
-        label: taskName(item), description: t('workbench.automation.taskDescription', taskType(item), taskLabel(item.lifecycle), formatNumber(item.revision)),
-        detail: item.task_id, task: item,
-      })), { title: taskActionLabels[action], placeHolder: `${owner.gatewayId} · ${owner.workspaceId}` }))?.task;
+    let task = explicit?.task;
+    if (!task) {
+      const tasks = await listPersistentTasks(0, target, controller.signal);
+      assertAccess();
+      task = (await quick.pick(
+        tasks.items.filter(item => automationActions(item).includes(action)).map(item => ({
+          label: taskName(item), description: t('workbench.automation.taskDescription', taskType(item), taskLabel(item.lifecycle), formatNumber(item.revision)),
+          detail: item.task_id, task: item,
+        })), { title: taskActionLabels[action], placeHolder: `${owner.gatewayId} · ${owner.workspaceId}` }))?.task;
+    }
     if (!task) return false;
     assertAccess();
     if (task.workspace_id !== owner.workspaceId) throw new Error(t('workbench.automation.ownerMismatch'));

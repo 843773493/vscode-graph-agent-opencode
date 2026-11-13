@@ -116,6 +116,15 @@ test('取消无 owner 的明确选择不会产生控制面预检查或写动作'
   expect(result.listUrls).toEqual([]); expect(result.errors).toEqual([]);
 });
 
+test('工作区选择期间Gateway离开再回到原身份，拒绝后续控制面读取', async () => {
+  const result = await exercise('command-empty-gateway-returned');
+  expect(result.choices).toHaveLength(1); expect(result.calls).toEqual([]);
+  expect(result.listUrls).toEqual([]);
+  expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/search/workspaces']);
+  expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain('Gateway 或访问凭据已改变');
+});
+
 for (const mode of ['command-loading', 'command-control-error']) test(`${mode} 直接暴露控制镜像错误，不提供替代目标`, async () => {
   const result = await exercise(mode);
   expect(result.calls).toEqual([]); expect(result.choices).toEqual([]); expect(result.listUrls).toEqual([]);

@@ -559,7 +559,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     const gatewayId = workspaceContext.getSnapshot().gatewayId;
     lifetime.add(toDisposable(workspaceContext.subscribe(() => {
       const current = workspaceContext.getSnapshot().gatewayId;
-      if (gatewayId && current && gatewayId !== current) invalidate();
+      if (gatewayId && current !== gatewayId) invalidate();
     })));
   }
 

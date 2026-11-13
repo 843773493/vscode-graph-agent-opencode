@@ -543,7 +543,7 @@ test('delegate 接收空查询及 URI 查询，换查询和释放取消旧调用
 
 test('身份屏障或 Gateway 改变立即取消、撤下旧结果，继续输入也不沿旧身份查询', async () => {
   const results = await exercise('identityContract');
-  expect(results.map(item => item.kind)).toEqual(['user', 'gateway']);
+  expect(results.map(item => item.kind)).toEqual(['user', 'gateway', 'gateway-null-returned']);
   for (const item of results) {
     expect(item.cancelled).toBe(true);
     expect(item.calls).toBe(1);

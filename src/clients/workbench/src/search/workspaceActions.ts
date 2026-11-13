@@ -46,6 +46,7 @@ async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceA
           owner: gatewayWorkspaceOwner(workspace),
         })), { title: t('workbench.workspaceAction.pickTitle'), placeHolder: t('workbench.workspaceAction.pickHint') });
         if (!selected) return;
+        assertAccess();
         owner = selected.owner;
       }
     }

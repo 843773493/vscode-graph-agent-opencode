@@ -233,7 +233,7 @@ export async function delegateContract() {
 
 export async function identityContract() {
   const results = [];
-  for (const kind of ['user', 'gateway']) {
+  for (const kind of ['user', 'gateway', 'gateway-null-returned']) {
     const before = workspaceContext.getSnapshot();
     workspaceContext.publish({ ...before, gatewayId: 'gateway-a' });
     const calls = [];
@@ -242,7 +242,10 @@ export async function identityContract() {
     } } });
     try {
       if (kind === 'user') invalidateGatewayToken(0);
-      else workspaceContext.publish({ ...before, gatewayId: 'gateway-b' });
+      else if (kind === 'gateway-null-returned') {
+        workspaceContext.publish({ ...before, gatewayId: null });
+        workspaceContext.publish({ ...before, gatewayId: 'gateway-a' });
+      } else workspaceContext.publish({ ...before, gatewayId: 'gateway-b' });
       const cancelled = calls[0].token.isCancellationRequested;
       calls[0].resolve({ results: [{ resource: uri('old-user.txt') }], messages: [] });
       await Promise.resolve(); await Promise.resolve();

@@ -59,6 +59,9 @@ export async function automationContract(mode) {
         init.signal.addEventListener('abort', () => { aborted = true; });
         return new Promise(resolve => { releaseRead = () => resolve(success({ items: [records[index]], runtime: { state: 'running', recovering_tasks: 0 } })); });
       }
+      if (mode === 'command-list-gateway-returned' && workspacesCalls > 1) {
+        return new Promise(resolve => { releaseRead = () => resolve(success({ items: [records[index]], runtime: { state: 'running', recovering_tasks: 0 } })); });
+      }
       return success({ items: [records[index]], runtime: { state: 'running', recovering_tasks: 0 } });
     }
     if (path.endsWith('/control') || path.endsWith('/checks')) {
@@ -148,8 +151,15 @@ export async function automationContract(mode) {
     } else {
       const action = ['pause', 'resume', 'check', 'checkOnly', 'details', 'history', 'edit'].includes(mode) ? mode
         : mode.startsWith('terminate') || mode === 'accepted-terminate-close' ? 'terminate' : 'pause';
-      const supplied = mode === 'origin' || mode === 'owner-cancel' ? undefined : { owner: { ...owners[0] }, task: structuredClone(records[0]) };
+      const supplied = mode === 'origin' || mode === 'owner-cancel' || mode === 'command-list-gateway-returned'
+        ? undefined : { owner: { ...owners[0] }, task: structuredClone(records[0]) };
       const operation = commands.executeCommand(taskActionCommand(action), supplied).catch(cause => { errors.push(String(cause)); return false; });
+      if (mode === 'command-list-gateway-returned') {
+        await until(() => releaseRead);
+        workspaceContext.publish({ ...initial, gatewayId: null });
+        workspaceContext.publish(initial);
+        releaseRead();
+      }
       if (mode === 'freeze') {
         await until(() => releaseList);
         supplied.owner.gatewayId = owners[1].gatewayId; supplied.task.revision = 99;
