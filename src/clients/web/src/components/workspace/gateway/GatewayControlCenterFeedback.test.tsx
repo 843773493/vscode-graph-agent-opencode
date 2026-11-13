@@ -13,7 +13,7 @@ import GatewayControlCenter from "./GatewayControlCenter";
 
 afterEach(restoreGatewayTestEnvironment);
 
-function installHealthyGateway(): void {
+function installHealthyGateway(healthFailure?: () => Response): void {
   const health: GatewayHealth = {
     status: "ok",
     active_workspace: undefined,
@@ -22,7 +22,7 @@ function installHealthyGateway(): void {
     gateway_id: "gateway_local",
   };
   installGatewayFetch(({ path }) => {
-    if (path === "/api/gateway/health") return apiSuccessResponse(health);
+    if (path === "/api/gateway/health") return healthFailure?.() ?? apiSuccessResponse(health);
     if (path === "/api/gateway/management/gateways") return apiSuccessResponse({ local_gateway_id: "gateway_local", items: [] });
     if (path === "/api/gateway/inbound-access") {
       return apiSuccessResponse({ gateway_id: "gateway_local", peers: [], items: [] });
@@ -43,6 +43,7 @@ function gatewayControlCenter(
     <WarmConfirmProvider>
       <GatewayControlCenter onSelectColorTheme={async () => undefined}
         apiPort={8014}
+        entryGatewayId="gateway_local"
         workspaces={[]}
         gatewayError={gatewayError}
         onAddSsh={noop}
@@ -67,6 +68,26 @@ async function flush(): Promise<void> {
 }
 
 describe("Gateway 连接页反馈槽", () => {
+  test("健康读取失败保留真实入口与 request_id，不用健康响应补造身份", async () => {
+    installHealthyGateway(() => Response.json({ detail: "健康读取被拒绝", request_id: "req_health_denied" },
+      { status: 503, headers: { "X-Request-ID": "req_health_denied" } }));
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(gatewayControlCenter(async () => {}));
+        await flush();
+      });
+      const error = renderer.root.findByProps({ className: "gateway-console-feedback error" });
+      expect(error.props.title).toContain("gateway_local");
+      expect(error.props.title).toContain("健康读取被拒绝");
+      expect(error.props.title).toContain("request_id=req_health_denied");
+      const status = renderer.root.findByProps({ className: "gateway-control-sidebar-status" });
+      expect(status.findByType("code").children).toEqual(["gateway_local"]);
+    } finally {
+      if (renderer) await act(async () => renderer.unmount());
+    }
+  });
+
   test("刷新失败进入固定状态槽，连接卡片仍位于其后", async () => {
     installHealthyGateway();
     let renderer!: ReactTestRenderer;
@@ -94,7 +115,7 @@ describe("Gateway 连接页反馈槽", () => {
         className: "gateway-console-feedback error",
       });
       expect(error.props.role).toBe("alert");
-      expect(error.props.title).toBe("连接操作失败：远程 Gateway 连接失败");
+      expect(error.props.title).toBe("连接操作失败：gateway_local · 远程 Gateway 连接失败");
       expect(renderer.root.findByProps({ className: "gateway-local-connection-card" }))
         .toBeDefined();
       expect(renderer.root.findByProps({ className: "gateway-console-feedback-slot" }).children)

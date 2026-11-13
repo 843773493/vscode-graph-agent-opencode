@@ -259,7 +259,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     <SessionContextForkDialog state={actions.forkDialog} onCancel={actions.closeForkDialog} onSubmit={actions.submitForkDialog} onSelectionChange={actions.updateForkDialogSelection} />
     {gatewayOpen ? <div className="native-navigation-dialog" role="dialog" aria-label={t('navigation.workspace.gatewayControl')}>
       <button type="button" className="sidebar-icon-button" aria-label={t('navigation.workspace.closeGatewayControl')} onClick={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }}><span className="codicon codicon-close" /></button>
-      <GatewayControlCenter apiPort={0} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
+      <GatewayControlCenter apiPort={0} entryGatewayId={state.browserViewScope ?? null} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
         request={workspaceDiagnostics ?? gatewayControl}
         onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
         onRemoteGatewayReconnected={notifyPluginCommandGatewayReconnected}

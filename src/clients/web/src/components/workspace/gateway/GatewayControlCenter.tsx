@@ -13,6 +13,7 @@ import type {
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import type { GatewayBackendRuntimeActions } from "./GatewayBackendRuntimePanel";
 import { errorMessage } from "../../../utils/errorMessage";
+import { HttpRequestError } from "../../../api/http";
 import type { GatewayDiagnosticLogLocateRequest } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
 import GatewayDiagnosticLogLocation from "./GatewayDiagnosticLogLocation";
 
@@ -30,6 +31,7 @@ export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
 interface GatewayControlCenterProps extends GatewayBackendRuntimeActions {
   apiPort: number;
+  entryGatewayId: string | null;
   workspaces: GatewayWorkspace[];
   gatewayError: string | null;
   onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
@@ -46,6 +48,7 @@ interface GatewayControlCenterProps extends GatewayBackendRuntimeActions {
 
 export default function GatewayControlCenter({
   apiPort,
+  entryGatewayId,
   workspaces,
   gatewayError,
   onAddSsh,
@@ -89,7 +92,8 @@ export default function GatewayControlCenter({
       setHealthError(null);
     } catch (error) {
       setHealth(null);
-      setHealthError(errorMessage(error));
+      setHealthError(error instanceof HttpRequestError && error.requestId
+        ? `${errorMessage(error)} · request_id=${error.requestId}` : errorMessage(error));
     }
   }, [apiPort]);
 
@@ -107,7 +111,8 @@ export default function GatewayControlCenter({
       setConnectionRevision((value) => value + 1);
       setOperationNotice(t("gateway.control.refreshed"));
     } catch (error) {
-      setOperationError(errorMessage(error));
+      setOperationError(error instanceof HttpRequestError && error.requestId
+        ? `${errorMessage(error)} · request_id=${error.requestId}` : errorMessage(error));
     } finally {
       setRefreshing(false);
     }
@@ -142,14 +147,16 @@ export default function GatewayControlCenter({
       await waitForRestartedGateway(result.previous_process_id);
       window.location.reload();
     } catch (error) {
-      setOperationError(errorMessage(error));
+      setOperationError(error instanceof HttpRequestError && error.requestId
+        ? `${errorMessage(error)} · request_id=${error.requestId}` : errorMessage(error));
       setOperationNotice(null);
       setRestartingDevelopment(false);
     }
   };
 
   const available = health?.status === "ok";
-  const feedbackError = gatewayError || healthError || operationError;
+  const failure = gatewayError || healthError || operationError;
+  const feedbackError = failure && entryGatewayId ? `${entryGatewayId} · ${failure}` : failure;
 
   return (
     <main className="gateway-control-shell">
@@ -176,7 +183,7 @@ export default function GatewayControlCenter({
         </nav>
         <div className="gateway-control-sidebar-status">
           <strong><span className={available ? undefined : "offline"} />{available ? t("gateway.control.gatewayAvailable") : t("gateway.control.gatewayUnavailable")}</strong>
-          <code>{health?.gateway_id}</code>
+          <code>{entryGatewayId}</code>
         </div>
       </aside>
 

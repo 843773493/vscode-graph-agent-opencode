@@ -27,6 +27,7 @@ const html = renderToString(
   <WarmConfirmProvider>
     <GatewayControlCenter onSelectColorTheme={async () => undefined}
       apiPort={8014}
+      entryGatewayId="gateway-test"
       workspaces={[localWorkspace]}
       gatewayError={null}
       onAddSsh={noop}

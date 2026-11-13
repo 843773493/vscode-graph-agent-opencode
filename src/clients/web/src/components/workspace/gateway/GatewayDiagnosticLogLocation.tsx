@@ -4,6 +4,7 @@ import { locateGatewayDiagnosticLog } from "../../../gatewayApi";
 import type { GatewayWorkspace } from "../../../types/backend";
 import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
 import { errorMessage } from "../../../utils/errorMessage";
+import { HttpRequestError } from "../../../api/http";
 
 export default function GatewayDiagnosticLogLocation({ apiPort, request, workspaces, onClose }: {
   apiPort: number; request: GatewayDiagnosticLogLocateRequest; workspaces: GatewayWorkspace[]; onClose: () => void;
@@ -15,7 +16,10 @@ export default function GatewayDiagnosticLogLocation({ apiPort, request, workspa
     const controller = new AbortController();
     void locateGatewayDiagnosticLog(apiPort, request, { signal: controller.signal }).then(
       data => { if (!controller.signal.aborted) setSnapshot({ request, data }); },
-      cause => { if (!controller.signal.aborted) setSnapshot({ request, error: errorMessage(cause) }); },
+      cause => {
+        if (!controller.signal.aborted) setSnapshot({ request, error: cause instanceof HttpRequestError && cause.requestId
+          ? `${errorMessage(cause)} · request_id=${cause.requestId}` : errorMessage(cause) });
+      },
     );
     return () => controller.abort();
   }, [apiPort, request]);
@@ -27,6 +31,7 @@ export default function GatewayDiagnosticLogLocation({ apiPort, request, workspa
   return <section className="gateway-diagnostics-viewer" aria-label={t("gateway.diagnostics.locationPanel")}>
     <header><strong>{data?.source?.label ?? t("gateway.diagnostics.originalLogLine")}</strong><button type="button" onClick={onClose}>{t("gateway.diagnostics.closeLocation")}</button></header>
     <p>{request.reference?.gateway_id} · {request.scope?.source === "gateway" ? t("gateway.diagnostics.gatewaySource") : t("gateway.diagnostics.managedProcessSource", linkedWorkspaces?.join(t("gateway.diagnostics.workspaceListSeparator")) ?? t("gateway.diagnostics.loadingRelatedWorkspaces"), (linkedWorkspaces?.length ?? 0) > 1 ? t("gateway.diagnostics.sharedSourceSuffix") : "")}</p>
+    <p>{t("gateway.diagnostics.logEntry")} <code>{request.reference?.log_id}</code> <code>{request.scope?.workspace_ids.join(", ")}</code></p>
     {current?.error ? <p role="alert">{t("gateway.diagnostics.locationFailed", current.error)}</p> : !data ? <p role="status">{t("gateway.diagnostics.verifyingOriginalLine")}</p> : reference ? <>
       <p>{t("gateway.diagnostics.originalLineRanges", reference.line_start, reference.line_end, reference.start_codepoint, reference.end_codepoint)}</p>
       <pre data-testid="gateway-diagnostic-log-location">{text.slice(0, reference.start_codepoint).join("")}<mark ref={mark}
