@@ -3636,7 +3636,6 @@
   "workbench.resource.focus": "聚焦工作区资源",
   "workbench.resource.gatewayMissing": "尚未取得发起 Gateway 身份，无法复制资源引用",
   "workbench.resource.gatewayNotLoaded": "Gateway 登记身份尚未加载",
-  "workbench.resource.noThread": "没有可选择的明确 Thread，请先打开目标 Thread",
   "workbench.resource.ownerMismatch": "资源回执不属于明确选择的工作区",
   "workbench.resource.panelUnavailable": "资源所属工作区面板不可用",
   "workbench.resource.pasteSelectionToChat": "将选定正文粘贴到聊天草稿…",

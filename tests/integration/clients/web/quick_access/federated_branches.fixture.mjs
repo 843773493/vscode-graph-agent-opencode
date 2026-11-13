@@ -136,7 +136,8 @@ async function federatedBranchContract(mode, category, diagnostic) {
         invokeFunction: callback => callback({ get: () => ({ executeCommand(id, target) { commands.push({ id, target }); return Promise.resolve(); } }) }),
       }, editors, groups, { getHistory: () => history }, { getValue: () => undefined }, {}, {}, {}, {},
       { error: cause => errors.push(String(cause)) }, {}, {}));
-      lifetime.add(provider.provide(picker, token.token, { searchOwners: owners, sessionSelection: mode === 'session-selection' }));
+      lifetime.add(provider.provide(picker, token.token, { searchOwners: owners,
+        resourceSelection: mode === 'session-selection' ? 'session' : mode === 'thread-selection' ? 'thread' : undefined }));
       await until(() => connections.length === 1);
       const first = connections[0]; scope(first); page(first, 0, 2); page(first, 1, 2); end(first, [state(0), state(1)]);
       const isCandidate = item => category === 'Thread' ? item.resource?.scheme === 'boxteam-thread' : !!item.sessionTarget;
@@ -144,7 +145,7 @@ async function federatedBranchContract(mode, category, diagnostic) {
       const candidates = picker.items.filter(isCandidate), folder = picker.items.find(item => item.id?.startsWith('folder:'));
       const target = candidates.find(item => category === 'Thread' ? item.resource.authority === owners[1].gatewayId
         : item.sessionTarget.owner.gatewayId === owners[1].gatewayId);
-      if (mode === 'session-selection') { picker.selectedItems = [target]; accepts.fire({ inBackground: false }); }
+      if (mode.endsWith('-selection')) { picker.selectedItems = [target]; accepts.fire({ inBackground: false }); }
       else {
         const tooltip = mode === 'session-delete' ? '永久删除会话' : mode.endsWith('fork') ? '创建上下文分支' : '重命名会话';
         buttons.fire({ item: target, button: target.buttons.find(button => button.tooltip === tooltip) });

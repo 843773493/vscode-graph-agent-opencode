@@ -14,7 +14,8 @@ import { controlWorkspaceResource, getWorkspaceResource, listWorkspaceResources,
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { resourceActionLabels, resourceActionMessageKeys, settleWorkspaceResourceOperation, workspaceResourceName, type WorkspaceResourceActionSource } from '../../../web/src/hooks/workspace/resourceActions.js';
 import { gateway } from '../agentApi.js';
-import { captureSearchOwner } from '../search/target.js';
+import { captureSearchOwner, type SearchInvocationOptions } from '../search/target.js';
+import type { ResourcePick } from '../search/quickAccessPicks.js';
 import { ThreadInput } from '../threadInput.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { workspaceActionCommands } from '../search/workspaceActions.js';
@@ -43,8 +44,11 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
   if (!initial.gatewayId) throw new Error(t('workbench.resource.gatewayNotLoaded'));
   let invalidated = false;
   const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+  const releaseGateway = workspaceContext.subscribe(() => {
+    if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidated = true;
+  });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error(t('workbench.resource.accessChanged'));
+    if (invalidated) throw new Error(t('workbench.resource.accessChanged'));
   };
   let pending: ReturnType<INotificationService['status']> | undefined;
   try {
@@ -79,14 +83,23 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
     if (!resource.available_actions.includes(action)) throw new Error(t('workbench.resource.actionUnavailable', resourceActionLabels[action]));
     let thread = action === 'attach' || action === 'detach' ? explicit?.thread : undefined;
     if (action === 'attach' && !thread && originThread?.owner.gatewayId === owner.gatewayId && originThread.owner.workspaceId === owner.workspaceId) thread = originThread.thread;
-    if ((action === 'attach' || action === 'detach') && !thread) {
-      const candidates = action === 'detach' ? resource.thread_associations : editors.editors.flatMap(input =>
-        input instanceof ThreadInput && input.owner.gatewayId === owner.gatewayId && input.owner.workspaceId === owner.workspaceId
-          ? [{ session_id: input.owner.sessionId, thread_id: input.owner.threadId }] : []);
-      const unique = [...new Map(candidates.map(ref => [`${ref.session_id}/${ref.thread_id}`, ref])).values()];
-      if (!unique.length) throw new Error(t('workbench.resource.noThread'));
-      thread = (await quick.pick(unique.map(ref => ({ label: ref.thread_id, description: ref.session_id, thread: ref })),
-        { title: t(action === 'detach' ? 'workbench.resource.chooseDetachThread' : 'workbench.resource.chooseAttachThread') }))?.thread;
+    if (action === 'attach' && !thread) {
+      const providerOptions: SearchInvocationOptions = { searchOwners: [owner], resourceSelection: 'thread' };
+      const selected = await quick.quickAccess.pick('thread ', { preserveValue: true, enabledProviderPrefixes: ['thread '],
+        placeholder: t('workbench.resource.chooseAttachThread'), providerOptions });
+      assertAccess();
+      if (!selected?.length) return;
+      const selectedResource = (selected[0] as ResourcePick).resource;
+      if (!selectedResource || selectedResource.scheme !== 'boxteam-thread') throw new Error(t('workbench.resource.ownerMismatch'));
+      const selectedOwner = ThreadInput.fromResource(selectedResource).owner;
+      if (selectedOwner.gatewayId !== owner.gatewayId || selectedOwner.workspaceId !== owner.workspaceId) throw new Error(t('workbench.resource.ownerMismatch'));
+      thread = { session_id: selectedOwner.sessionId, thread_id: selectedOwner.threadId };
+    }
+    if (action === 'detach' && !thread) {
+      const associations = [...new Map(resource.thread_associations.map(ref => [`${ref.session_id}/${ref.thread_id}`, ref])).values()];
+      if (!associations.length) throw new Error(t('workbench.resource.threadNotAssociated'));
+      thread = (await quick.pick(associations.map(ref => ({ label: ref.thread_id, description: ref.session_id, thread: ref })),
+        { title: t('workbench.resource.chooseDetachThread') }))?.thread;
       if (!thread) return;
     }
     if (action === 'detach' && !resource.thread_associations.some(ref => ref.session_id === thread!.session_id && ref.thread_id === thread!.thread_id)) {
@@ -112,14 +125,14 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
     } else {
       const settled = await settleWorkspaceResourceOperation(0, workspaceKey, resource.kind, () => {
         assertAccess(); return controlWorkspaceResource(0, workspaceKey, resource, action, thread);
-      }, () => !invalidated && workspaceContext.getSnapshot().gatewayId === initial.gatewayId);
+      }, () => !invalidated);
       if (!settled.succeeded) throw new Error(settled.error, { cause: settled.cause });
       result = settled.resource;
     }
     assertAccess();
     notifications.info(t('workbench.resource.actionConfirmed', resourceActionLabels[action], result.resource_id));
     return result;
-  } finally { pending?.close(); release(); }
+  } finally { pending?.close(); release(); releaseGateway(); }
 }
 
 registerAction2(class extends Action2 {
@@ -130,8 +143,11 @@ registerAction2(class extends Action2 {
     const initialGateway = workspaceContext.getSnapshot().gatewayId;
     let invalidated = false;
     const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+    const releaseGateway = workspaceContext.subscribe(() => {
+      if (workspaceContext.getSnapshot().gatewayId !== initialGateway) invalidated = true;
+    });
     const assertAccess = () => {
-      if (invalidated || workspaceContext.getSnapshot().gatewayId !== initialGateway) throw new Error(t('workbench.resource.accessChanged'));
+      if (invalidated) throw new Error(t('workbench.resource.accessChanged'));
     };
     try {
       if (!initialGateway) throw new Error(t('workbench.resource.gatewayNotLoaded'));
@@ -153,7 +169,7 @@ registerAction2(class extends Action2 {
       if (workspaceContext.getSnapshot().activeId !== key) throw new Error(t('workbench.resource.workspaceChanged'));
       if (!view) throw new Error(t('workbench.resource.panelUnavailable'));
       view.revealResource(owner, resource.resource_id);
-    } finally { release(); }
+    } finally { release(); releaseGateway(); }
   }
 });
 

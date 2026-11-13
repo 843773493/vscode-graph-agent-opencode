@@ -51,7 +51,7 @@ for (const mode of ['origin', 'explicit', 'rename', 'mutation']) test(`${mode} �
 test('没有发起 Session 时沿原有界 session Provider 只选择，接受不打开 Thread', async () => {
   const result = await exercise('pick-select');
   expect(result.picks).toHaveLength(1); expect(result.picks[0].value).toBe('session ');
-  expect(result.picks[0].options.providerOptions).toEqual({ sessionSelection: true,
+  expect(result.picks[0].options.providerOptions).toEqual({ resourceSelection: 'session',
     searchOwners: [{ gatewayId: `gateway_${'a'.repeat(32)}`, workspaceId: '019a0000-0000-7000-8000-000000000001' }] });
   expect(result.calls[0].workspaceKey).toBe(key('a')); expect(result.errors).toEqual([]);
 });
@@ -99,6 +99,17 @@ for (const mode of ['fork-origin', 'fork-explicit']) test(`${mode} 分支命令�
     source: mode === 'fork-origin' ? { threadId: `thr_${'d'.repeat(32)}` }
       : { threadId: 'explicit-child', itemId: 'explicit-item', sourceViewId: 'explicit-view', sourceViewRevision: 7 } }]);
   expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/workspaces', `/api/v1/sessions/ses_${'c'.repeat(32)}`]);
+});
+
+test('只选择未打开Thread保留精确child，确认不打开、不复制或创建分支', async () => {
+  const result = await exercise('thread-selection', 'threadPickerContract');
+  expect(result.errors).toEqual([]); expect(result.commands).toEqual([]); expect(result.calls).toEqual(['hide']);
+  expect(result.requests).toHaveLength(1);
+  expect(result.requests[0].queries.map(query => query.category)).toEqual(['thread']);
+  expect(result.candidates).toHaveLength(2);
+  expect(result.candidates.every(item => item.buttons.length === 0)).toBe(true);
+  expect(result.candidates[1].resource).toContain(`gateway_${'b'.repeat(32)}`);
+  expect(result.candidates[1].resource).toContain('/same-child-2');
 });
 
 for (const mode of ['thread-fork', 'thread-recent-fork']) test(`${mode} 同名跨Gateway候选只从指定child创建分支，不打开编辑器`, async () => {

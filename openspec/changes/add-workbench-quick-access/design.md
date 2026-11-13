@@ -399,6 +399,8 @@ scope 跟随原 Input 的 configuration model，原 JSON serializer 的 config �
 | Gateway／工作区 | 既有控制面与注册信息 | 定位导航／工作区面板 | 切换、连接、启动须明确动作；选中候选本身不启动后端 |
 | 终端／浏览器／MCP | 既有工作区资源及 Thread 关联 API | 聚焦具体实例或原资源视图 | 与原生 `term `／`mcpr ` 的服务映射需核对；无正式规范 URI 就不发明 URI |
 
+终端／Browser 的关联动作按显式 SessionThread、同一 owner 的发起 Thread、原 `thread ` Provider 只选择的顺序确定接收者；目标不必已打开，发现仍沿原有界 Thread 查询。只选择不打开详情，不提供复制／分支／侧开按钮，取消不写入；接受后使用冻结资源 revision 和精确 Gateway／workspace／Session／Thread 交同一资源 Command。解除关联只从该资源的现有关联选择，不借普通 Thread 搜索解除其它关系。原临时资源的 source Thread 限制继续由原 owner 和动作入口执行；选择期间 Gateway 离开后切回也使旧动作失效。
+
 ### 默认结果排序与入口名称
 
 Thread 名称发现使用原工作区 catalog 的可见快照限定 Session，由原 Session owner 在生命周期读准入内读取同一控制库事务中的 main／published child 名称。每次最多检查 64 个目录节点、512 条 Thread、返回 100 个匹配；分支调度预算为 1 秒，单次准入与同步 I/O 仍沿用原 owner 的期限和受保护 worker 结算规则，不宣称任意 I/O 都能在 1 秒强行中断。child 用稳定 ID keyset 续查，不随页数重复 OFFSET 扫描；不建立新表或正文索引。cursor 固定 Gateway／workspace、规范化查询、catalog revision 与当前控制库原插入型 Thread revision；当前分支新增 child 拒绝旧 cursor。各 Session 分支是各自读取时的快照，不假称跨库同一时刻；已完成分支后续发布的新 child 需要重新查询。完成、结果条数、扫描和时间预算分别披露；有 cursor 的空页表示尚未覆盖完成，消费者不得展示成全量无匹配。

@@ -26,7 +26,7 @@ const record = (kind, index) => ({ resource_id: `${kind}_same`, workspace_id: ow
 /** 真实 Provider／Action／HTTP 客户端；仅宿主服务与后端回执为显式装具。 */
 export async function runtimeActionContract(mode) {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
-  const requests = [], errors = [], shows = [], choices = [], notices = [], confirmations = [], sourceCalls = [], focuses = [];
+  const requests = [], errors = [], shows = [], choices = [], notices = [], confirmations = [], sourceCalls = [], focuses = [], threadSelections = [];
   const mcpOpened = [], mcpOptions = [];
   const targets = owners.map((owner, i) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: `工作区 ${i}`, status: 'ready' }));
   const initial = { ...previous, gatewayId: 'control-gateway', loading: false, error: null, workspaces: targets, activeId: gatewayWorkspaceKey(owners[0]) };
@@ -108,9 +108,26 @@ export async function runtimeActionContract(mode) {
     }
     throw new Error(`非预期资源请求：${method} ${path}`);
   });
-  const quick = { quickAccess: { show: (value, options) => shows.push({ value, options }) }, async pick(items, options) {
+  const quick = { quickAccess: { show: (value, options) => shows.push({ value, options }), async pick(value, options) {
+    threadSelections.push({ value, options });
+    if (mode === 'attach-selection-cancel') return undefined;
+    if (mode === 'attach-selection-identity') {
+      workspaceContext.publish({ ...initial, gatewayId: owners[0].gatewayId });
+      workspaceContext.publish(initial);
+    }
+    const selected = new ThreadInput({ ...(mode === 'attach-selection-owner' ? owners[0] : owners[1]),
+      workspaceKey: '', sessionId: 'ses_unopened', threadId: 'thr_unopened_child', title: '未打开的 child' });
+    const resource = selected.resource; selected.dispose();
+    return [{ resource }];
+  } }, async pick(items, options) {
     choices.push({ title: options.title, items: items.map(item => ({ label: item.label, action: item.action, thread: item.thread })) });
     if (mode === 'action-cancel') return undefined;
+    if (mode === 'action-gateway-returned') {
+      lifetime.dispose();
+      workspaceContext.publish({ ...initial, gatewayId: owners[0].gatewayId });
+      workspaceContext.publish(initial);
+      return items.find(item => item.action === 'stop');
+    }
     if (mode === 'identity') return new Promise(resolve => { releaseChoice = () => resolve(items.find(item => item.action === 'stop')); });
     if (items[0]?.action) return items.find(item => item.action === (mode === 'picker-attach' ? 'attach' : 'stop'));
     return items[0];
@@ -119,11 +136,18 @@ export async function runtimeActionContract(mode) {
   const editors = { activeEditor: origin, editors: [origin], async openEditor(input) {
     mcpOpened.push({ name: input.mcpServer.name, target: input.mcpServer.catalog.target });
   } };
+  if (mode === 'attach-unopened' || mode.startsWith('attach-selection-')) { editors.activeEditor = undefined; editors.editors = []; }
   const notifications = { error: cause => errors.push(String(cause)), info: value => notices.push(value),
     status: value => { notices.push(value); return { close() { notices.push('pending-closed'); } }; } };
   const commands = { executeCommand(id, ...args) {
     // 面板宿主在真实 Gateway 场景验收；这里核 Provider 冻结的精确命令目标。
     if (id === resourceFocusCommand) { focuses.push(structuredClone(args[0])); return Promise.resolve(); }
+    if (id === 'boxteam.workspace.activate') {
+      focuses.push({ command: id, owner: args[0] });
+      workspaceContext.publish({ ...initial, gatewayId: owners[0].gatewayId });
+      workspaceContext.publish(initial);
+      return Promise.resolve();
+    }
     if (id === 'workbench.mcp.serverOptions') { mcpOptions.push(args[0]); return Promise.resolve(); }
     let valid = true;
     const accessor = { get(service) {
@@ -181,17 +205,24 @@ export async function runtimeActionContract(mode) {
       picker.selectedItems = picker.activeItems = [picker.items[mode === 'focus' ? 2 : 3]];
       accepts.fire({ inBackground: false });
       await until(() => focuses.length || errors.length);
-    } else if (['action-cancel', 'identity', 'picker-attach', 'accepted-close'].includes(mode)) {
+    } else if (mode === 'focus-command-identity') {
+      const handler = CommandsRegistry.getCommand(resourceFocusCommand).handler;
+      await handler({ get: service => service === ICommandService ? commands : {} },
+        { owner: owners[1], resource: records[1][0] }).catch(cause => errors.push(String(cause)));
+    } else if (['action-cancel', 'action-gateway-returned', 'identity', 'picker-attach', 'accepted-close'].includes(mode)) {
       picker.items[2].trigger(0, picker.keyMods);
       if (mode === 'identity') { await until(() => releaseChoice); invalidateGatewayToken(0); releaseChoice(); }
       if (mode === 'accepted-close') { await until(() => releaseWrite); lifetime.dispose(); cancellation.cancel(); releaseWrite(); }
       await until(() => errors.length || shows.length || notices.includes('pending-closed'));
     } else {
-      const action = ['promote', 'attach', 'detach', 'delete'].includes(mode) ? mode : mode === 'delete-cancel' ? 'delete' : 'stop';
+      const action = mode === 'attach-unopened' || mode === 'attach-explicit' || mode.startsWith('attach-selection-') ? 'attach'
+        : ['promote', 'attach', 'detach', 'delete'].includes(mode) ? mode : mode === 'delete-cancel' ? 'delete' : 'stop';
       const target = { owner: { ...owners[1] }, resource: structuredClone(records[1][0]) };
       if (mode.startsWith('reference')) target.resource = { resource_id: target.resource.resource_id,
         owner_revision: mode === 'reference-stale' ? 6 : target.resource.owner_revision };
       if (mode === 'illegal-attach') { target.resource.retention_scope = 'thread'; target.thread = { session_id: 'ses_wrong', thread_id: 'thr_wrong' }; }
+      if (mode === 'attach-explicit') target.thread = { session_id: 'ses_explicit', thread_id: 'thr_explicit_child' };
+      if (mode === 'attach-selection-temporary') target.resource.retention_scope = 'thread';
       if (mode === 'source' || mode === 'source-mismatch') target.source = { workspaceKey: gatewayWorkspaceKey(owners[1]), resource: { ...target.resource, owner_revision: mode === 'source' ? 7 : 8 },
         async run(action, ref) { sourceCalls.push({ action, ref }); return { ...target.resource, owner_revision: 8 }; } };
       requests.push({ phase: 'command' });
@@ -203,7 +234,7 @@ export async function runtimeActionContract(mode) {
       if (mode === 'reference-identity') { await until(() => releaseRead); invalidateGatewayToken(0); releaseRead(); }
       result = await operation;
     }
-    return { requests, rows, choices, shows, errors, notices, confirmations, sourceCalls, focuses, mcpOpened, mcpOptions, result, discoveryCount, aborted, records, maximum };
+    return { requests, rows, choices, shows, errors, notices, confirmations, sourceCalls, focuses, mcpOpened, mcpOptions, threadSelections, result, discoveryCount, aborted, records, maximum };
   } finally {
     lifetime.dispose(); cancellation.dispose(true); provider.dispose(); mcpService.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose();
     unwrapSessionApiFetch(); workspaceContext.publish(previous);

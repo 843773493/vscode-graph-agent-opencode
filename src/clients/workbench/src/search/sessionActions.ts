@@ -45,7 +45,7 @@ async function runSessionAction(accessor: ServicesAccessor, action: SessionActio
       const owners = origin || initial.activeId ? [captureSearchOwner(editors)] : await chooseSearchOwners(quick, []);
       if (!owners) return;
       assertAccess();
-      const providerOptions: SearchInvocationOptions = { searchOwners: owners, sessionSelection: true };
+      const providerOptions: SearchInvocationOptions = { searchOwners: owners, resourceSelection: 'session' };
       const selected = await quick.quickAccess.pick('session ', { preserveValue: true, enabledProviderPrefixes: ['session '],
         placeholder: t('workbench.sessionAction.pickPlaceholder'), providerOptions });
       if (!selected?.length) return;

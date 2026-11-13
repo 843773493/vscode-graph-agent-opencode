@@ -24,6 +24,8 @@ Quick Access 分支只按后端 `state` 区分取消与失败：`cancelled` 显�
 
 会话重命名、上下文分支与删除由 `sessionActions` 的同一 Action／Command 交原导航对话框、确认与生命周期 writer；导航菜单和 Session 候选按钮不另建 writer。显式 Session／分支快照优先于发起 Thread，发起 child 的分支保留精确 Thread，仍不明确时用原 `session ` Provider 只选择，不先读取 main Thread 或打开详情。命令重解稳定 owner、核验 ready 状态及权威会话标题；原确认前身份失效拒绝写入，已受理操作继续由原 owner 结算，不重放、不把排队回执说成物理删除完成。
 
+管理调用的 `resourceSelection` 明确区分 Session 与 Thread，只选择时返回原领域身份，不执行打开或行内动作。资源关联复用专用 `thread ` 前缀和冻结的单 owner；不新建 Thread 目录或只枚举已打开编辑器，folder 不作为接收者。
+
 Thread 名称与最近候选的分支按钮直接交同一 Session Command，保留候选中的完整 Gateway／工作区／Session／Thread 身份，不先打开候选；消息与 Trace 正文命中不以缺少快照的候选按钮创建分支。
 
 最近历史的接受、侧开、移除和引用动作均先核本次身份有效，再创建组或调用原 owner；失效的旧回调不得继续展示动作。范围选择切换到独立 Quick Input 后仍拥有同一身份约束，取消原选择且不重开失效列表，结束即释放订阅；沿原 CancellationToken，不维护第二套范围状态。

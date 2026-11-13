@@ -3636,7 +3636,6 @@
   "workbench.resource.focus": "Focus Workspace Resource",
   "workbench.resource.gatewayMissing": "The originating Gateway identity is unavailable. Cannot copy the resource reference.",
   "workbench.resource.gatewayNotLoaded": "The registered Gateway identity has not loaded yet",
-  "workbench.resource.noThread": "There is no explicit Thread to select. Open the target Thread first.",
   "workbench.resource.ownerMismatch": "The resource response does not belong to the explicitly selected workspace",
   "workbench.resource.panelUnavailable": "The workspace panel for the resource is unavailable",
   "workbench.resource.pasteSelectionToChat": "Paste Selected Content to Chat…",

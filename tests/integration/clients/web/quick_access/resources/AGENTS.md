@@ -26,6 +26,8 @@ Provider 合同区分单次 provide 的本地筛选与重新打开的当前发�
 
 运行资源合同实际调用 Provider、Command 及原 HTTP 客户端，显式宿主／回执装具不能冒充真实 Gateway。正式运行资源页面通过产品 API 创建 Session、终端与 Browser，核独立 stop／detach／delete、所选 revision 冲突、原底部面板按钮和明确工作区；不预写账本或触发模型执行。
 
+未打开 Thread 的关联沿原 `thread ` 只选择入口；合同核精确 child／显式目标优先及身份、owner、临时来源拒绝，正式页面用产品 API 创建未打开 main，核取消零写／零 Tab、关联与精确解除且原实例继续运行。资源聚焦按候选稳定 ID 用正常方向键定位后 Enter，不假定异步候选到达顺序或固定多按一次；不绕过原 Quick Input 接受链。
+
 同页右侧 Session 场景在真实 GET 前通过原 promote 发布新版，不替换响应；验证旧版本拒绝、原 loader 刷新后解除精确 Thread 关联。强制刷新卸载资源行后重新展开；结束 Browser 预览再进入独立 B 管理场景，避免 attach 页重建期间的焦点切换干扰。
 
 配置合同运行真实 ResourceQuickAccess 与配置 API，命令宿主只捕获冻结的来源和编辑器选项；验证同 Gateway 去重、工作区隔离、取消、分支权限及零提前正文读取。完整打开、侧开、原 JSONC writer 保存、只读、冲突和草稿恢复由 `test_settings_source_editor.py` 的正式 Workbench 页面覆盖，不把合同装具当产品验收。

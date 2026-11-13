@@ -64,6 +64,14 @@ for (const mode of ['focus', 'focus-browser']) test(`${mode}默认回车只聚�
   expect(result.focuses[0].resource.owner_revision).toBe(7);
   expect(result.requests).toHaveLength(result.discoveryCount);
 });
+test('资源聚焦等待切换工作区期间Gateway离开后切回，旧动作不能继续打开面板', async () => {
+  const result = await exercise('focus-command-identity');
+  expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新选择资源']);
+  expect(result.focuses).toEqual([{ command: 'boxteam.workspace.activate', owner: {
+    gatewayId: ownerB, workspaceId: '019a0000-0000-7000-8000-000000000001',
+  } }]);
+  expect(writes(result)).toEqual([]); expect(result.mcpOpened).toEqual([]);
+});
 test('同名终端和浏览器按owner保留；发现／逐键过滤／取消没有写入或正文读取', async () => {
   const result = await exercise('browse');
   expect(result.rows).toHaveLength(4); expect(new Set(result.rows.map(row => row.id)).size).toBe(4);
@@ -113,10 +121,40 @@ test('picker attach固定发起child，不把导航A或来源Thread当接收者'
   expect(result.errors).toEqual([]); expect(post).toHaveLength(1); expect(post[0].gateway).toBe(ownerB);
   expect(post[0].body.thread).toEqual({ session_id: 'ses_source', thread_id: 'thr_child' });
 });
+test('attach显式child优先于发起Thread，不再打开选择器', async () => {
+  const result = await exercise('attach-explicit');
+  expect(result.errors).toEqual([]); expect(writes(result)).toHaveLength(1);
+  expect(writes(result)[0]).toMatchObject({ gateway: ownerB,
+    body: { expected_revision: 7, thread: { session_id: 'ses_explicit', thread_id: 'thr_explicit_child' } } });
+  expect(result.threadSelections).toEqual([]); expect(result.choices).toEqual([]); expect(result.mcpOpened).toEqual([]);
+});
+test('attach未打开child沿原Thread只选择入口，保留owner和revision且不打开详情', async () => {
+  const result = await exercise('attach-unopened');
+  expect(result.errors).toEqual([]); expect(result.threadSelections).toHaveLength(1);
+  expect(result.threadSelections[0]).toMatchObject({ value: 'thread ', options: {
+    enabledProviderPrefixes: ['thread '], providerOptions: { resourceSelection: 'thread', searchOwners: [
+      { gatewayId: ownerB, workspaceId: '019a0000-0000-7000-8000-000000000001' },
+    ] },
+  } });
+  expect(writes(result)).toHaveLength(1);
+  expect(writes(result)[0]).toMatchObject({ path: '/api/v1/resources/terminal_same/attach', gateway: ownerB,
+    body: { expected_revision: 7, thread: { session_id: 'ses_unopened', thread_id: 'thr_unopened_child' } } });
+  expect(result.mcpOpened).toEqual([]); expect(result.choices).toEqual([]);
+});
+for (const mode of ['cancel', 'owner', 'identity', 'temporary']) test(`attach只选择${mode}在写入前结束或拒绝`, async () => {
+  const result = await exercise(`attach-selection-${mode}`);
+  expect(result.threadSelections).toHaveLength(1); expect(writes(result)).toEqual([]); expect(result.mcpOpened).toEqual([]);
+  expect(result.errors).toHaveLength(mode === 'cancel' ? 0 : 1);
+});
 test('资源picker二级取消返回原范围，零写入', async () => {
   const result = await exercise('action-cancel');
   expect(writes(result)).toEqual([]); expect(result.shows).toHaveLength(1);
   expect(result.shows[0].options.providerOptions.searchOwners).toHaveLength(2);
+});
+test('资源picker退出主列表后的动作选择仍拒绝Gateway离开后切回，零写入或旧列表重开', async () => {
+  const result = await exercise('action-gateway-returned');
+  expect(result.errors).toEqual(['Error: 访问凭据已改变，请重新选择资源']);
+  expect(writes(result)).toEqual([]); expect(result.shows).toEqual([]); expect(result.sourceCalls).toEqual([]);
 });
 for (const mode of ['identity', 'delete-cancel', 'illegal-attach', 'source-mismatch']) test(`${mode}在副作用前拒绝或取消`, async () => {
   const result = await exercise(mode); expect(writes(result)).toEqual([]); expect(result.sourceCalls).toEqual([]);

@@ -18,6 +18,8 @@ AGENTS／Skill 候选的复制按钮直接交原 `resourceActions` 命令，保�
 
 终端／Browser 候选只读取原工作区资源清单，保持独立种类、稳定 owner 和所选 revision。管理复用同一 Action／Command 与原 Hook 临时句柄，原组件成功完整替换、失败回读；picker 的独立动作使用同一结算函数，不重放未知写入。stop、detach、delete 使用各自原端点，关联保持明确 SessionThread 与原来源／保留范围。Session 元数据投影携原 ID／revision 进入该命令，完整读取后不悄悄改用新版；原 Session loader 继续负责权威刷新。浏览和二级取消不写入，关闭 picker 不撤销已受理动作；聚焦沿原工作区切换、面板恢复及实例选择，选择 Browser 不自动 attach，MCP 与跨平台验收按各自任务继续。
 
+关联优先使用显式 Thread、同 owner 发起 Thread，否则通过原 `thread ` Provider 只选择未打开目标；不从已打开编辑器列表缩小可选范围，也不先打开详情。解除关联只列当前资源的关联，临时资源仍限原 source Thread。Command 等待选择或面板恢复期间持续观察 Gateway，离开后切回不能恢复旧动作资格，结束时释放原订阅。
+
 配置来源沿原 ConfigurationSourceOwner 只读目录；每个选定工作区独立发现，同一已登记 Gateway 只发现一次。来源文件 URI 只消费 owner 回执；没有文件 URI 的正式逻辑来源用既有来源身份打开，不造公开地址。接受时固定目标、source_key、发起编辑器组及打开选项，统一交原设置 JSONC 命令读取、建模和保存，取消或逐键筛选不读正文、不预检或写入。
 
 只有公布 URI 的配置候选显示独立复制按钮，直接复用同一资源 Command；不重新发现目录、不打开配置或读取正文，保留输入焦点和选择器。

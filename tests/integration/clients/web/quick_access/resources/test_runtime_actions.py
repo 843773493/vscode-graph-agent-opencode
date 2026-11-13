@@ -34,8 +34,8 @@ from tests.support.workspaces import (
 
 
 @pytest.fixture(autouse=True)
-def runtime_web_assets(monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path) -> None:
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
+def runtime_web_assets(resource_web_assets: Path) -> Path:
+    return resource_web_assets
 
 
 async def test_manage_runtime_resources_without_opening_details(
@@ -103,6 +103,7 @@ async def test_manage_runtime_resources_without_opening_details(
     assert all(result[key] for key in ("browseOnly", "cancelOnly", "directStop", "detachedWithoutDelete",
                                       "deletedSeparately", "originalReact", "revisionConflict", "ownerB",
                                       "focusOtherWorkspace", "focusExactTerminal", "focusBrowserWithoutAttach",
+                                      "attachSelectionCancelled", "attachUnopenedThread", "detachSelectedThreadOnly",
                                       "sessionOwnerConflict", "sessionDetach"))
     assert result["forbiddenWrites"] == []
     with provider.control._condition:

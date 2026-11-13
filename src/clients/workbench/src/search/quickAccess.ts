@@ -152,7 +152,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     picker.placeholder = options.placeholder ?? (this.contentMode
       ? t('quickAccess.contentPlaceholder', options.contentCategories?.map(searchCategoryLabel).join(t('quickAccess.listSeparator')) || t('quickAccess.chooseCategories'), run.owners.map(owner => owner.workspaceId).join(t('quickAccess.listSeparator')))
       : options.filesOnly ? t('quickAccess.findFiles') : t('quickAccess.findPlaceholder', this.category ? searchCategoryLabel(this.category) : t('quickAccess.defaultCategories'), run.owners.map(owner => owner.workspaceId).join(t('quickAccess.listSeparator')) || t('quickAccess.chooseWorkspace')));
-    if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !options.sessionSelection && !picker.quickNavigate) {
+    if (!options.filesOnly && !options.fileSearchDelegate && !options.handleAccept && !options.resourceSelection && !picker.quickNavigate) {
       const button = { iconClass: ThemeIcon.asClassName(Codicon.filter), tooltip: t('quickAccess.chooseScope') };
       picker.buttons = [...picker.buttons, button];
       lifetime.add(picker.onDidTriggerButton(selected => { if (selected === button) this.report(this.chooseScope(run)); }));
@@ -431,6 +431,8 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   private resourcePick(run: AccessRun, resource: URI, description?: string, title = basename(resource), detail?: string,
     editor?: EditorInput | IResourceEditorInput, message?: TurnMessageMatchDTO, trace?: TraceMatchDTO, reference?: { uri: string; owner: WorkspaceOwner }): ResourcePick {
+    if (run.options.resourceSelection === 'thread') return { id: resource.toString(), resource, label: title, description, detail,
+      buttons: [], accept: () => {} };
     const side = run.options.includeOpenToSideButton !== false;
     const dirty = editor && isEditorInput(editor) && editor.isDirty() && !editor.isSaving();
     const copyReference = !run.options.fileSearchDelegate && !run.options.handleAccept && supportsResourceReference(resource);
@@ -470,7 +472,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
 
   private sessionPick(run: AccessRun, owner: WorkspaceOwner, sessionId: string, uri: string, title: string, description: string, detail: string, requestLog?: LLMRequestLogMatchDTO): ResourcePick {
     const target = { owner: { ...owner }, sessionId };
-    const selection = run.options.sessionSelection;
+    const selection = run.options.resourceSelection === 'session';
     const side = !selection && run.options.includeOpenToSideButton !== false;
     const manage = !selection && !requestLog && !run.options.handleAccept;
     const action = (kind: SessionAction) => {
@@ -494,7 +496,7 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private folderPick(run: AccessRun, owner: WorkspaceOwner, nodeId: string, label: string, description: string, detail: string): ResourcePick {
-    if (run.options.sessionSelection) return { id: `folder:${searchOwnerKey(owner)}/${nodeId}`, label, description, detail, pickable: false };
+    if (run.options.resourceSelection) return { id: `folder:${searchOwnerKey(owner)}/${nodeId}`, label, description, detail, pickable: false };
     return { id: `folder:${searchOwnerKey(owner)}/${nodeId}`, label, description, detail,
       iconClass: ThemeIcon.asClassName(Codicon.folder),
       accept: (_mods, event) => this.report((async () => {

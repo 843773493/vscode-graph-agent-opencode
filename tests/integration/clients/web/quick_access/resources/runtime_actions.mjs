@@ -59,13 +59,16 @@ try {
   }));
   const terminals = await Promise.all([a, b].map((owner, i) => api('/api/v1/resources/terminals', owner,
     { ...sessions[i], title: 'Needle 终端', retention_scope: 'workspace' })));
+  const unopenedSession = await api('/api/v1/sessions', b, { title: '运行资源关联目标', agent_id: 'default' });
+  const unopened = { session_id: unopenedSession.session_id,
+    thread_id: (await api(`/api/v1/sessions/${unopenedSession.session_id}/main-thread`, b)).thread_id };
   const browserResource = await api('/api/v1/resources/browsers', a, { ...sessions[0], title: 'Needle 浏览器', retention_scope: 'thread', url: 'about:blank', viewport: { width: 640, height: 480 } });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   await command('workbench.action.closeAllEditors');
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first();
   const camel = owner => ({ gatewayId: owner.gateway_id, workspaceId: owner.workspace_id });
-  const rows = id => quick.locator('.monaco-list-row').filter({ hasText: id });
+  const rows = id => quick.locator('.monaco-list-row').filter({ has: page.locator(`[data-quick-input-id$="/${id}"]`) });
   const find = async (owner, id) => {
     await command('boxteam.quickAccess.resources', camel(owner));
     await expect(input).toHaveValue('resource '); await input.fill(`resource ${id}`); await expect(rows(id)).toBeVisible();
@@ -94,7 +97,16 @@ try {
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('Escape'); expect(resourceActions(result.phase)).toEqual([]); result.browseOnly = true;
   const focus = async (owner, resourceId) => {
     await find(owner, resourceId);
-    await page.keyboard.press('ArrowDown');
+    const expectedId = await rows(resourceId).locator('[data-quick-input-id]').getAttribute('data-quick-input-id');
+    expect(expectedId).toBeTruthy();
+    const focused = quick.locator('.monaco-list-row.focused [data-quick-input-id]');
+    const rowCount = await quick.locator('.monaco-list-row').count();
+    // 渐进发现会保留先到目标的焦点，按实际稳定身份导航，不能假定多按一次正好选中资源。
+    for (let index = 0; index <= rowCount; index += 1) {
+      if (await focused.count() === 1 && await focused.getAttribute('data-quick-input-id') === expectedId) break;
+      await page.keyboard.press('ArrowDown');
+    }
+    await expect(focused).toHaveAttribute('data-quick-input-id', expectedId);
     await page.keyboard.press('Enter');
   };
   await phase('focus-B'); await focus(b, terminals[1].resource_id);
@@ -122,6 +134,30 @@ try {
   await expect(page.locator('.native-workspace-panel[data-panel-kind="browser"]:visible iframe')).toHaveCount(0);
   expect((await current(a, browserResource.resource_id)).thread_associations).toEqual([sessions[0]]);
   expect(resourceActions(result.phase)).toEqual([]); result.focusBrowserWithoutAttach = true;
+  await phase('attach-cancel'); await show(b, terminals[1].resource_id);
+  await quick.getByText('关联 Thread', { exact: true }).click();
+  await expect(input).toHaveValue('thread '); await page.keyboard.press('Escape');
+  await expect(quick).not.toBeVisible(); expect(resourceActions(result.phase)).toEqual([]);
+  await expect(page.locator('.tabs-container .tab')).toHaveCount(0); result.attachSelectionCancelled = true;
+
+  await phase('attach-unopened'); await show(b, terminals[1].resource_id);
+  await quick.getByText('关联 Thread', { exact: true }).click();
+  await expect(input).toHaveValue('thread '); await input.fill(`thread ${unopened.thread_id}`);
+  const targetThread = quick.locator('.monaco-list-row').filter({ hasText: unopened.thread_id });
+  await expect(targetThread).toHaveCount(1); await targetThread.hover();
+  await expect(targetThread.locator('.quick-input-list-entry-action-bar .action-label')).toHaveCount(0);
+  const associated = await settle(terminals[1].resource_id, 'attach', () => targetThread.click());
+  expect(associated.thread_associations).toEqual([sessions[1], unopened]);
+  expect(resourceActions(result.phase)).toHaveLength(1);
+  expect(resourceActions(result.phase)[0]).toMatchObject({ owner: { gateway_id: b.gateway_id, workspace_id: b.workspace_id },
+    body: { expected_revision: terminals[1].owner_revision, thread: unopened } });
+  await expect(page.locator('.tabs-container .tab')).toHaveCount(0); result.attachUnopenedThread = true;
+
+  await phase('detach-unopened'); await show(b, terminals[1].resource_id);
+  await quick.getByText('解除关联', { exact: true }).click();
+  const restored = await settle(terminals[1].resource_id, 'detach', () => quick.getByText(unopened.thread_id, { exact: true }).click());
+  expect(restored.thread_associations).toEqual([sessions[1]]); expect(restored.status).toBe('running');
+  expect(resourceActions(result.phase)).toHaveLength(1); result.detachSelectedThreadOnly = true;
   await phase('cancel'); await show(a, terminals[0].resource_id); await page.keyboard.press('Escape');
   await expect(input).toHaveValue(`resource ${terminals[0].resource_id}`); await page.keyboard.press('Escape'); expect(resourceActions(result.phase)).toEqual([]); result.cancelOnly = true;
   await phase('stop'); await show(a, terminals[0].resource_id);
