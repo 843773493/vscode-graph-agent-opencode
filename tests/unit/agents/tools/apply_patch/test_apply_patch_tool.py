@@ -235,23 +235,31 @@ def test_apply_patch_matches_unicode_punctuation_and_trailing_whitespace(
     assert target.read_text(encoding="utf-8") == "title - new\nnext\n"
 
 
+@pytest.mark.parametrize("first, second, accepted", [
+    ("first", "seconx", True), ("first", "secon", True), ("first", "seconds", True),
+    ("fxrst", "seconx", False),
+])
 def test_apply_patch_uses_edit_distance_for_conservative_context_match(
-    empty_workspace_scope: tuple[str, Path],
+    empty_workspace_scope: tuple[str, Path], first: str, second: str, accepted: bool,
 ) -> None:
     workspace_root = empty_workspace_scope[1]
     target = workspace_root / "fuzzy.txt"
     target.write_text("first\nsecond\nthird\n", encoding="utf-8")
 
-    result = _apply(
-        """*** Begin Patch
+    patch = f"""*** Begin Patch
 *** Update File: fuzzy.txt
 @@
- first
--seconx
+ {first}
+-{second}
 +changed
  third
 *** End Patch"""
-    )
+    if not accepted:
+        with pytest.raises(InvalidContextError):
+            _apply(patch)
+        assert target.read_text(encoding="utf-8") == "first\nsecond\nthird\n"
+        return
+    result = _apply(patch)
 
     assert int(result["fuzz"]) & int(Fuzz.EDIT_DISTANCE_MATCH)
     assert target.read_text(encoding="utf-8") == "first\nchanged\nthird\n"

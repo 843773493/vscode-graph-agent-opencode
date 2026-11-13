@@ -122,10 +122,11 @@ def _find_context_core(
         return None
     fuzz |= Fuzz.EDIT_DISTANCE_MATCH
     for index in range(max(0, start), len(stripped_lines) - len(stripped_context) + 1):
-        distance = sum(
-            _levenshtein(stripped_lines[index + offset], expected)
-            for offset, expected in enumerate(stripped_context)
-        )
+        distance = 0
+        for offset, expected in enumerate(stripped_context):
+            distance += _levenshtein(stripped_lines[index + offset], expected, max_distance - distance)
+            if distance > max_distance:
+                break
         if distance <= max_distance:
             return FuzzMatch(index, fuzz)
     return None
@@ -280,19 +281,25 @@ def _spaces_difference(
     return 0, False
 
 
-def _levenshtein(left: str, right: str) -> int:
+def _levenshtein(left: str, right: str, maximum: int) -> int:
+    if left == right:
+        return 0
+    if abs(len(left) - len(right)) > maximum:
+        return maximum + 1
     if len(left) < len(right):
         left, right = right, left
-    previous = list(range(len(right) + 1))
+    # 仅计算剩余容差可达的对角带；超过预算后无需知道完整编辑距离。
+    outside = maximum + 1
+    previous = {index: index for index in range(min(len(right), maximum) + 1)}
     for left_index, left_character in enumerate(left, start=1):
-        current = [left_index]
-        for right_index, right_character in enumerate(right, start=1):
-            current.append(
-                min(
-                    current[-1] + 1,
-                    previous[right_index] + 1,
-                    previous[right_index - 1] + (left_character != right_character),
-                )
+        current = {0: left_index} if left_index <= maximum else {}
+        for right_index in range(max(1, left_index - maximum), min(len(right), left_index + maximum) + 1):
+            current[right_index] = min(
+                current.get(right_index - 1, outside) + 1,
+                previous.get(right_index, outside) + 1,
+                previous.get(right_index - 1, outside) + (left_character != right[right_index - 1]),
             )
+        if min(current.values()) > maximum:
+            return outside
         previous = current
-    return previous[-1]
+    return previous[len(right)]
