@@ -43,7 +43,7 @@ async def watch_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIt
     native = NativeWatch()
     native.initialized.set()
 
-    async def watch(_root: Path, **_options: object) -> AsyncIterator[set[tuple[Change, str]]]:
+    async def watch(_runtime, _root: Path, **_options: object) -> AsyncIterator[set[tuple[Change, str]]]:
         native.starts += 1
         try:
             await native.initialized.wait()
@@ -61,7 +61,7 @@ async def watch_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIt
                 if error := native.failures.get(_root):
                     raise error
 
-    monkeypatch.setattr(watch_module, "awatch", watch)
+    monkeypatch.setattr(watch_module.FileWatchRuntime, "watch", watch)
     service = WorkspaceFileWatchService(workspace_root=root)
     queue: asyncio.Queue[WorkspaceFileChangeBatch] = asyncio.Queue()
     await service._acquire((root,), queue, include_internal_paths=False)

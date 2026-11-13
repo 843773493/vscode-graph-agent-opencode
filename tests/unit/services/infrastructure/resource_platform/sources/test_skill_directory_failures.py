@@ -125,12 +125,12 @@ async def test_upstream_watch_failure_reaches_file_and_directory_snapshots(
     failure = PermissionError(errno.EACCES, "底层监听失败", str(root))
     release = asyncio.Event()
 
-    async def failing_watch(_root: Path, **_options):
+    async def failing_watch(_runtime, _root: Path, **_options):
         yield set()
         await release.wait()
         raise failure
 
-    monkeypatch.setattr(watch_module, "awatch", failing_watch)
+    monkeypatch.setattr(watch_module.FileWatchRuntime, "watch", failing_watch)
     watcher = WorkspaceFileWatchService(workspace_root=root)
     registry = WorkspaceFileResourceRegistry(workspace_root=root, watch_service=watcher, project_root=tmp_path)
     initial = registry.register_skill_directory(root=skill.parent.parent, scope="workspace", scope_id="test")

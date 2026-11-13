@@ -212,11 +212,11 @@ async def test_real_watch_failure_keeps_native_path_in_log_only(
     import app.services.infrastructure.workspace_file_watch_service as watch_module
 
     root = Path(workspace_service.root_path)
-    async def failing_watch(*_roots, **_options):
+    async def failing_watch(_runtime, *_roots, **_options):
         yield set()
         raise PermissionError(13, "Permission denied", str(root / "private.txt"))
 
-    monkeypatch.setattr(watch_module, "awatch", failing_watch)
+    monkeypatch.setattr(watch_module.FileWatchRuntime, "watch", failing_watch)
     watcher = watch_module.WorkspaceFileWatchService(workspace_root=root)
     response = await stream_workspace_file_events(
         WorkspaceFileWatchRequest(paths=[]), "local-dev-token",

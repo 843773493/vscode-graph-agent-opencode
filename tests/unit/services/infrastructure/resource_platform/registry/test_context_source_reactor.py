@@ -357,12 +357,12 @@ async def raw_overflow_case(
     ContextSourceManager, WorkspaceFileResourceRegistry, WorkspaceFileWatchService,
     ContextSourceReactor, list[str], asyncio.Event,
 ]]:
-    async def quiet_awatch(_root: Path, **_options: object):
+    async def quiet_awatch(_runtime, _root: Path, **_options: object):
         # 原生事件源在本例保持静止，防止真实 OS 通知替漏掉 overflow 的错误实现补救。
         yield set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(watch_module, "awatch", quiet_awatch)
+    monkeypatch.setattr(watch_module.FileWatchRuntime, "watch", quiet_awatch)
     monkeypatch.setattr(watch_module, "FILE_WATCH_QUEUE_SIZE", 1)
     (tmp_path / "workspace").mkdir()
     manager, registry, watcher, reactor, scope, uris = _overflow_fixture(
