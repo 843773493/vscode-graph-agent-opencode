@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.core.failures import mark_public_failure
+from app.core.failures import mark_public_failure, public_failure_message
 from app.core.resource_uri import resource_display_uri
 from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationOperation,
@@ -831,6 +831,17 @@ async def test_describe_reports_real_stat_without_reading_binary_content(
     def reject_content_read(*_args, **_kwargs):
         pytest.fail("describe 不应读取正文")
 
+    original_open = Path.open
+    handles = []
+
+    @contextmanager
+    def open_without_read(path, *args, **kwargs):
+        assert path == binary and args == ("rb",) and not kwargs
+        with original_open(path, *args, **kwargs) as stream:
+            handles.append(stream)
+            yield SimpleNamespace(read=reject_content_read)
+
+    monkeypatch.setattr(Path, "open", open_without_read)
     monkeypatch.setattr(owner, "_read", reject_content_read)
     for path, address, shape in ((workspace, uri, "directory"),
                                  (binary, uri + "/%E4%BA%8C%E8%BF%9B%E5%88%B6%20%25.bin", "file")):
@@ -844,6 +855,7 @@ async def test_describe_reports_real_stat_without_reading_binary_content(
         assert result.node.stat.changed_at_ms == metadata.st_ctime_ns / 1_000_000
         assert result.content is None and result.content_hash is None
         assert ResourceNavigationResultDTO.model_validate_json(result.model_dump_json()).node.stat == result.node.stat
+    assert len(handles) == 1 and handles[0].closed
     missing = ResourceNavigationRequest(uri=uri + "/missing-directory", operation="describe")
     with pytest.raises(ResourceFileOperationError) as failure:
         if synchronous:
@@ -851,3 +863,34 @@ async def test_describe_reports_real_stat_without_reading_binary_content(
         else:
             await owner.navigate(missing, local_gateway_id=GATEWAY_ID)
     assert (failure.value.code, failure.value.reason) == ("file_not_found", "not_found")
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.asyncio
+async def test_describe_rejects_current_file_read_denial_before_returning_stat(
+    navigation_case, synchronous, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, workspace, uri = navigation_case
+    path = workspace / "unreadable.css"
+    path.write_text(".probe { color: red; }", encoding="utf-8")
+    address = uri + "/unreadable.css"
+    error = PermissionError(errno.EACCES, "当前用户不可读取文件", str(path))
+
+    def deny_open(target, *args, **kwargs):
+        assert target == path and args == ("rb",) and not kwargs
+        raise error
+
+    monkeypatch.setattr(Path, "open", deny_open)
+    request = ResourceNavigationRequest(uri=address, operation="describe")
+    with pytest.raises(PermissionError) as failure:
+        if synchronous:
+            owner.navigate_sync(request, local_gateway_id=GATEWAY_ID)
+        else:
+            await owner.navigate(request, local_gateway_id=GATEWAY_ID)
+    assert failure.value is error
+    detail = public_failure_message(error)
+    assert detail is not None and address in detail and "当前用户不可读取文件" in detail
+    # 目录描述仍沿原 stat，不因文件读取核验而尝试打开目录。
+    directory = ResourceNavigationRequest(uri=uri, operation="describe")
+    result = owner.navigate_sync(directory, local_gateway_id=GATEWAY_ID) if synchronous else await owner.navigate(directory, local_gateway_id=GATEWAY_ID)
+    assert result.node.resource_shape == "directory" and result.node.stat is not None

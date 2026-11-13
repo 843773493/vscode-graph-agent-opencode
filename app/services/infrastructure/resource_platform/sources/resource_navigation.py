@@ -26,6 +26,7 @@ import regex
 from wcmatch import glob as wcglob
 
 from app.abstractions.resource_file_content import ResourceFileReader
+from app.core.atomic_fs import native_io_path
 from app.core.distribution_identity import load_distribution_id
 from app.core.exceptions import ForbiddenError
 from app.core.failures import public_failure_message
@@ -68,6 +69,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.resolver im
 from app.services.infrastructure.resource_platform.virtual_resources.values import (
     ResolutionContext,
 )
+from app.services.infrastructure.workspace_files.filesystem import file_access
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 if TYPE_CHECKING:
@@ -364,6 +366,10 @@ class ResourceNavigation:
         if request.operation not in node.operations:
             raise ResourceUriResolveError("capability_denied", "资源不允许所请求的导航操作")
         if request.operation == "describe":
+            if parsed.kind == "files" and node.resource_shape == "file":
+                # 原 FileService 会据 stat 复用 Webview 字节；先核当前读取权限，不读取正文。
+                with file_access(node.canonical_uri, "文件描述"), native_io_path(path).open("rb"):
+                    pass
             return self._response(ResourceNavigationResultDTO(node=node), request, deadline)
         if request.operation == "read":
             if parsed.kind == "attachments":
