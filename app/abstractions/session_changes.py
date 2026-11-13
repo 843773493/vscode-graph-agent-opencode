@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -66,7 +67,7 @@ class SessionChangesStoreProtocol(Protocol):
 
     def save_reviewed_map(self, session_id: str, reviewed: dict[str, bool]) -> None: ...
 
-    def read_edit_text(self, session_id: str, edit_id: str, phase: Literal["before", "after", "diff"]) -> str: ...
+    def edit_text_reader(self, session_id: str) -> Callable[[str, Literal["before", "after", "diff"]], str]: ...
 
     def save_changeset_file(
         self,

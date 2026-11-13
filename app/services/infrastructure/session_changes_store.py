@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Literal
@@ -120,20 +121,26 @@ class SessionChangesStore:
             encoding="utf-8",
         )
 
-    def read_edit_text(self, session_id: str, edit_id: str, phase: Literal["before", "after", "diff"]) -> str:
-        if phase not in {"before", "after", "diff"}:
-            raise ValueError("文件变更内容必须为 before、after 或 diff")
-        filename = "diff.patch" if phase == "diff" else f"{phase}.txt"
-        file_path = self._edit_path_in(self._session_changes_dir(session_id), edit_id, filename)
-        try:
-            with native_io_path(file_path).open(
-                encoding="utf-8", newline="" if phase == "diff" else None,
-            ) as handle:
-                return handle.read()
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                f"文件变更内容缺失: session_id={session_id}, edit_id={edit_id}, phase={phase}"
-            ) from exc
+    def edit_text_reader(self, session_id: str) -> Callable[[str, Literal["before", "after", "diff"]], str]:
+        """在调用方的同一次会话读准入内复用 locator，不跨请求保存路径。"""
+        changes_dir = self._session_changes_dir(session_id)
+
+        def read(edit_id: str, phase: Literal["before", "after", "diff"]) -> str:
+            if phase not in {"before", "after", "diff"}:
+                raise ValueError("文件变更内容必须为 before、after 或 diff")
+            filename = "diff.patch" if phase == "diff" else f"{phase}.txt"
+            file_path = self._edit_path_in(changes_dir, edit_id, filename)
+            try:
+                with native_io_path(file_path).open(
+                    encoding="utf-8", newline="" if phase == "diff" else None,
+                ) as handle:
+                    return handle.read()
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    f"文件变更内容缺失: session_id={session_id}, edit_id={edit_id}, phase={phase}"
+                ) from exc
+
+        return read
 
     def save_changeset_file(
         self,

@@ -186,15 +186,12 @@ def summarize_records(
     )
 
 
-def sorted_turn_ids(records: list[StoredFileEdit]) -> list[str]:
-    seen: dict[str, str] = {}
+def group_turn_records(records: list[StoredFileEdit]) -> list[tuple[str, list[StoredFileEdit]]]:
+    grouped: dict[str, list[StoredFileEdit]] = {}
     for record in records:
         if record.turn_id is not None:
-            seen.setdefault(record.turn_id, record.created_at)
-    return [
-        turn_id
-        for turn_id, _ in sorted(seen.items(), key=lambda item: item[1], reverse=True)
-    ]
+            grouped.setdefault(record.turn_id, []).append(record)
+    return sorted(grouped.items(), key=lambda item: item[1][0].created_at, reverse=True)
 
 
 def changeset_kind_and_turn(

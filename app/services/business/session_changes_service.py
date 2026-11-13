@@ -26,8 +26,8 @@ from app.services.business.session_changes_logic import (
     changeset_records,
     count_diff_lines,
     detect_change_kind,
+    group_turn_records,
     preview_session_file_content,
-    sorted_turn_ids,
     summarize_records,
 )
 from app.services.business.session_service import SessionService
@@ -112,16 +112,15 @@ class SessionChangesService:
             records = self._store.read_records(session_id)
             # 单次编辑从已保存 patch 取摘要；多次编辑仍按首尾快照计算净变化。
             build_diff = cache(build_unified_diff)
+            read_edit_text = self._store.edit_text_reader(session_id)
             items: list[SessionChangesetListItemDTO] = []
-            for changeset_id in (
-                "all",
-                *(f"turn:{turn_id}" for turn_id in sorted_turn_ids(records)),
+            for changeset_id, selected_records in (
+                ("all", records),
+                *((f"turn:{turn_id}", grouped) for turn_id, grouped in group_turn_records(records)),
             ):
                 summary = summarize_records(
-                    changeset_records(records, changeset_id),
-                    read_edit_text=lambda edit_id, phase: self._store.read_edit_text(
-                        session_id, edit_id, phase,
-                    ),
+                    selected_records,
+                    read_edit_text=read_edit_text,
                     build_diff=build_diff,
                 )
                 change_kind, turn_id = changeset_kind_and_turn(changeset_id)
@@ -213,11 +212,7 @@ class SessionChangesService:
     ) -> SessionChangesetDTO:
         changes = aggregate_records(
             records,
-            read_edit_text=lambda edit_id, phase: self._store.read_edit_text(
-                session_id,
-                edit_id,
-                phase,
-            ),
+            read_edit_text=self._store.edit_text_reader(session_id),
         )
         files: list[SessionFileChangeDTO] = []
         for change in changes:
