@@ -36,6 +36,7 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/services/history/browser/historyService.ts',
   'src/vs/workbench/services/workingCopy/common/workingCopyHistoryTracker.ts',
   'src/vs/workbench/services/workingCopy/common/workingCopyBackupService.ts',
+  'src/vs/workbench/services/workingCopy/common/workingCopyHistoryService.ts',
   'src/vs/workbench/contrib/localHistory/browser/localHistoryCommands.ts',
   'src/vs/workbench/contrib/localHistory/browser/localHistoryTimeline.ts',
   'src/vs/workbench/common/editor/textResourceEditorInput.ts',
@@ -180,9 +181,60 @@ if (!meta || typeof meta !== 'object' || Array.isArray(meta) || ('typeId' in met
       contents = replaceOnce(contents, '// ignore JSON parse errors',
         'throw new Error(`Backup: Invalid metadata in ${backupResource}`, { cause: error });');
     }
+    if (path === join(upstream, 'src/vs/workbench/services/workingCopy/common/workingCopyHistoryService.ts')) {
+      // 本地历史是用户恢复数据；同一解析器保护定向读取和全部历史枚举。
+      contents = replaceOnce(contents, 'export class WorkingCopyHistoryModel {', `function parseHistoryEntries(raw: string, location: URI, resource?: URI): ISerializedWorkingCopyHistoryModel {
+  try {
+    const model: ISerializedWorkingCopyHistoryModel = JSON.parse(raw);
+    if (!model || model.version !== 1 || typeof model.resource !== 'string' || !URI.parse(model.resource).scheme
+      || (resource && model.resource !== resource.toString()) || !Array.isArray(model.entries)
+      || model.entries.some(entry => !entry || !entry.id || typeof entry.id !== 'string' || !Number.isFinite(entry.timestamp)
+        || (entry.source !== undefined && typeof entry.source !== 'string')
+        || (entry.sourceDescription !== undefined && typeof entry.sourceDescription !== 'string'))) {
+      throw new Error('Invalid local history format, version or resource');
+    }
+    return model;
+  } catch (error) {
+    throw new Error(\`Local History: Invalid entries in \${location}\`, { cause: error });
+  }
+}
+
+export class WorkingCopyHistoryModel {`);
+      contents = replaceOnce(contents,
+        'let entryToReplace: IWorkingCopyHistoryEntry | undefined = undefined;',
+        'await this.resolveEntriesOnce();\n\nlet entryToReplace: IWorkingCopyHistoryEntry | undefined = undefined;');
+      contents = replaceOnce(contents,
+        'async moveEntries(target: WorkingCopyHistoryModel, source: SaveSource, token: CancellationToken): Promise<void> {',
+        'async moveEntries(target: WorkingCopyHistoryModel, source: SaveSource, token: CancellationToken): Promise<void> {\nawait Promise.all([this.resolveEntriesOnce(), target.resolveEntriesOnce()]);');
+      contents = replaceOnce(contents,
+        'serializedModel = JSON.parse((await this.fileService.readFile(historyEntriesListingFile)).value.toString());',
+        'serializedModel = parseHistoryEntries((await this.fileService.readFile(historyEntriesListingFile)).value.toString(), historyEntriesListingFile, this.workingCopyResource);');
+      // 两处读取都只将真实缺失当作空历史，拒读及格式错误向原消费者传播。
+      for (const next of ['return serializedModel;', 'if (!rawEntries) {']) contents = replaceOnce(contents,
+        `if (!this.isFileNotFound(error)) {\n\t\t\t\tthis.traceError(error);\n\t\t\t}\n\t\t}\n\n\t\t${next}`,
+        `if (!this.isFileNotFound(error)) {\n\t\t\t\tthis.logService.error(error);\n\t\t\t\tthrow error;\n\t\t\t}\n\t\t}\n\n\t\t${next}`);
+      contents = replaceOnce(contents,
+        'const serializedModel: ISerializedWorkingCopyHistoryModel = JSON.parse((await this.fileService.readFile(joinPath(child.resource, WorkingCopyHistoryModel.ENTRIES_FILE))).value.toString());',
+        'const location = joinPath(child.resource, WorkingCopyHistoryModel.ENTRIES_FILE);\nconst serializedModel = parseHistoryEntries((await this.fileService.readFile(location)).value.toString(), location);');
+      contents = replaceOnce(contents, '// ignore - model might be missing or corrupt, but we need it',
+        'if (!(error instanceof FileOperationError && error.fileOperationResult === FileOperationResult.FILE_NOT_FOUND)) throw error;');
+      contents = replaceOnce(contents, '// ignore - history might be entirely empty',
+        'if (!(error instanceof FileOperationError && error.fileOperationResult === FileOperationResult.FILE_NOT_FOUND)) {\nthis.logService.error(error);\nthrow error;\n}');
+    }
     if (path === join(upstream, 'src/vs/workbench/contrib/localHistory/browser/localHistoryCommands.ts')) {
       contents = replaceOnce(contents, 'resource?.scheme !== pathService.defaultUriScheme && resource?.scheme !== Schemas.vscodeUserData',
         "resource?.scheme !== pathService.defaultUriScheme && resource?.scheme !== 'boxteam-file' && resource?.scheme !== Schemas.vscodeUserData");
+      // 读取失败先结清原选择器；新建历史的异步接受错误交原对话框展示。
+      for (const [declaration, read, disposable] of [
+        ['const resources', 'new ResourceSet(await workingCopyHistoryService.getAll(cts.token))', 'resourcePickerDisposables'],
+        ['const entries', 'await workingCopyHistoryService.getEntries(resource, cts.token)', 'entryPickerDisposables'],
+      ]) contents = replaceOnce(contents, `${declaration} = ${read};`,
+        `${declaration.replace('const', 'let')}: ${declaration === 'const resources' ? 'ResourceSet' : 'readonly IWorkingCopyHistoryEntry[]'};\ntry { ${declaration.replace('const ', '')} = ${read}; }\ncatch (error) { ${disposable}.dispose(); throw error; }`);
+      contents = replaceOnce(contents, "inputBox.title = localize('createLocalHistoryEntryTitle',",
+        "const dialogService = accessor.get(IDialogService);\ninputBox.title = localize('createLocalHistoryEntryTitle',");
+      contents = replaceOnce(contents,
+        'await workingCopyHistoryService.addEntry({ resource, source: inputBox.value }, CancellationToken.None);',
+        'try { await workingCopyHistoryService.addEntry({ resource, source: entrySource }, CancellationToken.None); }\ncatch (error) { await dialogService.error(toErrorMessage(error)); }');
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/localHistory/browser/localHistoryTimeline.ts')) {
       contents = replaceOnce(contents, 'uri.scheme === this.pathService.defaultUriScheme || uri.scheme === Schemas.vscodeUserData',

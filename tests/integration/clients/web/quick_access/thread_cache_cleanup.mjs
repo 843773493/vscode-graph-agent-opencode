@@ -1,4 +1,4 @@
-// Integration：由真实执行生成历史，再经正式工作台清理镜像；只读 IndexedDB 核对结果。
+// Integration：真实执行生成历史；离开产品文档后仅对原恢复记录注入具名格式故障。
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -12,7 +12,7 @@ export async function runThreadCacheCleanup({ run, launch }) {
 const output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const identities = JSON.parse(required('BOXTEAM_CACHE_THREADS'));
 const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], forbiddenWrites: [],
-  boundary: '真实 Gateway、产品执行、model_stream 精确回放及正式 Workbench；不预写历史、草稿或缓存，不替换响应。' };
+  boundary: '真实 Gateway、产品执行、model_stream 精确回放及正式 Workbench；正常状态由产品生成，仅离开产品文档后破坏并修复一条备份和历史记录，故障页为空同origin页面，不替换业务响应。' };
 let page, quick, groups, failure;
 const checkpoint = async phase => { result.phase = phase; await writeFile(output, JSON.stringify(result, null, 2) + '\n'); };
 try {
@@ -233,7 +233,7 @@ try {
   expect(backup).toHaveLength(1);
   const original = backup[0], broken = original.text.replace(/ \{[^\n]*\}\n/, ' {"typeId":\n');
   expect(broken).not.toBe(original.text);
-  const writeBackup = async text => page.evaluate(async ({ key, text }) => {
+  const writeRecoveryRecord = async (record, text) => page.evaluate(async ({ key, text }) => {
     const request = indexedDB.open('vscode-web-db');
     const db = await new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
@@ -245,8 +245,8 @@ try {
         transaction.objectStore('vscode-userdata-store').put(new TextEncoder().encode(text), key);
       });
     } finally { db.close(); }
-  }, { key: original.key, text });
-  await writeBackup(broken);
+  }, { key: record.key, text });
+  await writeRecoveryRecord(original, broken);
   result.backupCorruption = { key: original.key, original: original.text, broken };
   await checkpoint('corrupt-backup-recovery-rejects-with-original-preserved');
   await page.goto(host.baseUrl, { waitUntil: 'domcontentloaded' }); await ready();
@@ -258,7 +258,7 @@ try {
   result.backupCorruption.rejectedAndPreserved = true;
   // 仅修复已声明的故障原件；重新进入产品后由原恢复服务读取，不预先填模型。
   await page.goto(storageUrl, { waitUntil: 'domcontentloaded' });
-  await writeBackup(original.text);
+  await writeRecoveryRecord(original, original.text);
   await checkpoint('repaired-backup-restores-original-dirty-model');
   await page.goto(host.baseUrl, { waitUntil: 'domcontentloaded' }); await ready();
   // 导航先可用，编辑器恢复仍异步进行；等真实working copy恢复后再发起后续操作。
@@ -272,6 +272,51 @@ try {
   for (const [index, target] of identities.entries()) {
     await open(target); await expect(pane(target).getByTestId('composer-input')).toHaveValue(`保留草稿 ${index}`);
   }
+  await checkpoint('unknown-history-version-retains-original-and-rejects-command');
+  await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
+  await page.goto(storageUrl, { waitUntil: 'domcontentloaded' });
+  const history = historyListing(await recoveryRecords());
+  expect(history.data.version).toBe(1);
+  const incompatible = JSON.stringify({ ...history.data, version: 2 });
+  await writeRecoveryRecord(history, incompatible);
+  await page.goto(host.baseUrl, { waitUntil: 'domcontentloaded' }); await ready();
+  const commandFailure = await page.evaluate(async () => {
+    try {
+      await globalThis.workbench.commands.executeCommand('workbench.action.localHistory.restoreViaPicker');
+      return null;
+    } catch (error) { return { message: error.message, cause: String(error.cause) }; }
+  });
+  expect(commandFailure.message).toContain('Local History: Invalid entries in');
+  expect(commandFailure.cause).toContain('Invalid local history format, version or resource');
+  await expect(quick).toBeHidden();
+  await command('_workbench.open', fileUri, [0, { pinned: true }]);
+  await command('workbench.action.localHistory.create');
+  await expect(quick).toBeVisible();
+  await quick.locator('input').first().fill('不得覆盖损坏的历史'); await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Local History: Invalid entries in');
+  await dialog.getByRole('button', { name: '确定', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const historyAfterFailure = (await recoveryRecords()).filter(record => record.key.includes('/History/'));
+  expect(historyAfterFailure).toEqual(protectedHistory.map(record => record.key === history.key
+    ? { key: record.key, text: incompatible } : record));
+  expect(await readSavedSettings(page)).toEqual(savedSettings);
+  result.historyCorruption = { key: history.key, commandFailure, rejectedAndPreserved: true };
+  // 只修复本次故障原件，产品下次读取继续使用原历史服务和Timeline。
+  await page.goto(storageUrl, { waitUntil: 'domcontentloaded' });
+  await writeRecoveryRecord(history, history.text);
+  await page.goto(host.baseUrl, { waitUntil: 'domcontentloaded' }); await ready();
+  await expect(groups.getByRole('tab', { name: /cache-protected\.txt/ })).toHaveCount(2);
+  for (const group of await groups.all()) await expect(group.getByRole('tab', { name: /cache-protected\.txt/ })).toHaveClass(/dirty/);
+  await command('_workbench.open', fileUri, [0, { pinned: true }]);
+  await command('timeline.focus');
+  await expect(page.locator('.timeline-tree-view')).toContainText('清理后仍保留的文件历史');
+  expect((await recoveryRecords()).filter(record => record.key.includes('/History/'))).toEqual(protectedHistory);
+  for (const [index, target] of identities.entries()) {
+    await open(target); await expect(pane(target).getByTestId('composer-input')).toHaveValue(`保留草稿 ${index}`);
+  }
+  expect(await readSavedSettings(page)).toEqual(savedSettings);
+  result.historyCorruption.recoveredAfterRepair = true;
   await page.unroute(storageUrl);
   expect(result.forbiddenWrites).toEqual([]); expect(result.pageErrors).toEqual([]);
   await checkpoint('complete');
