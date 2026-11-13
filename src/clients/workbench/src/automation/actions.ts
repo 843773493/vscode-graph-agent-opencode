@@ -39,8 +39,11 @@ async function runTaskAction(accessor: ServicesAccessor, action: PersistentTaskA
   let invalidated = false;
   let pending: ReturnType<INotificationService['status']> | undefined;
   const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+  const releaseContext = workspaceContext.subscribe(() => {
+    if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidated = true;
+  });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error(t('workbench.automation.accessChanged'));
+    if (invalidated) throw new Error(t('workbench.automation.accessChanged'));
   };
   // 显式参数在任何 await 前复制，保留所选 revision，不用新列表静默替换。
   const explicit = supplied ? { ...supplied, owner: { ...supplied.owner }, task: structuredClone(supplied.task),
@@ -99,7 +102,7 @@ async function runTaskAction(accessor: ServicesAccessor, action: PersistentTaskA
     if (result.error) throw new Error(result.error);
     if (result.succeeded) notifications.info(t('workbench.automation.actionConfirmed', taskActionLabels[action], taskName(task)));
     return result.succeeded;
-  } finally { pending?.close(); release(); }
+  } finally { pending?.close(); release(); releaseContext(); }
 }
 
 for (const action of Object.keys(taskActionLabels) as PersistentTaskAction[]) registerAction2(class extends Action2 {

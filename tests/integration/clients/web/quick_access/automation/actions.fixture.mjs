@@ -36,7 +36,7 @@ export async function automationContract(mode) {
   const initial = { ...before, gatewayId: 'control-gateway', loading: false, error: null, workspaces: targets,
     activeId: mode === 'owner-cancel' ? null : gatewayWorkspaceKey(owners[0]) };
   workspaceContext.publish(initial);
-  let records = owners.map((_, index) => record(index)), releaseList, releaseWrite, releaseChoice, releaseRead, aborted = false;
+  let records = owners.map((_, index) => record(index)), releaseList, releaseWrite, releaseChoice, releaseRead, workspacesCalls = 0, aborted = false;
   if (mode === 'resume') records[0].lifecycle = 'paused';
   if (mode === 'unsupported-edit') records[0].configuration.trigger.version = '999';
   const success = data => Response.json({ code: 0, request_id: 'task-contract', data }, { headers: { 'X-Request-ID': 'task-contract' } });
@@ -45,6 +45,11 @@ export async function automationContract(mode) {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ path, method, owner: headers.get('X-BoxTeam-Target-Gateway-Id'), body });
     if (path === '/api/gateway/workspaces') {
+      workspacesCalls++;
+      if (mode === 'command-gateway-returned' && workspacesCalls > 1) {
+        workspaceContext.publish({ ...initial, gatewayId: owners[1].gatewayId });
+        workspaceContext.publish(initial);
+      }
       const response = () => success({ items: targets, active_workspace: targets[0] });
       if (mode === 'freeze') return new Promise(resolve => { releaseList = () => resolve(response()); });
       return response();
@@ -78,7 +83,7 @@ export async function automationContract(mode) {
   const quick = { quickAccess: { show: (value, options) => shows.push({ value, options }) }, async pick(items, options) {
     choices.push({ items: items.map(item => ({ label: item.label, action: item.action })), title: options.title });
     if (mode === 'owner-cancel' || mode === 'action-cancel') return undefined;
-    if (mode === 'identity') return new Promise(resolve => { releaseChoice = () => resolve(items.find(item => item.action === 'pause')); });
+    if (mode === 'identity' || mode === 'gateway-returned') return new Promise(resolve => { releaseChoice = () => resolve(items.find(item => item.action === 'pause')); });
     return items[0];
   } };
   const origin = new ThreadInput({ ...owners[1], workspaceKey: gatewayWorkspaceKey(owners[1]), sessionId: 'session', threadId: 'thread', title: '发起Thread' });
@@ -128,9 +133,17 @@ export async function automationContract(mode) {
     requests.length = 0;
     if (mode === 'browse') {
       picker.activeItems = [picker.items[1]]; cancellation.cancel();
-    } else if (mode === 'identity' || mode === 'action-cancel') {
+    } else if (mode === 'identity' || mode === 'gateway-returned' || mode === 'action-cancel') {
       picker.selectedItems = [picker.items[1]]; accepts.fire({ inBackground: false });
-      if (mode === 'identity') { await until(() => releaseChoice); invalidateGatewayToken(0); releaseChoice(); }
+      if (mode === 'identity' || mode === 'gateway-returned') {
+        await until(() => releaseChoice);
+        if (mode === 'identity') invalidateGatewayToken(0);
+        else {
+          workspaceContext.publish({ ...initial, gatewayId: owners[1].gatewayId });
+          workspaceContext.publish(initial);
+        }
+        releaseChoice();
+      }
       await until(() => errors.length || shows.length);
     } else {
       const action = ['pause', 'resume', 'check', 'checkOnly', 'details', 'history', 'edit'].includes(mode) ? mode

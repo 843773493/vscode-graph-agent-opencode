@@ -27,8 +27,11 @@ async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceA
   if (!initial.gatewayId) throw new Error(t('workbench.workspaceAction.gatewayPending'));
   let invalidated = false;
   const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+  const releaseContext = workspaceContext.subscribe(() => {
+    if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidated = true;
+  });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) throw new Error(t('workbench.workspaceAction.identityChanged'));
+    if (invalidated) throw new Error(t('workbench.workspaceAction.identityChanged'));
   };
   try {
     let owner = explicit;
@@ -57,7 +60,7 @@ async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceA
     assertAccess();
     if (!view) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
     await view.runWorkspaceAction(action, gatewayWorkspaceKey(targetOwner), assertAccess);
-  } finally { release(); }
+  } finally { release(); releaseContext(); }
 }
 
 for (const [action, titleKey] of [

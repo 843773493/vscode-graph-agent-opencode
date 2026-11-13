@@ -67,10 +67,11 @@ test('冲突不覆盖revision重试，保留原错误并回读', async () => {
   expect(result.requests.at(-1).method).toBe('GET');
   expect(result.errors.join('')).toContain('revision'); expect(result.result).toBe(false);
 });
-for (const mode of ['owner-cancel', 'action-cancel', 'terminate-cancel', 'identity']) test(`${mode}在未接受步骤零写入`, async () => {
+for (const mode of ['owner-cancel', 'action-cancel', 'terminate-cancel', 'identity', 'gateway-returned']) test(`${mode}在未接受步骤零写入`, async () => {
   const result = await exercise(mode); expect(writes(result)).toEqual([]);
   if (mode === 'owner-cancel') expect(result.requests).toEqual([]);
   if (mode === 'identity') expect(result.errors).toEqual(['Error: 访问凭据已改变，请重新查找任务']);
+  if (mode === 'gateway-returned') expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新查找任务']);
 });
 for (const mode of ['accepted-close', 'accepted-terminate-close']) test(`${mode}关闭浮层和切换A/B不撤销、改投或重放已受理动作`, async () => {
   const result = await exercise(mode); expect(result.result).toBe(true);
@@ -83,6 +84,12 @@ for (const mode of ['freeze', 'origin']) test(`${mode}固定显式参数或发�
   const result = await exercise(mode), write = writes(result);
   expect(result.errors).toEqual([]); expect(write).toHaveLength(1); expect(write[0].body.expected_revision).toBe(7);
   expect(write[0].owner).toBe(`gateway_${(mode === 'freeze' ? 'a' : 'b').repeat(32)}`);
+});
+test('Gateway离开后切回也会锁存，阻止待处理工作区读取进入任务写入', async () => {
+  const result = await exercise('command-gateway-returned');
+  expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新选择任务']);
+  expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/workspaces']);
+  expect(writes(result)).toEqual([]);
 });
 for (const action of ['details', 'history', 'edit']) test(`${action}只打开精确任务的原产品宿主`, async () => {
   const result = await exercise(action);

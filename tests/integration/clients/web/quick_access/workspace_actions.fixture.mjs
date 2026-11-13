@@ -50,6 +50,10 @@ export async function workspaceControlContract(mode) {
       const requestUrl = new URL(url, location.origin);
       listUrls.push(requestUrl.pathname + requestUrl.search);
       const result = () => success({ items: mode === 'removed' ? [targets[0]] : targets, active_workspace: { gateway_id: owners[1].gatewayId, workspace_id: owners[1].workspaceId } });
+      if (mode === 'command-gateway-returned') {
+        workspaceContext.publish({ ...initial, gatewayId: 'gateway-transient' });
+        workspaceContext.publish(initial);
+      }
       if (mode === 'command-mutation' || mode === 'command-origin') return new Promise(resolve => { releaseList = () => resolve(result()); });
       return result();
     }
@@ -63,7 +67,7 @@ export async function workspaceControlContract(mode) {
       if (mode === 'scope-confirm') return [items[1]];
       if (mode.startsWith('command-empty')) return mode.endsWith('cancel') ? undefined : items[1];
       const selected = items.find(item => item.action === mode.replace('action-', ''));
-      if (mode === 'action-identity' || mode === 'action-gateway') return new Promise(resolve => { releaseChoice = () => resolve(items.find(item => item.action === 'activate')); });
+      if (mode === 'action-identity' || mode === 'action-gateway' || mode === 'action-gateway-returned') return new Promise(resolve => { releaseChoice = () => resolve(items.find(item => item.action === 'activate')); });
       return selected;
     },
   };
@@ -123,10 +127,14 @@ export async function workspaceControlContract(mode) {
         buttons.fire(picker.buttons[0]); await until(() => shows.length || errors.length);
       } else if (mode.startsWith('action-')) {
         picker.selectedItems = [picker.items[0]]; accepts.fire({ inBackground: false });
-        if (mode === 'action-identity' || mode === 'action-gateway') {
+        if (mode === 'action-identity' || mode === 'action-gateway' || mode === 'action-gateway-returned') {
           await until(() => releaseChoice);
           if (mode === 'action-identity') invalidateGatewayToken(0);
-          else workspaceContext.publish({ ...initial, gatewayId: 'changed-control-gateway' });
+          else if (mode === 'action-gateway') workspaceContext.publish({ ...initial, gatewayId: 'changed-control-gateway' });
+          else {
+            workspaceContext.publish({ ...initial, gatewayId: 'gateway-transient' });
+            workspaceContext.publish(initial);
+          }
           releaseChoice();
         }
         await until(() => calls.length || shows.length || errors.length);

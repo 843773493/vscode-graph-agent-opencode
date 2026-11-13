@@ -135,9 +135,17 @@ test('已移除 owner 明确失败，不执行其它同名候选', async () => {
   expect(result.errors[0]).toContain('缺少唯一已登记工作区');
 });
 
-for (const mode of ['action-identity', 'action-gateway']) test(`${mode} 废弃旧目标执行权`, async () => {
+for (const mode of ['action-identity', 'action-gateway', 'action-gateway-returned']) test(`${mode} 废弃旧目标执行权`, async () => {
   const result = await exercise(mode);
   expect(result.calls).toEqual([]); expect(result.errors).toHaveLength(1);
   expect(result.errors[0]).toContain(mode === 'action-identity' ? '访问凭据已改变' : 'Gateway 或访问凭据不可用');
   expect(result.requests).toHaveLength(1);
+});
+
+test('命令控制面读取期间Gateway离开再切回仍拒绝继续操作', async () => {
+  const result = await exercise('command-gateway-returned');
+  expect(result.calls).toEqual([]); expect(result.errors).toHaveLength(1);
+  expect(result.errors[0]).toContain('Gateway 或访问凭据已改变');
+  expect(result.listUrls).toEqual(['/api/gateway/workspaces?check_health=false']);
+  expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/search/workspaces', '/api/gateway/workspaces']);
 });
