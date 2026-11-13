@@ -725,6 +725,7 @@ async def test_terminal_stream_cache_is_bounded_and_evicted_state_reloads(
     assert terminal_ids == stream_ids[-3:]
     assert set(store._terminal_state_sizes) == set(terminal_ids)
     assert stream_ids[0] not in store._event_ids
+    assert stream_ids[0] not in store._replay_events
 
     reopened = await store.open_existing(
         thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id,
@@ -1712,7 +1713,17 @@ async def test_cancelled_stream_read_settles_before_following_append(
             assert release.wait(3), "事件读取阻塞了事件循环，无法释放读取屏障"
         return original_open(target, mode, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", blocked_open)
+    if operation == "cold_open":
+        monkeypatch.setattr(Path, "open", blocked_open)
+    else:
+        event_for_log = store._event_for_log
+
+        def blocked_event(event):
+            entered.set()
+            assert release.wait(3), "事件复制阻塞了事件循环，无法释放读取屏障"
+            return event_for_log(event)
+
+        monkeypatch.setattr(store, "_event_for_log", blocked_event)
     reader = asyncio.create_task(
         store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) if operation == "events"
         else store.open_existing(session_id=session_id, thread_id=writer.thread_id, turn_id=writer.turn_id)
@@ -2642,6 +2653,11 @@ async def test_explicit_event_id_idempotence_survives_retention_compaction(
         )
     ]
     assert "evt_stable_explicit" not in retained_ids
+    retained = await store.list_events(
+        session_id=session_id, turn_stream_id=writer.turn_stream_id,
+        after_seq=(await store.get_state(writer.turn_stream_id))["snapshot_seq"] - len(retained_ids),
+    )
+    assert [event["event_id"] for event in retained] == retained_ids
     text_before = (await store.get_state(writer.turn_stream_id))["blocks"][0]["text"]
 
     replay = await writer.commit(

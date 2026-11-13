@@ -55,7 +55,7 @@ async def test_delta_reuses_untouched_branches_and_preserves_published_snapshots
         })
         assert record.checkpoint == frozen
         await writer.commit("tool_call.delta", {
-            "tool_call_id": "known-call", "arguments": {"parts": ["updated"]},
+            "tool_call_id": "known-call", "arguments": {"parts": ["updated"], "pair": ("left", "right")},
         })
         assert before == original
         assert record.checkpoint == frozen
@@ -63,6 +63,17 @@ async def test_delta_reuses_untouched_branches_and_preserves_published_snapshots
         snapshot["payload"]["tool_calls"][0]["arguments"]["parts"].append("caller")
         current = await store.get_state(writer.turn_stream_id)
         assert current["tool_calls"][0]["arguments"]["parts"] == ["updated"]
+        events = await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id)
+        original_event = deepcopy(events[-1])
+        assert original_event["payload"]["arguments"]["pair"] == ["left", "right"]
+        events[-1]["payload"]["arguments"]["parts"].append("caller")
+        page = await store.list_events(
+            session_id=session_id, turn_stream_id=writer.turn_stream_id,
+            after_seq=original_event["event_seq"] - 1, limit=1,
+        )
+        assert page == [original_event]
+        cached_event = await writer.get_event(original_event["event_id"])
+        assert cached_event is not None and cached_event["payload"]["arguments"]["parts"] == ["updated"]
     finally:
         await store.unsubscribe(subscription)
 

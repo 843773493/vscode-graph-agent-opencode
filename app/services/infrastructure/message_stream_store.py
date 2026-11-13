@@ -55,6 +55,7 @@ MESSAGE_STREAM_TERMINAL_CACHE_MAX_BYTES = 16 * 1024 * 1024
 MESSAGE_STREAM_INDEX_LOCK_SHARDS = 64
 # 消息事件日志逐事件持久化；状态快照只是恢复加速索引，不需要逐 token 写入。
 MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS = 32
+MESSAGE_STREAM_REPLAY_BATCH_EVENTS = 256
 RECOVERED_TOOL_RESULT_UNKNOWN = "工作区后端重启，工具执行结果未知；未确认执行完成，不会自动重放。"
 INTERRUPTING_ALLOWED_EVENT_TYPES = frozenset(
     {
@@ -252,6 +253,8 @@ class MessageStreamStore:
         self._subscriptions: dict[str, set[MessageStreamSubscription]] = {}
         self._event_ids: dict[str, dict[str, dict[str, Any]]] = {}
         self._event_ids_loaded: set[str] = set()
+        # 仅索引仍在保留窗口内的事件，正文与幂等缓存共享；归档幂等事实不能用于续播。
+        self._replay_events: dict[str, dict[int, dict[str, Any]]] = {}
 
     @staticmethod
     def _cached_state_size_bytes(state: Mapping[str, Any]) -> int:
@@ -268,6 +271,7 @@ class MessageStreamStore:
         self._terminal_state_sizes.pop(turn_stream_id, None)
         self._event_ids.pop(turn_stream_id, None)
         self._event_ids_loaded.discard(turn_stream_id)
+        self._replay_events.pop(turn_stream_id, None)
         # 被淘汰的流不再需要串行锁；锁字典必须随缓存一起收敛，否则每处理一个
         # 历史 Turn 都会永久留下两个 asyncio.Lock，进程内存随会话总量无界增长。
         # 锁被持有时说明仍有协程在提交或等待同一 Turn，此时绝不能移除，否则
@@ -925,6 +929,10 @@ class MessageStreamStore:
             for record in retained_records
         )
         self._event_ids_loaded.add(turn_stream_id)
+        self._replay_events[turn_stream_id] = {
+            int(record.event["event_seq"]): record.applied_event or record.event
+            for record in retained_records
+        }
         logger.warning(
             "消息流超过保留上限，已保留尾部事件并依赖 snapshot 恢复: "
             "turn_stream_id=%s records_before=%d records_after=%d bytes_after=%d",
@@ -1018,16 +1026,17 @@ class MessageStreamStore:
 
     async def _load_state_from_disk(self, session_id: str, turn_stream_id: str) -> None:
         # 调用方持有原 Turn 锁；worker 完整校验后，缓存只在事件循环中统一发布。
-        state, event_ids = await run_sync_shielded(self._read_state_from_disk, session_id, turn_stream_id)
+        state, event_ids, replay_events = await run_sync_shielded(self._read_state_from_disk, session_id, turn_stream_id)
         self._touch_cached_state(turn_stream_id, state)
         self._event_ids[turn_stream_id] = event_ids
         self._event_ids_loaded.add(turn_stream_id)
+        self._replay_events[turn_stream_id] = replay_events
 
     def _read_state_from_disk(
         self,
         session_id: str,
         turn_stream_id: str,
-    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[int, dict[str, Any]]]:
         path = self._stream_path(session_id, turn_stream_id)
         records = self._read_records(
             path,
@@ -1109,7 +1118,10 @@ class MessageStreamStore:
             thread_id=str(state["thread_id"]),
             turn_id=str(state["turn_id"]),
         )
-        return state, event_ids
+        return state, event_ids, {
+            int(record.event["event_seq"]): record.applied_event or record.event
+            for record in records
+        }
 
     def _load_event_ids_from_disk(
         self, session_id: str, turn_stream_id: str, *, thread_id: str, turn_id: str,
@@ -1129,6 +1141,10 @@ class MessageStreamStore:
             turn_id=turn_id,
         )
         self._event_ids_loaded.add(turn_stream_id)
+        self._replay_events[turn_stream_id] = {
+            int(record.event["event_seq"]): record.applied_event or record.event
+            for record in records
+        }
 
     async def open(
         self,
@@ -1491,11 +1507,13 @@ class MessageStreamStore:
             self._terminal_state_sizes.pop(turn_stream_id, None)
             self._event_ids.pop(turn_stream_id, None)
             self._event_ids_loaded.discard(turn_stream_id)
+            self._replay_events.pop(turn_stream_id, None)
             await run_cleanup_shielded(lambda: self._load_state_from_disk(session_id, turn_stream_id))
             raise
         self._touch_cached_state(turn_stream_id, next_state)
         self._event_ids.setdefault(turn_stream_id, {})[event["event_id"]] = event
         self._event_ids_loaded.add(turn_stream_id)
+        self._replay_events.setdefault(turn_stream_id, {})[next_seq] = event
         subscribers = self._subscriptions.get(turn_stream_id, set())
         overflowed: list[MessageStreamSubscription] = []
         for subscription in tuple(subscribers):
@@ -1772,40 +1790,26 @@ class MessageStreamStore:
         after_seq: int = 0,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        """返回游标之后的事件；``limit`` 为空表示不截断，供 SSE 续播使用。"""
-        # 日志读取会修剪未提交尾部；原 Turn 锁须覆盖读取及取消后的 worker 结算。
+        """返回已校验保留窗口中的事件；仅复制本页正文，不重扫磁盘历史。"""
+        # 原 Turn 锁覆盖选页、正文复制及取消结算，不与裁剪或后续追加交错。
         async with self._lock_for(turn_stream_id):
             state = await self.get_state(turn_stream_id)
-            self._raise_if_cursor_ahead(
-                state,
-                turn_stream_id=turn_stream_id,
-                after_seq=after_seq,
-            )
-            path = self._stream_path(session_id, turn_stream_id)
+            if state["session_id"] != session_id:
+                raise MessageStreamError(f"消息流关联键不匹配: session_id={session_id} turn_stream_id={turn_stream_id}")
+            self._raise_if_cursor_ahead(state, turn_stream_id=turn_stream_id, after_seq=after_seq)
+            retained = self._replay_events[turn_stream_id]
+            first_seq = next(iter(retained))
+            if after_seq < first_seq - 1:
+                raise MessageStreamCursorGoneError(
+                    turn_stream_id=turn_stream_id, after_seq=after_seq, first_seq=first_seq,
+                )
+            sequences = range(max(first_seq, after_seq + 1), int(state["snapshot_seq"]) + 1)
+            if limit is not None:
+                sequences = sequences[:limit]
 
             def read() -> list[dict[str, Any]]:
-                # 完整校验日志，只保留续点后的事件；JSON 解码产生独立对象，无需再复制正文。
-                events = [
-                    record.event
-                    for record in self._iter_records(
-                        path, expected_session_id=session_id,
-                        expected_turn_stream_id=turn_stream_id,
-                    )
-                    if int(record.event["event_seq"]) > after_seq
-                ]
-                if events and int(events[0]["event_seq"]) > after_seq + 1:
-                    raise MessageStreamCursorGoneError(
-                        turn_stream_id=turn_stream_id,
-                        after_seq=after_seq,
-                        first_seq=int(events[0]["event_seq"]),
-                    )
-                if not events and after_seq < int(state["snapshot_seq"]):
-                    raise MessageStreamCursorGoneError(
-                        turn_stream_id=turn_stream_id,
-                        after_seq=after_seq,
-                        first_seq=int(state["snapshot_seq"]),
-                    )
-                return events if limit is None else events[:limit]
+                # 幂等正文可能超出展示上限；复用日志的同一截断规则，返回独立对象。
+                return [json.loads(json.dumps(self._event_for_log(retained[seq]), ensure_ascii=False)) for seq in sequences]
 
             return await run_sync_shielded(read)
 
@@ -1866,24 +1870,29 @@ class MessageStreamStore:
         subscription = await self.subscribe(turn_stream_id)
         last_seq = after_seq
         try:
-            try:
-                initial_events = await self.list_events(
-                    session_id=session_id,
-                    turn_stream_id=turn_stream_id,
-                    after_seq=after_seq,
-                )
-            except MessageStreamCursorGoneError:
-                snapshot_event, terminal = await self._recovery_snapshot(turn_stream_id)
-                last_seq = int(snapshot_event["event_seq"])
-                yield snapshot_event
-                if terminal:
-                    return
-                initial_events = []
-            for event in initial_events:
-                last_seq = int(event["event_seq"])
-                yield event
-                if self._is_terminal_event(event):
-                    return
+            replay_high_water = int((await self.get_state(turn_stream_id))["snapshot_seq"])
+            while True:
+                try:
+                    initial_events = await self.list_events(
+                        session_id=session_id,
+                        turn_stream_id=turn_stream_id,
+                        after_seq=last_seq,
+                        limit=max(1, min(MESSAGE_STREAM_REPLAY_BATCH_EVENTS, replay_high_water - last_seq)),
+                    )
+                except MessageStreamCursorGoneError:
+                    snapshot_event, terminal = await self._recovery_snapshot(turn_stream_id)
+                    last_seq = int(snapshot_event["event_seq"])
+                    yield snapshot_event
+                    if terminal:
+                        return
+                    initial_events = []
+                for event in initial_events:
+                    last_seq = int(event["event_seq"])
+                    yield event
+                    if self._is_terminal_event(event):
+                        return
+                if not initial_events or last_seq >= replay_high_water:
+                    break
             # 重放窗口里没有终态事件，但流本身可能已经终态：客户端用 Last-Event-ID
             # 指到它已经收到的终态帧上，或终态之后只追加了 interrupt.rejected 这类
             # 非终态事件。此时必须立刻用控制帧收敛并关闭；否则生成器会永久阻塞在

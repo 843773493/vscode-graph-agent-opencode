@@ -95,6 +95,11 @@ async def test_corrupt_read_keeps_diagnostics_and_rejects_again_without_partial_
     artifact = next(name for name in paths if fault.startswith(name + "_"))
     damaged = damage_record(originals[artifact], fault, marker)
     paths[artifact].write_bytes(damaged)
+    if artifact == "events":
+        # 已加载的流沿已校验事实续播；篡改必须由下方两次冷加载明确拒绝。
+        assert await store.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id) == [
+            json.loads(line)["event"] for line in originals["events"].splitlines()
+        ]
     cold = MessageStreamStore(path_resolver=resolver)
     try:
         for _ in range(2):
