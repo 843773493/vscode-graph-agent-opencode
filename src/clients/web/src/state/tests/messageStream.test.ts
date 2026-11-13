@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  applyMessageStreamEvent,
+  applyMessageStreamEvent as reduceMessageStreamEvent,
   applyMessageStreamSnapshot,
   createMessageStreamState,
   messageStreamToResponseParts,
@@ -11,6 +11,19 @@ import {
 } from "../messageStream/index";
 import { isTerminalStatus } from "../messageStream/state";
 import { validateMessageStreamSnapshotPayload } from "../../api/stream/messageStreamSnapshot";
+
+function freezeInput(value: unknown): void {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const child of Object.values(value)) freezeInput(child);
+}
+
+// 既有生命周期、乱序和终态用例同时证明归约不会改写此前状态或输入事件。
+function applyMessageStreamEvent(current: MessageStreamState, message: MessageStreamEvent): MessageStreamState {
+  freezeInput(current);
+  freezeInput(message);
+  return reduceMessageStreamEvent(current, message);
+}
 
 function event(
   seq: number,

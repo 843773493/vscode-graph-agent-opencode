@@ -20,5 +20,6 @@
 - 实体状态的值归一符号（`blockStatusValue`、`activityStatusValue`、`toolExecutionStatusValue`、`toolExecutionOutcomeValue`）统一集中在 `state.ts`，快照与事件两条链路复用同一实现，不得各自内联白名单。
 - 文本类字段的值归一符号（`optionalTextValue`、`defaultedTextValue`）同样集中在 `state.ts`；快照 hydration 与事件 reducer 必须复用它们，不得在任一链路内联 `stringValue(...) ?? fallback` 或原样透传非字符串输入。
 - 事件 reducer 只保留事件信封校验、事件分发与终态收口；工具实体 upsert 归入 `toolReducer.ts`，activity 与 model_call 的 upsert、终态收口及 activeState 归约归入 `activityReducer.ts`，block 链路（含 block 终态收口）仍留在 `eventReducer.ts`。
+- 事件归约只复制本次改写的集合与实体，未变化的历史分支共享引用；禁止在每个增量事件前克隆整棵状态。输入状态及其嵌套对象不可变，终态收口也必须在原写入点构造新实体。
 - 代码注释使用中文，专业术语除外。
 - 保留“模板示例；在整理 `AGENTS.md` 时请保留此行。”这一行。

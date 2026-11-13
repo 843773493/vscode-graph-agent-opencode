@@ -17,7 +17,6 @@ import {
   blockStatusValue,
   booleanValue,
   boundedMessageStreamText,
-  cloneMessageStreamState,
   defaultedTextValue,
   failureFromValue,
   findBlock,
@@ -89,7 +88,8 @@ export function applyMessageStreamEvent(
   }
   if (event.event_seq <= current.lastEventSeq) return current;
 
-  const state = cloneMessageStreamState(current);
+  // 集合与实体由各自的写入点复制；新文本不再复制已结束的工具和模型历史。
+  const state = { ...current };
   if (event.event_seq !== state.lastEventSeq + 1) {
     const pendingEvents = state.pendingEvents.filter(
       (pending) => pending.event_id !== event.event_id,
@@ -158,11 +158,8 @@ export function applyMessageStreamEvent(
       break;
     case "model.retrying":
       state.agentLoopStatus = "retrying";
-      for (const block of state.blocks) {
-        if (block.model_call_id === state.currentModelCallId) {
-          block.projection = "intermediate";
-        }
-      }
+      state.blocks = state.blocks.map((block) => block.model_call_id === state.currentModelCallId
+        ? { ...block, projection: "intermediate" } : block);
       break;
     case "model.failed":
       state.agentLoopStatus = "failed";
@@ -213,13 +210,16 @@ export function applyMessageStreamEvent(
       );
       break;
     case "block.completed": {
-      const block = findBlock(state, stringValue(payload.block_id) ?? event.block_id ?? null);
-      if (block) {
-        block.status = blockStatusValue(payload.status);
-        block.completion_reason = defaultedTextValue(payload.completion_reason, "upstream_completed");
-        block.partial = booleanValue(payload.partial) ?? false;
-        applyLifecycle(block, event, true);
-      }
+      const blockId = stringValue(payload.block_id) ?? event.block_id ?? null;
+      const existing = findBlock(state, blockId);
+      state.blocks = state.blocks.map((block) => {
+        if (block !== existing) return block;
+        const completed = { ...block, status: blockStatusValue(payload.status),
+          completion_reason: defaultedTextValue(payload.completion_reason, "upstream_completed"),
+          partial: booleanValue(payload.partial) ?? false };
+        applyLifecycle(completed, event, true);
+        return completed;
+      });
       break;
     }
     case "tool_call":
@@ -227,10 +227,8 @@ export function applyMessageStreamEvent(
       const toolCallId = stringValue(payload.tool_call_id) ?? event.tool_call_id;
       if (toolCallId) {
         const toolCallPayload = withToolIdentityFallback(payload, event);
-        state.toolCalls[toolCallId] = mergeToolCall(
-          state.toolCalls[toolCallId],
-          toolCallPayload,
-        );
+        state.toolCalls = { ...state.toolCalls,
+          [toolCallId]: mergeToolCall(state.toolCalls[toolCallId], toolCallPayload) };
         applyLifecycle(state.toolCalls[toolCallId], event);
         // 逐字段对齐后端 tool_call / tool_call.delta 分支：phase 恒为 accumulating，
         // status 取 payload（tool_call.delta 的公共线格式刻意剥离 status，缺失时
@@ -251,10 +249,8 @@ export function applyMessageStreamEvent(
       const toolCallId = stringValue(payload.tool_call_id) ?? event.tool_call_id;
       if (toolCallId) {
         const toolCallPayload = withToolIdentityFallback(payload, event);
-        state.toolCalls[toolCallId] = mergeToolCall(
-          state.toolCalls[toolCallId],
-          toolCallPayload,
-        );
+        state.toolCalls = { ...state.toolCalls,
+          [toolCallId]: mergeToolCall(state.toolCalls[toolCallId], toolCallPayload) };
         applyLifecycle(state.toolCalls[toolCallId], event, true);
         // 后端 tool_call.completed 用 phase "stopping"，缺省 status "incomplete"；
         // 归属身份同样只取 payload，不额外补信封身份。
@@ -425,9 +421,10 @@ function upsertBlock(
   if (!blockId) return null;
   const existing = findBlock(state, blockId);
   if (existing) {
-    existing.status = status;
-    applyLifecycle(existing, event);
-    return existing;
+    const block = { ...existing, status };
+    applyLifecycle(block, event);
+    state.blocks = state.blocks.map((item) => item === existing ? block : item);
+    return block;
   }
   const block: MessageStreamBlock = {
     block_id: blockId,
@@ -443,7 +440,7 @@ function upsertBlock(
     partial: booleanValue(payload.partial) ?? false,
     ...lifecycleFromValue(payload),
   };
-  state.blocks.push(block);
+  state.blocks = [...state.blocks, block];
   applyLifecycle(block, event);
   return block;
 }
@@ -475,10 +472,9 @@ function applyBlockDelta(
     const index = itemId
       ? block.items.findIndex((existing) => existing.id === itemId)
       : -1;
-    if (index === -1) block.items.push({ ...item });
-    else block.items[index] = operation === "item_patch"
-      ? { ...block.items[index], ...item }
-      : { ...item };
+    block.items = index === -1 ? [...block.items, { ...item }]
+      : block.items.map((existing, itemIndex) => itemIndex !== index ? existing
+        : operation === "item_patch" ? { ...existing, ...item } : { ...item });
   }
 }
 
@@ -487,14 +483,13 @@ function finishRunningBlocks(
   status: "failed" | "interrupted",
   event: MessageStreamEvent,
 ): void {
-  for (const block of state.blocks) {
-    if (block.status === "running") {
-      block.status = status;
-      block.completion_reason = status === "interrupted" ? "user_interrupt" : "execution_lost";
-      block.partial = true;
-      applyLifecycle(block, event, true);
-    }
-  }
+  state.blocks = state.blocks.map((block) => {
+    if (block.status !== "running") return block;
+    const completed = { ...block, status,
+      completion_reason: status === "interrupted" ? "user_interrupt" : "execution_lost", partial: true };
+    applyLifecycle(completed, event, true);
+    return completed;
+  });
 }
 
 function failureFromPayload(payload: Record<string, unknown>): MessageStreamState["failure"] {

@@ -1,4 +1,4 @@
-// 消息流状态构造与共享原语：构造、克隆、缓存淘汰、生命周期、排序与值归一。
+// 消息流状态构造与共享原语：缓存淘汰、生命周期、排序与值归一。
 import type {
   MessageStreamActivity,
   MessageStreamBlock,
@@ -89,36 +89,6 @@ export function createMessageStreamState(
     resumable: true,
     connectionStatus: "connecting",
     protocolError: null,
-  };
-}
-
-export function cloneMessageStreamState(state: MessageStreamState): MessageStreamState {
-  return {
-    ...state,
-    blocks: state.blocks.map((block) => ({ ...block, items: block.items.map((item) => ({ ...item })) })),
-    toolExecutions: state.toolExecutions.map((tool) => ({ ...tool })),
-    toolCalls: Object.fromEntries(
-      Object.entries(state.toolCalls).map(([id, value]) => [id, { ...value }]),
-    ),
-    interruptState: state.interruptState ? { ...state.interruptState } : null,
-    failure: state.failure ? { ...state.failure } : null,
-    activeState: state.activeState ? { ...state.activeState } : null,
-    activities: state.activities.map((activity) => ({
-      ...activity,
-      resource_refs: [...activity.resource_refs],
-      detail: activity.detail ? { ...activity.detail } : undefined,
-    })),
-    modelCalls: Object.fromEntries(
-      Object.entries(state.modelCalls).map(([id, value]) => [id, { ...value }]),
-    ),
-    resourceRefs: Object.fromEntries(
-      Object.entries(state.resourceRefs).map(([id, value]) => [id, { ...value }]),
-    ),
-    recovery: state.recovery ? { ...state.recovery } : null,
-    pendingEvents: state.pendingEvents.map((event) => ({
-      ...event,
-      payload: { ...event.payload },
-    } as MessageStreamEvent)),
   };
 }
 

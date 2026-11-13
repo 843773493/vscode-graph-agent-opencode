@@ -112,17 +112,11 @@ export function upsertActivity(
   const existingActivity = state.activities.find(
     (item) => item.activity_id === activity.activity_id,
   );
-  if (existingActivity) {
-    Object.assign(existingActivity, activity);
-    applyLifecycle(
-      existingActivity,
-      event,
-      event.type === "activity.completed" || event.type === "activity.failed",
-    );
-  } else {
-    applyLifecycle(activity, event, event.type === "activity.completed" || event.type === "activity.failed");
-    state.activities.push(activity);
-  }
+  const updated = { ...existingActivity, ...activity };
+  applyLifecycle(updated, event, event.type === "activity.completed" || event.type === "activity.failed");
+  state.activities = existingActivity
+    ? state.activities.map((item) => item === existingActivity ? updated : item)
+    : [...state.activities, updated];
   state.activeState = {
     kind: "activity",
     phase: activity.status,
@@ -142,11 +136,7 @@ export function upsertModelCall(
 ): void {
   const id = stringValue(payload.model_call_id);
   if (!id) return;
-  state.modelCalls[id] = {
-    ...state.modelCalls[id],
-    ...payload,
-    status,
-  };
+  state.modelCalls = { ...state.modelCalls, [id]: { ...state.modelCalls[id], ...payload, status } };
   applyLifecycle(
     state.modelCalls[id],
     event,
@@ -159,14 +149,12 @@ export function finishRunningModelCalls(
   event: MessageStreamEvent,
   outcome: "user_interrupt" | "execution_lost",
 ): void {
-  for (const modelCall of Object.values(state.modelCalls)) {
-    if (stringValue(modelCall.status) !== "running") continue;
-    modelCall.status = "failed";
-    modelCall.outcome = outcome;
-    modelCall.retryable = false;
-    modelCall.completion_reason = outcome;
-    applyLifecycle(modelCall, event, true);
-  }
+  state.modelCalls = Object.fromEntries(Object.entries(state.modelCalls).map(([id, modelCall]) => {
+    if (stringValue(modelCall.status) !== "running") return [id, modelCall];
+    const completed = { ...modelCall, status: "failed", outcome, retryable: false, completion_reason: outcome };
+    applyLifecycle(completed, event, true);
+    return [id, completed];
+  }));
 }
 
 export function finishRunningActivities(
@@ -174,15 +162,17 @@ export function finishRunningActivities(
   event: MessageStreamEvent,
   reason: "user_interrupt" | "execution_lost",
 ): void {
-  for (const activity of state.activities) {
-    if (activity.status !== "running" && activity.status !== "waiting" && activity.status !== "stopping") continue;
+  state.activities = state.activities.map((activity) => {
+    if (activity.status !== "running" && activity.status !== "waiting" && activity.status !== "stopping") return activity;
     const externallySideEffecting = !["none", "read_only"].includes(activity.side_effect_policy);
     const uncertainInterrupt = reason === "user_interrupt" && externallySideEffecting;
-    activity.status = reason === "execution_lost" || uncertainInterrupt ? "failed" : "completed";
-    activity.outcome = reason === "execution_lost"
+    const completed = { ...activity };
+    completed.status = reason === "execution_lost" || uncertainInterrupt ? "failed" : "completed";
+    completed.outcome = reason === "execution_lost"
       ? "execution_lost"
       : uncertainInterrupt ? "outcome_unknown" : reason;
-    if (activity.status === "failed") activity.resumable = false;
-    applyLifecycle(activity, event, true);
-  }
+    if (completed.status === "failed") completed.resumable = false;
+    applyLifecycle(completed, event, true);
+    return completed;
+  });
 }

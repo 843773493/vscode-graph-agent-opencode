@@ -28,14 +28,11 @@ export function upsertTool(
   const existingExecution = state.toolExecutions.find(
     (tool) => tool.tool_execution_id === executionId,
   );
-  if (existingExecution) {
-    Object.assign(existingExecution, toolFromPayload(payload, status));
-    applyLifecycle(existingExecution, event, status !== "running");
-    return;
-  }
-  const execution = toolFromPayload(payload, status);
+  const execution = { ...existingExecution, ...toolFromPayload(payload, status) };
   applyLifecycle(execution, event, status !== "running");
-  state.toolExecutions.push(execution);
+  state.toolExecutions = existingExecution
+    ? state.toolExecutions.map((item) => item === existingExecution ? execution : item)
+    : [...state.toolExecutions, execution];
 }
 
 export function withToolIdentityFallback(
@@ -59,14 +56,13 @@ export function markRunningToolsUnknown(
   state: MessageStreamState,
   event: MessageStreamEvent,
 ): void {
-  for (const execution of state.toolExecutions) {
-    if (execution.status === "running") {
-      execution.status = "completed";
-      execution.outcome = "outcome_unknown";
-      execution.completion_reason = "execution_lost";
-      applyLifecycle(execution, event, true);
-    }
-  }
+  state.toolExecutions = state.toolExecutions.map((execution) => {
+    if (execution.status !== "running") return execution;
+    const completed: MessageStreamToolExecution = { ...execution, status: "completed",
+      outcome: "outcome_unknown", completion_reason: "execution_lost" };
+    applyLifecycle(completed, event, true);
+    return completed;
+  });
 }
 
 export function finishRunningToolCalls(
@@ -74,15 +70,15 @@ export function finishRunningToolCalls(
   event: MessageStreamEvent,
   reason: "user_interrupt" | "execution_lost",
 ): void {
-  for (const toolCall of Object.values(state.toolCalls)) {
+  state.toolCalls = Object.fromEntries(Object.entries(state.toolCalls).map(([id, toolCall]) => {
     const status = stringValue(toolCall.status);
-    if (status !== "accumulating" && status !== "streaming" && status !== "running") continue;
-    toolCall.status = reason === "user_interrupt" && toolCall.arguments_complete === true
-      ? "cancelled"
-      : "incomplete";
-    toolCall.completion_reason = reason;
-    applyLifecycle(toolCall, event, true);
-  }
+    if (status !== "accumulating" && status !== "streaming" && status !== "running") return [id, toolCall];
+    const completed = { ...toolCall,
+      status: reason === "user_interrupt" && toolCall.arguments_complete === true ? "cancelled" : "incomplete",
+      completion_reason: reason };
+    applyLifecycle(completed, event, true);
+    return [id, completed];
+  }));
 }
 
 function toolFromPayload(
