@@ -292,7 +292,7 @@ try {
   await pageB.bringToFront();
   let releaseRead;
   const readReleased = new Promise(resolve => { releaseRead = resolve; });
-  const matchesRead = url => url.pathname === `/api/v1/sessions/${unopenedSessionId}/main-thread`;
+  const matchesRead = url => url.pathname === `/api/v1/sessions/${unopenedSessionId}`;
   await pageB.route(matchesRead, async route => {
     const request = route.request();
     if (request.method() !== "GET" || request.headers()["x-boxteam-workspace-id"] !== workspaceId
@@ -306,7 +306,7 @@ try {
   });
   try {
     await pageB.locator(`button[data-session-id="${unopenedSessionId}"]`).dblclick();
-    await waitUntil(() => unreadReadProof.heldRequests.length > 0, "未读会话的真实 main-thread 查询进入延迟点");
+    await waitUntil(() => unreadReadProof.heldRequests.length > 0, "未读会话携带主 Thread 身份的真实 Session 查询进入延迟点");
     await expect(threadB.getByTestId("composer-input")).toBeVisible();
     await expect(pageB.locator(`section.boxteam-thread[data-session-id="${unopenedSessionId}"]`)).toHaveCount(0);
     const openingRow = pageB.locator(`button[data-session-id="${unopenedSessionId}"]`);
@@ -356,6 +356,7 @@ try {
     assert.equal(response.status(), 200, await response.text());
     const payload = await response.json();
     assert.equal(payload.data.session_id, unopenedSessionId);
+    assert.equal(payload.data.workspace_id, workspaceId);
     assert.equal(payload.data.thread_id, unopenedThreadId);
     assert.ok(payload.request_id);
     assert.equal(response.headers()["x-request-id"], payload.request_id);

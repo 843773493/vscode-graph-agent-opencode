@@ -187,18 +187,20 @@ try {
     };
     result.navigation = [];
     for (let index = 0; index < 21; index++) {
-      const measured = await timed(async () => {
-        await pages[0].evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.closeActiveEditor"));
-        await expect(first).toHaveCount(0);
+      const measured = await perf.stage("sync.navigation", { sample: index }, () => timed(async () => {
+        await perf.stage("sync.navigation.close", {}, async () => {
+          await pages[0].evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.closeActiveEditor"));
+          await expect(first).toHaveCount(0);
+        });
         const responses = [];
         for (const endpoint of ["/api/gateway/workspaces", "/api/v1/workspace", `/api/v1/session-catalog/children?parent_node_id=${folderId}`]) {
-          responses.push(await api(pages[0], endpoint));
+          responses.push(await perf.stage("sync.navigation.api", { path: endpoint }, () => api(pages[0], endpoint)));
         }
-        await expect(pages[0].getByTestId(nodeId)).toBeVisible();
-        await pages[0].getByTestId(nodeId).getByTitle("两端确认后的名称", { exact: true }).click();
-        await expect(first.getByTestId("composer-input")).toBeEditable();
+        await perf.stage("sync.navigation.locate", {}, () => expect(pages[0].getByTestId(nodeId)).toBeVisible());
+        await perf.stage("sync.navigation.click", {}, () => pages[0].getByTestId(nodeId).getByTitle("两端确认后的名称", { exact: true }).click());
+        await perf.stage("sync.navigation.editable", {}, () => expect(first.getByTestId("composer-input")).toBeEditable());
         return responses.map(({ ms, bytes, requestId }) => ({ ms, bytes, requestId }));
-      });
+      }));
       result.navigation.push({ ms: measured.ms, hops: measured.value });
     }
   }

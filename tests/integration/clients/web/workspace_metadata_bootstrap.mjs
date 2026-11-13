@@ -168,8 +168,9 @@ try {
     (async () => {
       await page.goto(new URL("/", required("BOXTEAM_BROWSER_BASE_URL")).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
       await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
-      // 工作台导航只加载目录；打开真实 Thread 后才加载它归属工作区的元数据。
+      // 工作区元数据由真实底部输出面板按需读取，不依赖聊天前置的重复 owner 查询。
       await page.locator(`button[data-session-id="${fixture.nativeDirectory.sessionId}"]`).dblclick();
+      await page.evaluate(() => globalThis.workbench.commands.executeCommand("boxteam.output.focus"));
     })(),
   ]);
   const payload = await response.json();
@@ -181,6 +182,7 @@ try {
     && metadataHeaders["x-boxteam-target-gateway-id"] === fixture.gatewayId, "页面初始化请求归属错误");
   check(!Object.hasOwn(payload.data, "root_path") && !Object.hasOwn(payload.data.git, "root"), "产品元数据仍包含重复路径");
   result.metadata = payload;
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.closePanel"));
   const workspace = page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`);
   await workspace.waitFor({ state: "visible", timeout: 30_000 });
   result.workspace_navigation_visible = true;

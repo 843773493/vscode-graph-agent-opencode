@@ -26,7 +26,6 @@ import { IStorageService, WillSaveStateReason } from '../../upstream/src/vs/plat
 import type { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { DeferredPromise } from '../../upstream/src/vs/base/common/async.js';
 import { ThreadInput } from '../threadInput.js';
-import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { notifyPluginCommandGatewayReconnected } from '../extensions/pluginCommands.js';
 import { ReactSurface } from './surface.js';
@@ -123,10 +122,11 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     const request = (openRequests.current.get(group) ?? 0) + 1;
     openRequests.current.set(group, request);
     const session = await setActiveSession(workspaceKey, sessionId);
-    const main = await gateway.mainThread(workspaceKey, sessionId);
+    // Session DTO 已携带 catalog 冻结的 main Thread，不再串行查询同一身份。
+    if (session.session_id !== sessionId || !session.thread_id) throw new Error(t('workbench.session.mainThreadOwnerMismatch'));
     if (openRequests.current.get(group) !== request) return;
     await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
-      sessionId, threadId: main.thread_id, title: session.title }), { pinned: options.pinned }, group);
+      sessionId, threadId: session.thread_id, title: session.title }), { pinned: options.pinned }, group);
   }, [editors, groups, setActiveSession]);
   useEffect(() => {
     let selection: { group: number; editor: typeof editors.activeEditor } | undefined;

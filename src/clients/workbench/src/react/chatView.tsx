@@ -203,12 +203,12 @@ function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, 
       return null;
     });
     const initialize = async () => {
-      await gateway.assertWorkspace(owner);
       const [session, agents, workspaces, settings, browserViewScope] = await Promise.all([
         getSession(0, owner.sessionId, owner.workspaceKey), listAgents(0, owner.workspaceKey),
         // 会话只需登记归属；显式健康刷新仍由 Gateway 导航入口发起。
         gateway.workspaces(false), getBrowserUiSettings(0), browserGatewayId(0),
       ]);
+      // 会话响应同时确认 Session 与工作区归属，不再为同一 owner 前置读取 /workspace。
       if (session.session_id !== owner.sessionId || session.workspace_id !== owner.workspaceId) throw new Error(t('thread.host.initializeOwnerMismatch'));
       const history = await cacheLoad;
       if (!disposed) setSeed({ session, agents, workspaces: workspaces.items, settings, browserViewScope, history });

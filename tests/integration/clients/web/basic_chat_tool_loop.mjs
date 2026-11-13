@@ -132,11 +132,11 @@ async function verifyPreviewTabs(page, owner) {
   await mainTab.dblclick();
   await expect(mainTab.locator(".tab-label.italic")).toHaveCount(0);
 
-  // 只延迟真实主 Thread 查询：用户随后选择原版 Tab，迟到导航不能抢回活动编辑器。
+  // 只延迟携带主 Thread 身份的真实 Session 查询：用户随后选择原版 Tab，迟到导航不能抢回活动编辑器。
   const held = [];
   let release;
   const gate = new Promise(resolve => { release = resolve; });
-  const navigationUrl = url => url.pathname === `/api/v1/sessions/${owner.sessionId}/main-thread`;
+  const navigationUrl = url => url.pathname === `/api/v1/sessions/${owner.sessionId}`;
   const holdNavigation = async route => {
     const request = route.request();
     if (request.method() !== "GET" || !hasWorkspaceOwner(request, owner)) {
@@ -161,6 +161,7 @@ async function verifyPreviewTabs(page, owner) {
     const payload = await response.json();
     expect(payload.request_id).toBe(response.headers()["x-request-id"]);
     expect(payload.data.session_id).toBe(owner.sessionId);
+    expect(payload.data.workspace_id).toBe(owner.workspaceId);
     expect(payload.data.thread_id).toBe(owner.threadId);
     await expect(mainRow).not.toHaveAttribute("aria-busy", "true");
     await expect(spareTab).toHaveClass(/\bactive\b/);
