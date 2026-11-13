@@ -190,6 +190,8 @@ class SessionContextQueryProtocol(Protocol):
     async def search_context(
         self,
         request: SessionContextSearchRequest,
+        *,
+        deadline_at: float | None = None,
     ) -> SessionContextSearchResultDTO: ...
 
 

@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+
+import regex
 
 from app.abstractions.session_context import (
     SessionContextAssemblySourceProtocol,
@@ -55,6 +56,7 @@ from app.services.business.session_context_resource import (
     validate_session_context_read_view,
     workspace_session_inventory_identity,
 )
+from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
@@ -213,7 +215,10 @@ class SessionContextQueryService:
     async def search_context(
         self,
         request: SessionContextSearchRequest,
+        *,
+        deadline_at: float | None = None,
     ) -> SessionContextSearchResultDTO:
+        budget = NameSearchBudget.create(deadline_at)
         resource = parse_session_context_ref(
             resource_identity=request.resource_identity,
             uri=request.uri,
@@ -221,112 +226,112 @@ class SessionContextQueryService:
         )
         self._require_workspace_resource(resource)
         expression = self._compile_search_expression(request)
-        async with AsyncExitStack() as admission:
-            if resource.session_id is not None:
-                await admission.enter_async_context(self._session_lookup.session_read_admission(resource.session_id))
-                await observe_phase(resource.session_id, "context.read.guarded", details={"kind": "search_context"})
-            candidates, revision = await self._search_candidates(resource, request.sources)
-            require_session_context_revision(request.revision, revision)
-            query_hash = hashlib.sha256(
-                json.dumps(
-                    {
-                        "query": request.query,
-                        "sources": request.sources,
-                        "match_mode": request.match_mode,
-                        "case_sensitive": request.case_sensitive,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ).encode("utf-8")
-            ).hexdigest()
-            offset, char_offset = SessionContextCursorCodec.decode(
-                request.cursor,
-                resource_identity=resource.resource_identity,
-                uri=resource.uri,
-                scope=resource.scope,
-                revision=revision,
-                operation=f"search:{query_hash}",
-            )
-            if char_offset != 0:
-                raise SessionContextCursorError("position_invalid", "search cursor 不支持 item 内字符偏移")
-            found: list[tuple[_SearchCandidate, re.Match[str]]] = []
-            for candidate in candidates:
-                match = expression.search(candidate.text)
-                if match is not None:
-                    found.append((candidate, match))
-                # 大量历史逐条匹配时让出事件循环，避免搜索阻塞同工作区的其它请求。
-                await asyncio.sleep(0)
-
-            require_cursor_offset_in_range(offset, len(found), uri=resource.uri)
-            selected = found[offset : offset + request.max_results]
-            matches: list[SessionContextSearchMatchDTO] = []
-            match_json_chars = 0
-            budget_truncated = False
-            for candidate, match in selected:
-                preview_start = max(0, match.start() - 180)
-                preview_end = min(len(candidate.text), match.end() + 180)
-                preview = candidate.text[preview_start:preview_end]
-                dto = SessionContextSearchMatchDTO(
-                    resource_identity=candidate.resource_identity,
-                    uri=candidate.uri,
-                    scope=candidate.scope,
-                    preview=preview,
-                    source=candidate.source,
-                    revision=candidate.revision,
-                    record_index=candidate.record_index,
-                    match_start=match.start(),
-                    match_end=match.end(),
+        try:
+            async with asyncio.timeout(budget.remaining()), AsyncExitStack() as admission:
+                if resource.session_id is not None:
+                    await admission.enter_async_context(self._session_lookup.session_read_admission(resource.session_id))
+                    await observe_phase(resource.session_id, "context.read.guarded", details={"kind": "search_context"})
+                candidates, revision = await self._search_candidates(resource, request.sources)
+                require_session_context_revision(request.revision, revision)
+                query_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "query": request.query,
+                            "sources": request.sources,
+                            "match_mode": request.match_mode,
+                            "case_sensitive": request.case_sensitive,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest()
+                offset, char_offset = SessionContextCursorCodec.decode(
+                    request.cursor,
+                    resource_identity=resource.resource_identity,
+                    uri=resource.uri,
+                    scope=resource.scope,
+                    revision=revision,
+                    operation=f"search:{query_hash}",
                 )
-                serialized_match = dto.model_dump_json()
-                candidate_match_count = len(matches) + 1
-                empty_candidate = self._build_search_result(
+                if char_offset != 0:
+                    raise SessionContextCursorError("position_invalid", "search cursor 不支持 item 内字符偏移")
+                found = await run_sync_shielded(
+                    self._match_search_candidates, candidates, expression, budget,
+                )
+
+                require_cursor_offset_in_range(offset, len(found), uri=resource.uri)
+                selected = found[offset : offset + request.max_results]
+                matches: list[SessionContextSearchMatchDTO] = []
+                match_json_chars = 0
+                budget_truncated = False
+                for candidate, match in selected:
+                    preview_start = max(0, match.start() - 180)
+                    preview_end = min(len(candidate.text), match.end() + 180)
+                    preview = candidate.text[preview_start:preview_end]
+                    dto = SessionContextSearchMatchDTO(
+                        resource_identity=candidate.resource_identity,
+                        uri=candidate.uri,
+                        scope=candidate.scope,
+                        preview=preview,
+                        source=candidate.source,
+                        revision=candidate.revision,
+                        record_index=candidate.record_index,
+                        match_start=match.start(),
+                        match_end=match.end(),
+                    )
+                    serialized_match = dto.model_dump_json()
+                    candidate_match_count = len(matches) + 1
+                    empty_candidate = self._build_search_result(
+                        request=request,
+                        revision=revision,
+                        query_hash=query_hash,
+                        matches=[],
+                        returned_match_count=candidate_match_count,
+                        offset=offset,
+                        total_matches=len(found),
+                        budget_truncated=budget_truncated,
+                    )
+                    candidate_returned_chars = exact_json_result_chars(
+                        serialized_chars=(
+                            empty_candidate.returned_chars + match_json_chars + len(serialized_match) + len(matches)
+                        ),
+                        reported_chars=empty_candidate.returned_chars,
+                    )
+                    if candidate_returned_chars <= request.max_chars:
+                        matches.append(dto)
+                        match_json_chars += len(serialized_match)
+                        continue
+                    if matches:
+                        budget_truncated = True
+                        break
+                    clipped = self._largest_fitting_search_match(
+                        request=request,
+                        revision=revision,
+                        query_hash=query_hash,
+                        match=dto,
+                        offset=offset,
+                        total_matches=len(found),
+                    )
+                    if clipped is None:
+                        raise SessionContextSearchBudgetError("max_chars 太小，无法返回包含资源身份的最小搜索结果")
+                    matches.append(clipped)
+                    budget_truncated = True
+                result = self._build_search_result(
                     request=request,
                     revision=revision,
                     query_hash=query_hash,
-                    matches=[],
-                    returned_match_count=candidate_match_count,
+                    matches=matches,
+                    returned_match_count=len(matches),
                     offset=offset,
                     total_matches=len(found),
                     budget_truncated=budget_truncated,
                 )
-                candidate_returned_chars = exact_json_result_chars(
-                    serialized_chars=(
-                        empty_candidate.returned_chars + match_json_chars + len(serialized_match) + len(matches)
-                    ),
-                    reported_chars=empty_candidate.returned_chars,
-                )
-                if candidate_returned_chars <= request.max_chars:
-                    matches.append(dto)
-                    match_json_chars += len(serialized_match)
-                    continue
-                if matches:
-                    budget_truncated = True
-                    break
-                clipped = self._largest_fitting_search_match(
-                    request=request,
-                    revision=revision,
-                    query_hash=query_hash,
-                    match=dto,
-                    offset=offset,
-                    total_matches=len(found),
-                )
-                if clipped is None:
-                    raise SessionContextSearchBudgetError("max_chars 太小，无法返回包含资源身份的最小搜索结果")
-                matches.append(clipped)
-                budget_truncated = True
-            result = self._build_search_result(
-                request=request,
-                revision=revision,
-                query_hash=query_hash,
-                matches=matches,
-                returned_match_count=len(matches),
-                offset=offset,
-                total_matches=len(found),
-                budget_truncated=budget_truncated,
-            )
-            if result.returned_chars > request.max_chars:
-                raise RuntimeError("上下文搜索器生成了超过 max_chars 的响应")
-            return result
+                if result.returned_chars > request.max_chars:
+                    raise RuntimeError("上下文搜索器生成了超过 max_chars 的响应")
+                budget.check()
+                return result
+        except TimeoutError as error:
+            raise TimeoutError("查询超过本次总执行期限，请重新查询") from error
 
     @classmethod
 
@@ -680,17 +685,30 @@ class SessionContextQueryService:
     @staticmethod
     def _compile_search_expression(
         request: SessionContextSearchRequest,
-    ) -> re.Pattern[str]:
+    ) -> regex.Pattern[str]:
         pattern = (
-            re.escape(request.query)
+            regex.escape(request.query)
             if request.match_mode == "literal"
             else request.query
         )
-        flags = 0 if request.case_sensitive else re.IGNORECASE
+        flags = regex.VERSION0 | (0 if request.case_sensitive else regex.IGNORECASE)
         try:
-            return re.compile(pattern, flags)
-        except re.error as error:
+            return regex.compile(pattern, flags)
+        except regex.error as error:
             raise SessionContextSearchPatternError(f"query 不是有效正则表达式: {error}") from error
+
+    @staticmethod
+    def _match_search_candidates(
+        candidates: list[_SearchCandidate],
+        expression: regex.Pattern[str],
+        budget: NameSearchBudget,
+    ) -> list[tuple[_SearchCandidate, regex.Match[str]]]:
+        found: list[tuple[_SearchCandidate, regex.Match[str]]] = []
+        for candidate in candidates:
+            match = expression.search(candidate.text, timeout=budget.remaining())
+            if match is not None:
+                found.append((candidate, match))
+        return found
 
     async def _list_sessions(self, workspace_id: str | None) -> list[SessionDTO]:
         result = await self._session_lookup.list(

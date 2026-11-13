@@ -1,7 +1,5 @@
 """有效上下文沿原 owner 查询；不读取第二份消息历史。"""
 
-import asyncio
-
 from app.schemas.internal_v2.search import (
     SearchProviderCapabilityDTO,
     WorkspaceContextSearchOptionsDTO,
@@ -20,7 +18,6 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
-from app.services.business.session_navigation.name_search_budget import NameSearchBudget
 
 
 def register_context_search(service: WorkspaceSearchService, context: SessionContextQueryService) -> None:
@@ -35,11 +32,7 @@ def register_context_search(service: WorkspaceSearchService, context: SessionCon
             "match_mode": request.match_mode, "case_sensitive": options.case_sensitive,
             "max_results": request.limit, "max_chars": options.max_chars, "cursor": request.cursor, "revision": options.revision,
         })
-        budget = NameSearchBudget.create(request.deadline_at)
-        # 原 owner 的同步投影仍按安全检查点结算；不能宣称强行打断本机阻塞读取。
-        async with asyncio.timeout(budget.remaining()):
-            page = await context.search_context(original)
-        budget.check()
+        page = await context.search_context(original, deadline_at=request.deadline_at)
         return WorkspaceSearchResultDTO(
             provider_id="session-context", workspace_id=service.workspace_id, category="context", operation="content",
             contract_version=1, state="limited" if page.truncated else "complete",

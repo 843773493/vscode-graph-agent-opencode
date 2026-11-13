@@ -98,6 +98,10 @@ async def search_context(
         result = await query_service.search_context(payload)
     except (SessionContextSearchPatternError, SessionContextSearchBudgetError, SessionContextCursorError) as error:
         raise HTTPException(status_code=400, detail=error.detail()) from error
+    except TimeoutError as error:
+        raise HTTPException(
+            status_code=409, detail={"code": "deadline", "message": str(error)},
+        ) from error
     except SessionContextRevisionChangedError as error:
         raise session_context_revision_http_error(error) from error
     except (KeyError, NotFoundError) as error:

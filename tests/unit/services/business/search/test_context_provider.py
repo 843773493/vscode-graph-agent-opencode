@@ -1,5 +1,6 @@
 """原上下文 owner 与统一 Provider 的来源、身份和分页一致。"""
 
+import asyncio
 import base64
 import json
 import time
@@ -40,6 +41,7 @@ from tests.unit.services.business.test_session_context_query_service import (
     BACKEND_WORKSPACE_ID,
     _FakeMessageSource,
     _session_request,
+    _session_search_request,
 )
 from tests.unit.services.business.test_session_context_query_service import (
     session_context_service_factory as session_context_service_factory,  # noqa: PLC0414 - 复用原来源装具，不准备另一套历史。
@@ -128,6 +130,41 @@ async def test_revision_character_budget_and_deadline_remain_explicit(search_ser
         await search_service.search(request.model_copy(update={"deadline_at": time.time() - 1}), gateway_id=GATEWAY)
     with pytest.raises(SearchContractError, match="Gateway"):
         await search_service.search(request)
+
+
+@pytest.mark.parametrize("unified", [False, True])
+async def test_expensive_regex_obeys_deadline_without_blocking_other_requests(
+    session_context_service_factory, monkeypatch, unified,
+):
+    source = _FakeMessageSource()
+    source.records = [{"role": "user", "type": "human", "content": "a" * 100_000 + "!"}]
+    monkeypatch.setattr("app.services.business.session_context_query_service.get_current_gateway_id", lambda: GATEWAY)
+    context = session_context_service_factory(source)
+    deadline_at = time.time() + 0.25
+    if unified:
+        service = WorkspaceSearchService(BACKEND_WORKSPACE_ID)
+        register_context_search(service, context)
+        operation = service.search(WorkspaceSearchRequest(
+            workspace_id=BACKEND_WORKSPACE_ID, category="context", operation="content",
+            query=r"(a+)+$", match_mode="regex", deadline_at=deadline_at,
+        ), gateway_id=GATEWAY)
+    else:
+        operation = context.search_context(
+            _session_search_request(query=r"(a+)+$", match_mode="regex"),
+            deadline_at=deadline_at,
+        )
+    started = time.monotonic()
+    search = asyncio.create_task(operation)
+    try:
+        await asyncio.sleep(0.02)
+        # 搜索尚在运行时，其它请求已能得到事件循环调度。
+        assert not search.done()
+        with pytest.raises(TimeoutError, match="查询超过本次总执行期限"):
+            await search
+        assert time.monotonic() - started < 2
+    finally:
+        search.cancel()
+        await asyncio.gather(search, return_exceptions=True)
 
 
 async def test_insufficient_budget_keeps_original_query_owner_on_both_http_entries(context_http):

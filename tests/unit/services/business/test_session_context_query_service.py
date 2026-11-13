@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import re
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
@@ -11,6 +10,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 import pytest
+import regex
 from langchain_core.messages import AIMessage
 
 from app.abstractions.session_context import (
@@ -717,9 +717,9 @@ async def test_empty_inventory_rejects_invalid_regex_before_any_candidate_read(
         await service.search_context(_workspace_inventory_search_request(query="[", match_mode="regex"))
     assert caught.value.detail() == {
         "owner": "session_context_query", "code": "invalid_regex", "reason": "invalid_search_pattern",
-        "message": "query 不是有效正则表达式: unterminated character set at position 0",
+        "message": "query 不是有效正则表达式: unterminated character set at position 1",
     }
-    assert isinstance(caught.value.__cause__, re.error)
+    assert isinstance(caught.value.__cause__, regex.error)
     read_inventory.assert_not_awaited()
     assert source.context_state_owners == []
 

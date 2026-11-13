@@ -62,6 +62,7 @@ def search_api():
 @pytest.mark.parametrize("error", [
     SessionContextSearchPatternError("query 不是有效正则表达式: unterminated character set at position 0"),
     SessionContextSearchBudgetError("max_chars 太小，无法返回包含资源身份的最小搜索结果"),
+    TimeoutError("查询超过本次总执行期限，请重新查询"),
 ])
 def test_context_input_rejection_keeps_same_owner_detail_on_both_routes(search_api, endpoint, error):
     client, query = search_api
@@ -73,9 +74,11 @@ def test_context_input_rejection_keeps_same_owner_detail_on_both_routes(search_a
         payload.update(resource_identity=str(workspace_session_inventory_identity("ws")),
                        uri=workspace_session_inventory_uri("ws"), scope="workspace")
     response = client.post(endpoint, json=payload)
-    assert response.status_code == 400
+    assert response.status_code == (409 if isinstance(error, TimeoutError) else 400)
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req-search-failure"
-    assert response.json()["detail"] == error.detail()
+    assert response.json()["detail"] == (
+        {"code": "deadline", "message": str(error)} if isinstance(error, TimeoutError) else error.detail()
+    )
     query.assert_awaited_once()
 
 
