@@ -1,5 +1,11 @@
 # 目录用途
 
+Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `unit-search-providers` 分别核公开结构、联邦调度及领域 owner；定向上限90秒／4GiB。`integration-search-headless-tools`、`integration-search-provider-lifecycle` 和 `integration-search-federation` 保留真实 Gateway／Backend、模型入口及原集成独占闸门，分别限600／240／480秒，不代替页面或真实 Provider 验收。
+
+`integration-workbench-quick-access-contracts` 限300秒／4GiB，核原上游调用语义、文件覆盖及动作目标；`integration-web-quick-access-actions` 限900秒／4GiB，经正式 Workbench 与真实 Gateway 验资源、任务、Session、工作区及 Composer。各测试沿自身隔离目录和原集成闸门，默认共用一次构建；复用已准备的不可变包不复用 Home 或运行实例。
+
+`integration-electron-quick-access` 和 `integration-electron-quick-access-recovery` 均限900秒／4GiB，运行真实 Linux ASAR 的快捷键／明确范围，以及历史／文件恢复；原生产物由既有 fixture 准备或显式复用，不依赖开发服务器。各记录只证明其 ASAR 指纹对应的行为，不代替当前全部源码、正式发行或 Windows／macOS 验收。
+
 `integration-workbench-edit-lifecycle` 验证原 Tabs、BulkEdit 与预览服务的版本、取消及迟到结果释放；`integration-workbench-workspace-symbols` 验证完整窗口范围才查询原 Registry，并保留成功结果与 Provider 错误。均固定90秒／4GiB，不代替真实 Gateway／Workbench 或原生客户端验收。
 
 `integration-web-extension-scanner` 用正式转换后的内置 scanner 与真实 Chromium 核 system／custom 派生缓存，固定90秒／4GiB；用户 VSIX 安装与 profile 库存已退役，不恢复旧安装测试。

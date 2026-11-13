@@ -41,6 +41,7 @@ from tests.support.processes.gateway import (
     start_gateway_process,
 )
 from tests.support.processes.workspace import workspace_backend_id_for_root
+from tests.support.session_navigation.http_operations import submit_navigation_operation
 
 
 async def test_python_search_without_browser_has_exact_scope_and_restart_continuation(network: Network) -> None:
@@ -49,6 +50,7 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
         gateway_url=f"http://127.0.0.1:{network.gateway_port}", local_token_supplier=lambda: LOCAL_TOKEN_HEADERS["X-Local-Token"],
     )
     observed = []
+    trees = []
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{network.gateway_port}", headers=LOCAL_TOKEN_HEADERS, timeout=25) as ui:
             gateway_id = (await ui.get("/api/gateway/health")).json()["data"]["gateway_id"]
@@ -62,9 +64,67 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
             assert set(owners) == {workspace_a, workspace_b, workspace_c}
             assert all(owner["gateway_id"] == gateway_id for owner in owners.values())
             sessions = {}
+            folders = {}
             for route in (workspace_a, workspace_b):
                 ui.headers["X-BoxTeam-Workspace-Id"] = route
                 sessions[route] = [await create_session(ui, f"Headless Search {index}") for index in range(3)]
+                root = await submit_navigation_operation(ui, "create_folder", name="Headless Folder")
+                tail = await submit_navigation_operation(ui, "create_folder", name="Headless Tail")
+                nested = await submit_navigation_operation(ui, "create_folder", name="Headless Nested",
+                                                           parent_node_id=root["created_node_id"])
+                assert root["state"] == tail["state"] == nested["state"] == "committed"
+                folders[route] = (root["created_node_id"], tail["created_node_id"], nested["created_node_id"])
+                for session_id in sessions[route]:
+                    moved = await submit_navigation_operation(ui, "move_node", target_node_id=session_id,
+                                                              parent_node_id=nested["created_node_id"])
+                    assert moved["state"] == "committed"
+
+            async def read_tree(route: str, path: str, params: dict, *, status: int = 200) -> dict:
+                request_id = f"req_headless_tree_{len(trees)}"
+                response = await ui.get(f"/api/v1/session-catalog/{path}", params=params,
+                    headers={"X-BoxTeam-Workspace-Id": route, "X-Request-ID": request_id})
+                body = response.json()
+                trees.append({"owner": owners[route], "path": path, "params": params,
+                              "status": response.status_code, "response": body})
+                assert response.status_code == status, response.text
+                assert body["request_id"] == response.headers["X-Request-ID"] == request_id
+                return body["data"] if status == 200 else body
+
+            # 两个同名目录树由产品生成；交错分页，不以显示名合并或重用另一 owner 的续点。
+            roots = {route: await read_tree(route, "roots", {"limit": 1}) for route in sessions}
+            children = {route: await read_tree(route, "children", {"parent_node_id": folders[route][2], "limit": 1})
+                        for route in sessions}
+            for route, expected_sessions in sessions.items():
+                root_id, tail_id, nested_id = folders[route]
+                first = roots[route]
+                assert first["total"] == 2 and first["parent_node_id"] is None and first["cursor"]
+                next_root = await read_tree(route, "roots", {"limit": 1, "cursor": first["cursor"]})
+                assert {node["node_id"] for page in (first, next_root) for node in page["items"]} == {root_id, tail_id}
+                assert next_root["cursor"] is None
+                branch = await read_tree(route, "children", {"parent_node_id": root_id, "limit": 1})
+                assert [(node["node_id"], node["name"], node["parent_node_id"]) for node in branch["items"]] == [
+                    (nested_id, "Headless Nested", root_id)]
+                page = children[route]
+                found = []
+                while True:
+                    assert page["total"] == 3 and page["parent_node_id"] == nested_id
+                    assert len(page["items"]) == 1
+                    node, = page["items"]
+                    assert node["kind"] == "session" and node["parent_node_id"] == nested_id
+                    found.append(node["session_id"])
+                    breadcrumb = await read_tree(route, f"breadcrumb/{node['node_id']}", {})
+                    assert [item["node_id"] for item in breadcrumb["items"]] == [root_id, nested_id, node["node_id"]]
+                    assert [item["name"] for item in breadcrumb["items"]] == ["Headless Folder", "Headless Nested", node["name"]]
+                    if page["cursor"] is None:
+                        break
+                    assert len(found) < 3
+                    page = await read_tree(route, "children", {"parent_node_id": nested_id, "limit": 1, "cursor": page["cursor"]})
+                assert found == expected_sessions
+            rejected = await read_tree(workspace_b, "roots", {"limit": 1, "cursor": roots[workspace_a]["cursor"]}, status=409)
+            assert rejected["detail"]["code"] == "stale_catalog_cursor"
+            assert rejected["detail"]["owner"] == "session_catalog" and rejected["detail"]["reason"] == "revision"
+            assert set(folders[workspace_a]).isdisjoint(folders[workspace_b])
+            assert set(sessions[workspace_a]).isdisjoint(sessions[workspace_b])
         assert not transport._http_client.cookies
         query = {"category": "catalog", "query": "Headless Search", "limit": 1}
 
@@ -89,7 +149,8 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
         assert page_b.branch is not None and page_b.branch.cursor is not None
         full = await search({"scope": {"mode": "all"}, "queries": [query]}, "req_headless_all")
         assert full[-1].summary is not None and full[-1].summary.state == "incomplete"
-        stopped, = [item for item in full[-1].summary.branches if item.branch.owner.workspace_id == owners[workspace_c]["workspace_id"]]
+        stopped, = [item for item in full[-1].summary.branches
+                    if item.branch.owner is not None and item.branch.owner.workspace_id == owners[workspace_c]["workspace_id"]]
         assert stopped.state == "failed" and stopped.code == "target_unavailable" and stopped.retryable
         assert not (network.stopped / ".boxteam/sessions").exists()
 
@@ -121,6 +182,7 @@ async def test_python_search_without_browser_has_exact_scope_and_restart_continu
         if gateway is not None:
             await asyncio.to_thread(close_gateway_process, gateway)
         (network.artifacts / "headless-search.json").write_text(json.dumps(observed, ensure_ascii=False, indent=2) + "\n")
+        (network.artifacts / "headless-trees.json").write_text(json.dumps(trees, ensure_ascii=False, indent=2) + "\n")
     logs = [(network.artifacts / f"backend-{index}.stderr.log").read_text(encoding="utf-8") for index in (0, 1)]
     actual = {request: [index for index, log in enumerate(logs) if f'request_id="{request}"' in log]
               for request in ("req_headless_discover", "req_headless_a", "req_headless_ab", "req_headless_all", "req_headless_resume_b")}
@@ -149,7 +211,6 @@ async def test_model_execution_invokes_discovery_and_resource_search_through_gat
     request: pytest.FixtureRequest, restart_source_case: RestartRuntimeSourceCase,
 ) -> None:
     case = restart_source_case
-    assert case.mount is not None
     backend = case.backends[-1]
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=case.workspace,
         default_backend_url=f"http://127.0.0.1:{backend.port}", port=integration_port_block_for_file(Path(request.node.path)).port(20),
@@ -159,7 +220,7 @@ async def test_model_execution_invokes_discovery_and_resource_search_through_gat
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as ui:
             listing = (await ui.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
             owner = listing["active_workspace"]
-            assert owner["workspace_id"] == case.mount.workspace_id
+            assert owner["workspace_id"] == backend.workspace_id
             ui.headers.update({
                 "X-BoxTeam-Workspace-Id": owner["workspace_id"],
                 "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],

@@ -221,7 +221,8 @@
 
 覆盖规范：接入完成必须具备真实入口与运行条件证据。
 
-- [ ] 15.1 按测试矩阵登记对应定向协议／owner／客户端检查及隔离 fixture，使用进程外超时、内存保护和镜像测试产物路径；独立 fixture 可并行，失败先归因，不默认串行全跑。
+- [x] 15.1 按测试矩阵登记对应定向协议／owner／客户端检查及隔离 fixture，使用进程外超时、内存保护和镜像测试产物路径；独立 fixture 可并行，失败先归因，不默认串行全跑。
+  - 2026-11-13 定向入口登记：公开搜索合同、联邦／领域 owner、无浏览器工具／目录树、Provider 生命周期、真实联邦、原调用方／动作合同、Web 动作和 Linux Electron 搜索／恢复各有独立 suite；沿现有 runner 的外部超时、4GiB 数据段上限与 pytest 集成独占闸门，不增加调度器或重复 fixture。矩阵解析、ID 唯一性、源码路径与保护参数核验、原 `--list` 入口均通过，原件在 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/matrix-registration-2.json`、`matrix-list-1.json` 和 `matrix-search-contracts-1.json`（28项公开合同通过）；此登记不表示本次重跑了所有 suite。
 - [x] 15.2 完成相关后端静态检查、真实前端类型检查和 `bun run --cwd src/clients/web build`；同一 sourceTransform 生成贡献必须纳入类型证明，复用同源码已完成构建，不重复无变化检查。
   - 2026-11-13 最新范围加载／计数批次：完整Web真实类型退出0／39.79秒，185份实际转换源码类型退出0／86.56秒，79内置扩展正式Web构建退出0／97.11秒，两次1070输入前后无变化；main SHA256 `13e3702190e7fe51c4c3c9fa58d1a268560c597c1edef02ba1b261d866154f5c`。原件及输入指纹位于 `out/tests/temp/2026/11/13/search_scope_identity/artifacts/` 的 `web-types.json`、`workbench-typecheck.json`、`web-build.json` 和相应stdout／inputs文件；不替代后续只读Provider修复或MCP失败页面的验收。
   - 2026-11-08 类型验收收口：Web 的检查目标及标准库对齐实际 Workbench ES2024 构建，修齐既有测试的 owner、可选字段和异步返回类型，不关闭严格检查、不排除测试、不放宽身份／顺序／恢复断言。原29条诊断清零，完整Web真实类型检查和包含183份实际sourceTransform源码的正式Workbench类型检查均通过，8文件114项测试／441条断言及独占目录正式Web构建通过。后端本片无改动，最近切片Ruff／Pyright经原输入SHA核对复用；1001个客户端／构建输入验证期间无变化。准确命令、首轮字段遗漏及修复、原始输出、源码指纹和复用范围见 `out/tests/temp/2026/11/08/quick_access_type_gate/artifacts/verification-v1.json`。本项仅关闭静态与构建门，不替代15.3真实Gateway页面、15.4 Electron或其它业务验收；插件／扩展／MCP实现继续暂停。
@@ -261,6 +262,7 @@
 - [x] 16.13 用隔离 A/B/C 真实 Gateway＋后端验收只 A、A+B、all、相关发现、未知／空范围、停止目标、all 期间增删登记；核实际目标请求，名称不相关但正文命中的 B 不被预筛，控制面发现没有正文读取。
 - [x] 16.14 验证快慢分支、排队期限、取消／断流、部分／全部失败、不支持选项、独立重试、Gateway 重启后续页、单分支 revision 冲突，以及相同 request_id 和真实序列化；不同 owner 同名／同片段不误去重，排名不改导航持久顺序。
 - [ ] 16.15 在真实 Web 和 Electron 产品入口定向回归多范围搜索、原文件 dirty model／Search Editor、历史和动作；另在关闭浏览器后验证工具／脚本查全部会话树及真实 `search_context`。树验收覆盖 A/B 同名 folder 与 Session 不合并、各自根／父链／breadcrumb 及独立 cursor 正确；上下文验收对应 16.12 的原来源、身份、预算和版本语义，保存范围及原始结果证据。静态检查、类型检查、构建和受影响用例按第 15 组要求保护执行，不默认全套重跑。
+  - 2026-11-13 无浏览器树／真实工具补验：A/B 同名根、父子目录和 Session 均由原产品创建／移动入口生成，交错分页核根、父链、breadcrumb、独立 cursor，跨 owner 游标真实409；原脚本 origin／A+B／all、停止目标和 Gateway 重启只续查B继续通过（1 passed／75.58秒）。真实模型入口经两个已登记扩展工具完成发现与精确 Session 查询（1 passed／299.32秒，包含原集成闸门等待）；没有浏览器或用户Cookie，保留实际后端分发及request_id。Ruff、Python真实类型零诊断，两个运行的相关输入前后无变化。复用已准备不可变插件包而隔离Home／实例，首轮超时及包准备超时原件不覆盖；准确命令与原始输出见 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/headless-tree-3.json`、`headless-agent-1.json`、`tree-static-2.json`。本片不替代尚在收口的综合Web动作与原生范围恢复。
 - [x] 16.16 复核删除清单、原调用方／测试迁移、无双重调度／重复匹配／第二事实源；同步实际 Gateway 职责说明与相关 AGENTS.md，在实现完成时登记准确证据，不把本次规范扩展当实现完成。
   - 2026-11-13 删除与调用链复审：生产及测试全量检索无旧 `fileSearchPage`／`quickAccessBranches` 调用；唯一Workbench SearchService、原Quick Access／文件Provider／旧React共享流、Gateway浏览器SSE／授权JSON relay及原工作区Provider分派的实际调用位置已登记。文件根元数据Limiter与镜像订阅并发保持各自职责，不误当领域fan-out清除；Gateway根／搜索、工作区搜索及Workbench搜索的AGENTS已描述实际边界，无第二索引、调度或恢复事实源。结合16.6、16.10、16.11、16.14、16.20和当前scope／模型页原件完成此项；命令、源码指纹及准确依赖见 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/search-migration.json`，不据静态检索替代原生或MCP验收。
 - [x] 16.17 定义资源数／正文匹配区间／上下文与状态字节的计量、全请求与 owner 配额及公平准入，分发前分配页预算；未调度分支明确可继续，页尾被截断时不得推进越过未交付命中的 cursor。验证刚好上限／多一条、重复根、0 配额、原 IFileQuery 0 哨兵转换、exists 探测，不混同无界查询或完整覆盖。
