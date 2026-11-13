@@ -36,6 +36,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import new_message_operation_id
 
 
 @dataclass(frozen=True)
@@ -219,7 +220,7 @@ async def test_old_worker_cannot_release_generation_created_during_storage_wait(
             # 原代正常卸载，再经正式消息执行重建 runtime 与本目录关联；不手填新 token。
             await case.runtime.tracker.close(session_id=case.session_id)
             result = await container.session_orchestrator.create_message(case.session_id, MessageRunRequest(
-                message=MessageCreateRequest(content="再次使用同一附件", attachments=[case.ref]), run=RunOptions(),
+                message=MessageCreateRequest(content="再次使用同一附件", attachments=[case.ref]), run=RunOptions(), operation_id=new_message_operation_id(),
             ))
             assert isinstance(container.job_service, JobService)
             job = container.job_service._jobs[result.job_id]

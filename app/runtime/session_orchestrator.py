@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from app.abstractions.internal_message import (
     PreparedInternalMessage,
     RuntimeContextMode,
@@ -7,33 +9,32 @@ from app.abstractions.internal_message import (
 )
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
-from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_lifecycle_gate import OperationHolderGate
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
 from app.domain.itemized.execution_admission import (
     ExecutionBinding,
-    InternalExecutionIntent,
     UserExecutionIdentity,
 )
-from app.domain.itemized.execution_queue import ExecutionQueueInput
-from app.prompting.validation import validate_internal_message
+from app.domain.itemized.execution_queue import (
+    ExecutionQueueInput,
+    ExecutionQueueRecord,
+)
+from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import (
     MessageCreateRequest,
     MessageDTO,
     MessageRunAccepted,
     MessageRunRequest,
+    MessageSubmissionResultDTO,
 )
 from app.schemas.internal_v2.pending_request import DeliveryPolicy
 from app.services.business.message_display import project_message_for_display
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.session_message_idempotency_store import (
-    SessionMessageIdempotencyStore,
-)
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 
 _RESERVED_INTERNAL_METADATA_KEYS = frozenset(
@@ -56,7 +57,6 @@ class SessionOrchestrator:
         job_service: JobServiceProtocol,
         job_event_bus: JobEventBusProtocol,
         attachment_holder: OperationHolderGate,
-        idempotency_store: SessionMessageIdempotencyStore | None = None,
         runtime_source_dispatcher: RuntimeSourceDispatcher | None = None,
     ) -> None:
         self._message_service = message_service
@@ -65,7 +65,6 @@ class SessionOrchestrator:
         self._job_service = job_service
         self._job_event_bus = job_event_bus
         self._attachment_holder = attachment_holder
-        self._idempotency_store = idempotency_store
         self._runtime_source_dispatcher = runtime_source_dispatcher
 
     async def resolve_main_thread(self, session_id: str) -> str:
@@ -99,59 +98,6 @@ class SessionOrchestrator:
     def reserve_user_execution_identity(self) -> UserExecutionIdentity:
         return self._job_service.reserve_user_execution_identity()
 
-    def reserve_internal_job_id(self) -> str:
-        return self._job_service.reserve_internal_job_id()
-
-    async def create_and_run(
-        self,
-        session_id: str,
-        content: str,
-        *,
-        metadata: dict[str, object] | None = None,
-        delivery_policy: DeliveryPolicy = "after_turn",
-        idempotency_key: str | None = None,
-    ) -> MessageRunAccepted:
-        self._reject_internal_metadata_on_user_path(metadata)
-        session = await self._session_service.get(session_id)
-        message_request = MessageCreateRequest(
-            role=MessageRole.user,
-            content=content,
-            metadata=metadata or {},
-        )
-        return await self._create_and_dispatch(
-            session_id,
-            message_request,
-            requested_agent_id=session.current_agent_id,
-            delivery_policy=delivery_policy,
-            idempotency_key=idempotency_key,
-            internal=False,
-        )
-
-    async def create_and_run_internal(
-        self,
-        session_id: str,
-        message: PreparedInternalMessage,
-        *,
-        delivery_policy: DeliveryPolicy = "after_turn",
-        idempotency_key: str | None = None,
-        thread_id: str | None = None,
-    ) -> MessageRunAccepted:
-        validate_internal_message(message.content, message.metadata)
-        session = await self._session_service.get(session_id)
-        return await self._create_and_dispatch(
-            session_id,
-            MessageCreateRequest(
-                role=MessageRole.user,
-                content=message.content,
-                metadata=dict(message.metadata),
-            ),
-            requested_agent_id=session.current_agent_id,
-            delivery_policy=delivery_policy,
-            idempotency_key=idempotency_key,
-            internal=True,
-            thread_id=thread_id,
-        )
-
     async def prepare_user_message(
         self,
         session_id: str,
@@ -176,25 +122,6 @@ class SessionOrchestrator:
             ),
         )
 
-    async def prepare_internal_message(
-        self,
-        session_id: str,
-        message: PreparedInternalMessage,
-    ) -> MessageDTO:
-        """生成稳定的内部结构消息 DTO；调用方必须先写账本再派发。"""
-        validate_internal_message(message.content, message.metadata)
-        return await self._job_service.run_session_preparation(
-            session_id,
-            lambda: self._message_service.create(
-                session_id,
-                MessageCreateRequest(
-                    role=MessageRole.user,
-                    content=message.content,
-                    metadata=dict(message.metadata),
-                ),
-            ),
-        )
-
     @staticmethod
     def _reject_internal_metadata_on_user_path(
         metadata: dict[str, object] | None,
@@ -203,8 +130,7 @@ class SessionOrchestrator:
             metadata
         ):
             raise ValueError(
-                "内部结构消息必须通过 create_and_run_internal 或 "
-                "prepare_internal_message 注入"
+                "普通用户消息不得携带保留的内部结构 metadata"
             )
 
     async def dispatch_existing_message(
@@ -232,65 +158,50 @@ class SessionOrchestrator:
         )
 
     async def create_message(self, session_id: str, payload: MessageRunRequest, *, thread_id: str | None = None) -> MessageRunAccepted:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("[session_orchestrator] create_message begin: session_id=%s", session_id)
-        requested_agent_id = payload.run.agent_id if payload.run else None
-        delivery_policy: DeliveryPolicy = payload.run.delivery_policy
         self._reject_internal_metadata_on_user_path(payload.message.metadata)
-        return await self._create_and_dispatch(
-            session_id,
-            payload.message,
-            requested_agent_id=requested_agent_id,
-            delivery_policy=delivery_policy,
-            internal=False,
-            thread_id=thread_id,
-        )
+        submission_hash = sha256_jcs(payload.model_dump(mode="json", by_alias=True))
 
-    async def _create_and_dispatch(
-        self,
-        session_id: str,
-        message_request: MessageCreateRequest,
-        *,
-        requested_agent_id: str | None,
-        delivery_policy: DeliveryPolicy,
-        idempotency_key: str | None = None,
-        internal: bool,
-        thread_id: str | None = None,
-    ) -> MessageRunAccepted:
-        async def prepare_and_dispatch() -> MessageRunAccepted:
-            # 上传和 canonical acceptance 共用一个准备窗口，删除须先排空它。
-            async with self._attachment_holder.lock_for(session_id, exclusive=False):
-                if idempotency_key is not None and self._idempotency_store is not None:
-                    existing = self._idempotency_store.get(session_id, idempotency_key)
-                    if existing is not None:
-                        return existing
-                target_thread_id = thread_id if thread_id is not None else await self._session_service.resolve_main_thread(session_id)
-                self._session_service.path_resolver.resolve_thread_node(session_id, target_thread_id)
-                message = await self._message_service.create(session_id, message_request, thread_id=target_thread_id)
-                execution_binding: ExecutionBinding | None = None
-                if internal:
-                    execution_binding = InternalExecutionIntent(
-                        message_id=message.message_id,
-                        execution_id=create_prefixed_id("intr"),
-                        admission_idempotency_key=create_prefixed_id("adm"),
-                    )
-                result = await self.dispatch_prepared_message(
-                    session_id,
-                    message,
-                    requested_agent_id=requested_agent_id,
-                    delivery_policy=delivery_policy,
-                    execution_binding=execution_binding,
-                    thread_id=target_thread_id,
+        async def submit() -> MessageRunAccepted:
+            target = thread_id if thread_id is not None else await self.resolve_main_thread(session_id)
+            self._session_service.path_resolver.resolve_thread_node(session_id, target)
+            async with (self._job_service.thread_input_admission(session_id, target),
+                        self._attachment_holder.lock_for(session_id, exclusive=False)):
+                record = await run_sync_shielded(
+                    self._message_service.message_submission, session_id, target, payload.operation_id,
+                    submission_hash=submission_hash,
                 )
-                if idempotency_key is not None and self._idempotency_store is not None:
-                    self._idempotency_store.put(session_id, idempotency_key, result)
-                return result
+                if record is not None:
+                    return await self._accepted_submission(record)
+                message = await self._message_service.create(session_id, payload.message, thread_id=target)
+                identity = replace(self.reserve_user_execution_identity(), admission_idempotency_key=payload.operation_id)
+                return await self.dispatch_prepared_message(
+                    session_id, message, requested_agent_id=payload.run.agent_id,
+                    delivery_policy=payload.run.delivery_policy, execution_binding=identity,
+                    thread_id=target, submission_hash=submission_hash,
+                )
 
-        return await self._job_service.run_session_preparation(
-            session_id,
-            prepare_and_dispatch,
+        return await self._job_service.run_session_preparation(session_id, submit)
+
+    async def _accepted_submission(self, record: ExecutionQueueRecord) -> MessageRunAccepted:
+        identity = record.input.execution_binding
+        if not isinstance(identity, UserExecutionIdentity):
+            raise TypeError("普通消息操作不能引用内部执行")
+        dispatch = await self._job_service.submission_dispatch(record)
+        return MessageRunAccepted(
+            operation_id=identity.admission_idempotency_key,
+            message_id=record.input.message_id, job_id=identity.job_id, turn_id=identity.turn_id,
+            thread_id=record.cursor.admission.thread_id, status=dispatch.job_status, dispatch=dispatch,
         )
+
+    async def message_submission(self, session_id: str, thread_id: str, operation_id: str) -> MessageSubmissionResultDTO:
+        async with self._session_service.session_read_admission(session_id):
+            self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
+            record = await run_sync_shielded(self._message_service.message_submission, session_id, thread_id, operation_id)
+            accepted = None if record is None else await self._accepted_submission(record)
+            return MessageSubmissionResultDTO(
+                session_id=session_id, thread_id=thread_id, operation_id=operation_id,
+                status="unknown" if accepted is None else "accepted", accepted=accepted,
+            )
 
     async def dispatch_prepared_message(
         self,
@@ -302,6 +213,7 @@ class SessionOrchestrator:
         execution_binding: ExecutionBinding | None = None,
         reserved_job_id: str | None = None,
         thread_id: str | None = None,
+        submission_hash: str | None = None,
     ) -> MessageRunAccepted:
         """调度一条已生成稳定 message_id 的用户消息。"""
         import logging
@@ -342,7 +254,7 @@ class SessionOrchestrator:
                     raise ValueError("未预留 execution binding 时不得单独预留 Job ID")
                 execution_binding = self._job_service.reserve_user_execution_identity()
             if isinstance(execution_binding, UserExecutionIdentity):
-                await run_sync_shielded(
+                record = await run_sync_shielded(
                     self._message_service.accept_user_message,
                     message,
                     execution_identity=execution_binding,
@@ -351,8 +263,11 @@ class SessionOrchestrator:
                         agent_id=effective_agent_id, provider_id=session.current_provider_id,
                         delivery_policy=delivery_policy, gateway_id=get_current_gateway_id(),
                         request_id=get_current_request_id(), created_at=message.created_at.isoformat(),
+                        submission_hash=submission_hash,
                     ),
                 )
+                if submission_hash is not None and record.input.message_id != message.message_id:
+                    return await self._accepted_submission(record)
             dispatch = await self._job_service.start_job(
                 session_id,
                 message.content,
@@ -392,6 +307,7 @@ class SessionOrchestrator:
             )
             logger.info("[session_orchestrator] message_created event published: session_id=%s message_id=%s job_id=%s", session_id, message.message_id, job_id)
             return MessageRunAccepted(
+                operation_id=execution_binding.admission_idempotency_key if submission_hash is not None else None,
                 message_id=message.message_id,
                 job_id=job_id,
                 turn_id=(execution_binding.turn_id if isinstance(execution_binding, UserExecutionIdentity) else None),

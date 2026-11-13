@@ -26,6 +26,11 @@ export async function mountSessionGoalControllerHarness(options: {
     latestState = currentState;
     controller = useSessionGoalController({
       currentMainThreadId: currentState.currentSession?.thread_id ?? null,
+      currentGoalControlRevision: currentState.currentGoalControlRevision ?? 0,
+      currentGoalSyncVersion: currentState.currentGoalSyncVersion ?? 0,
+      currentThreadId: currentState.currentSession?.thread_id ?? null,
+      currentSessionCacheKey: currentState.currentSession
+        ? JSON.stringify([currentState.currentSessionWorkspaceId, currentState.currentSession.session_id, currentState.currentSession.thread_id]) : null,
       apiPort: 49_406,
       currentSessionId: currentState.currentSession?.session_id ?? null,
       currentWorkspaceId: currentState.currentSessionWorkspaceId,
@@ -62,6 +67,11 @@ export function createSessionGoalControllerHarness(options: {
     applyUpdate = setState;
     controller = useSessionGoalController({
       currentMainThreadId: current.currentSession?.thread_id ?? null,
+      currentGoalControlRevision: current.currentGoalControlRevision ?? 0,
+      currentGoalSyncVersion: current.currentGoalSyncVersion ?? 0,
+      currentThreadId: current.currentSession?.thread_id ?? null,
+      currentSessionCacheKey: current.currentSession
+        ? JSON.stringify([current.currentSessionWorkspaceId, current.currentSession.session_id, current.currentSession.thread_id]) : null,
       apiPort: options.apiPort,
       currentSessionId: current.currentSession?.session_id ?? null,
       currentWorkspaceId: current.currentSessionWorkspaceId,

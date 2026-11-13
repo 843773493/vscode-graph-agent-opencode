@@ -1,3 +1,4 @@
+import { createSnapshotReadCoordinator, assertMinimumVersion } from "../../../../shared/core/syncState";
 import { observeSessionCatalogChanges } from "../sessionEventStream/sessionCatalogObservation";
 import { gatewayWorkspaceKey, gatewayWorkspaceOwner } from "../../api/workspaceIdentity";
 import { HttpRequestError } from "../../api/http";
@@ -117,7 +118,9 @@ interface RuntimeDriver extends SessionCatalogOutboxHandle {
   opening: Promise<void>;
   activeRequests: Set<AbortController>;
   navigationEventSequence: number | null;
+  reads: ReturnType<typeof createSnapshotReadCoordinator>;
   confirmedCatalogRevision: number | null;
+  confirmedProjectionRevision: string | null;
   dispatchRetryTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -168,28 +171,10 @@ export function createSessionCatalogOutboxRuntime(
     }
   };
 
-  const withRuntimeRequestSignal = async <T>(
-    runtimeDriver: RuntimeDriver,
-    request: (signal: AbortSignal) => Promise<T>,
-  ): Promise<T> => {
-    assertCurrentDriver(runtimeDriver);
-    const controller = new AbortController();
-    runtimeDriver.activeRequests.add(controller);
-    try {
-      const result = await request(controller.signal);
-      assertCurrentDriver(runtimeDriver);
-      return result;
-    } catch (error: unknown) {
-      assertCurrentDriver(runtimeDriver);
-      throw error;
-    } finally {
-      runtimeDriver.activeRequests.delete(controller);
-    }
-  };
-
   const deactivateDriver = (runtimeDriver: RuntimeDriver): void => {
     if (runtimeDriver.dispatchRetryTimer !== null) clearTimeout(runtimeDriver.dispatchRetryTimer);
     runtimeDriver.driver.deactivate();
+    runtimeDriver.reads.dispose();
     for (const controller of runtimeDriver.activeRequests) controller.abort();
   };
 
@@ -289,14 +274,18 @@ export function createSessionCatalogOutboxRuntime(
       // 仅当分页已读到通知之后的新事件时补读，在线空闲不再定时查询 snapshot。
       const catalog = notified.event_seq_watermark < sequence
         || notified.catalog_revision < (runtimeDriver.confirmedCatalogRevision ?? 0)
-        ? await fetchSessionCatalogSnapshot(options.apiPort, runtimeDriver.workspaceTarget, { signal }) : notified;
+        ? await fetchSessionCatalogSnapshot(options.apiPort, runtimeDriver.workspaceTarget, { signal, minimumCatalogRevision: runtimeDriver.confirmedCatalogRevision ?? 0 }) : notified;
       assertCurrentDriver(runtimeDriver);
       if (catalog.workspace_id !== runtimeDriver.partition.workspaceId
         || catalog.event_seq_watermark < sequence
         || catalog.catalog_revision < (runtimeDriver.confirmedCatalogRevision ?? 0)) {
         throw new Error("navigation 权威 snapshot 落后于已消费目录或事件");
       }
-      changed ||= catalog.catalog_revision !== runtimeDriver.confirmedCatalogRevision;
+      changed ||= catalog.catalog_revision !== runtimeDriver.confirmedCatalogRevision
+        || (catalog.projection_revision ?? null) !== runtimeDriver.confirmedProjectionRevision
+        || runtimeDriver.driver.current().operations.some((operation) =>
+          operation.state === "committed" && operation.settlement !== "pending"
+          && operation.settlement !== "repair_required");
       if (changed) {
         // 事件只使既有镜像失效；状态与目录仍从同 ID 回执和最新 snapshot 取得。
         await Promise.all([
@@ -312,6 +301,7 @@ export function createSessionCatalogOutboxRuntime(
         }
         sequence = catalog.event_seq_watermark;
         runtimeDriver.confirmedCatalogRevision = catalog.catalog_revision;
+        runtimeDriver.confirmedProjectionRevision = catalog.projection_revision ?? null;
       }
       runtimeDriver.navigationEventSequence = sequence;
     } finally {
@@ -323,7 +313,10 @@ export function createSessionCatalogOutboxRuntime(
     if (!isCurrentDriver(runtimeDriver) || error instanceof CatalogReadSupersededError) return;
     const requestIdentity = error instanceof HttpRequestError && error.requestId
       ? ` [request_id=${error.requestId}]` : "";
-    reportError(`对账会话目录操作失败 (${runtimeDriver.gatewayWorkspaceId}): ${errorMessage(error)}${requestIdentity}`);
+    const repairs = runtimeDriver.driver.current().operations
+      .filter((operation) => operation.state === "committed" && operation.settlement === "repair_required")
+      .map((operation) => `会话目录操作 ${operation.client_operation_id} 删除已提交但排空失败，需修复: ${operation.error_detail ?? operation.error_code}`);
+    reportError([...repairs, `${repairs.length ? "终态分支刷新失败" : "对账会话目录操作失败"} (${runtimeDriver.gatewayWorkspaceId}): ${errorMessage(error)}${requestIdentity}`].join("；"));
   };
 
   const scheduleDispatchRetry = (runtimeDriver: RuntimeDriver, outbox: CatalogOutbox): void => {
@@ -450,7 +443,9 @@ export function createSessionCatalogOutboxRuntime(
         opening: Promise.resolve(),
         activeRequests: new Set(),
         navigationEventSequence: null,
+        reads: createSnapshotReadCoordinator(),
         confirmedCatalogRevision: null,
+        confirmedProjectionRevision: null,
         dispatchRetryTimer: null,
       };
       driversByScope.set(scopeKey, runtimeDriver);
@@ -523,12 +518,11 @@ export function createSessionCatalogOutboxRuntime(
         if (terminal.settlement === "repair_required") {
           throw new TerminalError(`会话目录操作 ${operationId} 删除已提交但排空失败，需修复: ${terminal.error_detail ?? terminal.error_code}`);
         }
-        const catalog = await withRuntimeRequestSignal(runtimeDriver, (signal) =>
-          fetchSessionCatalogSnapshot(
-            options.apiPort,
-            handle.workspaceTarget,
-            { signal },
-          ));
+        const minimum = terminal.committed_catalog_revision;
+        const catalog = await runtimeDriver.reads.read(`snapshot:${minimum}`, (signal) =>
+          fetchSessionCatalogSnapshot(options.apiPort, handle.workspaceTarget, { signal, minimumCatalogRevision: minimum }));
+        assertCurrentDriver(runtimeDriver);
+        assertMinimumVersion(catalog.catalog_revision, minimum);
         if (terminal.settlement !== "pending"
           && catalog.catalog_revision >= terminal.committed_catalog_revision) {
           return terminal;
@@ -618,13 +612,17 @@ export function createSessionCatalogOutboxRuntime(
   const registerFailureOwner: SessionCatalogOutboxRuntime["registerFailureOwner"] = (owner) => {
     if (disposed) throw new Error("会话目录 outbox runtime 已停止");
     failureOwners.add(owner);
-    // owner 晚于恢复就绪时重新对账现存命令，不给合法的打开入口增加注册前置。
+    // owner 晚于首帧或恢复就绪时，沿同一 snapshot/范围对账接缝恢复，不另监听 outbox 摘要。
     for (const runtimeDriver of driversByScope.values()) {
       if (!isCurrentDriver(runtimeDriver)) continue;
-      if (runtimeDriver.driver.current().operations.length === 0) continue;
-      void runtimeDriver.driver.reconcile().catch((error: unknown) => {
-        if (isCurrentDriver(runtimeDriver)) reportError("恢复失败对账: " + errorMessage(error));
-      });
+      void runtimeDriver.driver.reconcile().then(async () => {
+        assertCurrentDriver(runtimeDriver);
+        const minimum = Math.max(runtimeDriver.confirmedCatalogRevision ?? 0,
+          ...runtimeDriver.driver.current().operations.map((operation) => operation.committed_catalog_revision ?? 0));
+        const catalog = await runtimeDriver.reads.read(`snapshot:${minimum}`, (signal) =>
+          fetchSessionCatalogSnapshot(options.apiPort, runtimeDriver.workspaceTarget, { signal, minimumCatalogRevision: minimum }));
+        await reconcileWorkspace(runtimeDriver, catalog);
+      }).catch((error: unknown) => reportReconciliationError(runtimeDriver, error));
     }
     return () => {
       failureOwners.delete(owner);

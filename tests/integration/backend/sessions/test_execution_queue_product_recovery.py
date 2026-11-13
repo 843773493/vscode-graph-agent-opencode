@@ -16,15 +16,15 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 — 显式注册共享 pytest fixture
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.harness import control_request
 
 
 async def _send(case: CommunicationCase, session: str, text: str) -> dict[str, object]:
-    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": text},
         "run": {"mode": "single_agent", "agent_id": "default", "delivery_policy": "after_turn"},
-    })
+    }))
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
     return response.json()["data"]

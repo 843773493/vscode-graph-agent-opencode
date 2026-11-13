@@ -63,7 +63,6 @@ interface SessionResourceExplorerProps {
     workspaceId: string,
     deletedCurrentSession: boolean,
   ) => Promise<void>;
-  catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
@@ -109,7 +108,6 @@ export default function SessionResourceExplorer({
   onRefreshWorkspaceSessions,
   onCreateSessionInFolder,
   onSessionFolderDeleted,
-  catalogSyncKeys,
   catalogRefreshVersions,
   sessionCatalogOutboxRuntime,
   sessionCatalogOutboxSnapshot,
@@ -151,7 +149,6 @@ export default function SessionResourceExplorer({
     currentSessionId,
     currentSessionWorkspaceId,
     workspaceNavigationSyncKey: buildWorkspaceNavigationSyncKey(workspaces),
-    catalogSyncKeys,
     catalogRefreshVersions,
     sessionCatalogOutboxRuntime,
     sessionCatalogOutboxSnapshot,
@@ -366,8 +363,17 @@ export default function SessionResourceExplorer({
           ].join("\n\n"),
         }
       : branchFailure;
+    const mirror = branch?.sync?.source === "gateway_mirror" ? branch.sync : null;
     return (
       <ul className="session-resource-list" role="group" aria-busy={branch?.loading || undefined}>
+        {showContents && mirror?.stale ? (
+          <li className="session-resource-error-card" role="status">
+            <strong>{t('navigation.catalog.mirrorUnconfirmed')}</strong>
+            {mirror.authoritative_confirmed_at ? <span>{t('navigation.catalog.mirrorConfirmedAt', mirror.authoritative_confirmed_at)}</span> : null}
+            {mirror.error ? <span>{mirror.error}</span> : null}
+            <button type="button" onClick={() => refreshSessionCatalogBranchInBackground(workspaceId, parentNodeId)}>{t('navigation.catalog.reload')}</button>
+          </li>
+        ) : null}
         {showContents && branch?.items.map((node) => renderCatalogNode(workspaceId, node, depth))}
         {showContents && branch?.loading && !hasSnapshot ? <li className="session-resource-state">{t('navigation.catalog.loading')}</li> : null}
         {showContents && branch?.consistency_warning ? (

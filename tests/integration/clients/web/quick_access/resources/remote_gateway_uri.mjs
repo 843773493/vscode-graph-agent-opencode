@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../../support/e2e_control/browser_client.mjs';
+import { newOperationId } from '../../../../../support/operation_ids.mjs';
 
 const fixture = JSON.parse(process.env.BOXTEAM_REMOTE_URI_FIXTURE);
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/resources/test_remote_gateway_uri.py');
@@ -247,7 +248,7 @@ try {
   const main = await api(`/api/v1/sessions/${session.session_id}/main-thread`, b);
   await testControl({ action: 'plan_model', session_id: session.session_id, thread_id: main.thread_id, interactions: [fixture.interaction] });
   const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${main.thread_id}/messages`, b,
-    { message: { content: '仅 B 生成真实 main 与 child 的来源历史。' }, run: {} });
+    { operation_id: newOperationId(), message: { content: '仅 B 生成真实 main 与 child 的来源历史。' }, run: {} });
   await expect.poll(async () => {
     const job = await api(`/api/v1/jobs/${accepted.job_id}`, b);
     if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));

@@ -80,6 +80,7 @@ export function installComposerTestGlobals(
   Object.defineProperty(globalThis, "BroadcastChannel", {
     configurable: true,
     value: class {
+      postMessage() {}
       addEventListener() {}
       removeEventListener() {}
       close() {}

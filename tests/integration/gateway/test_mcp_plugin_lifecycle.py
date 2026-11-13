@@ -28,7 +28,7 @@ from tests.integration.workspace_services.mcp.schema_server import (
     RESULT_AUDIO_BASE64,
     RESULT_IMAGE_BASE64,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 唯一真实 HTTP MCP 装具
@@ -276,10 +276,10 @@ async def _agent_call(case: McpPluginCase, *, phase: str, load_skill: bool = Fal
     ).raw)["interactions"][0] for index, delta in enumerate(deltas)]
     ids = case.replay.control.plan_model_calls(session, thread, interactions)
     request_id = f"mcp-plugin-execute-{phase}"
-    response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "发现 probe，并发调用 success 和 error，读取进度、结构化与媒体回执后结束。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    }, headers={"X-Request-ID": request_id})
+    }), headers={"X-Request-ID": request_id})
     response.raise_for_status()
     assert response.headers["X-Request-ID"] == request_id
     assert response.json()["request_id"] == request_id

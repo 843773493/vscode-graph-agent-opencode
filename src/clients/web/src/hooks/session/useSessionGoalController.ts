@@ -2,13 +2,17 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   clearSessionGoal as apiClearSessionGoal,
   getSessionGoal as apiGetSessionGoal,
+  getSessionGoalOperation as apiGetSessionGoalOperation,
   updateSessionGoal as apiUpdateSessionGoal,
 } from "../../api";
-import type { SessionGoal, SessionGoalUpdateRequest } from "../../types/backend";
+import type { SessionGoal, SessionGoalOperationResultDTO, SessionGoalUpdateRequest } from "../../types/backend";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import { errorMessage } from "../../utils/errorMessage";
-import { trackInFlightRequest } from "../runtime/inFlightRequests";
-import { assertGoalOwner } from "../../state/sessionGoal";
+import { assertGoalOwner } from "../../protocol/sessionGoal";
+import { listThreadPendingRequests } from "../../pendingRequestsApi";
+import { writePendingSnapshot } from "../../state/conversations";
+import { cloneMaps } from "../../state/appStateMaps";
+import { applyVersionedValue, createSerialOperationQueue, createSnapshotReadCoordinator, SnapshotReadSupersededError } from "../../../../shared/core/syncState";
 
 interface GoalTarget {
   sessionId: string;
@@ -16,55 +20,94 @@ interface GoalTarget {
   workspaceId: string | null;
 }
 
-const SESSION_AUXILIARY_LOAD_DELAY_MS = 200;
+const GOAL_CONFIRM_INTERVAL_MS = 30_000;
 
-/** 三条 Goal 链路（读取、设置、清除）共用的请求合并键与写入代际键。 */
+/** Goal 读取和控制操作共用精确 owner 键。 */
 function goalRequestKey(apiPort: number, target: GoalTarget): string {
   return `${apiPort}:${target.workspaceId ?? ""}:${target.sessionId}`;
 }
 
 export function useSessionGoalController({
+  active = true,
   apiPort,
   currentSessionId,
   currentMainThreadId,
+  currentGoalControlRevision,
+  currentGoalSyncVersion,
+  currentThreadId,
+  currentSessionCacheKey,
   currentWorkspaceId,
   setState,
 }: {
+  active?: boolean;
   apiPort: number;
   currentSessionId: string | null;
   currentMainThreadId: string | null;
+  currentGoalControlRevision: number;
+  currentGoalSyncVersion: number;
+  currentThreadId: string | null;
+  currentSessionCacheKey: string | null;
   currentWorkspaceId: string | null;
   setState: SetAppState;
 }) {
-  const inFlightGoalRequestsRef = useRef<Map<string, Promise<SessionGoal | null>>>(
-    new Map(),
-  );
-  // 每条 Goal 请求键的写入代际：写入开始时递增，读取只采样当前代际、不抢占
-  // 序列。写入前发出的读取若迟到，不能用旧快照覆盖新写入；读取在写入之后
-  // 发出时仍可校准后端真值。这样同时避免旧设置复活已清除 Goal 和旧空值隐藏
-  // 刚创建的 Goal。
-  const goalWriteSeqRef = useRef<Map<string, number>>(new Map());
+  const goalReadCoordinatorRef = useRef(createSnapshotReadCoordinator());
+  const executionReadCoordinatorRef = useRef(createSnapshotReadCoordinator());
+  const currentThreadIdRef = useRef(currentThreadId);
+  currentThreadIdRef.current = currentThreadId;
+  const currentGoalControlRevisionRef = useRef(currentGoalControlRevision);
+  const currentGoalSyncVersionRef = useRef(currentGoalSyncVersion);
+  const currentSessionCacheKeyRef = useRef(currentSessionCacheKey);
+  currentSessionCacheKeyRef.current = currentSessionCacheKey;
+  const goalWriteQueueRef = useRef(createSerialOperationQueue());
+  const currentGoalKey = goalRequestKey(apiPort, {
+    sessionId: currentSessionId ?? "", threadId: currentMainThreadId ?? "", workspaceId: currentWorkspaceId,
+  });
+  const currentGoalKeyRef = useRef(currentGoalKey);
+  const ownerRef = useRef<object | null>({});
+  if (currentGoalKeyRef.current !== currentGoalKey) {
+    currentGoalKeyRef.current = currentGoalKey;
+    ownerRef.current = {};
+    currentGoalControlRevisionRef.current = 0;
+    currentGoalSyncVersionRef.current = 0;
+  } else if (currentGoalSyncVersion >= currentGoalSyncVersionRef.current) {
+    currentGoalControlRevisionRef.current = currentGoalControlRevision;
+    currentGoalSyncVersionRef.current = currentGoalSyncVersion;
+  }
+  const owner = ownerRef.current;
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
-  const beginGoalWrite = useCallback((requestKey: string): number => {
-    const next = (goalWriteSeqRef.current.get(requestKey) ?? 0) + 1;
-    goalWriteSeqRef.current.set(requestKey, next);
-    inFlightGoalRequestsRef.current.delete(requestKey);
-    return next;
-  }, []);
-
-  const isLatestGoalWrite = useCallback(
-    (requestKey: string, writeSeq: number): boolean =>
-      goalWriteSeqRef.current.get(requestKey) === writeSeq,
-    [],
-  );
-
-  const finishGoalWrite = useCallback((requestKey: string, writeSeq: number): number | null => {
-    if (!isLatestGoalWrite(requestKey, writeSeq)) return null;
-    const settledSeq = writeSeq + 1;
-    goalWriteSeqRef.current.set(requestKey, settledSeq);
-    inFlightGoalRequestsRef.current.delete(requestKey);
-    return settledSeq;
-  }, [isLatestGoalWrite]);
+  const confirmExecutionSnapshot = useCallback(async () => {
+    if (!activeRef.current || ownerRef.current !== owner || !currentSessionId || !currentThreadId || !currentWorkspaceId || !currentSessionCacheKey) return;
+    const target = { sessionId: currentSessionId, threadId: currentThreadId, workspaceId: currentWorkspaceId,
+      cacheKey: currentSessionCacheKey };
+    const executionKey = `${apiPort}:${target.workspaceId}:${target.sessionId}:${target.threadId}`;
+    try {
+      const { snapshot, signal } = await executionReadCoordinatorRef.current.read(executionKey, async (signal) => ({
+        snapshot: await listThreadPendingRequests(apiPort, target.sessionId, target.workspaceId, signal, target.threadId), signal,
+      }));
+      setState((previous) => {
+        if (signal.aborted || ownerRef.current !== owner || !activeRef.current || previous.currentSession?.session_id !== target.sessionId
+          || previous.currentSessionWorkspaceId !== target.workspaceId
+          || currentThreadIdRef.current !== target.threadId
+          || currentSessionCacheKeyRef.current !== target.cacheKey) return previous;
+        const next = cloneMaps(previous);
+        writePendingSnapshot(
+          next.pendingConversations, next.activeJobIdsBySession, snapshot,
+          target.cacheKey, next.pendingQueueVersions,
+        );
+        next.sessionExecutionSyncError = null;
+        return next;
+      });
+    } catch (error) {
+      if (error instanceof SnapshotReadSupersededError) return;
+      setState((previous) => ownerRef.current !== owner || !activeRef.current || previous.currentSession?.session_id !== target.sessionId
+        || previous.currentSessionWorkspaceId !== target.workspaceId
+        || currentThreadIdRef.current !== target.threadId
+        || currentSessionCacheKeyRef.current !== target.cacheKey
+        ? previous : { ...previous, sessionExecutionSyncError: errorMessage(error) });
+    }
+  }, [apiPort, currentSessionCacheKey, currentSessionId, currentThreadId, currentWorkspaceId, owner, setState]);
 
   const refreshGoal = useCallback(async (
     target: GoalTarget = {
@@ -74,60 +117,69 @@ export function useSessionGoalController({
     },
     options: { silent?: boolean } = {},
   ): Promise<SessionGoal | null> => {
+    if (!activeRef.current || ownerRef.current !== owner) return null;
     if (!target.sessionId) {
       setState((previous) => ({
         ...previous,
         currentGoal: null,
         currentGoalSessionId: null,
+        currentGoalControlRevision: 0,
+        currentGoalSyncVersion: 0,
         goalLoading: false,
         goalError: null,
       }));
       return null;
     }
+    const requestKey = goalRequestKey(apiPort, target);
+    if (currentGoalKeyRef.current !== requestKey) return null;
     if (!options.silent) {
-      setState((previous) => ({
+      setState((previous) => ownerRef.current !== owner ? previous : ({
         ...previous,
         goalLoading: true,
         goalError: null,
       }));
     }
-    const requestKey = goalRequestKey(apiPort, target);
-    const readWriteSeq = goalWriteSeqRef.current.get(requestKey) ?? 0;
-    const inFlight = inFlightGoalRequestsRef.current.get(requestKey);
-    if (inFlight) {
-      return inFlight;
-    }
-    const request = (async (): Promise<SessionGoal | null> => {
+    const request = goalReadCoordinatorRef.current.read(requestKey, async (signal): Promise<SessionGoal | null> => {
       try {
-        const goal = await apiGetSessionGoal(
+        const snapshot = await apiGetSessionGoal(
           apiPort,
           target.sessionId,
           target.workspaceId,
+          signal,
+          currentGoalSyncVersionRef.current,
         );
+        assertGoalOwner(snapshot, { session_id: target.sessionId, thread_id: target.threadId });
+        const goal = snapshot.goal ?? null;
         if (goal) assertGoalOwner(goal, { session_id: target.sessionId, thread_id: target.threadId });
         setState((previous) => {
-          if ((goalWriteSeqRef.current.get(requestKey) ?? 0) !== readWriteSeq) {
-            return previous;
-          }
+          if (signal.aborted || ownerRef.current !== owner || !activeRef.current || currentGoalKeyRef.current !== requestKey) return previous;
           if (previous.currentSession?.session_id !== target.sessionId) {
             return previous;
           }
           if (previous.currentSessionWorkspaceId !== target.workspaceId) return previous;
+          if (snapshot.sync_version < previous.currentGoalSyncVersion) return previous;
+          currentGoalControlRevisionRef.current = snapshot.control_revision;
+          currentGoalSyncVersionRef.current = snapshot.sync_version;
           return {
             ...previous,
-            currentGoal: goal,
+            currentGoal: goal === null ? null : applyVersionedValue(
+              previous.currentGoal,
+              goal,
+              (item) => item.sync_version,
+            ),
             currentGoalSessionId: target.sessionId,
+            currentGoalControlRevision: snapshot.control_revision,
+            currentGoalSyncVersion: snapshot.sync_version,
             goalLoading: false,
             goalError: null,
           };
         });
         return goal;
       } catch (error) {
+        if (signal.aborted || error instanceof SnapshotReadSupersededError) return null;
         const message = errorMessage(error);
         setState((previous) => {
-          if ((goalWriteSeqRef.current.get(requestKey) ?? 0) !== readWriteSeq) {
-            return previous;
-          }
+          if (signal.aborted || ownerRef.current !== owner || !activeRef.current || currentGoalKeyRef.current !== requestKey) return previous;
           if (previous.currentSession?.session_id !== target.sessionId
             || previous.currentSessionWorkspaceId !== target.workspaceId) {
             return previous;
@@ -140,10 +192,12 @@ export function useSessionGoalController({
         });
         throw error;
       }
-    })();
-    trackInFlightRequest(inFlightGoalRequestsRef.current, requestKey, request);
+    }).catch((error: unknown) => {
+      if (error instanceof SnapshotReadSupersededError) return null;
+      throw error;
+    });
     return request;
-  }, [apiPort, currentSessionId, currentMainThreadId, currentWorkspaceId, setState]);
+  }, [apiPort, currentSessionId, currentMainThreadId, currentWorkspaceId, owner, setState]);
 
   const reconcileAfterFailure = useCallback(async (
     target: GoalTarget,
@@ -160,6 +214,17 @@ export function useSessionGoalController({
     throw operationError;
   }, [refreshGoal]);
 
+  const reconcileUnknown = useCallback(async (
+    target: GoalTarget,
+    operationId: string,
+  ): Promise<SessionGoalOperationResultDTO | null> => {
+    const result = await apiGetSessionGoalOperation(
+      apiPort, target.sessionId, operationId, target.workspaceId,
+    );
+    assertGoalOwner(result, { session_id: target.sessionId, thread_id: target.threadId });
+    return result.status === "unknown" ? null : result;
+  }, [apiPort]);
+
   const updateGoal = useCallback(async (
     payload: SessionGoalUpdateRequest,
     target: GoalTarget = {
@@ -172,23 +237,50 @@ export function useSessionGoalController({
       throw new Error("当前没有可设置 Goal 的会话");
     }
     const requestKey = goalRequestKey(apiPort, target);
-    const writeSeq = beginGoalWrite(requestKey);
-    setState((previous) => ({ ...previous, goalLoading: true, goalError: null }));
-    try {
-      const goal = await apiUpdateSessionGoal(
-        apiPort,
-        target.sessionId,
-        payload,
-        target.workspaceId,
-      );
-      assertGoalOwner(goal, { session_id: target.sessionId, thread_id: target.threadId });
-      const settledSeq = finishGoalWrite(requestKey, writeSeq);
+    const frozenPayload = { ...payload };
+    return goalWriteQueueRef.current.run(requestKey, async () => {
+      if (ownerRef.current !== owner || !activeRef.current || currentGoalKeyRef.current !== requestKey) throw new SnapshotReadSupersededError();
+      goalReadCoordinatorRef.current.invalidate(requestKey);
+      setState((previous) => ownerRef.current === owner && currentGoalKeyRef.current === requestKey
+        ? { ...previous, goalLoading: true, goalError: null } : previous);
+      const expectedControlRevision = frozenPayload.expected_control_revision
+        ?? currentGoalControlRevisionRef.current;
+      const operationId = crypto.randomUUID();
+      let result: SessionGoalOperationResultDTO;
+      try {
+        result = await apiUpdateSessionGoal(apiPort, target.sessionId, {
+          ...frozenPayload,
+          operation_id: operationId,
+          expected_control_revision: expectedControlRevision,
+        }, target.workspaceId);
+      } catch (operationError) {
+        let known: SessionGoalOperationResultDTO | null;
+        try { known = await reconcileUnknown(target, operationId); }
+        catch (queryError) {
+          return reconcileAfterFailure(target, new Error(
+            `${errorMessage(operationError)}；查询 Goal 原操作回执失败：${errorMessage(queryError)}`,
+          ));
+        }
+        if (known === null) return reconcileAfterFailure(target, operationError);
+        result = known;
+      }
+      assertGoalOwner(result, { session_id: target.sessionId, thread_id: target.threadId });
+      if (result.status !== "applied" || !result.goal) {
+        await refreshGoal(target, { silent: true });
+        throw new Error(`Goal 操作未应用: ${result.status}`);
+      }
+      const goal = result.goal;
+      goalReadCoordinatorRef.current.invalidate(requestKey);
+      if (ownerRef.current === owner && currentGoalKeyRef.current === requestKey && result.sync_version >= currentGoalSyncVersionRef.current) {
+        currentGoalControlRevisionRef.current = result.control_revision;
+        currentGoalSyncVersionRef.current = result.sync_version;
+      }
       setState((previous) => {
         if (
-          settledSeq === null
-          || !isLatestGoalWrite(requestKey, settledSeq)
+          ownerRef.current !== owner || currentGoalKeyRef.current !== requestKey
           || previous.currentSession?.session_id !== target.sessionId
           || previous.currentSessionWorkspaceId !== target.workspaceId
+          || result.sync_version < previous.currentGoalSyncVersion
         ) {
           return previous;
         }
@@ -196,24 +288,23 @@ export function useSessionGoalController({
           ...previous,
           currentGoal: goal,
           currentGoalSessionId: target.sessionId,
+          currentGoalControlRevision: result.control_revision,
+          currentGoalSyncVersion: result.sync_version,
           goalLoading: false,
           goalError: null,
         };
       });
       return goal;
-    } catch (error) {
-      if (finishGoalWrite(requestKey, writeSeq) === null) throw error;
-      return reconcileAfterFailure(target, error);
-    }
+    });
   }, [
     apiPort,
-    beginGoalWrite,
     currentSessionId,
     currentMainThreadId,
     currentWorkspaceId,
-    finishGoalWrite,
-    isLatestGoalWrite,
+    owner,
+    reconcileUnknown,
     reconcileAfterFailure,
+    refreshGoal,
     setState,
   ]);
 
@@ -223,23 +314,51 @@ export function useSessionGoalController({
       threadId: currentMainThreadId ?? "",
       workspaceId: currentWorkspaceId,
     },
+    expectedControlRevision?: number,
   ): Promise<void> => {
     if (!target.sessionId) {
       throw new Error("当前没有可清除 Goal 的会话");
     }
     const requestKey = goalRequestKey(apiPort, target);
-    const writeSeq = beginGoalWrite(requestKey);
-    setState((previous) => ({ ...previous, goalLoading: true, goalError: null }));
-    try {
-      const result = await apiClearSessionGoal(apiPort, target.sessionId, target.workspaceId);
+    return goalWriteQueueRef.current.run(requestKey, async () => {
+      if (ownerRef.current !== owner || !activeRef.current || currentGoalKeyRef.current !== requestKey) throw new SnapshotReadSupersededError();
+      goalReadCoordinatorRef.current.invalidate(requestKey);
+      setState((previous) => ownerRef.current === owner && currentGoalKeyRef.current === requestKey
+        ? { ...previous, goalLoading: true, goalError: null } : previous);
+      const operationId = crypto.randomUUID();
+      let result: SessionGoalOperationResultDTO;
+      try {
+        result = await apiClearSessionGoal(apiPort, target.sessionId, {
+          operation_id: operationId,
+          expected_control_revision: expectedControlRevision ?? currentGoalControlRevisionRef.current,
+        }, target.workspaceId);
+      } catch (operationError) {
+        let known: SessionGoalOperationResultDTO | null;
+        try { known = await reconcileUnknown(target, operationId); }
+        catch (queryError) {
+          return reconcileAfterFailure(target, new Error(
+            `${errorMessage(operationError)}；查询 Goal 原操作回执失败：${errorMessage(queryError)}`,
+          ));
+        }
+        if (known === null) return reconcileAfterFailure(target, operationError);
+        result = known;
+      }
       assertGoalOwner(result, { session_id: target.sessionId, thread_id: target.threadId });
-      const settledSeq = finishGoalWrite(requestKey, writeSeq);
+      if (result.status !== "applied" && result.status !== "already_missing") {
+        await refreshGoal(target, { silent: true });
+        throw new Error(`Goal 清除操作未应用: ${result.status}`);
+      }
+      goalReadCoordinatorRef.current.invalidate(requestKey);
+      if (ownerRef.current === owner && currentGoalKeyRef.current === requestKey && result.sync_version >= currentGoalSyncVersionRef.current) {
+        currentGoalControlRevisionRef.current = result.control_revision;
+        currentGoalSyncVersionRef.current = result.sync_version;
+      }
       setState((previous) => {
         if (
-          settledSeq === null
-          || !isLatestGoalWrite(requestKey, settledSeq)
+          ownerRef.current !== owner || currentGoalKeyRef.current !== requestKey
           || previous.currentSession?.session_id !== target.sessionId
           || previous.currentSessionWorkspaceId !== target.workspaceId
+          || result.sync_version < previous.currentGoalSyncVersion
         ) {
           return previous;
         }
@@ -247,63 +366,96 @@ export function useSessionGoalController({
           ...previous,
           currentGoal: null,
           currentGoalSessionId: target.sessionId,
+          currentGoalControlRevision: result.control_revision,
+          currentGoalSyncVersion: result.sync_version,
           goalLoading: false,
           goalError: null,
         };
       });
-    } catch (error) {
-      if (finishGoalWrite(requestKey, writeSeq) === null) throw error;
-      await reconcileAfterFailure(target, error);
-    }
+    });
   }, [
     apiPort,
-    beginGoalWrite,
     currentSessionId,
     currentMainThreadId,
     currentWorkspaceId,
-    finishGoalWrite,
-    isLatestGoalWrite,
+    owner,
+    reconcileUnknown,
     reconcileAfterFailure,
+    refreshGoal,
     setState,
   ]);
 
   useEffect(() => {
+    ownerRef.current = owner;
     setState((previous) => ({
       ...previous,
       currentGoal: null,
       currentGoalSessionId: currentSessionId,
+      currentGoalControlRevision: 0,
+      currentGoalSyncVersion: 0,
       goalLoading: Boolean(currentSessionId),
       goalError: null,
     }));
-    if (!currentSessionId) {
-      return;
+    return () => {
+      if (ownerRef.current === owner) ownerRef.current = null;
+      goalReadCoordinatorRef.current.invalidate(goalRequestKey(apiPort, {
+        sessionId: currentSessionId ?? "", threadId: currentMainThreadId ?? "",
+        workspaceId: currentWorkspaceId,
+      }));
+    };
+  }, [apiPort, currentSessionId, currentMainThreadId, currentWorkspaceId, owner, setState]);
+
+  const confirmSessionState = useCallback(async (afterSubscription = false) => {
+    if (!activeRef.current || document.visibilityState !== "visible") return;
+    if (afterSubscription) {
+      // 订阅前已发出的快照不能证明加载窗口内没有遗漏更新。
+      goalReadCoordinatorRef.current.invalidate(currentGoalKey);
+      executionReadCoordinatorRef.current.invalidate(`${apiPort}:${currentWorkspaceId}:${currentSessionId}:${currentThreadId}`);
     }
-    const timerId = window.setTimeout(() => {
-      void refreshGoal().catch(() => {
-        // 请求错误已写入 AppState，界面必须直接呈现。
-      });
-    }, SESSION_AUXILIARY_LOAD_DELAY_MS);
-    return () => window.clearTimeout(timerId);
-  }, [currentSessionId, currentWorkspaceId, refreshGoal, setState]);
+    await Promise.allSettled([refreshGoal(undefined, { silent: true }), confirmExecutionSnapshot()]);
+  }, [apiPort, currentGoalKey, currentSessionId, currentThreadId, currentWorkspaceId, refreshGoal, confirmExecutionSnapshot]);
 
   useEffect(() => {
-    if (!currentSessionId) {
+    if (!active || !currentSessionId || !currentThreadId || !currentSessionCacheKey) {
       return;
     }
+    let intervalId: number | null = null;
+    const startVisibleConfirmation = () => {
+      if (document.visibilityState !== "visible") return;
+      if (intervalId === null) {
+        intervalId = window.setInterval(() => {
+          void confirmSessionState();
+        }, GOAL_CONFIRM_INTERVAL_MS);
+      }
+      void confirmSessionState();
+    };
     const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") {
-        void refreshGoal(undefined, { silent: true }).catch(() => {
-          // 请求错误已写入 AppState，界面必须直接呈现。
-        });
+      if (document.visibilityState === "hidden") {
+        if (intervalId !== null) window.clearInterval(intervalId);
+        intervalId = null;
+        goalReadCoordinatorRef.current.invalidate(currentGoalKey);
+        executionReadCoordinatorRef.current.invalidate(
+          `${apiPort}:${currentWorkspaceId}:${currentSessionId}:${currentThreadId}`,
+        );
+      } else {
+        startVisibleConfirmation();
       }
     };
     window.addEventListener("focus", refreshWhenVisible);
+    window.addEventListener("online", refreshWhenVisible);
     document.addEventListener("visibilitychange", refreshWhenVisible);
+    startVisibleConfirmation();
     return () => {
+      if (intervalId !== null) window.clearInterval(intervalId);
+      goalReadCoordinatorRef.current.invalidate(currentGoalKey);
+      executionReadCoordinatorRef.current.invalidate(
+        `${apiPort}:${currentWorkspaceId}:${currentSessionId}:${currentThreadId}`,
+      );
       window.removeEventListener("focus", refreshWhenVisible);
+      window.removeEventListener("online", refreshWhenVisible);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [currentSessionId, refreshGoal]);
+  }, [active, apiPort, currentGoalKey, currentWorkspaceId, confirmSessionState, currentSessionCacheKey, currentSessionId, currentThreadId]);
 
-  return { refreshGoal, updateGoal, clearGoal };
+  return { refreshGoal, updateGoal, clearGoal, confirmSessionState };
 }

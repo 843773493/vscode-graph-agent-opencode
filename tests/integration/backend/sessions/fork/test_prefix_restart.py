@@ -29,7 +29,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     restart_source_case as restart_source_case,  # noqa: PLC0414 - 复用真实进程及model_stream
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.fork_deadline import ForkDeadlineRegistry
 
 
@@ -205,9 +205,9 @@ async def test_public_prefix_hard_restart_reuses_capture_after_source_advances(
     retry_deadline.complete()
     assert _record(case, session, creation_key, child) == recovered
     child_call, = await case.plan(target_session, [{"content": "restart-prefix-target-answer"}], thread_id=target_thread)
-    sent = await case.client.post(f"/api/v1/sessions/{target_session}/threads/{target_thread}/messages", json={
+    sent = await case.client.post(f"/api/v1/sessions/{target_session}/threads/{target_thread}/messages", json=with_message_run_operation_id({
         "message": {"content": "restart-prefix-target-question"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert sent.status_code == 200, sent.text
     await _job(case, sent.json()["data"]["job_id"])
     wire = _wire_text(case.request(child_call)["messages"])

@@ -1194,10 +1194,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_request_id, verify_local_token
+from app.api.deps import get_request_id, get_session_orchestrator, verify_local_token
+from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
-from app.services.message_service import MessageService
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 
@@ -1208,9 +1208,10 @@ async def create_message_and_run(
     payload: MessageRunRequest,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
+    session_orchestrator: SessionOrchestrator = Depends(get_session_orchestrator),
 ):
-    result = await MessageService().create_and_run(session_id, payload)
-    return APIResponse(message="accepted", data=result, request_id=request_id)
+    result = await session_orchestrator.create_message(session_id, payload)
+    return APIResponse(message="ok", data=result, request_id=request_id)
 
 
 @router.get("/{session_id}/messages", response_model=APIResponse[CursorPage[MessageDTO]], summary="获取消息列表")

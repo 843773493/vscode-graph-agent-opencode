@@ -43,7 +43,7 @@ import {
   type SessionCatalogOutboxRuntime,
   type SessionCatalogOutboxSnapshot,
 } from "./sessionCatalogOutboxRuntime";
-import { CatalogReadSupersededError, changedCatalogWorkspaceIds } from "../sessionResourceExplorer/resourceTreeSync";
+import { CatalogReadSupersededError } from "../sessionResourceExplorer/resourceTreeSync";
 import { errorMessage } from "../../utils/errorMessage";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
 import { HttpRequestError, isTransientNetworkError } from "../../api/http";
@@ -167,6 +167,7 @@ function branchFailureState(
     cursor: branch?.cursor ?? null,
     total: branch?.total ?? 0,
     consistency_warning: branch?.consistency_warning ?? null,
+    sync: branch?.sync,
     loading: false,
     error: message,
   };
@@ -203,7 +204,6 @@ export function useSessionResourceExplorer({
   currentSessionId,
   currentSessionWorkspaceId,
   workspaceNavigationSyncKey,
-  catalogSyncKeys,
   catalogRefreshVersions,
   sessionCatalogOutboxRuntime,
   sessionCatalogOutboxSnapshot,
@@ -216,7 +216,6 @@ export function useSessionResourceExplorer({
   currentSessionId: string;
   currentSessionWorkspaceId: string | null;
   workspaceNavigationSyncKey: string;
-  catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
@@ -268,10 +267,7 @@ export function useSessionResourceExplorer({
   const branchInFlightRequestsRef = useRef<
     Map<string, Promise<SessionCatalogPage | undefined>>
   >(new Map());
-  const catalogSyncKeysRef = useRef(catalogSyncKeys);
   const catalogRefreshVersionsRef = useRef(catalogRefreshVersions);
-  const terminalOutboxSyncKeysRef = useRef<ReadonlyMap<string, string>>(new Map());
-  const trackedOutboxOperationKeysRef = useRef<Set<string>>(new Set());
   const workspaceReadControllersRef = useRef(new Map<string, AbortController>());
 
   useLayoutEffect(() => () => {
@@ -335,19 +331,24 @@ export function useSessionResourceExplorer({
     return sessionCatalogOutboxSnapshot.get(key)?.outbox ?? null;
   }, [sessionCatalogOutboxSnapshot]);
 
+  const catalogReadVersionFor = useCallback((workspaceId: string) => {
+    let latest: CatalogBranchState | undefined;
+    for (const [key, branch] of branchesRef.current) {
+      if (key.startsWith(`${workspaceId}:`) && branch.revision
+        && (latest === undefined || (branch.catalog_revision ?? 0) > (latest.catalog_revision ?? 0))) latest = branch;
+    }
+    return { minimumCatalogRevision: latest?.catalog_revision ?? 0, knownRevision: latest?.revision };
+  }, []);
+
   const catalogRevisionFor = useCallback(async (workspaceId: string): Promise<number> => {
-    const prefix = `${workspaceId}:`;
-    const revisions = [...branchesRef.current.entries()]
-      .filter(([key, branch]) => key.startsWith(prefix)
-        && branch.catalog_revision !== undefined)
-      .map(([, branch]) => branch.catalog_revision as number);
-    if (revisions.length > 0) return Math.max(...revisions);
+    const known = catalogReadVersionFor(workspaceId);
+    if (known.knownRevision !== undefined) return known.minimumCatalogRevision;
     const catalog = await fetchSessionCatalogSnapshot(
       apiPort,
       workspaceRequestTarget(workspaceId),
     );
     return catalog.catalog_revision;
-  }, [apiPort, workspaceRequestTarget]);
+  }, [apiPort, catalogReadVersionFor, workspaceRequestTarget]);
 
   const confirmedNodeFor = useCallback((workspaceId: string, nodeId: string) => {
     const prefix = `${workspaceId}:`;
@@ -409,7 +410,7 @@ export function useSessionResourceExplorer({
     workspaceId: string,
     parentNodeId?: string | null,
     append = false,
-    confirmedRead: { minimumCatalogRevision?: number; signal?: AbortSignal; refreshRoot?: boolean } = {},
+    confirmedRead: { minimumCatalogRevision?: number; knownRevision?: string; signal?: AbortSignal; refreshRoot?: boolean } = {},
   ): Promise<SessionCatalogPage | undefined> => {
     confirmedRead.signal?.throwIfAborted();
     if (sessionCatalogOutboxRuntime) {
@@ -428,6 +429,7 @@ export function useSessionResourceExplorer({
     const refreshRoot = confirmedRead.refreshRoot && parentNodeId == null;
     const requestKey = `${key}:${append ? "append" : "replace"}`
       + `:confirmed:${confirmedRead.minimumCatalogRevision ?? 0}`
+      + `:projection:${confirmedRead.knownRevision ?? ""}`
       + (refreshRoot ? ":refresh" : "");
     const inFlight = branchInFlightRequestsRef.current.get(requestKey);
     if (inFlight) {
@@ -449,6 +451,7 @@ export function useSessionResourceExplorer({
         cursor: current?.cursor ?? null,
         total: current?.total ?? 0,
         consistency_warning: current?.consistency_warning ?? null,
+        sync: current?.sync,
         loading: true,
         error: null,
       });
@@ -460,7 +463,7 @@ export function useSessionResourceExplorer({
         const items = append ? [...(current?.items ?? [])] : [];
         const visitedCursors = new Set<string>();
         let cursor = append ? current?.cursor ?? null : null;
-        let revision = append ? current?.catalog_revision : undefined;
+        let revision = append ? current?.revision : undefined;
         while (true) {
           for (let attempt = 0; ; attempt += 1) {
             try {
@@ -468,13 +471,15 @@ export function useSessionResourceExplorer({
               page = refreshRoot && cursor === null ? await refreshSessionCatalog(
                 apiPort,
                 workspaceRequestTarget(workspaceId),
-                { signal: confirmedRead.signal },
+                { signal: confirmedRead.signal, knownRevision: confirmedRead.knownRevision,
+                  minimumCatalogRevision: Math.max(confirmedRead.minimumCatalogRevision ?? 0, branchesRef.current.get(key)?.catalog_revision ?? 0) },
               ) : await listSessionCatalogChildren(
                 apiPort,
                 workspaceRequestTarget(workspaceId),
                 parentNodeId,
                 cursor,
-                { signal: confirmedRead.signal },
+                { signal: confirmedRead.signal, knownRevision: confirmedRead.knownRevision,
+                  minimumCatalogRevision: Math.max(confirmedRead.minimumCatalogRevision ?? 0, branchesRef.current.get(key)?.catalog_revision ?? 0) },
               );
               break;
             } catch (error) {
@@ -494,10 +499,10 @@ export function useSessionResourceExplorer({
           if (!Number.isSafeInteger(page.catalog_revision) || page.catalog_revision < minimumRevision) {
             throw new Error(t('navigation.catalog.branchRevisionBehind', workspaceId, parentNodeId ?? "root", page.catalog_revision, minimumRevision));
           }
-          if (revision !== undefined && revision !== page.catalog_revision) {
+          if (revision !== undefined && revision !== page.revision) {
             throw new Error(t('navigation.catalog.pageRevisionMismatch', workspaceId, parentNodeId ?? "root"));
           }
-          revision = page.catalog_revision;
+          revision = page.revision;
           items.push(...page.items);
           // 整批对账保留已加载的分页深度，展开下一层不能丢掉父分支刚定位的节点。
           if (append || !page.cursor || items.length >= (current?.items.length ?? 0)) break;
@@ -564,6 +569,7 @@ export function useSessionResourceExplorer({
     operationIds?: readonly string[],
     confirmedRead: {
       minimumCatalogRevision?: number;
+      knownRevision?: string;
       signal?: AbortSignal;
       visibleParentIds?: ReadonlySet<string>;
       refreshRoot?: boolean;
@@ -592,6 +598,7 @@ export function useSessionResourceExplorer({
           && confirmedRead.minimumCatalogRevision !== undefined
           && cached !== undefined
           && cached.catalog_revision === confirmedRead.minimumCatalogRevision
+          && (confirmedRead.knownRevision === undefined || cached.revision === confirmedRead.knownRevision)
           && !cached.loading && cached.error === null) {
           return {
             key, requestId: branchRequestRefs.current.get(key), parentNodeId,
@@ -641,7 +648,7 @@ export function useSessionResourceExplorer({
         && error instanceof HttpRequestError && error.status === 404
         && error.path.startsWith("/api/v1/session-catalog/children?")
         && new URLSearchParams(error.path.split("?")[1]).get("parent_node_id") === parentNodeId);
-      const mixedRevisions = new Set(pages.map((page) => page.catalog_revision)).size > 1;
+      const mixedRevisions = new Set(pages.map((page) => page.revision)).size > 1;
       if (mixedRevisions || missingParents.length > 0) {
         const maximumRevision = Math.max(confirmedRead.minimumCatalogRevision ?? 0,
           ...pages.map(page => page.catalog_revision));
@@ -650,7 +657,7 @@ export function useSessionResourceExplorer({
           let latest: SessionCatalogExport | undefined;
           try {
             latest = await getSessionCatalogExport(apiPort, workspaceRequestTarget(workspaceId), {
-              signal: confirmedRead.signal,
+              signal: confirmedRead.signal, minimumCatalogRevision: maximumRevision, knownRevision: confirmedRead.knownRevision,
               nodeIds: parentNodeIds.filter((nodeId): nodeId is string => nodeId !== null),
             });
           } catch (error) {
@@ -671,6 +678,7 @@ export function useSessionResourceExplorer({
               }
               // 新快照须同时确认推进及全部 404 父节点已撤销；旧页整批作废，不提前 prune。
               confirmedRead = { ...confirmedRead, minimumCatalogRevision: latest.catalog_revision,
+                knownRevision: latest.revision,
                 visibleParentIds: new Set(latest.items.map(node => node.node_id)) };
               continue;
             }
@@ -720,6 +728,7 @@ export function useSessionResourceExplorer({
       forceRoot?: boolean;
       outbox?: CatalogOutbox;
       minimumCatalogRevision?: number;
+      knownRevision?: string;
       signal?: AbortSignal;
       refreshRoot?: boolean;
       appendParentNodeId?: string | null;
@@ -809,6 +818,7 @@ export function useSessionResourceExplorer({
     const refreshKey = `${workspaceId}\u0000${options.forceRoot ? "root" : ""}\u0000`
       + [...operationIds].sort().join("\u0001")
       + `\u0000${options.minimumCatalogRevision ?? "current"}\u0000${options.refreshRoot ? "refresh" : ""}`
+      + `\u0000${options.knownRevision ?? "current"}`
       + `\u0000${[...parentNodeIds].map((id) => id ?? "root").sort().join("\u0001")}`
       + `\u0000${options.appendParentNodeId === undefined ? "replace" : `append:${options.appendParentNodeId ?? "root"}`}`
       + `\u0000${options.reuseConfirmedBranches ? [...(options.additionalParentNodeIds ?? [])].map((id) => id ?? "root").sort().join("\u0001") : "all"}`;
@@ -817,11 +827,16 @@ export function useSessionResourceExplorer({
     const rootKey = branchKey(workspaceId, null);
     const rootRequestId = branchRequestRefs.current.get(rootKey);
     const request = (async () => {
-      let minimumCatalogRevision = options.minimumCatalogRevision ?? 0;
+      const known = catalogReadVersionFor(workspaceId);
+      let knownRevision = options.knownRevision ?? known.knownRevision;
+      let minimumCatalogRevision = Math.max(options.minimumCatalogRevision ?? 0,
+        known.minimumCatalogRevision,
+        ...(currentOutbox?.operations.filter(operation => operation.state === "committed")
+          .map(operation => operation.committed_catalog_revision ?? 0) ?? []));
       let visibleParentIds: ReadonlySet<string> | undefined;
       if ([...parentNodeIds].some((parentNodeId) => parentNodeId !== null)) {
         const catalog = await getSessionCatalogExport(apiPort, target, {
-          signal, nodeIds: [...parentNodeIds].filter((nodeId): nodeId is string => nodeId !== null),
+          signal, minimumCatalogRevision, knownRevision, nodeIds: [...parentNodeIds].filter((nodeId): nodeId is string => nodeId !== null),
         });
         signal.throwIfAborted();
         const floor = Math.max(minimumCatalogRevision, ...[...branchesRef.current.entries()]
@@ -831,10 +846,11 @@ export function useSessionResourceExplorer({
           throw new Error(t('navigation.catalog.fullRevisionBehind', catalog.catalog_revision, floor));
         }
         minimumCatalogRevision = catalog.catalog_revision;
+        knownRevision = catalog.revision;
         visibleParentIds = new Set(catalog.items.map((node) => node.node_id));
       }
       return await reconcileCatalogBranches(workspaceId, [...parentNodeIds], operationIds, {
-        ...options, signal, minimumCatalogRevision, visibleParentIds,
+        ...options, signal, minimumCatalogRevision, knownRevision, visibleParentIds,
       });
     })().catch((error: unknown) => {
       if (lifetime.signal.aborted) throw lifetime.signal.reason;
@@ -858,6 +874,7 @@ export function useSessionResourceExplorer({
   }, [
     activeWorkspaceId,
     apiPort,
+    catalogReadVersionFor,
     reconcileCatalogBranches,
     sessionCatalogOutboxRuntime,
     updateBranches,
@@ -888,18 +905,16 @@ export function useSessionResourceExplorer({
 
   failureRefreshRef.current = async (workspaceTarget, outbox, minimumCatalogRevision, signal) => {
     const workspaceId = gatewayWorkspaceKey(workspaceTarget);
-    const confirmedRevisions = [...branchesRef.current.entries()]
-      .filter(([key]) => key.startsWith(`${workspaceId}:`))
-      .map(([, branch]) => branch.catalog_revision ?? 0);
-    const floor = Math.max(minimumCatalogRevision, ...confirmedRevisions);
-    const catalog = await fetchSessionCatalogSnapshot(apiPort, workspaceTarget, { signal });
+    const floor = Math.max(minimumCatalogRevision, catalogReadVersionFor(workspaceId).minimumCatalogRevision);
+    const catalog = await fetchSessionCatalogSnapshot(apiPort, workspaceTarget, { signal, minimumCatalogRevision: floor });
     if (signal.aborted) throw new Error(t('navigation.catalog.failureReconcileCancelled'));
     if (catalog.catalog_revision < floor) {
       throw new Error(t('navigation.catalog.snapshotBehind', catalog.catalog_revision, floor));
     }
     await refreshCatalogWorkspace(workspaceId, {
-      outbox, operationIds: [], forceRoot: true,
+      outbox, forceRoot: true,
       minimumCatalogRevision: catalog.catalog_revision, signal,
+      knownRevision: catalog.projection_revision ?? undefined,
     });
     if (signal.aborted) throw new Error(t('navigation.catalog.confirmedRefreshCancelled'));
     // 目录事件也使原 breadcrumb 和搜索视图失效，业务结果仍由原 API 提供。
@@ -1123,8 +1138,6 @@ export function useSessionResourceExplorer({
     parentNodeIds: Array<string | null>,
   ) => {
     if (!sessionCatalogOutboxRuntime) return;
-    const trackedKey = `${handle.partitionKey}\u0000${operationId}`;
-    trackedOutboxOperationKeysRef.current.add(trackedKey);
     void (async () => {
       let terminalError: unknown = null;
       try {
@@ -1161,7 +1174,6 @@ export function useSessionResourceExplorer({
           t('navigation.catalog.operationError', operationId, status, details),
         );
       }
-      trackedOutboxOperationKeysRef.current.delete(trackedKey);
     })();
   }, [refreshCatalogWorkspace, sessionCatalogOutboxRuntime]);
 
@@ -1287,6 +1299,7 @@ export function useSessionResourceExplorer({
         apiPort,
         workspaceRequestTarget(workspaceId),
         currentSessionId,
+        { ...catalogReadVersionFor(workspaceId), minimumCatalogRevision: await catalogRevisionFor(workspaceId) },
       );
       const outbox = handle.driver.current();
       const projected = outbox
@@ -1301,10 +1314,7 @@ export function useSessionResourceExplorer({
       targetNodeId: folderId,
       recursive: true,
     }, { expectedRevision: node.node_revision });
-    const trackedKey = `${handle.partitionKey}\u0000${result.operationId}`;
-    trackedOutboxOperationKeysRef.current.add(trackedKey);
     const completion = (async () => {
-    try {
       let terminalError: unknown = null;
       try {
         await outboxRuntime.waitForTerminal(handle, result.operationId);
@@ -1346,14 +1356,13 @@ export function useSessionResourceExplorer({
         }
         throw terminalError ?? refreshError;
       }
-    } finally {
-      trackedOutboxOperationKeysRef.current.delete(trackedKey);
-    }
-    return deletedCurrentSession;
+      return deletedCurrentSession;
     })();
     return { operationId: result.operationId, completion };
   }, [
     apiPort,
+    catalogReadVersionFor,
+    catalogRevisionFor,
     confirmedNodeFor,
     currentSessionId,
     currentSessionWorkspaceId,
@@ -1508,75 +1517,14 @@ export function useSessionResourceExplorer({
   }, [refreshNavigation, workspaceNavigationSyncKey]);
 
   useEffect(() => {
-    const previousSyncKeys = catalogSyncKeysRef.current;
-    const previousRefreshVersions = catalogRefreshVersionsRef.current;
-    catalogSyncKeysRef.current = catalogSyncKeys;
+    const previous = catalogRefreshVersionsRef.current;
     catalogRefreshVersionsRef.current = catalogRefreshVersions;
-    const changedWorkspaceIds = changedCatalogWorkspaceIds(
-      previousSyncKeys,
-      catalogSyncKeys,
-      previousRefreshVersions,
-      catalogRefreshVersions,
-    ).filter((workspaceId) =>
-      catalogSyncKeys.has(workspaceId)
-      || previousRefreshVersions.get(workspaceId)
-        !== catalogRefreshVersions.get(workspaceId),
-    );
-    if (changedWorkspaceIds.length === 0) {
-      return;
-    }
-    void Promise.all(
-      changedWorkspaceIds.map((workspaceId) => refreshCatalogWorkspace(workspaceId)),
-    ).catch(() => {
-      // 每个失败分支都保留自己的可见错误，不能提升为整个资源树故障。
+    const changed = [...catalogRefreshVersions].filter(([workspaceId, version]) => previous.get(workspaceId) !== version);
+    void Promise.all(changed.map(([workspaceId]) => refreshCatalogWorkspace(workspaceId))).catch(() => {
+      // 每个分支保留自己的可见错误。
     });
-  }, [catalogRefreshVersions, catalogSyncKeys, refreshCatalogWorkspace]);
+  }, [catalogRefreshVersions, refreshCatalogWorkspace]);
 
-  useEffect(() => {
-    const nextSyncKeys = new Map<string, string>();
-    if (sessionCatalogOutboxSnapshot) {
-      for (const [scopeKey, entry] of sessionCatalogOutboxSnapshot) {
-        if (scopeKey !== sessionCatalogOutboxScopeKey(
-          entry.gatewayWorkspaceId,
-              )) {
-          continue;
-        }
-        const terminalOperations = entry.outbox.operations.filter((operation) =>
-          operation.state === "committed"
-          && !trackedOutboxOperationKeysRef.current.has(
-            `${entry.partitionKey}\u0000${operation.client_operation_id}`,
-          ),
-        );
-        if (terminalOperations.length === 0) continue;
-        const operationIds = terminalOperations.map(
-          (operation) => operation.client_operation_id,
-        ).sort();
-        const signature = terminalOperations.map((operation) =>
-          `${operation.client_operation_id}:${operation.state}:${operation.committed_catalog_revision ?? "null"}:${operation.receipt_revision ?? "null"}:${operation.settlement ?? "none"}`,
-        ).sort().join("\u0001");
-        nextSyncKeys.set(scopeKey, signature);
-        if (terminalOutboxSyncKeysRef.current.get(scopeKey) === signature) continue;
-        void refreshCatalogWorkspace(entry.gatewayWorkspaceId, { operationIds })
-          .catch((error: unknown) => {
-            // 最新目录读取接管 confirmed 和回执清理；旧读取取消不能报告成业务失败。
-            if (error instanceof CatalogReadSupersededError) return;
-            const repairDetails = terminalOperations
-              .filter((operation) => operation.settlement === "repair_required")
-              .map((operation) =>
-                t('navigation.catalog.operationRepair', operation.client_operation_id, operation.error_detail ?? operation.error_code),
-              );
-            sessionCatalogOutboxRuntime?.reportError(
-              [...repairDetails, t('navigation.catalog.terminalRefreshFailed', entry.gatewayWorkspaceId, operationIds.join(", "), errorMessage(error))].join(t('navigation.errorSeparator')),
-            );
-          });
-      }
-    }
-    terminalOutboxSyncKeysRef.current = nextSyncKeys;
-  }, [
-    refreshCatalogWorkspace,
-    sessionCatalogOutboxRuntime,
-    sessionCatalogOutboxSnapshot,
-  ]);
 
   useEffect(() => {
     if (!activeWorkspaceId) {
@@ -1656,6 +1604,7 @@ export function useSessionResourceExplorer({
       apiPort,
       workspaceRequestTarget(currentSessionWorkspaceId),
       currentSessionId,
+      catalogReadVersionFor(currentSessionWorkspaceId),
     )
       .then(async (breadcrumb) => {
         if (currentSessionRevealRequestRef.current !== requestId) {
@@ -1675,6 +1624,7 @@ export function useSessionResourceExplorer({
       });
   }, [
     apiPort,
+    catalogReadVersionFor,
     catalogViewVersion,
     currentSessionId,
     currentSessionWorkspaceId,

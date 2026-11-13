@@ -15,6 +15,7 @@ import pytest
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from configs.runtime import read_jsonc_object
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
@@ -100,9 +101,9 @@ def _complete_turn(
     )
     interaction, = cast(list[dict[str, object]], cassette.raw["interactions"])
     call, = replay.control.plan_model_calls(session_id, thread_id, [interaction])
-    accepted = _data(client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    accepted = _data(client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": message}, "run": {"mode": "single_agent", "agent_id": "default"},
-    }))
+    })))
     deadline = time.monotonic() + 60
     while True:
         job = _data(client.get(f"/api/v1/jobs/{accepted['job_id']}"))

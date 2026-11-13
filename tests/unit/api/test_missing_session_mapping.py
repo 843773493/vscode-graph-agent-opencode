@@ -60,7 +60,7 @@ def read_session_service():
 
 
 class _FakeGoalService:
-    async def get(self, session_id: str):
+    async def get_snapshot(self, session_id: str):
         raise NotFoundError(f"Session {session_id} not found")
 
 
@@ -182,6 +182,24 @@ async def test_get_session_goal_maps_missing_session_to_404() -> None:
         )
 
     assert captured.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_session_goal_rejects_snapshot_below_minimum_sync_version() -> None:
+    class GoalService:
+        async def get_snapshot(self, session_id: str):
+            return type("Snapshot", (), {"sync_version": 3})()
+
+    with pytest.raises(HTTPException) as captured:
+        await sessions_api.get_session_goal(
+            "ses_019c1ef767ab76f28d14b419797b6c3",
+            minimum_sync_version=4,
+            _="local",
+            request_id="req",
+            goal_service=GoalService(),
+        )
+
+    assert captured.value.status_code == 409
 
 
 @pytest.mark.asyncio

@@ -54,6 +54,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     _child,
     _session,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 
 
 def _exclusive_available(path: Path) -> bool:
@@ -87,9 +88,9 @@ async def test_cold_history_releases_topology_but_guards_handles_until_delete(
     reading_history: ContextVar[bool] = ContextVar("reading_cold_history", default=False)
     read_task = delete_task = None
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
-        response = await history_client.post(root + "/messages", json={
+        response = await history_client.post(root + "/messages", json=with_message_run_operation_id({
             "message": {"content": "通过消息入口生成需要冷读保护的历史。"}, "run": {},
-        })
+        }))
         assert response.status_code == 200, response.text
         accepted = response.json()["data"]
         message_url = {
@@ -257,9 +258,9 @@ async def test_cancelled_message_read_guards_worker_handles_until_delete(
     read_task = delete_task = None
     delete_id = f"cancelled-message-delete-{entry}-{reader}"
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
-        response = await history_client.post(root + "/messages", json={
+        response = await history_client.post(root + "/messages", json=with_message_run_operation_id({
             "message": {"content": "取消冷读时，删除必须等待真实读取句柄关闭。"}, "run": {},
-        })
+        }))
         assert response.status_code == 200, response.text
         accepted = response.json()["data"]
         job = container.job_service._jobs[accepted["job_id"]]

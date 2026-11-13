@@ -48,9 +48,10 @@ try {
   const first = await api("/api/v1/sessions", "POST", { title: "Goal 管理验证" });
   const second = await api("/api/v1/sessions", "POST", { title: "无 Goal 的会话" });
   // 保持暂停，验证管理界面时不触发模型调用。
-  const original = await api(`/api/v1/sessions/${first.session_id}/goal`, "PUT", {
+  const original = (await api(`/api/v1/sessions/${first.session_id}/goal`, "PUT", {
     objective: "验证原始 Goal", status: "paused", token_budget: 1000,
-  });
+    operation_id: crypto.randomUUID(), expected_control_revision: 0,
+  })).goal;
   const target = new URL(baseUrl);
   await page.goto(target.href, { waitUntil: "domcontentloaded" });
   await selectSession(first);
@@ -67,13 +68,16 @@ try {
   await dialog.getByRole("button", { name: "保存 Goal", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(panel).toContainText("通过界面编辑的 Goal");
-  const edited = await api(`/api/v1/sessions/${first.session_id}/goal`);
+  const edited = (await api(`/api/v1/sessions/${first.session_id}/goal`)).goal;
   assert.equal(edited.goal_id, original.goal_id);
   assert.equal(edited.thread_id, first.thread_id);
   assert.equal(edited.status, "paused");
   assert.equal(edited.objective, "通过界面编辑的 Goal");
   assert.equal(edited.token_budget, original.token_budget);
-  assert.deepEqual(writes, [{ objective: edited.objective, token_budget: original.token_budget, status: "paused" }]);
+  assert.equal(writes.length, 1);
+  assert.match(writes[0].operation_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.deepEqual(writes, [{ objective: edited.objective, token_budget: original.token_budget, status: "paused",
+    operation_id: writes[0].operation_id, expected_control_revision: original.control_revision }]);
   // 新工作台把会话资源展示态保存到对应 EditorInput，由原版存储恢复。
   await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -102,12 +106,12 @@ try {
   const confirmation = page.getByRole("dialog");
   await expect(confirmation).toContainText("会话消息保留");
   await confirmation.getByRole("button", { name: "取消", exact: true }).click();
-  assert.equal((await api(`/api/v1/sessions/${first.session_id}/goal`)).goal_id, original.goal_id);
+  assert.equal((await api(`/api/v1/sessions/${first.session_id}/goal`)).goal.goal_id, original.goal_id);
   await panel.getByRole("button", { name: "删除 Goal", exact: true }).click();
   await page.getByRole("dialog", { name: "删除当前 Goal？", exact: true })
     .getByRole("button", { name: "删除 Goal", exact: true }).click();
   await expect(panel).toContainText("当前会话没有关联任务。");
-  assert.equal(await api(`/api/v1/sessions/${first.session_id}/goal`), null);
+  assert.equal((await api(`/api/v1/sessions/${first.session_id}/goal`)).goal, null);
   // 从会话侧栏创建普通任务，验证默认目标、直接管理及两处完整镜像。
   await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
   await panel.getByRole("button", { name: "自定义", exact: true }).click();

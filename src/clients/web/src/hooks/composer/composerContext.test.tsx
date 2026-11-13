@@ -64,6 +64,7 @@ const composerActions: Omit<ComposerContextType, "state"> = {
   getLatestAssistantContent: () => null,
   setStatus: () => undefined,
   sendMessage: async () => undefined,
+  refreshTurnHistory: () => undefined,
   compactSession: async () => ({
     session_id: "session",
     status: "scheduled",

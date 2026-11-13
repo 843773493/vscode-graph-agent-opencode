@@ -30,6 +30,7 @@ from app.schemas.internal_v2.message import (
 from app.schemas.internal_v2.session import SessionCreateRequest, SessionDTO
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import new_message_operation_id
 
 
 def _source_interactions(*, tool_loop: bool) -> list[dict[str, object]]:
@@ -115,7 +116,7 @@ async def fork_execution_message(
             replay.control.plan_model_calls(session_id, thread, interactions)
             with workspace_context(container.workspace_id, container.workspace_root):
                 accepted = await container.session_orchestrator.create_message(session_id, MessageRunRequest(
-                    message=MessageCreateRequest(content=content, attachments=attachments or []), run=RunOptions(),
+                    message=MessageCreateRequest(content=content, attachments=attachments or []), run=RunOptions(), operation_id=new_message_operation_id(),
                 ))
                 async with asyncio.timeout(45):
                     while True:

@@ -267,12 +267,15 @@ message SessionCatalogPageDTO {
   optional string cursor = 5;
   int64 total = 6;
   optional string consistency_warning = 7;
+  SessionCatalogSyncDTO sync = 8;
 }
 
 message SessionCatalogBreadcrumbDTO {
   string revision = 1;
   int64 catalog_revision = 2;
   repeated SessionCatalogNodeDTO items = 3;
+  string node_id = 4;
+  SessionCatalogSyncDTO sync = 5;
 }
 
 message SessionCatalogSearchResultDTO {
@@ -293,6 +296,32 @@ message SessionCatalogExportDTO {
   string revision = 1;
   int64 catalog_revision = 2;
   repeated SessionCatalogNodeDTO items = 3;
+  repeated string node_ids = 4;
+  bool complete = 5;
+  SessionCatalogSyncDTO sync = 6;
+}
+
+message SessionCatalogSyncDTO {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  string source = 3;
+  bool stale = 4;
+  optional google.protobuf.Timestamp authoritative_confirmed_at = 5;
+  optional string error = 6;
+}
+
+message SessionCatalogVersionDTO {
+  string workspace_id = 1;
+  int64 catalog_revision = 2;
+  string projection_revision = 3;
+}
+
+message NavigationSnapshotDTO {
+  string workspace_id = 1;
+  int64 catalog_revision = 2;
+  int64 event_seq_watermark = 3;
+  int64 generation = 4;
+  optional string projection_revision = 5;
 }
 
 // 工作区搜索的能力与生命周期；领域分页仍由原 owner 解释。
@@ -823,11 +852,21 @@ message MessageRunAccepted {
   JobDispatchSnapshotDTO dispatch = 4;
   string thread_id = 5;
   optional string turn_id = 6;
+  optional string operation_id = 7;
 }
 
 message MessageRunRequest {
   MessageCreateRequest message = 1;
   RunOptions run = 2;
+  string operation_id = 3;
+}
+
+message MessageSubmissionResultDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  string operation_id = 3;
+  string status = 4;
+  optional MessageRunAccepted accepted = 5;
 }
 
 message ExtensionCatalogBindingAuditDTO {
@@ -1735,10 +1774,27 @@ message SessionGenerationOriginDTO {
   string generator_type_version = 5;
 }
 
-message SessionGoalClearResultDTO {
+message SessionGoalClearRequest {
+  string operation_id = 1;
+  int64 expected_control_revision = 2;
+}
+
+message SessionGoalSnapshotDTO {
   string session_id = 1;
-  bool cleared = 2;
-  string thread_id = 3;
+  string thread_id = 2;
+  optional SessionGoalDTO goal = 3;
+  int64 control_revision = 4;
+  int64 sync_version = 5;
+}
+
+message SessionGoalOperationResultDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  string operation_id = 3;
+  string status = 4;
+  int64 control_revision = 5;
+  int64 sync_version = 6;
+  optional SessionGoalDTO goal = 7;
 }
 
 message SessionSkillUntrackRequest {
@@ -1782,11 +1838,10 @@ message SessionGoalDTO {
   // 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。
   // 与 revision 不同：revision 仅随普通设置更新递增。
   google.protobuf.Timestamp updated_at = 10;
-  optional string last_accounted_job_id = 11;
-  optional string last_continued_job_id = 12;
-  optional google.protobuf.Struct accounted_jobs = 13;
   // 由权威 catalog 解析的 main Thread；不作为 goal.json 中的第二指针。
   string thread_id = 14;
+  int64 control_revision = 15;
+  int64 sync_version = 16;
 }
 
 message SessionGoalSetRequest {
@@ -1794,6 +1849,8 @@ message SessionGoalSetRequest {
   optional string status = 2;
   optional int64 token_budget = 3;
   optional bool replace = 4;
+  string operation_id = 5;
+  int64 expected_control_revision = 6;
 }
 
 message SessionInformationErrorDTO {

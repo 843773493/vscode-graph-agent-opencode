@@ -20,7 +20,10 @@ from app.domain.itemized.enums import (
     TurnStatus,
 )
 from app.domain.itemized.execution_admission import user_turn_admission_payload_hash
-from app.domain.itemized.execution_queue import ExecutionQueueInput
+from app.domain.itemized.execution_queue import (
+    ExecutionQueueInput,
+    MessageSubmissionConflictError,
+)
 from app.domain.itemized.hashing import content_hash as item_content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
@@ -122,6 +125,29 @@ class RolloutTurnsMixin:
         strict_text(identity_origin, field="identity_origin")
         with self._storage.write_connection(session_id, owner_thread_id, checkpoint_ns) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if queue_input is not None and queue_input.submission_hash is not None:
+                existing_submission = connection.execute(
+                    "SELECT job_id FROM executions WHERE session_id=? AND thread_id=? "
+                    "AND admission_idempotency_key=?",
+                    (session_id, owner_thread_id, admission_idempotency_key),
+                ).fetchone()
+                if existing_submission is not None:
+                    record = self._execution_queue_record(
+                        connection, session_id, owner_thread_id, checkpoint_ns, existing_submission[0],
+                    )
+                    if record.input.submission_hash != queue_input.submission_hash:
+                        raise MessageSubmissionConflictError("operation_id 已用于不同消息输入")
+                    admission = record.cursor.admission
+                    root = connection.execute(
+                        "SELECT root_input_item_id FROM turn_records WHERE session_id=? AND thread_id=? AND turn_id=?",
+                        (session_id, owner_thread_id, admission.turn_id),
+                    ).fetchone()
+                    return {
+                        "turn_id": admission.turn_id, "root_input_item_id": root[0],
+                        "initial_execution_id": admission.execution_id, "execution_id": admission.execution_id,
+                        "job_id": admission.job_id, "admission_idempotency_key": admission.admission_idempotency_key,
+                        "commit_id": record.cursor.commit_id, "idempotent": True,
+                    }
             if branch_id is None:
                 active_branch_row = connection.execute(
                     "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns = ?",

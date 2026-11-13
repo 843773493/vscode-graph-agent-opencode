@@ -4,6 +4,7 @@ import {
   decodeJsonSseData,
   defineSseEvent,
   parseSseFrameBlock,
+  SseProtocolError,
 } from "../../sse/sseClient";
 import type { ConsumeSseResponseOptions } from "../../sse/sseClient";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
@@ -50,7 +51,7 @@ class WorkspaceObservationTransport {
     for (const [name, value] of this.targetHeaders) {
       const other = incoming.get(name);
       if (other !== null && other !== value) {
-        return Promise.reject(new Error(`Workspace 观察者目标身份冲突: ${name}`));
+        return Promise.reject(new SseProtocolError(`Workspace 观察者目标身份冲突: ${name}`));
       }
     }
     for (const [name, value] of incoming) this.targetHeaders.set(name, value);
@@ -139,14 +140,19 @@ class WorkspaceObservationTransport {
             (envelope) => {
               if (revision !== this.revision) return;
               if (!ids.has(envelope.subscription_id)) {
-                throw new Error(`Workspace SSE 返回未知观察者: ${envelope.subscription_id}`);
+                throw new SseProtocolError(`Workspace SSE 返回未知观察者: ${envelope.subscription_id}`);
               }
               const subscriber = this.subscribers.get(envelope.subscription_id);
               if (!subscriber) return;
               try {
                 if (envelope.state === "error") {
+                  let detail: unknown;
+                  try { detail = JSON.parse(envelope.detail_json!); }
+                  catch (cause) {
+                    throw new SseProtocolError(`Workspace 观察错误回执包含无效 JSON: ${envelope.subscription_id}`, { cause });
+                  }
                   throw new HttpRequestError(envelope.status!, "Observation failed",
-                    JSON.parse(envelope.detail_json!), STREAM_PATH, response.headers.get("X-Request-ID"));
+                    detail, STREAM_PATH, response.headers.get("X-Request-ID"));
                 }
                 if (envelope.state === "closed") {
                   this.settle(subscriber);
@@ -159,7 +165,7 @@ class WorkspaceObservationTransport {
                   return;
                 }
                 if (!connected.has(subscriber.id)) {
-                  throw new Error(`Workspace 观察者尚未连接就收到事件: ${subscriber.id}`);
+                  throw new SseProtocolError(`Workspace 观察者尚未连接就收到事件: ${subscriber.id}`);
                 }
                 subscriber.options.onActivity?.();
                 const frame = parseSseFrameBlock(envelope.frame!);
@@ -167,7 +173,7 @@ class WorkspaceObservationTransport {
                 const events = subscriber.options.events;
                 const definition = Object.prototype.hasOwnProperty.call(events, frame.event)
                   ? events[frame.event] : events["*"];
-                if (!definition) throw new Error(`未注册的 SSE 事件类型: ${frame.event}`);
+                if (!definition) throw new SseProtocolError(`未注册的 SSE 事件类型: ${frame.event}`);
                 definition.handle(definition.decode(frame.data, frame), frame);
               } catch (error) {
                 this.settle(subscriber, error, envelope.state !== "error");

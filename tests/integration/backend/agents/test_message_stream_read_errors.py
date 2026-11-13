@@ -13,7 +13,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 — 只复用产品进程和model_stream装具
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 
 @pytest.mark.asyncio
@@ -25,10 +25,10 @@ async def test_product_stream_reads_reject_corruption_then_reopen_original_histo
     for artifact in ("events", "state", "index", "applied_event_ids"):
         session = await create_session(case.client, f"消息流读取-{artifact}")
         await case.plan(session, [{"content": f"stream-original-{artifact}"}])
-        sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+        sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": f"stream-trigger-{artifact}"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert sent.status_code == 200, sent.text
         accepted = sent.json()["data"]
         await _completed(case.client, accepted["job_id"])
@@ -109,10 +109,10 @@ async def test_product_stream_rejects_foreign_applied_event_then_recovers(
     case = communication_case
     session = await create_session(case.client, "消息流幂等归属")
     await case.plan(session, [{"content": "applied-owner-original"}])
-    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "applied-owner-trigger"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert sent.status_code == 200, sent.text
     accepted = sent.json()["data"]
     await _completed(case.client, accepted["job_id"])
@@ -165,10 +165,10 @@ async def test_product_startup_rejects_corrupt_recovery_then_reopens_history(
     case = communication_case
     session = await create_session(case.client, "启动恢复统一校验")
     await case.plan(session, [{"content": "startup-recovery-original"}])
-    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "startup-recovery-trigger"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert sent.status_code == 200, sent.text
     accepted = sent.json()["data"]
     await _completed(case.client, accepted["job_id"])
@@ -233,10 +233,10 @@ async def test_product_stream_locator_rejects_paths_and_empty_values_without_ret
     case = communication_case
     session = await create_session(case.client, "消息流标识定位")
     await case.plan(session, [{"content": "stream-locator-original"}])
-    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    sent = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "stream-locator-trigger"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert sent.status_code == 200, sent.text
     accepted = sent.json()["data"]
     await _completed(case.client, accepted["job_id"])

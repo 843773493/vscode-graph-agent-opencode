@@ -119,12 +119,17 @@ async def stream_workspace_observation(
 
 
 async def _stream_navigation_changes(service: SessionCatalogService):
+    confirmed = None
     async with aclosing(stream_sse_with_heartbeat(
         service.operations.changes(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
         close_source_on_exit=True,
     )) as changes:
         async for snapshot in changes:
-            if isinstance(snapshot, str):
+            heartbeat = isinstance(snapshot, str)
+            if heartbeat:
                 yield snapshot
-            else:
+                # 复用原心跳确认权威标量；通知丢失或配置投影变化也使已加载范围失效。
+            snapshot = service.navigation_snapshot()
+            if not heartbeat or snapshot != confirmed:
+                confirmed = snapshot
                 yield f"event: session_navigation\ndata: {snapshot.model_dump_json()}\n\n"

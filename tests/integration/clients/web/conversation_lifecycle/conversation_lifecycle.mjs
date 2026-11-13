@@ -2136,8 +2136,9 @@ async function runGoalOwner(surface) {
   };
   const initial = (await ownerApi(owner, path, {
     method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ objective: "编辑前的暂停目标", status: "paused" }),
-  })).data;
+    body: JSON.stringify({ objective: "编辑前的暂停目标", status: "paused",
+      operation_id: crypto.randomUUID(), expected_control_revision: 0 }),
+  })).data.goal;
   assertOwner(initial);
   await openOwner(owner);
   const input = threadSurface(owner).getByTestId("composer-input");
@@ -2152,8 +2153,9 @@ async function runGoalOwner(surface) {
     assert.equal(response.status(), 200);
     const envelope = await response.json();
     assert.equal(envelope.request_id, response.headers()["x-request-id"]);
-    if (envelope.data !== null) assertOwner(envelope.data);
-    return envelope.data;
+    assertOwner(envelope.data);
+    if (envelope.data.goal !== null) assertOwner(envelope.data.goal);
+    return response.request().method() === "DELETE" ? envelope.data : envelope.data.goal;
   };
   const refresh = responseFor("GET");
   await command("/goal");
@@ -2181,8 +2183,9 @@ async function runGoalOwner(surface) {
   const clear = responseFor("DELETE");
   await command("/goal clear");
   const cleared = await readResponse(clear);
-  assert.equal(cleared.cleared, true);
-  assert.equal((await ownerApi(owner, path)).data, null);
+  assert.equal(cleared.status, "applied");
+  assert.equal(cleared.goal, null);
+  assert.equal((await ownerApi(owner, path)).data.goal, null);
   await expect(threadSurface(owner).getByTestId("composer-input")).toBeVisible();
   await expect(threadSurface(owner).getByTestId("composer-current-goal")).toHaveCount(0);
   const clearedRead = responseFor("GET");

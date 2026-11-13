@@ -5,6 +5,7 @@ import { expect } from "playwright/test";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 import { gatewayWorkspaceKey } from "../../../../src/clients/web/src/api/workspaceIdentity.ts";
 import { browserViewKey } from "../../../../src/clients/web/src/state/browserViewStore.ts";
+import { newOperationId } from "../../../support/operation_ids.mjs";
 
 function required(name) {
   const value = process.env[name];
@@ -275,7 +276,7 @@ try {
   await expect(pageB.locator(`section.boxteam-thread[data-session-id="${unopenedSessionId}"]`)).toHaveCount(0);
   const accepted = await api(pageB, `/api/v1/sessions/${unopenedSessionId}/threads/${unopenedThreadId}/messages`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: { role: "user", content: "后台完成通知测试" }, run: { mode: "single_agent", agent_id: "default" } }),
+    body: JSON.stringify({ operation_id: newOperationId(), message: { role: "user", content: "后台完成通知测试" }, run: { mode: "single_agent", agent_id: "default" } }),
   });
   assert.equal(accepted.thread_id, unopenedThreadId);
   let job;

@@ -51,9 +51,11 @@ from app.protocol.codecs.workspace_events import trace_to_json, trace_to_proto
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.goal import (
-    SessionGoalClearResultDTO,
-    SessionGoalDTO,
+    SessionGoalClearRequest,
+    SessionGoalOperationResultDTO,
     SessionGoalSetRequest,
+    SessionGoalSnapshotDTO,
+    goal_public_view,
 )
 from app.schemas.internal_v2.llm_request_log import (
     LLMRequestLogLocationDTO,
@@ -125,6 +127,7 @@ from app.services.infrastructure.llm_request_log_service import (
     LLMRequestLogError,
     LLMRequestLogService,
 )
+from app.services.infrastructure.persistent_tasks.goals import GoalOperationReplayError
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -139,7 +142,7 @@ from app.services.infrastructure.turn_history.trace_page import (
     TracePageBudgetExceededError,
 )
 from app.services.infrastructure.turn_history.trace_search import TraceSearchError
-from app.services.orchestration.persistent_tasks.goal import settle_goal_progress
+from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
@@ -155,25 +158,30 @@ def _not_found_or_invalid_input_http_error(error: Exception) -> HTTPException:
 
 @router.get(
     "/{session_id}/goal",
-    response_model=APIResponse[SessionGoalDTO | None],
+    response_model=APIResponse[SessionGoalSnapshotDTO],
     summary="获取会话 Goal",
 )
 async def get_session_goal(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    goal_service: SessionGoalService = Depends(get_goal_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
+    minimum_sync_version: Annotated[int, Query(ge=0)] = 0,
 ):
     try:
-        goal = await goal_service.get(session_id)
+        snapshot = await goal_service.get_snapshot(session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
-    return APIResponse(data=goal, request_id=request_id)
+    if snapshot.sync_version < minimum_sync_version:
+        raise state_conflict_http_error(ClientStateConflictError(
+            f"Goal 同步版本落后: {snapshot.sync_version} < {minimum_sync_version}"
+        ))
+    return APIResponse(data=snapshot, request_id=request_id)
 
 
 @router.put(
     "/{session_id}/goal",
-    response_model=APIResponse[SessionGoalDTO],
+    response_model=APIResponse[SessionGoalOperationResultDTO],
     summary="设置会话 Goal",
 )
 async def set_session_goal(
@@ -191,11 +199,20 @@ async def set_session_goal(
         else TOKEN_BUDGET_UNSET
     )
     try:
+        replay = await goal_service.replay_set(
+            session_id, objective=payload.objective, status=payload.status,
+            token_budget=token_budget, replace=payload.replace,
+            expected_control_revision=payload.expected_control_revision,
+            operation_id=payload.operation_id,
+        )
+        if replay is not None:
+            return APIResponse(data=replay, request_id=request_id)
         previous_goal = await goal_service.get(session_id)
+        progress = ()
         if payload.replace or (
             payload.status is not None and payload.status.value != "active"
         ):
-            await settle_goal_progress(runtime, session_id)
+            progress = await sample_goal_progress(runtime, session_id)
         async with session_service.session_write_admission(session_id):
             goal = await goal_service.set(
                 session_id,
@@ -203,8 +220,11 @@ async def set_session_goal(
                 status=payload.status,
                 token_budget=token_budget,
                 replace=payload.replace,
+                expected_control_revision=payload.expected_control_revision,
+                operation_id=payload.operation_id,
+                progress=progress,
             )
-        if goal.status.value == "active":
+        if goal.status.value == "active" and goal.control_revision == payload.expected_control_revision + 1:
             if (
                 not payload.replace
                 and payload.objective is not None
@@ -213,20 +233,30 @@ async def set_session_goal(
             ):
                 await runtime.request_goal(session_id, objective=goal)
             await runtime.request_goal(session_id)
+    except GoalOperationReplayError as replay:
+        return APIResponse(data=SessionGoalOperationResultDTO.model_validate(replay.result), request_id=request_id)
     except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except ClientStateConflictError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError, ValueError) as error:
         raise _not_found_or_invalid_input_http_error(error) from error
-    return APIResponse(data=goal, request_id=request_id)
+    return APIResponse(data=SessionGoalOperationResultDTO(
+        session_id=session_id, thread_id=goal.thread_id,
+        operation_id=payload.operation_id, status="applied",
+        control_revision=goal.control_revision, sync_version=goal.sync_version,
+        goal=goal_public_view(goal),
+    ), request_id=request_id)
 
 
 @router.delete(
     "/{session_id}/goal",
-    response_model=APIResponse[SessionGoalClearResultDTO],
+    response_model=APIResponse[SessionGoalOperationResultDTO],
     summary="清除会话 Goal",
 )
 async def clear_session_goal(
     session_id: CanonicalSessionId,
+    payload: SessionGoalClearRequest,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
@@ -234,10 +264,23 @@ async def clear_session_goal(
     session_service: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
-        await settle_goal_progress(runtime, session_id)
+        replay = await goal_service.replay_clear(
+            session_id, operation_id=payload.operation_id,
+            expected_control_revision=payload.expected_control_revision,
+        )
+        if replay is not None:
+            return APIResponse(data=replay, request_id=request_id)
+        progress = await sample_goal_progress(runtime, session_id)
         async with session_service.session_write_admission(session_id):
-            cleared = await goal_service.clear(session_id)
+            cleared = await goal_service.clear(
+                session_id,
+                operation_id=payload.operation_id,
+                expected_control_revision=payload.expected_control_revision,
+                progress=progress,
+            )
     except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except ClientStateConflictError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
@@ -245,6 +288,25 @@ async def clear_session_goal(
         data=cleared,
         request_id=request_id,
     )
+
+
+@router.get(
+    "/{session_id}/goal-operations/{operation_id}",
+    response_model=APIResponse[SessionGoalOperationResultDTO],
+    summary="查询 Goal 原操作回执",
+)
+async def get_session_goal_operation(
+    session_id: CanonicalSessionId,
+    operation_id: str,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    goal_service: Annotated[SessionGoalService, Depends(get_goal_service)],
+):
+    try:
+        result = await goal_service.get_operation(session_id, operation_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
 
 
 @router.post("/fork-transfer", response_model=APIResponse[SessionForkTransferResultDTO], summary="执行精确 fork 来源导出或目标创建")

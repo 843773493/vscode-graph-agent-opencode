@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 
@@ -68,7 +69,7 @@ async def test_cctq_vision_model_receives_image_attachment(
 
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {
                 "content": (
                     "请判断图片中是否有红色圆形、蓝色三角形、绿色方块。"
@@ -86,7 +87,7 @@ async def test_cctq_vision_model_receives_image_attachment(
                 "mode": "single_agent",
                 "agent_id": "default",
             },
-        },
+        }),
     )
     assert message_response.status_code == 200, message_response.text
     job_id = message_response.json()["data"]["job_id"]
@@ -132,7 +133,7 @@ async def test_cctq_video_attachment_input_is_sampled_to_frames(
 
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {
                 "content": "请按时间顺序说明视频里的颜色和英文文字。",
                 "attachments": [
@@ -147,7 +148,7 @@ async def test_cctq_video_attachment_input_is_sampled_to_frames(
                 "mode": "single_agent",
                 "agent_id": "default",
             },
-        },
+        }),
     )
     assert message_response.status_code == 200, message_response.text
     job_id = message_response.json()["data"]["job_id"]

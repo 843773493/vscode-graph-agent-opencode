@@ -11,6 +11,7 @@ import pytest
 
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
@@ -131,10 +132,10 @@ async def test_persisted_failed_session_retries_with_migrated_current_tools(
             call_ids = retry_model.control.plan_model_calls(session_id, thread_id, interactions)
             message_response = await client.post(
                 f"/api/v1/sessions/{session_id}/messages",
-                json={
+                json=with_message_run_operation_id({
                     "message": {"content": "请回复 MIGRATION_RETRY_OK"},
                     "run": {"mode": "single_agent", "agent_id": "default"},
-                },
+                }),
             )
             assert message_response.status_code == 200, message_response.text
             accepted = message_response.json()["data"]

@@ -59,6 +59,10 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import (
+    running_job_dispatch_snapshot,
+    with_message_run_operation_id,
+)
 
 
 @pytest.fixture
@@ -101,9 +105,9 @@ async def test_public_session_history_and_replay_stay_on_main_with_real_child(
         for thread_id in (main, child):
             for index in range(2):
                 endpoint = base + ("" if thread_id == main else f"/threads/{thread_id}")
-                response = await history_client.post(endpoint + "/messages", json={
+                response = await history_client.post(endpoint + "/messages", json=with_message_run_operation_id({
                     "message": {"content": f"{thread_id} 第 {index + 1} 条真实输入"}, "run": {},
-                })
+                }))
                 assert response.status_code == 200, response.text
                 data = response.json()["data"]
                 assert data["thread_id"] == thread_id
@@ -116,7 +120,14 @@ async def test_public_session_history_and_replay_stay_on_main_with_real_child(
         # 此 runner fixture 不安装 Trace sink；为已完成的真实 child Job 写入游标见证。
         await container.trace_event_store.append(session_id, JobStartedEvent(
             event_id="evt_thread_bootstrap_witness", job_id=accepted[child][-1]["job_id"],
-            timestamp=datetime.now(UTC), payload=JobStartedPayload(session_id=session_id, thread_id=child),
+            timestamp=datetime.now(UTC), payload=JobStartedPayload(
+                session_id=session_id,
+                thread_id=child,
+                dispatch=running_job_dispatch_snapshot(
+                    session_id, child, accepted[child][-1]["job_id"],
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
         bootstrap = await history_client.get(base + "/bootstrap")
         assert bootstrap.status_code == 200, bootstrap.text

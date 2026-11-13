@@ -38,7 +38,7 @@ from tests.integration.backend.sessions.itemized_dispatch_helpers import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     _prepare_source_workspace,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 
 @pytest.fixture
@@ -93,10 +93,10 @@ async def test_product_fallback_keeps_failed_attempt_and_rejects_unclosed_tool_g
         state.output_tool_name = "read_file"
     session = await create_session(client, "工具参数流失败的备用派发边界")
     with caplog.at_level(logging.ERROR):
-        sent = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        sent = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "保留候选失败事实；不要执行未完成的工具调用。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert sent.status_code == 200, sent.text
         assert sent.headers["X-Request-ID"] == sent.json()["request_id"]
         accepted = sent.json()["data"]

@@ -1,6 +1,7 @@
 import { t } from "../../../../shared/core/i18n/index.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
+import { MessageSubmissionRejectedError, MessageSubmissionUnknownError } from "../../api/session/sessionMessages";
 import { useComposerState } from "../../hooks/app/appContext";
 import { useComposerSlashCommands } from "../../hooks/composer/useComposerSlashCommands";
 import { useComposerAttachments, useComposerDraft, writeComposerAttachments, type ComposerDraftController } from "../../hooks/composer/useComposerDraft";
@@ -28,6 +29,7 @@ import ComposerActionButtons from "./ComposerActionButtons";
 import ComposerAgentControl from "./ComposerAgentControl";
 import ComposerModelControl from "./ComposerModelControl";
 import ComposerAttachmentTray from "./ComposerAttachmentTray";
+import MessageSubmissionRecovery from "./MessageSubmissionRecovery";
 import ComposerSlashCommandMenu from "./ComposerSlashCommandMenu";
 import ComposerToolControl from "./ComposerToolControl";
 import ComposerViewControl from "./ComposerViewControl";
@@ -91,6 +93,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     renameSession,
     updateUiSettings,
     getLatestAssistantContent,
+    refreshTurnHistory,
   } =
     useComposerState();
   const [selectedBrowserElements, setSelectedBrowserElements] = useState<
@@ -341,7 +344,11 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     if (!targetThreadId) throw new Error("Goal 目标会话缺少 main Thread 身份");
     await runGoalMutation(
       () => updateGoal(
-        { objective, status: "active", replace: true },
+        {
+          objective, status: "active", replace: true,
+          expected_control_revision: targetSession.session_id === state.currentSession?.session_id
+            ? state.currentGoalControlRevision : 0,
+        },
         { sessionId: targetSession.session_id, threadId: targetThreadId, workspaceId: targetWorkspaceId },
       ),
       t("composer.goalStarted"),
@@ -352,14 +359,14 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     if (!visibleGoal || visibleGoal.status !== "active") {
       throw new Error(t("composer.goalPauseInvalid"));
     }
-    await runGoalMutation(() => updateGoal({ status: "paused" }), t("composer.goalPaused"));
+    await runGoalMutation(() => updateGoal({ status: "paused", expected_control_revision: visibleGoal.control_revision }), t("composer.goalPaused"));
   };
 
   const resumeGoal = async () => {
     if (!visibleGoal || !goalCanResume(visibleGoal.status)) {
       throw new Error(t("composer.goalResumeInvalid"));
     }
-    await runGoalMutation(() => updateGoal({ status: "active" }), t("composer.goalResumed"));
+    await runGoalMutation(() => updateGoal({ status: "active", expected_control_revision: visibleGoal.control_revision }), t("composer.goalResumed"));
   };
 
   const clearCurrentGoal = async (requireConfirmation: boolean) => {
@@ -377,7 +384,10 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
         return;
       }
     }
-    await runGoalMutation(clearGoal, t("composer.goalCleared"));
+    await runGoalMutation(() => clearGoal({
+      sessionId: visibleGoal.session_id, threadId: visibleGoal.thread_id,
+      workspaceId: currentWorkspaceId,
+    }, visibleGoal.control_revision), t("composer.goalCleared"));
   };
 
   const runGoalCommand = (args: string) => {
@@ -513,6 +523,10 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
     ).catch((error: unknown) => {
       if (inFlightSubmissionRef.current === submission) {
         inFlightSubmissionRef.current = null;
+      }
+      if (error instanceof MessageSubmissionUnknownError || error instanceof MessageSubmissionRejectedError) {
+        if (currentScopeKeyRef.current === submission.scopeKey) setAttachmentError(error.message);
+        return;
       }
       if (currentScopeKeyRef.current === submission.scopeKey) {
         // 只填空输入：发送在途期间用户可能已经写下下一条内容，失败回填绝不能
@@ -756,6 +770,10 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
   return (
     <>
       <footer className="composer">
+        <MessageSubmissionRecovery port={state.apiPort ?? DEFAULT_BACKEND_PORT}
+          owner={currentWorkspaceId && currentSessionId && (threadId ?? state.currentSession?.thread_id)
+            ? { workspaceKey: currentWorkspaceId, sessionId: currentSessionId, threadId: (threadId ?? state.currentSession!.thread_id)! } : null}
+          onAccepted={refreshTurnHistory} />
         <div className="composer-surface new-chat-input-container">
           <div className="new-chat-input-area">
             <div className="composer-copy sessions-chat-editor">
@@ -813,6 +831,11 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
               {state.goalError && currentSessionId ? (
                 <div className="composer-attachment-error" role="alert">
                   {t("composer.syncGoalFailed", state.goalError)}
+                </div>
+              ) : null}
+              {state.sessionExecutionSyncError && currentSessionId ? (
+                <div className="composer-attachment-error" role="alert">
+                  {t("composer.syncExecutionFailed", state.sessionExecutionSyncError)}
                 </div>
               ) : null}
               {selectedBrowserElements.length > 0 ? (
@@ -959,6 +982,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
             () => updateGoal({
               objective,
               status: goalEditStatus(visibleGoal.status),
+              expected_control_revision: visibleGoal.control_revision,
             }),
             t("composer.goalUpdated"),
           );

@@ -3,6 +3,7 @@ export {
   decodeJsonSseData,
   defineSseEvent,
   parseSseFrameBlock,
+  SseProtocolError,
 } from "../../../../shared/sse.js";
 export type {
   ConsumeSseResponseOptions,

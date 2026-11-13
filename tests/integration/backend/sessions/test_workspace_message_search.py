@@ -29,6 +29,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     _child,
     _session,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 
 ENDPOINT = "/api/v1/sessions/history/search"
 
@@ -102,7 +103,7 @@ async def test_unified_provider_preserves_literal_body_cursor_and_original_error
     # 真实执行推进历史版本；统一入口仍返回原 owner 的冲突代码。
     source = await query(query="真实编译图回复")
     cursor = source.json()["data"]["messages"]["cursor"]
-    submitted = await history_client.post(f"{base}/{main}/messages", json={"message": {"content": "推进历史"}, "run": {}})
+    submitted = await history_client.post(f"{base}/{main}/messages", json=with_message_run_operation_id({"message": {"content": "推进历史"}, "run": {}}))
     assert submitted.status_code == 200, submitted.text
     job = runtime_case.runner.container.job_service._jobs[submitted.json()["data"]["job_id"]]
     await asyncio.wait_for(asyncio.shield(job.task), 20)
@@ -228,7 +229,7 @@ async def test_workspace_search_rejects_changed_query_thread_catalog_and_history
     assert page["cursor"]
     wrong = await workspace_query(json={**query, "query": "其它词", "cursor": page["cursor"]})
     assert wrong.status_code == 400, wrong.text
-    submitted = await history_client.post(f"{base}/{main}/messages", json={"message": {"content": "新正文"}, "run": {}})
+    submitted = await history_client.post(f"{base}/{main}/messages", json=with_message_run_operation_id({"message": {"content": "新正文"}, "run": {}}))
     assert submitted.status_code == 200, submitted.text
     job = runtime_case.runner.container.job_service._jobs[submitted.json()["data"]["job_id"]]
     await asyncio.wait_for(asyncio.shield(job.task), 20)

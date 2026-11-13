@@ -9,6 +9,7 @@ import { flushSessionStreamEventBatch } from "../sessionEventStream/batchUpdates
 import { refreshWorkspaceSessionList } from "../sessionEventStream/sessionRefresh";
 import {
   apiSuccessResponse,
+  catalogReadResponse,
   catalogChildrenResponse,
   apiErrorResponse,
   installGatewayFetch,
@@ -354,9 +355,10 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
       },
     };
     const refreshedParents: Array<string | null> = [];
-    installGatewayFetch(({ path, method, url }) => {
+    installGatewayFetch((request) => {
+      const { path, method, url } = request;
       if (path === `/api/v1/session-catalog/breadcrumb/${sesB.session_id}`) {
-        return apiSuccessResponse({
+        return catalogReadResponse(request, {
           revision: "catalog-revision-3",
           catalog_revision: 3,
           items: [
@@ -386,7 +388,9 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
         });
       }
       if (path === "/api/v1/session-catalog/children" && method === "GET") {
-        const parentNodeId = new URL(url, "http://localhost").searchParams.get("parent_node_id");
+        const params = new URL(url, "http://localhost").searchParams;
+        expect(params.get("minimum_catalog_revision")).toBe("4");
+        const parentNodeId = params.get("parent_node_id");
         refreshedParents.push(parentNodeId);
         return catalogChildrenResponse("catalog-revision-4", [], parentNodeId, 4);
       }
@@ -453,15 +457,16 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
       settlement: "repair_required", errorCode: "delete_settlement_repair_required",
       errorDetail: "日期目录隔离失败",
     }) });
-    installGatewayFetch(({ path }) => {
-      if (path.endsWith(`/breadcrumb/${current.session_id}`)) return apiSuccessResponse({
+    installGatewayFetch((request) => {
+      const { path } = request;
+      if (path.endsWith(`/breadcrumb/${current.session_id}`)) return catalogReadResponse(request, {
         revision: "catalog-revision-3", catalog_revision: 3, items: [{
           node_id: current.session_id, kind: "session", name: current.title,
           parent_node_id: null, session_id: current.session_id, has_children: false,
           node_revision: 2, state: "active", session: current,
         }],
       });
-      if (path === "/api/v1/session-catalog/children") return apiSuccessResponse({
+      if (path === "/api/v1/session-catalog/children") return catalogReadResponse(request, {
         parent_node_id: null, catalog_revision: 4, revision: "catalog-revision-4",
         items: [], cursor: null, total: 0, consistency_warning: null,
       });
@@ -491,8 +496,9 @@ describe("会话生命周期写动作的竞态与失败补偿", () => {
         ...outbox.runtime,
         waitForTerminal: async () => { throw terminalError; },
       };
-      installGatewayFetch(({ path }) => {
-        if (path.endsWith(`/breadcrumb/${current.session_id}`)) return apiSuccessResponse({
+      installGatewayFetch((request) => {
+        const { path } = request;
+        if (path.endsWith(`/breadcrumb/${current.session_id}`)) return catalogReadResponse(request, {
           revision: "catalog-revision-3", catalog_revision: 3, items: [{
             node_id: current.session_id, kind: "session", name: current.title,
             parent_node_id: null, session_id: current.session_id, has_children: false,

@@ -19,7 +19,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 - fixture 沿当前文件隔离
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 
 @pytest.fixture(autouse=True)
@@ -50,9 +50,9 @@ async def test_model_tools_reopen_native_directory_without_registration(communic
     first_call, = await case.plan(session, [_tool("ls", {"path": str(external)}, "call_native_ls")])
     listing_call = first_call + ":tool-call:call_native_ls"
     case.replay.control.arm(listing_call, "test.tool_result.committed")
-    accepted = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "native-directory-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     try:
         await asyncio.to_thread(case.replay.control.acknowledged, listing_call, "test.tool_result.committed", 30)

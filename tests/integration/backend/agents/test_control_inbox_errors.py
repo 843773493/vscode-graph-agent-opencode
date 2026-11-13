@@ -30,6 +30,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import new_message_operation_id
 
 
 @pytest.mark.parametrize("fault", ["shape", "session", "command"])
@@ -65,7 +66,7 @@ async def test_control_state_rejection_keeps_locations_out_of_execution_records(
 
     caplog.set_level(logging.ERROR)
     session = await container.session_service.create(SessionCreateRequest(title="控制状态拒绝"))
-    request = MessageRunRequest(message=MessageCreateRequest(content="验证控制状态错误"), run=RunOptions())
+    request = MessageRunRequest(message=MessageCreateRequest(content="验证控制状态错误"), run=RunOptions(), operation_id=new_message_operation_id())
     with monkeypatch.context() as failure:
         failure.setattr(runner, "ports", replace(runner.ports, control_inbox_state_path=corrupt_state))
         accepted = await container.session_orchestrator.create_message(session.session_id, request)

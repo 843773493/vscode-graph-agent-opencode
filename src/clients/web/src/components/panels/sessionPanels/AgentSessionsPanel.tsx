@@ -112,7 +112,6 @@ interface AgentSessionsPanelProps {
     deletedCurrentSession: boolean,
   ) => Promise<void>;
   onInvalidateSessionCatalog: (workspaceId: string) => void;
-  catalogSyncKeys: ReadonlyMap<string, string>;
   catalogRefreshVersions: ReadonlyMap<string, number>;
   sessionCatalogOutboxRuntime?: SessionCatalogOutboxRuntime | null;
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
@@ -170,7 +169,6 @@ export default function AgentSessionsPanel({
   onCreateSessionFolder,
   onSessionFolderDeleted,
   onInvalidateSessionCatalog,
-  catalogSyncKeys,
   catalogRefreshVersions,
   sessionCatalogOutboxRuntime,
   sessionCatalogOutboxSnapshot,
@@ -509,7 +507,6 @@ export default function AgentSessionsPanel({
                 onRefreshWorkspaceSessions={onRefreshWorkspaceSessions}
                 onCreateSessionInFolder={onCreateSessionInFolder}
                 onSessionFolderDeleted={onSessionFolderDeleted}
-                catalogSyncKeys={catalogSyncKeys}
                 catalogRefreshVersions={catalogRefreshVersions}
                 sessionCatalogOutboxRuntime={sessionCatalogOutboxRuntime}
                 sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}

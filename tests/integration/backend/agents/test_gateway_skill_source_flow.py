@@ -22,6 +22,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.services.orchestration.session_subagent_service import _derive_delegation_id
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.ports import integration_port_block_for_file
@@ -92,10 +93,10 @@ def scripted_model(request: pytest.FixtureRequest) -> Iterator[ModelState]:
 
 
 async def _job(client: httpx.AsyncClient, session_id: str) -> dict:
-    response = await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    response = await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": "继续验证已登记的 Skill 来源"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     job_id = response.json()["data"]["job_id"]
     return await _wait_job(client, job_id)
@@ -252,10 +253,10 @@ async def test_gateway_authenticated_raw_sources_drive_frozen_skill_and_restart(
             calls = state.plan(session_id, thread_id, _skill_reply("call_gateway_skill", tracked=True),
                                _text_reply("GATEWAY_SKILL_OK"))
             state.control.arm(calls[0], "model.response_ready")
-            accepted = await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+            accepted = await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
                 "message": {"content": "继续验证已登记的 Skill 来源"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            })
+            }))
             assert accepted.status_code == 200, accepted.text
             try:
                 await asyncio.to_thread(state.control.acknowledged, calls[0], "model.response_ready")
@@ -504,10 +505,10 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
                 "function": {"name": "task", "arguments": json.dumps({"description": "COLD_CHILD_SKILL_TASK：显式加载 Gateway Skill 并返回结果。"})},
             }]}, "tool_calls"))[0]
             control.arm(first_call, "model.response_ready")
-            accepted = await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+            accepted = await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
                 "message": {"content": "创建独立子线程并验证 Gateway Skill 来源"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            }, headers={"X-Request-ID": "request-cold-child-original"})
+            }), headers={"X-Request-ID": "request-cold-child-original"})
             assert accepted.status_code == 200, accepted.text
             request_id = accepted.headers["X-Request-ID"]
             assert request_id == accepted.json()["request_id"] == "request-cold-child-original"

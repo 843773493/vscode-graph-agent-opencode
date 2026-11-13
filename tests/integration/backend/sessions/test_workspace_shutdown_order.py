@@ -44,6 +44,7 @@ from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     mounted_case as mounted_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import new_message_operation_id
 
 
 def _causes(error: BaseException):
@@ -121,7 +122,7 @@ async def test_backend_shutdown_preserves_dependencies_and_retries_original_owne
                 _plan_model_call(replay, container, session.session_id, tid)
                 accepted = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
                     message=MessageCreateRequest(content="使用上传文件", attachments=[upload(b"shutdown original")]),
-                    run=RunOptions(),
+                    run=RunOptions(), operation_id=new_message_operation_id(),
                 ))
                 job = container.job_service._jobs[accepted.job_id]
                 await asyncio.wait_for(asyncio.shield(job.task), 30)

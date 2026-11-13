@@ -8,6 +8,7 @@ from app.domain.itemized.execution_admission import (
     ExecutionBinding,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueRecord
 from app.schemas.internal_v2.job import (
     JobControlRequest,
     JobControlResponseDTO,
@@ -39,6 +40,8 @@ class JobServiceProtocol(Protocol):
     async def list(self, session_id: str | None = None) -> list[JobDTO]: ...
 
     async def get(self, job_id: str) -> JobDTO: ...
+
+    async def submission_dispatch(self, record: ExecutionQueueRecord) -> JobDispatchSnapshotDTO: ...
 
     def get_execution_binding(self, job_id: str) -> ExecutionBinding: ...
 

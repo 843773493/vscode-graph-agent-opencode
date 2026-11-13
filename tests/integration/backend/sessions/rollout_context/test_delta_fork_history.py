@@ -49,6 +49,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runner_case,
     runtime_case,
 )
+from tests.support.api_helpers import new_message_operation_id
 
 __all__ = [
     "fork_context", "fork_gateway_request_context", "production_fork_container",
@@ -166,7 +167,7 @@ async def test_product_graph_history_selector_is_read_only_and_preserves_executi
     first_messages = None
     for content in ("历史第一轮", "历史第二轮"):
         result = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
-            message=MessageCreateRequest(content=content), run=RunOptions(),
+            message=MessageCreateRequest(content=content), run=RunOptions(), operation_id=new_message_operation_id(),
         ))
         accepted.append(result)
         task = jobs._jobs[result.job_id].task
@@ -217,7 +218,7 @@ async def test_product_graph_history_selector_is_read_only_and_preserves_executi
         assert (rollout / "rollout.jsonl").read_bytes() == frozen_jsonl
     assert len(case.model_requests) == 2
     successor = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
-        message=MessageCreateRequest(content="历史查看后的第三轮"), run=RunOptions(),
+        message=MessageCreateRequest(content="历史查看后的第三轮"), run=RunOptions(), operation_id=new_message_operation_id(),
     ))
     task = jobs._jobs[successor.job_id].task
     assert task is not None

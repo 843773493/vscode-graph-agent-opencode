@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.http_server import running_http_server
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -328,7 +329,7 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
             await client.post(
                 f"/api/v1/sessions/{session_id}/messages",
                 headers={**workspace_headers, "X-Request-ID": send_request_id},
-                json={
+                json=with_message_run_operation_id({
                     "message": {"content": "PROVIDER_403_REQUEST_MARKER"},
                     "run": {
                         "mode": "single_agent",
@@ -338,7 +339,7 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
                         "max_steps": 1,
                         "timeout_seconds": 60,
                     },
-                },
+                }),
             ),
             expected_request_id=send_request_id,
         )

@@ -115,6 +115,14 @@ export function bootstrap(
   };
 }
 
+export function emptyPendingResponse(threadId = THREAD_ID): Response {
+  return Response.json({
+    code: 0, message: "ok", request_id: "req_history_pending",
+    data: { session_id: SESSION_ID, thread_id: threadId, active_job_id: null,
+      requests: [], snapshot_version: 1 },
+  });
+}
+
 export function emptyHistoryPageResponse(
   requestId: string,
   projectionEpoch = 1,
@@ -143,12 +151,14 @@ export function appState(): AppState {
     currentSessionWorkspaceId: WORKSPACE_KEY,
     eventQueuesBySession: new Map(),
     pendingConversations: new Map(),
+    pendingQueueVersions: new Map(),
     activeJobIdsBySession: new Map(),
     unreadSessionKeys: new Set(),
     sessionAttachmentSummaries: new Map(),
     turnTimelinesBySession: new Map(),
     sessionHistoryReloadNonce: 0,
     status: "",
+    sessionExecutionSyncError: null,
   } as AppState;
 }
 

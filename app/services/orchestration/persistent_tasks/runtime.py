@@ -32,7 +32,7 @@ from app.core.trace_middleware import (
 )
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import Event
-from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
+from app.schemas.internal_v2.goal import GoalStatus, SessionGoalStateDTO
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,
     PersistentTaskRunDTO,
@@ -177,7 +177,7 @@ class PersistentTaskRuntime:
         self._application_work.setdefault(key, deque()).append((work, done))
         self._wake.set()
 
-    async def request_goal(self, session_id: str, *, objective: SessionGoalDTO | None = None) -> None:
+    async def request_goal(self, session_id: str, *, objective: SessionGoalStateDTO | None = None) -> None:
         self.assert_healthy()
         done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._queue_goal(GoalWork(session_id, "objective" if objective is not None else "idle", goal=objective), done)

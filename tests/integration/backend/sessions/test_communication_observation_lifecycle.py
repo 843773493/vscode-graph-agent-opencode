@@ -67,7 +67,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     CommunicationCase,
     _completed,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.harness import control_request
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 from tests.support.session_navigation.http_operations import submit_navigation_operation
@@ -549,9 +549,9 @@ async def test_real_http_cursor_errors_gateway_source_and_deleted_page(
     source_id = await create_session(case.client, "HTTP observation source")
     target_id = await create_session(case.client, "HTTP observation target")
     await case.plan(target_id, [{"content": "冻结的目标回答"}])
-    seeded = await case.client.post(f"/api/v1/sessions/{target_id}/messages", json={
+    seeded = await case.client.post(f"/api/v1/sessions/{target_id}/messages", json=with_message_run_operation_id({
         "message": {"content": "目标原始问题"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert seeded.status_code == 200, seeded.text
     await _completed(case.client, seeded.json()["data"]["job_id"])
     source_thread = (await case.client.get(f"/api/v1/sessions/{source_id}/main-thread")).json()["data"]["thread_id"]

@@ -15,6 +15,14 @@ import type {
 } from "../../types/backend";
 import type { LLMRequestLogReferenceDTO, LLMRequestLogLocationDTO, TraceLocationDTO, TraceReferenceDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import type { TraceEvent } from "../../types/backend";
+import { HttpRequestError } from "../http";
+import {
+  freezeMessageSubmission, loadMessageSubmissions, rejectMessageSubmission, releaseMessageSubmission,
+  type FrozenMessageSubmission, type MessageSubmissionOwner,
+} from "../../state/messageSubmissions/storage";
+import type { MessageSubmissionResultDTO as GeneratedSubmissionResult } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import { getWorkspaceRawFileBlob } from "../workspaceFilesystem";
+type MessageSubmissionResult = Omit<GeneratedSubmissionResult, "accepted"> & { accepted?: MessageRunAccepted | null };
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
   normalizePageResult,
@@ -253,6 +261,13 @@ function validateAcceptedMessage(accepted: MessageRunAccepted, action: string): 
   if (typeof accepted.thread_id !== "string" || !accepted.thread_id) {
     throw new Error(`${action}响应缺少 thread_id`);
   }
+  const dispatch = accepted.dispatch;
+  if (!dispatch || dispatch.thread_id !== accepted.thread_id || dispatch.job_id !== accepted.job_id
+    || dispatch.job_status !== accepted.status || !dispatch.session_id
+    || typeof dispatch.queue_snapshot_version !== "number" || !Number.isSafeInteger(dispatch.queue_snapshot_version)
+    || dispatch.queue_snapshot_version < 0) {
+    throw new Error(`${action}响应缺少对应 Job／Thread 的权威队列水位`);
+  }
 }
 
 export async function sendMessage(
@@ -277,7 +292,90 @@ export async function sendMessage(
     ),
   );
   validateAcceptedMessage(accepted, "发送消息");
+  if (accepted.operation_id !== payload.operation_id || accepted.dispatch.session_id !== sessionId
+    || (threadId !== undefined && accepted.thread_id !== threadId)) {
+    throw new Error("消息接受结果与原操作身份或 Thread 不一致");
+  }
   return accepted;
+}
+
+export async function queryMessageSubmission(port: number, owner: MessageSubmissionOwner, operationId: string, signal?: AbortSignal) {
+  const result = unwrapApiData(await requestJson<APIResponse<MessageSubmissionResult>>(port,
+    `/api/v1/sessions/${encodeURIComponent(owner.sessionId)}/threads/${encodeURIComponent(owner.threadId)}/message-submissions/${encodeURIComponent(operationId)}`,
+    { headers: workspaceHeader(owner.workspaceKey), signal },
+  ));
+  if (result.session_id !== owner.sessionId || result.thread_id !== owner.threadId || result.operation_id !== operationId) {
+    throw new Error("消息操作查询返回了另一归属");
+  }
+  if (result.status === "accepted") {
+    if (!result.accepted) throw new Error("已接收的消息操作缺少权威身份");
+    validateAcceptedMessage(result.accepted, "消息操作查询");
+    if (result.accepted.operation_id !== operationId || result.accepted.thread_id !== owner.threadId
+      || result.accepted.dispatch.session_id !== owner.sessionId) {
+      throw new Error("消息操作回执身份不一致");
+    }
+  } else if (result.status !== "unknown" || result.accepted) {
+    throw new Error("消息操作查询状态非法");
+  }
+  return result;
+}
+
+export class MessageSubmissionUnknownError extends Error {
+  constructor(readonly operationId: string, cause: unknown) {
+    super(`消息接收结果尚未确认，已保留原输入：${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
+}
+
+export class MessageSubmissionRejectedError extends Error {
+  constructor(readonly operationId: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
+/** 只按冻结输入提交；网络失败先查原身份，不把队列缺项当作未接收。 */
+export async function submitFrozenMessage(port: number, record: FrozenMessageSubmission): Promise<MessageRunAccepted> {
+  if (record.state === "rejected") throw new MessageSubmissionRejectedError(record.request.operation_id, record.error ?? "消息已被拒绝，请编辑后重新提交");
+  const { owner, request } = record;
+  let accepted: MessageRunAccepted;
+  try {
+    accepted = await sendMessage(port, owner.sessionId, request, owner.workspaceKey, owner.threadId);
+  } catch (error) {
+    let result: Awaited<ReturnType<typeof queryMessageSubmission>>;
+    try {
+      result = await queryMessageSubmission(port, owner, request.operation_id);
+    } catch (queryError) {
+      throw new MessageSubmissionUnknownError(request.operation_id, queryError);
+    }
+    if (result.status === "accepted" && result.accepted) accepted = result.accepted;
+    else if (error instanceof HttpRequestError && [400, 422].includes(error.status)) {
+      // 消息入口在准入前拒绝且原身份查询未接收，才允许用户编辑为新操作。
+      try { await rejectMessageSubmission(record, error.message); }
+      catch (storageError) { throw new MessageSubmissionUnknownError(request.operation_id, storageError); }
+      throw new MessageSubmissionRejectedError(request.operation_id, error);
+    } else throw new MessageSubmissionUnknownError(request.operation_id, error);
+  }
+  // 接收已确定时，清理失败仍按原身份恢复，不能让 Composer 生成新操作重发。
+  try { await releaseMessageSubmission(record); }
+  catch (error) { throw new MessageSubmissionUnknownError(request.operation_id, error); }
+  return accepted;
+}
+
+/** 刷新只对账原操作；未知结果保留，不用新身份补发，拒绝项不自动发送。 */
+export async function reconcileMessageSubmissions(port: number, owner: MessageSubmissionOwner, signal?: AbortSignal) {
+  const records = await loadMessageSubmissions(owner);
+  signal?.throwIfAborted();
+  const results: Array<{ record: FrozenMessageSubmission; accepted: MessageRunAccepted | null }> = [];
+  for (const record of records) {
+    signal?.throwIfAborted();
+    if (record.state === "rejected") { results.push({ record, accepted: null }); continue; }
+    const result = await queryMessageSubmission(port, owner, record.request.operation_id, signal);
+    signal?.throwIfAborted();
+    if (result.status === "accepted" && result.accepted) {
+      await releaseMessageSubmission(record);
+      results.push({ record, accepted: result.accepted });
+    } else results.push({ record, accepted: null });
+  }
+  return results;
 }
 
 export async function sendUserMessage(
@@ -289,12 +387,29 @@ export async function sendUserMessage(
   workspaceId?: string | null,
   deliveryPolicy: DeliveryPolicy = "after_turn",
   threadId?: string,
+  operationId = `op_${crypto.randomUUID().replaceAll("-", "")}`,
 ): Promise<MessageRunAccepted> {
+  if (!workspaceId || !threadId) throw new Error("可靠消息提交缺少固定工作区或 Thread 身份");
+  // 原生文件引用仍按读取时内容处理；这份字节只保护当前尚未确认的提交，不建立文件版本库。
+  const frozenAttachments: AttachmentRef[] = [];
+  for (const attachment of structuredClone(attachments)) {
+    if (attachment.data_url?.startsWith("data:")) { frozenAttachments.push({ ...attachment }); continue; }
+    if (attachment.file_id.startsWith("blob:") || attachment.data_url) throw new Error("消息附件缺少可恢复的原始输入");
+    const blob = await getWorkspaceRawFileBlob(port, attachment.file_id, workspaceId);
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("消息附件读取未返回字节输入"));
+      reader.onerror = () => reject(reader.error ?? new Error("消息附件读取失败"));
+      reader.readAsDataURL(blob);
+    });
+    frozenAttachments.push({ ...attachment, data_url: dataUrl });
+  }
   const payload: MessageRunRequest = {
+    operation_id: operationId,
     message: {
       role: "user",
       content,
-      attachments,
+      attachments: frozenAttachments,
       metadata: {},
     },
     run: {
@@ -306,7 +421,8 @@ export async function sendUserMessage(
     },
   };
 
-  return sendMessage(port, sessionId, payload, workspaceId, threadId);
+  const frozen = await freezeMessageSubmission({ workspaceKey: workspaceId, sessionId, threadId }, payload);
+  return submitFrozenMessage(port, frozen);
 }
 
 export async function replayMessageTurn(

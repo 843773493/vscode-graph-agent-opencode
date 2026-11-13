@@ -71,6 +71,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
 from app.services.mapping.itemized.canonical_langchain import validate_summary_source
 from app.services.mapping.itemized.provider_request import project_user_message_content
+from tests.support.api_helpers import new_message_operation_id
 
 BODY = b"attachment survives until canonical acceptance"
 
@@ -352,7 +353,7 @@ async def test_message_http_retry_accepts_same_attachment_after_failed_upload(
             file_id="inline:retry", name="retry.txt", content_type="text/plain",
             data_url="data:text/plain;base64," + base64.b64encode(body).decode(),
         )],
-    )).model_dump(mode="json", by_alias=True)
+    ), operation_id=new_message_operation_id()).model_dump(mode="json", by_alias=True)
     def fail_sync(operation_id, phase, *, details=None):
         if phase == "attachment.ingest." + boundary:
             raise OSError("注入上传失败")
@@ -467,7 +468,7 @@ async def test_thread_delete_drains_message_before_releasing_real_attachment(
             session_id,
             MessageRunRequest(run=RunOptions(), message=MessageCreateRequest(
                 role="user", content="读取附件", attachments=[attachment],
-            )),
+            ), operation_id=new_message_operation_id()),
         )
     else:
         operation = case.orchestrator.dispatch_prepared_message(

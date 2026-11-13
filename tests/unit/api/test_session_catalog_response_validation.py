@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass
 from unittest.mock import Mock
 
@@ -20,10 +21,14 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
+from app.core.session_catalog_store.queries import CatalogReadRange
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.session_navigation import SessionCatalogPageDTO
 from app.services.business.search.providers import register_navigation_search
 from app.services.business.search.service import WorkspaceSearchService
+from app.services.business.session_navigation.catalog_query import (
+    catalog_projection_revision,
+)
 from app.services.business.session_navigation.read_service import (
     SessionCatalogReadService,
 )
@@ -159,9 +164,13 @@ def test_real_read_service_response_retries_after_source_metadata_repair(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # resolver 只提供局部查询元数据；快照、分页与响应装配使用真实目录读链路。
-    resolver = Mock(spec=SessionCatalogPathResolver, revision=1)
+    resolver = Mock(spec=SessionCatalogPathResolver, revision=1, workspace_id="workspace-validation")
     resolver.catalog_snapshot.return_value = ({native: native}, [])
-    sessions = Mock(spec=SessionService, path_resolver=resolver)
+    scope = CatalogReadRange({native: native}, [], {}, frozenset(), frozenset())
+    resolver.catalog_store.read_catalog_children.return_value = scope
+    resolver.project_catalog_range.return_value = []
+    sessions = Mock(spec=SessionService, path_resolver=resolver, workspace_id="workspace-validation", catalog_projection_revision="config-test")
+    sessions.catalog_projection.side_effect = lambda: nullcontext("config-test")
     service = SessionCatalogReadService(session_service=sessions)
     catalog_case.application.dependency_overrides[get_session_catalog_service] = lambda: service
     search_service = _search_service(service)
@@ -180,15 +189,25 @@ def test_real_read_service_response_retries_after_source_metadata_repair(
     assert len(diagnostics) == 1
     # 修复同一来源，下一次读取须重建正确快照；不靠清缓存或重造服务掩盖问题。
     resolver.catalog_snapshot.return_value = (1, [])
+    resolver.catalog_store.read_catalog_children.return_value = CatalogReadRange(1, [], {}, frozenset(), frozenset())
     repaired = _request(catalog_case.client, route)
     assert repaired.status_code == 200, repaired.text
     expected: dict[str, object] = {
-        "revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "revision": catalog_projection_revision(1, "config-test"),
         "catalog_revision": 1,
         "items": [], "cursor": None, "total": 0,
     }
     if route != "search":
-        expected.update(parent_node_id=None, consistency_warning=None)
-    assert repaired.json() == {"code": 0, "message": "ok", "data": expected, "request_id": REQUEST_ID}
+        sync = repaired.json()["data"]["sync"]
+        assert sync.pop("authoritative_confirmed_at")
+        expected.update(parent_node_id=None, consistency_warning=None, sync={
+            "gateway_id": "gateway_789f146c159aa74461af8dacca7341ca", "workspace_id": "workspace-validation",
+            "source": "authoritative", "stale": False, "error": None,
+        })
+        actual = repaired.json()
+        actual["data"]["sync"].pop("authoritative_confirmed_at")
+    else:
+        actual = repaired.json()
+    assert actual == {"code": 0, "message": "ok", "data": expected, "request_id": REQUEST_ID}
     assert repaired.headers["X-Request-ID"] == REQUEST_ID
-    assert resolver.catalog_snapshot.call_count == 2
+    assert (resolver.catalog_snapshot.call_count if route == "search" else resolver.catalog_store.read_catalog_children.call_count) == 2

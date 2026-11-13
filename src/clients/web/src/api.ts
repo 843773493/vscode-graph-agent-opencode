@@ -78,6 +78,7 @@ export {
 export { untrackSessionSkill } from "./api/session/sessionSkillTracking";
 export {
   clearSessionGoal,
+  getSessionGoalOperation,
   getSessionGoal,
   updateSessionGoal,
 } from "./api/session/sessionGoals";

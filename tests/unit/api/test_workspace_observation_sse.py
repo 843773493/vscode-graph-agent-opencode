@@ -82,28 +82,54 @@ async def read_envelope(stream):
     return json.loads(frame.split("data: ", 1)[1])
 
 
-async def test_idle_navigation_sends_logical_heartbeat_without_reading_snapshot(monkeypatch):
+async def test_idle_navigation_confirms_original_snapshot_on_heartbeat(monkeypatch):
     closed = asyncio.Event()
+    snapshot = NavigationSnapshotDTO(workspace_id="workspace", catalog_revision=7, event_seq_watermark=2, generation=7, projection_revision="old")
     reads = []
 
     async def changes():
         try:
-            reads.append("initial")
-            yield NavigationSnapshotDTO(workspace_id="workspace", catalog_revision=7, event_seq_watermark=2, generation=7)
+            yield snapshot
             await asyncio.Event().wait()
         finally:
             closed.set()
 
+    def read():
+        reads.append(snapshot.catalog_revision)
+        return snapshot.model_copy()
+
     monkeypatch.setattr(api, "SSE_HEARTBEAT_INTERVAL_SECONDS", 0.01)
-    stream = api._stream_navigation_changes(SimpleNamespace(operations=SimpleNamespace(changes=changes)))
+    stream = api._stream_navigation_changes(SimpleNamespace(operations=SimpleNamespace(changes=changes), navigation_snapshot=read))
     try:
         assert (await anext(stream)).startswith("event: session_navigation\n")
+        snapshot.catalog_revision = 8
         assert await asyncio.wait_for(anext(stream), 0.5) == ": heartbeat\n\n"
+        frame = await asyncio.wait_for(anext(stream), 0.5)
+        assert json.loads(frame.split("data: ", 1)[1])["catalog_revision"] == 8
+        snapshot.projection_revision = "new"
         assert await asyncio.wait_for(anext(stream), 0.5) == ": heartbeat\n\n"
-        assert reads == ["initial"]
+        frame = await asyncio.wait_for(anext(stream), 0.5)
+        assert json.loads(frame.split("data: ", 1)[1])["projection_revision"] == "new"
+        assert reads == [7, 8, 8]
     finally:
         await stream.aclose()
     assert closed.is_set()
+
+
+async def test_navigation_commit_keeps_frame_when_scalar_version_is_unchanged():
+    snapshot = NavigationSnapshotDTO(workspace_id="workspace", catalog_revision=7, event_seq_watermark=2, generation=7)
+
+    async def changes():
+        yield snapshot
+        yield snapshot
+
+    service = SimpleNamespace(operations=SimpleNamespace(changes=changes), navigation_snapshot=lambda: snapshot)
+    stream = api._stream_navigation_changes(service)
+    try:
+        first = await anext(stream)
+        assert await anext(stream) == first
+    finally:
+        await stream.aclose()
 
 
 async def test_observations_keep_independent_cursors_and_original_frames(

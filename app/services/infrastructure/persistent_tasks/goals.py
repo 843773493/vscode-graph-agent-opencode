@@ -11,13 +11,21 @@ from typing import TYPE_CHECKING
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store import SessionCreationRecord
 from app.domain.itemized.hashing import sha256_jcs
-from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
+from app.schemas.internal_v2.goal import (
+    GoalStatus,
+    SessionGoalStateDTO,
+)
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 if TYPE_CHECKING:
     from contextlib import AbstractContextManager
 
 _COMMON_FIELDS = {"goal_id", "session_id", "thread_id", "created_at", "updated_at", "objective", "token_budget"}
+
+
+class GoalOperationReplayError(RuntimeError):
+    def __init__(self, result: dict[str, object]) -> None:
+        self.result = result
 
 
 class TaskGoals:
@@ -45,7 +53,7 @@ class TaskGoals:
 
     @staticmethod
     def _goal(connection: sqlite3.Connection, workspace_id: str, session_id: str,
-              thread_id: str) -> SessionGoalDTO | None:
+              thread_id: str) -> SessionGoalStateDTO | None:
         row = connection.execute(
             "SELECT t.*,d.configuration_json FROM persistent_tasks t LEFT JOIN persistent_task_definitions d "
             "ON d.task_id=t.task_id AND d.definition_revision=t.definition_revision "
@@ -59,18 +67,69 @@ class TaskGoals:
         definition = json.loads(row["configuration_json"])
         if definition.pop("type_id") != "builtin.goal" or definition.pop("version") != "1":
             raise RuntimeError("不支持的 Goal 应用定义")
-        return SessionGoalDTO.model_validate({
+        return SessionGoalStateDTO.model_validate({
             **json.loads(row["application_json"]), **definition,
             "goal_id": row["task_id"], "session_id": session_id, "thread_id": thread_id,
             "created_at": row["created_at"], "updated_at": row["updated_at"],
         })
 
-    def goal_read(self, session_id: str, *, creation: SessionCreationRecord | None = None) -> SessionGoalDTO | None:
+    @staticmethod
+    def _slot_control_revision(connection: sqlite3.Connection, workspace_id: str, session_id: str) -> int:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(CAST(json_extract(application_json,'$.control_revision') AS INTEGER)),0) "
+            "FROM persistent_tasks WHERE workspace_id=? AND owner_session_id=? AND application_type='goal'",
+            (workspace_id, session_id),
+        ).fetchone()
+        return int(row[0])
+
+    @staticmethod
+    def _slot_sync_version(connection: sqlite3.Connection, workspace_id: str, session_id: str) -> int:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(CAST(json_extract(application_json,'$.sync_version') AS INTEGER)),0) "
+            "FROM persistent_tasks WHERE workspace_id=? AND owner_session_id=? AND application_type='goal'",
+            (workspace_id, session_id),
+        ).fetchone()
+        return int(row[0])
+
+    def goal_control_revision(self, session_id: str) -> int:
+        with closing(self._store.connection()) as connection:
+            return self._slot_control_revision(connection, self.workspace_id, session_id)
+
+    def goal_sync_version(self, session_id: str) -> int:
+        with closing(self._store.connection()) as connection:
+            return self._slot_sync_version(connection, self.workspace_id, session_id)
+
+    def goal_operation(self, session_id: str, operation_id: str, request_hash: str | None = None) -> dict[str, object] | None:
+        with closing(self._store.connection()) as connection:
+            row = connection.execute(
+                "SELECT request_hash,result_json FROM session_goal_operations WHERE workspace_id=? AND session_id=? AND operation_id=?",
+                (self.workspace_id, session_id, operation_id),
+            ).fetchone()
+        if row is None:
+            return None
+        if request_hash is not None and row["request_hash"] != request_hash:
+            from app.abstractions.state_conflict import ClientStateConflictError
+
+            raise ClientStateConflictError("Goal 操作身份已绑定不同载荷")
+        return json.loads(row["result_json"])
+
+    @staticmethod
+    def _record_goal_operation(
+        connection: sqlite3.Connection, workspace_id: str, session_id: str, operation_id: str,
+        request_hash: str, result: dict[str, object], created_at: str,
+    ) -> None:
+        connection.execute(
+            "INSERT INTO session_goal_operations VALUES (?,?,?,?,?,?)",
+            (workspace_id, session_id, operation_id, request_hash,
+             json.dumps(result, ensure_ascii=False, sort_keys=True), created_at),
+        )
+
+    def goal_read(self, session_id: str, *, creation: SessionCreationRecord | None = None) -> SessionGoalStateDTO | None:
         thread_id = self._goal_thread(session_id, creation)
         with closing(self._store.connection()) as connection:
             return self._goal(connection, self.workspace_id, session_id, thread_id)
 
-    def _write_goal(self, connection: sqlite3.Connection, goal: SessionGoalDTO) -> None:
+    def _write_goal(self, connection: sqlite3.Connection, goal: SessionGoalStateDTO) -> None:
         definition = {"type_id": "builtin.goal", "version": "1", "objective": goal.objective, "token_budget": goal.token_budget}
         definition_json = json.dumps(definition, ensure_ascii=False, sort_keys=True)
         state_json = goal.model_dump_json(exclude=_COMMON_FIELDS)
@@ -102,19 +161,119 @@ class TaskGoals:
         if row is None or revision != row["definition_revision"]:
             connection.execute("INSERT INTO persistent_task_definitions VALUES (?,?,?)", (goal.goal_id, revision, definition_json))
 
-    def goal_write(self, goal: SessionGoalDTO, *, creation: SessionCreationRecord | None = None) -> None:
+    def goal_write(
+        self, goal: SessionGoalStateDTO, *, creation: SessionCreationRecord | None = None,
+        expected_control_revision: int | None = None,
+        operation: tuple[str, str, dict[str, object]] | None = None,
+        retiring_goal: SessionGoalStateDTO | None = None,
+    ) -> None:
         if goal.thread_id != self._goal_thread(goal.session_id, creation):
             raise ValueError("Goal 只能写入权威 main Thread")
         with self._transaction() as connection:
+            if operation is not None:
+                operation_id, request_hash, _ = operation
+                row = connection.execute(
+                    "SELECT request_hash,result_json FROM session_goal_operations WHERE workspace_id=? AND session_id=? AND operation_id=?",
+                    (self.workspace_id, goal.session_id, operation_id),
+                ).fetchone()
+                if row is not None:
+                    if row["request_hash"] != request_hash:
+                        from app.abstractions.state_conflict import (
+                            ClientStateConflictError,
+                        )
+
+                        raise ClientStateConflictError("Goal 操作身份已绑定不同载荷")
+                    raise GoalOperationReplayError(json.loads(row["result_json"]))
+            current_revision = self._slot_control_revision(connection, self.workspace_id, goal.session_id)
+            if expected_control_revision is not None and current_revision != expected_control_revision:
+                from app.abstractions.state_conflict import ClientStateConflictError
+
+                raise ClientStateConflictError(
+                    f"Goal 控制版本冲突: expected={expected_control_revision}, actual={current_revision}"
+                )
+            if expected_control_revision is not None and goal.control_revision not in {
+                expected_control_revision, expected_control_revision + 1
+            }:
+                raise ValueError("Goal 控制版本只能保持或从期望版本推进一次")
+            if goal.control_revision < current_revision:
+                raise RuntimeError("Goal 写入不能回退槽位控制版本")
+            if retiring_goal is not None:
+                self._write_goal(connection, retiring_goal)
             self._write_goal(connection, goal)
+            if operation is not None:
+                operation_id, request_hash, result = operation
+                self._record_goal_operation(
+                    connection, self.workspace_id, goal.session_id, operation_id,
+                    request_hash, result, goal.updated_at.isoformat(),
+                )
 
-    def goal_clear(self, session_id: str) -> bool:
+    def goal_clear_versioned(
+        self, session_id: str, expected_control_revision: int,
+        operation: tuple[str, str, dict[str, object]] | None = None,
+        settled_goal: SessionGoalStateDTO | None = None,
+    ) -> tuple[bool, int, int]:
         with self._transaction() as connection:
-            return bool(connection.execute("UPDATE persistent_tasks SET retired_at=? WHERE workspace_id=? AND owner_session_id=? "
-                                           "AND application_type='goal' AND retired_at IS NULL",
-                                           (datetime.now(UTC).isoformat(), self.workspace_id, session_id)).rowcount)
+            if operation is not None:
+                operation_id, request_hash, _ = operation
+                row = connection.execute(
+                    "SELECT request_hash,result_json FROM session_goal_operations WHERE workspace_id=? AND session_id=? AND operation_id=?",
+                    (self.workspace_id, session_id, operation_id),
+                ).fetchone()
+                if row is not None:
+                    if row["request_hash"] != request_hash:
+                        from app.abstractions.state_conflict import (
+                            ClientStateConflictError,
+                        )
 
-    def goal_list(self) -> list[SessionGoalDTO]:
+                        raise ClientStateConflictError("Goal 操作身份已绑定不同载荷")
+                    raise GoalOperationReplayError(json.loads(row["result_json"]))
+            actual = self._slot_control_revision(connection, self.workspace_id, session_id)
+            if expected_control_revision is not None and actual != expected_control_revision:
+                from app.abstractions.state_conflict import ClientStateConflictError
+
+                raise ClientStateConflictError(
+                    f"Goal 控制版本冲突: expected={expected_control_revision}, actual={actual}"
+                )
+            row = connection.execute(
+                "SELECT task_id,application_json FROM persistent_tasks WHERE workspace_id=? AND owner_session_id=? "
+                "AND application_type='goal' AND retired_at IS NULL",
+                (self.workspace_id, session_id),
+            ).fetchone()
+            if row is None:
+                if operation is not None:
+                    operation_id, request_hash, result = operation
+                    result.update({"status": "already_missing", "control_revision": actual,
+                                   "sync_version": self._slot_sync_version(connection, self.workspace_id, session_id)})
+                    self._record_goal_operation(connection, self.workspace_id, session_id, operation_id,
+                                                request_hash, result, datetime.now(UTC).isoformat())
+                return False, actual, self._slot_sync_version(connection, self.workspace_id, session_id)
+            if settled_goal is not None and (settled_goal.goal_id != row["task_id"] or settled_goal.session_id != session_id):
+                raise ValueError("冻结进度与待清除 Goal 身份不一致")
+            state = (settled_goal.model_dump(mode="json", exclude=_COMMON_FIELDS)
+                     if settled_goal is not None else json.loads(row["application_json"]))
+            state["control_revision"] = actual + 1
+            state["sync_version"] = self._slot_sync_version(connection, self.workspace_id, session_id) + 1
+            connection.execute(
+                "UPDATE persistent_tasks SET retired_at=?,application_json=?,updated_at=? WHERE task_id=?",
+                (datetime.now(UTC).isoformat(), json.dumps(state, ensure_ascii=False),
+                 datetime.now(UTC).isoformat(), row["task_id"]),
+            )
+            if operation is not None:
+                operation_id, request_hash, result = operation
+                result.update({"status": "applied", "control_revision": actual + 1,
+                               "sync_version": state["sync_version"]})
+                self._record_goal_operation(connection, self.workspace_id, session_id, operation_id,
+                                            request_hash, result, datetime.now(UTC).isoformat())
+            return True, actual + 1, state["sync_version"]
+
+    def goal_clear(self, session_id: str, *, expected_control_revision: int | None = None) -> bool:
+        if expected_control_revision is not None:
+            return self.goal_clear_versioned(session_id, expected_control_revision)[0]
+        with closing(self._store.connection()) as connection:
+            expected = self._slot_control_revision(connection, self.workspace_id, session_id)
+        return self.goal_clear_versioned(session_id, expected)[0]
+
+    def goal_list(self) -> list[SessionGoalStateDTO]:
         # 发布可见性归原 catalog；preparing、aborted、deleting 均不能被恢复调度。
         active = {node.node_id: node.main_thread_id for node in self._goal_paths().list_nodes(kind="session")
                   if node.state == "active"}
@@ -124,7 +283,7 @@ class TaskGoals:
             return [goal for row in sessions if row[0] in active
                     if (goal := self._goal(connection, self.workspace_id, row[0], active[row[0]])) is not None]
 
-    def goal_import(self, goal: SessionGoalDTO, source_hash: str, *, creation: SessionCreationRecord | None = None) -> None:
+    def goal_import(self, goal: SessionGoalStateDTO, source_hash: str, *, creation: SessionCreationRecord | None = None) -> None:
         if goal.thread_id != self._goal_thread(goal.session_id, creation):
             raise ValueError("Goal 迁移归属与权威 main Thread 不一致")
         with self._transaction() as connection:

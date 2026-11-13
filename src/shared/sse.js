@@ -2,6 +2,13 @@
  * 标准 SSE 帧解析与流消费器。这里只处理传输语义，不解释业务 DTO。
  */
 
+export class SseProtocolError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = 'SseProtocolError';
+  }
+}
+
 export function defineSseEvent(decode, handle) {
   return { decode, handle };
 }
@@ -11,8 +18,9 @@ export function decodeJsonSseData(data, frame) {
     return JSON.parse(data);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
+    throw new SseProtocolError(
       `SSE JSON 无法解析: event=${frame.event} id=${frame.id ?? ''} error=${detail}`,
+      { cause: error },
     );
   }
 }
@@ -92,12 +100,12 @@ function readStreamChunk(reader, { idleTimeoutMs, idleTimeoutError, signal }, re
 function assertEventStreamResponse(response) {
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   if (!contentType.includes('text/event-stream')) {
-    throw new Error(
+    throw new SseProtocolError(
       `SSE 响应 Content-Type 错误: ${contentType || '<missing>'}`,
     );
   }
   if (!response.body) {
-    throw new Error('SSE 响应缺少可读 body');
+    throw new SseProtocolError('SSE 响应缺少可读 body');
   }
 }
 
@@ -132,7 +140,7 @@ export async function consumeSseResponse(response, options) {
       ? options.events[frame.event]
       : options.events['*'];
     if (!definition) {
-      throw new Error(`未注册的 SSE 事件类型: ${frame.event}`);
+      throw new SseProtocolError(`未注册的 SSE 事件类型: ${frame.event}`);
     }
     definition.handle(definition.decode(frame.data, frame), frame);
   };

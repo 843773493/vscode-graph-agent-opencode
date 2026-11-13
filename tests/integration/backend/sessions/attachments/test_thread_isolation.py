@@ -27,7 +27,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 BODY = b"same bytes must remain independent uploads"
 
@@ -46,10 +46,10 @@ def state(root: Path) -> ThreadState:
 
 
 async def send(case: CommunicationCase, session: str, thread: str, text: str) -> MessageRunAccepted:
-    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{thread}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{thread}/messages", json=with_message_run_operation_id({
         "message": {"content": text, "attachments": [upload(BODY).model_dump(mode="json")]},
         "run": {"mode": "single_agent", "agent_id": "default", "delivery_policy": "after_turn"},
-    })
+    }))
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
     accepted = MessageRunAccepted.model_validate(response.json()["data"])
@@ -89,10 +89,10 @@ async def test_parallel_threads_keep_fifo_context_and_upload_identity_through_re
     case = communication_case
     session = await create_session(case.client, "Thread 并行与目录隔离")
     await case.plan(session, [{"content": "共同历史已完成"}])
-    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "共同的历史输入", "attachments": [upload(b"shared source").model_dump(mode="json")]},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     initial = MessageRunAccepted.model_validate(response.json()["data"])
     await _completed(case.client, initial.job_id)

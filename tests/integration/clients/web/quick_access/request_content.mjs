@@ -5,6 +5,7 @@ import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
 import { confirmContentCategories } from './default_interactions.mjs';
+import { newOperationId } from '../../../../support/operation_ids.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
@@ -43,7 +44,7 @@ try {
     interactions: [JSON.parse(process.env.BOXTEAM_REQUEST_SEARCH_INTERACTION)] });
   const query = '请求定位😀词';
   const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${main}/messages`,
-    { message: { content: `开头😀\n${query}，再次${query}\n结束` }, run: {} });
+    { operation_id: newOperationId(), message: { content: `开头😀\n${query}，再次${query}\n结束` }, run: {} });
   await expect.poll(async () => {
     const job = await api(`/api/v1/jobs/${accepted.job_id}`);
     if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));

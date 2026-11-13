@@ -22,6 +22,9 @@ from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationStatusPageDTO,
     NavigationSnapshotDTO,
 )
+from app.services.business.session_navigation.catalog_query import (
+    catalog_projection_revision,
+)
 from app.services.business.session_navigation.executor import NavigationMutationExecutor
 from app.services.business.session_navigation.operations_service import (
     NavigationAuthScope,
@@ -181,11 +184,6 @@ class SessionCatalogService(SessionCatalogReadService):
     def path_resolver(self) -> SessionCatalogPathResolver:
         return self._path_resolver
 
-    @property
-    def workspace_id(self) -> str:
-        """本工作区后端的权威 workspace 身份（导航 operation 幂等 scope 的一维）。"""
-        return self._path_resolver.workspace_id
-
     def _on_session_changed(self, action: str, session_id: str) -> None:
         self.invalidate()
 
@@ -329,8 +327,17 @@ class SessionCatalogService(SessionCatalogReadService):
     ) -> NavigationMutationStatusPageDTO:
         return self.operations.status(operation_ids, scope)
 
-    def navigation_snapshot(self) -> NavigationSnapshotDTO:
-        return self.operations.snapshot()
+    def navigation_snapshot(self, *, minimum_catalog_revision: int = 0) -> NavigationSnapshotDTO:
+        snapshot = self.operations.snapshot()
+        if snapshot.catalog_revision < minimum_catalog_revision:
+            raise RuntimeError(
+                "会话目录权威版本低于读取下限: "
+                f"catalog_revision={snapshot.catalog_revision}, minimum_catalog_revision={minimum_catalog_revision}"
+            )
+        snapshot.projection_revision = catalog_projection_revision(
+            snapshot.catalog_revision, self._session_service.catalog_projection_revision,
+        )
+        return snapshot
 
     def navigation_events(
         self,

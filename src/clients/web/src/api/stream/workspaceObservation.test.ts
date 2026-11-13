@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { gatewayWorkspaceKey } from "../workspaceIdentity";
 import { HttpRequestError } from "../http";
+import { SseProtocolError } from "../../sse/sseClient";
 import { streamSessionActivity } from "../session/sessionActivity";
 import { streamSessionCatalogSnapshots } from "../session/sessionCatalogOperations";
 import { SessionStreamIdleTimeoutError, streamSessionEvents, TraceCursorGoneError } from "./sessionTraceStream";
@@ -221,6 +222,25 @@ describe("Workspace 单物理 SSE 观察者", () => {
       expect((failure as HttpRequestError).requestId).toBe(requestId);
       expect((failure as HttpRequestError).path).toBe("/api/v1/workspace/observations/stream");
       expect(connections[0].cancelled).toBe(false);
+    } finally { await active.stop(); }
+  });
+
+  test("损坏的逻辑流错误正文属于协议失败，其余观察者仍使用原连接", async () => {
+    const connections = installBackend();
+    const active = readers(49_110);
+    try {
+      await waitUntil(() => connections.length === 1);
+      connections[0].controller.enqueue(envelope({ subscription_id: owner(connections[0], "session_trace").subscription_id,
+        state: "error", status: 503, detail_json: "{broken" }));
+      const failure = await active.outcomes.trace;
+      expect(failure).toBeInstanceOf(SseProtocolError);
+      expect((failure as Error).cause).toBeInstanceOf(SyntaxError);
+      expect(connections[0].cancelled).toBe(false);
+      send(connections[0], "session_activity", activity(5));
+      send(connections[0], "workspace_files", files(28));
+      await waitUntil(() => active.received.files.length === 1);
+      expect(connections).toHaveLength(1);
+      expect(active.received.activity).toEqual([5]);
     } finally { await active.stop(); }
   });
 

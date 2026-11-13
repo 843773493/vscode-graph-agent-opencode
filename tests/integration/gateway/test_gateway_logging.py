@@ -17,6 +17,7 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -197,10 +198,10 @@ def test_warning_keeps_real_terminal_tool_bytes_and_workspace_records(logging_ca
             finish_reason="tool_calls" if "tool_calls" in reply else "stop",
         ),
     ).raw["interactions"])[0] for index, reply in enumerate(replies)])
-    accepted = case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    accepted = case.client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": "执行命令并核对输出；退出码7是预期结果。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    }).raise_for_status().json()["data"]
+    })).raise_for_status().json()["data"]
     deadline = time.monotonic() + 60
     job: dict = {}
     while time.monotonic() < deadline:

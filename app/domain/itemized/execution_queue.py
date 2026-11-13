@@ -19,6 +19,10 @@ DeliveryBoundary = Literal["idle", "after_turn", "after_tool_result", "after_int
 ExecutionQueuePhase = Literal["queued", "claimed", "started", "terminal"]
 
 
+class MessageSubmissionConflictError(ValueError):
+    """同一消息操作身份不能对应另一份输入。"""
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionQueueInput:
     """准入事务冻结的调度信息；后续 policy 更新不改写该输入。"""
@@ -31,6 +35,8 @@ class ExecutionQueueInput:
     gateway_id: str | None
     request_id: str | None
     created_at: str
+    # 普通消息操作复用 admission key；hash 只校验同身份的原始请求，不复制正文。
+    submission_hash: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.execution_binding, (UserExecutionIdentity, InternalExecutionIntent)):

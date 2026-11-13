@@ -18,6 +18,7 @@ from app.core.workspace_identity import read_workspace_id
 from app.testing.model_stream import ModelStreamCassette, load_cassette
 from configs.runtime import read_jsonc_object, validate_config
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -198,9 +199,9 @@ async def test_non_preserve_gateway_shutdown_drains_resources_before_auxiliary_e
                     for index, entry in enumerate(shutdown_cassette.raw["interactions"])
                 ],
             )
-            sent = await client.post(f"/api/v1/sessions/{sid}/messages", json={
+            sent = await client.post(f"/api/v1/sessions/{sid}/messages", json=with_message_run_operation_id({
                 "message": {"content": "只回复就绪"}, "run": {"async": True},
-            })
+            }))
             assert sent.status_code == 200, sent.text
             job_id = sent.json()["data"]["job_id"]
             deadline = time.monotonic() + 60

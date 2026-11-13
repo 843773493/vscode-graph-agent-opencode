@@ -1,7 +1,9 @@
+import "fake-indexeddb/auto";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AttachmentRef, Session } from "../../types/backend";
+import { act } from "react-test-renderer";
+import type { AttachmentRef, MessageRunRequest, Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import {
   apiSuccessResponse,
@@ -10,12 +12,16 @@ import {
   restoreGatewayTestEnvironment,
 } from "../../tests/fixtures/session/gatewayEnvironment";
 import { createAppStateMirror } from "../../tests/fixtures/session/appState";
-import { createDeferredResult } from "../../tests/fixtures/session/asyncControl";
+import { createDeferredResult, flushReactEffects } from "../../tests/fixtures/session/asyncControl";
+import { installGatewayTestWindow } from "../../tests/fixtures/session/gatewayBrowserGlobals";
+import { mountReactTestHarness } from "../../tests/fixtures/session/reactHarness";
 import { mountSessionRunActions } from "../../tests/fixtures/session/sessionRunActions";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { errorMessage } from "../../utils/errorMessage";
 import { INITIAL_APP_STATE } from "../app/appStateSeed";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { MessageSubmissionUnknownError } from "../../api/session/sessionMessages";
+import { freezeMessageSubmission, loadMessageSubmissions, releaseMessageSubmission } from "../../state/messageSubmissions/storage";
 import { useSessionRunActions } from "./useSessionRunActions";
 
 const OWNER_A = { gatewayId: "gateway-run-a", workspaceId: "00000000-0000-4000-8000-000000000071" };
@@ -29,24 +35,36 @@ const businessRequests: string[] = [];
 
 function installGatewayFetch(...[handler, options]: Parameters<typeof installGatewayFetchMock>): void {
   expectsBusinessRequest = true;
-  installGatewayFetchMock((request) => {
+  installGatewayFetchMock(async (request) => {
     expect(request.path.startsWith("/api/v1/")).toBe(true);
     const headers = new Headers(request.init?.headers);
     expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER_A.gatewayId);
     expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER_A.workspaceId);
     businessRequests.push(request.path);
-    return handler(request);
+    const response = await handler(request);
+    if (request.method !== "POST" || !request.path.endsWith("/messages") || !response?.ok) return response;
+    const body = JSON.parse(String(request.init?.body)) as MessageRunRequest;
+    const envelope = await response.clone().json() as { data?: Record<string, unknown> };
+    if (typeof envelope.data?.operation_id === "string") return response;
+    return apiSuccessResponse({ ...envelope.data, operation_id: body.operation_id }, response.status);
   }, options);
 }
 
-
-afterEach(() => {
+afterEach(async () => {
   restoreGatewayTestEnvironment();
   const count = businessRequests.length;
   const expected = expectsBusinessRequest;
   businessRequests.length = 0;
   expectsBusinessRequest = false;
   if (expected) expect(count).toBeGreaterThan(0);
+  for (const owner of [
+    { workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions" },
+    { workspaceKey: WORKSPACE_A, sessionId: "ses_created_late", threadId: "thr_created_late" },
+    { workspaceKey: WORKSPACE_A, sessionId: "ses_created_on_send", threadId: "thr_run_actions" },
+    { workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_explicit_child" },
+  ]) {
+    for (const record of await loadMessageSubmissions(owner)) await releaseMessageSubmission(record);
+  }
 });
 
 /** 回归用的固定会话：网关工作区、当前 agent 与时间戳都取稳定值。 */
@@ -109,6 +127,7 @@ function runActions(
 /** 后端 dispatch 事实块；queue 计数与阻塞来源只有显式覆盖时才出现。 */
 function dispatchFacts(overrides: {
   session_id?: string;
+  thread_id?: string;
   job_id: string;
   job_status?: string;
   active_job_id: string | null;
@@ -122,10 +141,12 @@ function dispatchFacts(overrides: {
 }): Record<string, unknown> {
   return {
     session_id: SESSION_ID,
+    thread_id: "thr_run_actions",
     job_status: "running",
     queued_jobs_ahead: 0,
     queued_job_count: 0,
     pending_job_count: 0,
+    queue_snapshot_version: 1,
     ...overrides,
   };
 }
@@ -166,32 +187,53 @@ function replayResponse(): Response {
 }
 
 const PENDING_PATH = `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`;
-const MESSAGES_PATH = `/api/v1/sessions/${SESSION_ID}/messages`;
+const MESSAGES_PATH = `/api/v1/sessions/${SESSION_ID}/threads/thr_run_actions/messages`;
+const SUBMISSION_QUERY_PREFIX = `/api/v1/sessions/${SESSION_ID}/threads/thr_run_actions/message-submissions/`;
 const INTERRUPT_PATH = `/api/v1/sessions/${SESSION_ID}/interrupt`;
 const REPLAY_PATH = `/api/v1/sessions/${SESSION_ID}/messages/msg_original/replay`;
 const COMPACT_PATH = `/api/v1/sessions/${SESSION_ID}/compact`;
+
+function unknownSubmissionResponse(path: string, sessionId = SESSION_ID, threadId = "thr_run_actions"): Response {
+  const operationId = decodeURIComponent(path.slice(path.lastIndexOf("/") + 1));
+  return apiSuccessResponse({ session_id: sessionId, thread_id: threadId, operation_id: operationId, status: "unknown", accepted: null });
+}
 
 describe("发送消息状态更新", () => {
   test("发送入口使用 catalog owner 乐观写入，再消费 accepted owner 且隔离附件摘要", async () => {
     let resolveSend!: (response: Response) => void;
     const sent = new Promise<Response>((resolve) => { resolveSend = resolve; });
-    const attachment: AttachmentRef = { file_id: "attachment_same_id", name: "当前附件.txt" };
+    const attachment: AttachmentRef = {
+      file_id: "attachment_same_id", name: "当前附件.txt", data_url: "data:text/plain;base64,QQ==",
+    };
     const initial = state(session());
     const otherScope = sessionScopeKey(WORKSPACE_B, SESSION_ID);
     initial.sessionAttachmentSummaries.set(otherScope, { count: 1, names: ["其它工作区.txt"], latestAt: null });
-    installGatewayFetch(({ path, method }) => path === MESSAGES_PATH && method === "POST" ? sent : undefined);
+    installGatewayFetch(async (request) => {
+      if (request.path !== MESSAGES_PATH || request.method !== "POST") return undefined;
+      const body = JSON.parse(String(request.init?.body)) as MessageRunRequest;
+      const records = await loadMessageSubmissions({
+        workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions",
+      });
+      expect(records).toHaveLength(1);
+      expect(records[0]?.owner).toEqual({
+        workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions",
+      });
+      expect(records[0]?.request).toEqual(body);
+      expect(body.operation_id).toMatch(/^op_/);
+      return sent;
+    });
     const mounted = runActions(session(), initial);
     const sending = mounted.actions.sendMessage("带附件输入", [attachment]);
     expect(mounted.state().pendingConversations.get(CACHE_KEY)?.[0]?.userMessage?.thread_id).toBe("thr_run_actions");
     expect(mounted.state().sessionAttachmentSummaries.get(CACHE_KEY)?.names).toEqual([attachment.name!]);
     expect(mounted.state().sessionAttachmentSummaries.get(otherScope)?.names).toEqual(["其它工作区.txt"]);
     resolveSend(apiSuccessResponse({ session_id: SESSION_ID, message_id: "msg_owner_accepted", job_id: "job_owner_accepted",
-      turn_id: "turn_owner_accepted", thread_id: "thr_owner_accepted", status: "running",
+      turn_id: "turn_owner_accepted", thread_id: "thr_run_actions", status: "running",
       dispatch: dispatchFacts({ job_id: "job_owner_accepted", active_job_id: "job_owner_accepted" }) }));
     await sending;
     const accepted = mounted.state().pendingConversations.get(CACHE_KEY)?.[0];
-    expect(accepted?.threadId).toBe("thr_owner_accepted");
-    expect(accepted?.userMessage?.thread_id).toBe("thr_owner_accepted");
+    expect(accepted?.threadId).toBe("thr_run_actions");
+    expect(accepted?.userMessage?.thread_id).toBe("thr_run_actions");
     expect(mounted.state().sessionAttachmentSummaries.has(SESSION_ID)).toBe(false);
   });
 
@@ -217,11 +259,11 @@ describe("发送消息状态更新", () => {
     const sentSessions: string[] = [];
     installGatewayFetch(({ path, method }) => {
       if (path === "/api/v1/sessions" && method === "POST") return creating;
-      if (path === "/api/v1/sessions/ses_created_late/messages") {
+      if (path === "/api/v1/sessions/ses_created_late/threads/thr_created_late/messages" && method === "POST") {
         sentSessions.push("ses_created_late");
         return apiSuccessResponse({ session_id: "ses_created_late", thread_id: "thr_created_late",
           message_id: "msg_created_late", job_id: "job_created_late", turn_id: "turn_created_late", status: "running",
-          dispatch: dispatchFacts({ session_id: "ses_created_late", job_id: "job_created_late", active_job_id: "job_created_late" }) });
+          dispatch: dispatchFacts({ session_id: "ses_created_late", thread_id: "thr_created_late", job_id: "job_created_late", active_job_id: "job_created_late" }) });
       }
       return undefined;
     });
@@ -238,47 +280,55 @@ describe("发送消息状态更新", () => {
     expect(mounted.state().pendingConversations.has(CACHE_KEY)).toBe(false);
   });
 
-  test("同一毫秒并发两次发送时，一次失败的回滚不得抹掉仍在途的另一条", async () => {
+  test("同一毫秒并发发送使用不同操作身份，结果未知时保留两条原输入", async () => {
     const currentSession = session();
     const nowSpy = spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    let sendCalls = 0;
-    installGatewayFetch(({ path, method }) => {
+    let queryCalls = 0;
+    const secondResponse = createDeferredResult<Response>();
+    installGatewayFetch(({ path, method, init }) => {
       if (path === MESSAGES_PATH && method === "POST") {
-        sendCalls += 1;
-        if (sendCalls === 1) {
+        const request = JSON.parse(String(init?.body)) as MessageRunRequest;
+        if (request.message.content === "第一条") {
           return apiErrorResponse(502, "第一条发送被拒绝");
         }
-        return new Promise<Response>((resolve) => {
-          // 第二条一直挂在途，用来观察第一条失败回滚时的队列状态。
-          void resolve;
-        });
+        return secondResponse.promise;
       }
-      if (path === PENDING_PATH) {
-        // 快照重取也失败：触发本地回滚分支。
-        return apiErrorResponse(503, "队列不可读");
+      if (path.startsWith(SUBMISSION_QUERY_PREFIX)) {
+        queryCalls += 1;
+        return unknownSubmissionResponse(path);
       }
       return undefined;
     }, { token: "probe-concurrent-token" });
 
     const mounted = runActions(currentSession);
     const first = mounted.actions.sendMessage("第一条");
-    void mounted.actions.sendMessage("第二条").catch(() => undefined);
-    await first.catch(() => undefined);
+    const second = mounted.actions.sendMessage("第二条");
+    await expect(first).rejects.toBeInstanceOf(MessageSubmissionUnknownError);
 
-    // 第一条失败回滚后，第二条仍在途：它的乐观回合必须还在队列里。
     const conversations = mounted.state().pendingConversations.get(CACHE_KEY) ?? [];
-    expect(conversations.length).toBe(1);
+    expect(conversations).toHaveLength(2);
+    expect(conversations.map(item => item.userMessage?.content)).toEqual(["第一条", "第二条"]);
+    expect(conversations[0]?.pendingSubmissionId).toMatch(/^op_/);
+    expect(conversations[1]?.pendingSubmissionId).toMatch(/^op_/);
+    expect(conversations[0]?.pendingSubmissionId).not.toBe(conversations[1]?.pendingSubmissionId);
+    expect(conversations[0]?.pending).toBe(true);
+    expect(conversations[1]?.pending).toBe(true);
+    expect(queryCalls).toBe(1);
+    secondResponse.release(apiSuccessResponse({ session_id: SESSION_ID, message_id: "msg_second", job_id: "job_second",
+      turn_id: "turn_second", thread_id: "thr_run_actions", status: "running",
+      dispatch: dispatchFacts({ job_id: "job_second", active_job_id: "job_second" }) }));
+    await second;
     nowSpy.mockRestore();
   });
 
-  test("W9-d 发送失败后按后端队列快照校准而不是抹掉已接受的回合", async () => {
+  test("发送回执未知时保留冻结输入，不用待处理队列猜测接收结果", async () => {
     const currentSession = session();
     let pendingCalls = 0;
     installGatewayFetch(({ path, method }) => {
       if (path === MESSAGES_PATH && method === "POST") {
-        // 网关拒绝：但后端其实已经收下并排进队列。
         return apiErrorResponse(502, "模型网关拒绝");
       }
+      if (path.startsWith(SUBMISSION_QUERY_PREFIX)) return unknownSubmissionResponse(path);
       if (path === PENDING_PATH) {
         pendingCalls += 1;
         return pendingRequestsResponse({
@@ -290,12 +340,13 @@ describe("发送消息状态更新", () => {
     }, { token: "test-pending-token" });
 
     const mounted = runActions(currentSession);
-    await expect(mounted.actions.sendMessage("你好")).rejects.toThrow("模型网关拒绝");
+    await expect(mounted.actions.sendMessage("你好")).rejects.toBeInstanceOf(MessageSubmissionUnknownError);
 
-    expect(pendingCalls).toBe(1);
-    // 乐观回合被后端权威快照替换：后端已接受的 job 必须留在本地队列里。
-    expect(mounted.state().activeJobIdsBySession.get(CACHE_KEY))
-      .toBe("job_server_accepted");
+    expect(pendingCalls).toBe(0);
+    expect(mounted.state().pendingConversations.get(CACHE_KEY)?.[0]?.pending).toBe(true);
+    expect(mounted.state().pendingConversations.get(CACHE_KEY)?.[0]?.status).toBe("error");
+    expect((await loadMessageSubmissions({ workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions" })).map(record => record.request.message.content))
+      .toEqual(["你好"]);
     expect(mounted.state().status).toContain("发送失败");
     expect(mounted.state().status).toContain("模型网关拒绝");
   });
@@ -561,14 +612,14 @@ describe("发送消息状态更新", () => {
     );
   });
 
-  test("发送失败且待处理队列重取也失败时，两条原因都要拼进可见失败文案", async () => {
+  test("发送结果未知时显示原始原因并保留冻结操作，不发起队列猜测", async () => {
     const currentSession = session();
     installGatewayFetch(({ path, method }) => {
       if (path === MESSAGES_PATH && method === "POST") {
         return apiErrorResponse(502, "模型网关拒绝");
       }
+      if (path.startsWith(SUBMISSION_QUERY_PREFIX)) return unknownSubmissionResponse(path);
       if (path === PENDING_PATH) {
-        // 补偿快照也读不到：用户必须同时看到「发送失败」和「重取失败」两条事实。
         return apiErrorResponse(503, "队列不可读");
       }
       return undefined;
@@ -576,13 +627,13 @@ describe("发送消息状态更新", () => {
 
     const mounted = runActions(currentSession);
 
-    await expect(mounted.actions.sendMessage("你好")).rejects.toThrow("模型网关拒绝");
+    await expect(mounted.actions.sendMessage("你好")).rejects.toBeInstanceOf(MessageSubmissionUnknownError);
 
-    // 两条事实必须同时可见：发送失败本身 + 补偿读队列也失败。
-    expect(mounted.state().status).toBe(
-      "发送失败: 请求失败 502 : 模型网关拒绝"
-      + "；重新读取待处理队列也失败: 请求失败 503 : 队列不可读",
-    );
+    expect(mounted.state().status).toContain("发送失败: 消息接收结果尚未确认");
+    expect(mounted.state().status).toContain("请求失败 502 : 模型网关拒绝");
+    expect(mounted.state().pendingConversations.get(CACHE_KEY)?.[0]?.pending).toBe(true);
+    expect((await loadMessageSubmissions({ workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions" }))
+      .map(record => record.request.message.content)).toEqual(["你好"]);
   });
 
   test("replay 失败时必须递增历史重载计数，界面不停在脏状态", async () => {
@@ -661,7 +712,7 @@ describe("发送消息状态更新", () => {
           updated_at: "2026-07-20T00:00:00Z",
         });
       }
-      if (path === "/api/v1/sessions/ses_created_on_send/messages" && method === "POST") {
+      if (path === "/api/v1/sessions/ses_created_on_send/threads/thr_run_actions/messages" && method === "POST") {
         observed.sentSessionId = "ses_created_on_send";
         return apiSuccessResponse({
           message_id: "msg_created_on_send",
@@ -786,9 +837,7 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
       createDeferredResult<Response>();
     installGatewayFetch(({ path, method }) => {
       if (path === MESSAGES_PATH && method === "POST") return sendResponse;
-      if (path === PENDING_PATH) {
-        return pendingRequestsResponse({ active_job_id: null });
-      }
+      if (path.startsWith(SUBMISSION_QUERY_PREFIX)) return unknownSubmissionResponse(path);
       return undefined;
     }, { token: "test-run-actions-session-switch-send" });
 
@@ -810,15 +859,13 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     expect(mirror.current().status).not.toContain("发送失败");
   });
 
-  test("同 Session ID 切到另一工作区后，发送失败仍校准来源队列但不改新 owner 状态", async () => {
+  test("同 Session ID 切到另一工作区后，未知发送保留在原 owner 且不改新状态", async () => {
     const started = session();
     const { promise: sendResponse, release: releaseSend } =
       createDeferredResult<Response>();
     installGatewayFetch(({ path, method }) => {
       if (path === MESSAGES_PATH && method === "POST") return sendResponse;
-      if (path === PENDING_PATH) {
-        return pendingRequestsResponse({ active_job_id: "job_send_source_owner" });
-      }
+      if (path.startsWith(SUBMISSION_QUERY_PREFIX)) return unknownSubmissionResponse(path);
       return undefined;
     }, { token: "test-run-actions-same-id-send-failure" });
 
@@ -832,12 +879,14 @@ describe("在途运行动作的迟到回写不得污染已切到的会话", () =
     await sending;
 
     expect(mirror.current().status).toBe("新 owner 状态");
-    expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe(
-      "job_send_source_owner",
-    );
+    expect(mirror.current().activeJobIdsBySession.has(CACHE_KEY)).toBe(false);
     expect(mirror.current().activeJobIdsBySession.has(
       sessionScopeKey(WORKSPACE_B, started.session_id),
     )).toBe(false);
+    const frozen = await loadMessageSubmissions({ workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions" });
+    expect(frozen).toHaveLength(1);
+    expect(frozen[0]?.request.message.content).toBe("跨工作区在途发送");
+    expect(await loadMessageSubmissions({ workspaceKey: WORKSPACE_B, sessionId: SESSION_ID, threadId: "thr_run_actions" })).toEqual([]);
   });
 
   test("同 Session ID 切到另一工作区后，发送成功保留来源运行态但不改新 owner 状态", async () => {
@@ -1224,4 +1273,61 @@ test("显式子 Thread 发送与停止失败重读始终冻结目标，不改写
   ]);
   expect(mirror.current().activeJobIdsBySession.get(cacheKey)).toBe("job_child");
   expect(mirror.current().currentSession?.thread_id).toBe("thr_run_actions");
+});
+
+test("隐藏时撤销消息对账，迟到回执不发布；重新可见立即按原身份确认", async () => {
+  installGatewayTestWindow(8014);
+  const visibility = Object.assign(new EventTarget(), { visibilityState: "visible" });
+  Object.defineProperty(globalThis, "document", { configurable: true, value: visibility });
+  const owner = { workspaceKey: WORKSPACE_A, sessionId: SESSION_ID, threadId: "thr_run_actions" };
+  const record = await freezeMessageSubmission(owner, {
+    operation_id: "op_visibility", message: { content: "隐藏前的输入", attachments: [], metadata: {} }, run: {},
+  });
+  const mirror = createAppStateMirror(state(session()));
+  const pending = createDeferredResult<Response>();
+  const started = createDeferredResult<AbortSignal | null | undefined>();
+  const accepted = apiSuccessResponse({ session_id: SESSION_ID, thread_id: owner.threadId,
+    operation_id: record.request.operation_id, status: "accepted", accepted: {
+      operation_id: record.request.operation_id, message_id: "msg_visibility", job_id: "job_visibility",
+      turn_id: "turn_visibility", thread_id: owner.threadId, status: "running",
+      dispatch: dispatchFacts({ job_id: "job_visibility", active_job_id: "job_visibility", queue_snapshot_version: 5 }),
+    } });
+  let reads = 0;
+  installGatewayFetch(({ path, init }) => {
+    if (!path.startsWith(SUBMISSION_QUERY_PREFIX)) return undefined;
+    reads++;
+    if (reads === 1) { started.release(init?.signal); return pending.promise; }
+    return accepted.clone();
+  });
+  function Harness() {
+    useSessionRunActions({
+      apiPort: 8014, currentSession: session(), activeGatewayWorkspaceId: WORKSPACE_A,
+      currentSessionGatewayWorkspaceId: WORKSPACE_A, currentSessionCacheKey: CACHE_KEY,
+      defaultGatewayWorkspaceId: WORKSPACE_A, contentView: "default", setState: mirror.setState,
+      refreshAgentStateSnapshot: async () => undefined,
+      createSession: async () => { throw new Error("恢复不得创建新会话"); },
+    });
+    return null;
+  }
+  const unmount = await mountReactTestHarness(Harness);
+  try {
+    const signal = await started.promise;
+    await act(async () => {
+      visibility.visibilityState = "hidden";
+      visibility.dispatchEvent(new Event("visibilitychange"));
+      expect(signal?.aborted).toBe(true);
+      pending.release(accepted.clone());
+      await flushReactEffects();
+    });
+    expect(await loadMessageSubmissions(owner)).toEqual([record]);
+    expect(mirror.current().activeJobIdsBySession.has(CACHE_KEY)).toBe(false);
+    await act(async () => {
+      visibility.visibilityState = "visible";
+      visibility.dispatchEvent(new Event("visibilitychange"));
+      for (let index = 0; index < 10; index++) await flushReactEffects();
+    });
+    expect(reads).toBe(2);
+    expect(await loadMessageSubmissions(owner)).toEqual([]);
+    expect(mirror.current().activeJobIdsBySession.get(CACHE_KEY)).toBe("job_visibility");
+  } finally { unmount(); }
 });

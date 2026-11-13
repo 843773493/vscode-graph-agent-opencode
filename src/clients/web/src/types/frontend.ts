@@ -204,6 +204,7 @@ export interface AppState {
   eventQueuesBySession: Map<string, FrontendReceivedEvent[]>;
   sessionTraceHistoryBySession: Map<string, SessionTraceHistoryState>;
   pendingConversations: Map<string, ConversationView[]>;
+  pendingQueueVersions: Map<string, Map<string, number>>;
   activeJobIdsBySession: Map<string, string>;
   unreadSessionKeys: Set<string>;
   status: string;
@@ -221,6 +222,9 @@ export interface AppState {
   lastCompactResult: SessionCompactResult | null;
   currentGoal: SessionGoal | null;
   currentGoalSessionId: string | null;
+  currentGoalControlRevision: number;
+  currentGoalSyncVersion: number;
+  sessionExecutionSyncError: string | null;
   goalLoading: boolean;
   goalError: string | null;
 }

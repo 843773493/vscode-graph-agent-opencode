@@ -46,6 +46,7 @@ from app.core.session_catalog_store.contracts import (
     SessionGenerationOriginDTO,
     SessionKind,
 )
+from app.core.session_catalog_store.queries import CatalogReadRange
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore, ThreadCreationRecord
 from app.core.session_lifecycle_gate import OperationHolderGate
@@ -395,6 +396,11 @@ class SessionCatalogPathResolver:
                 node, self._nearest_session_ancestor_from_map(node.parent_node_id, by_id, ancestors)
             ))
         return navigation_revision, projected
+
+    def project_catalog_range(self, scope: CatalogReadRange) -> list[SessionCatalogNodeProjection]:
+        """有界读取沿用同一 catalog 行投影和冻结 locator 校验。"""
+        self._ensure_consistency_verified()
+        return [self._project_node(node, scope.parent_session_ids[node.node_id]) for node in scope.nodes]
 
     def session_list_page(
         self, *, skip: int, limit: int, cursor: str | None

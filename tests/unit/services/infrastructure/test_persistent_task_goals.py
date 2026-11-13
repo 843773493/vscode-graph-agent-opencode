@@ -13,7 +13,7 @@ import pytest
 from app.schemas.internal_v2.goal import (
     GoalJobAccountingDTO,
     GoalStatus,
-    SessionGoalDTO,
+    SessionGoalStateDTO,
 )
 from app.services.infrastructure.persistent_tasks.goal_import import import_legacy_goals
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
@@ -32,7 +32,7 @@ async def goal_case(empty_workspace_scope: tuple[str, Path]):
         with WorkspaceStateStore(workspace_root=workspace.workspace_root) as state:
             store = PersistentTaskStore(state, workspace_id=workspace.workspace_id, paths=workspace.resolver)
             now = datetime(2026, 10, 27, tzinfo=UTC)
-            goal = SessionGoalDTO(goal_id="goal_legacy", session_id=session_id,
+            goal = SessionGoalStateDTO(goal_id="goal_legacy", session_id=session_id,
                                   thread_id=workspace.resolver.main_thread_id(session_id), objective="原目标",
                                   status=GoalStatus.active, token_budget=100, tokens_used=7, time_used_seconds=3,
                                   revision=9, created_at=now, updated_at=now, last_accounted_job_id="job_a",
@@ -42,7 +42,7 @@ async def goal_case(empty_workspace_scope: tuple[str, Path]):
             yield workspace, state, store, goal
 
 
-def _legacy(workspace, goal: SessionGoalDTO) -> Path:
+def _legacy(workspace, goal: SessionGoalStateDTO) -> Path:
     path = workspace.session_dir(goal.session_id) / "goal.json"
     path.write_text(goal.model_dump_json(exclude={"thread_id"}), encoding="utf-8")
     return path
@@ -180,7 +180,9 @@ async def test_management_view_is_the_same_goal_identity_and_retires_old_identit
     store.goal_write(goal)
     task = store.get(goal.goal_id)
     assert task.application_type == "goal" and task.application_version == "1"
-    assert task.task_id == goal.goal_id and task.goal == goal
+    assert task.task_id == goal.goal_id
+    assert task.goal.goal_id == goal.goal_id and task.goal.objective == goal.objective
+    assert not hasattr(task.goal, "accounted_jobs")
     assert task.configuration is None and task.lifecycle == task.phase == "active"
     assert store.list() == [task] and store.list_automations() == []
     with pytest.raises(ValueError, match="会话 Goal 入口"):
@@ -188,7 +190,7 @@ async def test_management_view_is_the_same_goal_identity_and_retires_old_identit
     edited = goal.model_copy(update={"status": GoalStatus.blocked, "objective": "明确阻塞", "revision": 10})
     store.goal_write(edited)
     updated = store.get(goal.goal_id)
-    assert updated.goal == edited and updated.lifecycle == "needs_attention" and updated.phase == "blocked"
+    assert updated.goal.objective == edited.objective and updated.lifecycle == "needs_attention" and updated.phase == "blocked"
     assert updated.revision == task.revision + 1 and updated.definition_revision == task.definition_revision + 1
     store.goal_write(edited.model_copy(update={"goal_id": "goal_replacement"}))
     with pytest.raises(KeyError, match="不存在"):
@@ -207,3 +209,54 @@ async def test_management_view_rejects_missing_goal_definition(goal_case):
         store.get(goal.goal_id)
     with pytest.raises(RuntimeError, match="缺少不可变定义"):
         store.list()
+
+
+@pytest.fixture
+def goal_service(goal_case):
+    from types import SimpleNamespace
+
+    from app.services.business.session_goal_service import SessionGoalService
+
+    workspace, _, store, _ = goal_case
+    async def main(session_id):
+        return workspace.resolver.main_thread_id(session_id)
+    async def publish(**event):
+        return event
+    return SessionGoalService(store=store, session_service=SimpleNamespace(resolve_main_thread=main),
+                              job_event_bus=SimpleNamespace(publish=publish))
+
+
+@pytest.mark.parametrize("action", ["replace", "clear"])
+async def test_control_commit_freezes_old_goal_and_replay_precedes_newer_slot_version(goal_case, goal_service, action):
+    from app.abstractions.state_conflict import ClientStateConflictError
+    from app.services.business.persistent_tasks.goal import GoalProgressSample
+    from app.services.infrastructure.persistent_tasks.goals import (
+        GoalOperationReplayError,
+    )
+
+    _, state, _, seed = goal_case
+    old = await goal_service.set(seed.session_id, objective="正在执行")
+    progress = (GoalProgressSample(old.goal_id, "running", 12),)
+    if action == "replace":
+        applied = await goal_service.set(seed.session_id, objective="替换", replace=True,
+            expected_control_revision=old.control_revision, operation_id="control-1", progress=progress)
+    else:
+        applied = await goal_service.clear(seed.session_id, expected_control_revision=old.control_revision,
+            operation_id="control-1", progress=progress)
+    with closing(state.connection()) as connection:
+        retired = json.loads(connection.execute("SELECT application_json FROM persistent_tasks WHERE task_id=?", (old.goal_id,)).fetchone()[0])
+    assert retired["time_used_seconds"] == 12 and retired["accounted_jobs"]["running"]["time_closed"]
+    newer = await goal_service.set(seed.session_id, objective="随后修改", replace=True)
+    if action == "replace":
+        with pytest.raises(GoalOperationReplayError) as replay:
+            await goal_service.set(seed.session_id, objective="替换", replace=True,
+                expected_control_revision=old.control_revision, operation_id="control-1", progress=progress)
+        assert replay.value.result["goal"]["goal_id"] == applied.goal_id
+        with pytest.raises(ClientStateConflictError, match="不同载荷"):
+            await goal_service.set(seed.session_id, objective="不同输入", replace=True,
+                expected_control_revision=old.control_revision, operation_id="control-1")
+    else:
+        assert await goal_service.clear(seed.session_id, expected_control_revision=old.control_revision, operation_id="control-1") == applied
+        with pytest.raises(ClientStateConflictError, match="不同载荷"):
+            await goal_service.clear(seed.session_id, expected_control_revision=newer.control_revision, operation_id="control-1")
+    assert await goal_service.get(seed.session_id) == newer

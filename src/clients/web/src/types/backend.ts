@@ -1,6 +1,9 @@
 // 该文件是前端业务类型适配层，封装后端实际返回结构。
 // 本目录业务代码统一从这里导入类型；后端 DTO 直接别名到生成文件，避免手写协议漂移。
 import type {
+  SessionGoalDTO as ProtocolSessionGoalDTO,
+  SessionGoalSnapshotDTO as ProtocolSessionGoalSnapshotDTO,
+  SessionGoalOperationResultDTO as ProtocolSessionGoalOperationResultDTO,
   WorkspaceResourceDTO,
   SessionCatalogNodeDTO,
   SessionCatalogPageDTO,
@@ -150,28 +153,31 @@ export type SessionGoalStatus =
   | "budget_limited"
   | "complete";
 
-export interface SessionGoal {
-  goal_id: string;
-  session_id: string;
-  thread_id: string;
-  objective: string;
+export type SessionGoal = Omit<ProtocolSessionGoalDTO,
+  "status" | "token_budget" | "tokens_used" | "time_used_seconds" | "revision" | "created_at" | "updated_at"> & {
   status: SessionGoalStatus;
   token_budget: number | null;
   tokens_used: number;
   time_used_seconds: number;
+  revision: number;
   created_at: string;
-  /** 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。revision 仅随普通设置更新递增。 */
   updated_at: string;
-}
+};
+export type SessionGoalSnapshotDTO = Omit<ProtocolSessionGoalSnapshotDTO, "goal"> & { goal?: SessionGoal | null };
+export type SessionGoalOperationResultDTO = Omit<ProtocolSessionGoalOperationResultDTO, "goal"> & { goal?: SessionGoal | null };
 
-export type { SessionGoalClearResultDTO } from "./protocol_generated/boxteam/workspace/v2/public";
-
-export interface SessionGoalUpdateRequest {
+export type SessionGoalUpdateRequest = {
   objective?: string;
   status?: SessionGoalStatus;
   token_budget?: number | null;
   replace?: boolean;
-}
+  expected_control_revision?: number;
+};
+
+export type SessionGoalWriteRequest = SessionGoalUpdateRequest & {
+  operation_id: string;
+  expected_control_revision: number;
+};
 export type {
   MessageDTO,
   SessionInformationSnapshotDTO,

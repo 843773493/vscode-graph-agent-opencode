@@ -44,7 +44,7 @@ from tests.integration.backend.agents.test_mcp_connection_wait import (
 )
 from tests.integration.backend.sessions.test_mcp_config_recovery import RecoveryCase
 from tests.integration.workspace_services.mcp.oauth_server import OAuthEndpoint
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414
@@ -79,10 +79,10 @@ async def pending_wait(request, product_case, oauth_endpoint_factory, http_schem
         calls = wait_plan(replay, session, thread, "连接成功后检查定义并调用 probe。", interleaved_user=getattr(request, "param", False))
         operation = software_tool_operation_id("mcp_connect", session, thread, str(UUID(calls[0])), "debug-e2e-call-0")
         task = mcp_wait_task_id(session, thread, operation)
-        response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "为 secure 发起连接，登记成功后自动继续，并结束当前执行。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         accepted = response.json()["data"]
         await wait_for_job_done(client, accepted["job_id"], max_attempts=140)
@@ -117,10 +117,10 @@ def verify_requests(wait: PendingWait, expected_count: int) -> list[dict]:
 async def test_user_input_finishes_before_authorization_continuation(pending_wait: PendingWait):
     wait = pending_wait
     wait.replay.control.arm(wait.calls[2], "model.response_ready")
-    response = await wait.client.post(f"/api/v1/sessions/{wait.session}/messages", json={
+    response = await wait.client.post(f"/api/v1/sessions/{wait.session}/messages", json=with_message_run_operation_id({
         "message": {"content": "授权期间的新输入：先完成这条用户消息。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     user = response.json()["data"]
     await asyncio.to_thread(wait.replay.control.acknowledged, wait.calls[2], "model.response_ready")
@@ -231,10 +231,10 @@ async def test_wait_registered_after_authorization_observes_original_terminal_st
         thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
         calls = wait_plan(replay, session, thread, "连接已经成功，读取完整定义并核实 probe。", operation_id=operation)
         task = mcp_wait_task_id(session, thread, operation)
-        response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "查询已完成的连接并明确登记继续意图，结束本次执行。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         accepted = response.json()["data"]
         await wait_for_job_done(client, accepted["job_id"], max_attempts=100)

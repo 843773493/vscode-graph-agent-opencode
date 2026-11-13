@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
+from threading import RLock
 
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_test_workspace
@@ -31,6 +34,7 @@ class SessionServiceConfigStub:
     """只实现 SessionService 测试需要的配置查询，不访问 provider 或网络。"""
 
     def __init__(self, config: dict[str, object] | None = None) -> None:
+        self.publication_lock = RLock()
         self._config = (
             config
             if config is not None
@@ -54,6 +58,9 @@ class SessionServiceConfigStub:
         if agent_id is not None:
             return self.validate_agent_id(agent_id)
         return self._workspace_agent_id or self._default_agent_id()
+
+    def get_revision(self) -> str:
+        return hashlib.sha256(json.dumps(self._config, sort_keys=True).encode()).hexdigest()
 
     def resolve_new_session_provider_id(self, agent_id: str) -> str:
         return self._workspace_provider_ids.get(

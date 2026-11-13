@@ -168,9 +168,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
-from app.services.infrastructure.session_message_idempotency_store import (
-    SessionMessageIdempotencyStore,
-)
 from app.services.infrastructure.team.store import TeamStore
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_catalog_service import ToolCatalogService
@@ -965,9 +962,6 @@ def _build_app_container(
         job_service=job_service,
         job_event_bus=job_event_bus,
         runtime_source_dispatcher=runtime_source_dispatcher,
-        idempotency_store=SessionMessageIdempotencyStore(
-            path_resolver=session_path_resolver,
-        ),
     )
     dependency_provider.set_session_orchestrator(session_orchestrator)
     session_generation_service = SessionGenerationService(

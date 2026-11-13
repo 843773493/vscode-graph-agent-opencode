@@ -37,6 +37,19 @@ if TYPE_CHECKING:
 class RolloutExecutionQueueMixin:
     _storage: RolloutStorage
 
+    def message_submission(self, session_id: str, thread_id: str, operation_id: str) -> ExecutionQueueRecord | None:
+        """沿准入唯一键定位接收事实；不扫描消息历史或建立第二操作索引。"""
+        try:
+            with self._storage.read_connection(session_id, thread_id) as connection:
+                row = connection.execute(
+                    "SELECT job_id FROM executions WHERE session_id=? AND thread_id=? "
+                    "AND admission_idempotency_key=? AND execution_origin='user_turn'",
+                    (session_id, thread_id, operation_id),
+                ).fetchone()
+                return None if row is None else self._execution_queue_record(connection, session_id, thread_id, "", row[0])
+        except RolloutNotMaterializedError:
+            return None
+
     def execution_completions(self, session_id: str, thread_id: str, *,
                               after_commit_id: int | None, limit: int = 100) -> ExecutionCompletionPage:
         """以原终态提交顺序增量读取；None只取得新订阅的起点。"""

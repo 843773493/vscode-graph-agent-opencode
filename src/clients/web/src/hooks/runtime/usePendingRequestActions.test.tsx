@@ -76,6 +76,7 @@ function state(): AppState {
   return {
     eventQueuesBySession: new Map(),
     pendingConversations: new Map(),
+    pendingQueueVersions: new Map(),
     activeJobIdsBySession: new Map(),
     unreadSessionKeys: new Set(),
     sessionAttachmentSummaries: new Map(),

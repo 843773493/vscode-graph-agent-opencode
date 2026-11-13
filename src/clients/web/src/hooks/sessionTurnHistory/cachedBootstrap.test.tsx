@@ -3,7 +3,7 @@ import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { useSessionTurnHistory } from './useSessionTurnHistory';
 import { createSessionTurnTimeline, upsertTurns } from '../../state/session/turnTimeline';
-import { appState, bootstrap, emptyHistoryPageResponse, installWindow, originalFetch,
+import { appState, emptyPendingResponse, bootstrap, emptyHistoryPageResponse, installWindow, originalFetch,
   restoreTurnHistoryTestGlobals, SESSION_ID, SCOPE_KEY, THREAD_ID, WORKSPACE_KEY, WORKSPACE_OWNER, turnDetail, wait } from './testFixtures';
 
 afterEach(restoreTurnHistoryTestGlobals);
@@ -22,6 +22,7 @@ test.each([{ epoch: 1, cachedRevision: 1 }, { epoch: 2, cachedRevision: 8 }])(
     const path = new URL(String(args[0]), 'http://127.0.0.1:9149').pathname;
     if (path === '/api/gateway/auth/local-credential') return Response.json({ data: { token: 'cached-bootstrap' } });
     paths.push(path);
+    if (path.endsWith("/pending-requests")) return emptyPendingResponse();
     if (path.endsWith('/bootstrap')) return pendingBootstrap;
     if (path.endsWith('/history')) return pendingHistory;
     throw new Error(`未声明的请求：${path}`);
@@ -70,6 +71,7 @@ test.each(['bootstrap', 'history'] as const)(
       if (!recovering && path.endsWith('/' + failureStage)) {
         return Response.json({ detail: '历史来源暂不可用，请保留原镜像' }, { status: 503 });
       }
+      if (path.endsWith("/pending-requests")) return emptyPendingResponse();
       if (path.endsWith('/bootstrap')) return Response.json({ code: 0, message: 'ok', request_id: 'metadata-2',
         data: { ...bootstrap('ready', 2), latest_turn: null } });
       if (path.endsWith('/history')) return emptyHistoryPageResponse('history-2', 2);

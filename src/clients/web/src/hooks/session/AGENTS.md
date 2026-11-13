@@ -15,6 +15,7 @@
 - 会话视图状态的读写、缓存与 host 适配。
 - 当前 Turn 时间线与终态 Turn 加载入口。
 - 会话 Goal 的读取、更新、清除与请求合并。
+- Goal hook 复用 `src/clients/shared/core/syncState.ts` 对同 owner 读取合并并撤销被写入取代的读取；同 owner 写操作串行且每次携带后端 control_revision。
 - 会话生命周期动作与运行动作的聚合编排。
 - 会话消息流订阅与后台会话活动对账。
 - 子会话列表加载。

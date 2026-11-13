@@ -133,6 +133,7 @@ class JobState:
     delivery_boundary: DeliveryBoundary | None = None
     internal_reservation: bool = False
     cancellation_reason: str | None = None
+    started_dispatch: JobDispatchSnapshotDTO | None = None
 
 
 class JobService:
@@ -911,6 +912,40 @@ class JobService:
             await self._publish_pending(await self._pending_requests.list(session_id), reason="enqueued")
         return self._existing_dispatch_snapshot(job)
 
+    async def submission_dispatch(self, record: ExecutionQueueRecord) -> JobDispatchSnapshotDTO:
+        """只读原操作的执行事实；查回执不得重新启动已领取或已结束的执行。"""
+        admission = record.cursor.admission
+        async with self._dispatch_lock:
+            job = self._jobs.get(admission.job_id)
+            if job is not None:
+                return self._existing_dispatch_snapshot(job)
+            record = await self._pending_requests.store.record(admission.session_id, admission.thread_id, admission.job_id)
+            records = await self._pending_requests.store.records(admission.session_id)
+            queued = [candidate for candidate in records
+                      if candidate.cursor.admission.thread_id == admission.thread_id and candidate.phase == "queued"]
+            version = await self._pending_requests.store.snapshot_version(admission.session_id)
+            active = next((candidate.cursor.admission.job_id for candidate in records
+                           if candidate.cursor.admission.thread_id == admission.thread_id
+                           and candidate.phase in {"claimed", "started"}), None)
+            status = {"completed": "completed", "completed_empty": "completed", "failed": "failed",
+                      "execution_lost": "failed", "interrupted": "timed_out", "cancelled": "cancelled"}.get(record.outcome)
+            if status is None:
+                if record.outcome != "unknown":
+                    raise RuntimeError(f"消息操作存在未知执行终态: {record.outcome}")
+                status = "queued" if record.phase == "queued" else "running"
+            ahead = next((index for index, candidate in enumerate(queued)
+                          if candidate.cursor.admission.job_id == admission.job_id), 0)
+            return JobDispatchSnapshotDTO(
+                session_id=admission.session_id, thread_id=admission.thread_id, job_id=admission.job_id,
+                job_status=status, active_job_id=active,
+                blocked_by_job_id=active if status == "queued" else None,
+                queued_jobs_ahead=ahead, queued_job_count=len(queued),
+                pending_job_count=len(queued) + int(active is not None),
+                delivery_policy=record.delivery_policy if status == "queued" else None,
+                enqueue_sequence=record.cursor.commit_id if status == "queued" else None,
+                queue_snapshot_version=version,
+            )
+
     def _existing_dispatch_snapshot(
         self,
         job: JobState,
@@ -991,6 +1026,8 @@ class JobService:
 
     def _start_job_task(self, job: JobState) -> None:
         loop = asyncio.get_running_loop()
+        # 调度调用方持有原锁，冻结出队水位，事件发布不再读取后来的队列状态。
+        job.started_dispatch = self._existing_dispatch_snapshot(job)
 
         def _task_done_callback(task):
             try:
@@ -1054,6 +1091,7 @@ class JobService:
                 if self._thread_current_job.get((job.session_id, job.thread_id)) != job.job_id:
                     raise RuntimeError(f"恢复 Job 丢失原 thread active 槽: {job.job_id}")
                 await job.queue_claim.start()
+                await self._pending_requests.refresh_version(job.session_id)
                 job.restoring_execution = False
                 self._start_job_task(job)
         return len(restored)
@@ -1269,6 +1307,7 @@ class JobService:
                     payload={
                         "session_id": session_id,
                         "thread_id": job.thread_id,
+                        "dispatch": job.started_dispatch.model_dump(mode="json"),
                         "agent_id": job.agent_id,
                         "message": message,
                         "attachments": [
@@ -1881,6 +1920,7 @@ class JobService:
                 if next_job.queue_claim is None:
                     raise RuntimeError("启动 Job 缺少持久 claim 与 OS holder")
                 await next_job.queue_claim.start()
+                await self._pending_requests.refresh_version(session_id)
                 self._start_job_task(next_job)
                 return True
 

@@ -7,7 +7,8 @@ export default function TaskGoalDetail({ apiPort, workspaceId, sessionId, revisi
 }) {
   const state = useTaskGoal(apiPort, workspaceId, sessionId, revision);
   return <>
-    <GoalManagerCard sessionId={sessionId} goal={state.goal} loading={state.loading} error={state.error}
+    <GoalManagerCard sessionId={sessionId} goal={state.goal} controlRevision={state.controlRevision}
+      loading={state.loading} error={state.error}
       onRefresh={state.refresh} onUpdate={state.update} onClear={state.clear} />
     <p className="persistent-task-hint">{t("tasks.goal.hint")}</p>
   </>;

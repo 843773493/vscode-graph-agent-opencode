@@ -28,7 +28,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_triad as communication_triad,  # noqa: PLC0414 - 正式 fixture 按当前测试文件隔离
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.harness import control_request
 
 
@@ -205,9 +205,9 @@ async def test_model_file_tools_execute_on_fixed_federated_owner(communication_t
         _tool("read_file", {"path": missing_uri}, "call_remote_missing"),
         {"content": "远端文件工具完成"},
     ])
-    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "federated-file-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    }, headers={"X-Request-ID": "req-model-federated-files"})
+    }), headers={"X-Request-ID": "req-model-federated-files"})
     assert accepted.status_code == 200, accepted.text
     await _completed(source.client, accepted.json()["data"]["job_id"])
     wire_messages = case.request(calls[-1])["messages"]
@@ -247,9 +247,9 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     control = case.replay.control
     read_delete = read_calls[-1] + ":tool-call:call_patch_read_delete"
     control.arm(read_delete, "test.tool_result.committed")
-    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "conditional-patch-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    }, headers={"X-Request-ID": "req-model-conditional-patch"})
+    }), headers={"X-Request-ID": "req-model-conditional-patch"})
     assert accepted.status_code == 200, accepted.text
     async with asyncio.timeout(60):
         try:
@@ -366,9 +366,9 @@ async def test_model_remote_text_mutations_preserve_owner_versions_and_source_ch
     control = case.replay.control
     read_call = first_call + ":tool-call:call_remote_text_read"
     control.arm(read_call, "test.tool_result.committed")
-    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "remote-text-mutation-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    }, headers={"X-Request-ID": "req-model-remote-text"})
+    }), headers={"X-Request-ID": "req-model-remote-text"})
     assert accepted.status_code == 200, accepted.text
     async with asyncio.timeout(60):
         try:
@@ -511,12 +511,12 @@ async def test_model_attachment_uri_reads_media_through_original_owner(communica
     original = image.getvalue()
     control = case.replay.control
     control.arm_match("attachment-ready", "thread.runtime.acquired", {"session_id": session})
-    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await source.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "artifact-media-trigger", "attachments": [{
             "file_id": "inline:media.png", "name": "media.png", "content_type": "image/png",
             "data_url": "data:image/png;base64," + base64.b64encode(original).decode(),
         }]}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     async with asyncio.timeout(60):
         try:

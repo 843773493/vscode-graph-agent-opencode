@@ -18,7 +18,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - 当前测试独立工作区和端口。
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.sealed_request_audit import audit_sealed_requests
 
 
@@ -36,12 +36,12 @@ async def test_attachment_publication_rejects_paths_and_keeps_original_history(
     call, = await case.plan(session_id, [{"content": "混合附件已接受"}])
     native_paths = ["/private/attachment-publication", r"C:\private\attachment-publication",
                     r"\\target\private\attachment-publication", "file:///private/attachment-publication"]
-    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": "正文允许原生路径：" + " | ".join(native_paths), "attachments": [
             *({"file_id": value} for value in (regular.name, str(regular), uri)),
             upload(b"immutable attachment original").model_dump(mode="json"),
         ]}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     accepted = response.json()["data"]
     await _job(case, accepted["job_id"])

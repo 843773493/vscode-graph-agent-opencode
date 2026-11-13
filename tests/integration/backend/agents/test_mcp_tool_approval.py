@@ -23,7 +23,7 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
 from tests.integration.backend.agents.test_mcp_connection_control import (
     recovery_case as recovery_case,  # noqa: PLC0414 - 本文件正式隔离工作区
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 唯一真实 MCP 资产
@@ -88,9 +88,9 @@ async def test_direct_tool_edit_preserves_original_call_and_completes_product_ex
         session = await create_session(client, "编辑直接工具")
         thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
         planned, calls = approval_plan(replay, session, thread, direct_calls=[_tool_call(call_index=1, name="ls", arguments={"path": "."})])
-        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "列出目录，等待我的确认。"}, "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert accepted.status_code == 200, accepted.text
         job = accepted.json()["data"]["job_id"]
         approval, = await read_approvals(client, job)
@@ -133,10 +133,10 @@ async def test_approval_resumes_original_calls_across_http_replacement(
         session = await create_session(client, "MCP 原代际工具审批")
         thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
         planned, calls = approval_plan(replay, session, thread)
-        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "发现并发出两个独立的 probe，分别等待我的决定。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert accepted.status_code == 200, accepted.text
         job = accepted.json()["data"]["job_id"]
         approvals = await read_approvals(client, job)
@@ -221,10 +221,10 @@ async def test_approval_wait_obeys_current_execution_boundary(
         session = await create_session(client, f"工具审批边界 {boundary}")
         thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
         planned, calls = approval_plan(replay, session, thread)
-        response = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "发出两个 probe 并等待我的逐项审批。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         job = response.json()["data"]["job_id"]
         approvals = await read_approvals(client, job)

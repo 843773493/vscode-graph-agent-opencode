@@ -47,20 +47,38 @@ class SessionCatalogNodeDTO(BaseModel):
     session: SessionDTO | None = None
 
 
+class SessionCatalogSyncDTO(BaseModel):
+    gateway_id: str
+    workspace_id: str
+    source: Literal["authoritative", "gateway_mirror"]
+    stale: bool
+    authoritative_confirmed_at: datetime | None = None
+    error: str | None = None
+
+
+class SessionCatalogVersionDTO(BaseModel):
+    workspace_id: str
+    catalog_revision: int = Field(ge=0)
+    projection_revision: str
+
+
 class SessionCatalogPageDTO(BaseModel):
-    revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
+    revision: str = Field(description="catalog_revision 与配置 owner 已发布 revision 的固定大小版本摘要；Provider 默认配置变化也会使分页 cursor 失效。")
     catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     parent_node_id: str | None = None
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
     cursor: str | None = None
     total: int = 0
     consistency_warning: str | None = None
+    sync: SessionCatalogSyncDTO | None = None
 
 
 class SessionCatalogBreadcrumbDTO(BaseModel):
-    revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
+    revision: str = Field(description="catalog_revision 与配置 owner 已发布 revision 的固定大小版本摘要；Provider 默认配置变化也会使分页 cursor 失效。")
     catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
+    node_id: str
+    sync: SessionCatalogSyncDTO | None = None
 
 
 class SessionCatalogSearchResultDTO(BaseModel):
@@ -70,7 +88,7 @@ class SessionCatalogSearchResultDTO(BaseModel):
 
 
 class SessionCatalogSearchResultsDTO(BaseModel):
-    revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
+    revision: str = Field(description="catalog_revision 与配置 owner 已发布 revision 的固定大小版本摘要；Provider 默认配置变化也会使分页 cursor 失效。")
     catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     items: list[SessionCatalogSearchResultDTO] = Field(default_factory=list)
     cursor: str | None = None
@@ -80,9 +98,12 @@ class SessionCatalogSearchResultsDTO(BaseModel):
 class SessionCatalogExportDTO(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
 
-    revision: str = Field(description="可见 SessionCatalogNodeDTO 按 node_id 排序的 JSON UTF-8 字节 SHA256 摘要；Provider 默认配置投影变化可只改变本摘要，不改变 catalog_revision。分页 cursor 同时绑定两者。")
+    revision: str = Field(description="catalog_revision 与配置 owner 已发布 revision 的固定大小版本摘要；Provider 默认配置变化也会使分页 cursor 失效。")
     catalog_revision: int = Field(description="SQLite 权威 catalog 的整体版本计数，与节点 node_revision 和字符串内容摘要 revision 分别独立；分页 cursor 同时绑定整体版本和内容摘要。")
     items: list[SessionCatalogNodeDTO] = Field(default_factory=list)
+    node_ids: list[str] = Field(default_factory=list)
+    complete: bool = True
+    sync: SessionCatalogSyncDTO | None = None
 
 
 class SessionGenerationGeneratorTypeDTO(BaseModel):

@@ -14,6 +14,8 @@ from typing import cast
 
 import httpx
 
+from tests.support.api_helpers import with_message_run_operation_id
+
 
 def data(response: httpx.Response) -> dict:
     assert response.status_code == 200, response.text
@@ -127,9 +129,9 @@ def generate(workspace: Path, home: Path, artifacts: Path, runtime: Path,
         )
         interactions = cast(list[dict[str, object]], cassette.raw["interactions"])
         call, = replay.control.plan_model_calls(session_id, thread_id, interactions)
-        accepted = data(client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        accepted = data(client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
             "message": {"content": prompt}, "run": {"mode": "single_agent", "agent_id": "default"},
-        }))
+        })))
         deadline = time.monotonic() + 60
         while True:
             job = data(client.get(f"/api/v1/jobs/{accepted['job_id']}"))

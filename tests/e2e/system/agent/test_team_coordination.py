@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
@@ -100,10 +101,10 @@ async def _run_turn(
 ) -> str:
     response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert response.status_code == 200, response.text
     job_id = response.json()["data"]["job_id"]

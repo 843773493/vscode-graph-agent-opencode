@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from app.abstractions.internal_message import PreparedInternalMessage
@@ -10,13 +11,31 @@ from app.schemas.internal_v2.goal import (
     MAX_GOAL_OBJECTIVE_CHARS,
     GoalJobAccountingDTO,
     GoalStatus,
-    SessionGoalDTO,
+    SessionGoalStateDTO,
 )
 
 UNFINISHED_GOAL_STATUSES = frozenset({
     GoalStatus.active, GoalStatus.paused, GoalStatus.blocked,
     GoalStatus.usage_limited, GoalStatus.budget_limited,
 })
+
+
+@dataclass(frozen=True)
+class GoalProgressSample:
+    goal_id: str
+    job_id: str
+    elapsed_seconds: int
+
+
+def freeze_goal_progress(
+    goal: SessionGoalStateDTO, samples: tuple[GoalProgressSample, ...], now: datetime,
+) -> SessionGoalStateDTO:
+    """采样不改账本；只有通过控制版本检查的当前 Goal 才冻结所属 Job。"""
+    for sample in samples:
+        if sample.goal_id == goal.goal_id:
+            goal = account_job(goal, job_id=sample.job_id, tokens=0,
+                               elapsed_seconds=sample.elapsed_seconds, close_time=True, now=now)
+    return goal
 
 
 def normalize_objective(value: str) -> str:
@@ -30,7 +49,7 @@ def normalize_objective(value: str) -> str:
     return normalized
 
 
-def enforce_budget(goal: SessionGoalDTO) -> SessionGoalDTO:
+def enforce_budget(goal: SessionGoalStateDTO) -> SessionGoalStateDTO:
     """预算仅收敛 active；迟到记账不得覆盖用户明确选择的暂停或终态。"""
     if (goal.status == GoalStatus.active and goal.token_budget is not None
             and goal.tokens_used >= goal.token_budget):
@@ -38,8 +57,8 @@ def enforce_budget(goal: SessionGoalDTO) -> SessionGoalDTO:
     return goal
 
 
-def account_job(goal: SessionGoalDTO, *, job_id: str, tokens: int, elapsed_seconds: int,
-                close_time: bool, now: datetime) -> SessionGoalDTO:
+def account_job(goal: SessionGoalStateDTO, *, job_id: str, tokens: int, elapsed_seconds: int,
+                close_time: bool, now: datetime) -> SessionGoalStateDTO:
     """按 Job 单调增量结算；已冻结时间仍可补记迟到 Token。"""
     previous = goal.accounted_jobs.get(job_id)
     previous_tokens = previous.tokens if previous is not None else 0
@@ -69,7 +88,7 @@ def account_job(goal: SessionGoalDTO, *, job_id: str, tokens: int, elapsed_secon
 
 
 def continuation_message(
-    goal: SessionGoalDTO,
+    goal: SessionGoalStateDTO,
     *,
     metadata: dict[str, object] | None = None,
 ) -> PreparedInternalMessage:
@@ -141,7 +160,7 @@ def continuation_message(
 
 
 def objective_updated_message(
-    goal: SessionGoalDTO,
+    goal: SessionGoalStateDTO,
     *,
     metadata: dict[str, object] | None = None,
 ) -> PreparedInternalMessage:
@@ -171,7 +190,7 @@ def objective_updated_message(
 
 
 def budget_limited_message(
-    goal: SessionGoalDTO,
+    goal: SessionGoalStateDTO,
     *,
     metadata: dict[str, object] | None = None,
 ) -> PreparedInternalMessage:

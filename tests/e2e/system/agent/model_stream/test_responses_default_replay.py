@@ -8,7 +8,10 @@ import httpx
 import pytest
 
 from app.testing.model_stream import load_scenario
-from tests.support.api_helpers import read_llm_request_logs
+from tests.support.api_helpers import (
+    read_llm_request_logs,
+    with_message_run_operation_id,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.paths import output_root_for_test
@@ -121,7 +124,7 @@ async def test_default_responses_replay_runs_complete_tool_loop(
         assert stream_response.status_code == 200, await stream_response.aread()
         message_response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={
+            json=with_message_run_operation_id({
                 "message": {
                     "content": (
                         "请先读取当前工作区的 README.md，然后只回复最终结论，"
@@ -132,7 +135,7 @@ async def test_default_responses_replay_runs_complete_tool_loop(
                     "mode": "single_agent",
                     "agent_id": "default",
                 },
-            },
+            }),
         )
         assert message_response.status_code == 200, message_response.text
         job_id = message_response.json()["data"]["job_id"]

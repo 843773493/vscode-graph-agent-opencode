@@ -9,6 +9,7 @@ import httpx
 import pytest
 from mcp import types
 
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.configuration import write_mcp_config
 from tests.support.mcp.http_endpoint import HttpSchemaEndpoint
@@ -130,7 +131,7 @@ async def test_agent_reuses_mini_mcp_state_across_tool_calls(
     for invocation_index in (1, 2):
         message_response = await integration_client.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={
+            json=with_message_run_operation_id({
                 "message": {
                     "content": (
                         "必须调用工具 mcp__mini__increment，"
@@ -139,7 +140,7 @@ async def test_agent_reuses_mini_mcp_state_across_tool_calls(
                     )
                 },
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            },
+            }),
         )
         assert message_response.status_code == 200
         await wait_for_job_done(

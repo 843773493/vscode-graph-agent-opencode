@@ -20,6 +20,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.plugin_package import install_plugin_async
@@ -184,9 +185,9 @@ async def _session(client: httpx.AsyncClient, workspace_id: str) -> tuple[str, s
 
 async def _send(client: httpx.AsyncClient, workspace_id: str, session_id: str) -> str:
     accepted = await _data(await client.post(f"/api/v1/sessions/{session_id}/messages",
-        headers={"X-BoxTeam-Workspace-Id": workspace_id}, json={
+        headers={"X-BoxTeam-Workspace-Id": workspace_id}, json=with_message_run_operation_id({
             "message": {"content": "加载插件说明"}, "run": {"mode": "single_agent", "agent_id": "default"},
-        }))
+        })))
     return accepted["job_id"]
 
 

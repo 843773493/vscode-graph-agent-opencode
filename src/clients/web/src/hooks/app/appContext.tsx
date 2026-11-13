@@ -85,6 +85,7 @@ export interface AppContextType {
   ) => Promise<SessionGoal>;
   clearGoal: (
     target?: { sessionId: string; threadId: string; workspaceId: string | null },
+    expectedControlRevision?: number,
   ) => Promise<void>;
   switchAgent: (agentId: string) => Promise<void>;
   switchModel: (providerId: string) => Promise<void>;
@@ -208,6 +209,7 @@ type ComposerContextActions = Pick<
   AppContextType,
   | "setStatus"
   | "sendMessage"
+  | "refreshTurnHistory"
   | "compactSession"
   | "refreshGoal"
   | "updateGoal"

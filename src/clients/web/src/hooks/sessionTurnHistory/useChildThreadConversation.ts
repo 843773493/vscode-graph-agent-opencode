@@ -1,7 +1,7 @@
 import { t } from "../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadSessionHistory } from "../../api/session/sessionTurnHistory";
-import { sendUserMessage } from "../../api/session/sessionMessages";
+import { MessageSubmissionRejectedError, MessageSubmissionUnknownError, reconcileMessageSubmissions, sendUserMessage } from "../../api/session/sessionMessages";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
 import type { ChildThreadSummary, MessageRunAccepted, TurnHistoryPage } from "../../types/backend";
 import { mergeChildThreadHistory } from "../../state/childThreadDisplay";
@@ -169,6 +169,18 @@ export function useChildThreadConversation({
   }, [enabled, threadId, scope, read, selection?.view]);
 
   useEffect(() => {
+    if (!enabled || !workspaceId || !sessionId || !threadId || !key) return;
+    const controller = new AbortController();
+    void reconcileMessageSubmissions(apiPort, { workspaceKey: workspaceId, sessionId, threadId }, controller.signal)
+      .then(results => {
+        if (!controller.signal.aborted && results.some(result => result.accepted)) void read("history");
+      }).catch(error => {
+        if (!controller.signal.aborted) update(key, prior => ({ ...prior, error: errorMessage(error) }));
+      });
+    return () => controller.abort();
+  }, [apiPort, enabled, key, read, sessionId, threadId, update, workspaceId]);
+
+  useEffect(() => {
     if (!enabled || !threadId) return;
     let polling = false;
     const timer = globalThis.setInterval(() => {
@@ -193,7 +205,10 @@ export function useChildThreadConversation({
       update(key, (prior) => ({ ...prior, accepted, draft: prior.draft.trim() === content ? "" : prior.draft }));
     } catch (error) {
       failure = errorMessage(error);
-      update(key, (prior) => ({ ...prior, error: failure }));
+      update(key, (prior) => ({ ...prior, error: failure,
+        // 未确认输入已独立冻结；清掉原文本，下一次发送不能误用新身份重复提交。
+        draft: (error instanceof MessageSubmissionUnknownError || error instanceof MessageSubmissionRejectedError)
+          && prior.draft.trim() === content ? "" : prior.draft }));
     } finally {
       // key 冻结原工作区/Session/child；切换视图后仍须结算原请求，不能留下发送中。
       sendingRef.current.delete(key);
@@ -226,6 +241,8 @@ export function useChildThreadConversation({
 
   return {
     selectedThread, selectionIntent, snapshot,
+    submissionRecovery: enabled && workspaceId && sessionId && threadId
+      ? { port: apiPort, owner: { workspaceKey: workspaceId, sessionId, threadId } } : null,
     selectThread,
     selectThreadForOwner,
     close,

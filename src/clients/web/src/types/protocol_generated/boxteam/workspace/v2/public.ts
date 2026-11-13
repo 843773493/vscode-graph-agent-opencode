@@ -270,12 +270,15 @@ export interface SessionCatalogPageDTO {
   cursor?: string | undefined;
   total: number;
   consistency_warning?: string | undefined;
+  sync: SessionCatalogSyncDTO | undefined;
 }
 
 export interface SessionCatalogBreadcrumbDTO {
   revision: string;
   catalog_revision: number;
   items: SessionCatalogNodeDTO[];
+  node_id: string;
+  sync: SessionCatalogSyncDTO | undefined;
 }
 
 export interface SessionCatalogSearchResultDTO {
@@ -296,6 +299,32 @@ export interface SessionCatalogExportDTO {
   revision: string;
   catalog_revision: number;
   items: SessionCatalogNodeDTO[];
+  node_ids: string[];
+  complete: boolean;
+  sync: SessionCatalogSyncDTO | undefined;
+}
+
+export interface SessionCatalogSyncDTO {
+  gateway_id: string;
+  workspace_id: string;
+  source: string;
+  stale: boolean;
+  authoritative_confirmed_at?: string | undefined;
+  error?: string | undefined;
+}
+
+export interface SessionCatalogVersionDTO {
+  workspace_id: string;
+  catalog_revision: number;
+  projection_revision: string;
+}
+
+export interface NavigationSnapshotDTO {
+  workspace_id: string;
+  catalog_revision: number;
+  event_seq_watermark: number;
+  generation: number;
+  projection_revision?: string | undefined;
 }
 
 /** 工作区搜索的能力与生命周期；领域分页仍由原 owner 解释。 */
@@ -830,11 +859,21 @@ export interface MessageRunAccepted {
   dispatch: JobDispatchSnapshotDTO | undefined;
   thread_id: string;
   turn_id?: string | undefined;
+  operation_id?: string | undefined;
 }
 
 export interface MessageRunRequest {
   message: MessageCreateRequest | undefined;
   run: RunOptions | undefined;
+  operation_id: string;
+}
+
+export interface MessageSubmissionResultDTO {
+  session_id: string;
+  thread_id: string;
+  operation_id: string;
+  status: string;
+  accepted?: MessageRunAccepted | undefined;
 }
 
 export interface ExtensionCatalogBindingAuditDTO {
@@ -1741,10 +1780,27 @@ export interface SessionGenerationOriginDTO {
   generator_type_version: string;
 }
 
-export interface SessionGoalClearResultDTO {
+export interface SessionGoalClearRequest {
+  operation_id: string;
+  expected_control_revision: number;
+}
+
+export interface SessionGoalSnapshotDTO {
   session_id: string;
-  cleared: boolean;
   thread_id: string;
+  goal?: SessionGoalDTO | undefined;
+  control_revision: number;
+  sync_version: number;
+}
+
+export interface SessionGoalOperationResultDTO {
+  session_id: string;
+  thread_id: string;
+  operation_id: string;
+  status: string;
+  control_revision: number;
+  sync_version: number;
+  goal?: SessionGoalDTO | undefined;
 }
 
 export interface SessionSkillUntrackRequest {
@@ -1797,14 +1853,13 @@ export interface SessionGoalDTO {
    * 当前 Goal 记录最近一次写入时刻，含设置、用量记账和续跑标记写入或失败回滚；fork 初值取目标 Session 冻结创建时刻。
    * 与 revision 不同：revision 仅随普通设置更新递增。
    */
-  updated_at: string | undefined;
-  last_accounted_job_id?: string | undefined;
-  last_continued_job_id?: string | undefined;
-  accounted_jobs?:
-    | { [key: string]: any }
+  updated_at:
+    | string
     | undefined;
   /** 由权威 catalog 解析的 main Thread；不作为 goal.json 中的第二指针。 */
   thread_id: string;
+  control_revision: number;
+  sync_version: number;
 }
 
 export interface SessionGoalSetRequest {
@@ -1812,6 +1867,8 @@ export interface SessionGoalSetRequest {
   status?: string | undefined;
   token_budget?: number | undefined;
   replace?: boolean | undefined;
+  operation_id: string;
+  expected_control_revision: number;
 }
 
 export interface SessionInformationErrorDTO {
@@ -5386,6 +5443,7 @@ function createBaseSessionCatalogPageDTO(): SessionCatalogPageDTO {
     cursor: undefined,
     total: 0,
     consistency_warning: undefined,
+    sync: undefined,
   };
 }
 
@@ -5403,6 +5461,7 @@ export const SessionCatalogPageDTO: MessageFns<SessionCatalogPageDTO> = {
       consistency_warning: isSet(object.consistency_warning)
         ? globalThis.String(object.consistency_warning)
         : undefined,
+      sync: isSet(object.sync) ? SessionCatalogSyncDTO.fromJSON(object.sync) : undefined,
     };
   },
 
@@ -5429,6 +5488,9 @@ export const SessionCatalogPageDTO: MessageFns<SessionCatalogPageDTO> = {
     if (message.consistency_warning !== undefined) {
       obj.consistency_warning = message.consistency_warning;
     }
+    if (message.sync !== undefined) {
+      obj.sync = SessionCatalogSyncDTO.toJSON(message.sync);
+    }
     return obj;
   },
 
@@ -5444,12 +5506,15 @@ export const SessionCatalogPageDTO: MessageFns<SessionCatalogPageDTO> = {
     message.cursor = object.cursor ?? undefined;
     message.total = object.total ?? 0;
     message.consistency_warning = object.consistency_warning ?? undefined;
+    message.sync = (object.sync !== undefined && object.sync !== null)
+      ? SessionCatalogSyncDTO.fromPartial(object.sync)
+      : undefined;
     return message;
   },
 };
 
 function createBaseSessionCatalogBreadcrumbDTO(): SessionCatalogBreadcrumbDTO {
-  return { revision: "", catalog_revision: 0, items: [] };
+  return { revision: "", catalog_revision: 0, items: [], node_id: "", sync: undefined };
 }
 
 export const SessionCatalogBreadcrumbDTO: MessageFns<SessionCatalogBreadcrumbDTO> = {
@@ -5460,6 +5525,8 @@ export const SessionCatalogBreadcrumbDTO: MessageFns<SessionCatalogBreadcrumbDTO
       items: globalThis.Array.isArray(object?.items)
         ? object.items.map((e: any) => SessionCatalogNodeDTO.fromJSON(e))
         : [],
+      node_id: isSet(object.node_id) ? globalThis.String(object.node_id) : "",
+      sync: isSet(object.sync) ? SessionCatalogSyncDTO.fromJSON(object.sync) : undefined,
     };
   },
 
@@ -5474,6 +5541,12 @@ export const SessionCatalogBreadcrumbDTO: MessageFns<SessionCatalogBreadcrumbDTO
     if (message.items?.length) {
       obj.items = message.items.map((e) => SessionCatalogNodeDTO.toJSON(e));
     }
+    if (message.node_id !== "") {
+      obj.node_id = message.node_id;
+    }
+    if (message.sync !== undefined) {
+      obj.sync = SessionCatalogSyncDTO.toJSON(message.sync);
+    }
     return obj;
   },
 
@@ -5485,6 +5558,10 @@ export const SessionCatalogBreadcrumbDTO: MessageFns<SessionCatalogBreadcrumbDTO
     message.revision = object.revision ?? "";
     message.catalog_revision = object.catalog_revision ?? 0;
     message.items = object.items?.map((e) => SessionCatalogNodeDTO.fromPartial(e)) || [];
+    message.node_id = object.node_id ?? "";
+    message.sync = (object.sync !== undefined && object.sync !== null)
+      ? SessionCatalogSyncDTO.fromPartial(object.sync)
+      : undefined;
     return message;
   },
 };
@@ -5588,7 +5665,7 @@ export const SessionCatalogSearchResultsDTO: MessageFns<SessionCatalogSearchResu
 };
 
 function createBaseSessionCatalogExportDTO(): SessionCatalogExportDTO {
-  return { revision: "", catalog_revision: 0, items: [] };
+  return { revision: "", catalog_revision: 0, items: [], node_ids: [], complete: false, sync: undefined };
 }
 
 export const SessionCatalogExportDTO: MessageFns<SessionCatalogExportDTO> = {
@@ -5599,6 +5676,11 @@ export const SessionCatalogExportDTO: MessageFns<SessionCatalogExportDTO> = {
       items: globalThis.Array.isArray(object?.items)
         ? object.items.map((e: any) => SessionCatalogNodeDTO.fromJSON(e))
         : [],
+      node_ids: globalThis.Array.isArray(object?.node_ids)
+        ? object.node_ids.map((e: any) => globalThis.String(e))
+        : [],
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      sync: isSet(object.sync) ? SessionCatalogSyncDTO.fromJSON(object.sync) : undefined,
     };
   },
 
@@ -5613,6 +5695,15 @@ export const SessionCatalogExportDTO: MessageFns<SessionCatalogExportDTO> = {
     if (message.items?.length) {
       obj.items = message.items.map((e) => SessionCatalogNodeDTO.toJSON(e));
     }
+    if (message.node_ids?.length) {
+      obj.node_ids = message.node_ids;
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.sync !== undefined) {
+      obj.sync = SessionCatalogSyncDTO.toJSON(message.sync);
+    }
     return obj;
   },
 
@@ -5624,6 +5715,170 @@ export const SessionCatalogExportDTO: MessageFns<SessionCatalogExportDTO> = {
     message.revision = object.revision ?? "";
     message.catalog_revision = object.catalog_revision ?? 0;
     message.items = object.items?.map((e) => SessionCatalogNodeDTO.fromPartial(e)) || [];
+    message.node_ids = object.node_ids?.map((e) => e) || [];
+    message.complete = object.complete ?? false;
+    message.sync = (object.sync !== undefined && object.sync !== null)
+      ? SessionCatalogSyncDTO.fromPartial(object.sync)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseSessionCatalogSyncDTO(): SessionCatalogSyncDTO {
+  return {
+    gateway_id: "",
+    workspace_id: "",
+    source: "",
+    stale: false,
+    authoritative_confirmed_at: undefined,
+    error: undefined,
+  };
+}
+
+export const SessionCatalogSyncDTO: MessageFns<SessionCatalogSyncDTO> = {
+  fromJSON(object: any): SessionCatalogSyncDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      stale: isSet(object.stale) ? globalThis.Boolean(object.stale) : false,
+      authoritative_confirmed_at: isSet(object.authoritative_confirmed_at)
+        ? globalThis.String(object.authoritative_confirmed_at)
+        : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: SessionCatalogSyncDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.stale !== false) {
+      obj.stale = message.stale;
+    }
+    if (message.authoritative_confirmed_at !== undefined) {
+      obj.authoritative_confirmed_at = message.authoritative_confirmed_at;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionCatalogSyncDTO>, I>>(base?: I): SessionCatalogSyncDTO {
+    return SessionCatalogSyncDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionCatalogSyncDTO>, I>>(object: I): SessionCatalogSyncDTO {
+    const message = createBaseSessionCatalogSyncDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.source = object.source ?? "";
+    message.stale = object.stale ?? false;
+    message.authoritative_confirmed_at = object.authoritative_confirmed_at ?? undefined;
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseSessionCatalogVersionDTO(): SessionCatalogVersionDTO {
+  return { workspace_id: "", catalog_revision: 0, projection_revision: "" };
+}
+
+export const SessionCatalogVersionDTO: MessageFns<SessionCatalogVersionDTO> = {
+  fromJSON(object: any): SessionCatalogVersionDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      projection_revision: isSet(object.projection_revision) ? globalThis.String(object.projection_revision) : "",
+    };
+  },
+
+  toJSON(message: SessionCatalogVersionDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.projection_revision !== "") {
+      obj.projection_revision = message.projection_revision;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionCatalogVersionDTO>, I>>(base?: I): SessionCatalogVersionDTO {
+    return SessionCatalogVersionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionCatalogVersionDTO>, I>>(object: I): SessionCatalogVersionDTO {
+    const message = createBaseSessionCatalogVersionDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.projection_revision = object.projection_revision ?? "";
+    return message;
+  },
+};
+
+function createBaseNavigationSnapshotDTO(): NavigationSnapshotDTO {
+  return {
+    workspace_id: "",
+    catalog_revision: 0,
+    event_seq_watermark: 0,
+    generation: 0,
+    projection_revision: undefined,
+  };
+}
+
+export const NavigationSnapshotDTO: MessageFns<NavigationSnapshotDTO> = {
+  fromJSON(object: any): NavigationSnapshotDTO {
+    return {
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      catalog_revision: isSet(object.catalog_revision) ? globalThis.Number(object.catalog_revision) : 0,
+      event_seq_watermark: isSet(object.event_seq_watermark) ? globalThis.Number(object.event_seq_watermark) : 0,
+      generation: isSet(object.generation) ? globalThis.Number(object.generation) : 0,
+      projection_revision: isSet(object.projection_revision)
+        ? globalThis.String(object.projection_revision)
+        : undefined,
+    };
+  },
+
+  toJSON(message: NavigationSnapshotDTO): unknown {
+    const obj: any = {};
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.catalog_revision !== 0) {
+      obj.catalog_revision = Math.round(message.catalog_revision);
+    }
+    if (message.event_seq_watermark !== 0) {
+      obj.event_seq_watermark = Math.round(message.event_seq_watermark);
+    }
+    if (message.generation !== 0) {
+      obj.generation = Math.round(message.generation);
+    }
+    if (message.projection_revision !== undefined) {
+      obj.projection_revision = message.projection_revision;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<NavigationSnapshotDTO>, I>>(base?: I): NavigationSnapshotDTO {
+    return NavigationSnapshotDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<NavigationSnapshotDTO>, I>>(object: I): NavigationSnapshotDTO {
+    const message = createBaseNavigationSnapshotDTO();
+    message.workspace_id = object.workspace_id ?? "";
+    message.catalog_revision = object.catalog_revision ?? 0;
+    message.event_seq_watermark = object.event_seq_watermark ?? 0;
+    message.generation = object.generation ?? 0;
+    message.projection_revision = object.projection_revision ?? undefined;
     return message;
   },
 };
@@ -8977,7 +9232,15 @@ export const MessageReplayRequest: MessageFns<MessageReplayRequest> = {
 };
 
 function createBaseMessageRunAccepted(): MessageRunAccepted {
-  return { message_id: "", job_id: "", status: "", dispatch: undefined, thread_id: "", turn_id: undefined };
+  return {
+    message_id: "",
+    job_id: "",
+    status: "",
+    dispatch: undefined,
+    thread_id: "",
+    turn_id: undefined,
+    operation_id: undefined,
+  };
 }
 
 export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
@@ -8989,6 +9252,7 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
       dispatch: isSet(object.dispatch) ? JobDispatchSnapshotDTO.fromJSON(object.dispatch) : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
       turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : undefined,
     };
   },
 
@@ -9012,6 +9276,9 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
     if (message.turn_id !== undefined) {
       obj.turn_id = message.turn_id;
     }
+    if (message.operation_id !== undefined) {
+      obj.operation_id = message.operation_id;
+    }
     return obj;
   },
 
@@ -9028,12 +9295,13 @@ export const MessageRunAccepted: MessageFns<MessageRunAccepted> = {
       : undefined;
     message.thread_id = object.thread_id ?? "";
     message.turn_id = object.turn_id ?? undefined;
+    message.operation_id = object.operation_id ?? undefined;
     return message;
   },
 };
 
 function createBaseMessageRunRequest(): MessageRunRequest {
-  return { message: undefined, run: undefined };
+  return { message: undefined, run: undefined, operation_id: "" };
 }
 
 export const MessageRunRequest: MessageFns<MessageRunRequest> = {
@@ -9041,6 +9309,7 @@ export const MessageRunRequest: MessageFns<MessageRunRequest> = {
     return {
       message: isSet(object.message) ? MessageCreateRequest.fromJSON(object.message) : undefined,
       run: isSet(object.run) ? RunOptions.fromJSON(object.run) : undefined,
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
     };
   },
 
@@ -9051,6 +9320,9 @@ export const MessageRunRequest: MessageFns<MessageRunRequest> = {
     }
     if (message.run !== undefined) {
       obj.run = RunOptions.toJSON(message.run);
+    }
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
     }
     return obj;
   },
@@ -9064,6 +9336,58 @@ export const MessageRunRequest: MessageFns<MessageRunRequest> = {
       ? MessageCreateRequest.fromPartial(object.message)
       : undefined;
     message.run = (object.run !== undefined && object.run !== null) ? RunOptions.fromPartial(object.run) : undefined;
+    message.operation_id = object.operation_id ?? "";
+    return message;
+  },
+};
+
+function createBaseMessageSubmissionResultDTO(): MessageSubmissionResultDTO {
+  return { session_id: "", thread_id: "", operation_id: "", status: "", accepted: undefined };
+}
+
+export const MessageSubmissionResultDTO: MessageFns<MessageSubmissionResultDTO> = {
+  fromJSON(object: any): MessageSubmissionResultDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      accepted: isSet(object.accepted) ? MessageRunAccepted.fromJSON(object.accepted) : undefined,
+    };
+  },
+
+  toJSON(message: MessageSubmissionResultDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.accepted !== undefined) {
+      obj.accepted = MessageRunAccepted.toJSON(message.accepted);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MessageSubmissionResultDTO>, I>>(base?: I): MessageSubmissionResultDTO {
+    return MessageSubmissionResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MessageSubmissionResultDTO>, I>>(object: I): MessageSubmissionResultDTO {
+    const message = createBaseMessageSubmissionResultDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.operation_id = object.operation_id ?? "";
+    message.status = object.status ?? "";
+    message.accepted = (object.accepted !== undefined && object.accepted !== null)
+      ? MessageRunAccepted.fromPartial(object.accepted)
+      : undefined;
     return message;
   },
 };
@@ -14908,41 +15232,160 @@ export const SessionGenerationOriginDTO: MessageFns<SessionGenerationOriginDTO> 
   },
 };
 
-function createBaseSessionGoalClearResultDTO(): SessionGoalClearResultDTO {
-  return { session_id: "", cleared: false, thread_id: "" };
+function createBaseSessionGoalClearRequest(): SessionGoalClearRequest {
+  return { operation_id: "", expected_control_revision: 0 };
 }
 
-export const SessionGoalClearResultDTO: MessageFns<SessionGoalClearResultDTO> = {
-  fromJSON(object: any): SessionGoalClearResultDTO {
+export const SessionGoalClearRequest: MessageFns<SessionGoalClearRequest> = {
+  fromJSON(object: any): SessionGoalClearRequest {
     return {
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      cleared: isSet(object.cleared) ? globalThis.Boolean(object.cleared) : false,
-      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      expected_control_revision: isSet(object.expected_control_revision)
+        ? globalThis.Number(object.expected_control_revision)
+        : 0,
     };
   },
 
-  toJSON(message: SessionGoalClearResultDTO): unknown {
+  toJSON(message: SessionGoalClearRequest): unknown {
     const obj: any = {};
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
     }
-    if (message.cleared !== false) {
-      obj.cleared = message.cleared;
-    }
-    if (message.thread_id !== "") {
-      obj.thread_id = message.thread_id;
+    if (message.expected_control_revision !== 0) {
+      obj.expected_control_revision = Math.round(message.expected_control_revision);
     }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<SessionGoalClearResultDTO>, I>>(base?: I): SessionGoalClearResultDTO {
-    return SessionGoalClearResultDTO.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<SessionGoalClearRequest>, I>>(base?: I): SessionGoalClearRequest {
+    return SessionGoalClearRequest.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<SessionGoalClearResultDTO>, I>>(object: I): SessionGoalClearResultDTO {
-    const message = createBaseSessionGoalClearResultDTO();
+  fromPartial<I extends Exact<DeepPartial<SessionGoalClearRequest>, I>>(object: I): SessionGoalClearRequest {
+    const message = createBaseSessionGoalClearRequest();
+    message.operation_id = object.operation_id ?? "";
+    message.expected_control_revision = object.expected_control_revision ?? 0;
+    return message;
+  },
+};
+
+function createBaseSessionGoalSnapshotDTO(): SessionGoalSnapshotDTO {
+  return { session_id: "", thread_id: "", goal: undefined, control_revision: 0, sync_version: 0 };
+}
+
+export const SessionGoalSnapshotDTO: MessageFns<SessionGoalSnapshotDTO> = {
+  fromJSON(object: any): SessionGoalSnapshotDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      goal: isSet(object.goal) ? SessionGoalDTO.fromJSON(object.goal) : undefined,
+      control_revision: isSet(object.control_revision) ? globalThis.Number(object.control_revision) : 0,
+      sync_version: isSet(object.sync_version) ? globalThis.Number(object.sync_version) : 0,
+    };
+  },
+
+  toJSON(message: SessionGoalSnapshotDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.goal !== undefined) {
+      obj.goal = SessionGoalDTO.toJSON(message.goal);
+    }
+    if (message.control_revision !== 0) {
+      obj.control_revision = Math.round(message.control_revision);
+    }
+    if (message.sync_version !== 0) {
+      obj.sync_version = Math.round(message.sync_version);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGoalSnapshotDTO>, I>>(base?: I): SessionGoalSnapshotDTO {
+    return SessionGoalSnapshotDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGoalSnapshotDTO>, I>>(object: I): SessionGoalSnapshotDTO {
+    const message = createBaseSessionGoalSnapshotDTO();
     message.session_id = object.session_id ?? "";
-    message.cleared = object.cleared ?? false;
     message.thread_id = object.thread_id ?? "";
+    message.goal = (object.goal !== undefined && object.goal !== null)
+      ? SessionGoalDTO.fromPartial(object.goal)
+      : undefined;
+    message.control_revision = object.control_revision ?? 0;
+    message.sync_version = object.sync_version ?? 0;
+    return message;
+  },
+};
+
+function createBaseSessionGoalOperationResultDTO(): SessionGoalOperationResultDTO {
+  return {
+    session_id: "",
+    thread_id: "",
+    operation_id: "",
+    status: "",
+    control_revision: 0,
+    sync_version: 0,
+    goal: undefined,
+  };
+}
+
+export const SessionGoalOperationResultDTO: MessageFns<SessionGoalOperationResultDTO> = {
+  fromJSON(object: any): SessionGoalOperationResultDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      control_revision: isSet(object.control_revision) ? globalThis.Number(object.control_revision) : 0,
+      sync_version: isSet(object.sync_version) ? globalThis.Number(object.sync_version) : 0,
+      goal: isSet(object.goal) ? SessionGoalDTO.fromJSON(object.goal) : undefined,
+    };
+  },
+
+  toJSON(message: SessionGoalOperationResultDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.control_revision !== 0) {
+      obj.control_revision = Math.round(message.control_revision);
+    }
+    if (message.sync_version !== 0) {
+      obj.sync_version = Math.round(message.sync_version);
+    }
+    if (message.goal !== undefined) {
+      obj.goal = SessionGoalDTO.toJSON(message.goal);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SessionGoalOperationResultDTO>, I>>(base?: I): SessionGoalOperationResultDTO {
+    return SessionGoalOperationResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SessionGoalOperationResultDTO>, I>>(
+    object: I,
+  ): SessionGoalOperationResultDTO {
+    const message = createBaseSessionGoalOperationResultDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.operation_id = object.operation_id ?? "";
+    message.status = object.status ?? "";
+    message.control_revision = object.control_revision ?? 0;
+    message.sync_version = object.sync_version ?? 0;
+    message.goal = (object.goal !== undefined && object.goal !== null)
+      ? SessionGoalDTO.fromPartial(object.goal)
+      : undefined;
     return message;
   },
 };
@@ -15119,10 +15562,9 @@ function createBaseSessionGoalDTO(): SessionGoalDTO {
     revision: undefined,
     created_at: undefined,
     updated_at: undefined,
-    last_accounted_job_id: undefined,
-    last_continued_job_id: undefined,
-    accounted_jobs: undefined,
     thread_id: "",
+    control_revision: 0,
+    sync_version: 0,
   };
 }
 
@@ -15139,14 +15581,9 @@ export const SessionGoalDTO: MessageFns<SessionGoalDTO> = {
       revision: isSet(object.revision) ? globalThis.Number(object.revision) : undefined,
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
-      last_accounted_job_id: isSet(object.last_accounted_job_id)
-        ? globalThis.String(object.last_accounted_job_id)
-        : undefined,
-      last_continued_job_id: isSet(object.last_continued_job_id)
-        ? globalThis.String(object.last_continued_job_id)
-        : undefined,
-      accounted_jobs: isObject(object.accounted_jobs) ? object.accounted_jobs : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      control_revision: isSet(object.control_revision) ? globalThis.Number(object.control_revision) : 0,
+      sync_version: isSet(object.sync_version) ? globalThis.Number(object.sync_version) : 0,
     };
   },
 
@@ -15182,17 +15619,14 @@ export const SessionGoalDTO: MessageFns<SessionGoalDTO> = {
     if (message.updated_at !== undefined) {
       obj.updated_at = message.updated_at;
     }
-    if (message.last_accounted_job_id !== undefined) {
-      obj.last_accounted_job_id = message.last_accounted_job_id;
-    }
-    if (message.last_continued_job_id !== undefined) {
-      obj.last_continued_job_id = message.last_continued_job_id;
-    }
-    if (message.accounted_jobs !== undefined) {
-      obj.accounted_jobs = message.accounted_jobs;
-    }
     if (message.thread_id !== "") {
       obj.thread_id = message.thread_id;
+    }
+    if (message.control_revision !== 0) {
+      obj.control_revision = Math.round(message.control_revision);
+    }
+    if (message.sync_version !== 0) {
+      obj.sync_version = Math.round(message.sync_version);
     }
     return obj;
   },
@@ -15212,16 +15646,22 @@ export const SessionGoalDTO: MessageFns<SessionGoalDTO> = {
     message.revision = object.revision ?? undefined;
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
-    message.last_accounted_job_id = object.last_accounted_job_id ?? undefined;
-    message.last_continued_job_id = object.last_continued_job_id ?? undefined;
-    message.accounted_jobs = object.accounted_jobs ?? undefined;
     message.thread_id = object.thread_id ?? "";
+    message.control_revision = object.control_revision ?? 0;
+    message.sync_version = object.sync_version ?? 0;
     return message;
   },
 };
 
 function createBaseSessionGoalSetRequest(): SessionGoalSetRequest {
-  return { objective: undefined, status: undefined, token_budget: undefined, replace: undefined };
+  return {
+    objective: undefined,
+    status: undefined,
+    token_budget: undefined,
+    replace: undefined,
+    operation_id: "",
+    expected_control_revision: 0,
+  };
 }
 
 export const SessionGoalSetRequest: MessageFns<SessionGoalSetRequest> = {
@@ -15231,6 +15671,10 @@ export const SessionGoalSetRequest: MessageFns<SessionGoalSetRequest> = {
       status: isSet(object.status) ? globalThis.String(object.status) : undefined,
       token_budget: isSet(object.token_budget) ? globalThis.Number(object.token_budget) : undefined,
       replace: isSet(object.replace) ? globalThis.Boolean(object.replace) : undefined,
+      operation_id: isSet(object.operation_id) ? globalThis.String(object.operation_id) : "",
+      expected_control_revision: isSet(object.expected_control_revision)
+        ? globalThis.Number(object.expected_control_revision)
+        : 0,
     };
   },
 
@@ -15248,6 +15692,12 @@ export const SessionGoalSetRequest: MessageFns<SessionGoalSetRequest> = {
     if (message.replace !== undefined) {
       obj.replace = message.replace;
     }
+    if (message.operation_id !== "") {
+      obj.operation_id = message.operation_id;
+    }
+    if (message.expected_control_revision !== 0) {
+      obj.expected_control_revision = Math.round(message.expected_control_revision);
+    }
     return obj;
   },
 
@@ -15260,6 +15710,8 @@ export const SessionGoalSetRequest: MessageFns<SessionGoalSetRequest> = {
     message.status = object.status ?? undefined;
     message.token_budget = object.token_budget ?? undefined;
     message.replace = object.replace ?? undefined;
+    message.operation_id = object.operation_id ?? "";
+    message.expected_control_revision = object.expected_control_revision ?? 0;
     return message;
   },
 };

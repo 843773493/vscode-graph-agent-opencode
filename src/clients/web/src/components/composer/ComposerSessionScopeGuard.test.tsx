@@ -76,6 +76,7 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     getLatestAssistantContent: () => null,
     setStatus: () => undefined,
     sendMessage: async () => undefined,
+    refreshTurnHistory: () => undefined,
     compactSession: async () => ({} as never),
     refreshGoal: async () => null,
     updateGoal: async () => undefined,

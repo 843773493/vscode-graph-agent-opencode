@@ -6,19 +6,22 @@ import { updateAttachmentSummariesFromTraces } from "../../state/attachments";
 import {
   appendTraceEventsToPendingConversations,
   writePendingSnapshot,
+  writeDispatchActiveJob,
 } from "../../state/conversations";
-import { goalStreamMutation } from "../../state/sessionGoal";
+import { goalStreamMutation } from "../../protocol/sessionGoal";
+import { applyVersionedValue } from "../../../../shared/core/syncState";
 import {
   appendBoundedLiveTraceEvents,
   appendReceivedEvents,
   buildTraceEvent,
   tracePayloadString,
+  rawTracePayload,
 } from "../../state/traceEvents";
 import {
   dispatchWorkspaceFileChanges,
   fileChangesFromTraceEvents,
 } from "../../state/workspaceFileTreeEvents";
-import type { SessionStreamEvent } from "../../types/backend";
+import type { JobDispatchSnapshot, SessionStreamEvent } from "../../types/backend";
 import {
   refreshSessionMetadata,
 } from "./sessionRefresh";
@@ -80,15 +83,29 @@ function updateCurrentSessionFromEvents(
       context.sessionCacheKey,
       true,
     );
+    for (const event of traceEvents) {
+      if (event.type !== "job_started") continue;
+      const dispatch = rawTracePayload(event).dispatch as JobDispatchSnapshot | undefined;
+      if (!dispatch || dispatch.session_id !== context.sessionId || dispatch.thread_id !== (context.threadId ?? previous.currentSession.thread_id) || dispatch.job_id !== event.job_id) {
+        throw new Error("Job 开始事件缺少同归属的队列水位");
+      }
+      writeDispatchActiveJob(next.activeJobIdsBySession, dispatch, context.sessionCacheKey, next.pendingQueueVersions);
+    }
     for (const mutation of goalMutations) {
       if (mutation?.kind === "updated") {
-        next.currentGoal = mutation.goal;
+        if (mutation.goal.sync_version < next.currentGoalSyncVersion) continue;
+        next.currentGoal = applyVersionedValue(next.currentGoal, mutation.goal, (goal) => goal.sync_version);
         next.currentGoalSessionId = context.sessionId;
+        next.currentGoalControlRevision = mutation.goal.control_revision;
+        next.currentGoalSyncVersion = mutation.goal.sync_version;
         next.goalLoading = false;
         next.goalError = null;
       } else if (mutation?.kind === "cleared") {
+        if (mutation.syncVersion < next.currentGoalSyncVersion) continue;
         next.currentGoal = null;
         next.currentGoalSessionId = context.sessionId;
+        next.currentGoalControlRevision = mutation.controlRevision;
+        next.currentGoalSyncVersion = mutation.syncVersion;
         next.goalLoading = false;
         next.goalError = null;
       }
@@ -162,6 +179,7 @@ export function flushSessionStreamEventBatch(
           next.activeJobIdsBySession,
           snapshot,
           context.sessionCacheKey,
+          next.pendingQueueVersions,
         );
         return next;
       });

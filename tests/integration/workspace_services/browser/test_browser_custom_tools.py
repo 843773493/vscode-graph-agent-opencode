@@ -44,6 +44,7 @@ from tests.harness.python.terminal_plugin import (
     TerminalPluginGateway,
     browser_plugin_gateway_for_workspace,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
@@ -863,12 +864,12 @@ async def test_agent_lists_current_browser_website_through_documented_tool(
 
     message_response = await integration_client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {
                 "content": "你看看当前后台连接的浏览器网站是什么。"
             },
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200, message_response.text
     job_id = message_response.json()["data"]["job_id"]

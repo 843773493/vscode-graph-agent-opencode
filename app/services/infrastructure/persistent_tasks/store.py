@@ -14,6 +14,7 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.time_schedule import evaluate_schedule
 from app.domain.itemized.execution_queue import ExecutionCompletionPage
 from app.domain.itemized.hashing import sha256_jcs
+from app.schemas.internal_v2.goal import goal_public_view
 from app.schemas.internal_v2.persistent_task import (
     AutomationTaskDTO,
     PersistentTaskCheckRequest,
@@ -116,7 +117,7 @@ class PersistentTaskStore(TaskGoals):
             raise RuntimeError("Goal 管理投影与当前任务身份不一致")
         return PersistentTaskDTO(
             task_id=task_id, workspace_id=self.workspace_id, revision=row["revision"],
-            definition_revision=row["definition_revision"], application_type="goal", goal=goal,
+            definition_revision=row["definition_revision"], application_type="goal", goal=goal_public_view(goal),
             lifecycle=row["lifecycle"], phase=goal.status.value,
             created_at=goal.created_at, updated_at=goal.updated_at,
         )

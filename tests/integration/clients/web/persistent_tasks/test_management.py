@@ -24,6 +24,7 @@ from tests.integration.backend.agents.test_mcp_connection_control import (
     recovery_case as recovery_case,  # noqa: PLC0414 - 当前文件正式隔离目录
 )
 from tests.support.api_helpers import create_session
+from tests.support.goal_control import goal_control_payload
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原产品装具依赖
 )
@@ -80,9 +81,9 @@ async def test_workspace_task_form_controls_trial_delivery_and_conflict_readback
         response = await client.get(f"/api/v1/sessions/{session}/main-thread")
         assert response.status_code == 200, response.text
         thread = response.json()["data"]["thread_id"]
-        response = await client.put(f"/api/v1/sessions/{session}/goal", json={"objective": "同一owner的暂停目标", "status": "paused"})
+        response = await client.put(f"/api/v1/sessions/{session}/goal", json=await goal_control_payload(client, session, {"objective": "同一owner的暂停目标", "status": "paused"}))
         assert response.status_code == 200, response.text
-        goal = response.json()["data"]
+        goal = response.json()["data"]["goal"]
         other_session = await create_session(client, "无关联任务的另一个会话")
         response = await client.get(f"/api/v1/sessions/{other_session}/main-thread")
         assert response.status_code == 200, response.text
@@ -115,7 +116,7 @@ async def test_workspace_task_form_controls_trial_delivery_and_conflict_readback
         assert trial["phase"] == "checked" and trial["decision"]["decision"] == "proceed" and trial["delivery"] is None
         assert delivered["phase"] == "delivered" and delivered["decision"]["decision"] == "proceed"
         assert delivered["delivery"]["state"] == "saved" and delivered["delivery"]["execution_id"] is None
-        updated_goal = (await client.get(f"/api/v1/sessions/{session}/goal")).json()["data"]
+        updated_goal = (await client.get(f"/api/v1/sessions/{session}/goal")).json()["data"]["goal"]
         assert updated_goal["goal_id"] == goal["goal_id"] and updated_goal["revision"] == goal["revision"] + 1
         assert updated_goal["objective"] == "同一owner的编辑目标" and updated_goal["status"] == "paused"
         # 本次只有上下文发布与纯规则判断，不应出现模型调用或伪用户消息。

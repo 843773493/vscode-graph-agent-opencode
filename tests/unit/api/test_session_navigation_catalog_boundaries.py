@@ -23,6 +23,7 @@ class _FailingCatalogService:
         parent_node_id: str | None,
         limit: int,
         cursor: str | None,
+        minimum_catalog_revision: int = 0,
     ):
         self.list_children_kwargs = {
             "parent_node_id": parent_node_id,

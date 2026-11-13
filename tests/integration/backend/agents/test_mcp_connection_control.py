@@ -22,7 +22,7 @@ from tests.integration.backend.sessions.test_mcp_config_recovery import (
 from tests.integration.workspace_services.mcp.oauth_server import (
     oauth_endpoint_factory as oauth_endpoint_factory,  # noqa: PLC0414 - 唯一 OAuth/MCP HTTP 资产
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用 MCP handler
@@ -153,10 +153,10 @@ async def test_first_oauth_remains_discoverable_and_connect_uses_real_call_ident
                 ),
             ).raw["interactions"][0])
         call_ids = replay.control.plan_model_calls(session, thread, interactions)
-        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+        accepted = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "发现连接控制，列出工作区连接，为 secure 发起授权。不要声称已连接。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert accepted.status_code == 200, accepted.text
         await wait_for_job_done(client, accepted.json()["data"]["job_id"], max_attempts=140)
         records = [json.loads((replay.artifacts / f"{identity}.json").read_text())["request"] for identity in call_ids]

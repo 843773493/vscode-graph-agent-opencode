@@ -27,6 +27,7 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _session,
     _start_job,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用真实 HTTP/MCP 协议 Server
 )
@@ -83,7 +84,7 @@ def start_workspace_message():
         ) as client:
             response = await client.post(
                 f"/api/v1/workspaces/{container.workspace_id}/sessions/{session_id}/messages",
-                json={"message": {"content": content}, "run": {"mode": "single_agent", "agent_id": "default"}},
+                json=with_message_run_operation_id({"message": {"content": content}, "run": {"mode": "single_agent", "agent_id": "default"}}),
             )
             assert response.status_code == 200, response.text
             return container.job_service._jobs[response.json()["data"]["job_id"]]

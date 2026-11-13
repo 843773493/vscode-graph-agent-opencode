@@ -172,7 +172,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
           updateState((previous) => {
             const next = cloneMaps(previous);
             writePendingSnapshot(next.pendingConversations, next.activeJobIdsBySession,
-              { ...snapshot, active_job_id: jobId, snapshot_version: 3 }, SCOPE_KEY);
+              { ...snapshot, active_job_id: jobId, snapshot_version: 3 }, SCOPE_KEY, next.pendingQueueVersions);
             return next;
           });
           await wait(40);
@@ -210,7 +210,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         updateState((previous) => {
           const next = cloneMaps(previous);
           for (const version of [4, 4]) writePendingSnapshot(next.pendingConversations,
-            next.activeJobIdsBySession, { ...snapshot, active_job_id: jobId, snapshot_version: version }, SCOPE_KEY);
+            next.activeJobIdsBySession, { ...snapshot, active_job_id: jobId, snapshot_version: version }, SCOPE_KEY, next.pendingQueueVersions);
           return next;
         });
         await wait(40);
@@ -347,6 +347,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       conversationId: "msg_replay_active",
       displayMode: "live",
       sessionId: SESSION_ID,
+      threadId: THREAD_ID,
       userMessage: {
         message_id: "msg_replay_active",
         session_id: SESSION_ID,
@@ -547,10 +548,12 @@ describe("useSessionTurnHistory pending bootstrap", () => {
     act(() => renderer!.unmount());
   });
 
-  test("bootstrap 权威 count 为零时清除旧 queued 缓存", async () => {
+  test("bootstrap 零 count 保留队列，权威空快照确认后清除并保留水位", async () => {
     const apiPort = 9115;
     installWindow(apiPort);
     let currentState = appState();
+    let resolvePending!: (response: Response) => void;
+    const pendingResponse = new Promise<Response>(resolve => { resolvePending = resolve; });
     currentState.pendingConversations.set(SCOPE_KEY, [{
       conversationId: "old-queued",
       displayMode: "live",
@@ -579,6 +582,9 @@ describe("useSessionTurnHistory pending bootstrap", () => {
         if (path === `/api/v1/sessions/${SESSION_ID}/history`) {
           return emptyHistoryPageResponse("req_history_empty_pending");
         }
+        if (path === `/api/v1/sessions/${SESSION_ID}/main-thread/pending-requests`) {
+          return pendingResponse;
+        }
         throw new Error(`测试收到未预期请求: ${path}`);
       },
       { preconnect: originalFetch.preconnect },
@@ -604,7 +610,15 @@ describe("useSessionTurnHistory pending bootstrap", () => {
       renderer = create(<Harness />);
       await wait(30);
     });
+    expect(currentState.pendingConversations.get(SCOPE_KEY)?.[0]?.jobId).toBe("old-queued-job");
+    await act(async () => {
+      resolvePending(Response.json({ code: 0, message: "ok", request_id: "req_pending_empty_confirmed", data: {
+        session_id: SESSION_ID, thread_id: THREAD_ID, active_job_id: null, requests: [], snapshot_version: 2,
+      } }));
+      await wait(30);
+    });
     expect(currentState.pendingConversations.has(SCOPE_KEY)).toBe(false);
+    expect(currentState.pendingQueueVersions.get(SCOPE_KEY)?.get(THREAD_ID)).toBe(2);
     act(() => renderer!.unmount());
   });
 });

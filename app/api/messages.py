@@ -24,6 +24,7 @@ from app.api.deps import (
 from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.domain.itemized.execution_queue import MessageSubmissionConflictError
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
@@ -39,6 +40,7 @@ from app.schemas.internal_v2.message import (
     MessageReplayRequest,
     MessageRunAccepted,
     MessageRunRequest,
+    MessageSubmissionResultDTO,
 )
 from app.schemas.internal_v2.pending_request import (
     PendingRequestListDTO,
@@ -203,6 +205,8 @@ async def create_message_and_run(
         result = await session_orchestrator.create_message(session_id, payload)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
+    except MessageSubmissionConflictError as error:
+        raise state_conflict_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except JobAdmissionClosedError as error:
@@ -226,10 +230,31 @@ async def create_thread_message_and_run(
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
+    except MessageSubmissionConflictError as error:
+        raise state_conflict_http_error(error) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except JobAdmissionClosedError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get(
+    "/{session_id}/threads/{thread_id}/message-submissions/{operation_id}",
+    response_model=APIResponse[MessageSubmissionResultDTO],
+    summary="按原操作身份查询消息接收事实",
+)
+async def get_message_submission(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId, operation_id: str,
+    _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
+    session_orchestrator: Annotated[SessionOrchestrator, Depends(get_session_orchestrator)],
+):
+    try:
+        result = await session_orchestrator.message_submission(session_id, thread_id, operation_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except MessageSubmissionConflictError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

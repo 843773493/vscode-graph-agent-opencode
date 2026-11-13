@@ -65,6 +65,7 @@ function panelProps(overrides: {
     conversation: {
       selectedThread: null,
       selectionIntent: null,
+      submissionRecovery: null,
       snapshot: { history: null, report: null, view: "history" as const, draft: "", loading: false, sending: false, error: null, accepted: null, paged: false },
       selectThread: () => {}, selectThreadForOwner: () => {}, close: () => {}, setDraft: () => {},
       refresh: async () => {}, openReport: async () => {}, loadEarlier: async () => {}, send: async () => {}, isUnread: () => false,

@@ -33,6 +33,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.session_navigation.catalog_intents import (
     create_catalog_intent,
     submit_catalog_intent,
@@ -591,7 +592,14 @@ class TestSessionService:
         created = await self.service.create(SessionCreateRequest(title="Trace Session"))
         await self.service._trace_event_store.append(created.session_id, JobStartedEvent(
             event_id="evt_owner", job_id="job_1", timestamp=datetime(2024, 3, 9, 11, tzinfo=UTC),
-            payload=JobStartedPayload(session_id=created.session_id, thread_id=created.thread_id),
+            payload=JobStartedPayload(
+                session_id=created.session_id,
+                thread_id=created.thread_id,
+                dispatch=running_job_dispatch_snapshot(
+                    created.session_id, created.thread_id, "job_1",
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
 
         trace_event = {
@@ -649,7 +657,14 @@ class TestSessionService:
         created = await self.service.create(SessionCreateRequest(title="Stream Trace Session"))
         await self.service._trace_event_store.append(created.session_id, JobStartedEvent(
             event_id="evt_owner", job_id="job_1", timestamp=datetime(2024, 3, 9, 11, tzinfo=UTC),
-            payload=JobStartedPayload(session_id=created.session_id, thread_id=created.thread_id),
+            payload=JobStartedPayload(
+                session_id=created.session_id,
+                thread_id=created.thread_id,
+                dispatch=running_job_dispatch_snapshot(
+                    created.session_id, created.thread_id, "job_1",
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
 
         first_event = {

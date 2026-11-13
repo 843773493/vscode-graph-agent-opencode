@@ -450,7 +450,7 @@ class SessionCatalogNodeDTO(_message.Message):
     def __init__(self, node_id: _Optional[str] = ..., kind: _Optional[str] = ..., name: _Optional[str] = ..., parent_node_id: _Optional[str] = ..., session_id: _Optional[str] = ..., folder_id: _Optional[str] = ..., has_children: _Optional[bool] = ..., node_revision: _Optional[int] = ..., state: _Optional[str] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., session: _Optional[_Union[SessionDTO, _Mapping]] = ...) -> None: ...
 
 class SessionCatalogPageDTO(_message.Message):
-    __slots__ = ("revision", "catalog_revision", "parent_node_id", "items", "cursor", "total", "consistency_warning")
+    __slots__ = ("revision", "catalog_revision", "parent_node_id", "items", "cursor", "total", "consistency_warning", "sync")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
     PARENT_NODE_ID_FIELD_NUMBER: _ClassVar[int]
@@ -458,6 +458,7 @@ class SessionCatalogPageDTO(_message.Message):
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     TOTAL_FIELD_NUMBER: _ClassVar[int]
     CONSISTENCY_WARNING_FIELD_NUMBER: _ClassVar[int]
+    SYNC_FIELD_NUMBER: _ClassVar[int]
     revision: str
     catalog_revision: int
     parent_node_id: str
@@ -465,17 +466,22 @@ class SessionCatalogPageDTO(_message.Message):
     cursor: str
     total: int
     consistency_warning: str
-    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., parent_node_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., total: _Optional[int] = ..., consistency_warning: _Optional[str] = ...) -> None: ...
+    sync: SessionCatalogSyncDTO
+    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., parent_node_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., total: _Optional[int] = ..., consistency_warning: _Optional[str] = ..., sync: _Optional[_Union[SessionCatalogSyncDTO, _Mapping]] = ...) -> None: ...
 
 class SessionCatalogBreadcrumbDTO(_message.Message):
-    __slots__ = ("revision", "catalog_revision", "items")
+    __slots__ = ("revision", "catalog_revision", "items", "node_id", "sync")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
     ITEMS_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    SYNC_FIELD_NUMBER: _ClassVar[int]
     revision: str
     catalog_revision: int
     items: _containers.RepeatedCompositeFieldContainer[SessionCatalogNodeDTO]
-    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ...) -> None: ...
+    node_id: str
+    sync: SessionCatalogSyncDTO
+    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ..., node_id: _Optional[str] = ..., sync: _Optional[_Union[SessionCatalogSyncDTO, _Mapping]] = ...) -> None: ...
 
 class SessionCatalogSearchResultDTO(_message.Message):
     __slots__ = ("node", "breadcrumb", "relative_path")
@@ -502,14 +508,60 @@ class SessionCatalogSearchResultsDTO(_message.Message):
     def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogSearchResultDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., total: _Optional[int] = ...) -> None: ...
 
 class SessionCatalogExportDTO(_message.Message):
-    __slots__ = ("revision", "catalog_revision", "items")
+    __slots__ = ("revision", "catalog_revision", "items", "node_ids", "complete", "sync")
     REVISION_FIELD_NUMBER: _ClassVar[int]
     CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
     ITEMS_FIELD_NUMBER: _ClassVar[int]
+    NODE_IDS_FIELD_NUMBER: _ClassVar[int]
+    COMPLETE_FIELD_NUMBER: _ClassVar[int]
+    SYNC_FIELD_NUMBER: _ClassVar[int]
     revision: str
     catalog_revision: int
     items: _containers.RepeatedCompositeFieldContainer[SessionCatalogNodeDTO]
-    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ...) -> None: ...
+    node_ids: _containers.RepeatedScalarFieldContainer[str]
+    complete: bool
+    sync: SessionCatalogSyncDTO
+    def __init__(self, revision: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[SessionCatalogNodeDTO, _Mapping]]] = ..., node_ids: _Optional[_Iterable[str]] = ..., complete: _Optional[bool] = ..., sync: _Optional[_Union[SessionCatalogSyncDTO, _Mapping]] = ...) -> None: ...
+
+class SessionCatalogSyncDTO(_message.Message):
+    __slots__ = ("gateway_id", "workspace_id", "source", "stale", "authoritative_confirmed_at", "error")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    STALE_FIELD_NUMBER: _ClassVar[int]
+    AUTHORITATIVE_CONFIRMED_AT_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_id: str
+    source: str
+    stale: bool
+    authoritative_confirmed_at: _timestamp_pb2.Timestamp
+    error: str
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., source: _Optional[str] = ..., stale: _Optional[bool] = ..., authoritative_confirmed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., error: _Optional[str] = ...) -> None: ...
+
+class SessionCatalogVersionDTO(_message.Message):
+    __slots__ = ("workspace_id", "catalog_revision", "projection_revision")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    PROJECTION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    catalog_revision: int
+    projection_revision: str
+    def __init__(self, workspace_id: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., projection_revision: _Optional[str] = ...) -> None: ...
+
+class NavigationSnapshotDTO(_message.Message):
+    __slots__ = ("workspace_id", "catalog_revision", "event_seq_watermark", "generation", "projection_revision")
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_REVISION_FIELD_NUMBER: _ClassVar[int]
+    EVENT_SEQ_WATERMARK_FIELD_NUMBER: _ClassVar[int]
+    GENERATION_FIELD_NUMBER: _ClassVar[int]
+    PROJECTION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    workspace_id: str
+    catalog_revision: int
+    event_seq_watermark: int
+    generation: int
+    projection_revision: str
+    def __init__(self, workspace_id: _Optional[str] = ..., catalog_revision: _Optional[int] = ..., event_seq_watermark: _Optional[int] = ..., generation: _Optional[int] = ..., projection_revision: _Optional[str] = ...) -> None: ...
 
 class SearchProviderCapabilityDTO(_message.Message):
     __slots__ = ("provider_id", "category", "operations", "contract_version", "supported_options", "position_kind", "max_results", "cache_policy", "match_modes")
@@ -1392,28 +1444,46 @@ class MessageReplayRequest(_message.Message):
     def __init__(self, action: _Optional[str] = ..., content: _Optional[str] = ..., acknowledge_context_only: _Optional[bool] = ...) -> None: ...
 
 class MessageRunAccepted(_message.Message):
-    __slots__ = ("message_id", "job_id", "status", "dispatch", "thread_id", "turn_id")
+    __slots__ = ("message_id", "job_id", "status", "dispatch", "thread_id", "turn_id", "operation_id")
     MESSAGE_ID_FIELD_NUMBER: _ClassVar[int]
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     DISPATCH_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
     TURN_ID_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     message_id: str
     job_id: str
     status: str
     dispatch: JobDispatchSnapshotDTO
     thread_id: str
     turn_id: str
-    def __init__(self, message_id: _Optional[str] = ..., job_id: _Optional[str] = ..., status: _Optional[str] = ..., dispatch: _Optional[_Union[JobDispatchSnapshotDTO, _Mapping]] = ..., thread_id: _Optional[str] = ..., turn_id: _Optional[str] = ...) -> None: ...
+    operation_id: str
+    def __init__(self, message_id: _Optional[str] = ..., job_id: _Optional[str] = ..., status: _Optional[str] = ..., dispatch: _Optional[_Union[JobDispatchSnapshotDTO, _Mapping]] = ..., thread_id: _Optional[str] = ..., turn_id: _Optional[str] = ..., operation_id: _Optional[str] = ...) -> None: ...
 
 class MessageRunRequest(_message.Message):
-    __slots__ = ("message", "run")
+    __slots__ = ("message", "run", "operation_id")
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     RUN_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
     message: MessageCreateRequest
     run: RunOptions
-    def __init__(self, message: _Optional[_Union[MessageCreateRequest, _Mapping]] = ..., run: _Optional[_Union[RunOptions, _Mapping]] = ...) -> None: ...
+    operation_id: str
+    def __init__(self, message: _Optional[_Union[MessageCreateRequest, _Mapping]] = ..., run: _Optional[_Union[RunOptions, _Mapping]] = ..., operation_id: _Optional[str] = ...) -> None: ...
+
+class MessageSubmissionResultDTO(_message.Message):
+    __slots__ = ("session_id", "thread_id", "operation_id", "status", "accepted")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    ACCEPTED_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    thread_id: str
+    operation_id: str
+    status: str
+    accepted: MessageRunAccepted
+    def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., operation_id: _Optional[str] = ..., status: _Optional[str] = ..., accepted: _Optional[_Union[MessageRunAccepted, _Mapping]] = ...) -> None: ...
 
 class ExtensionCatalogBindingAuditDTO(_message.Message):
     __slots__ = ("binding_id", "binding_hash", "catalog_revision", "generation", "provider_binding_identity", "target_id", "target_schema_hash")
@@ -2947,15 +3017,45 @@ class SessionGenerationOriginDTO(_message.Message):
     generator_type_version: str
     def __init__(self, generator_id: _Optional[str] = ..., run_id: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., generator_type_id: _Optional[str] = ..., generator_type_version: _Optional[str] = ...) -> None: ...
 
-class SessionGoalClearResultDTO(_message.Message):
-    __slots__ = ("session_id", "cleared", "thread_id")
+class SessionGoalClearRequest(_message.Message):
+    __slots__ = ("operation_id", "expected_control_revision")
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_CONTROL_REVISION_FIELD_NUMBER: _ClassVar[int]
+    operation_id: str
+    expected_control_revision: int
+    def __init__(self, operation_id: _Optional[str] = ..., expected_control_revision: _Optional[int] = ...) -> None: ...
+
+class SessionGoalSnapshotDTO(_message.Message):
+    __slots__ = ("session_id", "thread_id", "goal", "control_revision", "sync_version")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    CLEARED_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    GOAL_FIELD_NUMBER: _ClassVar[int]
+    CONTROL_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SYNC_VERSION_FIELD_NUMBER: _ClassVar[int]
     session_id: str
-    cleared: bool
     thread_id: str
-    def __init__(self, session_id: _Optional[str] = ..., cleared: _Optional[bool] = ..., thread_id: _Optional[str] = ...) -> None: ...
+    goal: SessionGoalDTO
+    control_revision: int
+    sync_version: int
+    def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., goal: _Optional[_Union[SessionGoalDTO, _Mapping]] = ..., control_revision: _Optional[int] = ..., sync_version: _Optional[int] = ...) -> None: ...
+
+class SessionGoalOperationResultDTO(_message.Message):
+    __slots__ = ("session_id", "thread_id", "operation_id", "status", "control_revision", "sync_version", "goal")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    CONTROL_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SYNC_VERSION_FIELD_NUMBER: _ClassVar[int]
+    GOAL_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    thread_id: str
+    operation_id: str
+    status: str
+    control_revision: int
+    sync_version: int
+    goal: SessionGoalDTO
+    def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., operation_id: _Optional[str] = ..., status: _Optional[str] = ..., control_revision: _Optional[int] = ..., sync_version: _Optional[int] = ..., goal: _Optional[_Union[SessionGoalDTO, _Mapping]] = ...) -> None: ...
 
 class SessionSkillUntrackRequest(_message.Message):
     __slots__ = ("name",)
@@ -3000,7 +3100,7 @@ class SessionSkillUntrackResultDTO(_message.Message):
     def __init__(self, session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., name: _Optional[str] = ..., mode: _Optional[str] = ..., status: _Optional[str] = ..., display_uri: _Optional[str] = ..., revision: _Optional[str] = ..., content_hash: _Optional[str] = ..., append_status: _Optional[str] = ..., tracked: _Optional[bool] = ..., queued: _Optional[bool] = ..., error: _Optional[_Union[SessionSkillUntrackErrorDTO, _Mapping]] = ...) -> None: ...
 
 class SessionGoalDTO(_message.Message):
-    __slots__ = ("goal_id", "session_id", "objective", "status", "token_budget", "tokens_used", "time_used_seconds", "revision", "created_at", "updated_at", "last_accounted_job_id", "last_continued_job_id", "accounted_jobs", "thread_id")
+    __slots__ = ("goal_id", "session_id", "objective", "status", "token_budget", "tokens_used", "time_used_seconds", "revision", "created_at", "updated_at", "thread_id", "control_revision", "sync_version")
     GOAL_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     OBJECTIVE_FIELD_NUMBER: _ClassVar[int]
@@ -3011,10 +3111,9 @@ class SessionGoalDTO(_message.Message):
     REVISION_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
     UPDATED_AT_FIELD_NUMBER: _ClassVar[int]
-    LAST_ACCOUNTED_JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    LAST_CONTINUED_JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    ACCOUNTED_JOBS_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    CONTROL_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SYNC_VERSION_FIELD_NUMBER: _ClassVar[int]
     goal_id: str
     session_id: str
     objective: str
@@ -3025,23 +3124,26 @@ class SessionGoalDTO(_message.Message):
     revision: int
     created_at: _timestamp_pb2.Timestamp
     updated_at: _timestamp_pb2.Timestamp
-    last_accounted_job_id: str
-    last_continued_job_id: str
-    accounted_jobs: _struct_pb2.Struct
     thread_id: str
-    def __init__(self, goal_id: _Optional[str] = ..., session_id: _Optional[str] = ..., objective: _Optional[str] = ..., status: _Optional[str] = ..., token_budget: _Optional[int] = ..., tokens_used: _Optional[int] = ..., time_used_seconds: _Optional[int] = ..., revision: _Optional[int] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., last_accounted_job_id: _Optional[str] = ..., last_continued_job_id: _Optional[str] = ..., accounted_jobs: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., thread_id: _Optional[str] = ...) -> None: ...
+    control_revision: int
+    sync_version: int
+    def __init__(self, goal_id: _Optional[str] = ..., session_id: _Optional[str] = ..., objective: _Optional[str] = ..., status: _Optional[str] = ..., token_budget: _Optional[int] = ..., tokens_used: _Optional[int] = ..., time_used_seconds: _Optional[int] = ..., revision: _Optional[int] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., thread_id: _Optional[str] = ..., control_revision: _Optional[int] = ..., sync_version: _Optional[int] = ...) -> None: ...
 
 class SessionGoalSetRequest(_message.Message):
-    __slots__ = ("objective", "status", "token_budget", "replace")
+    __slots__ = ("objective", "status", "token_budget", "replace", "operation_id", "expected_control_revision")
     OBJECTIVE_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     TOKEN_BUDGET_FIELD_NUMBER: _ClassVar[int]
     REPLACE_FIELD_NUMBER: _ClassVar[int]
+    OPERATION_ID_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_CONTROL_REVISION_FIELD_NUMBER: _ClassVar[int]
     objective: str
     status: str
     token_budget: int
     replace: bool
-    def __init__(self, objective: _Optional[str] = ..., status: _Optional[str] = ..., token_budget: _Optional[int] = ..., replace: _Optional[bool] = ...) -> None: ...
+    operation_id: str
+    expected_control_revision: int
+    def __init__(self, objective: _Optional[str] = ..., status: _Optional[str] = ..., token_budget: _Optional[int] = ..., replace: _Optional[bool] = ..., operation_id: _Optional[str] = ..., expected_control_revision: _Optional[int] = ...) -> None: ...
 
 class SessionInformationErrorDTO(_message.Message):
     __slots__ = ("event_id", "job_id", "type", "message", "timestamp", "message_truncated")

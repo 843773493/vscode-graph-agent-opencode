@@ -34,6 +34,7 @@ from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     mounted_case as mounted_case,  # noqa: PLC0414 - 工作区沿本测试文件隔离。
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
 
 
@@ -88,10 +89,10 @@ async def test_attachment_close_retains_original_owner_until_sync_work_finishes(
             assert thread.status_code == 200, thread.text
             thread_id = thread.json()["data"]["thread_id"]
             _plan_model_call(replay, selected, session_id, thread_id)
-            sent = await client.post(base + f"/sessions/{session_id}/messages", json={
+            sent = await client.post(base + f"/sessions/{session_id}/messages", json=with_message_run_operation_id({
                 "message": {"content": "保存附件", "attachments": [upload(body).model_dump(mode="json")]},
                 "run": {},
-            })
+            }))
             assert sent.status_code == 200, sent.text
             job = jobs._jobs[sent.json()["data"]["job_id"]]
             assert job.task is not None

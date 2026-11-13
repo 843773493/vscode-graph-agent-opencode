@@ -4,6 +4,10 @@ export interface SseFrame {
   data: string;
 }
 
+export class SseProtocolError extends Error {
+  constructor(message: string, options?: ErrorOptions);
+}
+
 export interface SseEventDefinition<T = unknown> {
   decode(data: string, frame: SseFrame): T;
   handle(value: T, frame: SseFrame): void;

@@ -10,6 +10,7 @@ import pytest
 
 from app.core.resource_uri import resource_display_uri
 from app.core.workspace_identity import read_workspace_id
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.sse import read_sse_events_until
 from tests.support.trace import get_trace_payload
@@ -44,10 +45,10 @@ async def _run_model_apply_patch(
         assert stream_response.status_code == 200
         message_response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={
+            json=with_message_run_operation_id({
                 "message": {"content": prompt},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            },
+            }),
         )
         assert message_response.status_code == 200
         job_id = message_response.json()["data"]["job_id"]

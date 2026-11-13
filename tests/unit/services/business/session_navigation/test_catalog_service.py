@@ -5,6 +5,7 @@ import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 from typing import Literal, TypeVar
 
 import pytest
@@ -15,7 +16,10 @@ from app.core.path_utils import get_session_creation_service, get_session_path_r
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
-from app.services.business.session_navigation.catalog_query import encode_catalog_cursor
+from app.services.business.session_navigation.catalog_query import (
+    catalog_projection_revision,
+    encode_catalog_cursor,
+)
 from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.trace_event_store import TraceEventStore
@@ -312,6 +316,70 @@ async def test_catalog_cached_null_provider_tracks_config_default_without_catalo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["children", "breadcrumb", "nodes", "full"])
+async def test_catalog_read_keeps_provider_and_revision_in_same_configuration_publication(
+    tmp_path: Path, session_bundle_factory, monkeypatch: pytest.MonkeyPatch, scope: str,
+) -> None:
+    model = {"primary_provider": "primary", "fallback_providers": ["backup"]}
+    config = SessionServiceConfigStub({
+        "default_agent": "default", "agents": {"default": {"model": model}},
+        "llm": {"providers": [{"id": "primary"}, {"id": "backup"}]},
+    })
+    sessions_root = tmp_path / "sessions"
+    service = _SessionService(sessions_root, config_service=config)
+    session_id = canonical("publication-session")
+    session_bundle_factory(sessions_root, session_id)
+    catalog = SessionCatalogService(session_service=service)
+    old_projection = config.get_revision()
+    revision_read, publication_attempted = Event(), Event()
+    original_revision = config.get_revision
+    original_project = service.project_catalog_session
+
+    def read_revision() -> str:
+        revision = original_revision()
+        revision_read.set()
+        return revision
+
+    def publish_configuration() -> None:
+        assert revision_read.wait(5), "目录读取未取得配置版本"
+        # 在 DTO 投影前尝试发布：只有整个读取持原屏障，发布才会等到本批投影结束。
+        if config.publication_lock.acquire(blocking=False):
+            try:
+                model["primary_provider"] = "backup"
+            finally:
+                config.publication_lock.release()
+                publication_attempted.set()
+        else:
+            publication_attempted.set()
+            with config.publication_lock:
+                model["primary_provider"] = "backup"
+
+    def project(node):
+        assert publication_attempted.wait(5), "配置发布线程未尝试切换"
+        return original_project(node)
+
+    monkeypatch.setattr(config, "get_revision", read_revision)
+    monkeypatch.setattr(service, "project_catalog_session", project)
+    reads = {
+        "children": lambda: catalog.list_children(parent_node_id=None, limit=100, cursor=None),
+        "breadcrumb": lambda: catalog.breadcrumb(session_id),
+        "nodes": lambda: catalog.export_index(node_ids=[session_id]),
+        "full": catalog.export_index,
+    }
+    publisher = asyncio.create_task(asyncio.to_thread(publish_configuration))
+    try:
+        first = await reads[scope]()
+    finally:
+        await publisher
+    assert first.revision == catalog_projection_revision(first.catalog_revision, old_projection)
+    assert first.items[0].session.current_provider_id == "primary"
+    second = await reads[scope]()
+    assert second.catalog_revision == first.catalog_revision
+    assert second.revision != first.revision
+    assert second.items[0].session.current_provider_id == "backup"
+
+
+@pytest.mark.asyncio
 async def test_catalog_read_keeps_authoritative_nodes_when_physical_tree_has_orphan(
     tmp_path: Path,
     session_bundle_factory,
@@ -524,16 +592,12 @@ def _count_full_catalog_aggregations(
 
 
 @pytest.mark.asyncio
-async def test_snapshot_aggregates_full_catalog_once(
+async def test_bounded_reads_do_not_aggregate_full_catalog(
     tmp_path: Path,
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """§10.3b：``refresh()`` 与一次目录 mutation 各只做一次全 catalog 聚合。
-
-    ``revision`` 只读单行版本，节点与版本通过一次原子 catalog snapshot 读取；
-    不得再附加旧 BFS 聚合或重复加载快照。
-    """
+    """刷新根和写后分支从同一事务读范围，不导出或聚合全目录。"""
     sessions_root = tmp_path / "sessions"
     session_service = _SessionService(sessions_root)
     resolver = session_service.path_resolver
@@ -546,12 +610,12 @@ async def test_snapshot_aggregates_full_catalog_once(
     count = _count_catalog_snapshots(monkeypatch, resolver)
     full_scan_count = _count_full_catalog_aggregations(monkeypatch, resolver)
 
-    # refresh() 走 force 路径，必须只聚合一次。
+    # 完整根页仅投影根节点，不读取后代。
     await catalog.refresh()
-    assert count[0] == 1
+    assert count[0] == 0
     assert full_scan_count[0] == 0
 
-    # 一次目录 mutation（新建 folder）后一次读：同样只聚合一次。
+    # mutation 后同样使用有界范围。
     count[0] = 0
     await _submit_catalog_mutation(
         catalog,
@@ -560,7 +624,7 @@ async def test_snapshot_aggregates_full_catalog_once(
         parent_node_id=None,
     )
     await catalog.list_children(parent_node_id=None, limit=50, cursor=None)
-    assert count[0] == 1
+    assert count[0] == 0
     assert full_scan_count[0] == 0
 
 
@@ -880,3 +944,56 @@ async def test_cursor_survives_catalog_writes_without_node_changes(
         cursor=first.cursor,
     )
     assert [node.name for node in second.items] == ["节点1"]
+
+
+@pytest.mark.asyncio
+async def test_version_and_required_ranges_do_not_build_full_catalog(tmp_path, monkeypatch):
+    service = _SessionService(tmp_path / "sessions")
+    resolver = service.path_resolver
+    parent = resolver.catalog_store.create_folder(canonical("range-parent"), resolver.workspace_id, None, "ß目录")
+    child = resolver.catalog_store.create_folder(canonical("range-child"), resolver.workspace_id, parent.node_id, "子目录")
+    catalog = SessionCatalogService(session_service=service)
+    def forbidden(**kwargs):
+        raise AssertionError("轻量版本与有界范围不得读取全目录")
+    monkeypatch.setattr(resolver, "catalog_snapshot", forbidden)
+    version = catalog.version()
+    page = await catalog.list_children(parent_node_id=parent.node_id, limit=1, cursor=None, minimum_catalog_revision=version.catalog_revision)
+    breadcrumb = await catalog.breadcrumb(child.node_id, minimum_catalog_revision=version.catalog_revision)
+    confirmation = await catalog.export_index(node_ids=[child.node_id, canonical("absent")], minimum_catalog_revision=version.catalog_revision)
+    assert [node.node_id for node in page.items] == [child.node_id]
+    assert breadcrumb.node_id == child.node_id
+    assert [node.node_id for node in breadcrumb.items] == [parent.node_id, child.node_id]
+    assert confirmation.node_ids == sorted([child.node_id, canonical("absent")])
+    assert not confirmation.complete
+    assert page.revision == breadcrumb.revision == confirmation.revision
+    assert [node.node_id for node in confirmation.items] == [child.node_id]
+    for read in (
+        catalog.list_children(parent_node_id=canonical("absent"), limit=1, cursor=None, minimum_catalog_revision=version.catalog_revision + 1),
+        catalog.breadcrumb(canonical("absent"), minimum_catalog_revision=version.catalog_revision + 1),
+        catalog.export_index(node_ids=[canonical("absent")], minimum_catalog_revision=version.catalog_revision + 1),
+    ):
+        with pytest.raises(RuntimeError, match="minimum_catalog_revision"):
+            await read
+
+
+@pytest.mark.asyncio
+async def test_bounded_page_uses_same_casefold_order_and_config_cursor_version(tmp_path):
+    model = {"primary_provider": "primary", "fallback_providers": ["backup"]}
+    config = SessionServiceConfigStub({"default_agent": "default", "agents": {"default": {"model": model}}})
+    service = _SessionService(tmp_path / "sessions", config_service=config)
+    store = service.path_resolver.catalog_store
+    for name in ("Zulu", "ß", "SS", "alpha"):
+        store.create_folder(canonical(name), service.workspace_id, None, name)
+    catalog = SessionCatalogService(session_service=service)
+    exported = await catalog.export_index()
+    page = await catalog.list_children(parent_node_id=None, limit=2, cursor=None)
+    assert page.revision == exported.revision
+    assert [node.node_id for node in page.items] == [node.node_id for node in sorted(exported.items, key=lambda node: (node.kind != "folder", node.name.casefold(), node.node_id))[:2]]
+    model["primary_provider"] = "backup"
+    from app.services.business.session_navigation.catalog_query import (
+        CatalogCursorError,
+    )
+    with pytest.raises(CatalogCursorError) as caught:
+        await catalog.list_children(parent_node_id=None, limit=2, cursor=page.cursor)
+    assert caught.value.reason == "revision"
+    assert catalog.version().catalog_revision == page.catalog_revision

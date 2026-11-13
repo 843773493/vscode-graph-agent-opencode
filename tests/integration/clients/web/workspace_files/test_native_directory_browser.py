@@ -28,7 +28,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_triad as communication_triad,  # noqa: PLC0414 - 独立 Gateway 与真实 SSH 路由
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
@@ -193,9 +193,9 @@ async def test_chat_file_references_preserve_native_and_uri_targets(communicatio
     session_id = await create_session(case.client, title)
     # 受控 Provider 回显用户给定目标以验证 Markdown 文件入口；不代表系统引用生成策略。
     await case.plan(session_id, [{"content": markdown}])
-    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": markdown}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     result = await _browse(case, {"session_id": session_id, "session_title": title,

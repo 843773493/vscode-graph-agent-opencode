@@ -66,6 +66,7 @@ export function usePendingRequestActions({
         next.activeJobIdsBySession,
         snapshot,
         sessionCacheKey,
+        next.pendingQueueVersions,
       );
       return next;
     });

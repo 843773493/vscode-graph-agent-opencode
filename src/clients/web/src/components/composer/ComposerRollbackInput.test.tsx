@@ -75,6 +75,7 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     getLatestAssistantContent: () => null,
     setStatus: () => undefined,
     sendMessage: async () => undefined,
+    refreshTurnHistory: () => undefined,
     compactSession: async () => ({} as never),
     refreshGoal: async () => null,
     updateGoal: async () => undefined,
@@ -147,6 +148,29 @@ function setInputValue(renderer: ReactTestRenderer, value: string): void {
 }
 
 describe("Composer 发送失败回填：不得覆盖在途期间新输入的草稿", () => {
+  test("提交冻结写入失败时恢复输入，阻止发送前丢失草稿", async () => {
+    installComposerEnvironment();
+    let attempts = 0;
+    const renderer = mountComposer(baseActions({
+      sendMessage: async () => {
+        attempts += 1;
+        throw new DOMException("本地提交记录写入失败", "QuotaExceededError");
+      },
+    }), "session_freeze_storage_failure");
+    setInputValue(renderer, "必须保留的输入");
+
+    await act(async () => {
+      renderer.root.findByProps({ id: "sendButton" }).props.onClick();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(attempts).toBe(1);
+    expect(inputValue(renderer)).toBe("必须保留的输入");
+    expect(JSON.stringify(renderer.toJSON())).toContain("本地提交记录写入失败");
+    act(() => renderer.unmount());
+  });
+
   test("在途失败回填只补空白输入，不覆盖用户新输入内容", async () => {
     installComposerEnvironment();
     let rejectSend: (error: unknown) => void = () => undefined;

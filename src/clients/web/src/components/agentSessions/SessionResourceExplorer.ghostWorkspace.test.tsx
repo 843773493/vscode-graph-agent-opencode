@@ -10,6 +10,8 @@ import {
 } from "../../state/session/sessionCatalogOutbox";
 import {
   apiSuccessResponse,
+  catalogReadResponse,
+  type GatewayFetchRequest,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
 
@@ -76,7 +78,7 @@ async function renderExplorer(options: {
   navigationFails?: string | null;
   branchItems?: unknown[];
   branchError?: string | null;
-  branchResponse?: (parentNodeId: string | null) => Response | Promise<Response>;
+  branchResponse?: (parentNodeId: string | null, request: GatewayFetchRequest) => Response | Promise<Response>;
   catalogItems?: SessionCatalogNode[];
   /** 激活工作区与当前会话：用于触发「定位当前会话」链路。 */
   activeWorkspaceId?: string | null;
@@ -142,19 +144,19 @@ async function renderExplorer(options: {
       if (options.breadcrumbFails) {
         return apiErrorResponse(options.breadcrumbFails);
       }
-      return apiSuccessResponse({ items: [] });
+      return catalogReadResponse(request, { items: [] });
     }
     if (request.path === "/api/v1/session-catalog/export" && options.catalogItems) {
-      return apiSuccessResponse({ revision: "catalog-3", catalog_revision: 3, items: options.catalogItems });
+      return catalogReadResponse(request, { revision: "catalog-3", catalog_revision: 3, items: options.catalogItems });
     }
     if (request.path.includes("/api/v1/session-catalog/children")) {
       if (options.branchResponse) {
-        return options.branchResponse(new URL(request.url, "http://localhost").searchParams.get("parent_node_id"));
+        return options.branchResponse(new URL(request.url, "http://localhost").searchParams.get("parent_node_id"), request);
       }
       if (options.branchError) {
         return apiErrorResponse(options.branchError);
       }
-      return apiSuccessResponse({
+      return catalogReadResponse(request, {
         revision: "catalog",
         catalog_revision: 3,
         parent_node_id: null,
@@ -185,7 +187,6 @@ async function renderExplorer(options: {
         onRefreshWorkspaceSessions={async () => undefined}
         onCreateSessionInFolder={async () => undefined}
         onSessionFolderDeleted={async () => undefined}
-        catalogSyncKeys={new Map()}
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
         onCloseSearch={() => undefined}
@@ -436,6 +437,7 @@ describe("会话目录更新保持树行稳定", () => {
 
   function catalogPage(parent: string | null, items: SessionCatalogNode[]): SessionCatalogPage {
     return { revision: "catalog-3", catalog_revision: 3, parent_node_id: parent,
+      sync: { gateway_id: "gateway-test", workspace_id: WORKSPACE_ID, source: "authoritative", stale: false },
       items, cursor: null, total: items.length, consistency_warning: null };
   }
 
@@ -452,7 +454,7 @@ describe("会话目录更新保持树行稳定", () => {
     const { tree } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")], workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
       activeWorkspaceId: WORKSPACE_ID,
-      branchResponse: (parent) => apiSuccessResponse(pages.get(parent)),
+      branchResponse: (parent, request) => catalogReadResponse(request, { ...pages.get(parent) }),
       catalogItems: [...pages.values()].flatMap((page) => page.items),
     });
     await act(async () => {
@@ -513,7 +515,7 @@ describe("会话目录更新保持树行稳定", () => {
     const { tree } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")],
       workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
-      branchResponse: (parent) => apiSuccessResponse({ ...catalogPage(parent, []), cursor: "next-page", total: null }),
+      branchResponse: (parent, request) => catalogReadResponse(request, { ...catalogPage(parent, []), cursor: "next-page", total: null }),
     });
     try {
       await expandFirstWorkspace(tree);
@@ -541,12 +543,13 @@ describe("会话目录更新保持树行稳定", () => {
     const { tree, pages } = await mountCatalog("folder");
     const child = tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-child` });
     const deferred = createDeferredResult<Response>();
-    installGatewayFetch(({ path }) => {
+    installGatewayFetch((request) => {
+      const { path } = request;
       if (path === "/api/gateway/workspace-navigation") {
         return apiSuccessResponse({ revision: "navigation", nodes: [navigationNode(WORKSPACE_ID, "gw_1")] });
       }
       if (path === "/api/v1/session-catalog/export") {
-        return apiSuccessResponse({ revision: "catalog-3", catalog_revision: 3,
+        return catalogReadResponse(request, { revision: "catalog-3", catalog_revision: 3,
           items: [catalogNode("parent", "folder"), catalogNode("stable", "session"), catalogNode("child", "session", "parent")] });
       }
       if (path === "/api/v1/session-catalog/refresh") return apiSuccessResponse(pages.get(null));
@@ -572,7 +575,7 @@ describe("会话目录更新保持树行稳定", () => {
   test("后端确认会话无子项后去掉箭头，不插入空态行", async () => {
     const { tree } = await renderExplorer({
       nodes: [navigationNode(WORKSPACE_ID, "gw_1")], workspaces: [gatewayWorkspace(WORKSPACE_ID, "ready")],
-      branchResponse: (parent) => apiSuccessResponse(catalogPage(parent, parent === null ? [catalogNode("parent", "session")] : [])),
+      branchResponse: (parent, request) => catalogReadResponse(request, { ...catalogPage(parent, parent === null ? [catalogNode("parent", "session")] : []) }),
       catalogItems: [catalogNode("parent", "session")],
     });
     await expandFirstWorkspace(tree);
@@ -661,9 +664,9 @@ describe("工作区错误提示合并与恢复", () => {
         activations.push(workspaceId);
         if (activations.length < 3) throw new Error("原始激活诊断");
       },
-      branchResponse: (parent) => ++catalogReads === 1
+      branchResponse: (parent, request) => ++catalogReads === 1
         ? apiErrorResponse("原始目录诊断")
-        : apiSuccessResponse({ revision: "catalog-3", catalog_revision: 3, parent_node_id: parent,
+        : catalogReadResponse(request, { revision: "catalog-3", catalog_revision: 3, parent_node_id: parent,
           items: [], cursor: null, total: 0, consistency_warning: null }),
     });
     const press = async (label: string) => {

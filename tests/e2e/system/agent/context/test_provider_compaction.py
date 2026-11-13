@@ -54,6 +54,7 @@ from tests.e2e.system.agent.context.test_provider_provenance import (
 from tests.e2e.system.agent.context.test_provider_provenance import (
     provenance_gateway as provenance_gateway,  # noqa: PLC0414
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.processes.workspace import terminate_process
 from tests.support.sealed_request_audit import logged_provider_wire
 
@@ -141,9 +142,9 @@ async def test_real_provider_compacts_product_history_and_resumes_after_restart(
     turn_ids = []
 
     async def send(prompt: str, phase: str) -> str:
-        sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
             "message": {"content": prompt}, "run": {"mode": "single_agent", "agent_id": "default"},
-        }), artifacts / f"{phase}-entry.json")["data"]
+        })), artifacts / f"{phase}-entry.json")["data"]
         job = await _terminal_job(client, sent["job_id"], artifacts / f"{phase}-job.json")
         assert job["status"] in {"completed", "succeeded"}, job
         assert isinstance(sent["turn_id"], str) and sent["turn_id"] not in turn_ids

@@ -28,6 +28,7 @@ from app.domain.itemized.execution_admission import (
 from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
     ExecutionQueueRecord,
+    MessageSubmissionConflictError,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import (
@@ -178,7 +179,7 @@ class MessageService(MessageContentProjectionMixin):
     def accept_user_message(
         self, message: MessageDTO, *, execution_identity: UserExecutionIdentity,
         queue_input: ExecutionQueueInput,
-    ) -> None:
+    ) -> ExecutionQueueRecord:
         """在 Job 入队前冻结用户输入，并原子建立 acceptance、Turn/root 和 initial execution。"""
         if message.role != MessageRole.user or message.thread_id is None:
             raise ValueError("接受用户输入必须提供真实 user 消息和 thread_id")
@@ -202,7 +203,7 @@ class MessageService(MessageContentProjectionMixin):
             attachment_diagnostics=built.diagnostics,
         )
         payload = user_input_payload(built.content, response.get("attachments"))
-        accept(
+        accepted = accept(
             message.session_id, thread_id=message.thread_id,
             accepted_ingress_id=message.message_id,
             acceptance_idempotency_key=f"message:{message.message_id}",
@@ -214,11 +215,28 @@ class MessageService(MessageContentProjectionMixin):
             root_item_id=f"item-{message.message_id}",
             extensions=message_annotations(response), queue_input=queue_input,
         )
-        if self._attachment_store is not None:
+        if self._attachment_store is not None and accepted["job_id"] == execution_identity.job_id:
             self._attachment_store.complete_message_ingests(
                 message.session_id, thread_id=message.thread_id, message_id=message.message_id,
                 messages=self._checkpointer,
             )
+        return self._checkpointer.execution_queue_record(
+            message.session_id, message.thread_id, accepted["job_id"],
+        )
+
+    def message_submission(
+        self, session_id: str, thread_id: str, operation_id: str, *,
+        submission_hash: str | None = None,
+    ) -> ExecutionQueueRecord | None:
+        """读取原准入与队列输入，不复制业务正文或建立操作账本。"""
+        if self._checkpointer is None:
+            raise RuntimeError("消息操作查询缺少 canonical input owner")
+        record = self._checkpointer.message_submission(session_id, thread_id, operation_id)
+        if record is not None and (record.input.submission_hash is None or (
+            submission_hash is not None and record.input.submission_hash != submission_hash
+        )):
+            raise MessageSubmissionConflictError("operation_id 已用于不同消息输入或非用户提交")
+        return record
 
     def accept_job_input(self, job: JobRuntimeStateProtocol, *, queue_input: ExecutionQueueInput) -> ExecutionQueueRecord:
         """真实 Job 入队前完成唯一次准入；已有输入只按完整 identity 核验。"""

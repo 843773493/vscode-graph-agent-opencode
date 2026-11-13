@@ -280,8 +280,8 @@ def test_execution_http_routes_check_actual_job_and_goal_roots(http_openapi: Jso
     schemas = http_openapi["components"]["schemas"]
     pending: list[JsonSchemaValue] = []
     prefix = "/api/v1/workspaces/{workspace_id}"
-    for path in ("/jobs/{job_id}", "/jobs/{job_id}/steps",
-                 "/jobs/{job_id}/control", "/sessions/{session_id}/goal"):
+    for path in ("/jobs/{job_id}", "/jobs/{job_id}/steps", "/jobs/{job_id}/control",
+                 "/sessions/{session_id}/goal", "/sessions/{session_id}/goal-operations/{operation_id}"):
         for operation in http_openapi["paths"][prefix + path].values():
             request = operation.get("requestBody", {}).get("content", {}).get("application/json")
             if request is not None:
@@ -294,7 +294,8 @@ def test_execution_http_routes_check_actual_job_and_goal_roots(http_openapi: Jso
     pending.append(schemas["MessageRunAccepted"]["properties"]["dispatch"])
     roots = _public_roots(http_openapi, pending)
     assert roots == {"JobDTO", "StepDTO", "JobControlRequest", "JobControlResponseDTO", "JobDispatchSnapshotDTO",
-                     "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearResultDTO"}
+                     "SessionGoalSetRequest", "SessionGoalClearRequest",
+                     "SessionGoalSnapshotDTO", "SessionGoalOperationResultDTO"}
     assert roots <= HTTP_JSON_DESCRIPTORS.keys(), f"执行入口缺少 proto 结构校验: {sorted(roots - HTTP_JSON_DESCRIPTORS.keys())}"
     assert_public_http_schemas(http_openapi)
 
@@ -307,7 +308,10 @@ def test_execution_http_routes_check_actual_job_and_goal_roots(http_openapi: Jso
     ("JobControlResponseDTO", "session_id", {"type": "integer"}),
     ("JobDispatchSnapshotDTO", "queued_job_count", {"type": "string"}),
     ("SessionGoalDTO", "token_budget", {"type": "string"}),
-    ("SessionGoalClearResultDTO", "cleared", {"type": "string"}),
+    ("SessionGoalSetRequest", "expected_control_revision", {"type": "string"}),
+    ("SessionGoalClearRequest", "operation_id", {"type": "integer"}),
+    ("SessionGoalSnapshotDTO", "sync_version", {"type": "string"}),
+    ("SessionGoalOperationResultDTO", "control_revision", {"type": "string"}),
 ])
 def test_execution_http_schema_rejects_identity_time_control_queue_and_budget_drift(
     http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,
@@ -334,10 +338,10 @@ def test_execution_structure_checks_preserve_pydantic_control_queue_and_goal_rul
             "queued_jobs_ahead": 0, "queued_job_count": -1, "pending_job_count": 0,
         })
     with pytest.raises(ValidationError, match="token_budget"):
-        SessionGoalSetRequest(token_budget=0)
+        SessionGoalSetRequest(token_budget=0, operation_id="goal-control", expected_control_revision=0)
     with pytest.raises(ValidationError, match="objective"):
-        SessionGoalSetRequest(objective="")
-    assert SessionGoalSetRequest(token_budget=None).token_budget is None
+        SessionGoalSetRequest(objective="", operation_id="goal-control", expected_control_revision=0)
+    assert SessionGoalSetRequest(token_budget=None, operation_id="goal-control", expected_control_revision=0).token_budget is None
 
 
 def test_session_http_routes_check_create_update_list_detail_and_information_roots(
@@ -737,7 +741,8 @@ def test_context_http_structure_checks_preserve_identity_uri_budget_and_skill_ru
     "NodeDebugStateDTO", "NodeDebugConfigurationDTO", "NodeDebugVariableDTO", "NodeDebugSetBreakpointParams",
     "WorkspaceResourceDTO", "ResourceThreadRef", "TerminalResourceCreateRequest",
     "BrowserResourceOperationRequest", "SessionResourceControlResultDTO",
-    "JobDTO", "JobDispatchSnapshotDTO", "SessionGoalDTO",
+    "JobDTO", "JobDispatchSnapshotDTO", "SessionGoalDTO", "SessionGoalSetRequest", "SessionGoalClearRequest",
+    "SessionGoalSnapshotDTO", "SessionGoalOperationResultDTO",
     "SessionForkRequest", "SessionForkResultDTO", "ForkSourceCaptureDTO", "SessionForkOwnerReference",
     "SessionCreateRequest", "SessionUpdateRequest", "SessionDTO", "SessionInformationSnapshotDTO",
     "SessionGenerationOriginDTO", "SessionInformationResourceDTO",

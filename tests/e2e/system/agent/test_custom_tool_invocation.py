@@ -27,7 +27,10 @@ from app.core.workspace_identity import load_or_create_workspace_id, read_worksp
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from tests.support.api_helpers import read_llm_request_logs
+from tests.support.api_helpers import (
+    read_llm_request_logs,
+    with_message_run_operation_id,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.processes.workspace import (
@@ -258,10 +261,10 @@ async def test_workspace_agents_doc_uses_stable_custom_tool_invoker_and_frontend
     )
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]
@@ -354,7 +357,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
 
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {
                 "content": (
                     "请使用 skill_load(name=large-test-output) 加载 large_test_output 对应的 skill，"
@@ -364,7 +367,7 @@ async def test_large_custom_tool_output_is_persisted_and_bounded_for_model(
                 )
             },
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]
@@ -530,10 +533,10 @@ async def test_custom_tool_reads_searches_and_expands_another_session_context(
     )
     reader_message_response = await client.post(
         f"/api/v1/sessions/{reader_session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert reader_message_response.status_code == 200
     reader_job_id = reader_message_response.json()["data"]["job_id"]

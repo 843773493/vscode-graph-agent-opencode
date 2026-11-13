@@ -9,6 +9,7 @@ import {
 import type { GatewayWorkspace, WorkspaceNavigationNode } from "../../types/backend";
 import {
   apiSuccessResponse,
+  catalogReadResponse,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
 } from "../../tests/fixtures/session/gatewayEnvironment";
@@ -76,8 +77,9 @@ async function mountExplorer(options: {
       });
     }
     if (request.path.includes("/api/v1/session-catalog/children")) {
-      return apiSuccessResponse({
+      return catalogReadResponse(request, {
         revision: "catalog",
+        catalog_revision: 3,
         parent_node_id: null,
         items: [],
         cursor: null,
@@ -106,7 +108,6 @@ async function mountExplorer(options: {
         onRefreshWorkspaceSessions={async () => undefined}
         onCreateSessionInFolder={async () => undefined}
         onSessionFolderDeleted={async () => undefined}
-        catalogSyncKeys={new Map()}
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
         onCloseSearch={() => undefined}

@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
+import { newOperationId } from '../../../../support/operation_ids.mjs';
 import { verifyEditorNavigation, verifyViewNavigation } from './editor_navigation.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
@@ -70,7 +71,7 @@ try {
     result.phase = 'execute-' + index;
     await testControl({ action: 'plan_model', session_id: owner.sessionId, thread_id: owner.threadId, interactions: interactions.splice(0, 2) });
     const accepted = await api(`/api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/messages`,
-      { message: { content: index ? '更新至第二版' : '生成首版' }, run: {} }, owner);
+      { operation_id: newOperationId(), message: { content: index ? '更新至第二版' : '生成首版' }, run: {} }, owner);
     await expect.poll(async () => {
       const job = await api(`/api/v1/jobs/${accepted.job_id}`, undefined, owner);
       if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));

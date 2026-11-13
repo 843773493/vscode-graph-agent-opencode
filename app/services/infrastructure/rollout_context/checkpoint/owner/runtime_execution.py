@@ -68,6 +68,9 @@ if TYPE_CHECKING:
 class RuntimeExecutionOwnerMixin:
     _storage: RolloutContextStore
 
+    def message_submission(self, session_id: str, thread_id: str, operation_id: str) -> ExecutionQueueRecord | None:
+        return self._storage.executions.message_submission(session_id, thread_id, operation_id)
+
     def runtime_input_consumption(
         self, session_id: str, thread_id: str, *, item_id: str, source_id: str,
         source_revision: str | None = None,

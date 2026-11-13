@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.agents.tool_invocation_context import (
@@ -5,7 +7,7 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
 )
 from app.agents.tools.goal import create_goal_tools
-from app.schemas.internal_v2.goal import GoalStatus
+from app.schemas.internal_v2.goal import GoalJobAccountingDTO, GoalStatus
 from app.services.business.session_goal_service import SessionGoalService
 
 
@@ -26,12 +28,32 @@ class _Store:
     def goal_read(self, session_id):
         return self.goal
 
-    def goal_write(self, goal):
+    def goal_write(self, goal, *, expected_control_revision=None, operation=None, retiring_goal=None):
+        if expected_control_revision is not None and expected_control_revision != self.goal_control_revision(goal.session_id):
+            from app.abstractions.state_conflict import ClientStateConflictError
+            raise ClientStateConflictError("Goal 控制版本冲突")
         self.goal = goal
+        self.control_revision = goal.control_revision
+        self.sync_version = goal.sync_version
 
-    def goal_clear(self, session_id):
+    def goal_control_revision(self, session_id):
+        return getattr(self, "control_revision", 0)
+
+    def goal_sync_version(self, session_id):
+        return getattr(self, "sync_version", 0)
+
+    def goal_operation(self, session_id, operation_id, request_hash=None):
+        return None
+
+    def goal_clear_versioned(self, session_id, expected_control_revision, operation=None, settled_goal=None):
+        existed = self.goal is not None
+        if expected_control_revision != self.goal_control_revision(session_id):
+            from app.abstractions.state_conflict import ClientStateConflictError
+            raise ClientStateConflictError("Goal 控制版本冲突")
         self.goal = None
-        return True
+        self.control_revision = expected_control_revision + int(existed)
+        self.sync_version = self.goal_sync_version(session_id) + int(existed)
+        return existed, self.control_revision, self.sync_version
 
     def goal_list(self):
         return [] if self.goal is None else [self.goal]
@@ -72,6 +94,37 @@ async def test_goal_agent_tools_enforce_status_boundary():
         await tools["update_goal"].ainvoke({"status": GoalStatus.active.value})
     completed = await tools["update_goal"].ainvoke({"status": "complete"})
     assert completed["status"] == "complete"
+
+
+@pytest.fixture
+def main_goal_tools():
+    store = _Store()
+    service = SessionGoalService(store=store, session_service=_Sessions(), job_event_bus=_Bus())
+    tools = {tool.name: tool for tool in create_goal_tools(
+        session_id="sess_1", goal_service=service,
+        invocation_context=ToolInvocationContext(
+            thread_binding=ThreadRuntimeBinding("sess_1", MAIN_THREAD_ID),
+        ),
+    )}
+    return store, tools
+
+
+@pytest.mark.asyncio
+async def test_goal_tools_keep_large_job_accounting_internal(main_goal_tools):
+    store, tools = main_goal_tools
+    created = await tools["create_goal"].ainvoke({"objective": "保持准确且有界的公开计量"})
+    assert "accounted_jobs" not in created
+    store.goal = store.goal.model_copy(update={
+        "accounted_jobs": {f"job-{index}": GoalJobAccountingDTO(tokens=7, elapsed_seconds=11) for index in range(2000)},
+        "tokens_used": 14000, "time_used_seconds": 22000,
+        "last_accounted_job_id": "job-1999", "last_continued_job_id": "job-1998",
+    })
+    for result in (await tools["get_goal"].ainvoke({}), await tools["update_goal"].ainvoke({"status": "complete"})):
+        assert result["goal_id"] == created["goal_id"]
+        assert result["tokens_used"] == 14000 and result["time_used_seconds"] == 22000
+        assert not {"accounted_jobs", "last_accounted_job_id", "last_continued_job_id"} & result.keys()
+        assert len(json.dumps(result)) < 1500
+    assert len(store.goal.accounted_jobs) == 2000
 
 
 @pytest.mark.parametrize("name,payload", [

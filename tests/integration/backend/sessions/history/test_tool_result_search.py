@@ -26,6 +26,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_workspace_message_search import (
     workspace_query as workspace_query,  # noqa: PLC0414
 )
+from tests.support.api_helpers import with_message_run_operation_id
 
 
 @pytest.fixture
@@ -55,7 +56,7 @@ async def tool_history(runtime_case: RuntimeCase, history_client: httpx.AsyncCli
     child = await _child(case, session)
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
         base = f"/api/v1/sessions/{session}/threads"
-        response = await history_client.post(f"{base}/{child}/messages", json={"message": {"content": "执行大工具"}, "run": {}})
+        response = await history_client.post(f"{base}/{child}/messages", json=with_message_run_operation_id({"message": {"content": "执行大工具"}, "run": {}}))
         assert response.status_code == 200, response.text
         accepted = response.json()["data"]
         job = container.job_service._jobs[accepted["job_id"]]

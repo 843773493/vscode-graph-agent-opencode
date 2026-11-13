@@ -4,9 +4,10 @@ import type {
   SessionStreamEvent,
   TraceEvent,
 } from "../../types/backend";
-import { decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { decodeJsonSseData, defineSseEvent, SseProtocolError } from "../../sse/sseClient";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import { validateTraceEvent } from "../../sse/sseRuntimeSchemas";
+import { goalStreamMutation } from "../../protocol/sessionGoal";
 import {
   HttpRequestError,
   requestJson,
@@ -105,9 +106,9 @@ export async function streamSessionEvents(
       events: {
         trace: defineSseEvent(
           (data, frame) => {
-            if (!frame.id) throw new Error("SSE trace 缺少 id 行");
+            if (!frame.id) throw new SseProtocolError("SSE trace 缺少 id 行");
             if (deliveredCursors.has(frame.id)) {
-              throw new Error(`SSE trace 重复 cursor: ${frame.id}`);
+              throw new SseProtocolError(`SSE trace 重复 cursor: ${frame.id}`);
             }
             deliveredCursors.add(frame.id);
             const event = validateTraceOwner(decodeJsonSseData(data, frame), sessionId, options?.threadId);
@@ -134,9 +135,15 @@ export async function streamSessionEvents(
 }
 
 function validateTraceOwner(value: unknown, sessionId: string, threadId?: string): SessionStreamEvent {
-  const event = validateTraceEvent(value);
-  if (event.session_id !== sessionId || (threadId !== undefined && event.thread_id !== threadId)) {
-    throw new Error(`Trace owner 不匹配: 请求 ${sessionId}/${threadId ?? "*"}，收到 ${event.session_id}/${event.thread_id}`);
+  try {
+    const event = validateTraceEvent(value);
+    if (event.session_id !== sessionId || (threadId !== undefined && event.thread_id !== threadId)) {
+      throw new SseProtocolError(`Trace owner 不匹配: 请求 ${sessionId}/${threadId ?? "*"}，收到 ${event.session_id}/${event.thread_id}`);
+    }
+    goalStreamMutation(event, { session_id: sessionId, thread_id: event.thread_id });
+    return event;
+  } catch (error) {
+    if (error instanceof SseProtocolError) throw error;
+    throw new SseProtocolError(error instanceof Error ? error.message : String(error), { cause: error });
   }
-  return event;
 }

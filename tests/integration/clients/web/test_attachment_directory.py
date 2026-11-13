@@ -26,7 +26,7 @@ from tests.harness.python.web_workbench import (
 from tests.integration.backend.sessions.rollout_context.test_execution_history_storage import (
     history_target as history_target,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.paths import chromium_temporary_environment
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
@@ -77,12 +77,12 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
 
     original = "上传原件保持不变 Ω\n"
     calls = plan([{"content": "附件目录已收到。"}])
-    sent = await client.post(f"/api/v1/sessions/{session}/messages", json={
+    sent = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "读取目录说明，保留原件。", "attachments": [{
             "file_id": "inline:source", "name": "source.txt", "content_type": "text/plain",
             "data_url": "data:text/plain;base64," + base64.b64encode(original.encode()).decode(),
         }]}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert sent.status_code == 200, sent.text
     await wait_for_job_done(client, sent.json()["data"]["job_id"])
     history = await client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 10})
@@ -94,10 +94,10 @@ async def test_attachment_directory_shortcut_and_derived_edit_survive_web_reload
     calls += plan([{"tool_calls": [{"index": 0, "id": "write-directory-result", "type": "function", "function": {
         "name": "write_file", "arguments": json.dumps({"file_path": derived, "content": content, "expected_version": "absent"}),
     }}]}, {"content": "派生文件已生成。"}])
-    sent = await client.post(f"/api/v1/sessions/{session}/messages", json={
+    sent = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "在附件目录的派生区写入处理结果。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert sent.status_code == 200, sent.text
     await wait_for_job_done(client, sent.json()["data"]["job_id"])
     wire = json.loads((replay.artifacts / (calls[0] + ".json")).read_text())["request"]

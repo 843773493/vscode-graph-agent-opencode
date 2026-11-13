@@ -53,6 +53,7 @@ export function applySessionListConvergence(
           eventQueuesBySession: new Map(state.eventQueuesBySession),
           sessionTraceHistoryBySession: new Map(state.sessionTraceHistoryBySession),
           pendingConversations: new Map(state.pendingConversations),
+          pendingQueueVersions: new Map(state.pendingQueueVersions),
           activeJobIdsBySession: new Map(state.activeJobIdsBySession),
           unreadSessionKeys: new Set(state.unreadSessionKeys),
           sessionGatewayWorkspaceById: new Map(state.sessionGatewayWorkspaceById),
@@ -70,6 +71,7 @@ export function applySessionListConvergence(
     next.eventQueuesBySession.delete(cacheKey);
     next.sessionTraceHistoryBySession.delete(cacheKey);
     next.pendingConversations.delete(cacheKey);
+    next.pendingQueueVersions.delete(cacheKey);
     next.activeJobIdsBySession.delete(cacheKey);
     next.unreadSessionKeys.delete(cacheKey);
     next.sessionGatewayWorkspaceById.delete(cacheKey);

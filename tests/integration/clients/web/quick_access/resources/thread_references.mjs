@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../../support/e2e_control/browser_client.mjs';
+import { newOperationId } from '../../../../../support/operation_ids.mjs';
 
 const required = name => { const value = process.env[name]; if (!value) throw new Error(`Thread 引用页面缺少 ${name}`); return value; };
 const base = required('BOXTEAM_BROWSER_BASE_URL'), resultPath = required('BOXTEAM_BROWSER_RESULT_PATH');
@@ -77,7 +78,7 @@ try {
   result.phase = 'create-product-history-for-child';
   await testControl({ action: 'plan_model', session_id: session.session_id, thread_id: main.thread_id, interactions });
   const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${main.thread_id}/messages`, owner,
-    { message: { content: '为 Thread 引用创建真实 fork 来源。' }, run: {} });
+    { operation_id: newOperationId(), message: { content: '为 Thread 引用创建真实 fork 来源。' }, run: {} });
   expect(accepted.thread_id).toBe(main.thread_id);
   await expect.poll(async () => {
     const job = await api(`/api/v1/jobs/${accepted.job_id}`, owner);

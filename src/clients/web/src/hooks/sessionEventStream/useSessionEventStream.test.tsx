@@ -4,6 +4,8 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import * as traceStream from "../../api/stream/sessionTraceStream";
 import { TraceCursorGoneError } from "../../api/stream/sessionTraceStream";
+import { HttpRequestError } from "../../api/http";
+import { SseProtocolError } from "../../sse/sseClient";
 import type { AppState } from "../../types/frontend";
 import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "./sessionEventStreamPolicy";
 import { useSessionEventStream } from "./useSessionEventStream";
@@ -23,6 +25,7 @@ test("真实 SSE 批次按完整 owner 写附件摘要并排除其它会话的 p
   const otherScope = `gateway_b::${sessionId}`;
   let current: AppState = { ...INITIAL_APP_STATE, currentSession: { session_id: sessionId } as AppState["currentSession"],
     currentSessionWorkspaceId: "gateway_a", eventQueuesBySession: new Map(), pendingConversations: new Map(),
+    pendingQueueVersions: new Map(),
     sessionAttachmentSummaries: new Map([[otherScope, { count: 1, names: ["B.txt"], latestAt: null }]]), traceEvents: [] };
   const event = (payloadSession: string, name: string): SessionStreamEvent => ({
     event_id: `event_${payloadSession}`, session_id: sessionId, thread_id: "thr_00000000700070008000000000000001", job_id: "job_attachment", type: "message_created",
@@ -85,6 +88,7 @@ async function flush(): Promise<void> {
 
 async function mountSessionStream(
   state: { value: AppState },
+  confirmSessionState?: (afterSubscription: boolean) => Promise<void>,
 ): Promise<ReactTestRenderer> {
   function Probe(): React.ReactNode {
     useSessionEventStream({
@@ -97,6 +101,7 @@ async function mountSessionStream(
       timelineReady: true,
       initialEventCursor: null,
       refreshTurnHistory: () => undefined,
+      confirmSessionState,
       loadTerminalJobTurn: async () => undefined,
       setState: (update) => {
         state.value = typeof update === "function"
@@ -262,6 +267,38 @@ describe("useSessionEventStream readiness", () => {
 });
 
 describe("useSessionEventStream 有界重连", () => {
+  test.each([
+    new HttpRequestError(401, "Unauthorized", "凭据已失效", "/stream", "request-auth"),
+    new HttpRequestError(403, "Forbidden", "禁止观察当前工作区", "/stream", "request-denied"),
+    new SseProtocolError("Trace 归属错误"),
+  ])("协议和鉴权失败不伪装成网络断开并停止重试: %s", async (error) => {
+    installWindow();
+    const streamSpy = spyOn(traceStream, "streamSessionEvents").mockRejectedValue(error);
+    const state = { value: initialAppState() };
+    const renderer = await mountSessionStream(state);
+    try {
+      for (let round = 0; round < 10; round += 1) await flush();
+      expect(streamSpy).toHaveBeenCalledTimes(1);
+      expect(state.value.status).toContain("未确认，已停止自动重连");
+      expect(state.value.sessionExecutionSyncError).toBe(error.message);
+    } finally { act(() => renderer.unmount()); streamSpy.mockRestore(); }
+  });
+
+  test("每次订阅建立及游标失效均要求重新确认当前权威快照", async () => {
+    installWindow();
+    const confirmations: boolean[] = [];
+    const streamSpy = spyOn(traceStream, "streamSessionEvents").mockImplementation(async (_port, _session, options) => {
+      options?.onConnected?.("route-new");
+      throw new TraceCursorGoneError("expired");
+    });
+    const state = { value: initialAppState() };
+    const renderer = await mountSessionStream(state, async (afterSubscription) => { confirmations.push(afterSubscription); });
+    try {
+      await flush();
+      expect(confirmations).toEqual([true, true]);
+    } finally { act(() => renderer.unmount()); streamSpy.mockRestore(); }
+  });
+
   test("连续建连失败到达上限后停止重连并给出可见终态", async () => {
     installWindow();
     const streamSpy = spyOn(traceStream, "streamSessionEvents")

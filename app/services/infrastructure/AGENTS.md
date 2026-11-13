@@ -4,7 +4,7 @@
 
 ## 模块职责树
 
-下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 29 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
+下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 27 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
 
 ```text
 infrastructure/
@@ -40,7 +40,6 @@ infrastructure/
     │   ├── pending_queue_migration.py
     │   ├── pending_request_store.py
     │   ├── session_changes_store.py
-    │   ├── session_message_idempotency_store.py
     │   ├── background_work_handlers.py
     │   └── background_work_store.py
     ├── 工具运行时与选择

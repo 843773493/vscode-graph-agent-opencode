@@ -7,6 +7,7 @@ import { conversationFromTurn } from "../../../state/conversations/turnProjectio
 import { buildRenderGroups, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
 import MarkdownContent from "../../chat/MarkdownContent";
 import { ForkItemButtons, TurnActivitySummary } from "../../chat/turn/TurnActivitySummary";
+import MessageSubmissionRecovery from "../../composer/MessageSubmissionRecovery";
 
 import { childExecutionStatusLabel } from "../../../state/childThreadDisplay";
 
@@ -120,6 +121,8 @@ export default function ChildThreadConversation({ thread, conversation, onFork }
       {snapshot.loading ? <p role="status">{t(snapshot.view === "report" ? "child.loadingReport" : "child.loadingHistory")}</p> : null}
       {snapshot.accepted ? <p role="status">{t("child.accepted", snapshot.accepted.job_id)}</p> : null}
       <ChildConversationTimeline page={page} threadId={thread.thread_id} loading={snapshot.loading} onFork={onFork} />
+      {conversation.submissionRecovery && <MessageSubmissionRecovery {...conversation.submissionRecovery}
+        onAccepted={() => { void conversation.refresh(); }} />}
       <form onSubmit={(event) => { event.preventDefault(); void conversation.send(); }}>
         <label htmlFor={`child-thread-draft-${thread.thread_id}`}>{t("child.messageLabel")}</label>
         <textarea id={`child-thread-draft-${thread.thread_id}`} value={snapshot.draft} onChange={(event) => conversation.setDraft(event.target.value)} rows={3} disabled={snapshot.sending} />

@@ -15,17 +15,45 @@ class _GoalSessionServiceFake:
 class _GoalStoreFake:
     def __init__(self):
         self.goal = None
+        self.control_revision = 0
+        self.sync_version = 0
+        self.operations = {}
 
     def goal_read(self, session_id):
         return self.goal
 
-    def goal_write(self, goal):
+    def goal_write(self, goal, *, expected_control_revision=None, operation=None, retiring_goal=None):
+        if expected_control_revision is not None and expected_control_revision != self.control_revision:
+            from app.abstractions.state_conflict import ClientStateConflictError
+            raise ClientStateConflictError("Goal 控制版本冲突")
         self.goal = goal
+        self.control_revision = goal.control_revision
+        self.sync_version = goal.sync_version
+        if operation is not None:
+            self.operations[operation[0]] = operation[2]
 
-    def goal_clear(self, session_id):
+    def goal_clear_versioned(self, session_id, expected_control_revision, operation=None, settled_goal=None):
+        if expected_control_revision != self.control_revision:
+            from app.abstractions.state_conflict import ClientStateConflictError
+            raise ClientStateConflictError("Goal 控制版本冲突")
         existed = self.goal is not None
         self.goal = None
-        return existed
+        if existed:
+            self.control_revision += 1
+            self.sync_version += 1
+        result = (existed, self.control_revision, self.sync_version)
+        if operation is not None:
+            self.operations[operation[0]] = operation[2]
+        return result
+
+    def goal_control_revision(self, session_id):
+        return self.control_revision
+
+    def goal_sync_version(self, session_id):
+        return self.sync_version
+
+    def goal_operation(self, session_id, operation_id, request_hash=None):
+        return self.operations.get(operation_id)
 
     def goal_list(self):
         return [] if self.goal is None else [self.goal]
@@ -202,12 +230,16 @@ async def test_accounting_continuation_and_clear_keep_main_owner(goal_service):
 
     assert await goal_service.dispatch_continuation_if_active("sess_1", "job_1", dispatch)
     assert [current.thread_id for current in continued] == [goal.thread_id]
-    cleared = await goal_service.clear("sess_1")
-    assert cleared.model_dump() == {"session_id": "sess_1", "thread_id": goal.thread_id, "cleared": True}
-    assert events[-1]["payload"] == {"session_id": "sess_1", "thread_id": goal.thread_id}
+    cleared = await goal_service.clear("sess_1", operation_id="clear-1", expected_control_revision=1)
+    assert cleared.status == "applied" and cleared.goal is None and cleared.control_revision == 2
+    assert cleared.session_id == "sess_1" and cleared.thread_id == goal.thread_id
+    assert events[-1]["payload"] == {
+        "session_id": "sess_1", "thread_id": goal.thread_id,
+        "control_revision": 2, "sync_version": cleared.sync_version,
+    }
     event_count = len(events)
-    empty = await goal_service.clear("sess_1")
-    assert empty.thread_id == goal.thread_id and not empty.cleared
+    empty = await goal_service.clear("sess_1", operation_id="clear-2", expected_control_revision=2)
+    assert empty.thread_id == goal.thread_id and empty.status == "already_missing"
     assert len(events) == event_count
 
 
@@ -230,3 +262,33 @@ async def test_continuation_attempt_does_not_publish_a_marker_before_acceptance(
     assert accepted.goal_id == original.goal_id and accepted.last_continued_job_id == "job_origin"
     assert not await goal_service.dispatch_continuation_if_active("sess_1", "job_origin", dispatch)
     assert attempts == [original.goal_id, original.goal_id] and goal_store.goal == accepted
+
+
+async def test_control_versions_advance_for_agent_and_budget_but_accounting_only_advances_sync(goal_service):
+    created = await goal_service.create_for_agent("sess_1", "预算和控制水位", 20)
+    counted = await goal_service.account_job("sess_1", job_id="job-1", tokens=10, elapsed_seconds=2)
+    assert counted.control_revision == created.control_revision
+    assert counted.sync_version > created.sync_version
+    limited = await goal_service.account_job("sess_1", job_id="job-1", tokens=20, elapsed_seconds=3)
+    assert limited.status == GoalStatus.budget_limited
+    assert limited.control_revision == counted.control_revision + 1
+    complete = await goal_service.update_for_agent("sess_1", GoalStatus.complete)
+    assert complete.control_revision == limited.control_revision + 1
+    replacement = await goal_service.create_for_agent("sess_1", "下一个目标", None)
+    paused = await goal_service.update_for_agent("sess_1", GoalStatus.paused)
+    assert paused.control_revision == replacement.control_revision + 1
+
+
+async def test_late_accounting_and_continuation_cannot_mutate_replaced_goal(goal_service):
+    old = await goal_service.set("sess_1", objective="旧目标")
+    replacement = await goal_service.set("sess_1", objective="新目标", replace=True)
+    assert await goal_service.account_job("sess_1", job_id="old-job", goal_id=old.goal_id,
+        tokens=100, elapsed_seconds=100) is None
+    dispatched = []
+
+    async def dispatch(goal):
+        dispatched.append(goal)
+
+    assert not await goal_service.dispatch_continuation_if_active("sess_1", "old-job", dispatch, goal_id=old.goal_id)
+    assert dispatched == []
+    assert await goal_service.get("sess_1") == replacement

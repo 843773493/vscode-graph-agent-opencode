@@ -14,6 +14,7 @@ import { validateWorkspaceObservationFrameDTO } from "../../../../shared/sseRunt
 import type { WorkspaceObservationFrameDTO } from "../types/backend";
 import { validateFederatedSearchEvent as validateSearchEvent } from "../../../../shared/sseRuntime.js";
 import type { FederatedSearchEventDTO } from "../types/protocol_generated/boxteam/search/v1/public";
+import { SseProtocolError } from "./sseClient";
 
 export function validateFederatedSearchEvent(value: unknown): FederatedSearchEventDTO {
   return validateSearchEvent(value) as FederatedSearchEventDTO;
@@ -21,14 +22,14 @@ export function validateFederatedSearchEvent(value: unknown): FederatedSearchEve
 
 export function validateWorkspaceObservationFrame(value: unknown): WorkspaceObservationFrameDTO {
   if (!validateWorkspaceObservationFrameDTO(value)) {
-    throw new Error(`Workspace 观察者信封无效: ${JSON.stringify(validateWorkspaceObservationFrameDTO.errors)}`);
+    throw new SseProtocolError(`Workspace 观察者信封无效: ${JSON.stringify(validateWorkspaceObservationFrameDTO.errors)}`);
   }
   const frame = value as WorkspaceObservationFrameDTO;
   if (frame.state === "frame" && !frame.frame) {
-    throw new Error("Workspace 观察者信封缺少原 SSE 帧");
+    throw new SseProtocolError("Workspace 观察者信封缺少原 SSE 帧");
   }
   if (frame.state === "error" && (typeof frame.status !== "number" || typeof frame.detail_json !== "string")) {
-    throw new Error("Workspace 观察者错误信封缺少 status/detail_json");
+    throw new SseProtocolError("Workspace 观察者错误信封缺少 status/detail_json");
   }
   return frame;
 }

@@ -215,6 +215,7 @@ async function refreshTerminalSessionInternal(
       latestNext.activeJobIdsBySession,
       pendingSnapshot,
       sessionCacheKey,
+      latestNext.pendingQueueVersions,
     );
     // 保留已完成的 live 回合，直到下一次 bootstrap 以 canonical Turn 替换它。
     if (

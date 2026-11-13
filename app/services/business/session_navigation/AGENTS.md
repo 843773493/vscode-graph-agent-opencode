@@ -27,16 +27,14 @@ session_navigation/
 ```text
 catalog revision
 └── 可见节点投影
-    ├── nodes_by_id                  breadcrumb 查父链；也把页内节点 ID 映射回 DTO
-    ├── visible_node_ids             O(1) 校验分页父节点是否可见
-    ├── child_node_ids_by_parent     每次快照按 folder/name/id 排序一次；请求只切当前页
+    ├── nodes_by_id                  搜索查父链和页内 DTO
     └── folded_search_terms          按稳定 ID 复用名称、ID、逻辑目录和冻结 UTC 创建位置的 casefold 结果
         └── search                   大目录首屏用 top-K 取页但全量计算 total；游标页完整排序并校验 offset
 ```
 
-按数据生命周期建索引：catalog revision 变化时重建节点投影、子节点顺序和搜索键；同一快照的分页或重复搜索复用它们。子节点索引只存稳定 ID，分页时从 `nodes_by_id` 取当前 DTO，避免默认 provider 变化重投影后留下旧对象引用。
+按数据生命周期建索引：catalog revision 变化时重建全量导出和搜索所需投影与搜索键；普通 children、breadcrumb 和指定 ID 读取不依赖该全量快照。
 
-冷投影与缓存命中都在本次读取内按 Agent 解析默认 provider，不能逐会话重复解析整份配置；显式 provider 不参与默认值复用，下一次读取仍重新解析默认值。
+版本 token 只取权威 catalog revision 与配置 owner 已发布 revision；未变化不构建 DTO 摘要。children、breadcrumb 和指定 ID 确认在同一 SQLite 事务读取有界范围，全量投影只供原 export／搜索缓存；配置变化仅替换缓存中的默认 Provider 投影，显式 Provider 保持原值。
 
 目录全量匹配和分页在受保护 worker 中执行，沿用包含快照读取的同一查询期限；取消须等待查询结算，不阻塞事件循环。
 

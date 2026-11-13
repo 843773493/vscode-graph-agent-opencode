@@ -15,6 +15,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式 Workbench 产物
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import e2e_port_block_for_file
@@ -134,10 +135,10 @@ async def test_session_tree_context_menus_drive_physical_hierarchy(
             }
             seed_response = await client.post(
                 f"/api/v1/sessions/{session_tree_browser_input['parentSessionId']}/messages",
-                json={
+                json=with_message_run_operation_id({
                     "message": {"content": "请记住目录测试标记 TREE-FORK，只回复这个标记。"},
                     "run": {"mode": "single_agent", "agent_id": "default"},
-                },
+                }),
             )
             assert seed_response.status_code == 200, seed_response.text
             await wait_for_job_done(client, seed_response.json()["data"]["job_id"])

@@ -25,6 +25,7 @@ from tests.integration.clients.web.persistent_tasks.test_management import (
     recovery_case as recovery_case,  # noqa: PLC0414
 )
 from tests.support.api_helpers import create_session
+from tests.support.goal_control import goal_control_payload
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414
 )
@@ -39,9 +40,9 @@ async def _prepare_owner(client: httpx.AsyncClient, workspace_id: str, label: st
     response = await client.get(f"/api/v1/sessions/{session}/main-thread")
     assert response.status_code == 200, response.text
     uri = thread_resource_uri(workspace_id, session, response.json()["data"]["thread_id"])
-    response = await client.put(f"/api/v1/sessions/{session}/goal", json={
+    response = await client.put(f"/api/v1/sessions/{session}/goal", json=await goal_control_payload(client, session, {
         "objective": f"工作区 {label} 暂停目标", "status": "paused",
-    })
+    }))
     assert response.status_code == 200, response.text
     configuration = _configuration(uri)
     configuration["name"] = f"工作区 {label} 原任务"

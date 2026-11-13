@@ -43,7 +43,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, new_message_operation_id
 from tests.support.sealed_request_audit import audit_sealed_requests
 
 
@@ -75,7 +75,7 @@ async def test_native_io_failure_converges_with_known_file_diagnostics(
     case.response_chunks = fail_model
     caplog.set_level(logging.ERROR)
     session = await container.session_service.create(SessionCreateRequest(title="原生 I/O 失败"))
-    request = MessageRunRequest(message=MessageCreateRequest(content="验证失败收口"), run=RunOptions())
+    request = MessageRunRequest(message=MessageCreateRequest(content="验证失败收口"), run=RunOptions(), operation_id=new_message_operation_id())
     accepted = await container.session_orchestrator.create_message(session.session_id, request)
     job = container.job_service._jobs[accepted.job_id]
     await asyncio.wait_for(asyncio.shield(job.task), 20)

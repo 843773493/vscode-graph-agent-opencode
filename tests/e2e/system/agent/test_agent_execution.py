@@ -12,7 +12,10 @@ import httpx
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from tests.support.api_helpers import read_llm_request_logs
+from tests.support.api_helpers import (
+    read_llm_request_logs,
+    with_message_run_operation_id,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.trace import get_trace_payload
 
@@ -29,10 +32,10 @@ async def test_agent_initialization(client: httpx.AsyncClient):
 
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "简单回复一句话：你好，我是测试助手"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]
@@ -53,10 +56,10 @@ async def test_single_step_execution(client: httpx.AsyncClient):
 
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "简单回复一句话：你好，我是测试助手"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]
@@ -86,10 +89,10 @@ async def test_llm_request_log_round_trip(
     prompt = "请只回复 LOG_OK，不要解释。"
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]
@@ -148,10 +151,10 @@ async def test_reply_token_usage_is_persisted_in_trace_and_message(
 
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "请只回复 TOKEN_USAGE_OK，不要调用工具。"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]
@@ -210,40 +213,40 @@ async def test_session_isolation(client: httpx.AsyncClient):
 
     job_a1_response = await client.post(
         f"/api/v1/sessions/{session_a}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "记住这个数字：42"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert job_a1_response.status_code == 200
     job_a1 = job_a1_response.json()["data"]["job_id"]
 
     job_b1_response = await client.post(
         f"/api/v1/sessions/{session_b}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "记住这个数字：88"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert job_b1_response.status_code == 200
     job_b1 = job_b1_response.json()["data"]["job_id"]
 
     job_a2_response = await client.post(
         f"/api/v1/sessions/{session_a}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "我刚才告诉你的数字是什么？"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert job_a2_response.status_code == 200
     job_a2 = job_a2_response.json()["data"]["job_id"]
 
     job_b2_response = await client.post(
         f"/api/v1/sessions/{session_b}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "我刚才告诉你的数字是什么？"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert job_b2_response.status_code == 200
     job_b2 = job_b2_response.json()["data"]["job_id"]

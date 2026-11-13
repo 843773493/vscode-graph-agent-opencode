@@ -28,7 +28,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.harness import control_request
 from tests.support.resource_owners.lease_storage import read_lease_snapshot
 
@@ -52,10 +52,10 @@ async def test_process_retention_across_hard_restarts(
     case = communication_case
     session = await create_session(case.client, "处理进程跨崩溃保活")
     await case.plan(session, [{"content": "附件已接受"}])
-    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "保存待处理原件", "attachments": [upload(b"process-retention-original").model_dump(mode="json")]},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     history = await case.client.post(f"/api/v1/sessions/{session}/history", json={"direction": "head", "turns": 10})
@@ -99,10 +99,10 @@ async def test_process_retention_across_hard_restarts(
         }, "hold-original-directory"),
         {"content": "处理程序继续运行"},
     ])
-    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "在附件目录中启动后台处理程序"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     tool = case.tool_result(session, calls[0] + ":tool-call:hold-original-directory")

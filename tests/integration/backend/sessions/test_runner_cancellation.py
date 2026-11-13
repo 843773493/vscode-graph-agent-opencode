@@ -76,6 +76,7 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
 )
+from tests.support.api_helpers import running_job_dispatch_snapshot
 
 
 @dataclass(frozen=True)
@@ -652,7 +653,12 @@ async def test_restart_rejects_same_job_started_owner_drift(
                 job_id="job-owner-conflict",
                 timestamp=datetime.now(UTC),
                 payload=JobStartedPayload(
-                    session_id=session_id, thread_id=owner_thread
+                    session_id=session_id,
+                    thread_id=owner_thread,
+                    dispatch=running_job_dispatch_snapshot(
+                        session_id, owner_thread, "job-owner-conflict",
+                        queued_job_count=0, queue_snapshot_version=0,
+                    ),
                 ),
             ),
         )
@@ -771,7 +777,12 @@ async def test_restart_restores_original_child_before_provider_dispatch(
             job_id=admission.job_id,
             timestamp=datetime.now(UTC),
             payload=JobStartedPayload(
-                session_id=session_id, thread_id=child.child_thread_id
+                session_id=session_id,
+                thread_id=child.child_thread_id,
+                dispatch=running_job_dispatch_snapshot(
+                    session_id, child.child_thread_id, admission.job_id,
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
             ),
         ),
     )
@@ -901,7 +912,14 @@ async def started_tool_attempt(
         await stream.start_tool(tool_execution_id=attempt_id, tool_call_id=call_id, tool_name="task")
     await runner_case.container.trace_event_store.append(session_id, JobStartedEvent(
         event_id=create_prefixed_id("evt"), job_id=admission.job_id, timestamp=datetime.now(UTC),
-        payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+        payload=JobStartedPayload(
+            session_id=session_id,
+            thread_id=thread_id,
+            dispatch=running_job_dispatch_snapshot(
+                session_id, thread_id, admission.job_id,
+                queued_job_count=0, queue_snapshot_version=0,
+            ),
+        ),
     ))
     completion = ToolResultCompletion(
         model_call_id=snapshot.model_call_id, tool_call_id=call_id,

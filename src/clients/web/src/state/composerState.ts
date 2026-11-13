@@ -13,8 +13,10 @@ export interface ComposerStateSnapshot {
   contentView: ConversationContentView;
   currentGoal: SessionGoal | null;
   currentGoalSessionId: string | null;
+  currentGoalControlRevision: number;
   goalLoading: boolean;
   goalError: string | null;
+  sessionExecutionSyncError: string | null;
   compactLoading: boolean;
   currentActiveJobId: string | null;
   queuedPendingCount: number;
@@ -39,8 +41,10 @@ export function selectComposerState(
     contentView: state.contentView,
     currentGoal: state.currentGoal,
     currentGoalSessionId: state.currentGoalSessionId,
+    currentGoalControlRevision: state.currentGoalControlRevision,
     goalLoading: state.goalLoading,
     goalError: state.goalError,
+    sessionExecutionSyncError: state.sessionExecutionSyncError,
     compactLoading: state.compactLoading,
     currentActiveJobId: sessionCacheKey
       ? state.activeJobIdsBySession.get(sessionCacheKey) ?? null

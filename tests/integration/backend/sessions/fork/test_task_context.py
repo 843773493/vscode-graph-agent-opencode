@@ -46,7 +46,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.runtime_ports import control_request
 from tests.support.fork_deadline import ForkDeadlineRegistry
 
@@ -81,9 +81,9 @@ def _first_response_item(case: RuntimeSourceCase, session_id: str, thread_id: st
 
 
 async def _send_thread(case: RuntimeSourceCase, session_id: str, thread_id: str, content: str):
-    response = await case.client.post(f"/api/v1/sessions/{session_id}/threads/{thread_id}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/threads/{thread_id}/messages", json=with_message_run_operation_id({
         "message": {"content": content}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     return response.json()["data"]
 

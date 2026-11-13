@@ -89,12 +89,20 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
     state, loadTurnDetails: history.loadTurnDetails, latestStateRef,
     sessionCacheKey: scopeKey, refreshTurnHistory: history.refreshTurnHistory, setState,
   });
+  const goal = useSessionGoalController({
+    active,
+    apiPort: 0, currentSessionId: owner.sessionId, currentMainThreadId: state.currentSession?.thread_id ?? null,
+    currentGoalControlRevision: state.currentGoalControlRevision,
+    currentGoalSyncVersion: state.currentGoalSyncVersion,
+    currentThreadId: owner.threadId, currentSessionCacheKey: scopeKey,
+    currentWorkspaceId: owner.workspaceKey, setState,
+  });
   const { abortCurrentStream } = useSessionEventStream({
     apiPort: active ? 0 : null, sessionId: owner.sessionId, threadId: owner.threadId,
     workspaceId: owner.workspaceKey, workspaceRequestTarget: null, sessionCacheKey: scopeKey,
     activeJobId, timelineReady: timeline?.phase === "ready" && timeline.projectionState === "ready",
     initialEventCursor: timeline?.eventCursor ?? null, refreshTurnHistory: history.refreshTurnHistory,
-    loadTerminalJobTurn, setState,
+    loadTerminalJobTurn, confirmSessionState: goal.confirmSessionState, setState,
   });
   useSessionMessageStream({
     apiPort: active ? 0 : null, sessionId: owner.sessionId, threadId: owner.threadId,
@@ -127,15 +135,12 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
     selectionIntentRef, onSessionCreated,
   });
   const actions = useSessionRunActions({
+    active,
     apiPort: 0, currentSession: state.currentSession, currentThreadId: owner.threadId,
     activeGatewayWorkspaceId: owner.workspaceKey, currentSessionGatewayWorkspaceId: owner.workspaceKey,
     currentSessionCacheKey: scopeKey, defaultGatewayWorkspaceId: owner.workspaceKey,
     contentView: state.contentView, setState, refreshAgentStateSnapshot: content.refreshAgentStateSnapshot,
     createSession: lifecycle.createSession,
-  });
-  const goal = useSessionGoalController({
-    apiPort: 0, currentSessionId: owner.sessionId, currentMainThreadId: state.currentSession?.thread_id ?? null,
-    currentWorkspaceId: owner.workspaceKey, setState,
   });
   const refreshAgents = useCallback(async (workspaceKey: string) => {
     if (workspaceKey !== owner.workspaceKey) throw new Error("Agent 刷新请求与会话工作区不一致");
@@ -150,6 +155,7 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
   });
   const { composerValue } = useComposerStateProjection({
     state, currentSessionCacheKey: scopeKey, latestStateRef, setStatus,
+    refreshTurnHistory: history.refreshTurnHistory,
     ...actions, ...goal, switchAgent: lifecycle.switchAgent, switchModel: lifecycle.switchModel,
     refreshAgents, setWorkspaceDefaultAgent: lifecycle.setWorkspaceDefaultAgent,
     setWorkspaceDefaultProvider: lifecycle.setWorkspaceDefaultProvider,

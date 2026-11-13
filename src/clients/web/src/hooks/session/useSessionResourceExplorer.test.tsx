@@ -8,6 +8,7 @@ import { gatewayWorkspaceKey } from '../../api/workspaceIdentity';
 import type { SessionCatalogFailureOwner } from './sessionCatalogOutboxRuntime';
 import {
   apiSuccessResponse,
+  catalogReadResponse,
   catalogChildrenResponse,
   apiErrorResponse,
   installGatewayFetch,
@@ -78,6 +79,55 @@ function waitForCatalogPrune(
 }
 
 describe("useSessionResourceExplorer 自动同步", () => {
+  test("配置投影变化但目录数字相同，按权威 token 刷新并阻止下一次展开退回旧镜像", async () => {
+    const fixture = createSessionCatalogOutboxTestRuntime();
+    let owner!: SessionCatalogFailureOwner;
+    const originalRegister = fixture.runtime.registerFailureOwner.bind(fixture.runtime);
+    const registration = spyOn(fixture.runtime, "registerFailureOwner").mockImplementation((value) => {
+      owner = value;
+      return originalRegister(value);
+    });
+    let published = false;
+    const requested: Array<{ path: string; revision: string | null }> = [];
+    const folder = { node_id: "folder-config", folder_id: "folder-config", kind: "folder", has_children: false, node_revision: 1 };
+    installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+      if (request.path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
+        workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id, catalog_revision: 3,
+        event_seq_watermark: 0, generation: 1, projection_revision: "config-new",
+      });
+      if (request.path !== "/api/v1/session-catalog/children" && request.path !== "/api/v1/session-catalog/export") return undefined;
+      const known = new Headers(request.init?.headers).get("X-BoxTeam-Catalog-Revision");
+      requested.push({ path: request.path, revision: known });
+      // Gateway 的旧镜像仍在；携带新 token 才会走原权威有界页。
+      const fresh = published && known === "config-new";
+      const node = { ...folder, name: fresh ? "新配置投影" : "旧配置投影", parent_node_id: null };
+      const parent = new URL(request.url).searchParams.get("parent_node_id");
+      return catalogReadResponse(request, {
+        revision: fresh ? "config-new" : "config-old", catalog_revision: 3,
+        items: request.path.endsWith("/export") || parent === null ? [node] : [],
+        parent_node_id: parent, cursor: null, total: parent === null ? 1 : 0,
+      });
+    }));
+    const mounted = await mountSessionResourceExplorerHarness({ props: { sessionCatalogOutboxRuntime: fixture.runtime } });
+    try {
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.revision).toBe("config-old");
+      published = true;
+      await act(async () => {
+        await owner.refresh(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET,
+          (await fixture.runtime.openWorkspace(TEST_GATEWAY_WORKSPACE_REQUEST_TARGET)).driver.current(), 3, new AbortController().signal);
+        await flushReactEffects();
+      });
+      expect(mounted.explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.items[0].name).toBe("新配置投影");
+      const afterConfirmation = requested.length;
+      await act(async () => { await mounted.explorer().loadBranch(TEST_GATEWAY_WORKSPACE_KEY, folder.node_id); });
+      expect(requested.slice(afterConfirmation).every((request) => request.revision === "config-new")).toBe(true);
+      expect([...mounted.explorer().branches.values()].every((branch) => branch.revision === "config-new")).toBe(true);
+    } finally {
+      mounted.unmount();
+      registration.mockRestore();
+    }
+  });
+
   test("刷新工作区回执保留用户折叠态，重新激活才自动展开", async () => {
     installGatewayFetch(withDefaultGatewayApiResponses(() => undefined));
     const props = createSessionResourceExplorerProps();
@@ -165,16 +215,17 @@ describe("useSessionResourceExplorer 自动同步", () => {
         };
         return [destination, ...(mode === "定位续页" ? [sibling] : []), moved];
       };
-      installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+      installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+        const { path, url } = request;
         if (path === "/api/v1/session-catalog/export") {
-          return apiSuccessResponse({ revision: `catalog-${catalogRevision}`, catalog_revision: catalogRevision, items: nodes() });
+          return catalogReadResponse(request, { revision: `catalog-${catalogRevision}`, catalog_revision: catalogRevision, items: nodes() });
         }
         if (path === "/api/v1/session-catalog/children") {
           const query = new URL(url).searchParams;
           const parent = query.get("parent_node_id");
           const children = nodes().filter((node) => node.parent_node_id === parent);
           if (mode === "定位续页" && parent === "folder-b" && catalogRevision === 4) {
-            return apiSuccessResponse({
+            return catalogReadResponse(request, {
               revision: "catalog-4", catalog_revision: 4, parent_node_id: parent,
               items: query.get("cursor") ? children.slice(1) : children.slice(0, 1),
               cursor: query.get("cursor") ? null : "second-page", total: children.length,
@@ -216,12 +267,13 @@ describe("useSessionResourceExplorer 自动同步", () => {
       const nodes = (): SessionCatalogNode[] => moveNodes.map(node => node.node_id === "ses_move"
         ? { ...node, parent_node_id: revision === 3 ? "fld_old" : "fld_new", node_revision: revision }
         : { ...node, has_children: node.node_id === (revision === 3 ? "fld_old" : "fld_new") });
-      installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+      installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+        const { path, url } = request;
         if (path === "/api/v1/session-catalog/export") {
           if (mode === "确认失败" && revision > 3) return apiErrorResponse(500, "确认目录原始失败");
           const exportedRevision = mode === "导出落后" ? 3 : revision;
           exports.push(exportedRevision);
-          const response = apiSuccessResponse({ revision: `catalog-${exportedRevision}`, catalog_revision: exportedRevision, items: nodes() });
+          const response = catalogReadResponse(request, { revision: `catalog-${exportedRevision}`, catalog_revision: exportedRevision, items: nodes() });
           if (mode === "读取被取代" && revision === 4 && !releaseConfirmation) {
             return new Promise<Response>(resolve => {
               releaseConfirmation = () => resolve(response);
@@ -297,14 +349,15 @@ describe("useSessionResourceExplorer 自动同步", () => {
       const nodes = (): SessionCatalogNode[] => deleted
         ? moveNodes.filter(node => node.node_id === "fld_new")
         : moveNodes;
-      installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+      installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+        const { path, url } = request;
         if (path === "/api/v1/session-catalog/export") {
           if (deleted) deletionConfirmed = true;
           if (deleted && mode === "确认失败") return apiErrorResponse(500, "删除确认原始失败");
           const exportedRevision = deleted && mode === "导出落后" ? 12
             : deleted && mode === "导出未推进" ? 13 : revision;
           exports.push(exportedRevision);
-          const response = apiSuccessResponse({ revision: `catalog-${exportedRevision}`,
+          const response = catalogReadResponse(request, { revision: `catalog-${exportedRevision}`,
             catalog_revision: exportedRevision, items: mode === "仍在目录" ? moveNodes : nodes() });
           if (deleted && mode === "读取被取代" && !releaseConfirmation) {
             return new Promise<Response>(resolve => {
@@ -473,12 +526,10 @@ describe("useSessionResourceExplorer 自动同步", () => {
       },
     });
     await act(async () => {
-      await waitForReportedCatalogError(runtime);
       await flushReactEffects();
     });
 
     expect(explorer().branches.get(`${TEST_GATEWAY_WORKSPACE_KEY}:root`)?.error).toContain("终态分支刷新故障");
-    expect(runtime.errors[0]).toContain("终态分支刷新故障");
     expect(runtime.pruneCalls).toHaveLength(0);
     const restoredOutbox = runtime.runtime.getSnapshot().get(`${TEST_GATEWAY_WORKSPACE_KEY}\u0000local`)?.outbox;
     expect(restoredOutbox?.operations).toHaveLength(1);
@@ -493,9 +544,10 @@ describe("useSessionResourceExplorer 自动同步", () => {
       { kind: "create_folder", name: "等待分支确认的文件夹" },
       { baseCatalogRevision: 3 },
     );
-    installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+      const { path, url } = request;
       if (path.includes("/api/v1/session-catalog/children")) {
-        return apiSuccessResponse({
+        return catalogReadResponse(request, {
           revision: "catalog-4",
           catalog_revision: 4,
           parent_node_id: new URL(url).searchParams.get("parent_node_id"),
@@ -544,7 +596,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
     }));
 
     const { unmount } = await mountSessionResourceExplorerHarness({
-      props: { apiPort: 49_405, catalogSyncKeys: new Map([[TEST_GATEWAY_WORKSPACE_KEY, "session-sync"]]) },
+      props: { apiPort: 49_405, catalogRefreshVersions: new Map([[TEST_GATEWAY_WORKSPACE_KEY, 1]]) },
     });
     expect(rootCatalogRequests).toBe(1);
 
@@ -563,13 +615,14 @@ describe("useSessionResourceExplorer 自动同步", () => {
     const ownerB = { ...ownerA, gateway_id: "gateway-other" };
     const keyA = gatewayWorkspaceKey(ownerA), keyB = gatewayWorkspaceKey(ownerB);
     const reads: { gatewayId: string | null; workspaceId: string | null }[] = [];
-    installGatewayFetch(withDefaultGatewayApiResponses(({ path, init }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+      const { path, init } = request;
       if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
         const headers = new Headers(init?.headers);
         reads.push({ gatewayId: headers.get("X-BoxTeam-Target-Gateway-Id"), workspaceId: headers.get("X-BoxTeam-Workspace-Id") });
-        return apiSuccessResponse({ items: [] });
+        return catalogReadResponse(request, { items: [] });
       }
-      if (path === "/api/v1/session-catalog/export") return apiSuccessResponse({ revision: "r1", catalog_revision: 1, items: [] });
+      if (path === "/api/v1/session-catalog/export") return catalogReadResponse(request, { revision: "r1", catalog_revision: 1, items: [] });
       if (path === "/api/v1/session-catalog/children") return catalogChildrenResponse("r1", [], null, 1);
       return undefined;
     }));
@@ -590,8 +643,9 @@ describe("useSessionResourceExplorer 自动同步", () => {
 
   test("当前会话定位复用已加载的根分支，不重复读取目录", async () => {
     const catalogRequests: string[] = [];
-    installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
-      if (path === "/api/v1/session-catalog/export") return apiSuccessResponse({
+    installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+      const { path, url } = request;
+      if (path === "/api/v1/session-catalog/export") return catalogReadResponse(request, {
         revision: "catalog", catalog_revision: 3,
         items: [
           { node_id: "folder-a", kind: "folder", name: "Folder A", has_children: true },
@@ -600,7 +654,8 @@ describe("useSessionResourceExplorer 自动同步", () => {
       });
       const parentNodeId = new URL(url).searchParams.get("parent_node_id");
       if (path.includes("/api/v1/session-catalog/breadcrumb/")) {
-        return apiSuccessResponse({
+        return catalogReadResponse(request, {
+          revision: "catalog", catalog_revision: 3,
           items: [
             { node_id: "folder-a", kind: "folder", name: "Folder A" },
             { node_id: "session-a", kind: "session", name: "Session A", session_id: "session-a" },
@@ -609,7 +664,7 @@ describe("useSessionResourceExplorer 自动同步", () => {
       }
       if (path.includes("/api/v1/session-catalog/children")) {
         catalogRequests.push(parentNodeId ?? "root");
-        return apiSuccessResponse({
+        return catalogReadResponse(request, {
           revision: "catalog",
           catalog_revision: 3,
           parent_node_id: parentNodeId,
@@ -674,12 +729,13 @@ describe("useSessionResourceExplorer 自动同步", () => {
     const runtime = createSessionCatalogOutboxTestRuntime({
       result: () => ({ state: "rejected", errorDetail: "目录移动被拒绝" }),
     });
-    installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+      const { path, url } = request;
       if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
         workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id,
         catalog_revision: 4, event_seq_watermark: 0, generation: 1,
       });
-      if (path === "/api/v1/session-catalog/export") return apiSuccessResponse({
+      if (path === "/api/v1/session-catalog/export") return catalogReadResponse(request, {
         revision: "catalog", catalog_revision: 4, items: moveNodes,
       });
       if (path.includes("/api/v1/session-catalog/children")) {
@@ -710,8 +766,8 @@ describe("useSessionResourceExplorer 自动同步", () => {
       await waitForReportedCatalogError(runtime);
       await flushReactEffects();
     });
-    expect(catalogRequests).toContain("limit=100&parent_node_id=fld_old");
-    expect(catalogRequests).toContain("limit=100&parent_node_id=fld_new");
+    expect(catalogRequests).toContain("minimum_catalog_revision=4&limit=100&parent_node_id=fld_old");
+    expect(catalogRequests).toContain("minimum_catalog_revision=4&limit=100&parent_node_id=fld_new");
     expect(runtime.errors[0]).toContain("目录移动被拒绝");
     unmount();
   });
@@ -853,12 +909,13 @@ describe("useSessionResourceExplorer 自动同步", () => {
       result: () => ({ state: "rejected", errorDetail: "目录移动被拒绝" }),
     });
     let failRead = false;
-    installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+      const { path, url } = request;
       if (path === "/api/v1/session-catalog/snapshot") return apiSuccessResponse({
         workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id,
         catalog_revision: 4, event_seq_watermark: 0, generation: 1,
       });
-      if (path === "/api/v1/session-catalog/export") return apiSuccessResponse({
+      if (path === "/api/v1/session-catalog/export") return catalogReadResponse(request, {
         revision: "catalog", catalog_revision: 4, items: moveNodes,
       });
       if (path.includes("/api/v1/session-catalog/children")) {

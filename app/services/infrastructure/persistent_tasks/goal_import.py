@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.core.atomic_fs import fsync_directory, native_io_path
 from app.core.session_catalog_store import SessionCreationRecord
-from app.schemas.internal_v2.goal import SessionGoalDTO
+from app.schemas.internal_v2.goal import SessionGoalStateDTO
 
 from .store import PersistentTaskStore
 
@@ -37,7 +37,7 @@ def import_legacy_goals(store: PersistentTaskStore) -> int:
         raw = json.loads(payload)
         if raw.get("session_id") != session_id:
             raise RuntimeError(f"Goal 旧文件 Session 归属冲突: session_id={session_id}")
-        goal = SessionGoalDTO.model_validate({**raw, "thread_id": thread_id})
+        goal = SessionGoalStateDTO.model_validate({**raw, "thread_id": thread_id})
         store.goal_import(goal, hashlib.sha256(payload).hexdigest(), creation=creation)
         # SQL 事实和指纹先提交；删除失败可重试，不能重新覆盖已编辑/清除的 Goal。
         path.unlink()

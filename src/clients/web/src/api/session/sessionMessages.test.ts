@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
+import "fake-indexeddb/auto";
 import {
   getLLMRequestLogs,
   getSessionAttachmentTextPreview,
@@ -13,9 +14,11 @@ import {
   installSessionApiFetchMock as installSessionApiFetch,
   unwrapSessionApiFetch,
 } from "./sessionApiFetchMock";
+import { loadMessageSubmissions, releaseMessageSubmission } from "../../state/messageSubmissions/storage";
 
 const OWNER = { gatewayId: "gateway-messages", workspaceId: "00000000-0000-4000-8000-000000000065" };
 const WORKSPACE_KEY = gatewayWorkspaceKey(OWNER);
+const MESSAGE_OPERATION_ID = "op_0199e600000070008000000000000001";
 const businessRequests: string[] = [];
 
 function installSessionApiFetchMock(...[handler, options]: Parameters<typeof installSessionApiFetch>): void {
@@ -25,6 +28,15 @@ function installSessionApiFetchMock(...[handler, options]: Parameters<typeof ins
     expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
     expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
     businessRequests.push(request.path);
+    if (request.path.includes("/message-submissions/")) {
+      return Response.json({ data: {
+        session_id: "session-accepted",
+        thread_id: "thread-accepted",
+        operation_id: decodeURIComponent(request.path.split("/").at(-1)!),
+        status: "unknown",
+        accepted: null,
+      }, request_id: "req-message-submission-unknown" });
+    }
     return handler(request);
   }, options);
 }
@@ -45,12 +57,14 @@ function installFetchMock(respond: () => Response): void {
   installSessionApiFetchMock(() => respond(), { credentialToken: "messages-token" });
 }
 
-afterEach(() => {
+afterEach(async () => {
   jest.useRealTimers();
   unwrapSessionApiFetch();
   const count = businessRequests.length;
   businessRequests.length = 0;
   expect(count).toBeGreaterThan(0);
+  const owner = { workspaceKey: WORKSPACE_KEY, sessionId: "session-accepted", threadId: "thread-accepted" };
+  for (const record of await loadMessageSubmissions(owner)) await releaseMessageSubmission(record);
   restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
@@ -196,6 +210,7 @@ describe("请求日志读取必须带上限，不能无限等待", () => {
 
 describe("发送与重放统一消费真实准入身份", () => {
   const accepted = {
+    operation_id: MESSAGE_OPERATION_ID,
     message_id: "message-accepted",
     job_id: "job-accepted",
     turn_id: "turn-accepted",
@@ -209,6 +224,7 @@ describe("发送与重放统一消费真实准入身份", () => {
       queued_jobs_ahead: 0,
       queued_job_count: 1,
       pending_job_count: 1,
+      queue_snapshot_version: 11,
     },
     session_id: "session-accepted",
     action: "regenerate",
@@ -218,7 +234,8 @@ describe("发送与重放统一消费真实准入身份", () => {
     notice: "已准入重放",
   } as const;
   const actions = [
-    { name: "发送消息", run: () => sendUserMessage(48_311, "session-accepted", "实际用户输入", undefined, [], WORKSPACE_KEY) },
+    { name: "发送消息", run: () => sendUserMessage(48_311, "session-accepted", "实际用户输入", undefined, [],
+      WORKSPACE_KEY, "after_turn", "thread-accepted", MESSAGE_OPERATION_ID) },
     { name: "重放消息", run: () => replayMessageTurn(48_311, "session-accepted", "message-original", { action: "regenerate" }, WORKSPACE_KEY) },
   ];
   for (const action of actions) {
@@ -234,9 +251,45 @@ describe("发送与重放统一消费真实准入身份", () => {
         await expect(action.run()).rejects.toThrow(`${action.name}响应缺少${field === "turn_id" ? "独立的 turn_id" : ` ${field}`}`);
       });
     }
+    for (const [field, value] of [
+      ["job_id", "job_other"],
+      ["thread_id", "thread_other"],
+      ["job_status", "running"],
+      ["session_id", ""],
+      ["queue_snapshot_version", -1],
+      ["queue_snapshot_version", 1.5],
+    ] as const) {
+      test(`${action.name}拒绝 dispatch 的无效 ${field}`, async () => {
+        const data = {
+          ...accepted,
+          dispatch: { ...accepted.dispatch, [field]: value },
+        };
+        installFetchMock(() => Response.json({ data, request_id: "req-admission-dispatch-owner" }));
+        await expect(action.run()).rejects.toThrow(`${action.name}响应缺少对应 Job／Thread 的权威队列水位`);
+      });
+    }
     test(`${action.name}拒绝以 Job 代替 Turn`, async () => {
       installFetchMock(() => Response.json({ data: { ...accepted, turn_id: accepted.job_id }, request_id: "req-admission-alias" }));
       await expect(action.run()).rejects.toThrow(`${action.name}响应缺少独立的 turn_id`);
     });
   }
+
+  test("发送请求与接受回执保留同一个 operation_id 及精确 owner", async () => {
+    let submittedOperationId: string | undefined;
+    installSessionApiFetchMock(({ path, method, init }) => {
+      expect(method).toBe("POST");
+      expect(path).toBe("/api/v1/sessions/session-accepted/threads/thread-accepted/messages");
+      const request = JSON.parse(String(init?.body)) as { operation_id: string };
+      submittedOperationId = request.operation_id;
+      return Response.json({
+        data: { ...accepted, operation_id: submittedOperationId },
+        request_id: "req-message-operation-id",
+      });
+    }, { credentialToken: "messages-token" });
+
+    const result = await sendUserMessage(48_311, "session-accepted", "实际用户输入", undefined, [],
+      WORKSPACE_KEY, "after_turn", "thread-accepted", MESSAGE_OPERATION_ID);
+    expect(submittedOperationId).toBe(MESSAGE_OPERATION_ID);
+    expect(result.operation_id).toBe(submittedOperationId);
+  });
 });

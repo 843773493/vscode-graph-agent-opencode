@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayWorkspace } from "../../types/backend";
 import {
   apiSuccessResponse,
+  catalogReadResponse,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
   type GatewayFetchHandler,
@@ -51,7 +52,7 @@ async function renderWithBranchItem(
       return apiSuccessResponse({ revision: "navigation", nodes: [navigationNode(WORKSPACE_ID, "工作区")] });
     }
     if (request.path.includes("/api/v1/session-catalog/children")) {
-      return apiSuccessResponse({
+      return catalogReadResponse(request, {
         revision: "catalog",
         catalog_revision: 3,
         parent_node_id: null,
@@ -82,7 +83,6 @@ async function renderWithBranchItem(
         onRefreshWorkspaceSessions={async () => undefined}
         onCreateSessionInFolder={async () => undefined}
         onSessionFolderDeleted={async () => undefined}
-        catalogSyncKeys={new Map()}
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
         onCloseSearch={() => undefined}
@@ -133,6 +133,37 @@ function actionErrorText(tree: ReactTestRenderer): string {
     .filter((child): child is string => typeof child === "string")
     .join(" ");
 }
+
+test("未确认目录镜像保留节点并展示确认时间、原错误及重新读取入口", async () => {
+  const confirmedAt = "2026-11-13T10:00:00Z";
+  const node = { node_id: "folder_cached", folder_id: "folder_cached", kind: "folder", name: "离线目录", has_children: false, node_revision: 1 };
+  let reads = 0;
+  const tree = await renderWithBranchItem([], () => undefined, {
+    respond: (request) => {
+      if (request.path !== "/api/v1/session-catalog/children") return undefined;
+      reads += 1;
+      return catalogReadResponse(request, {
+        revision: "catalog-cached", catalog_revision: 3, parent_node_id: null,
+        items: [node], total: 1, cursor: null,
+        sync: { gateway_id: "gateway-test", workspace_id: WORKSPACE_ID, source: "gateway_mirror", stale: true,
+          authoritative_confirmed_at: confirmedAt, error: "目录确认连接已断开" },
+      });
+    },
+  });
+  const notice = tree.root.findAll((instance) => instance.type === "li" && instance.props.role === "status")
+    .find((instance) => instance.findAllByType("strong").some((title) => title.props.children === "目录镜像尚未确认"));
+  expect(notice).toBeDefined();
+  expect(notice!.findAllByType("span").map((span) => span.props.children).join(" ")).toContain(confirmedAt);
+  expect(notice!.findAllByType("span").map((span) => span.props.children).join(" ")).toContain("目录确认连接已断开");
+  expect(catalogNodeRow(tree, node.node_id)).toBeDefined();
+  const beforeReload = reads;
+  await act(async () => {
+    notice!.findByType("button").props.onClick();
+    await flushReactEffects();
+  });
+  expect(reads).toBeGreaterThan(beforeReload);
+  act(() => tree.unmount());
+});
 
 describe("会话目录节点右键菜单的契约破坏", () => {
   test("文件夹节点缺 folder_id 时响亮报错，而不是右键静默无反应", async () => {

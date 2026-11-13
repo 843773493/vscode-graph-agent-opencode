@@ -21,6 +21,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import with_message_run_operation_id
 
 
 @pytest.fixture
@@ -36,9 +37,9 @@ async def search_history(runtime_case: RuntimeCase, history_client: httpx.AsyncC
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
         for thread_id, values in contents.items():
             for index, content in enumerate(values):
-                response = await history_client.post(f"{base}/{thread_id}/messages", json={
+                response = await history_client.post(f"{base}/{thread_id}/messages", json=with_message_run_operation_id({
                     "message": {"content": content}, "run": {},
-                })
+                }))
                 assert response.status_code == 200, response.text
                 result = response.json()["data"]
                 job = container.job_service._jobs[result["job_id"]]
@@ -152,7 +153,7 @@ async def test_message_search_limits_and_stale_references_are_explicit(
         assert limited.json()["data"]["scanned_bytes"] == 0
     # 新输入必须走产品入口推进历史版本，不能手改数据库来制造 stale。
     container = runtime_case.runner.container
-    next_message = await history_client.post(f"{base}/{child}/messages", json={"message": {"content": "新输入"}, "run": {}})
+    next_message = await history_client.post(f"{base}/{child}/messages", json=with_message_run_operation_id({"message": {"content": "新输入"}, "run": {}}))
     assert next_message.status_code == 200, next_message.text
     job = container.job_service._jobs[next_message.json()["data"]["job_id"]]
     await asyncio.wait_for(asyncio.shield(job.task), 20)

@@ -26,6 +26,7 @@ from tests.harness.python.web_workbench import (
 from tests.integration.clients.web.test_browser_view_sessions import (
     browser_backend as browser_backend,  # noqa: PLC0414
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.model_stream.config import ModelStreamReplay
 from tests.support.paths import chromium_temporary_environment
@@ -133,8 +134,8 @@ async def test_attachment_uri_reopen_decodes_original_media_and_preserves_owner(
                         "data_url": f"data:{mime};base64," + base64.b64encode(content).decode("ascii")}
                        for name, mime, content in sources]
         accepted = _data(await client.post(f"/api/v1/sessions/{session_id}/threads/{thread_id}/messages", headers=headers,
-            json={"message": {"content": "请确认已收到媒体附件。", "attachments": attachments},
-                  "run": {"mode": "single_agent", "agent_id": "default"}}))
+            json=with_message_run_operation_id({"message": {"content": "请确认已收到媒体附件。", "attachments": attachments},
+                  "run": {"mode": "single_agent", "agent_id": "default"}})))
         async with httpx.AsyncClient(base_url=client.base_url, headers={**client.headers, **headers}, timeout=90) as owned:
             await wait_for_job_done(owned, accepted["job_id"])
         page = _data(await client.get(f"/api/v1/sessions/{session_id}/threads/{thread_id}/attachments", headers=headers))

@@ -17,7 +17,7 @@ from starlette.datastructures import Headers
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.agents.test_debug_prompt_flow import _tool_call
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 沿当前文件正式输出路径复用原 HTTP MCP
@@ -179,10 +179,10 @@ async def test_private_headers_survive_backend_restart_and_reject_cross_workspac
         async with httpx.AsyncClient(base_url=case.client.base_url, cookies=case.client.cookies,
             headers={**LOCAL_TOKEN_HEADERS, "X-BoxTeam-Workspace-Id": workspace_id, "X-BoxTeam-Target-Gateway-Id": gateway_id},
             timeout=60, trust_env=False) as selected:
-            accepted = await selected.post(f"/api/v1/sessions/{session}/messages", json={
+            accepted = await selected.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
                 "message": {"content": "发现并调用 MCP probe，参数 proof=" + proof + "，读取回执后结束。"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            })
+            }))
             case.require_public(accepted.content)
             assert accepted.status_code == 200, accepted.text
             await wait_for_job_done(selected, accepted.json()["data"]["job_id"], max_attempts=90)

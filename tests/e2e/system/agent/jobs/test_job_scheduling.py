@@ -4,6 +4,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done, wait_for_jobs_done_concurrently
 
 
@@ -22,10 +23,10 @@ async def test_multiple_same_session_jobs_are_queued(client: httpx.AsyncClient):
     for i in range(3):
         response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={
+            json=with_message_run_operation_id({
                 "message": {"content": f"Hello from job {i}"},
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            },
+            }),
         )
         assert response.status_code == 200
         response_data = response.json()["data"]
@@ -67,14 +68,14 @@ async def test_pending_request_legacy_controls_are_removed(
 
     invalid_policy_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "无效策略不应入队"},
             "run": {
                 "mode": "single_agent",
                 "agent_id": "default",
                 "delivery_policy": "immediate",
             },
-        },
+        }),
     )
     assert invalid_policy_response.status_code == 422
 
@@ -111,12 +112,12 @@ async def test_multiple_different_session_jobs_can_run_in_parallel(client: httpx
     for index, session_id in enumerate(session_ids):
         response = await client.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={
+            json=with_message_run_operation_id({
                 "message": {
                     "content": f"不要调用任何工具，只回复一句简短中文问候。session={index}"
                 },
                 "run": {"mode": "single_agent", "agent_id": "default"},
-            },
+            }),
         )
         assert response.status_code == 200
         job_id = response.json()["data"]["job_id"]
@@ -152,10 +153,10 @@ async def test_job_event_history_is_available(client: httpx.AsyncClient):
 
     start_job_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": "Hello, please respond with a simple greeting."},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert start_job_response.status_code == 200
     job_id = start_job_response.json()["data"]["job_id"]

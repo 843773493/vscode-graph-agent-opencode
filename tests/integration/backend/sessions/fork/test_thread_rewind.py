@@ -25,15 +25,15 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 - 复用真实进程与 model_stream，工作区归当前测试
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.sealed_request_audit import audit_sealed_requests
 
 
 async def complete(case: CommunicationCase, session: str, thread: str, text: str, reply: str) -> MessageRunAccepted:
     await case.plan(session, [{"content": reply}], thread_id=thread)
-    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{thread}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{thread}/messages", json=with_message_run_operation_id({
         "message": {"content": text}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     accepted = MessageRunAccepted.model_validate(response.json()["data"])
     assert accepted.thread_id == accepted.dispatch.thread_id == thread
@@ -83,10 +83,10 @@ async def test_main_regenerate_preserves_child_storage_request_and_restart(
     for call in (child_call, replay_call):
         control.arm(call, phase)
     try:
-        response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json={
+        response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json=with_message_run_operation_id({
             "message": {"content": "child 专有的独立输入"},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        })
+        }))
         assert response.status_code == 200, response.text
         child_input = MessageRunAccepted.model_validate(response.json()["data"])
         assert child_input.thread_id == child_input.dispatch.thread_id == child
@@ -143,10 +143,10 @@ async def test_main_regenerate_preserves_child_storage_request_and_restart(
         assert await history(case, session, thread) == pages[thread]
 
     child_call, = await case.plan(session, [{"content": "child 冷恢复后继续完成"}], thread_id=child)
-    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json=with_message_run_operation_id({
         "message": {"content": "child 冷恢复后的后继输入"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     successor = MessageRunAccepted.model_validate(response.json()["data"])
     await _completed(case.client, successor.job_id)
@@ -209,10 +209,10 @@ async def test_main_compaction_preserves_child_storage_request_and_restart(
     summary_call, final_call = await case.plan(session, [
         {"content": summary}, {"content": "main 摘要后专有的回答"},
     ], thread_id=main)
-    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{main}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{main}/messages", json=with_message_run_operation_id({
         "message": {"content": "main 专有的摘要后输入"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     compacted = MessageRunAccepted.model_validate(response.json()["data"])
     await _completed(case.client, compacted.job_id)
@@ -237,10 +237,10 @@ async def test_main_compaction_preserves_child_storage_request_and_restart(
         assert state(roots[thread]) == finished[thread]
         assert await history(case, session, thread) == pages[thread]
     child_call, = await case.plan(session, [{"content": "child 未摘要历史冷恢复后完成"}], thread_id=child)
-    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json=with_message_run_operation_id({
         "message": {"content": "child 未摘要历史冷恢复后的后继输入"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     successor = MessageRunAccepted.model_validate(response.json()["data"])
     await _completed(case.client, successor.job_id)

@@ -52,6 +52,7 @@ from app.services.mapping.itemized.content_blocks import (
     reasoning_content_rows,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -677,9 +678,9 @@ async def test_real_provider_provenance_survives_cold_history(
             active_backend = provenance_backend_start(f"provenance-source-{ordinal}-backend")
         marker = f"CIL_PROVENANCE_TURN_{ordinal}_OK"
         prompt = f"不要调用任何工具。只回复这一行且不添加其它内容：{marker}"
-        sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json={
+        sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
             "message": {"content": prompt}, "run": {"mode": "single_agent", "agent_id": "default"},
-        }), artifacts / f"turn-{ordinal}-entry.json")["data"]
+        })), artifacts / f"turn-{ordinal}-entry.json")["data"]
         job = await _terminal_job(client, sent["job_id"], artifacts / f"turn-{ordinal}-job.json")
         succeeded = job["status"] in {"completed", "succeeded"}
         traces = await _trace_events(client, session_id, artifacts, ordinal)

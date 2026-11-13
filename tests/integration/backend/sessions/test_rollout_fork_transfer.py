@@ -38,9 +38,11 @@ from app.services.infrastructure.attachment_blob_catalog.locator import (
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
+from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.attachments.test_frozen_history import (
@@ -50,13 +52,14 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
     _completed,
     _prepare_workspace,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.communication.federation import (
     CommunicationNode,
     open_communication_triad,
 )
 from tests.support.e2e_control.harness import E2ETestControlHarness
 from tests.support.fork_deadline import ForkDeadlineRegistry, ForkOperationDeadline
+from tests.support.goal_control import goal_control_payload
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.processes.gateway import close_gateway_process
 from tests.support.session_navigation.http_operations import submit_navigation_operation
@@ -154,7 +157,7 @@ async def _send(
     await _plan_replies(node, model, session_id, [{"content": reply}], thread_id=thread_id)
     response = await node.client.post(
         address + "/messages",
-        json={"message": message, "run": {"mode": "single_agent", "agent_id": "default"}},
+        json=with_message_run_operation_id({"message": message, "run": {"mode": "single_agent", "agent_id": "default"}}),
     )
     assert response.status_code == 200, response.text
     if thread_id is not None:
@@ -654,23 +657,28 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
         }]},
         {"content": "来源 Goal 已完成，保留真实计量。"},
     ])
-    goal_response = await source.client.put(f"/api/v1/sessions/{source_session_id}/goal", json={
+    goal_response = await source.client.put(f"/api/v1/sessions/{source_session_id}/goal", json=await goal_control_payload(source.client, source_session_id, {
         "objective": source_objective, "token_budget": 500,
-    })
+    }))
     assert goal_response.status_code == 200, goal_response.text
     async with asyncio.timeout(60):
         while True:
             goal_response = await source.client.get(f"/api/v1/sessions/{source_session_id}/goal")
             assert goal_response.status_code == 200, goal_response.text
-            source_goal = goal_response.json()["data"]
+            source_goal = goal_response.json()["data"]["goal"]
             if source_goal["status"] == "complete" and source_goal["tokens_used"] > 0:
                 break
             await asyncio.sleep(0.05)
-    await _completed(source.client, source_goal["last_accounted_job_id"])
-    goal_response = await source.client.put(f"/api/v1/sessions/{source_session_id}/goal", json={"status": "paused"})
+    with WorkspaceStateStore(workspace_root=source.workspace) as state:
+        tasks = PersistentTaskStore(state, workspace_id=source.workspace_id,
+            paths=get_session_path_resolver(source.workspace / ".boxteam/sessions"))
+        source_state = tasks.goal_read(source_session_id)
+    assert source_state is not None and source_state.last_accounted_job_id is not None
+    await _completed(source.client, source_state.last_accounted_job_id)
+    goal_response = await source.client.put(f"/api/v1/sessions/{source_session_id}/goal", json=await goal_control_payload(source.client, source_session_id, {"status": "paused"}))
     assert goal_response.status_code == 200, goal_response.text
-    source_goal = goal_response.json()["data"]
-    assert source_goal["tokens_used"] > 0 and source_goal["accounted_jobs"]
+    source_goal = goal_response.json()["data"]["goal"]
+    assert source_goal["tokens_used"] > 0 and source_state.accounted_jobs
     assert source_goal["status"] == "paused"
     (artifacts / "source-goal.json").write_text(goal_response.text)
     point_response = await source.client.get(
@@ -726,7 +734,7 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert child_threads_after.json()["data"] == child_threads_before.json()["data"]
     unchanged_source_goal = await source.client.get(f"/api/v1/sessions/{source_session_id}/goal")
     assert unchanged_source_goal.status_code == 200, unchanged_source_goal.text
-    assert unchanged_source_goal.json()["data"] == source_goal
+    assert unchanged_source_goal.json()["data"]["goal"] == source_goal
     assert _provider_call_count(model) == provider_requests_before_fork
     key = "fork-" + hashlib.sha256(request["idempotency_key"].encode()).hexdigest()
     phase = "copy.source.marker_published"
@@ -826,19 +834,24 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     )
     goal_response = await target.client.get(f"/api/v1/sessions/{target_session_id}/goal")
     assert goal_response.status_code == 200, goal_response.text
-    target_goal = goal_response.json()["data"]
+    target_goal = goal_response.json()["data"]["goal"]
     assert target_goal["goal_id"] == published["goal_id"] != source_goal["goal_id"]
     assert (target_goal["session_id"], target_goal["thread_id"], target_goal["objective"], target_goal["token_budget"]) == (
         target_session_id, published["thread_id"], source_objective, 123,
     )
     assert target_goal["status"] == "paused"
     assert target_goal["tokens_used"] == target_goal["time_used_seconds"] == 0
-    assert target_goal["accounted_jobs"] == {}
-    assert target_goal["last_accounted_job_id"] is target_goal["last_continued_job_id"] is None
+    with WorkspaceStateStore(workspace_root=target.workspace) as state:
+        tasks = PersistentTaskStore(state, workspace_id=target.workspace_id,
+            paths=get_session_path_resolver(target.workspace / ".boxteam/sessions"))
+        target_state = tasks.goal_read(target_session_id)
+    assert target_state is not None
+    assert target_state.accounted_jobs == {}
+    assert target_state.last_accounted_job_id is target_state.last_continued_job_id is None
     updated_objective = "目标 C 用户已改 Goal；重放不得覆盖。"
-    goal_response = await target.client.put(f"/api/v1/sessions/{target_session_id}/goal", json={"objective": updated_objective})
+    goal_response = await target.client.put(f"/api/v1/sessions/{target_session_id}/goal", json=await goal_control_payload(target.client, target_session_id, {"objective": updated_objective}))
     assert goal_response.status_code == 200, goal_response.text
-    edited_goal = goal_response.json()["data"]
+    edited_goal = goal_response.json()["data"]["goal"]
     assert edited_goal["goal_id"] == target_goal["goal_id"] and edited_goal["objective"] == updated_objective
     (artifacts / "edited-target-goal.json").write_text(goal_response.text)
 
@@ -878,7 +891,7 @@ async def test_real_b_to_c_full_copy_cold_read_and_new_input_with_source_offline
     assert repeated["resources"] == published["resources"] and repeated["goal_id"] == published["goal_id"]
     goal_response = await target.client.get(f"/api/v1/sessions/{target_session_id}/goal")
     assert goal_response.status_code == 200, goal_response.text
-    assert goal_response.json()["data"] == edited_goal
+    assert goal_response.json()["data"]["goal"] == edited_goal
     assert _attachment_claims(target, key) == target_claims
     assert _provider_call_count(model) == provider_requests_before_fork
 

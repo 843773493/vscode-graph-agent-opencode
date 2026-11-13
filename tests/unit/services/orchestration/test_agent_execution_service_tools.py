@@ -124,45 +124,13 @@ class _FakeSessionService:
 
 
 class _FakeMessageService:
-    async def create_and_run(self, session_id, run_request, *, session_service, config_service, job_service, job_event_bus=None):
-        return _FakeResult()
+    pass
 
 
 class _FakeSessionOrchestrator:
     def __init__(self, result=None) -> None:
         self.calls: list[dict[str, object]] = []
         self.result = result or _FakeResult()
-
-    async def create_and_run(
-        self,
-        session_id: str,
-        content: str,
-        **kwargs,
-    ):
-        self.calls.append(
-            {
-                "session_id": session_id,
-                "content": content,
-                **kwargs,
-            }
-        )
-        return self.result
-
-    async def create_and_run_internal(
-        self,
-        session_id: str,
-        message,
-        **kwargs,
-    ):
-        return await self.create_and_run(
-            session_id,
-            message.content,
-            metadata=message.metadata,
-            **kwargs,
-        )
-
-
-
 
 class _FakeSessionSubagentService:
     async def delegate(self, **kwargs):

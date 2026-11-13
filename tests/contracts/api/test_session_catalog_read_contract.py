@@ -20,6 +20,8 @@ from tests.contracts.api.openapi_snapshots import OPENAPI_SNAPSHOTS
     ("get", "/api/v1/workspaces/{workspace_id}/session-catalog/breadcrumb/{node_id}", "SessionCatalogBreadcrumbDTO"),
     ("get", "/api/v1/workspaces/{workspace_id}/session-catalog/search", "SessionCatalogSearchResultsDTO"),
     ("get", "/api/v1/workspaces/{workspace_id}/session-catalog/export", "SessionCatalogExportDTO"),
+    ("get", "/api/v1/workspaces/{workspace_id}/session-catalog/version", "SessionCatalogVersionDTO"),
+    ("get", "/api/v1/workspaces/{workspace_id}/session-catalog/snapshot", "NavigationSnapshotDTO"),
 ])
 def test_catalog_read_contract_follows_actual_routes(http_openapi: JsonSchemaValue, method: str, path: str, model: str) -> None:
     original = deepcopy(http_openapi)
@@ -32,7 +34,7 @@ def test_catalog_read_contract_follows_actual_routes(http_openapi: JsonSchemaVal
 
 
 @pytest.mark.parametrize("name", [
-    "SessionCatalogPageDTO", "SessionCatalogBreadcrumbDTO", "SessionCatalogSearchResultsDTO", "SessionCatalogExportDTO",
+    "SessionCatalogPageDTO", "SessionCatalogBreadcrumbDTO", "SessionCatalogSearchResultsDTO", "SessionCatalogExportDTO", "SessionCatalogVersionDTO", "NavigationSnapshotDTO",
 ])
 def test_catalog_read_requires_response_roots(http_openapi: JsonSchemaValue, name: str) -> None:
     del http_openapi["components"]["schemas"][name]
@@ -78,3 +80,10 @@ def test_catalog_read_rejects_publish_before_touching_snapshots(
     with pytest.raises(ValueError, match="公开结构与 proto 字段不一致"):
         openapi_export(openapi_output, descriptor)
     assert {name: (openapi_output / name).read_bytes() for name in OPENAPI_SNAPSHOTS} == before
+
+
+@pytest.mark.parametrize("path", ["children", "roots", "breadcrumb/{node_id}", "export", "snapshot"])
+def test_catalog_minimum_revision_is_public_query(http_openapi: JsonSchemaValue, path: str):
+    operation = http_openapi["paths"][f"/api/v1/workspaces/{{workspace_id}}/session-catalog/{path}"]["get"]
+    parameter, = [item for item in operation["parameters"] if item["name"] == "minimum_catalog_revision"]
+    assert parameter["in"] == "query" and parameter["schema"]["minimum"] == 0

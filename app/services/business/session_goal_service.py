@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import zlib
 from collections.abc import Awaitable, Callable
@@ -12,16 +13,21 @@ from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import SessionCreationRecord
 from app.schemas.internal_v2.goal import (
     GoalStatus,
-    SessionGoalClearResultDTO,
-    SessionGoalDTO,
+    SessionGoalOperationResultDTO,
+    SessionGoalSnapshotDTO,
+    SessionGoalStateDTO,
+    goal_public_view,
 )
 from app.services.business.persistent_tasks.goal import (
     UNFINISHED_GOAL_STATUSES,
+    GoalProgressSample,
     account_job,
     enforce_budget,
+    freeze_goal_progress,
     normalize_objective,
 )
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.persistent_tasks.goals import GoalOperationReplayError
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 
 _UNSET = object()
@@ -57,10 +63,54 @@ class SessionGoalService:
             return goal.goal_id
         return None
 
-    async def get(self, session_id: str) -> SessionGoalDTO | None:
+    async def get(self, session_id: str) -> SessionGoalStateDTO | None:
         await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
             return self._store.goal_read(session_id)
+
+    async def get_snapshot(self, session_id: str) -> SessionGoalSnapshotDTO:
+        thread_id = await self._session_service.resolve_main_thread(session_id)
+        async with self.lock_for(session_id):
+            goal = self._store.goal_read(session_id)
+            return SessionGoalSnapshotDTO(
+                session_id=session_id, thread_id=thread_id,
+                goal=goal_public_view(goal) if goal is not None else None,
+                control_revision=self._store.goal_control_revision(session_id),
+                sync_version=self._store.goal_sync_version(session_id),
+            )
+
+    async def get_operation(self, session_id: str, operation_id: str) -> SessionGoalOperationResultDTO:
+        thread_id = await self._session_service.resolve_main_thread(session_id)
+        async with self.lock_for(session_id):
+            result = self._store.goal_operation(session_id, operation_id)
+            if result is not None:
+                return SessionGoalOperationResultDTO.model_validate(result)
+            goal = self._store.goal_read(session_id)
+            return SessionGoalOperationResultDTO(
+                session_id=session_id, thread_id=thread_id, operation_id=operation_id,
+                status="unknown", control_revision=self._store.goal_control_revision(session_id),
+                sync_version=self._store.goal_sync_version(session_id),
+                goal=goal_public_view(goal) if goal is not None else None,
+            )
+
+    async def replay_set(self, session_id: str, *, objective: str | None, status: GoalStatus | None,
+                         token_budget: int | None | object, replace: bool,
+                         expected_control_revision: int, operation_id: str) -> SessionGoalOperationResultDTO | None:
+        await self._session_service.resolve_main_thread(session_id)
+        request_hash = self._control_request_hash(
+            objective, status, token_budget, replace, expected_control_revision,
+        )
+        async with self.lock_for(session_id):
+            result = self._store.goal_operation(session_id, operation_id, request_hash)
+            return SessionGoalOperationResultDTO.model_validate(result) if result is not None else None
+
+    async def replay_clear(self, session_id: str, *, operation_id: str,
+                           expected_control_revision: int) -> SessionGoalOperationResultDTO | None:
+        await self._session_service.resolve_main_thread(session_id)
+        request_hash = self._clear_request_hash(expected_control_revision)
+        async with self.lock_for(session_id):
+            result = self._store.goal_operation(session_id, operation_id, request_hash)
+            return SessionGoalOperationResultDTO.model_validate(result) if result is not None else None
 
     async def install_fork_goal(self, record: SessionCreationRecord) -> str | None:
         """发布前消费冻结目标；恢复只复验，不重置已发布后用户修改的 Goal。"""
@@ -72,7 +122,7 @@ class SessionGoalService:
         if record.state != "preparing":
             raise RuntimeError("fork Goal 只能安装到未发布的新 Session main")
         created_at = datetime.fromisoformat(record.created_at)
-        goal = SessionGoalDTO(
+        goal = SessionGoalStateDTO(
             goal_id=snapshot["goal_id"], session_id=record.session_id,
             thread_id=record.main_thread_id,
             objective=normalize_objective(snapshot["objective"]), status=GoalStatus.paused,
@@ -102,7 +152,10 @@ class SessionGoalService:
         status: GoalStatus | None = None,
         token_budget: int | None | object = _UNSET,
         replace: bool = False,
-    ) -> SessionGoalDTO:
+        expected_control_revision: int | None = None,
+        operation_id: str = "",
+        progress: tuple[GoalProgressSample, ...] = (),
+    ) -> SessionGoalStateDTO:
         thread_id = await self._session_service.resolve_main_thread(session_id)
         if (
             token_budget is not _UNSET
@@ -111,19 +164,38 @@ class SessionGoalService:
         ):
             raise ValueError("token_budget 必须大于 0")
         async with self.lock_for(session_id):
+            request_hash = self._control_request_hash(
+                objective, status, token_budget, replace, expected_control_revision,
+            )
+            if operation_id:
+                prior = self._store.goal_operation(session_id, operation_id, request_hash)
+                if prior is not None:
+                    raise GoalOperationReplayError(prior)
             current = self._store.goal_read(session_id)
+            control_revision = self._store.goal_control_revision(session_id)
+            if expected_control_revision is not None and expected_control_revision != control_revision:
+                from app.abstractions.state_conflict import ClientStateConflictError
+
+                raise ClientStateConflictError(
+                    f"Goal 控制版本冲突: expected={expected_control_revision}, actual={control_revision}"
+                )
+            sync_version = self._store.goal_sync_version(session_id)
             now = datetime.now(UTC)
+            settled = freeze_goal_progress(current, progress, now) if current is not None else None
+            current = settled
             if current is None or replace:
                 if objective is None:
                     raise ValueError("创建 Goal 时 objective 不能为空")
                 normalized = normalize_objective(objective)
-                current = SessionGoalDTO(
+                current = SessionGoalStateDTO(
                     goal_id=create_prefixed_id("goal"),
                     session_id=session_id,
                     thread_id=thread_id,
                     objective=normalized,
                     status=status or GoalStatus.active,
                     token_budget=None if token_budget is _UNSET else token_budget,
+                    control_revision=control_revision + 1,
+                    sync_version=sync_version + 1,
                     created_at=now,
                     updated_at=now,
                 )
@@ -131,6 +203,8 @@ class SessionGoalService:
                 updates: dict[str, object] = {
                     "updated_at": now,
                     "revision": current.revision + 1,
+                    "control_revision": control_revision + 1,
+                    "sync_version": sync_version + 1,
                 }
                 if objective is not None:
                     updates["objective"] = normalize_objective(objective)
@@ -140,13 +214,23 @@ class SessionGoalService:
                     updates["token_budget"] = token_budget
                 current = current.model_copy(update=updates)
             current = enforce_budget(current)
-            self._store.goal_write(current)
+            self._store.goal_write(
+                current, expected_control_revision=control_revision,
+                retiring_goal=settled if replace else None,
+                operation=(operation_id, request_hash, {
+                    "session_id": session_id, "thread_id": current.thread_id,
+                    "operation_id": operation_id, "status": "applied",
+                    "control_revision": current.control_revision,
+                    "sync_version": current.sync_version,
+                    "goal": goal_public_view(current).model_dump(mode="json"),
+                }) if operation_id else None,
+            )
             await self._publish_updated(current)
             return current
 
     async def create_for_agent(
         self, session_id: str, objective: str, token_budget: int | None
-    ) -> SessionGoalDTO:
+    ) -> SessionGoalStateDTO:
         thread_id = await self._session_service.resolve_main_thread(session_id)
         if token_budget is not None and token_budget <= 0:
             raise ValueError("token_budget 必须大于 0")
@@ -155,23 +239,26 @@ class SessionGoalService:
             if existing is not None and existing.status in UNFINISHED_GOAL_STATUSES:
                 raise RuntimeError("当前会话已有未完成 Goal，不能由 Agent 覆盖")
             now = datetime.now(UTC)
-            goal = SessionGoalDTO(
+            control_revision = self._store.goal_control_revision(session_id)
+            goal = SessionGoalStateDTO(
                 goal_id=create_prefixed_id("goal"),
                 session_id=session_id,
                 thread_id=thread_id,
                 objective=normalize_objective(objective),
                 status=GoalStatus.active,
                 token_budget=token_budget,
+                control_revision=control_revision + 1,
+                sync_version=self._store.goal_sync_version(session_id) + 1,
                 created_at=now,
                 updated_at=now,
             )
-            self._store.goal_write(goal)
+            self._store.goal_write(goal, expected_control_revision=control_revision)
             await self._publish_updated(goal)
             return goal
 
     async def update_for_agent(
         self, session_id: str, status: GoalStatus
-    ) -> SessionGoalDTO:
+    ) -> SessionGoalStateDTO:
         if status == GoalStatus.paused:
             thread_id = await self._session_service.resolve_main_thread(session_id)
             async with self.lock_for(session_id):
@@ -182,30 +269,87 @@ class SessionGoalService:
                     update={
                         "status": GoalStatus.paused,
                         "revision": current.revision + 1,
+                        "control_revision": current.control_revision + 1,
+                        "sync_version": self._store.goal_sync_version(session_id) + 1,
                         "updated_at": datetime.now(UTC),
                     }
                 )
                 if paused.thread_id != thread_id:
                     raise ValueError("Goal 只能更新权威 main Thread")
-                self._store.goal_write(paused)
+                self._store.goal_write(
+                    paused, expected_control_revision=current.control_revision
+                )
                 await self._publish_updated(paused)
                 return paused
         if status not in {GoalStatus.complete, GoalStatus.blocked}:
             raise ValueError("Agent 只能将 Goal 更新为 paused、complete 或 blocked")
         return await self.set(session_id, status=status)
 
-    async def clear(self, session_id: str) -> SessionGoalClearResultDTO:
+    async def clear(
+        self, session_id: str, *, operation_id: str = "", expected_control_revision: int | None = None,
+        progress: tuple[GoalProgressSample, ...] = (),
+    ) -> SessionGoalOperationResultDTO:
         thread_id = await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
-            cleared = self._store.goal_clear(session_id)
+            request_hash = self._clear_request_hash(expected_control_revision)
+            if operation_id:
+                prior = self._store.goal_operation(session_id, operation_id, request_hash)
+                if prior is not None:
+                    return SessionGoalOperationResultDTO.model_validate(prior)
+            expected = (
+                self._store.goal_control_revision(session_id)
+                if expected_control_revision is None else expected_control_revision
+            )
+            result = SessionGoalOperationResultDTO(
+                session_id=session_id, thread_id=thread_id, operation_id=operation_id,
+                status="applied", control_revision=expected,
+                sync_version=self._store.goal_sync_version(session_id),
+            ).model_dump(mode="json")
+            try:
+                current = self._store.goal_read(session_id)
+                cleared, control_revision, sync_version = self._store.goal_clear_versioned(
+                    session_id, expected,
+                    settled_goal=freeze_goal_progress(current, progress, datetime.now(UTC)) if current is not None else None,
+                    operation=(operation_id, request_hash, result) if operation_id else None,
+                )
+            except GoalOperationReplayError as replay:
+                return SessionGoalOperationResultDTO.model_validate(replay.result)
             if cleared:
                 await self._job_event_bus.publish(
                     job_id=f"goal:{session_id}",
                     event_type=EventType.GOAL_CLEARED,
-                    payload={"session_id": session_id, "thread_id": thread_id},
+                    payload={"session_id": session_id, "thread_id": thread_id,
+                             "control_revision": control_revision, "sync_version": sync_version},
                     agent_id="goal_service",
                 )
-            return SessionGoalClearResultDTO(session_id=session_id, thread_id=thread_id, cleared=cleared)
+            return SessionGoalOperationResultDTO(
+                session_id=session_id, thread_id=thread_id, operation_id=operation_id,
+                status="applied" if cleared else "already_missing",
+                control_revision=control_revision, sync_version=sync_version,
+            )
+
+    async def stop_for_execution(
+        self, session_id: str, *, goal_id: str, expected_control_revision: int, cancelled: bool,
+    ) -> None:
+        """仅终结仍匹配执行观察版本的活动 Goal，过时工作正常退出。"""
+        async with self.lock_for(session_id):
+            current = self._store.goal_read(session_id)
+            if (
+                current is None
+                or current.goal_id != goal_id
+                or current.status != GoalStatus.active
+                or current.control_revision != expected_control_revision
+            ):
+                return
+            stopped = current.model_copy(update={
+                "status": GoalStatus.paused if cancelled else GoalStatus.blocked,
+                "revision": current.revision + 1,
+                "control_revision": current.control_revision + 1,
+                "sync_version": self._store.goal_sync_version(session_id) + 1,
+                "updated_at": datetime.now(UTC),
+            })
+            self._store.goal_write(stopped, expected_control_revision=expected_control_revision)
+            await self._publish_updated(stopped)
 
     async def account_job(
         self,
@@ -215,16 +359,26 @@ class SessionGoalService:
         tokens: int,
         elapsed_seconds: int,
         close_time: bool = False,
-    ) -> SessionGoalDTO | None:
+        goal_id: str | None = None,
+    ) -> SessionGoalStateDTO | None:
         async with self.lock_for(session_id):
             goal = self._store.goal_read(session_id)
-            if goal is None:
-                return goal
+            if goal is None or (goal_id is not None and goal.goal_id != goal_id):
+                return None
+            previous_status = goal.status
             goal = account_job(
                 goal, job_id=job_id, tokens=tokens, elapsed_seconds=elapsed_seconds,
                 close_time=close_time, now=datetime.now(UTC),
             )
-            self._store.goal_write(goal)
+            control_revision = goal.control_revision + (goal.status != previous_status)
+            goal = goal.model_copy(update={
+                "control_revision": control_revision,
+                "sync_version": self._store.goal_sync_version(session_id) + 1,
+            })
+            self._store.goal_write(
+                goal,
+                expected_control_revision=control_revision - (goal.status != previous_status),
+            )
             await self._publish_updated(goal)
             return goal
 
@@ -232,7 +386,8 @@ class SessionGoalService:
         self,
         session_id: str,
         trigger_id: str,
-        dispatch: Callable[[SessionGoalDTO], Awaitable[None]],
+        dispatch: Callable[[SessionGoalStateDTO], Awaitable[None]],
+        *, goal_id: str | None = None, revision: int | None = None,
     ) -> bool:
         """同一 Goal 锁内派发并登记已接受标记，避免 pause/clear 与续跑穿插。"""
         async with self.lock_for(session_id):
@@ -240,6 +395,8 @@ class SessionGoalService:
             if (
                 goal is None
                 or goal.status != GoalStatus.active
+                or (goal_id is not None and goal.goal_id != goal_id)
+                or (revision is not None and goal.revision != revision)
                 or goal.last_continued_job_id == trigger_id
             ):
                 return False
@@ -254,26 +411,40 @@ class SessionGoalService:
             self._store.goal_write(goal.model_copy(update={
                 "last_continued_job_id": trigger_id,
                 "updated_at": datetime.now(UTC),
-            }))
+                "sync_version": self._store.goal_sync_version(session_id) + 1,
+            }), expected_control_revision=goal.control_revision)
             await observe_phase(goal.goal_id, "goal.continuation.recorded", details={
                 "session_id": session_id, "goal_id": goal.goal_id, "trigger_id": trigger_id,
             })
             return True
 
-    async def _publish_updated(self, goal: SessionGoalDTO) -> None:
+    async def _publish_updated(self, goal: SessionGoalStateDTO) -> None:
         await self._job_event_bus.publish(
             job_id=f"goal:{goal.session_id}",
             event_type=EventType.GOAL_UPDATED,
             payload={
                 "session_id": goal.session_id,
                 "thread_id": goal.thread_id,
-                "goal": goal.model_dump(mode="json"),
+                "goal": goal_public_view(goal).model_dump(mode="json"),
             },
             agent_id="goal_service",
         )
 
-    def list_existing(self) -> list[SessionGoalDTO]:
+    def list_existing(self) -> list[SessionGoalStateDTO]:
         return self._store.goal_list()
+
+    @staticmethod
+    def _control_request_hash(objective, status, token_budget, replace: bool, expected_control_revision: int | None) -> str:
+        payload = {"objective": objective, "status": status.value if status else None,
+                   "token_budget": {"unset": True} if token_budget is _UNSET else token_budget,
+                   "replace": replace, "expected_control_revision": expected_control_revision}
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    @staticmethod
+    def _clear_request_hash(expected_control_revision: int) -> str:
+        return hashlib.sha256(json.dumps({
+            "kind": "clear", "expected_control_revision": expected_control_revision,
+        }, sort_keys=True).encode()).hexdigest()
 
 
 TOKEN_BUDGET_UNSET = _UNSET

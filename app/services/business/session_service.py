@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager, closing
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager, closing, contextmanager
 from datetime import UTC, datetime
 from typing import ClassVar
 from uuid import uuid4
@@ -96,6 +96,17 @@ class SessionService:
     @property
     def workspace_id(self) -> str:
         return self._workspace_id
+
+    @property
+    def catalog_projection_revision(self) -> str:
+        """目录默认 Provider 投影沿用配置 owner 已发布的版本。"""
+        return self._config_service.get_revision()
+
+    @contextmanager
+    def catalog_projection(self) -> Iterator[str]:
+        """版本与默认 Provider 投影共用配置 owner 的现有发布屏障。"""
+        with self._config_service.publication_lock:
+            yield self.catalog_projection_revision
 
     def register_change_listener(self, listener: Callable[[str, str], None]) -> None:
         self._change_listeners.append(listener)

@@ -38,9 +38,11 @@ class MessageRunRequest(BaseModel):
 
     message: MessageCreateRequest
     run: RunOptions
+    operation_id: str = Field(min_length=1, max_length=200)
 
 
 class MessageRunAccepted(BaseModel):
+    operation_id: str | None = None
     message_id: str
     job_id: str
     # 用户消息返回真实 Turn，内部执行显式为空；不得以 Job 身份替代。
@@ -49,6 +51,14 @@ class MessageRunAccepted(BaseModel):
     dispatch: JobDispatchSnapshotDTO
     # 普通 Session 聊天入口显式解析出的 main thread；实际执行 Turn 归属该 thread。
     thread_id: str
+
+
+class MessageSubmissionResultDTO(BaseModel):
+    session_id: str
+    thread_id: str
+    operation_id: str
+    status: Literal["accepted", "unknown"]
+    accepted: MessageRunAccepted | None = None
 
 
 TurnReplayAction = Literal["retry_failed", "regenerate", "edit_and_continue"]

@@ -147,6 +147,7 @@ from tests.integration.backend.sessions.test_runner_cancellation import (
     _session,
     _start_job,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.session_navigation.catalog_intents import create_catalog_intent
 from tests.support.workspaces import render_test_workspace_config
 
@@ -983,13 +984,13 @@ async def test_real_http_queued_child_turn_is_readable_and_fenced_from_active_ex
     jobs = []
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
         try:
-            first_response = await client.post(endpoint + "/messages", json={"message": {"content": first_prompt}, "run": {}})
+            first_response = await client.post(endpoint + "/messages", json=with_message_run_operation_id({"message": {"content": first_prompt}, "run": {}}))
             assert first_response.status_code == 200, first_response.text
             first = first_response.json()["data"]
             jobs.append(container.job_service._jobs[first["job_id"]])
             await asyncio.wait_for(entered.wait(), 8)
             compiled_count = len(case.compiled)
-            second_response = await client.post(endpoint + "/messages", json={"message": {"content": queued_prompt}, "run": {}})
+            second_response = await client.post(endpoint + "/messages", json=with_message_run_operation_id({"message": {"content": queued_prompt}, "run": {}}))
             assert second_response.status_code == 200, second_response.text
             second = second_response.json()["data"]
             queued_job = container.job_service._jobs[second["job_id"]]

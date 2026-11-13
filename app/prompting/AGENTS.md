@@ -55,7 +55,13 @@ prepared = internal_message_factory.build(
     metadata={"source": "send_message_to_session"},
 )
 
-await session_orchestrator.create_and_run_internal(target_session_id, prepared)
+await session_orchestrator.submit_runtime_event(
+    target_session_id,
+    prepared,
+    thread_id=await session_orchestrator.resolve_main_thread(target_session_id),
+    source_id=communication_id,
+    idempotency_key=communication_id,
+)
 ```
 
 Factory 会根据注册表自动生成类似以下结构，并写入 schema version、kind 和 internal metadata：

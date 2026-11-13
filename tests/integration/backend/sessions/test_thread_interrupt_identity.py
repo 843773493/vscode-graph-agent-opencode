@@ -28,6 +28,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
     _child,
 )
+from tests.support.api_helpers import with_message_run_operation_id
 
 pytest_plugins = ["tests.integration.backend.sessions.test_thread_runtime_runner"]
 
@@ -98,7 +99,7 @@ async def test_main_interrupt_never_selects_child_and_explicit_child_is_isolated
     with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
         try:
             async def start(thread):
-                response = await client.post(base + f"/threads/{thread}/messages", json={"message": {"content": "读取文件并等待中断。"}, "run": {}})
+                response = await client.post(base + f"/threads/{thread}/messages", json=with_message_run_operation_id({"message": {"content": "读取文件并等待中断。"}, "run": {}}))
                 assert response.status_code == 200, response.text
                 accepted[thread] = response.json()["data"]
                 await asyncio.wait_for(entered[thread].wait(), 8)

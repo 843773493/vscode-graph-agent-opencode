@@ -27,7 +27,7 @@ export function useComposerStateProjection({
   state,
   currentSessionCacheKey,
   latestStateRef,
-  setStatus, sendMessage, compactSession, refreshGoal, updateGoal, clearGoal,
+  setStatus, sendMessage, refreshTurnHistory, compactSession, refreshGoal, updateGoal, clearGoal,
   interruptSession, switchAgent, switchModel, refreshAgents, switchContentView,
   setWorkspaceDefaultAgent, setWorkspaceDefaultProvider,
   createSession, renameSession, updateUiSettings,
@@ -68,12 +68,12 @@ export function useComposerStateProjection({
   const composerValue = useMemo<ComposerContextType>(() => ({
     state: composerState,
     getLatestAssistantContent,
-    setStatus, sendMessage, compactSession, refreshGoal, updateGoal, clearGoal,
+    setStatus, sendMessage, refreshTurnHistory, compactSession, refreshGoal, updateGoal, clearGoal,
     interruptSession, switchAgent, switchModel, refreshAgents, switchContentView,
     setWorkspaceDefaultAgent, setWorkspaceDefaultProvider,
     createSession, renameSession, updateUiSettings,
   }), [
-    composerState, getLatestAssistantContent, setStatus, sendMessage,
+    composerState, getLatestAssistantContent, setStatus, sendMessage, refreshTurnHistory,
     compactSession, refreshGoal, updateGoal, clearGoal, interruptSession,
     switchAgent, switchModel, refreshAgents, switchContentView, createSession,
     setWorkspaceDefaultAgent, setWorkspaceDefaultProvider, renameSession,

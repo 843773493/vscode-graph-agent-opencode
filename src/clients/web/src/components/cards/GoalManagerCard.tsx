@@ -33,6 +33,7 @@ type GoalEditorMode = "create" | "edit" | null;
 export default function GoalManagerCard({
   sessionId,
   goal,
+  controlRevision = goal?.control_revision ?? 0,
   loading,
   error,
   onRefresh,
@@ -41,24 +42,28 @@ export default function GoalManagerCard({
 }: {
   sessionId: string;
   goal: SessionGoal | null;
+  controlRevision?: number;
   loading: boolean;
   error: string | null;
   onRefresh: () => Promise<SessionGoal | null>;
   onUpdate: (payload: SessionGoalUpdateRequest) => Promise<SessionGoal>;
-  onClear: () => Promise<void>;
+  onClear: (expectedControlRevision: number) => Promise<void>;
 }) {
   const confirm = useWarmConfirm();
   const [editorMode, setEditorMode] = useState<GoalEditorMode>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [tokenBudget, setTokenBudget] = useState("");
+  const [editControlRevision, setEditControlRevision] = useState<number | null>(null);
   const openEditor = (mode: Exclude<GoalEditorMode, null>) => {
     setTokenBudget(mode === "edit" && goal?.token_budget != null ? String(goal.token_budget) : "");
+    setEditControlRevision(mode === "edit" && goal ? goal.control_revision : controlRevision);
     setEditorMode(mode);
   };
 
   useEffect(() => {
     setEditorMode(null);
     setOperationError(null);
+    setEditControlRevision(null);
   }, [sessionId]);
 
   const run = (operation: () => Promise<unknown>) => {
@@ -74,6 +79,7 @@ export default function GoalManagerCard({
     if (!goal) {
       throw new Error(t("goal.manager.missing"));
     }
+    const expectedControlRevision = goal.control_revision;
     const confirmed = await confirm({
       title: t("goal.manager.deleteTitle"),
       message: t("goal.manager.deleteDetail", goal.objective),
@@ -81,7 +87,7 @@ export default function GoalManagerCard({
       danger: true,
     });
     if (confirmed) {
-      await onClear();
+      await onClear(expectedControlRevision);
     }
   };
 
@@ -131,7 +137,7 @@ export default function GoalManagerCard({
                 type="button"
                 disabled={!canManage}
                 title={t("goal.manager.pauseHint")}
-                onClick={() => run(() => onUpdate({ status: "paused" }))}
+                onClick={() => run(() => onUpdate({ status: "paused", expected_control_revision: goal.control_revision }))}
               >
                 {t("goal.manager.pause")}
               </button>
@@ -140,7 +146,7 @@ export default function GoalManagerCard({
                 type="button"
                 disabled={!canManage}
                 title={t("goal.manager.resumeHint")}
-                onClick={() => run(() => onUpdate({ status: "active" }))}
+                onClick={() => run(() => onUpdate({ status: "active", expected_control_revision: goal.control_revision }))}
               >
                 {t("goal.manager.resume")}
               </button>
@@ -149,7 +155,9 @@ export default function GoalManagerCard({
                 type="button"
                 disabled={!canManage}
                 title={t("goal.manager.restartHint")}
-                onClick={() => run(() => onUpdate(restartCompletedGoalPayload(goal)))}
+                onClick={() => run(() => onUpdate({
+                  ...restartCompletedGoalPayload(goal), expected_control_revision: goal.control_revision,
+                }))}
               >
                 {t("goal.manager.restart")}
               </button>
@@ -242,6 +250,7 @@ export default function GoalManagerCard({
               objective,
               token_budget: budget,
               status: goalEditStatus(goal.status),
+              expected_control_revision: editControlRevision ?? goal.control_revision,
             });
             return;
           }
@@ -250,6 +259,7 @@ export default function GoalManagerCard({
             token_budget: budget,
             status: "active",
             replace: true,
+            expected_control_revision: editControlRevision ?? controlRevision,
           });
         }}
       >

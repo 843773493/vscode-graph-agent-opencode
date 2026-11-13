@@ -297,3 +297,4 @@ class NavigationSnapshotDTO(BaseModel):
     catalog_revision: int = Field(ge=0)
     event_seq_watermark: int = Field(ge=0)
     generation: int = Field(ge=0)
+    projection_revision: str | None = None

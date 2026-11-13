@@ -94,6 +94,7 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runtime_case as runtime_case,  # noqa: PLC0414
 )
+from tests.support.api_helpers import new_message_operation_id
 from tests.support.message_service import accept_queued_message
 
 
@@ -193,7 +194,7 @@ async def test_preview_generation_releases_and_rebuilds_same_directory_after_run
     Image.new("RGB", size, (12, 24, 36)).save(source, format="PNG")
     original = source.getvalue()
     accepted = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
-        message=MessageCreateRequest(content="图片", attachments=[upload(original, mime="image/png")]), run=RunOptions(),
+        message=MessageCreateRequest(content="图片", attachments=[upload(original, mime="image/png")]), run=RunOptions(), operation_id=new_message_operation_id(),
     ))
     assert isinstance(container.job_service, JobService)
     job = container.job_service._jobs[accepted.job_id]

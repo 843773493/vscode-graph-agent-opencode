@@ -11,6 +11,7 @@
 ## 不可修改内容
 
 - 不得依赖 React、DOM、Node.js、Electron、VS Code 或 React Native。
+- `syncState.ts`只提供小对象版本替换、读取合并与撤销发布权，以及同 owner 的控制操作串行，不处理业务请求、持久化或调度。
 - 不得放 API 端点拼接、浏览器存储、具体页面状态或任何原生宿主调用。
 
 ## 规范

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import {
-  SESSION_ID, THREAD_ID, SCOPE_KEY, WORKSPACE_KEY, appState, bootstrap,
+  SESSION_ID, THREAD_ID, SCOPE_KEY, WORKSPACE_KEY, appState, emptyPendingResponse, bootstrap,
   emptyHistoryPageResponse, installWindow, originalFetch, restoreTurnHistoryTestGlobals,
   turnDetail,
 } from "./testFixtures";
@@ -24,6 +24,7 @@ test.each(["manual", "event"] as const)("%s 历史校准清空旧窗口但始终
   globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
     const path = new URL(String(args[0]), `http://127.0.0.1:${apiPort}`).pathname;
     if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "bootstrap-owner-token" } });
+    if (path.endsWith("/pending-requests")) return emptyPendingResponse();
     if (path.endsWith("/bootstrap")) return new Promise<Response>((resolve) => {
       resolveBootstrap = resolve;
       bootstrapReached();

@@ -162,7 +162,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     return () => listener.dispose();
   }, [configuration]);
   const actions = useSessionCatalogActions({ apiPort: 0, activeGatewayWorkspaceId: state.activeGatewayWorkspaceId,
-    activeSessionId: state.currentSession?.session_id ?? null, sessionsByWorkspace: state.sessionsByWorkspace,
+    activeSessionId: state.currentSession?.session_id ?? null,
     gatewayWorkspaces: state.gatewayWorkspaces, confirm, setStatus, onError: reportError, sessionCatalogOutboxRuntime: runtime.catalog, activateGatewayWorkspace: runtime.activateGatewayWorkspace,
     createSession: runtime.createSession, openWorkspaceSession: openSession, removeGatewayWorkspace: runtime.removeGatewayWorkspace,
     deleteSession: runtime.deleteSession, renameSession: runtime.renameSession, forkSessionContext: runtime.forkSessionContext,
@@ -205,7 +205,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       onCreateSession={actions.createSessionInCatalog} onCreateSessionInFolder={actions.createSessionInFolder}
       onCreateSessionFolder={actions.createSessionFolder} onSessionFolderDeleted={async workspaceKey => {
         await runtime.refreshGatewayWorkspaceSessions(workspaceKey); actions.invalidateSessionCatalog(workspaceKey);
-      }} onInvalidateSessionCatalog={actions.invalidateSessionCatalog} catalogSyncKeys={actions.sessionCatalogSyncKeys}
+      }} onInvalidateSessionCatalog={actions.invalidateSessionCatalog}
       catalogRefreshVersions={actions.sessionCatalogRefreshVersions} sessionCatalogOutboxRuntime={runtime.catalog}
       sessionCatalogOutboxSnapshot={runtime.catalogSnapshot} flexRatio={1}
       preferences={resolveAgentSessionsPreferences(state.uiSettings)} onPreferencesChange={updater => {

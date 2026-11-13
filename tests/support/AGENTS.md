@@ -64,6 +64,7 @@
 └── API等待、观察与断言
     ├── sealed_request_audit.py           Provider日志、真实transport与sealed registry/checkpoint只读核对
     ├── api_helpers.py / api_waiters.py    HTTP建会话、checkpoint样板与Job等待
+    ├── goal_control.py                   顺序Goal场景读取控制版本并冻结一次HTTP操作身份
     ├── session_navigation/
     │   ├── http_operations.py             真实HTTP导航operation提交及终态等待
     │   └── catalog_intents.py             直接调用catalog owner的intent准备与提交

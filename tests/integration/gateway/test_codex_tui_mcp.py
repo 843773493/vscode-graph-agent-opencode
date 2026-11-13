@@ -29,7 +29,11 @@ from tests.integration.gateway.test_mcp_plugin_lifecycle import (
 from tests.integration.gateway.test_mcp_plugin_lifecycle import (
     mcp_plugin_tool_restrictions as mcp_plugin_tool_restrictions,  # noqa: PLC0414 - mcp_plugin_case 的 fixture 依赖
 )
-from tests.support.api_helpers import create_session, read_llm_request_logs
+from tests.support.api_helpers import (
+    create_session,
+    read_llm_request_logs,
+    with_message_run_operation_id,
+)
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.plugin_package import install_plugin_async
 from tests.support.trace import get_trace_payload
@@ -260,13 +264,13 @@ async def test_agent_uses_codex_tui_mcp_through_gateway_plugin(
     request_id = "codex-tui-mcp-agent-call"
     response = await case.client.post(
         f"/api/v1/sessions/{session}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": (
                 "必须通过 invoke_extension_tool 调用 mcp__tui-mcp__list_sessions，"
                 "arguments={}；调用完成后说明已经读取会话列表。"
             )},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
         headers={"X-Request-ID": request_id},
     )
     response.raise_for_status()

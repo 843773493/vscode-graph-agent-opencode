@@ -18,7 +18,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.harness import control_request
 
 
@@ -39,10 +39,10 @@ async def test_hard_restart_preserves_queued_attachment_and_releases_only_stale_
     control = case.replay.control
     control.arm(head_call, "model.response_ready")
     control.arm(tail_call, "model.response_ready")
-    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "带目录输入", "attachments": [upload(b"restart original").model_dump(mode="json")]},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     head = response.json()["data"]
     barrier = "attachment-queue-before-new-runtime"
@@ -51,10 +51,10 @@ async def test_hard_restart_preserves_queued_attachment_and_releases_only_stale_
         await asyncio.to_thread(control.acknowledged, head_call, "model.response_ready", 60)
         old_token, state, pending, availability = directory_state(case)
         assert old_token.startswith("runtime:") and state == "active" and pending == 0 and availability == "available"
-        response = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+        response = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
             "message": {"content": "继续处理上轮附件"},
             "run": {"mode": "single_agent", "agent_id": "default", "delivery_policy": "after_turn"},
-        })
+        }))
         assert response.status_code == 200, response.text
         tail = response.json()["data"]
         control.arm_match(barrier, "execution.queue.claimed", {

@@ -96,7 +96,7 @@ from tests.integration.backend.sessions.test_session_generation_strategies impor
     _create_generation,
     _generation_configuration,
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.e2e_control.harness import E2ETestControlHarness, control_request
 from tests.support.e2e_control.runtime_ports import (
     ControlledIdentifiers,
@@ -104,6 +104,7 @@ from tests.support.e2e_control.runtime_ports import (
 )
 from tests.support.e2e_control.tool_observations import ObservedCanonicalItemSink
 from tests.support.fork_deadline import ForkDeadlineRegistry
+from tests.support.goal_control import goal_control_payload
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.workspace import (
@@ -422,9 +423,9 @@ async def _job(case: RuntimeSourceCase | RestartRuntimeSourceCase, job_id: str, 
 
 
 async def _send(case: RuntimeSourceCase | RestartRuntimeSourceCase, session_id: str, content: str) -> dict[str, object]:
-    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": content}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
     return response.json()["data"]
@@ -824,7 +825,7 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
         {"content": "H2-goal-completed"},
     ])
     thread_id = await case.container.session_service.resolve_main_thread(session_id)
-    goal_response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json={"objective": "H2-goal：完成目标并调用 update_goal。"})
+    goal_response = await case.client.put(f"/api/v1/sessions/{session_id}/goal", json=await goal_control_payload(case.client, session_id, {"objective": "H2-goal：完成目标并调用 update_goal。"}))
     assert goal_response.status_code == 200, goal_response.text
     await _wait_until(lambda: bool(case.sql(session_id, thread_id, "SELECT job_id FROM executions")))
     goal_job_id = case.sql(session_id, thread_id, "SELECT job_id FROM executions")[0][0]
@@ -832,7 +833,7 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
     tracker = case.container.agent_execution_service._residency_tracker
     source_generation = tracker.snapshot(session_id, thread_id).generation
     assert case.sql(session_id, thread_id, "SELECT execution_origin,turn_id FROM executions") == [("internal", None)]
-    assert (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]["status"] == "complete"
+    assert (await case.client.get(f"/api/v1/sessions/{session_id}/goal")).json()["data"]["goal"]["status"] == "complete"
 
     terminal_call, = await case.plan(session_id, [
         _tool_reply("exec_command", {"cmd": "sleep 3; printf 'H2-terminal-completed\\n'", "yield_time_ms": 1000}, "call_h2_terminal"),
@@ -2172,10 +2173,10 @@ async def test_h6_backend_hard_restart_keeps_child_and_runtime_report_identity(
     ])
     team_call = first_call + ":tool-call:call_h6_team"
     case.control.arm(team_call, "test.tool_result.committed")
-    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": "h6-team-trigger：创建团队并启动成员。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
     try:

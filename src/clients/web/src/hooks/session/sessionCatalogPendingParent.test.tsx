@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React, { useSyncExternalStore } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { SessionCatalogOperationReceipt } from "../../api/session/sessionCatalogOperations";
+import type { SessionCatalogOperationReceipt, SessionCatalogSnapshot } from "../../api/session/sessionCatalogOperations";
 import type { GatewayWorkspace, SessionCatalogNode } from "../../types/backend";
 import type { CatalogOutboxPersistencePort, CatalogOutboxStoredOperation } from "../../state/session/sessionCatalogOutboxStore";
 import { createSessionCatalogOutboxRuntime, type SessionCatalogOutboxSnapshot } from "./sessionCatalogOutboxRuntime";
@@ -11,6 +11,7 @@ import { useSessionCatalogActions } from "../shell/useSessionCatalogActions";
 import { useSessionResourceExplorer } from "./useSessionResourceExplorer";
 import {
   apiSuccessResponse,
+  catalogReadResponse,
   apiErrorResponse,
   installGatewayFetch,
   restoreGatewayTestEnvironment,
@@ -89,7 +90,9 @@ async function mountPendingParent(options: {
   let releaseDelayedRead: (() => void) | undefined;
   let nextExportMutation: (() => void) | undefined;
   const refreshReads: string[] = [];
-  installGatewayFetch(withDefaultGatewayApiResponses(({ path, url }) => {
+  let observeSnapshot: ((snapshot: SessionCatalogSnapshot) => Promise<void>) | undefined;
+  installGatewayFetch(withDefaultGatewayApiResponses((request) => {
+    const { path, url } = request;
     if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: "gateway-test" });
     if (path === "/api/v1/workspace") {
       return apiSuccessResponse({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id });
@@ -108,7 +111,7 @@ async function mountPendingParent(options: {
     if (path === "/api/v1/session-catalog/export") {
       if (readFailure === "export") return apiErrorResponse(500, "权威 export 读取失败");
       refreshReads.push("export");
-      const response = apiSuccessResponse({ revision: `catalog-${revision}`, catalog_revision: revision, items: [...nodes.values()] });
+      const response = catalogReadResponse(request, { revision: `catalog-${revision}`, catalog_revision: revision, items: [...nodes.values()] });
       // 模拟完整节点集冻结后、根页请求前的另一个客户端提交。
       if (nextExportMutation) {
         nextExportMutation(); nextExportMutation = undefined; revision += 1;
@@ -118,7 +121,7 @@ async function mountPendingParent(options: {
     if (path === "/api/v1/session-catalog/refresh") {
       refreshReads.push("refresh");
       const items = [...nodes.values()].filter((node) => node.parent_node_id === null);
-      return apiSuccessResponse({ revision: `catalog-${revision}`, catalog_revision: revision,
+      return catalogReadResponse(request, { revision: `catalog-${revision}`, catalog_revision: revision,
         parent_node_id: null, items, cursor: null, total: items.length, consistency_warning: null });
     }
     if (path === "/api/v1/session-catalog/children") {
@@ -128,7 +131,7 @@ async function mountPendingParent(options: {
       if (parent !== null && !nodes.has(parent)) return apiErrorResponse(404, `会话目录节点不存在: ${parent}`);
       const items = [...nodes.values()].filter((node) => node.parent_node_id === parent);
       const limit = parent === null ? options.rootPageLimit ?? items.length : items.length;
-      const response = apiSuccessResponse({
+      const response = catalogReadResponse(request, {
         revision: `catalog-${revision}`, catalog_revision: revision,
         parent_node_id: parent, items: items.slice(0, limit),
         cursor: items.length > limit ? "root-more" : null, total: items.length,
@@ -144,7 +147,7 @@ async function mountPendingParent(options: {
   }));
   const runtime = createSessionCatalogOutboxRuntime({
     apiPort: 49_459, openPersistence: async () => persistence,
-    observeChanges: async () => {}, onError: (message) => errors.push(message),
+    observeChanges: async (_port, _target, observation) => { observeSnapshot = observation.onSnapshot; }, onError: (message) => errors.push(message),
     adapter: {
       enqueue: async (_port, target, intents) => {
         const accepted = intents.map((intent) => {
@@ -178,7 +181,6 @@ async function mountPendingParent(options: {
   cleanup.push(() => runtime.dispose());
 
   const workspaces = [{ ...TEST_GATEWAY_WORKSPACE_REQUEST_TARGET, name: "待提交父目录工作区" }] as GatewayWorkspace[];
-  const sessions = new Map();
   let explorer!: ReturnType<typeof useSessionResourceExplorer>;
   let actions!: ReturnType<typeof useSessionCatalogActions>;
   let heldSnapshot: SessionCatalogOutboxSnapshot | null = null;
@@ -190,7 +192,7 @@ async function mountPendingParent(options: {
     }) });
     actions = useSessionCatalogActions({
       apiPort: 49_459, activeGatewayWorkspaceId: TEST_GATEWAY_WORKSPACE_KEY, activeSessionId: null,
-      sessionsByWorkspace: sessions, gatewayWorkspaces: workspaces,
+      gatewayWorkspaces: workspaces,
       confirm: async () => true, setStatus: (message) => statuses.push(message), onError: (message) => errors.push(message),
       sessionCatalogOutboxRuntime: runtime,
       activateGatewayWorkspace: async () => undefined, createSession: async () => { throw new Error("不应创建会话"); },
@@ -248,6 +250,8 @@ async function mountPendingParent(options: {
       }
       await act(async () => {
         await handle.driver.reconcile();
+        if (heldSnapshot === null) await observeSnapshot?.({ workspace_id: TEST_GATEWAY_WORKSPACE_REQUEST_TARGET.workspace_id,
+          catalog_revision: revision, event_seq_watermark: revision - 7, generation: 1 });
         await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 850));
         await flushReactEffects();
       });
@@ -541,7 +545,8 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
       node_id: 'cnode_' + suffix, kind: 'folder', name: suffix === 'a' ? 'A已提交' : suffix,
       parent_node_id: null, has_children: false, node_revision: 3, state: 'active',
     }));
-    installGatewayFetch(withDefaultGatewayApiResponses(async ({ path }) => {
+    installGatewayFetch(withDefaultGatewayApiResponses(async (request) => {
+      const { path } = request;
       if (path === '/api/gateway/health') return apiSuccessResponse({ gateway_id: partition.gatewayId });
       if (path === '/api/v1/workspace') return apiSuccessResponse({ workspace_id: partition.workspaceId });
       if (path === '/api/v1/session-catalog/snapshot') return apiSuccessResponse({ workspace_id: partition.workspaceId,
@@ -550,7 +555,7 @@ describe("失败对账的真实 confirmed owner 闭包", () => {
         if (refreshing) { branchRequested(); await branchGate; }
         const items = nodes.map((node) => refreshing && node.node_id === 'cnode_external'
           ? { ...node, name: '外部客户端已提交', node_revision: 4 } : node);
-        return apiSuccessResponse({ revision: refreshing ? 'catalog-12' : 'catalog-7',
+        return catalogReadResponse(request, { revision: refreshing ? 'catalog-12' : 'catalog-7',
           catalog_revision: refreshing ? 12 : 7, parent_node_id: null, items,
           total: items.length, cursor: null, consistency_warning: null });
       }

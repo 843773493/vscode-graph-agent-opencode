@@ -194,7 +194,7 @@ function repairDeleteFixture(refreshFails: boolean) {
       if (catalogRevision === 4 && refreshFails) throw refreshFailure;
       const parent = new URL(url).searchParams.get("parent_node_id");
       return catalogChildrenResponse(`catalog-${catalogRevision}`,
-        catalogRevision === 3 && parent === null ? [folder] : [], parent, catalogRevision);
+        catalogRevision === 3 && parent === null ? [folder] : [], parent, catalogRevision, WORKSPACE_TARGET);
     }
     return undefined;
   }));

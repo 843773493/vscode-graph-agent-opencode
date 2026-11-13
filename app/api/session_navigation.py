@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -34,6 +35,8 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogExportDTO,
     SessionCatalogPageDTO,
     SessionCatalogSearchResultsDTO,
+    SessionCatalogSyncDTO,
+    SessionCatalogVersionDTO,
     SessionGenerationCapabilitiesDTO,
 )
 from app.schemas.internal_v2.session_navigation.models import (
@@ -164,15 +167,18 @@ async def get_session_catalog_operation_status(
     response_model=APIResponse[NavigationSnapshotDTO],
 )
 async def get_session_catalog_snapshot(
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     """revision-pinned catalog snapshot：同一只读事务返回 revision 与事件水位。"""
     try:
-        result = service.navigation_snapshot()
+        result = service.navigation_snapshot(minimum_catalog_revision=minimum_catalog_revision)
     except NavigationQueueOwnerError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except RuntimeError as error:
+        raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -255,6 +261,21 @@ async def preview_session_generation(
     return APIResponse(data=result, request_id=request_id)
 
 
+def _catalog_sync(service: SessionCatalogService) -> SessionCatalogSyncDTO:
+    return SessionCatalogSyncDTO(
+        gateway_id=require_current_gateway_id("Session catalog read"), workspace_id=service.workspace_id,
+        source="authoritative", stale=False, authoritative_confirmed_at=datetime.now(UTC),
+    )
+
+
+@router.get("/session-catalog/version", response_model=APIResponse[SessionCatalogVersionDTO])
+async def get_session_catalog_version(
+    request_id: Annotated[str, Depends(get_request_id)],
+    service: Annotated[SessionCatalogService, Depends(get_session_catalog_service)],
+):
+    return APIResponse(data=service.version(), request_id=request_id)
+
+
 @router.get(
     "/session-catalog/children",
     response_model=APIResponse[SessionCatalogPageDTO],
@@ -263,6 +284,7 @@ async def list_session_catalog_children(
     parent_node_id: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     cursor: str | None = None,
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
@@ -271,6 +293,7 @@ async def list_session_catalog_children(
             parent_node_id=parent_node_id,
             limit=limit,
             cursor=cursor,
+            minimum_catalog_revision=minimum_catalog_revision,
         )
     except KeyError as error:
         raise not_found_http_error(error) from error
@@ -280,6 +303,7 @@ async def list_session_catalog_children(
         raise
     except (TypeError, ValueError, RuntimeError) as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -290,6 +314,7 @@ async def list_session_catalog_children(
 async def list_session_catalog_roots(
     limit: int = Query(default=100, ge=1, le=500),
     cursor: str | None = None,
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
@@ -298,6 +323,7 @@ async def list_session_catalog_roots(
             parent_node_id=None,
             limit=limit,
             cursor=cursor,
+            minimum_catalog_revision=minimum_catalog_revision,
         )
     except CatalogCursorError as error:
         raise HTTPException(status_code=409, detail=error.detail()) from error
@@ -305,6 +331,7 @@ async def list_session_catalog_roots(
         raise
     except (TypeError, ValueError, RuntimeError) as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -314,13 +341,15 @@ async def list_session_catalog_roots(
 )
 async def refresh_session_catalog(
     _: str = Depends(verify_local_token),
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     try:
-        result = await service.refresh()
+        result = await service.refresh(minimum_catalog_revision=minimum_catalog_revision)
     except RuntimeError as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -330,15 +359,17 @@ async def refresh_session_catalog(
 )
 async def get_session_catalog_breadcrumb(
     node_id: str,
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     try:
-        result = await service.breadcrumb(node_id)
+        result = await service.breadcrumb(node_id, minimum_catalog_revision=minimum_catalog_revision)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except RuntimeError as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 
@@ -348,13 +379,15 @@ async def get_session_catalog_breadcrumb(
 )
 async def export_session_catalog(
     node_id: Annotated[list[CanonicalSessionId] | None, Query()] = None,
+    minimum_catalog_revision: Annotated[int, Query(ge=0)] = 0,
     request_id: str = Depends(get_request_id),
     service: SessionCatalogService = Depends(get_session_catalog_service),
 ):
     try:
-        result = await service.export_index(node_ids=node_id)
+        result = await service.export_index(node_ids=node_id, minimum_catalog_revision=minimum_catalog_revision)
     except RuntimeError as error:
         raise state_conflict_http_error(error) from error
+    result.sync = _catalog_sync(service)
     return APIResponse(data=result, request_id=request_id)
 
 

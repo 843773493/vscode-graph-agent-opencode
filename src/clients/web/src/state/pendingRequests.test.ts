@@ -122,7 +122,7 @@ describe("待处理消息状态", () => {
   test("主视图拒绝未声明精确 thread 的 Session 聚合快照", () => {
     expect(() => writePendingSnapshot(new Map(), new Map(), {
       session_id: "ses_pending", thread_id: null, requests: [], snapshot_version: 1,
-    })).toThrow("缺少精确 thread 范围");
+    }, "workspace::ses_pending", new Map())).toThrow("主视图待处理快照缺少精确 thread 范围");
   });
 
   test("空快照按消息和 Job 两种身份去重，并保留活动 Job 与首个终态视图", () => {
@@ -147,6 +147,7 @@ describe("待处理消息状态", () => {
       }),
     ]]]);
     const activeJobs = new Map<string, string>();
+    const queueVersions = new Map<string, Map<string, number>>();
 
     writePendingSnapshot(
       pending,
@@ -159,6 +160,7 @@ describe("待处理消息状态", () => {
         snapshot_version: 1,
       },
       mapKey,
+      queueVersions,
     );
 
     expect(pending.get(mapKey)?.map((conversation) => conversation.conversationId)).toEqual([
@@ -172,6 +174,7 @@ describe("待处理消息状态", () => {
   test("待处理快照保留活动 Job 控制状态，但没有 Turn 时不生成聊天回合", () => {
     const pending = new Map();
     const active = new Map<string, string>();
+    const queueVersions = new Map<string, Map<string, number>>();
 
     writePendingSnapshot(
       pending,
@@ -184,6 +187,7 @@ describe("待处理消息状态", () => {
         snapshot_version: 1,
       },
       "workspace::ses_active",
+      queueVersions,
     );
 
     expect(active.get("workspace::ses_active")).toBe("job_active");
@@ -237,6 +241,7 @@ describe("待处理消息状态", () => {
         snapshot_version: 2,
       },
       "workspace::ses_failed",
+      new Map(),
     );
 
     // 终态 SSE 可能早于 rollout 投影提交到达，此时历史详情会返回 409；空 pending
@@ -294,6 +299,7 @@ describe("待处理消息状态", () => {
         snapshot_version: 1,
       },
       mapKey,
+      new Map(),
     );
 
     expect(pending.get(mapKey)).toEqual([

@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
+import { newOperationId } from '../../../../support/operation_ids.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH;
@@ -83,7 +84,8 @@ try {
   const send = async (thread, content) => {
     const started = performance.now();
     await testControl({ action: 'plan_model', session_id: session.session_id, thread_id: thread, interactions: [interactions.shift()] });
-    const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${thread}/messages`, owner, { message: { content }, run: {} });
+    const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${thread}/messages`, owner,
+      { operation_id: newOperationId(), message: { content }, run: {} });
     await expect.poll(async () => {
       const job = await api(`/api/v1/jobs/${accepted.job_id}`, owner);
       if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));

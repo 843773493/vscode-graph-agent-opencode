@@ -14,7 +14,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 - fixture 沿当前文件隔离
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 
 
 @pytest.fixture(autouse=True)
@@ -34,9 +34,9 @@ async def test_python_tool_result_preserves_streams_without_interpreter_locator(
             "print('python stdout Ω')\nprint('python stderr Ω', file=sys.stderr)"
         )}, "call_python_result"), {"content": "Python 结果验证完成"},
     ])
-    accepted = await case.client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await case.client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": "python-result-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     accepted_data = accepted.json()["data"]
     job_id = accepted_data["job_id"]

@@ -26,7 +26,7 @@ from app.services.business.session_context_resource import (
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.communication.federation import (
     CommunicationNode,
     open_communication_triad,
@@ -268,10 +268,10 @@ async def test_c1_real_send_worker_wait_read(communication_case: CommunicationCa
     }, "call_c1_send")])
     send_call = first_call + ":tool-call:call_c1_send"
     case.replay.control.arm(send_call, "test.tool_result.committed")
-    response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json=with_message_run_operation_id({
         "message": {"content": "c1-source-trigger，发送后等待并冷读目标。"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"]
     try:
@@ -331,9 +331,9 @@ async def test_real_child_execution_sends_and_waits_with_durable_source_owner(
         _tool("task", {"description": "初始化后等待直接消息。", "subagent_type": "general-purpose"}, "child-source-create"),
         {"content": "已创建通信 child。"}, {"content": "child 初始化汇报已处理。"},
     ])
-    created = await case.client.post(f"/api/v1/sessions/{source}/messages", json={
+    created = await case.client.post(f"/api/v1/sessions/{source}/messages", json=with_message_run_operation_id({
         "message": {"content": "创建一个同 Session 的持久 child，等待直接指令。"}, "run": {},
-    })
+    }))
     assert created.status_code == 200, created.text
     await _completed(case.client, created.json()["data"]["job_id"])
     async with asyncio.timeout(60):
@@ -352,9 +352,9 @@ async def test_real_child_execution_sends_and_waits_with_durable_source_owner(
     }, send_provider_id)], thread_id=child)
     send_call = first_call + ":tool-call:" + send_provider_id
     case.replay.control.arm(send_call, "test.tool_result.committed")
-    response = await case.client.post(f"/api/v1/sessions/{source}/threads/{child}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{source}/threads/{child}/messages", json=with_message_run_operation_id({
         "message": {"content": "向目标发送结果，并通过原 communication 等待完成。"}, "run": {},
-    })
+    }))
     assert response.status_code == 200, response.text
     assert response.json()["data"]["thread_id"] == response.json()["data"]["dispatch"]["thread_id"] == child
     try:
@@ -447,9 +447,9 @@ async def test_c2_hard_restart_proactively_binds_accepted_inbox(communication_ca
         {"content": "c2-source-accepted"},
     ])
     await case.plan(target_session, [{"content": "c2-target-recovered"}])
-    response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json=with_message_run_operation_id({
         "message": {"content": "c2-source-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     await _completed(case.client, response.json()["data"]["job_id"])
     receipt, = [json.loads(message["content"]) for message in case.request(source_calls[-1])["messages"] if message["role"] == "tool" and message["name"] == "send_message_to_session"]
@@ -479,9 +479,9 @@ async def test_c2_hard_restart_proactively_binds_accepted_inbox(communication_ca
         _tool("wait_for_session", {"target_session_id": target_session, "communication_id": receipt["communication_id"], "timeout_seconds": 20}, "call_c2_wait"),
         {"content": "c2-observation-completed"},
     ])
-    resumed = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json={
+    resumed = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json=with_message_run_operation_id({
         "message": {"content": "c2-resume-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert resumed.status_code == 200, resumed.text
     await _completed(case.client, resumed.json()["data"]["job_id"])
     results["wait"], = [json.loads(message["content"]) for message in case.request(resumed_calls[-1])["messages"] if message["role"] == "tool" and message["name"] == "wait_for_session"]
@@ -524,9 +524,9 @@ async def test_communication_crash_windows_keep_original_identity(communication_
         {"content": "matrix-source-completed"},
     ])
     target_calls = await case.plan(target_session, [{"content": "matrix-target-completed"}])
-    response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{source_session}/messages", json=with_message_run_operation_id({
         "message": {"content": "matrix-source-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     marker_path = case.artifacts / ("barrier-" + case.barrier_stage + ".json")
     async with asyncio.timeout(40):
@@ -690,9 +690,9 @@ async def test_c3_real_reverse_channel_question_and_reply(communication_triad) -
     }, "call_c3_question")])
     question_call = first_call + ":tool-call:call_c3_question"
     control.arm(question_call, "test.tool_result.committed")
-    accepted = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json={
+    accepted = await source.client.post(f"/api/v1/sessions/{source_session}/messages", json=with_message_run_operation_id({
         "message": {"content": "c3-source-trigger"}, "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     try:
         await asyncio.to_thread(control.acknowledged, question_call, "test.tool_result.committed", 30)

@@ -6,6 +6,7 @@ export function cloneMaps(state: AppState): AppState {
     eventQueuesBySession: new Map(state.eventQueuesBySession),
     sessionTraceHistoryBySession: new Map(state.sessionTraceHistoryBySession),
     pendingConversations: new Map(state.pendingConversations),
+    pendingQueueVersions: new Map(state.pendingQueueVersions),
     activeJobIdsBySession: new Map(state.activeJobIdsBySession),
     unreadSessionKeys: new Set(state.unreadSessionKeys),
     sessionViewStates: new Map(state.sessionViewStates),

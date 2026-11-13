@@ -27,7 +27,7 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
 )
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.fork_deadline import ForkDeadlineRegistry
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
@@ -180,10 +180,10 @@ def _verify_frozen_history(index: Path, wire: list[dict[str, object]]) -> None:
 
 
 async def _complete(client: httpx.AsyncClient, session: str, content: str) -> dict[str, object]:
-    accepted = await client.post(f"/api/v1/sessions/{session}/messages", json={
+    accepted = await client.post(f"/api/v1/sessions/{session}/messages", json=with_message_run_operation_id({
         "message": {"content": content},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert accepted.status_code == 200, accepted.text
     data = accepted.json()["data"]
     await wait_for_job_done(client, data["job_id"])

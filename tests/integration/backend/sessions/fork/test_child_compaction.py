@@ -26,7 +26,7 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_case as communication_case,  # noqa: PLC0414 - 复用真实进程与唯一模型协议装具
 )
-from tests.support.api_helpers import create_session
+from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.sealed_request_audit import audit_sealed_requests
 
 
@@ -73,10 +73,10 @@ async def test_child_compaction_tool_preserves_main_and_restores_own_archive(
         _tool("read_compaction_history", {"line_offset": 1, "limit": 2000}, "child-read-archive"),
         {"content": "child-only-compacted-answer"},
     ], thread_id=child, usage={"prompt_tokens": 100000, "completion_tokens": 16, "total_tokens": 100016})
-    sent = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json={
+    sent = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json=with_message_run_operation_id({
         "message": {"content": "child-only-compaction-question"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert sent.status_code == 200, sent.text
     compacted = MessageRunAccepted.model_validate(sent.json()["data"])
     assert compacted.thread_id == compacted.dispatch.thread_id == child
@@ -146,10 +146,10 @@ async def test_child_compaction_tool_preserves_main_and_restores_own_archive(
         _tool("read_compaction_history", {"line_offset": 1, "limit": 2000}, "child-reread-archive"),
         {"content": "child-cold-successor-answer"},
     ], thread_id=child)
-    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json={
+    response = await case.client.post(f"/api/v1/sessions/{session}/threads/{child}/messages", json=with_message_run_operation_id({
         "message": {"content": "child-cold-successor-question"},
         "run": {"mode": "single_agent", "agent_id": "default"},
-    })
+    }))
     assert response.status_code == 200, response.text
     successor = MessageRunAccepted.model_validate(response.json()["data"])
     await _completed(case.client, successor.job_id)

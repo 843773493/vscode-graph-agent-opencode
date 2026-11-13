@@ -6,6 +6,7 @@ import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { testControl } from '../../../../support/e2e_control/browser_client.mjs';
 import { confirmContentCategories } from './default_interactions.mjs';
 import { searchReceipt } from '../../../../support/workbench/search-observation.mjs';
+import { newOperationId } from '../../../../support/operation_ids.mjs';
 
 const base = process.env.BOXTEAM_BROWSER_BASE_URL, output = process.env.BOXTEAM_BROWSER_RESULT_PATH;
 const screenshot = process.env.BOXTEAM_BROWSER_SCREENSHOT_PATH, query = process.env.BOXTEAM_TRACE_SEARCH_QUERY;
@@ -62,7 +63,8 @@ try {
   const interactions = JSON.parse(process.env.BOXTEAM_TRACE_SEARCH_INTERACTIONS);
   const send = async (thread, content) => {
     await testControl({ action: 'plan_model', session_id: session.session_id, thread_id: thread, interactions: [interactions.shift()] });
-    const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${thread}/messages`, { message: { content }, run: {} });
+    const accepted = await api(`/api/v1/sessions/${session.session_id}/threads/${thread}/messages`,
+      { operation_id: newOperationId(), message: { content }, run: {} });
     await expect.poll(async () => {
       const job = await api(`/api/v1/jobs/${accepted.job_id}`);
       if (['failed', 'cancelled', 'timed_out', 'execution_lost'].includes(job.status)) throw new Error(JSON.stringify(job));

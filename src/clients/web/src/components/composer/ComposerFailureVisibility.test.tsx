@@ -57,6 +57,9 @@ function appState(agents: Agent[]): AppState {
       current_agent_id: "default",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
+      revision: 0,
+      control_revision: 0,
+      sync_version: 0,
     },
     currentSessionWorkspaceId: WORKSPACE_ID,
     contentView: "default",
@@ -85,6 +88,7 @@ function baseActions(overrides: Partial<Actions> = {}): Actions {
     getLatestAssistantContent: () => null,
     setStatus: () => undefined,
     sendMessage: async () => undefined,
+    refreshTurnHistory: () => undefined,
     compactSession: async () => ({} as never),
     refreshGoal: async () => null,
     updateGoal: async () => undefined,
@@ -145,6 +149,15 @@ afterEach(() => {
 });
 
 describe("Composer 切换类动作失败必须可见", () => {
+  test("权威执行状态确认失败在主窗口会话区可见", () => {
+    installComposerEnvironment();
+    const state = appState([agent("default")]);
+    state.sessionExecutionSyncError = "工作区连接已断开";
+    const renderer = mountComposer(state, baseActions());
+    expect(JSON.stringify(renderer.toJSON())).toContain("会话执行状态同步失败：工作区连接已断开");
+    act(() => renderer.unmount());
+  });
+
   test("持续显示当前会话的权威 Goal 内容与状态", () => {
     installComposerEnvironment();
     const state = appState([agent("default")]);
@@ -157,6 +170,9 @@ describe("Composer 切换类动作失败必须可见", () => {
       token_budget: null,
       tokens_used: 0,
       time_used_seconds: 0,
+      revision: 1,
+      control_revision: 1,
+      sync_version: 1,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     } satisfies SessionGoal;

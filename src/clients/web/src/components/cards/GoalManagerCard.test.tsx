@@ -13,6 +13,7 @@ const goal: SessionGoal = {
   goal_id: "goal_lifecycle", session_id: "ses_test", thread_id: "thr_main", objective: "检查服务上线",
   status: "active", token_budget: 1000, tokens_used: 100, time_used_seconds: 12,
   created_at: "2026-10-29T00:00:00Z", updated_at: "2026-10-29T00:00:00Z",
+  revision: 1, control_revision: 1, sync_version: 1,
 };
 let renderer: ReactTestRenderer | undefined;
 const restores: Array<() => void> = [];
@@ -104,6 +105,9 @@ test("Goal 管理器在右侧区域提供完整操作且不重复展示斜杠命
     token_budget: null,
     tokens_used: 10,
     time_used_seconds: 2,
+    revision: 1,
+    control_revision: 1,
+    sync_version: 1,
     created_at: "2026-07-27T00:00:00Z",
     updated_at: "2026-07-27T00:00:01Z",
   });
@@ -126,6 +130,9 @@ test("已完成 Goal 同时提供重新开始和修改后继续", () => {
     token_budget: 80000,
     tokens_used: 12500,
     time_used_seconds: 90,
+    revision: 1,
+    control_revision: 1,
+    sync_version: 1,
     created_at: "2026-07-27T00:00:00Z",
     updated_at: "2026-07-27T00:10:00Z",
   });
@@ -146,6 +153,9 @@ test("重新开始会创建新 Goal 并保留原 token 预算", () => {
     token_budget: 80000,
     tokens_used: 12500,
     time_used_seconds: 90,
+    revision: 1,
+    control_revision: 1,
+    sync_version: 1,
     created_at: "2026-07-27T00:00:00Z",
     updated_at: "2026-07-27T00:10:00Z",
   });
@@ -165,7 +175,8 @@ test("新建表单通过开始 Goal 提交目标，不沿用旧用量", async ()
   expect(card.button("开始 Goal").props.disabled).toBe(true);
   act(() => { renderer!.root.findByType("textarea").props.onChange({ target: { value: "  检查服务上线  " } }); });
   await act(async () => { renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
-  expect(card.writes).toEqual([{ objective: "检查服务上线", token_budget: null, status: "active", replace: true }]);
+  expect(card.writes).toEqual([{ objective: "检查服务上线", token_budget: null, status: "active", replace: true,
+    expected_control_revision: 0 }]);
 });
 
 test("编辑预算保留暂停状态，非法预算不写入，留空明确清除限制", async () => {
@@ -180,25 +191,29 @@ test("编辑预算保留暂停状态，非法预算不写入，留空明确清�
   expect(renderer!.root.findByProps({ role: "alert" }).children.join("")).toContain("正整数");
   act(() => budget().props.onChange({ target: { value: "2000" } }));
   await act(async () => { renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
-  expect(card.writes).toEqual([{ objective: goal.objective, status: "paused", token_budget: 2000 }]);
+  expect(card.writes).toEqual([{ objective: goal.objective, status: "paused", token_budget: 2000,
+    expected_control_revision: goal.control_revision }]);
   act(() => { card.button("编辑").props.onClick(); });
   act(() => budget().props.onChange({ target: { value: "" } }));
   await act(async () => { renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }); });
-  expect(card.writes[1]).toEqual({ objective: goal.objective, status: "paused", token_budget: null });
+  expect(card.writes[1]).toEqual({ objective: goal.objective, status: "paused", token_budget: null,
+    expected_control_revision: goal.control_revision });
 });
 
 test("暂停和各可恢复状态只更新状态，重新开始保留预算并显式替换", async () => {
   const card = mountGoal(goal);
   await act(async () => { card.button("暂停").props.onClick(); });
-  expect(card.writes).toEqual([{ status: "paused" }]);
+  expect(card.writes).toEqual([{ status: "paused", expected_control_revision: goal.control_revision }]);
   for (const status of ["paused", "blocked", "usage_limited"] as const) {
     card.show({ ...goal, status });
     await act(async () => { card.button("继续").props.onClick(); });
-    expect(card.writes[card.writes.length - 1]).toEqual({ status: "active" });
+    expect(card.writes[card.writes.length - 1]).toEqual({ status: "active",
+      expected_control_revision: goal.control_revision });
   }
   card.show({ ...goal, status: "complete" });
   await act(async () => { card.button("重新开始").props.onClick(); });
-  expect(card.writes[card.writes.length - 1]).toEqual({ objective: goal.objective, token_budget: 1000, status: "active", replace: true });
+  expect(card.writes[card.writes.length - 1]).toEqual({ objective: goal.objective, token_budget: 1000,
+    status: "active", replace: true, expected_control_revision: goal.control_revision });
   card.show({ ...goal, status: "budget_limited" });
   expect(card.button("继续")).toBeUndefined();
   expect(card.button("删除 Goal").props.disabled).toBe(false);

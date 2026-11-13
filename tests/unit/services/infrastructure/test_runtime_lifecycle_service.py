@@ -37,6 +37,7 @@ from app.services.business.job.service import (
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.background_work import build_background_registry
 
 
@@ -323,7 +324,14 @@ async def test_terminal_trace_without_active_queue_admission_does_not_restore_or
     thread_id = get_session_path_resolver(tmp_path / ".boxteam" / "sessions").main_thread_id(session_id)
     await trace.append(session_id, JobStartedEvent(
         event_id=create_prefixed_id("evt"), job_id="job-terminal", timestamp=datetime.now(UTC),
-        payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+        payload=JobStartedPayload(
+            session_id=session_id,
+            thread_id=thread_id,
+            dispatch=running_job_dispatch_snapshot(
+                session_id, thread_id, "job-terminal",
+                queued_job_count=0, queue_snapshot_version=0,
+            ),
+        ),
     ))
     await trace.append(session_id, JobFailedEvent(
         event_id=create_prefixed_id("evt"), job_id="job-terminal", timestamp=datetime.now(UTC),
@@ -388,7 +396,14 @@ async def test_startup_restores_only_the_matching_created_and_started_owner(
         await runtime._trace_event_store.append(session_id, JobStartedEvent(
             event_id=create_prefixed_id("evt"), job_id=request.job_id,
             timestamp=datetime.now(UTC),
-            payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+            payload=JobStartedPayload(
+                session_id=session_id,
+                thread_id=thread_id,
+                dispatch=running_job_dispatch_snapshot(
+                    session_id, thread_id, request.job_id,
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
     runtime._pending_request_store.add_started(request)
 
@@ -439,13 +454,27 @@ async def test_startup_rejects_owner_conflicts_before_any_recovery_side_effect(
     await store.append(session_id, JobStartedEvent(
         event_id=create_prefixed_id("evt"), job_id=request.job_id,
         timestamp=datetime.now(UTC),
-        payload=JobStartedPayload(session_id=session_id, thread_id=started_thread),
+        payload=JobStartedPayload(
+            session_id=session_id,
+            thread_id=started_thread,
+            dispatch=running_job_dispatch_snapshot(
+                session_id, started_thread, request.job_id,
+                queued_job_count=0, queue_snapshot_version=0,
+            ),
+        ),
     ))
     # 前面的合法 started 也不能在后面的冲突被发现前先写入 execution_lost。
     await store.append(session_id, JobStartedEvent(
         event_id=create_prefixed_id("evt"), job_id="job-valid-before-conflict",
         timestamp=datetime.now(UTC),
-        payload=JobStartedPayload(session_id=session_id, thread_id=main_thread),
+        payload=JobStartedPayload(
+            session_id=session_id,
+            thread_id=main_thread,
+            dispatch=running_job_dispatch_snapshot(
+                session_id, main_thread, "job-valid-before-conflict",
+                queued_job_count=0, queue_snapshot_version=0,
+            ),
+        ),
     ))
     if fault == "created_session_vs_trace":
         await store.append(session_id, _created_request(other_session, other_thread, "job-request-wrong-trace"))
@@ -457,7 +486,14 @@ async def test_startup_rejects_owner_conflicts_before_any_recovery_side_effect(
         await store.append(other_session, JobStartedEvent(
             event_id=create_prefixed_id("evt"), job_id=request.job_id,
             timestamp=datetime.now(UTC),
-            payload=JobStartedPayload(session_id=other_session, thread_id=other_thread),
+            payload=JobStartedPayload(
+                session_id=other_session,
+                thread_id=other_thread,
+                dispatch=running_job_dispatch_snapshot(
+                    other_session, other_thread, request.job_id,
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
     elif fault == "cross_trace_terminal":
         await store.append(other_session, JobFailedEvent(
@@ -502,7 +538,14 @@ async def test_startup_releases_other_session_request_bodies_before_recovery(
         await store.append(session_id, JobStartedEvent(
             event_id=create_prefixed_id("evt"), job_id=request.job_id,
             timestamp=datetime.now(UTC),
-            payload=JobStartedPayload(session_id=session_id, thread_id=thread_id),
+            payload=JobStartedPayload(
+                session_id=session_id,
+                thread_id=thread_id,
+                dispatch=running_job_dispatch_snapshot(
+                    session_id, thread_id, request.job_id,
+                    queued_job_count=0, queue_snapshot_version=0,
+                ),
+            ),
         ))
         queued = _created_request(session_id, thread_id, f"job-queued-request-{index}")
         queued.payload.message = "排队请求正文" * 200_000

@@ -50,12 +50,32 @@ class _Store:
     def goal_read(self, session_id):
         return self.goal
 
-    def goal_write(self, goal):
+    def goal_write(self, goal, *, expected_control_revision=None, operation=None, retiring_goal=None):
+        if expected_control_revision is not None and expected_control_revision != self.goal_control_revision(goal.session_id):
+            from app.abstractions.state_conflict import ClientStateConflictError
+            raise ClientStateConflictError("Goal 控制版本冲突")
         self.goal = goal
+        self.control_revision = goal.control_revision
+        self.sync_version = goal.sync_version
 
-    def goal_clear(self, session_id):
+    def goal_control_revision(self, session_id):
+        return getattr(self, "control_revision", 0)
+
+    def goal_sync_version(self, session_id):
+        return getattr(self, "sync_version", 0)
+
+    def goal_operation(self, session_id, operation_id, request_hash=None):
+        return None
+
+    def goal_clear_versioned(self, session_id, expected_control_revision, operation=None, settled_goal=None):
+        existed = self.goal is not None
+        if expected_control_revision != self.goal_control_revision(session_id):
+            from app.abstractions.state_conflict import ClientStateConflictError
+            raise ClientStateConflictError("Goal 控制版本冲突")
         self.goal = None
-        return True
+        self.control_revision = expected_control_revision + int(existed)
+        self.sync_version = self.goal_sync_version(session_id) + int(existed)
+        return existed, self.control_revision, self.sync_version
 
     def goal_list(self):
         return [self.goal] if self.goal else []
@@ -83,11 +103,6 @@ class _Orchestrator:
 
     def __init__(self):
         self.calls = []
-
-    async def create_and_run(
-        self, session_id, content, *, metadata, delivery_policy="after_turn"
-    ):
-        self.calls.append((session_id, content, metadata, delivery_policy))
 
     async def submit_runtime_event(
         self,
@@ -270,6 +285,53 @@ async def test_failed_job_does_not_overwrite_goal_paused_during_active_turn(
     await _work(goal_runtime, GoalWork("sess_1", "failed", job=job_service.job))
 
     assert (await goal_service.get("sess_1")).status == GoalStatus.paused
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["failed", "cancelled"])
+@pytest.mark.parametrize("control", ["pause", "edit", "replace"])
+async def test_terminal_goal_work_preserves_concurrent_user_control_and_keeps_worker_alive(
+    monkeypatch, goal_service, goal_runtime, job_service, session_orchestrator, kind, control,
+):
+    goal = await goal_service.set("sess_1", objective="执行中的目标")
+    job_service.job = SimpleNamespace(job_id="job_1", session_id="sess_1", thread_id="thr_sess_1")
+    goal_runtime._goal_job_owners["job_1"] = goal.goal_id
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_get = goal_service.get
+    reads = 0
+
+    async def read_before_control(session_id):
+        nonlocal reads
+        observed = await original_get(session_id)
+        reads += 1
+        if reads == 2:
+            entered.set()
+            await release.wait()
+        return observed
+
+    monkeypatch.setattr(goal_service, "get", read_before_control)
+    terminal = asyncio.create_task(_work(goal_runtime, GoalWork("sess_1", kind, job=job_service.job)))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        if control == "pause":
+            controlled = await goal_service.set("sess_1", status=GoalStatus.paused,
+                                                expected_control_revision=goal.control_revision)
+        else:
+            controlled = await goal_service.set("sess_1", objective="用户的新目标", replace=control == "replace",
+                                                expected_control_revision=goal.control_revision)
+    finally:
+        release.set()
+        await terminal
+
+    assert await original_get("sess_1") == controlled
+    goal_runtime.assert_healthy()
+    assert goal_runtime._worker is not None and not goal_runtime._worker.done()
+    assert not session_orchestrator.calls
+    following = await goal_service.set("sess_1", objective="继续处理后续目标", replace=True)
+    await goal_runtime.request_goal("sess_1")
+    goal_runtime.assert_healthy()
+    assert len(session_orchestrator.calls) == 1
+    assert session_orchestrator.calls[0][2]["goal_id"] == following.goal_id
 
 
 @pytest.mark.asyncio

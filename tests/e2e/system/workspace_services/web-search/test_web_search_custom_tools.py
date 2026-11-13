@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from tests.support.api_helpers import with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.trace import get_trace_payload
@@ -90,10 +91,10 @@ async def test_model_searches_web_then_fetches_selected_result(
     )
     message_response = await client.post(
         f"/api/v1/sessions/{session_id}/messages",
-        json={
+        json=with_message_run_operation_id({
             "message": {"content": prompt},
             "run": {"mode": "single_agent", "agent_id": "default"},
-        },
+        }),
     )
     assert message_response.status_code == 200
     job_id = message_response.json()["data"]["job_id"]

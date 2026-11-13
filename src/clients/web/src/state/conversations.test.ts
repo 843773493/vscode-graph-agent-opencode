@@ -291,10 +291,13 @@ test("历史提交期间的终态 live Turn 不会被空 pending 快照删除", 
     source: "pending",
   };
   const pendingMap = new Map([[sessionId, [terminalConversation]]]);
+  const queueVersions = new Map<string, Map<string, number>>();
   writePendingSnapshot(
     pendingMap,
     new Map(),
     { session_id: sessionId, thread_id: "thr_018f0000000070008000000000000001", active_job_id: null, requests: [], snapshot_version: 1 },
+    sessionId,
+    queueVersions,
   );
 
   expect(pendingMap.get(sessionId)).toEqual([terminalConversation]);
@@ -717,6 +720,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
   for (const order of ["turn_first", "snapshot_first"] as const) {
     const state = {
       pendingConversations: new Map([[mapKey, [live]]]),
+      pendingQueueVersions: new Map<string, Map<string, number>>(),
       activeJobIdsBySession: new Map<string, string>(),
       turnTimelinesBySession: new Map([[mapKey, createSessionTurnTimeline(mapKey)]]),
     } as unknown as AppState;
@@ -725,11 +729,11 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
       syncActiveJobConversation(state.pendingConversations, sessionId, jobId, mapKey, activeTurn, threadId);
     };
     if (order === "turn_first") projectTurn();
-    writePendingSnapshot(state.pendingConversations, state.activeJobIdsBySession, snapshot, mapKey);
+    writePendingSnapshot(state.pendingConversations, state.activeJobIdsBySession, snapshot, mapKey, state.pendingQueueVersions);
     if (order === "snapshot_first") projectTurn();
     for (const version of [2, 3, 1]) {
       writePendingSnapshot(state.pendingConversations, state.activeJobIdsBySession,
-        { ...snapshot, snapshot_version: version }, mapKey);
+        { ...snapshot, snapshot_version: version }, mapKey, state.pendingQueueVersions);
       const projected = getConversationsForSession(sessionId, state, mapKey)[0]!;
       expect(projected).toMatchObject(expected);
       expect(projected.assistantMessages).toBe(live.assistantMessages);
@@ -745,11 +749,12 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
     expect(getConversationsForSession(sessionId, state, mapKey)[0]?.rootLogicalItemOrdinal).toBeUndefined();
     const before = state.pendingConversations.get(mapKey);
     expect(() => writePendingSnapshot(state.pendingConversations, state.activeJobIdsBySession,
-      { ...snapshot, thread_id: "thr_other" }, mapKey)).toThrow("范围之外的消息");
+      { ...snapshot, thread_id: "thr_other", snapshot_version: 4 }, mapKey, state.pendingQueueVersions)).toThrow("范围之外的消息");
     expect(state.pendingConversations.get(mapKey)).toBe(before);
   }
   const freshState = {
     pendingConversations: new Map<string, ConversationView[]>(),
+    pendingQueueVersions: new Map<string, Map<string, number>>(),
     turnTimelinesBySession: new Map([[mapKey, upsertTurn({ ...createSessionTurnTimeline(mapKey), threadId: "thr_018f0000000070008000000000000001" }, activeTurn)]]),
   } as unknown as AppState;
   syncActiveJobConversation(freshState.pendingConversations, sessionId, jobId, mapKey, activeTurn, threadId);
