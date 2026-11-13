@@ -1,6 +1,6 @@
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "./api/workspaceIdentity";
 import { formatNumber, t } from "../../shared/core/i18n/index.js";
-import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO } from "./types/protocol_generated/boxteam/gateway/v2/public";
+import type { GatewayDiagnosticLogLocateRequest, GatewayDiagnosticLogLocationDTO, GatewayManagementDirectoryDTO } from "./types/protocol_generated/boxteam/gateway/v2/public";
 import type {
   AddManagedGatewayWorkspaceRequest,
   AddSshGatewayWorkspaceRequest,
@@ -56,6 +56,12 @@ export async function getGatewayHealth(port: number, options: { signal?: AbortSi
       options,
     ),
   );
+}
+
+export async function listGatewayManagementTargets(port: number, signal?: AbortSignal): Promise<GatewayManagementDirectoryDTO> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayManagementDirectoryDTO>>(
+    port, "/api/gateway/management/gateways", { signal },
+  ));
 }
 
 export async function getGatewayDiagnostics(
@@ -471,6 +477,13 @@ export async function reconnectRemoteGatewayConnection(port: number, connectionI
   return unwrapApiData(await requestJson<APIResponse<GatewayWorkspaceList>>(
     port, `/api/gateway/remote-gateways/${encodeURIComponent(connectionId)}/reconnect`,
     { method: "POST", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
+  ));
+}
+
+export async function removeRemoteGatewayConnection(port: number, connectionId: string): Promise<GatewayWorkspaceList> {
+  return unwrapApiData(await requestJson<APIResponse<GatewayWorkspaceList>>(
+    port, `/api/gateway/remote-gateways/${encodeURIComponent(connectionId)}`,
+    { method: "DELETE", timeoutMs: LIFECYCLE_REQUEST_TIMEOUT_MS },
   ));
 }
 

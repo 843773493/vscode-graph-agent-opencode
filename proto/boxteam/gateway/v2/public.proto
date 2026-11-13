@@ -745,9 +745,6 @@ message GatewaySearchScopeResolutionDTO {
   repeated GatewaySearchScopeBranchDTO branches = 2;
 }
 
-
-
-
 message GatewayUIAssetDTO {
   string asset_id = 1;
   string original_filename = 2;
@@ -773,6 +770,8 @@ message GatewayManagementTargetDTO {
   string connection_kind = 3;
   optional string gateway_connection_id = 4;
   optional string connection_error = 5;
+  optional string source_owner = 6;
+  optional int64 remote_gateway_port = 7;
 }
 
 message GatewayManagementDirectoryDTO {
@@ -837,7 +836,6 @@ message ReorderGatewayWorkspacesRequest {
   reserved "workspace_ids";
   repeated GatewaySearchWorkspaceOwnerDTO workspaces = 2;
 }
-
 
 message SshConnectionOptionDTO {
   reserved 7;
@@ -927,8 +925,6 @@ message WebUISettingsUpdateDTO {
   reserved 5;
   reserved "theme";
 }
-
-
 
 message WebUIWorkspaceBottomPanelSettingsDTO {
   optional bool visible = 1;

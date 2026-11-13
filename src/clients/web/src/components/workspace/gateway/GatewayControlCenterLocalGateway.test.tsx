@@ -32,6 +32,7 @@ const html = renderToString(
       onAddSsh={noop}
       onRefresh={noop}
       onRemoteGatewayReconnected={() => undefined}
+      onOpenConfiguration={noop}
       onStart={noop}
       onStop={noop}
       onSafeRestart={noop}

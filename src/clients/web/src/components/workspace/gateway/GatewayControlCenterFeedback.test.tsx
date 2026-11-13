@@ -23,6 +23,7 @@ function installHealthyGateway(): void {
   };
   installGatewayFetch(({ path }) => {
     if (path === "/api/gateway/health") return apiSuccessResponse(health);
+    if (path === "/api/gateway/management/gateways") return apiSuccessResponse({ local_gateway_id: "gateway_local", items: [] });
     if (path === "/api/gateway/inbound-access") {
       return apiSuccessResponse({ gateway_id: "gateway_local", peers: [], items: [] });
     }
@@ -47,6 +48,7 @@ function gatewayControlCenter(
         onAddSsh={noop}
         onRefresh={onRefresh}
         onRemoteGatewayReconnected={() => undefined}
+        onOpenConfiguration={noop}
         onStart={noop}
         onStop={noop}
         onSafeRestart={noop}

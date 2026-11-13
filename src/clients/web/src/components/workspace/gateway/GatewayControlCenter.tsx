@@ -1,20 +1,17 @@
 import type { AppearanceBackground } from "../../../theme/theme";
 import { t } from "../../../../../shared/core/i18n/index.js";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   getGatewayHealth,
-  reconnectRemoteGatewayConnection,
   restartDevelopmentRuntime,
 } from "../../../gatewayApi";
 import type {
   AddSshGatewayWorkspaceRequest,
   GatewayHealth,
   GatewayWorkspace,
-  GatewayRemoteConnectionSummary,
 } from "../../../types/backend";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import type { GatewayBackendRuntimeActions } from "./GatewayBackendRuntimePanel";
-import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 import { errorMessage } from "../../../utils/errorMessage";
 import type { GatewayDiagnosticLogLocateRequest } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
 import GatewayDiagnosticLogLocation from "./GatewayDiagnosticLogLocation";
@@ -24,6 +21,7 @@ const GatewayConnectionDialog = lazy(() => import("./GatewayConnectionDialog"));
 const GatewayDiagnosticsPanel = lazy(() => import("./GatewayDiagnosticsPanel"));
 const GatewayThemeSettings = lazy(() => import("./GatewayThemeSettings"));
 const GatewayInboundAccessPanel = lazy(() => import("./GatewayInboundAccessPanel"));
+const GatewayConnectionsPanel = lazy(() => import("./GatewayConnectionsPanel"));
 
 export type GatewayControlPage = "connections" | "credentials" | "theme" | "diagnostics" | "runtime";
 export interface GatewayControlRequest { page: GatewayControlPage }
@@ -37,6 +35,7 @@ interface GatewayControlCenterProps extends GatewayBackendRuntimeActions {
   onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
   onRefresh: () => Promise<void>;
   onRemoteGatewayReconnected: (connectionId: string) => void;
+  onOpenConfiguration: () => Promise<void>;
   background: AppearanceBackground;
   onUpdateBackground: (value: AppearanceBackground) => Promise<void>;
   onSelectColorTheme: () => Promise<void>;
@@ -52,6 +51,7 @@ export default function GatewayControlCenter({
   onAddSsh,
   onRefresh,
   onRemoteGatewayReconnected,
+  onOpenConfiguration,
   onStart, onStop, onSafeRestart, onForceRestart,
   background,
   onUpdateBackground,
@@ -68,9 +68,10 @@ export default function GatewayControlCenter({
   const [connectionDialogMode, setConnectionDialogMode] = useState<
     "ssh" | "external-device" | null
   >(null);
-  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
   const [restartingDevelopment, setRestartingDevelopment] = useState(false);
   const [deviceRevision, setDeviceRevision] = useState(0);
+  const [connectionRevision, setConnectionRevision] = useState(0);
+  const [diagnosticsConnectionId, setDiagnosticsConnectionId] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<GatewayControlPage>(request?.page ?? "connections");
   useEffect(() => { if (request) setActivePage(request.page); }, [request]);
   useEffect(() => { if (diagnosticLocation) setActivePage("diagnostics"); }, [diagnosticLocation]);
@@ -89,11 +90,6 @@ export default function GatewayControlCenter({
     void loadHealth();
   }, [loadHealth]);
 
-  const remoteGatewayGroups = useMemo(
-    () => groupGatewayWorkspaces(workspaces).filter((group) => group.key.startsWith("remote:")),
-    [workspaces],
-  );
-
   const handleRefresh = async () => {
     setRefreshing(true);
     setOperationError(null);
@@ -101,6 +97,7 @@ export default function GatewayControlCenter({
     try {
       await Promise.all([onRefresh(), loadHealth()]);
       setDeviceRevision((value) => value + 1);
+      setConnectionRevision((value) => value + 1);
       setOperationNotice(t("gateway.control.refreshed"));
     } catch (error) {
       setOperationError(errorMessage(error));
@@ -144,29 +141,6 @@ export default function GatewayControlCenter({
     }
   };
 
-  const reconnect = async (remote: GatewayRemoteConnectionSummary) => {
-    const accepted = await confirm({
-      title: t("gateway.control.reconnectTitle"),
-      message: t("gateway.control.reconnectDetail", remote.ssh_config_host ?? remote.host),
-      confirmText: t("gateway.control.reconnect"),
-    });
-    if (!accepted) return;
-    setReconnectingId(remote.gateway_connection_id);
-    setOperationError(null);
-    setOperationNotice(null);
-    try {
-      await reconnectRemoteGatewayConnection(apiPort, remote.gateway_connection_id);
-      onRemoteGatewayReconnected(remote.gateway_connection_id);
-      await onRefresh();
-      await loadHealth();
-      setOperationNotice(t("gateway.control.reconnected", remote.ssh_config_host ?? remote.host));
-    } catch (error) {
-      setOperationError(errorMessage(error));
-    } finally {
-      setReconnectingId(null);
-    }
-  };
-
   const available = health?.status === "ok";
   const feedbackError = gatewayError || healthError || operationError;
 
@@ -183,7 +157,6 @@ export default function GatewayControlCenter({
             <button type="button" className={activePage === "connections" ? "active" : undefined} aria-current={activePage === "connections" ? "page" : undefined} onClick={() => setActivePage("connections")}>
               <span className="codicon codicon-plug" aria-hidden="true" />
               {t("gateway.control.connections")}
-              <small>{remoteGatewayGroups.length}</small>
             </button>
           </section>
           <section>
@@ -197,7 +170,6 @@ export default function GatewayControlCenter({
         <div className="gateway-control-sidebar-status">
           <strong><span className={available ? undefined : "offline"} />{available ? t("gateway.control.gatewayAvailable") : t("gateway.control.gatewayUnavailable")}</strong>
           <code>{health?.gateway_id}</code>
-          <small>{t("gateway.control.remoteConnectionCount", remoteGatewayGroups.length)}</small>
         </div>
       </aside>
 
@@ -240,7 +212,7 @@ export default function GatewayControlCenter({
               <GatewayBackendRuntimePanel workspaces={workspaces} onStart={onStart} onStop={onStop} onSafeRestart={onSafeRestart} onForceRestart={onForceRestart} />
             ) : activePage === "diagnostics" ? (
               diagnosticLocation ? <GatewayDiagnosticLogLocation apiPort={apiPort} request={diagnosticLocation} workspaces={workspaces}
-                onClose={() => onCloseDiagnosticLocation?.()} /> : <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} />
+                onClose={() => onCloseDiagnosticLocation?.()} /> : <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} initialConnectionId={diagnosticsConnectionId} />
             ) : activePage === "credentials" ? (
               <GatewayInboundAccessPanel apiPort={apiPort} revision={deviceRevision}
                 onAddDevice={() => setConnectionDialogMode("external-device")} />
@@ -275,38 +247,10 @@ export default function GatewayControlCenter({
             <div><div><strong>{t("gateway.control.localGateway")}</strong><span className={`gateway-authorization-status ${available ? "authorized" : "expired"}`}>{available ? t("gateway.control.available") : t("gateway.control.errorStatus")}</span></div><small>{t("gateway.control.localEndpoint", `127.0.0.1:${apiPort}`)}</small></div>
           </section>
 
-          <section className="gateway-connection-section" aria-labelledby="remote-gateway-connections-title">
-            <div className="gateway-connection-section-heading">
-              <div><h2 id="remote-gateway-connections-title">{t("gateway.control.remoteGateways")}</h2><p>{t("gateway.control.remoteDescription")}</p></div>
-              <span>{t("gateway.control.connectionCount", remoteGatewayGroups.length)}</span>
-            </div>
-            {remoteGatewayGroups.length > 0 ? (
-              <div className="gateway-remote-connection-list">
-                {remoteGatewayGroups.map((group) => {
-                  const remote = group.remote;
-                  if (!remote) throw new Error(t("gateway.control.remoteGatewaySummaryMissing", group.key));
-                  const connectionError = group.workspaces.find(
-                    (item) => item.connection_error,
-                  )?.connection_error;
-                  const ready = !connectionError;
-                  const isReconnecting = reconnectingId === remote.gateway_connection_id;
-                  return (
-                    <article key={group.key}>
-                      <span className="gateway-device-icon"><span className="codicon codicon-remote" aria-hidden="true" /></span>
-                      <div className="gateway-device-copy">
-                        <div><strong>{group.title}</strong><span className={`gateway-authorization-status ${ready ? "authorized" : "expired"}`}>{ready ? t("gateway.control.connected") : t("gateway.control.connectionError")}</span></div>
-                        <small>{connectionError ?? group.connectionLabel}</small>
-                        <code title={remote.gateway_id}>{remote.gateway_id}</code>
-                      </div>
-                      <div className="gateway-remote-connection-meta"><span>{t("gateway.control.workspaceCount", group.workspaces.length)}</span><button type="button" disabled={isReconnecting} onClick={() => void reconnect(remote)}>{isReconnecting ? t("gateway.control.connecting") : t("gateway.control.reconnect")}</button></div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="gateway-connection-empty"><span className="codicon codicon-remote" aria-hidden="true" /><strong>{t("gateway.control.noRemoteConnections")}</strong><p>{t("gateway.control.noRemoteConnectionsDetail")}</p></div>
-            )}
-          </section>
+          <GatewayConnectionsPanel apiPort={apiPort} gatewayId={health?.gateway_id ?? null} workspaces={workspaces}
+            revision={connectionRevision} onAddSsh={onAddSsh} onRefresh={onRefresh}
+            onRemoteGatewayReconnected={onRemoteGatewayReconnected} onOpenConfiguration={onOpenConfiguration}
+            onOpenLogs={connectionId => { setDiagnosticsConnectionId(connectionId); setActivePage("diagnostics"); }} />
 
             </>}
           </Suspense>
@@ -327,7 +271,7 @@ export default function GatewayControlCenter({
             mode={connectionDialogMode}
             apiPort={apiPort}
             onClose={() => setConnectionDialogMode(null)}
-            onAddSsh={onAddSsh}
+            onAddSsh={async payload => { await onAddSsh(payload); setConnectionRevision(value => value + 1); }}
             onDeviceConnectionsChanged={() => setDeviceRevision((value) => value + 1)}
           />
         </Suspense>

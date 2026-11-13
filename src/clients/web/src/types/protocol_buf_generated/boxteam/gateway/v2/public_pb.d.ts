@@ -3283,6 +3283,16 @@ export declare type GatewayManagementTargetDTO = Message<"boxteam.gateway.v2.Gat
    * @generated from field: optional string connection_error = 5;
    */
   connectionError?: string | undefined;
+
+  /**
+   * @generated from field: optional string source_owner = 6;
+   */
+  sourceOwner?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 remote_gateway_port = 7;
+   */
+  remoteGatewayPort?: bigint | undefined;
 };
 
 /**

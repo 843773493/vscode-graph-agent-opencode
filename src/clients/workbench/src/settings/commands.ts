@@ -6,7 +6,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName } from '../managementTarget.js';
+import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName, type ManagementTarget } from '../managementTarget.js';
 import { manageDefaultAgentSource } from './defaultAgent.js';
 import { configureServicePlugin } from './pluginConfiguration.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
@@ -154,13 +154,15 @@ for (const operation of ['sourceStatus', 'rebaseSource'] as const) registerActio
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.settings.openTarget', title: commandTitle('workbench.settings.openTarget'),
     category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true }); }
-  async run(accessor: ServicesAccessor): Promise<void> {
+  async run(accessor: ServicesAccessor, target?: ManagementTarget): Promise<void> {
     const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
-    const cancellation = new CancellationTokenSource();
+    const frozen = { ...(target ?? managementGateway('settings')) };
+    const lifecycle = createManagementTargetLifecycle(t('workbench.settings.reopenSource'));
     try {
-      const captured = await captureSettingsLocation(parent, cancellation.token);
+      const captured = await captureSettingsLocation(parent, lifecycle.token, frozen);
+      lifecycle.check();
       if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { pinned: true });
-    } finally { cancellation.dispose(); }
+    } finally { lifecycle.dispose(); }
   }
 });
 

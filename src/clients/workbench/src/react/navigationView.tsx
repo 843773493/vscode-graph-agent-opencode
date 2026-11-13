@@ -229,6 +229,13 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
         request={gatewayControl}
         onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
         onRemoteGatewayReconnected={notifyPluginCommandGatewayReconnected}
+        onOpenConfiguration={async () => {
+          const gatewayId = state.browserViewScope;
+          if (!gatewayId) throw new Error(t('workbench.managementTarget.gatewayNotReady'));
+          await commands.executeCommand('boxteam.settings.openTarget', { gateway_id: gatewayId,
+            name: t('workbench.managementTarget.local'), connection_kind: 'local' });
+          setGatewayOpen(false);
+        }}
         onStart={startWorkspace} onStop={backendActions.stop}
         onSafeRestart={backendActions.safeRestart} onForceRestart={backendActions.forceRestart}
         background={background} onUpdateBackground={value => configuration.updateValue(BACKGROUND_SETTING, readWorkbenchBackground(value), {}, ConfigurationTarget.USER, { donotNotifyError: true })}

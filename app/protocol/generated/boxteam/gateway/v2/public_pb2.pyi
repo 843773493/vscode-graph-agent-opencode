@@ -1274,18 +1274,22 @@ class GatewayUIAssetListDTO(_message.Message):
     def __init__(self, items: _Optional[_Iterable[_Union[GatewayUIAssetDTO, _Mapping]]] = ...) -> None: ...
 
 class GatewayManagementTargetDTO(_message.Message):
-    __slots__ = ("gateway_id", "name", "connection_kind", "gateway_connection_id", "connection_error")
+    __slots__ = ("gateway_id", "name", "connection_kind", "gateway_connection_id", "connection_error", "source_owner", "remote_gateway_port")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     CONNECTION_KIND_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     CONNECTION_ERROR_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_OWNER_FIELD_NUMBER: _ClassVar[int]
+    REMOTE_GATEWAY_PORT_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     name: str
     connection_kind: str
     gateway_connection_id: str
     connection_error: str
-    def __init__(self, gateway_id: _Optional[str] = ..., name: _Optional[str] = ..., connection_kind: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_error: _Optional[str] = ...) -> None: ...
+    source_owner: str
+    remote_gateway_port: int
+    def __init__(self, gateway_id: _Optional[str] = ..., name: _Optional[str] = ..., connection_kind: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_error: _Optional[str] = ..., source_owner: _Optional[str] = ..., remote_gateway_port: _Optional[int] = ...) -> None: ...
 
 class GatewayManagementDirectoryDTO(_message.Message):
     __slots__ = ("local_gateway_id", "items")

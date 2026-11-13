@@ -763,6 +763,8 @@ export interface GatewayManagementTargetDTO {
   connection_kind: string;
   gateway_connection_id?: string | undefined;
   connection_error?: string | undefined;
+  source_owner?: string | undefined;
+  remote_gateway_port?: number | undefined;
 }
 
 export interface GatewayManagementDirectoryDTO {
@@ -5944,6 +5946,8 @@ function createBaseGatewayManagementTargetDTO(): GatewayManagementTargetDTO {
     connection_kind: "",
     gateway_connection_id: undefined,
     connection_error: undefined,
+    source_owner: undefined,
+    remote_gateway_port: undefined,
   };
 }
 
@@ -5957,6 +5961,10 @@ export const GatewayManagementTargetDTO: MessageFns<GatewayManagementTargetDTO> 
         ? globalThis.String(object.gateway_connection_id)
         : undefined,
       connection_error: isSet(object.connection_error) ? globalThis.String(object.connection_error) : undefined,
+      source_owner: isSet(object.source_owner) ? globalThis.String(object.source_owner) : undefined,
+      remote_gateway_port: isSet(object.remote_gateway_port)
+        ? globalThis.Number(object.remote_gateway_port)
+        : undefined,
     };
   },
 
@@ -5977,6 +5985,12 @@ export const GatewayManagementTargetDTO: MessageFns<GatewayManagementTargetDTO> 
     if (message.connection_error !== undefined) {
       obj.connection_error = message.connection_error;
     }
+    if (message.source_owner !== undefined) {
+      obj.source_owner = message.source_owner;
+    }
+    if (message.remote_gateway_port !== undefined) {
+      obj.remote_gateway_port = Math.round(message.remote_gateway_port);
+    }
     return obj;
   },
 
@@ -5990,6 +6004,8 @@ export const GatewayManagementTargetDTO: MessageFns<GatewayManagementTargetDTO> 
     message.connection_kind = object.connection_kind ?? "";
     message.gateway_connection_id = object.gateway_connection_id ?? undefined;
     message.connection_error = object.connection_error ?? undefined;
+    message.source_owner = object.source_owner ?? undefined;
+    message.remote_gateway_port = object.remote_gateway_port ?? undefined;
     return message;
   },
 };

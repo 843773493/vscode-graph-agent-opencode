@@ -18,6 +18,7 @@ import { copyTextToClipboard } from "../../../utils/clipboard";
 interface GatewayDiagnosticsPanelProps {
   apiPort: number;
   workspaces: GatewayWorkspace[];
+  initialConnectionId?: string | null;
 }
 
 function formatTime(value: string | null): string {
@@ -35,9 +36,10 @@ function diagnosticsStatusLabel(status: GatewayDiagnostics["status"]): string {
 export default function GatewayDiagnosticsPanel({
   apiPort,
   workspaces,
+  initialConnectionId = null,
 }: GatewayDiagnosticsPanelProps) {
   const groups = useMemo(() => groupGatewayWorkspaces(workspaces), [workspaces]);
-  const [gatewayConnectionId, setGatewayConnectionId] = useState<string | null>(null);
+  const [gatewayConnectionId, setGatewayConnectionId] = useState<string | null>(initialConnectionId);
   const [workspaceId, setWorkspaceId] = useState("");
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<GatewayDiagnostics | null>(null);
@@ -170,6 +172,7 @@ export default function GatewayDiagnosticsPanel({
                 {group.title} · {t("gateway.diagnostics.workspaceCount", group.workspaces.length)}
               </option>
             ))}
+            {gatewayConnectionId && !selectedGroup ? <option value={gatewayConnectionId}>{gatewayConnectionId}</option> : null}
           </select>
         </label>
         <label>

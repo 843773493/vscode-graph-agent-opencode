@@ -37,7 +37,8 @@ async def list_management_gateways(
     items = [GatewayManagementTargetDTO(gateway_id=registry.gateway_id, name="本地", connection_kind="local")]
     items.extend(GatewayManagementTargetDTO(gateway_id=connection.remote_gateway_id, name=connection.name,
         connection_kind="remote_gateway", gateway_connection_id=connection.connection_id,
-        connection_error=connection.connection_error) for connection in registry.remote_gateway_connections())
+        connection_error=connection.connection_error, source_owner=connection.source_owner,
+        remote_gateway_port=connection.remote_gateway_port) for connection in registry.remote_gateway_connections())
     return APIResponse(data=GatewayManagementDirectoryDTO(local_gateway_id=registry.gateway_id, items=items), request_id=request_id)
 
 
