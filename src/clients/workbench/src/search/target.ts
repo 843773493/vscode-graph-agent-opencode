@@ -4,7 +4,7 @@ import { Limiter } from '../../upstream/src/vs/base/common/async.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../upstream/src/vs/workbench/common/editor.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
-import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
+import { gatewayWorkspaceRequestHeaders, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { awaitWithAbort } from '../../../web/src/utils/abortable.js';
 import type { WorkspaceFileRootsDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gateway } from '../agentApi.js';
@@ -113,9 +113,22 @@ export function createSearchRootLoader(lifetime: AbortSignal): typeof loadSearch
 
 /** 原搜索视图需要完整范围；Quick Access 则逐根表达元数据失败。 */
 export async function loadSearchScope(owners: readonly WorkspaceOwner[], signal: AbortSignal): Promise<SearchScope> {
-  const roots = await loadSearchRoots(owners, signal);
-  return { version: 1, workspaces: roots.map(root => {
-    if (root.status === 'rejected') throw root.reason;
-    return root.value;
-  }) };
+  // Search Editor／SearchView 的初次范围加载早于文件查询，必须在这里保护元数据读取。
+  const controller = new AbortController(), reading = AbortSignal.any([signal, controller.signal]);
+  const invalidate = () => controller.abort(new Error(t('quickAccess.files.identityChanged')));
+  const releaseToken = onGatewayTokenInvalidated(0, invalidate);
+  let gatewayId = workspaceContext.getSnapshot().gatewayId;
+  const releaseGateway = workspaceContext.subscribe(() => {
+    const current = workspaceContext.getSnapshot().gatewayId;
+    if (gatewayId && current !== gatewayId) invalidate();
+    gatewayId = current;
+  });
+  try {
+    const roots = await loadSearchRoots(owners, reading);
+    reading.throwIfAborted();
+    return { version: 1, workspaces: roots.map(root => {
+      if (root.status === 'rejected') throw root.reason;
+      return root.value;
+    }) };
+  } finally { releaseToken(); releaseGateway(); }
 }

@@ -15,5 +15,8 @@ export { Event } from '../../../../../src/clients/workbench/upstream/src/vs/base
 export { DisposableStore } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/lifecycle.js';
 export { workspaceFileUri } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
 export { PickerEditorState } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/browser/quickaccess.js';
-export { prepareSearchInvocation } from '../../../../../src/clients/workbench/src/search/target.js';
+export { prepareSearchInvocation, loadSearchScope } from '../../../../../src/clients/workbench/src/search/target.js';
+export { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
+export { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
+export { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
 export { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';

@@ -93,6 +93,60 @@ function fixture(context = new m.SearchWorkspaceContext(scope), groupService = {
   return { context, instantiation, builder: instantiation.createInstance(m.QueryBuilder) };
 }
 
+for (const phase of ['routes', 'roots']) {
+  for (const change of ['credential', 'gateway-roundtrip', 'active-workspace', 'initial-gateway']) {
+    test(`范围元数据 ${phase} 等待期间 ${change}：身份变化废弃旧范围，导航变化保留发起目标`, async () => {
+      const previous = m.workspaceContext.getSnapshot();
+      const entered = Promise.withResolvers(), release = Promise.withResolvers();
+      const calls = [];
+      let readingSignal;
+      m.workspaceContext.publish({ ...previous, gatewayId: change === 'initial-gateway' ? null : owner.gatewayId });
+      m.invalidateGatewayToken(0);
+      m.installSessionApiFetchMock(async ({ path, init }) => {
+        calls.push(path);
+        const currentPhase = path === '/api/gateway/workspaces' ? 'routes' : 'roots';
+        expect(['/api/gateway/workspaces', '/api/v1/workspace/files/roots']).toContain(path);
+        if (currentPhase === phase) {
+          readingSignal = init.signal;
+          entered.resolve();
+          // 明确让 HTTP 替身迟到，即使取消也返回原数据，核业务层不能接纳它。
+          await release.promise;
+        }
+        const data = currentPhase === 'routes' ? { items: [{ gateway_id: owner.gatewayId,
+          workspace_id: owner.workspaceId, name: '工作区 A', status: 'ready' }] } : { workspace_uri: root };
+        return Response.json({ code: 0, message: 'ok', request_id: `scope-${calls.length}`, data });
+      });
+      try {
+        const pending = m.loadSearchScope([owner], new AbortController().signal).then(value => ({ value }), error => ({ error }));
+        await entered.promise;
+        if (change === 'credential') m.invalidateGatewayToken(0);
+        else if (change === 'gateway-roundtrip') {
+          m.workspaceContext.publish({ ...m.workspaceContext.getSnapshot(), gatewayId: 'gateway-b' });
+          m.workspaceContext.publish({ ...m.workspaceContext.getSnapshot(), gatewayId: owner.gatewayId });
+        } else m.workspaceContext.publish({ ...m.workspaceContext.getSnapshot(), gatewayId: owner.gatewayId, activeId: 'workspace-b' });
+        release.resolve();
+        const result = await pending;
+        if (change === 'credential' || change === 'gateway-roundtrip') {
+          expect(result.error).toBeInstanceOf(Error);
+          expect(result.error.message).toContain('Gateway');
+          expect(result.value).toBeUndefined();
+          expect(readingSignal.aborted).toBe(true);
+          expect(calls).toHaveLength(phase === 'routes' ? 1 : 2);
+        } else {
+          expect(result.error).toBeUndefined();
+          expect(result.value).toEqual(scope);
+          expect(readingSignal.aborted).toBe(false);
+          expect(calls).toHaveLength(2);
+          // 完成后释放身份订阅，不让后续切换再改变已完成请求。
+          m.invalidateGatewayToken(0);
+          m.workspaceContext.publish({ ...m.workspaceContext.getSnapshot(), gatewayId: 'gateway-b' });
+          expect(readingSignal.aborted).toBe(false);
+        }
+      } finally { release.resolve(); m.unwrapSessionApiFetch(); m.workspaceContext.publish(previous); }
+    });
+  }
+}
+
 describe('生产 sourceTransform 与原 QueryBuilder 范围接线', () => {
   test('显式转接保留原归属及接收者，新入口独立捕获，不隐式继承旧错误或接受动作', () => {
     const editors = { activeEditor: new m.ThreadInput({ ...owner, sessionId: 'session-a', threadId: 'thread-a', title: 'A', routeId: '' }) };
