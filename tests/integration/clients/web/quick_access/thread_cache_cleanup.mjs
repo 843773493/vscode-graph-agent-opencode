@@ -13,13 +13,14 @@ const output = required('BOXTEAM_BROWSER_RESULT_PATH');
 const identities = JSON.parse(required('BOXTEAM_CACHE_THREADS'));
 const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], forbiddenWrites: [],
   boundary: '真实 Gateway、产品执行、model_stream 精确回放及正式 Workbench；正常状态由产品生成，仅离开产品文档后破坏并修复一条备份和历史记录，故障页为空同origin页面，不替换业务响应。' };
-let page, quick, groups, failure;
+let page, quick, groups, dialog, failure;
 const checkpoint = async phase => { result.phase = phase; await writeFile(output, JSON.stringify(result, null, 2) + '\n'); };
 try {
   const host = await launch({ run, result, usePage(next) {
   page = next;
   quick = page.locator('.quick-input-widget');
   groups = page.locator('.editor-group-container');
+  dialog = page.locator('.monaco-dialog-box');
   page.on('pageerror', cause => result.pageErrors.push(String(cause)));
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
@@ -159,7 +160,6 @@ try {
   await quick.locator('input').first().fill('>清除当前 Thread 历史展示缓存');
   const action = quick.locator('.monaco-list-row').filter({ hasText: '清除当前 Thread 历史展示缓存' });
   await expect(action).toHaveCount(1); result.commandDiscoverable = true; await action.click();
-  const dialog = page.locator('.monaco-dialog-box');
   await expect(dialog).toBeVisible();
   for (const id of [a.gateway_id, a.workspace_id, a.session_id, a.thread_id]) await expect(dialog).toContainText(id);
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
