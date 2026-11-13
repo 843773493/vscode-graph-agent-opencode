@@ -2,7 +2,7 @@ import { t } from '../../../shared/core/i18n/index.js';
 import { raceCancellationError } from '../../upstream/src/vs/base/common/async.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
-import { Disposable, type IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { Disposable, toDisposable, type IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ResourceSet } from '../../upstream/src/vs/base/common/map.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
@@ -12,15 +12,19 @@ import type { ResourceNavigationContextDTO, ResourceNavigationMatchDTO } from '.
 import { streamFederatedSearch, searchBranchKey } from '../../../web/src/api/stream/federatedSearch.js';
 import type { FederatedSearchContinuationDTO, FederatedSearchEventDTO } from '../../../web/src/types/protocol_generated/boxteam/search/v1/public.js';
 import type { GatewaySearchScopeDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
+import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
+import { workspaceContext } from '../workspaceContext.js';
 import { canonicalFileQuery, fileOptions, openResources, resourceInFolder, resourceInQuery, validateQuery, validateTextQuery } from './query.js';
 
 type SearchRetry = (token: CancellationToken, onProgress: (item: ISearchProgressItem) => void) => Promise<ISearchComplete>;
 interface PreparedSearch {
   deadlineAt: number;
+  operation?: ReturnType<WorkspaceSearchProvider['beginSearch']>;
   watchRetryModels?: (source: CancellationTokenSource) => IDisposable & { validate(): void };
 }
 interface SearchResume {
+  identityGeneration: number;
   scope: GatewaySearchScopeDTO;
   branch: FederatedSearchContinuationDTO;
   pageLimit: number;
@@ -75,9 +79,33 @@ export function textMatch(hit: ResourceNavigationMatchDTO, previewOptions?: ITex
 export class WorkspaceSearchProvider extends Disposable implements ISearchResultProvider {
   private readonly active = new Set<CancellationTokenSource>();
   private readonly resourceKey = (resource: URI) => this.uriIdentity.extUri.getComparisonKey(resource);
+  private identityGeneration = 0;
 
   constructor(@IEditorService private readonly editors: IEditorService,
-    @IUriIdentityService private readonly uriIdentity: IUriIdentityService) { super(); }
+    @IUriIdentityService private readonly uriIdentity: IUriIdentityService) {
+    super();
+    const invalidate = () => { this.identityGeneration++; for (const source of this.active) source.cancel(); };
+    this._register(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
+    let gatewayId = workspaceContext.getSnapshot().gatewayId;
+    this._register(toDisposable(workspaceContext.subscribe(() => {
+      const current = workspaceContext.getSnapshot().gatewayId;
+      if (gatewayId && gatewayId !== current) invalidate();
+      gatewayId = current;
+    })));
+  }
+
+  /** 初次查询从元数据／本地模型前准入，显式重试沿原身份代次重新准入。 */
+  beginSearch(token = CancellationToken.None, generation = this.identityGeneration) {
+    const validate = () => {
+      if (generation !== this.identityGeneration) throw new Error(t('quickAccess.files.identityChanged'));
+    };
+    validate();
+    if (this._store.isDisposed) throw new Error(t('quickAccess.files.disposed'));
+    const source = new CancellationTokenSource(token);
+    if (token.isCancellationRequested) source.cancel();
+    this.active.add(source);
+    return { source, generation, validate, dispose: () => { source.dispose(true); this.active.delete(source); } };
+  }
 
   override dispose(): void {
     for (const source of this.active) source.cancel();
@@ -98,43 +126,44 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
 
   private async search(query: IFileQuery | ITextQuery, onProgress?: (item: ISearchProgressItem) => void,
     token = CancellationToken.None, models = new ResourceSet(), prepared?: PreparedSearch, resume?: SearchResume): Promise<ISearchComplete> {
+    const run = prepared?.operation ?? this.beginSearch(token, resume?.identityGeneration);
+    const source = run.source, controller = new AbortController();
+    token = source.token;
     const deadlineAt = prepared?.deadlineAt ?? Date.now() + 10000;
-    if (!prepared) query = await canonicalFileQuery(query, token, deadlineAt);
-    const identity = this.uriIdentity.extUri;
-    query = query.type === QueryType.Text ? validateTextQuery(query, identity) : validateQuery(query, identity);
-    models = new ResourceSet([...models], this.resourceKey);
-    if (token.isCancellationRequested) throw new CancellationError();
-    if (this._store.isDisposed) throw new Error(t('quickAccess.files.disposed'));
-    const source = new CancellationTokenSource(token), controller = new AbortController();
     const cancellation = source.token.onCancellationRequested(() => controller.abort());
-    this.active.add(source);
     let timedOut = false;
     // 沿原导航的十秒预算限制整个查询；续页不重新获得完整等待期限。
     const timer = setTimeout(() => { timedOut = true; source.cancel(); }, Math.max(0, deadlineAt - Date.now()));
     if (deadlineAt <= Date.now()) { timedOut = true; source.cancel(); }
-    const results = new Map<string, IFileMatch>();
-    const contexts = new Map<string, Map<number, ResourceNavigationContextDTO>>();
-    const messages: ISearchComplete['messages'] = [];
-    let limitHit = false;
-    let continuation = resume && { scope: resume.scope, branches: [resume.branch] };
-    let frozenScope = resume?.scope;
-    const failures: FederatedSearchEventDTO[] = [];
-    // 原 FileSearchManager 把 0 当预热哨兵；这里无缓存，只执行服务硬上限内的有界召回。
-    const maximum = query.type === QueryType.File && query.maxResults === 0 ? 500 : query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
-    const budget = resume?.budget ?? { remaining: maximum, seen: new Set<string>() };
-    // 冻结本代际覆盖集合；每个目标只发送其自身根内的规范身份。
-    const coveredResources = [...models];
-    const seen = budget.seen;
-    const exactResources = resume?.exactResources ?? (query.onlyOpenEditors ? openResources(this.editors, query, identity)
-      : (query.extraFileResources ?? []).filter(resource => resourceInQuery(resource, query, identity)
-        && !query.folderQueries.some(folder => identity.isEqual(resource, folder.folder))));
-    const targets: { resource: URI; folder: IFolderQuery; exact: boolean }[] = [
-      ...(query.onlyOpenEditors || query.type === QueryType.Text ? exactResources : [])
-        .map(resource => ({ resource, folder: query.folderQueries.find(folder => resourceInFolder(resource, query, folder, identity))!, exact: true })),
-      ...(query.onlyOpenEditors ? [] : query.folderQueries.map(folder => ({ resource: folder.folder, folder, exact: false }))),
-    ];
     let modelWatch: ReturnType<NonNullable<PreparedSearch['watchRetryModels']>> | undefined;
     try {
+      if (!prepared) query = await canonicalFileQuery(query, token, deadlineAt);
+      run.validate();
+      const identity = this.uriIdentity.extUri;
+      query = query.type === QueryType.Text ? validateTextQuery(query, identity) : validateQuery(query, identity);
+      models = new ResourceSet([...models], this.resourceKey);
+      if (token.isCancellationRequested) throw new CancellationError();
+      const results = new Map<string, IFileMatch>();
+      const contexts = new Map<string, Map<number, ResourceNavigationContextDTO>>();
+      const messages: ISearchComplete['messages'] = [];
+      let limitHit = false;
+      let continuation = resume && { scope: resume.scope, branches: [resume.branch] };
+      let frozenScope = resume?.scope;
+      const failures: FederatedSearchEventDTO[] = [];
+      // 原 FileSearchManager 把 0 当预热哨兵；这里无缓存，只执行服务硬上限内的有界召回。
+      const maximum = query.type === QueryType.File && query.maxResults === 0 ? 500 : query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
+      const budget = resume?.budget ?? { remaining: maximum, seen: new Set<string>() };
+      // 冻结本代际覆盖集合；每个目标只发送其自身根内的规范身份。
+      const coveredResources = [...models];
+      const seen = budget.seen;
+      const exactResources = resume?.exactResources ?? (query.onlyOpenEditors ? openResources(this.editors, query, identity)
+        : (query.extraFileResources ?? []).filter(resource => resourceInQuery(resource, query, identity)
+          && !query.folderQueries.some(folder => identity.isEqual(resource, folder.folder))));
+      const targets: { resource: URI; folder: IFolderQuery; exact: boolean }[] = [
+        ...(query.onlyOpenEditors || query.type === QueryType.Text ? exactResources : [])
+          .map(resource => ({ resource, folder: query.folderQueries.find(folder => resourceInFolder(resource, query, folder, identity))!, exact: true })),
+        ...(query.onlyOpenEditors ? [] : query.folderQueries.map(folder => ({ resource: folder.folder, folder, exact: false }))),
+      ];
       if (resume) modelWatch = prepared?.watchRetryModels?.(source);
       if (source.token.isCancellationRequested) throw new CancellationError();
       // 原 FileSearchManager 直接匹配额外文件；名称发现不为这些已给定身份重读正文。
@@ -292,7 +321,8 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
           const retry: SearchRetry | undefined = query.type === QueryType.Text && event.branch!.retryable && budget.remaining > 0 ? (retryToken, progress) => {
             // 每次显式重试只读原失败输入；已交付匹配共用同一剩余额度和去重集合。
             if (budget.remaining <= 0) return Promise.reject(new Error(t('quickAccess.queryLimited', t('quickAccess.moreResults'))));
-            return this.search(query, progress, retryToken, models, { ...prepared, deadlineAt: Date.now() + 10000 }, { scope, branch, pageLimit, exactResources, budget });
+            return this.search(query, progress, retryToken, models, { deadlineAt: Date.now() + 10000, watchRetryModels: prepared?.watchRetryModels },
+              { identityGeneration: run.generation, scope, branch, pageLimit, exactResources, budget });
           } : undefined;
           return new WorkspaceSearchBranchError(event, messages, limitHit || budget.remaining <= 0, retry);
         });
@@ -300,11 +330,13 @@ export class WorkspaceSearchProvider extends Disposable implements ISearchResult
       }
       return { results: [...results.values()], messages, limitHit };
     } catch (error) {
+      run.validate();
       modelWatch?.validate();
       if (timedOut) throw new Error(t('quickAccess.files.deadlineExceeded'), { cause: error });
       throw error;
     } finally {
-      modelWatch?.dispose(); clearTimeout(timer); cancellation.dispose(); source.dispose(); this.active.delete(source);
+      modelWatch?.dispose(); clearTimeout(timer); cancellation.dispose();
+      if (!prepared?.operation) run.dispose();
     }
   }
 }

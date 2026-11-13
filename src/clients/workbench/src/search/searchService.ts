@@ -2,7 +2,7 @@ import { t } from '../../../shared/core/i18n/index.js';
 import { raceCancellationError } from '../../upstream/src/vs/base/common/async.js';
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
-import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ResourceSet } from '../../upstream/src/vs/base/common/map.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IModelService } from '../../upstream/src/vs/editor/common/services/model.js';
@@ -54,21 +54,37 @@ export class WorkspaceSearchService extends RemoteSearchService {
     onProgress?: (item: ISearchProgressItem) => void, notebookFilesToIgnore?: ResourceSet,
     asyncNotebookFilesToIgnore?: Promise<ResourceSet>): { syncResults: ISearchComplete; asyncResults: Promise<ISearchComplete> } {
     if (!businessQuery(query)) return super.textSearchSplitSyncAsync(query, token, onProgress, notebookFilesToIgnore, asyncNotebookFilesToIgnore);
+    const operation = this.businessProvider.beginSearch(token), source = operation.source;
+    token = source.token;
+    const lifetime = this._register(new DisposableStore());
+    lifetime.add(operation);
     const deadlineAt = Date.now() + 10000;
-    if (requiresCanonicalFileQuery(query)) return { syncResults: { results: [], messages: [], limitHit: false },
-      asyncResults: canonicalFileQuery(query, token, deadlineAt).then(async canonical => {
-        const split = this.textSearchCanonical(canonical, token, onProgress, notebookFilesToIgnore, asyncNotebookFilesToIgnore, deadlineAt);
-        const remote = await split.asyncResults;
-        return { ...remote, results: [...split.syncResults.results, ...remote.results],
-          messages: [...split.syncResults.messages, ...remote.messages], limitHit: split.syncResults.limitHit || remote.limitHit };
-      }) };
-    return this.textSearchCanonical(query, token, onProgress, notebookFilesToIgnore, asyncNotebookFilesToIgnore, deadlineAt);
+    const search = (canonical: ITextQuery) => this.textSearchCanonical(canonical, operation, lifetime, onProgress,
+      notebookFilesToIgnore, asyncNotebookFilesToIgnore, deadlineAt);
+    try {
+      const split = requiresCanonicalFileQuery(query) ? { syncResults: { results: [], messages: [], limitHit: false },
+        asyncResults: canonicalFileQuery(query, token, deadlineAt).then(async canonical => {
+          operation.validate();
+          const split = search(canonical), remote = await split.asyncResults;
+          return { ...remote, results: [...split.syncResults.results, ...remote.results],
+            messages: [...split.syncResults.messages, ...remote.messages], limitHit: split.syncResults.limitHit || remote.limitHit };
+        }) } : search(query);
+      return { ...split, asyncResults: split.asyncResults.then(result => { operation.validate(); return result; },
+        error => { operation.validate(); throw error; }).finally(() => this._store.delete(lifetime)) };
+    } catch (error) {
+      this._store.delete(lifetime);
+      operation.validate();
+      throw error;
+    }
   }
 
-  private textSearchCanonical(query: ITextQuery, token: CancellationToken, onProgress: ((item: ISearchProgressItem) => void) | undefined,
+  private textSearchCanonical(query: ITextQuery, operation: ReturnType<WorkspaceSearchProvider['beginSearch']>, lifetime: DisposableStore,
+    onProgress: ((item: ISearchProgressItem) => void) | undefined,
     notebookFilesToIgnore: ResourceSet | undefined, asyncNotebookFilesToIgnore: Promise<ResourceSet> | undefined, deadlineAt: number
   ): { syncResults: ISearchComplete; asyncResults: Promise<ISearchComplete> } {
     const identity = this.businessIdentity.extUri;
+    const source = operation.source, token = source.token;
+    operation.validate();
     query = validateTextQuery(query, identity);
     if (token.isCancellationRequested) throw new CancellationError();
     if (this._store.isDisposed) throw new Error(t('quickAccess.files.disposed'));
@@ -76,10 +92,6 @@ export class WorkspaceSearchService extends RemoteSearchService {
     const open = new ResourceSet(openResources(this.businessEditors, query, identity), key);
     const covered = new ResourceSet(key), results: FileMatch[] = [];
     const ignoredModels = new ResourceSet([...(notebookFilesToIgnore ?? [])], key);
-    const source = new CancellationTokenSource(token);
-    token = source.token;
-    const lifetime = this._register(new DisposableStore());
-    lifetime.add(toDisposable(() => source.dispose(true)));
     const maximum = query.maxResults ?? DEFAULT_MAX_SEARCH_RESULTS;
     let count = 0, limitHit = false;
     const modelVersions = new Map<ReturnType<typeof this.businessModels.getModels>[number], number>();
@@ -132,15 +144,14 @@ export class WorkspaceSearchService extends RemoteSearchService {
           const ignored = await raceCancellationError(asyncNotebookFilesToIgnore ?? Promise.resolve(new ResourceSet()), token);
           for (const resource of ignoredModels) covered.add(resource);
           for (const resource of ignored) covered.add(resource);
-          return await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered, { deadlineAt, watchRetryModels });
+          return await this.businessProvider.textSearch({ ...query, maxResults: maximum - count }, onProgress, token, covered, { deadlineAt, operation, watchRetryModels });
         } catch (error) {
           validateModels();
           throw error;
-        } finally { this._store.delete(lifetime); }
+        }
       })();
       return { syncResults, asyncResults };
     } catch (error) {
-      this._store.delete(lifetime);
       validateModels();
       throw error;
     }

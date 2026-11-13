@@ -15,11 +15,12 @@ import { IWorkspaceContextService } from '../../upstream/src/vs/platform/workspa
 import { MAX_FILES_SHOWN, TextSearchQuickAccess } from '../../upstream/src/vs/workbench/contrib/search/browser/quickTextSearch/textSearchQuickAccess.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { TextSearchCompleteMessageType, type ISearchComplete } from '../../upstream/src/vs/workbench/services/search/common/search.js';
-import { HttpRequestError } from '../../../web/src/api/http.js';
+import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { IncompleteSearchStreamError, SearchStreamReadError } from '../../../web/src/api/stream/federatedSearch.js';
 import { WorkspaceSearchBranchError, workspaceSearchBranchErrors } from './fileProvider.js';
 import { SearchWorkspaceContext } from './scope.js';
 import { captureSearchOwner, loadSearchScope, type SearchInvocationOptions } from './target.js';
+import { workspaceContext } from '../workspaceContext.js';
 
 function failureDetail(error: unknown): string {
   const detail = [error instanceof Error ? error.message : String(error)];
@@ -151,6 +152,18 @@ export class WorkspaceTextQuickAccess extends Disposable implements IQuickAccess
     const cancellation = new CancellationTokenSource(token), controller = new AbortController();
     operation.add(toDisposable(() => cancellation.dispose(true)));
     operation.add(cancellation.token.onCancellationRequested(() => controller.abort()));
+    const invalidate = () => {
+      operation.clear();
+      picker.activeItems = picker.selectedItems = [];
+      picker.buttons = [];
+      picker.items = [{ label: t('quickAccess.identityChangedReopen') }];
+      picker.busy = false;
+    };
+    operation.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
+    const gatewayId = workspaceContext.getSnapshot().gatewayId;
+    operation.add(toDisposable(workspaceContext.subscribe(() => {
+      if (gatewayId && workspaceContext.getSnapshot().gatewayId !== gatewayId) invalidate();
+    })));
     picker.busy = true;
     const fail = (error: unknown) => {
       if (cancellation.token.isCancellationRequested) return;

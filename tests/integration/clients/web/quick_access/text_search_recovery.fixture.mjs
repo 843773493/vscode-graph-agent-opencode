@@ -39,7 +39,7 @@ const matched = picker => picker.items.filter(item => item.match).map(item => it
 
 /** 宿主事件及 HTTP 页是明确替身；原 Controller、TextQuickAccess、QueryBuilder、SearchModel 和 Provider 实际运行。 */
 async function fixture(asset, searchOverride) {
-  const lifetime = new q.DisposableStore(), host = lifetime.add(new PickerHost()), calls = [], buttons = [];
+  const lifetime = new q.DisposableStore(), host = lifetime.add(new PickerHost()), calls = [], buttons = [], opened = [];
   const create = host.createQuickPick.bind(host);
   host.createQuickPick = () => {
     const picker = create(), pressed = lifetime.add(new Emitter());
@@ -51,7 +51,7 @@ async function fixture(asset, searchOverride) {
   const configuration = { editor: { wordSeparators: ' /' }, files: { encoding: 'utf8', exclude: {} },
     search: { useIgnoreFiles: false, followSymlinks: true, searchOnType: true, quickAccess: { preserveInput: false }, sortOrder: 'default', maxResults: 100 },
     workbench: { editor: { enablePreview: true, enablePreviewFromQuickOpen: true } } };
-  const editors = { editors: [], visibleEditors: [], activeEditor: undefined, openEditor: async () => undefined };
+  const editors = { editors: [], visibleEditors: [], activeEditor: undefined, openEditor: async (...args) => { opened.push(args); } };
   const services = new q.ServiceCollection(
     [q.IConfigurationService, { getValue: key => typeof key === 'string' ? key.split('.').reduce((value, part) => value?.[part], configuration) : configuration }],
     [q.IWorkspaceContextService, context], [q.IEditorGroupsService, { groups: [], activeGroup: { id: 1 }, getGroups: () => [] }],
@@ -113,9 +113,61 @@ async function fixture(asset, searchOverride) {
       order: 'category-scope-owner-v1', returned_results: states.reduce((count, state) => count + state.returned_results, 0), branches: states } });
     return new Response(frames.join(''), { headers: { 'content-type': 'text/event-stream', 'X-Request-ID': id } });
   });
-  return { host, calls, buttons, controller, show(pattern = 'needle') {
+  return { host, calls, buttons, opened, controller, show(pattern = 'needle') {
     controller.show('%' + pattern, { providerOptions: { searchOwners: owners } }); return host.currentQuickInput;
   }, close() { lifetime.dispose(); s.unwrapSessionApiFetch(); s.gateway.workspaces = workspaces; s.gateway.request = request; } };
+}
+
+export async function identityChange(mode, phase) {
+  const previous = s.workspaceContext.getSnapshot();
+  s.workspaceContext.publish({ ...previous, gatewayId: owners[0].gatewayId, activeId: owners[0].workspaceId });
+  let release; const barrier = new Promise(resolve => { release = resolve; });
+  const f = await fixture(async (_request, index) => {
+    if (phase === 'initial' && !index || phase === 'retry' && index === 1) await barrier;
+    return phase !== 'initial' && !index ? { failures: [{ owner: owners[0].gatewayId, state: 'failed', retryable: true }] }
+      : { name: index ? 'new-identity.txt' : 'late.txt' };
+  });
+  try {
+    const picker = f.show();
+    if (phase === 'initial') await until(() => f.calls.length === 1);
+    else await until(() => !picker.busy && picker.items.some(item => item.buttons?.[0]?.tooltip === '重新查询此文件分支'));
+    const stale = picker.items.find(item => item.buttons?.[0]?.tooltip === '重新查询此文件分支');
+    const oldMatch = picker.items.find(item => item.match);
+    if (phase === 'retry') { picker.press(stale); await until(() => f.calls.length === 2); }
+    if (oldMatch) picker.activeItems = picker.selectedItems = [oldMatch];
+    const before = f.calls.length;
+    if (mode === 'credential') s.invalidateGatewayToken(0);
+    else {
+      s.workspaceContext.publish({ ...s.workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+      s.workspaceContext.publish({ ...s.workspaceContext.getSnapshot(), gatewayId: owners[0].gatewayId });
+    }
+    const invalidated = { labels: labels(picker), matches: matched(picker), selected: picker.selectedItems.length,
+      active: picker.activeItems.length, buttons: picker.buttons.length, busy: picker.busy,
+      aborted: f.calls.at(-1).signal.aborted };
+    if (stale) picker.press(stale);
+    if (oldMatch) picker.accept(oldMatch, true);
+    picker.value = '%changed'; release(); await tick(); await tick();
+    const unchanged = JSON.stringify(labels(picker)) === JSON.stringify(invalidated.labels), staleRequests = f.calls.length - before;
+    picker.hide(); const reopened = f.show('newidentity');
+    await until(() => !reopened.busy && matched(reopened).some(resource => resource.endsWith('/new-identity.txt')),
+      () => ({ labels: labels(reopened), busy: reopened.busy, calls: f.calls.length, visible: reopened.visible }));
+    return { invalidated, unchanged, staleRequests, opened: f.opened.length, reopened: matched(reopened),
+      requests: f.calls.map(call => call.request) };
+  } finally { release(); f.close(); s.workspaceContext.publish(previous); }
+}
+
+export async function activeWorkspaceSwitch() {
+  const previous = s.workspaceContext.getSnapshot();
+  s.workspaceContext.publish({ ...previous, gatewayId: owners[0].gatewayId, activeId: owners[0].workspaceId });
+  let release; const barrier = new Promise(resolve => { release = resolve; });
+  const f = await fixture(async () => { await barrier; return { name: 'frozen.txt' }; });
+  try {
+    const picker = f.show(); await until(() => f.calls.length === 1);
+    s.workspaceContext.publish({ ...s.workspaceContext.getSnapshot(), activeId: 'another-workspace' });
+    const aborted = f.calls[0].signal.aborted; release();
+    await until(() => !picker.busy && matched(picker).length === 2);
+    return { aborted, matches: matched(picker), requests: f.calls.map(call => call.request) };
+  } finally { release(); f.close(); s.workspaceContext.publish(previous); }
 }
 
 export async function recovery(state, multiple = false) {

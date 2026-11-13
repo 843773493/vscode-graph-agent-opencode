@@ -2426,6 +2426,7 @@
   "quickAccess.gatewayControl": "Gateway 控制面",
   "quickAccess.gatewayDiagnosticsUnavailable": "Gateway 诊断视图不可用",
   "quickAccess.identityChangedReopen": "Gateway 或访问凭据已改变，请重新打开快速访问",
+  "quickAccess.files.identityChanged": "Gateway 或访问凭据已改变，请重新搜索文件",
   "quickAccess.identityChangedSelect": "Gateway 或访问凭据已改变，请重新选择目标",
   "quickAccess.invokingGroupClosed": "发起快速访问的编辑器组已关闭",
   "quickAccess.listSeparator": "、",

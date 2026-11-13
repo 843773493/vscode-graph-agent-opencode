@@ -42,6 +42,24 @@ async function exercise(name, ...args) {
   } finally { await context.close(); }
 }
 
+for (const [mode, phase] of [['credential', 'initial'], ['credential', 'retry'], ['credential', 'settled'], ['gateway', 'settled']]) {
+  test(`原%在${phase}的${mode}失效撤销旧候选／接受／重试及迟到结果，重开可用新代`, async () => {
+    const result = await exercise('identityChange', mode, phase);
+    expect(result.invalidated.labels).toEqual(['Gateway 或访问凭据已改变，请重新打开快速访问']);
+    expect(result.invalidated.matches).toEqual([]); expect(result.invalidated.selected).toBe(0); expect(result.invalidated.active).toBe(0);
+    expect(result.invalidated.buttons).toBe(0); expect(result.invalidated.busy).toBe(false);
+    if (phase !== 'settled') expect(result.invalidated.aborted).toBe(true);
+    expect(result.unchanged).toBe(true); expect(result.staleRequests).toBe(0); expect(result.opened).toBe(0);
+    expect(result.reopened).toHaveLength(2); expect(result.reopened.every(resource => resource.endsWith('/new-identity.txt'))).toBe(true);
+  }, 12000);
+}
+
+test('原%同Gateway切换活动工作区不中止查询或改投冻结范围', async () => {
+  const result = await exercise('activeWorkspaceSwitch');
+  expect(result.aborted).toBe(false); expect(result.matches).toHaveLength(2); expect(result.requests).toHaveLength(1);
+  expect(result.requests[0].scope.owners).toEqual([{ gateway_id: 'gateway-a', workspace_id: 'workspace-a' }, { gateway_id: 'gateway-b', workspace_id: 'workspace-a' }]);
+});
+
 for (const state of ['failed', 'cancelled']) test(`原%将${state}与成功候选同时展示，按钮只重试失败根且双击不重复分发`, async () => {
   const result = await exercise('recovery', state);
   expect(result.before.matches).toHaveLength(1); expect(result.before.matches[0]).toContain('gateway-b');

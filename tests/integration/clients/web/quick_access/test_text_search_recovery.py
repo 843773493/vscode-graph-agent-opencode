@@ -39,12 +39,14 @@ def recovery_assets(request: pytest.FixtureRequest) -> Path:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ("recovery", "identity"))
 async def test_text_branch_failure_remote_cancel_and_explicit_retry(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
     search_gateway_port: int,
     recovery_assets: Path,
+    scenario: str,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "文本分支恢复验收需要 Chromium"
@@ -57,11 +59,13 @@ async def test_text_branch_failure_remote_cancel_and_explicit_retry(
                                       schema_path=root / ".boxteam/workspace_schema.jsonc")
         (target / "recover.txt").write_text(f"textrecovery {target.name} original\n", encoding="utf-8")
         (target / "cancel.txt").write_text(f"textcancel {target.name} original\n", encoding="utf-8")
+        (target / "identity.txt").write_text("".join(f"{query} {target.name} original\n"
+            for query in ("identityretry", "identityeditor", "identityafter")), encoding="utf-8")
     gateway = start_gateway_process(workspace_root=workspaces[0], default_backend_url=None, port=search_gateway_port,
         asgi_app="tests.integration.clients.web.quick_access.query_gateway_fixture:app",
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(recovery_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
-    output = context.artifacts_dir / "text-recovery.json"
+    output = context.artifacts_dir / f"text-{scenario}.json"
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "120", "--",
                "node", "tests/integration/clients/web/quick_access/text_search_recovery.mjs"]
@@ -70,6 +74,7 @@ async def test_text_branch_failure_remote_cancel_and_explicit_retry(
             completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": f"http://127.0.0.1:{gateway.port}",
                      "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_RECOVERY_WORKSPACE_B": str(workspaces[1]),
+                     "BOXTEAM_TEXT_SEARCH_SCENARIO": scenario,
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium}, capture_output=True, timeout=135, check=False)
         (context.artifacts_dir / "browser.stdout.raw").write_bytes(completed.stdout)
         (context.artifacts_dir / "browser.stderr.raw").write_bytes(completed.stderr)
@@ -77,12 +82,19 @@ async def test_text_branch_failure_remote_cancel_and_explicit_retry(
         assert completed.returncode == 0, (completed.stdout + completed.stderr).decode("utf-8", errors="replace")
         result = json.loads(output.read_text())
         assert result["phase"] == "complete" and result["pageErrors"] == []
-        assert result["failedKeepsSibling"] and result["cancelledKeepsSibling"] and result["retryOnlyFailedBranch"]
-        assert result["closedRetryAbortsRead"] and result["modelCalls"] == []
+        if scenario == "recovery":
+            assert result["failedKeepsSibling"] and result["cancelledKeepsSibling"] and result["retryOnlyFailedBranch"]
+            assert result["closedRetryAbortsRead"]
+        else:
+            assert result["identityRevokesCandidates"] and result["identityCancelsRetry"] and result["identityCancelsSearchEditor"]
+            assert result["newQueryUsesFrozenEditorScope"] and result["reopenUsesNewIdentity"]
+        assert result["modelCalls"] == []
         assert len(result["initialization"]) == 3
         assert all(item["requestId"] for item in result["initialization"])
         for target in workspaces:
             assert (target / "recover.txt").read_text() == f"textrecovery {target.name} original\n"
             assert (target / "cancel.txt").read_text() == f"textcancel {target.name} original\n"
+            assert (target / "identity.txt").read_text() == "".join(f"{query} {target.name} original\n"
+                for query in ("identityretry", "identityeditor", "identityafter"))
     finally:
         close_gateway_process(gateway)

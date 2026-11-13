@@ -2426,6 +2426,7 @@
   "quickAccess.gatewayControl": "Gateway control plane",
   "quickAccess.gatewayDiagnosticsUnavailable": "Gateway diagnostics view is unavailable",
   "quickAccess.identityChangedReopen": "Gateway or access credentials changed. Reopen Quick Access",
+  "quickAccess.files.identityChanged": "Gateway or access credentials changed. Search the files again.",
   "quickAccess.identityChangedSelect": "Gateway or access credentials changed. Select the target again",
   "quickAccess.invokingGroupClosed": "The editor group that opened Quick Access has closed",
   "quickAccess.listSeparator": ", ",

@@ -14,7 +14,8 @@ await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/
   tsconfig: resolve('src/clients/workbench/tsconfig.jsonc'), logLevel: 'silent' });
 const { URI, gateway, fixture, model, WorkspaceSearchService, WorkspaceSearchProvider, WorkspaceSearchBranchError, workspaceSearchBranchErrors,
   workspaceFileUri, workspaceFileSource, textMatch, CancellationTokenSource, resourceInQuery,
-  ExtUri, extUri, textSearchResultToMatches, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
+  ExtUri, extUri, textSearchResultToMatches, installSessionApiFetchMock, unwrapSessionApiFetch,
+  workspaceContext, invalidateGatewayToken } = await import(pathToFileURL(bundle).href);
 const ownerA = { gatewayId: 'gateway-a', workspaceId: 'workspace-a' };
 const ownerB = { gatewayId: 'gateway-b', workspaceId: 'workspace-a' };
 const root = owner => `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`;
@@ -41,7 +42,7 @@ async function withTransport(callback, asset = async target => page(target.uri),
     expect(Object.keys(request)).toEqual(['paths']); expect(request.paths.length).toBeLessThanOrEqual(100);
     expect(request.paths.every(path => path.startsWith(root(owner) + '/'))).toBe(true);
     metadata.push({ owner, paths: request.paths });
-    return { uris: metadataReply(request.paths, owner) };
+    return { uris: await metadataReply(request.paths, owner, init.signal) };
   });
   installSessionApiFetchMock(async ({ path, init }) => {
     paths.push(path);
@@ -90,6 +91,129 @@ async function withTransport(callback, asset = async target => page(target.uri),
 }
 
 describe('唯一 SearchService 文件联邦合同（网络页为显式资产）', () => {
+  test('凭据失效取消普通文件及正文实际请求，拒绝迟到结果；新查询使用新代身份', async () => {
+    for (const kind of ['file', 'text']) {
+      const f = fixture([]);
+      let started, release;
+      const reading = new Promise(resolve => { started = resolve; }), response = new Promise(resolve => { release = resolve; });
+      try {
+        await withTransport(async calls => {
+          const progress = [];
+          const pending = (kind === 'file' ? f.search.fileSearch({ type: 1, folderQueries: [{ folder: uri(ownerA) }], filePattern: 'late' })
+            : f.search.textSearch(query(), undefined, item => progress.push(item))).catch(error => error);
+          await reading; invalidateGatewayToken(0);
+          const aborted = calls[0].signal.aborted; release();
+          const error = await pending;
+          expect(aborted).toBe(true); expect(error).toBeInstanceOf(Error);
+          expect(error.message).toContain('Gateway 或访问凭据已改变'); expect(progress).toEqual([]);
+          await f.search.textSearch(query()); expect(calls).toHaveLength(2);
+        }, async (target, _cursor, _query, _signal, request) => {
+          if (!request.continuations.length) { started(); await response; }
+          return kind === 'file' ? files(target, ['late.txt']) : page(target.uri, [hit(target.uri + '/late.txt')]);
+        });
+      } finally { release(); f.instantiation.dispose(); }
+    }
+  });
+
+  test('凭据失效覆盖规范引用等待，文件与正文均不查询模型或分发搜索', async () => {
+    for (const kind of ['file', 'text']) {
+      const draft = model(uri(ownerA, 'folder/draft.txt'), 'needle'), f = fixture([draft]);
+      let started, received;
+      const reading = new Promise(resolve => { started = resolve; });
+      try {
+        await withTransport(async calls => {
+          const folderQueries = [{ folder: uri(ownerA, 'folder') }];
+          const pending = (kind === 'file' ? f.search.fileSearch({ type: 1, folderQueries, filePattern: 'draft' })
+            : f.search.textSearch(query({ folderQueries }))).catch(error => error);
+          await reading; invalidateGatewayToken(0);
+          const error = await pending;
+          expect(received.aborted).toBe(true); expect(error.message).toContain('Gateway 或访问凭据已改变');
+          expect(calls).toEqual([]); expect(draft.calls).toBe(0); expect(draft.watching).toBe(false);
+        }, undefined, {}, [{ owner: ownerA, paths: [root(ownerA) + '/folder'] }], async (paths, _owner, signal) => {
+          received = signal; started();
+          await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+          return paths;
+        });
+      } finally { f.instantiation.dispose(); draft.dispose(); }
+    }
+  });
+
+  test('凭据失效中止原Notebook排除等待，释放已覆盖模型监听且不分发文件搜索', async () => {
+    const draft = model(uri(ownerA, 'draft.txt'), 'removed'), f = fixture([draft]);
+    try {
+      await withTransport(async calls => {
+        const split = f.search.textSearchSplitSyncAsync(query(), undefined, undefined, undefined, new Promise(() => {}));
+        expect(draft.watching).toBe(true); invalidateGatewayToken(0);
+        await expect(split.asyncResults).rejects.toThrow('Gateway 或访问凭据已改变');
+        expect(calls).toEqual([]); expect(draft.watching).toBe(false);
+      });
+    } finally { f.instantiation.dispose(); draft.dispose(); }
+  });
+
+  for (const identity of ['credential', 'gateway']) test(`${identity}失效前后原失败项重试均拒绝；Gateway切走再切回不恢复旧代`, async () => {
+    for (const phase of ['before', 'during']) {
+      const previous = workspaceContext.getSnapshot();
+      workspaceContext.publish({ ...previous, gatewayId: ownerA.gatewayId, activeId: ownerA.workspaceId });
+      const f = fixture([]);
+      try {
+        await withTransport(async calls => {
+          const error = await f.search.textSearch(query()).catch(error => error), progress = [];
+          const invalidate = () => {
+            if (identity === 'credential') invalidateGatewayToken(0);
+            else {
+              workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: ownerB.gatewayId });
+              workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: ownerA.gatewayId });
+            }
+          };
+          if (phase === 'before') invalidate();
+          const retry = error.retry(undefined, item => progress.push(item));
+          if (phase === 'during') {
+            while (calls.length < 2) await new Promise(resolve => setTimeout(resolve, 0));
+            invalidate();
+          }
+          await expect(retry).rejects.toThrow('Gateway 或访问凭据已改变');
+          expect(calls).toHaveLength(phase === 'before' ? 1 : 2); expect(progress).toEqual([]);
+          if (phase === 'during') expect(calls[1].signal.aborted).toBe(true);
+        }, async (target, _cursor, _q, signal, request) => {
+          if (!request.continuations.length) return { failure: { code: 'execution_failed', message: '原分支拒绝', retryable: true } };
+          await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+          return page(target.uri, [hit(target.uri + '/late.txt')]);
+        });
+      } finally { f.instantiation.dispose(); workspaceContext.publish(previous); }
+    }
+  });
+
+  test('同Gateway活动工作区切换保留在途查询及原冻结owner，独立Provider同样中止旧身份', async () => {
+    const previous = workspaceContext.getSnapshot();
+    workspaceContext.publish({ ...previous, gatewayId: ownerA.gatewayId, activeId: ownerA.workspaceId });
+    const f = fixture([]);
+    let started, release;
+    const reading = new Promise(resolve => { started = resolve; }), response = new Promise(resolve => { release = resolve; });
+    try {
+      await withTransport(async calls => {
+        const pending = f.search.textSearch(query());
+        await reading;
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), activeId: 'another-workspace' });
+        expect(calls[0].signal.aborted).toBe(false); release();
+        const complete = await pending;
+        expect(complete.results.map(item => item.resource.toString())).toEqual([uri(ownerA, 'same-owner.txt').toString()]);
+        expect(calls[0].request.scope.owners).toEqual([{ gateway_id: ownerA.gatewayId, workspace_id: ownerA.workspaceId }]);
+      }, async target => { started(); await response; return page(target.uri, [hit(target.uri + '/same-owner.txt')]); });
+      const provider = new WorkspaceSearchProvider({ editors: [] }, { extUri });
+      try {
+        await withTransport(async calls => {
+          const pending = provider.textSearch(query()).catch(error => error);
+          while (!calls.length) await new Promise(resolve => setTimeout(resolve, 0));
+          invalidateGatewayToken(0);
+          expect((await pending).message).toContain('Gateway 或访问凭据已改变'); expect(calls[0].signal.aborted).toBe(true);
+        }, async (target, _cursor, _query, signal) => {
+          await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+          return page(target.uri, [hit(target.uri + '/late.txt')]);
+        });
+      } finally { provider.dispose(); }
+    } finally { release(); f.instantiation.dispose(); workspaceContext.publish(previous); }
+  });
+
   test('owner规范回执同时归一目录、局部排除和额外文件，按规范模型冻结覆盖且不查询B', async () => {
     const canonicalRoot = `boxteam://workspace/${ownerA.workspaceId}/resources/files/root`;
     const canonicalUri = (owner, name) => workspaceFileUri(owner, canonicalRoot + '/' + name, canonicalRoot);

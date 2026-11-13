@@ -24,6 +24,8 @@ export { WorkspaceSearchProvider, WorkspaceSearchBranchError, workspaceSearchBra
 export { resourceInQuery } from '../../../../../src/clients/workbench/src/search/query.js';
 export { ExtUri, extUri } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/resources.js';
 export { gateway } from '../../../../../src/clients/workbench/src/agentApi.js';
+export { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
+export { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
 export { workspaceFileUri, workspaceFileSource } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
 export { URI, WorkspaceSearchService };
 
