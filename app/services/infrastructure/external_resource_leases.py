@@ -15,13 +15,14 @@ import os
 from collections import deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 from typing import ClassVar, Literal, Never, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter
+from pydantic_core import to_json
 
 from app.core.child_process_state import ChildProcessState
 from app.core.failures import failure_detail
@@ -146,9 +147,9 @@ class ExternalResourceLeaseLedger:
                 if record.mcp_server_id != mcp_server_id:
                     raise RuntimeError(f"资源的原 MCP Server 绑定不可改变: resource_id={resource_id}")
                 # 重复登记不是续期或运行观察，不重写时间戳及整个持久账本。
-                return self._copy_record(record)
+                return replace(record)
             self._commit(records=(record,))
-            return self._copy_record(record)
+            return replace(record)
 
     def acquire(
         self,
@@ -188,7 +189,7 @@ class ExternalResourceLeaseLedger:
                     or existing.expires_at != expires_at
                 ):
                     raise RuntimeError(f"资源 lease 重复但关联键不一致: lease_id={lease_id}")
-                return self._copy_lease(existing)
+                return replace(existing)
             lease = ResourceLease(
                 lease_id=lease_id,
                 resource_id=resource_id,
@@ -200,7 +201,7 @@ class ExternalResourceLeaseLedger:
                 expires_at=expires_at,
             )
             self._commit(leases=(lease,))
-            return self._copy_lease(lease)
+            return replace(lease)
 
     def register_external(
         self,
@@ -282,7 +283,7 @@ class ExternalResourceLeaseLedger:
                 raise RuntimeError(f"operation 尚未取得核实回执，不能普通释放: lease_id={lease_id}")
             lease = replace(lease, status="released", updated_at=self._now())
             self._commit(leases=(lease,))
-            return self._copy_lease(lease)
+            return replace(lease)
 
     async def settle(self, lease_id: str) -> ResourceLease:
         """结清由资源 owner 核实终态后释放的跨 Turn 占用 lease。
@@ -298,14 +299,14 @@ class ExternalResourceLeaseLedger:
                 raise KeyError(f"资源 lease 不存在: lease_id={lease_id}")
             lease = replace(lease, status="settled", updated_at=self._now())
             self._commit(leases=(lease,))
-            return self._copy_lease(lease), [(lease.resource_id, "released")]
+            return replace(lease), [(lease.resource_id, "released")]
 
         return await self._commit_notified(commit)
 
     def get_lease(self, lease_id: str) -> ResourceLease | None:
         """按 lease_id 读取占用状态；不存在时返回 None。"""
         lease = self._leases.get(lease_id)
-        return self._copy_lease(lease) if lease is not None else None
+        return replace(lease) if lease is not None else None
 
     def release_turn_leases(self, turn_stream_id: str) -> list[ResourceLease]:
         """释放 Turn 对资源的占用；不改变资源实际状态。"""
@@ -317,7 +318,7 @@ class ExternalResourceLeaseLedger:
             ]
             if released:
                 self._commit(leases=released)
-            return [self._copy_lease(lease) for lease in released]
+            return [replace(lease) for lease in released]
 
     async def reconcile(
         self,
@@ -360,7 +361,7 @@ class ExternalResourceLeaseLedger:
                 else:
                     state = "unknown"
                 notifications.append((record.resource_id, state))
-            return [self._copy_record(record) for record in reconciled], notifications
+            return [replace(record) for record in reconciled], notifications
 
         return await self._commit_notified(commit)
 
@@ -427,15 +428,15 @@ class ExternalResourceLeaseLedger:
 
     def get(self, resource_id: str) -> ResourceRecord | None:
         record = self._records.get(resource_id)
-        return self._copy_record(record) if record is not None else None
+        return replace(record) if record is not None else None
 
     def records_by_kind(self, kind: str) -> list[ResourceRecord]:
         """向实际 owner 提供本领域登记，供冷启动核对旧实例。"""
-        return [self._copy_record(record) for record in self._records.values() if record.kind == kind]
+        return [replace(record) for record in self._records.values() if record.kind == kind]
 
     def leases_for_turn(self, turn_stream_id: str) -> list[ResourceLease]:
         return [
-            self._copy_lease(lease)
+            replace(lease)
             for lease in self._leases.values()
             if lease.turn_stream_id == turn_stream_id
         ]
@@ -444,7 +445,7 @@ class ExternalResourceLeaseLedger:
         """包括崩溃后未结清占用；owner 不能把未知 operation 当作已完成。"""
         self._require_record(resource_id)
         return [
-            self._copy_lease(lease)
+            replace(lease)
             for lease in self._leases.values()
             if lease.resource_id == resource_id
             and lease.status in _UNSETTLED_LEASE_STATUSES
@@ -463,7 +464,7 @@ class ExternalResourceLeaseLedger:
                 lease.resource_id in result
                 and lease.status in _UNSETTLED_LEASE_STATUSES
             ):
-                result[lease.resource_id].append(self._copy_lease(lease))
+                result[lease.resource_id].append(replace(lease))
         return result
 
     def update_external_state(
@@ -577,11 +578,12 @@ class ExternalResourceLeaseLedger:
                 self._state_path.parent.mkdir(parents=True, exist_ok=True)
                 temp_path = self._state_path.with_suffix(".tmp")
                 payload = {
-                    "records": [_RESOURCE_RECORD.dump_python(record, mode="json") for record in next_records.values()],
-                    "leases": [asdict(lease) for lease in next_leases.values()],
+                    "records": list(next_records.values()),
+                    "leases": list(next_leases.values()),
                 }
-                with temp_path.open("w", encoding="utf-8") as stream:
-                    json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
+                with temp_path.open("wb") as stream:
+                    # 直接编码 dataclass，避免深复制及 json.dump 的逐字段 Python 写入。
+                    stream.write(to_json(payload, inf_nan_mode="constants"))
                     stream.flush()
                     os.fsync(stream.fileno())
                 temp_path.replace(self._state_path)
@@ -599,14 +601,6 @@ class ExternalResourceLeaseLedger:
     @staticmethod
     def _now() -> str:
         return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-    @staticmethod
-    def _copy_record(record: ResourceRecord) -> ResourceRecord:
-        return replace(record)
-
-    @staticmethod
-    def _copy_lease(lease: ResourceLease) -> ResourceLease:
-        return ResourceLease(**asdict(lease))
 
 
 __all__ = [
