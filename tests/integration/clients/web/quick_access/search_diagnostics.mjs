@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from '../../../../../src/shared/sse.js';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 import { writeWorkspaceSettings } from '../../../../support/workbench/settings.mjs';
 
@@ -39,24 +40,32 @@ try {
     'X-BoxTeam-Workspace-Id': owner.workspace_id, 'X-BoxTeam-Target-Gateway-Id': owner.gateway_id,
   } });
   const emptyDirectory = `${roots.data.workspace_uri}/empty-search-directory`;
-  const federatedSearch = async (requestId, contractVersion, query, matchMode, isRegex) => page.evaluate(async ({ requestId, payload }) => {
-    const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
-    const response = await fetch('/api/gateway/search', { method: 'POST', headers: {
-      'X-Local-Token': credential.data.token, 'X-Request-ID': requestId, 'Content-Type': 'application/json',
-    }, body: JSON.stringify(payload) });
-    const body = await response.text();
-    const events = body.split(/\r?\n/).filter(line => line.startsWith('data: '))
-      .map(line => JSON.parse(line.slice('data: '.length)));
-    if (response.status !== 200 || response.headers.get('X-Request-ID') !== requestId
-      || events.some(event => event.request_id !== requestId)) throw new Error(JSON.stringify({ status: response.status,
-        responseRequestId: response.headers.get('X-Request-ID'), requestId, events }));
-    return { status: response.status, requestId, responseRequestId: response.headers.get('X-Request-ID'), events };
-  }, { requestId, payload: {
-    scope: { mode: 'selected', owners: [owner] },
-    queries: [{ category: 'file', operation: 'content', contract_version: contractVersion, query, match_mode: matchMode,
-      limit: 1, file_targets: [{ owner, target: { uri: emptyDirectory, search_options: { is_regex: isRegex } } }], diagnostic_targets: [] }],
-    continuations: [], max_results: 1,
-  } });
+  const federatedSearch = async (requestId, contractVersion, query, matchMode, isRegex) => {
+    const response = await page.evaluate(async ({ requestId, payload }) => {
+      const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
+      const response = await fetch('/api/gateway/search', { method: 'POST', headers: {
+        'X-Local-Token': credential.data.token, 'X-Request-ID': requestId, 'Content-Type': 'application/json',
+      }, body: JSON.stringify(payload) });
+      return { status: response.status, responseRequestId: response.headers.get('X-Request-ID'),
+        contentType: response.headers.get('Content-Type'), body: await response.text() };
+    }, { requestId, payload: {
+      scope: { mode: 'selected', owners: [owner] },
+      queries: [{ category: 'file', operation: 'content', contract_version: contractVersion, query, match_mode: matchMode,
+        limit: 1, file_targets: [{ owner, target: { uri: emptyDirectory, search_options: { is_regex: isRegex } } }], diagnostic_targets: [] }],
+      continuations: [], max_results: 1,
+    } });
+    const events = [];
+    if (response.status !== 200 || response.responseRequestId !== requestId) {
+      throw new Error(JSON.stringify({ status: response.status, responseRequestId: response.responseRequestId, requestId }));
+    }
+    await consumeSseResponse(new Response(response.body, { headers: { 'Content-Type': response.contentType } }), {
+      events: { search: defineSseEvent(decodeJsonSseData, event => events.push(event)) },
+    });
+    if (events.some(event => event.request_id !== requestId)) {
+      throw new Error(JSON.stringify({ status: response.status, responseRequestId: response.responseRequestId, requestId, events }));
+    }
+    return { status: response.status, requestId, responseRequestId: response.responseRequestId, events };
+  };
   const invalidRegex = await federatedSearch('search-diagnostics-empty-regex', 1, '[', 'regex', true);
   const invalidRegexBranch = invalidRegex.events.at(-1)?.summary?.branches?.[0];
   expect(invalidRegexBranch).toMatchObject({ state: 'failed', code: 'execution_failed', error_owner: 'resource_file_operations',
