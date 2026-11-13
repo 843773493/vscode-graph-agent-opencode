@@ -183,6 +183,12 @@ export async function runFileCanonical({ run, launch }) {
     const mixed = thread.getByTitle(targets[0].rootUri + '/Mixed', { exact: true }).and(thread.locator('button.files-tree-item'));
     await observe('tree.expandMixed', () => mixed.click());
     const fileRow = thread.getByTitle(targets[0].rootUri + '/Mixed/Doc.json', { exact: true }).and(thread.locator('button.files-tree-item'));
+    const tabsBeforePreview = await groups().getByRole('tab').count();
+    await observe('tree.file.singleClick', () => fileRow.click());
+    await observe('tree.file.sessionPreview', () => expect(thread.locator('.workspace-preview-panel .workspace-preview-text-editor')).toHaveValue('{"diskOwner":1}\n'));
+    await expect(docTabs()).toHaveCount(0);
+    await expect(groups().getByRole('tab')).toHaveCount(tabsBeforePreview);
+    result.treeSingleClickPreview = true;
     await observe('tree.file.contextMenu', () => fileRow.click({ button: 'right' }));
     await observe('tree.file.vscodeMenu', () => thread.getByRole('menuitem', { name: 'VS Code', exact: true }).click());
     await observe('tree.file.openEditor', () => page.getByRole('menuitem', { name: '在编辑器中打开', exact: true }).click({ delay: 120 }));
@@ -239,7 +245,7 @@ export async function runFileCanonical({ run, launch }) {
     const beforeReloadReads = result.rawReads.length;
     await observe('workbench.normalReload', () => host.reload());
     await expect(editor().locator('.view-lines')).toContainText('savedBase'); await expect(docTabs()).toHaveCount(1); await expect(docTabs()).toHaveClass(/dirty/);
-    await expect(docTabs()).toHaveClass(/sticky/); await expect(page.locator('#status\\.editor\\.selection')).toContainText('Ln 1, Col 4');
+    await expect(docTabs()).toHaveClass(/sticky/); await expect(page.locator('#status\\.editor\\.selection')).toHaveText('行 1，列 4');
     expect(result.rawReads.length).toBe(beforeReloadReads);
     const saved = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname.endsWith('/workspace/files/content'));
     await command('workbench.action.files.save');
@@ -269,7 +275,7 @@ export async function runFileCanonical({ run, launch }) {
     const beforeConflictReloadReads = result.rawReads.length;
     await observe('workbench.restoreAfterExternalChange', () => host.restore());
     await expect(editor().locator('.view-lines')).toContainText('renameDirty'); await expect(docTabs()).toHaveCount(1); await expect(docTabs()).toHaveClass(/dirty/);
-    await expect(docTabs()).toHaveClass(/sticky/); await expect(page.locator('#status\\.editor\\.selection')).toContainText('Ln 2, Col 4');
+    await expect(docTabs()).toHaveClass(/sticky/); await expect(page.locator('#status\\.editor\\.selection')).toHaveText('行 2，列 4');
     await expect.poll(() => symbols(current), { timeout: 30_000 }).toEqual(['renameDirty']);
     expect(await symbols(aliasIdentity)).toEqual(['renameDirty']);
     expect(result.rawReads.length).toBe(beforeConflictReloadReads);
@@ -284,9 +290,9 @@ export async function runFileCanonical({ run, launch }) {
     const rejection = await rejected.json(); expect(rejection.request_id).toBe(rejected.headers()['x-request-id']);
     await expect(editor().locator('.view-lines')).toContainText('renameDirty'); await expect(docTabs()).toHaveClass(/dirty/);
     const notification = page.locator('.notifications-toasts');
-    await expect(notification).toContainText('The content of the file is newer.');
-    await expect(notification.getByRole('button', { name: 'Compare', exact: true })).toBeVisible();
-    await expect(notification.getByRole('button', { name: 'Overwrite', exact: true })).toBeVisible();
+    await expect(notification).toContainText(`无法保存"${windows ? 'DOC.json' : 'Doc.json'}": 文件的内容较新。请将您的版本与文件内容进行比较，或用您的更改覆盖文件内容。`);
+    await expect(notification.getByRole('button', { name: '比较', exact: true })).toBeVisible();
+    await expect(notification.getByRole('button', { name: '覆盖', exact: true })).toBeVisible();
     result.conflictNotification = await notification.innerText();
     expect(await readFile(currentFile, 'utf8')).toBe('{"savedBase":2}\n');
     result.restoredConflictPreserved = true; result.backups = { originalBackup, pendingBackup, restoredBackup }; result.conflict = rejection;

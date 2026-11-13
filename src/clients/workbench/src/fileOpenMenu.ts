@@ -2,8 +2,10 @@ import { Action, Separator } from '../upstream/src/vs/base/common/actions.js';
 import { t } from '../../shared/core/i18n/index.js';
 import type { IContextMenuService } from '../upstream/src/vs/platform/contextview/browser/contextView.js';
 import type { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import { IEditorService, SIDE_GROUP } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
-import { GroupDirection, IEditorGroup, IEditorGroupsService } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { IConfigurationService } from '../upstream/src/vs/platform/configuration/common/configuration.js';
+import type { IEditorOptions } from '../upstream/src/vs/platform/editor/common/editor.js';
+import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { GroupDirection, IEditorGroup, IEditorGroupsService, preferredSideBySideGroupDirection } from '../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { OpenWithEditorPicker } from '../upstream/src/vs/workbench/services/editor/browser/openWithEditorPicker.js';
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import type { ThreadOwner } from './agentApi.js';
@@ -18,17 +20,23 @@ export function showFileOpenMenu(path: string, anchor: { x: number; y: number },
   const root = resourceFileRootUri(path);
   if (!root) throw new Error(t('workbench.fileMenu.rootMissing'));
   const resource = workspaceFileUri(owner, path, root);
+  const open = (options: IEditorOptions, direction?: GroupDirection) => {
+    const source = groups.getGroup(group.id);
+    if (!source) throw new Error(t('quickAccess.resource.invokingGroupClosed'));
+    const target = direction === undefined ? source
+      : groups.findGroup({ direction }, source) ?? groups.addGroup(source, direction);
+    return editors.openEditor({ resource, options }, target.id);
+  };
   const actions = [
     new Action('boxteam.file.open', t('workbench.fileMenu.open'), '', true,
-      () => editors.openEditor({ resource, options: { pinned: true } }, group.id)),
+      () => open({ pinned: true })),
     new Action('boxteam.file.preview', t('workbench.fileMenu.preview'), '', true,
-      () => editors.openEditor({ resource, options: { pinned: false } }, group.id)),
+      () => open({ pinned: false })),
     new Action('boxteam.file.openSide', t('workbench.fileMenu.openSide'), '', true,
-      () => editors.openEditor({ resource, options: { pinned: true } }, SIDE_GROUP)),
-    new Action('boxteam.file.openBelow', t('workbench.fileMenu.openBelow'), '', true, () => {
-      const target = groups.findGroup({ direction: GroupDirection.DOWN }, group) ?? groups.addGroup(group, GroupDirection.DOWN);
-      return editors.openEditor({ resource, options: { pinned: true } }, target.id);
-    }),
+      () => open({ pinned: true }, instantiation.invokeFunction(accessor =>
+        preferredSideBySideGroupDirection(accessor.get(IConfigurationService))))),
+    new Action('boxteam.file.openBelow', t('workbench.fileMenu.openBelow'), '', true,
+      () => open({ pinned: true }, GroupDirection.DOWN)),
     new Separator(),
     new Action(COPY_RESOURCE_URI, t('workbench.resource.copyUri'), '', true,
       () => instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(COPY_RESOURCE_URI, resource))),
@@ -36,7 +44,7 @@ export function showFileOpenMenu(path: string, anchor: { x: number; y: number },
       () => instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(ATTACH_RESOURCE_URI, resource))),
     new Action('boxteam.file.openWith', t('workbench.fileMenu.openWith'), '', true, async () => {
       const options = await instantiation.createInstance(OpenWithEditorPicker).pick({ resource });
-      if (options) await editors.openEditor({ resource, options: { ...options, pinned: true } }, group.id);
+      if (options) await open({ ...options, pinned: true });
     }),
   ];
   menus.showContextMenu({ getAnchor: () => anchor, getActions: () => actions,

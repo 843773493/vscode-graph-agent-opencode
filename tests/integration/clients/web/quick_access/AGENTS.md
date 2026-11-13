@@ -12,6 +12,8 @@
 
 # 规范
 
+`file_open_menu.test.mjs` 执行正式转换后的真实菜单 Action，组服务、编辑器 writer 和打开方式选择结果为明确边界；核右键发起组、原侧开方向、组关闭拒绝及取消零打开，不将其称作真实 Workbench 页面。`test_file_canonical.py` 的完整页面先单击文件，核会话资源区预览原正文且零新 Workbench Tab，再经原生右键菜单打开编辑器；可复用既有 `file_search_web_assets` 提供的不可变产物，场景 Home／工作区／端口仍独立。
+
 文件搜索合同覆盖显式额外文件的名称／精确正文分支、owner隔离及目录分页前去重；HTTP页资产区分真实文件节点与目录。完整模型覆盖页面通过原文件编辑器修改node_modules中的未保存模型，沿真实Search Editor开启ignore，核本地正文、负命中、原Gateway请求及磁盘不变，不预写模型或替换业务响应。
 
 `test_remote_model_coverage` 使用两个真实 Gateway／Backend 和相同 workspace UUID，经原编辑器修改本地模型，核分区覆盖身份、A+B 小配额、合法续页、仅 A、onlyOpenEditors、首批本地结果及剩余远端配额。SSH 连接沿既有 loopback 装具；仅具名出站失败和一次真实回执延迟为故障边界，原匹配、调度和 SSE 不替换。核真实请求／终态计量、原 owner 身份、模型变化后旧 cursor／重试拒绝，不把状态提示行当正文匹配或将回环验收称为真实跨机。

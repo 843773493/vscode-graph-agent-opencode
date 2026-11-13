@@ -16,6 +16,9 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
+from tests.integration.clients.web.quick_access.test_file_model_coverage import (
+    file_search_web_assets as file_search_web_assets,  # noqa: PLC0414
+)
 from tests.support.paths import chromium_temporary_environment
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
 from tests.support.workspaces import (
@@ -57,6 +60,7 @@ def assert_canonical_result(result_path: Path, workspaces: list[Path]) -> dict[s
     """Web 与原生容器复用同一业务及磁盘字节验收。"""
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert result["phase"] == "complete" and result["pageErrors"] == []
+    assert result["treeSingleClickPreview"]
     assert result["threeEntriesOneDirtyModel"] and result["directResolverUsesDirtyModel"]
     assert result["completeOwnerIsolation"] and result["logicalLinkIndependent"] and result["mixedSensitivityIndependent"]
     assert result["normalReloadSaved"] and result["restoredConflictPreserved"]
@@ -69,14 +73,14 @@ def assert_canonical_result(result_path: Path, workspaces: list[Path]) -> dict[s
 
 async def test_file_identity_and_dirty_backup_recovery_through_real_gateway(
     request: pytest.FixtureRequest, canonical_workspaces: tuple[TestRunContext, list[Path]],
-    search_gateway_port: int, web_workbench_assets: Path,
+    search_gateway_port: int, file_search_web_assets: Path,
 ) -> None:
     context, workspaces = canonical_workspaces
     result_path = context.artifacts_dir / "file-canonical.json"
     gateway = await asyncio.to_thread(start_gateway_process,
         workspace_root=workspaces[0], default_backend_url=None, port=search_gateway_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
+        extra_env={"BOXTEAM_WEB_ASSETS": str(file_search_web_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
     supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
     # Playwright 使用 Node 执行，正式构建仍由 Bun 执行。
     command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180", "--",
