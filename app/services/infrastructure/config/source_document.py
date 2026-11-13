@@ -6,6 +6,7 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
+from urllib.parse import quote
 
 from commentjson.commentjson import parser
 from lark import Token, Tree
@@ -133,32 +134,59 @@ def _at_path(payload: object, path: tuple[str, ...]) -> object:
     return payload
 
 
-def redact_source_text(text: str) -> str:
+def _provider_api_key(path: tuple[str, ...]) -> bool:
+    return len(path) == 4 and path[:2] == ("llm", "providers") and path[-1] == "api_key"
+
+
+def redact_source_text(text: str, *, provider_scope: str) -> str:
     redacted = redact_source_payload(parse_source_text(text))
     replacements = []
     for path, token in _strings(parser.parse(text)):
         value = json.loads(str(token))
         replacement_value = _at_path(redacted, path)
         if replacement_value != value:
+            if _provider_api_key(path):
+                replacement_value += "#" + quote(provider_scope, safe="")
             replacement = json.dumps(replacement_value, ensure_ascii=False)
             replacements.append((token.pos_in_stream, token.pos_in_stream + len(token), replacement))
     return _replace_tokens(text, replacements)
 
 
-def restore_source_text(text: str, original: str) -> str:
-    """占位只能在相同路径、相同对象绑定中还原，绝不把遮罩当密码保存。"""
+def restore_source_text(text: str, original: str, *, provider_scope: str) -> str:
+    """Provider 密钥可随原对象移动，其余秘密只在原路径及绑定中还原。"""
     incoming, previous = parse_source_text(text), parse_source_text(original)
     redacted_previous = redact_source_payload(previous)
     originals = {path: (json.loads(str(token)), str(token)) for path, token in _strings(parser.parse(original))}
+    provider_keys = {
+        str(_at_path(redacted_previous, path)) + "#" + quote(provider_scope, safe=""): path
+        for path in originals if _provider_api_key(path)
+    }
     replacements = []
     for path, token in _strings(parser.parse(text)):
         value = json.loads(str(token))
         if not _secret(path, value) or not value.startswith(_MASK_PREFIX):
             continue
+        if _provider_api_key(path):
+            old_path = provider_keys.get(value)
+            if old_path is None:
+                raise ValueError("秘密脱敏占位不属于当前来源，必须重新读取原目标")
+            old_provider = cast(dict[str, object], _at_path(previous, old_path[:-1]))
+            provider = cast(dict[str, object], _at_path(incoming, path[:-1]))
+            provider_id = provider.get("id")
+            if not isinstance(provider_id, str) or not provider_id or (
+                old_provider.get("id"), old_provider.get("endpoint")
+            ) != (provider_id, provider.get("endpoint")):
+                raise ValueError("秘密所属对象或地址已改变，不能沿用原脱敏占位")
+            for payload in (previous, incoming):
+                providers = cast(list[dict[str, object]], _at_path(payload, ("llm", "providers")))
+                if sum(isinstance(item, dict) and item.get("id") == provider_id for item in providers) != 1:
+                    raise ValueError("Provider ID 必须唯一，不能确定秘密所属对象")
+            replacements.append((token.pos_in_stream, token.pos_in_stream + len(token), originals[old_path][1]))
+            continue
         old = originals.get(path)
         if old is None or _at_path(redacted_previous, path) != value:
             raise ValueError("秘密脱敏占位不属于当前来源路径，必须重新读取原目标")
-        # 数组元素重排、Server/Provider 换身份后不能沿旧位置借用秘密。
+        # 其他秘密仍按原位置核验，不能借本次 api_key 规则扩大恢复范围。
         left: object = previous
         right: object = incoming
         for part in (*path[:-1], None):

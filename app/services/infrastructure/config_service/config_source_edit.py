@@ -125,6 +125,7 @@ class ConfigSourceEditMixin:
                 key == source_key or baseline.get(key) == value for key, value in candidate.source_baseline.items()
             ):
                 verify_stable_config_file(file)
+                service._validate_agent_definition_references(snapshot.to_dict())
                 return candidate
         return None
 
@@ -184,7 +185,7 @@ class ConfigSourceEditMixin:
         return ConfigSourceDocumentDTO(
             gateway_id=gateway_id, workspace_id=workspace_id, source_key=source_key,
             layer=layer, writable=source_key in _WRITABLE_SOURCES,
-            jsonc=redact_source_text(text),
+            jsonc=redact_source_text(text, provider_scope=f"{gateway_id}:{workspace_id}:{source_key}"),
             file_presence=file.presence if file is not None else "absent",
             file_digest=file.digest if file is not None else None,
             layer_revision=record.layer_revision if record is not None else None,
@@ -247,8 +248,13 @@ class ConfigSourceEditMixin:
         service = cast("ConfigService", self)
         file = self._check_source_edit(source_key, gateway_id, request, accepted)
         original = file.raw_bytes.decode("utf-8") if file.raw_bytes is not None else "{}\n"
-        text = restore_source_text(request.jsonc, original)
+        # 已接受的同一请求在 replace 后恢复时，原文件就是已保存正文；不再用旧下标重放草稿。
+        text = (original if accepted is not None and accepted.source_edit is not None
+                and file.digest == accepted.source_edit["file_digest"] else restore_source_text(
+                    request.jsonc, original, provider_scope=f"{gateway_id}:{request.workspace_id}:{source_key}",
+                ))
         candidate = service._build_candidate_snapshot(source_override=(source_key, parse_source_text(text)), import_sources=False)
+        service._validate_agent_definition_references(candidate.to_dict())
         verify_stable_config_file(file)
         return text, candidate
 
@@ -330,6 +336,7 @@ class ConfigSourceEditMixin:
                 elif claim is not None:
                     raise ConfigConflictError("已有配置 apply claim，禁止接受另一来源 intent")
                 require_plugin_permission()
+                service._validate_agent_definition_references(candidate.to_dict())
                 file = self._check_source_edit(source_key, gateway_id, request, accepted)
                 if accepted is None:
                     service._prepare_candidate(service._require_snapshot(), candidate, idempotency_key=request.idempotency_key, source_edit=intent)

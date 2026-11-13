@@ -65,6 +65,9 @@ def _base_config() -> dict:
         "mcp": {"supervision": {"sealed_call_timeout_seconds": 1800}, "servers": {}},
         "default_agent": "default",
         "agents": {
+            # Provider 数组整体替换，继承的 Agent 也必须引用本次真实 Provider。
+            **{name: {"model": {"primary_provider": "primary", "fallback_providers": []}}
+               for name in ("coder", "reviewer", "researcher")},
             "default": {
                 "name": "Default Agent",
                 "instructions": {"system_prompt": "hello"},

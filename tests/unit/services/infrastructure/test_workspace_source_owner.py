@@ -59,6 +59,8 @@ def _write_config(path: Path, *, model_name: str) -> None:
                 },
                 "default_agent": "default",
                 "agents": {
+                    **{name: {"model": {"primary_provider": "primary", "fallback_providers": []}}
+                       for name in ("coder", "reviewer", "researcher")},
                     "default": {
                         "name": "Default Agent",
                         "instructions": {"system_prompt": "hello"},
@@ -150,7 +152,8 @@ async def test_user_source_writer_previews_saves_and_queries_original_generation
             saved = await service.save_source_edit(source_key=document.source_key, gateway_id=document.gateway_id, request=request)
             assert saved.edit is not None and saved.edit.source_saved and saved.edit.layer_imported
             assert saved.edit.state == "active"
-            assert config_path.read_text() == text.replace("boxteam-redacted:/llm/providers/0/api_key", "${TEST_API_KEY}")
+            mask = payload["llm"]["providers"][0]["api_key"]
+            assert config_path.read_text() == text.replace(mask, "${TEST_API_KEY}")
             assert saved.fanout is not None and saved.fanout.source_generation == 2
             assert saved.fanout.coverage == "observed_only" and saved.fanout.workspaces[0].result == "applied"
             assert await service.save_source_edit(source_key=document.source_key, gateway_id=document.gateway_id, request=request) == saved

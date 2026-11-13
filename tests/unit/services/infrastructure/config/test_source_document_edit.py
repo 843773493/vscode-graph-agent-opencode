@@ -38,13 +38,13 @@ def test_replace_only_exact_member_preserves_other_server_and_secret_tokens() ->
                 "headers": {"Authorization": "${TARGET_KEY}"}}
     result = set_source_value(original, ("mcp", "servers", "target"), expected)
     assert result.startswith(prefix) and result.endswith(suffix)
-    public = redact_source_text(result)
+    public = redact_source_text(result, provider_scope="test-source")
     synthetic = set_source_value(public, ("mcp", "servers", "target"), expected)
-    restored_candidate = restore_source_text(public, synthetic)
+    restored_candidate = restore_source_text(public, synthetic, provider_scope="test-source")
     assert '${TARGET_KEY}' in restored_candidate and 'boxteam-redacted:/mcp/servers/other/headers/X-Secret' in restored_candidate
-    assert restore_source_text(restored_candidate, original) == result
+    assert restore_source_text(restored_candidate, original, provider_scope="test-source") == result
     with pytest.raises(ValueError, match="地址已改变"):
-        restore_source_text(public.replace('https://mcp.example/target', 'https://mcp.example/other'), synthetic)
+        restore_source_text(public.replace('https://mcp.example/target', 'https://mcp.example/other'), synthetic, provider_scope="test-source")
 
 
 def test_replace_existing_server_keeps_crlf_and_member_indentation() -> None:

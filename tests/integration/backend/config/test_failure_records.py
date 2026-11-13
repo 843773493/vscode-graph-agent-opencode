@@ -66,7 +66,8 @@ async def config_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
         "agents": {"default": {
             "name": "Default Agent", "instructions": {"system_prompt": "hello"},
             "model": {"primary_provider": "primary", "fallback_providers": []},
-        }},
+        }, **{name: {"model": {"primary_provider": "primary", "fallback_providers": []}}
+              for name in ("coder", "reviewer", "researcher")}},
     }
     path = tmp_path / "workspace.jsonc"
     path.write_text(json.dumps(payload), encoding="utf-8")

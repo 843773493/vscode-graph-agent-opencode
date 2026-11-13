@@ -2,10 +2,43 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from app.services.infrastructure.config_service import ConfigService
 
 
 class ConfigAgentsMixin:
+    def _validate_agent_definition_references(self, config: dict[str, object]) -> None:
+        """只核完整候选及本工作区会话默认值，不展开凭据或查询历史。"""
+        service = cast("ConfigService", self)
+        llm = cast(dict[str, object], config["llm"])
+        providers = cast(list[dict[str, object]], llm["providers"])
+        provider_ids = [provider["id"] for provider in providers]
+        if len(set(provider_ids)) != len(provider_ids):
+            raise ValueError("llm.providers 的 Provider ID 必须唯一")
+        agents = cast(dict[str, dict[str, object]], config["agents"])
+        if config["default_agent"] not in agents:
+            raise ValueError("default_agent 引用了不存在的 Agent")
+        defaults = service._session_defaults.read_workspace_session_defaults()
+        default_agent = defaults.get("default_agent_id")
+        if default_agent is not None and default_agent not in agents:
+            raise ValueError("工作区默认 Agent 引用了不存在的 Agent: field=default_agent_id")
+        provider_defaults = defaults.get("provider_by_agent", {})
+        if not isinstance(provider_defaults, dict):
+            raise TypeError("工作区默认 provider 映射必须是对象: artifact=session_defaults")
+        allowed: dict[str, list[str]] = {}
+        for agent_id, agent in agents.items():
+            model = cast(dict[str, object], agent["model"])
+            references = [cast(str, model["primary_provider"]), *cast(list[str], model.get("fallback_providers", []))]
+            for provider_id in references:
+                if provider_id not in provider_ids:
+                    raise ValueError(f"Agent {agent_id} 引用了不存在的 Provider: {provider_id}")
+            allowed[agent_id] = references
+        for agent_id, provider_id in provider_defaults.items():
+            if agent_id not in allowed or provider_id not in allowed[agent_id]:
+                raise ValueError(f"工作区默认 Provider 不再属于 Agent {agent_id}: field=provider_by_agent")
+
     def get_default_agent_id(self) -> str:
         config = self._get_effective_config()
         default_agent_id = config.get("default_agent")

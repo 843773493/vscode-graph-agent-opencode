@@ -186,6 +186,8 @@ class ConfigSnapshotMixin:
             )
         if pending.fencing_token != fencing_token:
             raise ConfigConflictError("Workspace pending candidate 的 fencing token 不匹配")
+        if pending.source_edit is not None:
+            self._validate_agent_definition_references(pending.payload)
         return self._build_persisted_snapshot(pending, loaded_source="pending")
 
     def _build_persisted_snapshot(
@@ -388,6 +390,10 @@ class ConfigSnapshotMixin:
     def retry_pending_restart(self, *, candidate_ref: str) -> ConfigReloadStatus:
         """为 Workspace pending candidate 创建新的受控重启 generation。"""
 
+        if self._workspace_state_store is not None:
+            pending = self._workspace_state_store.load_pending_config_candidate(candidate_ref=candidate_ref, allow_recovery=True)
+            if pending.source_edit is not None:
+                self._validate_agent_definition_references(pending.payload)
         return self._pending_restart.retry_pending_restart(candidate_ref=candidate_ref)
 
     def resolve_pending_restart(
@@ -400,6 +406,10 @@ class ConfigSnapshotMixin:
 
         service = cast("ConfigService", self)
         store = service._workspace_state_store
+        if store is not None:
+            pending = store.load_pending_config_candidate(candidate_ref=candidate_ref, allow_recovery=True)
+            if pending.source_edit is not None:
+                service._validate_agent_definition_references(pending.payload)
 
         def after_promotion(payload: dict[str, object]) -> None:
             if store is None:

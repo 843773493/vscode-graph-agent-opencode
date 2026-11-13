@@ -230,7 +230,7 @@ def test_source_jsonc_round_trip_exposes_reference_and_masks_existing_literals(p
     _, _, reference = private_header
     payload = {"mcp": _config(reference)}
     text = "// 用户注释\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    redacted = redact_source_text(text)
+    redacted = redact_source_text(text, provider_scope="test-source")
     parsed = parse_source_text(redacted)
     assert SECRET not in redacted and "unchanged" not in redacted
     assert parsed == redact_source_payload(payload)
@@ -244,9 +244,9 @@ def test_source_jsonc_round_trip_exposes_reference_and_masks_existing_literals(p
     headers = secure["headers"]
     assert isinstance(headers, dict)
     assert headers[HEADER] == reference.model_dump(mode="json")
-    assert restore_source_text(redacted, text) == text
+    assert restore_source_text(redacted, text, provider_scope="test-source") == text
     moved = redacted.replace(ENDPOINT, "https://other.test/mcp")
     with pytest.raises(ValueError, match="地址已改变"):
-        restore_source_text(moved, text)
+        restore_source_text(moved, text, provider_scope="test-source")
     invalid = {"mcp": {"servers": {"secure": {"headers": {"X-Bad": {"kind": "mcp_private_header", "value": SECRET}}}}}}
     assert SECRET not in json.dumps(redact_source_payload(invalid))
