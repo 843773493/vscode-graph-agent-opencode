@@ -18,12 +18,6 @@ from tests.support.workspaces import (
     prepare_default_test_workspace,
 )
 
-INTERACTION_ASSETS = Path(
-    "out/tests/integration/clients/web/quick_access/resources/test_remote_gateway_uri/"
-    "runtime/plugin-command-connections-20261113/dist"
-)
-INTERACTION_MAIN_SHA256 = "5c06458b6c7472a094e37957227d485a064ba22bcabf92f611cdd70075caefc2"
-
 
 @pytest.mark.asyncio
 async def test_default_quick_access_interactions(
@@ -36,10 +30,15 @@ async def test_default_quick_access_interactions(
     if not chromium:
         pytest.fail("Quick Access 交互验收需要 Chromium")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    assets = (context.project_root / INTERACTION_ASSETS).resolve(strict=True)
-    main_sha256 = hashlib.file_digest((assets / "out/main.js").open("rb"), "sha256").hexdigest()
-    if main_sha256 != INTERACTION_MAIN_SHA256:
-        pytest.fail(f"复用的 Workbench main.js 指纹不匹配：{main_sha256}")
+    prepared_assets = os.getenv("BOXTEAM_QUICK_ACCESS_WEB_ASSETS")
+    assets = (Path(prepared_assets).resolve(strict=True) if prepared_assets
+              else request.getfixturevalue("web_workbench_assets"))
+    with (assets / "out/main.js").open("rb") as main:
+        main_sha256 = hashlib.file_digest(main, "sha256").hexdigest()
+    (context.artifacts_dir / "quick-access-assets.json").write_text(json.dumps({
+        "assets": str(assets), "prepared": bool(prepared_assets), "main_sha256": main_sha256,
+        "version": json.loads((assets / "version.json").read_text(encoding="utf-8")),
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     root = Path(integration_workspace_root_path)
     template = context.project_root / "tests/fixtures/workspaces/default_test_workspace"
     workspace = prepare_default_test_workspace(workspace_root=root / "quick-access-interactions", template_root=template)

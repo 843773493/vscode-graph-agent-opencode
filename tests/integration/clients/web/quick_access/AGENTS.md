@@ -64,7 +64,7 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 
 `file_input.test.mjs` 编译真实 `FileEditorInput` 及同一源码转换，只在文件服务／模型引用服务边界提供计数装具；验证并发引用、解析中关闭与失败后重试，不替代真实页面或 Gateway 模型验收。
 
-`test_quick_access_interactions.py` 使用独立且指纹固定的正式 Workbench dist，通过真实 Gateway／Workspace 和 Chromium 验证原 Quick Input 的输入焦点、ARIA、键盘、焦点失去策略、预览恢复和本地设置；服务与 Query Provider 不作替身。运行资产固定且只读，独立页面不得改变共享 `web_workbench_assets` fixture。
+`test_quick_access_interactions.py` 使用独立的正式 Workbench 页面，通过真实 Gateway／Workspace 和 Chromium 验证原 Quick Input 的输入焦点、ARIA、键盘、焦点失去策略、预览恢复和本地设置；服务与 Query Provider 不作替身。运行资产默认沿共享 `web_workbench_assets` fixture；`BOXTEAM_QUICK_ACCESS_WEB_ASSETS` 可显式复用已准备的不可变 dist，收据记录实际路径及 main.js 指纹。独立页面不得改变共享 fixture。
 
 `change_documents.test.mjs` 使用真实只读 Provider、TextModelResolverService 和 TextResourceEditorModel，仅替换路由／HTTP及底层文本存取；核并发、版本、失败重试和最后引用释放。`test_change_documents.py` 复用 model_stream 通过真实执行创建更改，正式 Gateway 页面从会话资源打开原 Diff，验证分屏、完整补丁、旧引用归一及来源／Diff 刷新恢复，不预写历史或浏览器存储。
 
