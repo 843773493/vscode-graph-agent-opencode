@@ -74,6 +74,7 @@ export async function automationContract(mode) {
       const response = () => {
         if (body.action) records[index] = { ...records[index], revision: body.expected_revision + 1,
           lifecycle: { pause: 'paused', resume: 'active', terminate: 'terminated' }[body.action] };
+        if (mode === 'unknown') throw new TypeError('任务写入后连接断开');
         return success(body.action ? records[index] : { task_id: records[index].task_id, run_id: 'trial-run', check_only: body.check_only });
       };
       if (mode === 'accepted-close' || mode === 'accepted-terminate-close') {
@@ -183,7 +184,7 @@ export async function automationContract(mode) {
       }
       result = await operation;
     }
-    return { requests, errors, choices, opened, notices, confirmations, shows, rows, result, aborted,
+    return { requests, errors, choices, opened, notices, confirmations, shows, rows, result, aborted, records,
       goalActions: availableTaskActions({ ...record(0), application_type: 'goal', configuration: null,
         goal: { session_id: 'session', objective: 'Goal' } }) };
   } finally {

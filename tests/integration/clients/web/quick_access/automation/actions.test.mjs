@@ -67,6 +67,15 @@ test('冲突不覆盖revision重试，保留原错误并回读', async () => {
   expect(result.requests.at(-1).method).toBe('GET');
   expect(result.errors.join('')).toContain('revision'); expect(result.result).toBe(false);
 });
+test('任务已写入但回执丢失时只向原owner对账，不重放或伪报确认', async () => {
+  const result = await exercise('unknown'), write = writes(result);
+  expect(write).toHaveLength(1); expect(write[0].body).toEqual({ expected_revision: 7, action: 'pause' });
+  expect(result.records[0]).toMatchObject({ revision: 8, lifecycle: 'paused' });
+  expect(result.requests.at(-1)).toMatchObject({ method: 'GET', path: '/api/v1/persistent-tasks', owner: `gateway_${'a'.repeat(32)}` });
+  expect(result.errors.join('')).toContain('任务写入后连接断开'); expect(result.result).toBe(false);
+  expect(result.notices.some(message => message.includes('已确认'))).toBe(false);
+  expect(result.notices.at(-1)).toBe('pending-closed');
+});
 for (const mode of ['owner-cancel', 'action-cancel', 'terminate-cancel', 'identity', 'gateway-returned']) test(`${mode}在未接受步骤零写入`, async () => {
   const result = await exercise(mode); expect(writes(result)).toEqual([]);
   if (mode === 'owner-cancel') expect(result.requests).toEqual([]);
