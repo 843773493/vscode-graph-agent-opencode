@@ -16,6 +16,8 @@
 
 同模块的恢复场景共用 `recent_history.mjs`：原资源／命令历史和三项输入记忆经产品生成，三种损坏记录只在正常关窗重开并离开产品文档后逐条注入；随后仍正常关窗重启，核明确错误、单条移除与相邻草稿保留。凭据负例只改下一次 HTTP 发送头，原 Gateway 返回真实401／request_id；工作区通过原 managed API 和隔离目录搬迁验证路径复用与稳定身份。原打开失败移除单条历史的行为保留，规范 URI 重开仍恢复原草稿。产物归本测试同名镜像路径，不预写正常恢复状态或新增产品 IPC；不代替真实双 Gateway 切换、异常退出、Windows／macOS 或正式发行验收。
 
+`test_native_quick_access.py` 经真实 Ctrl+P、文件正文模式、明确 A+B 范围和 Command Center 操作原 Quick Input；从搜索视图转交原 Search Editor，正常保存、关窗重启后再次查询，核持久范围仍只含原 A+B。两次启动使用同来源／profile，观察实际搜索 owner 和 request_id；不手动写范围配置、缓存或提前 flush，也不把复用 ASAR 算作最新全部源码的发行验收。
+
 # 可修改内容
 
 - Linux 原生 Electron 的产物构建、窗口操作、独立 profile、固定页面来源和缓存恢复验收。

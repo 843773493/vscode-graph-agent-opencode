@@ -1,4 +1,4 @@
-"""真实 Linux Electron ASAR 中验证 Quick Access 快捷键、正文范围与 Command Center。"""
+"""真实 Linux Electron ASAR 中验证 Quick Access、正文范围与搜索编辑器重启恢复。"""
 
 from __future__ import annotations
 
@@ -102,12 +102,13 @@ async def test_packaged_electron_quick_access_scoped_search_and_command_center(
     assert result["phase"] == "complete"
     assert result["quickAccessShortcut"] and result["commandCenterOpensQuickAccess"]
     assert result["scopedContentSearch"] and result["explicitScopeSearch"]
+    assert result["searchEditorScopeRestored"]
     assert result["searchRequests"]
     assert all(item["owners"] and item["request_id"] for item in result["searchRequests"])
     assert any(item["owners"] == [owner["workspace_id"]] for item in result["searchRequests"])
     expected_owners = sorted([owner["workspace_id"], other_owner["workspace_id"]])
     assert any(item["owners"] == expected_owners for item in result["searchRequests"])
-    assert len(result["native"]["launches"]) == len(result["native"]["exits"]) == 1
+    assert len(result["native"]["launches"]) == len(result["native"]["exits"]) == 2
     assert len({entry["url"] for entry in result["native"]["launches"]}) == 1
     assert len({entry["location"]["userData"] for entry in result["native"]["launches"]}) == 1
     assert all(entry["code"] == 0 and entry["signal"] is None for entry in result["native"]["exits"])

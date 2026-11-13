@@ -86,8 +86,42 @@ try {
     && item.owners.length === 2)).toBe(true);
   const multi = result.searchRequests.filter(item => item.query === 'native quick access scope token' && item.owners.length === 2);
   expect(multi.every(item => item.owners.join('|') === [owner.workspace_id, otherOwner.workspace_id].sort().join('|') && item.request_id)).toBe(true);
-  await page.keyboard.press('Escape');
   result.explicitScopeSearch = true;
+  await saveReceipt();
+
+  result.phase = 'native-search-editor-scope-recovery';
+  await quick.locator('.quick-input-header').getByRole('button', { name: '在搜索视图中打开', exact: true }).click();
+  await expect(quick).not.toBeVisible();
+  await expect(page.locator('.search-view')).toContainText('other native quick access scope token');
+  await command('search.action.openInEditor');
+  let searchEditor = page.locator('.search-editor');
+  await expect(searchEditor).toHaveCount(1);
+  await expect(searchEditor.locator('.boxteam-search-scope')).toContainText('原生范围 B');
+  await expect(searchEditor.locator('.view-lines')).toContainText('other native quick access scope token');
+  // 范围与搜索结果均由原产品链生成；正常关窗承担持久化，不提前 flush 或写存储。
+  const saved = command('workbench.action.files.saveAs');
+  await expect(quick).toBeVisible();
+  await quick.locator('input').fill('/Workspace/native-scope.code-search');
+  await quick.locator('input').press('Enter');
+  await saved;
+  await expect(quick).not.toBeVisible();
+  await host.reload();
+  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  searchEditor = page.locator('.search-editor');
+  await expect(searchEditor).toHaveCount(1);
+  await expect(searchEditor.locator('.boxteam-search-scope')).toContainText('原生范围 B');
+  const query = searchEditor.getByRole('textbox', { name: '搜索: 键入搜索词，然后按 Enter 进行搜索', exact: true });
+  await expect(query).toHaveValue('native quick access scope token');
+  await query.fill('scope token');
+  await query.press('Enter');
+  await expect(searchEditor.locator('.view-lines')).toContainText('other native quick access scope token');
+  await query.press('Control+s');
+  const restoredScope = () => result.searchRequests.filter(item => item.query === 'scope token'
+    && item.owners.length === 2 && item.request_id);
+  await expect.poll(() => restoredScope().length).toBeGreaterThan(0);
+  expect(restoredScope().every(item => item.owners.join('|')
+    === [owner.workspace_id, otherOwner.workspace_id].sort().join('|'))).toBe(true);
+  result.searchEditorScopeRestored = true;
   await saveReceipt();
 
   result.phase = 'native-command-center-and-management';

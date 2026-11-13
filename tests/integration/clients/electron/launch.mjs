@@ -78,8 +78,13 @@ export async function launchElectron({ run, result, usePage, extraArgs = [], obs
         preventedReloadDialogs.push(dialog);
         return;
       }
-      if (dialog.type() === 'beforeunload') await dialog.accept();
-      else await dialog.dismiss();
+      try {
+        if (dialog.type() === 'beforeunload') await dialog.accept();
+        else await dialog.dismiss();
+      } catch (cause) {
+        if (!String(cause).includes('Protocol error (Page.handleJavaScriptDialog): No dialog is showing')) throw cause;
+        native.dialogs.push({ launch: number, type: `${dialog.type()}-settled`, driverError: String(cause) });
+      }
     });
     await page.waitForURL(url => url.protocol === 'http:' && url.hostname === '127.0.0.1'
       && url.pathname === '/' && url.search === '', { waitUntil: 'domcontentloaded' });
