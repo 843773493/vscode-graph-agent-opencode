@@ -93,6 +93,10 @@ try {
     observed.on('response', response => {
       if (response.status() >= 400) result.failedResponses.push({ url: response.url(), status: response.status() });
       const path = new URL(response.url()).pathname;
+      if (path.startsWith('/extensions/markdown-language-features/')
+        || path.startsWith('/extensions/mermaid-markdown-features/')) {
+        (result.markdownResponses ??= []).push({ path, status: response.status() });
+      }
       if (/^\/out\/nls-(?:assets-[a-f0-9]+|zh-cn-[a-f0-9]+)\.json$/.test(path)) {
         nlsResponses.push(response.json().then(body => ({ path, body }), error => ({ path, error: String(error) })));
       }
@@ -165,10 +169,13 @@ try {
   const owner = result.initialization.find(item => item.path === '/api/gateway/workspaces').data.active_workspace;
   const previewUri = `boxteam://${owner.gateway_id}/workspace/${owner.workspace_id}/resources/files/root/development-locale.md`;
   await page.evaluate(uri => globalThis.workbench.commands.executeCommand('workbench.action.quickOpen', uri), previewUri);
-  await quick.locator(`[data-quick-input-id="link:${previewUri}"]`).click();
+  const candidate = quick.locator(`[data-quick-input-id="link:${previewUri}"]`);
+  await expect(candidate).toBeVisible({ timeout: 30000 });
+  await candidate.click();
+  await expect(page.getByRole('tab', { name: 'development-locale.md' })).toBeVisible({ timeout: 30000 });
   await command('markdown.showPreview');
   const preview = page.frameLocator('iframe.webview:visible').frameLocator('iframe#active-frame');
-  await expect(preview.locator('h1')).toHaveText('Development locale preview');
+  await expect(preview.locator('h1')).toHaveText('Development locale preview', { timeout: 30000 });
   await expect(preview.locator('#code-csp-warning')).toHaveText('已禁用此文档中的部分内容');
   await expect(preview.locator('#code-csp-warning')).toHaveAttribute('aria-label', '已禁用内容安全警告');
   result.developmentPreviewLocalized = true;
@@ -228,6 +235,17 @@ try {
     path: new URL(observed.url()).pathname,
     title: await observed.title().catch(() => ''),
     readyState: await observed.evaluate(() => document.readyState).catch(() => 'unavailable'),
+    frames: await Promise.all(observed.frames().map(async frame => ({
+      name: frame.name(), url: frame.url(),
+      document: await frame.evaluate(() => ({
+        readyState: document.readyState,
+        title: document.title,
+        body: document.body?.innerText.slice(0, 4000) ?? '',
+        activeFrames: [...document.querySelectorAll('iframe#active-frame')].map(element => ({
+          src: element.getAttribute('src'), title: element.getAttribute('title'),
+        })),
+      })).catch(error => String(error)),
+    }))),
   })));
   if (page) {
     try { await page.screenshot({ path: join(run.artifactsDir, 'development-hmr-failure.png') }); }

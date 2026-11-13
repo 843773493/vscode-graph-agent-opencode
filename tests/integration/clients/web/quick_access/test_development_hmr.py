@@ -45,79 +45,13 @@ def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
 def development_snapshot(request: pytest.FixtureRequest) -> Path:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
-    reused = os.getenv("BOXTEAM_HMR_SOURCE_SNAPSHOT")
-    if reused:
-        snapshot = Path(reused).resolve(strict=True)
-        old_run, old_node = snapshot.parent.parent.name, snapshot.parent.name
-        prior_receipt = context.output_root / "runs" / old_run / "nodes" / old_node / "artifacts" / "source-snapshot.json"
-        receipt = json.loads(prior_receipt.read_text(encoding="utf-8"))
-        assert receipt["upstream_head"] == "fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca"
-        source = snapshot / "src/clients/workbench/src/react/navigationView.tsx"
-        workbench_root = context.project_root / "src/clients/workbench"
-        scripts_root = workbench_root / "scripts"
-        implementation_inputs = [
-            *[f"scripts/{path.relative_to(scripts_root).as_posix()}" for path in sorted(scripts_root.rglob("*.mjs"))
-              if ".test." not in path.name],
-            "resources/localization/zh-cn-project.json",
-            "resources/localization/zh-cn-upstream-main.json",
-            "upstream/product.json",
-            "src/bootstrap.ts",
-            "src/main.ts",
-            "src/react/navigationView.tsx",
-            "src/settings/editor.ts",
-            "src/settings/scope.ts",
-            "src/settings/sourceOwner.ts",
-            "src/clients/shared/core/i18n/index.ts",
-            "src/clients/shared/core/i18n/actionTitles.en.json",
-            "src/clients/shared/core/i18n/bootstrapMessages.json",
-            "src/clients/shared/core/i18n/messages/en.json",
-            "src/clients/shared/core/i18n/messages/zh-cn.json",
-            *[f"resources/localization/extensions/{path.name}" for path in sorted(
-                (workbench_root / "resources/localization/extensions").glob("*.i18n.json"),
-            )],
-        ]
-        implementation_hashes = {}
-        for relative in implementation_inputs:
-            current = context.project_root / "src/clients/workbench" / relative
-            if relative.startswith("src/clients/shared/"):
-                current = context.project_root / relative
-            destination = snapshot / "src/clients/workbench" / relative
-            if relative.startswith("src/clients/shared/"):
-                destination = snapshot / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if relative == "src/react/navigationView.tsx":
-                assert hashlib.sha256(current.read_bytes()).hexdigest() == receipt["original_sha256"]
-            shutil.copy2(current, destination)
-            implementation_hashes[relative] = hashlib.sha256(destination.read_bytes()).hexdigest()
-        upstream_dependencies = (
-            "src/vs/workbench/services/preferences/common/preferencesEditorInput.ts",
-            "src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts",
-        )
-        for relative in upstream_dependencies:
-            path = snapshot / "src/clients/workbench/upstream" / relative
-            implementation_hashes[f"upstream/{relative}"] = hashlib.sha256(path.read_bytes()).hexdigest()
-        navigation_original = source.read_text(encoding="utf-8")
-        original_sha256 = hashlib.sha256(navigation_original.encode()).hexdigest()
-        assert original_sha256 == receipt["original_sha256"]
-        anchor = '<div className="native-session-navigation"'
-        assert navigation_original.count(anchor) == 1
-        source.write_text(navigation_original.replace(anchor, anchor + ' data-hmr-acceptance="version-1"'), encoding="utf-8")
-        project_translations = snapshot / "src/clients/workbench/resources/localization/zh-cn-project.json"
-        project_messages = json.loads(project_translations.read_text(encoding="utf-8"))
-        assert project_messages["contents"].get("vs/workbench/contrib/localization/common/localizationsActions", {}).get(
-            "chooseLocale",
-        ) is None
-        receipt["reused_from"] = str(snapshot)
-        receipt["reused_implementation_sha256"] = implementation_hashes
-        receipt["boundary"] = "复用完整源码快照与静态资产；同步完整开发转换链及其本地化输入并记录SHA，仅修改隔离快照观测标记"
-    else:
-        snapshot, receipt = snapshot_workbench_sources(context.project_root, runtime)
-        source = snapshot / "src/clients/workbench/src/react/navigationView.tsx"
-        original = source.read_text(encoding="utf-8")
-        anchor = '<div className="native-session-navigation"'
-        assert original.count(anchor) == 1
-        source.write_text(original.replace(anchor, anchor + ' data-hmr-acceptance="version-1"'), encoding="utf-8")
-        original_sha256 = hashlib.sha256(original.encode()).hexdigest()
+    snapshot, receipt = snapshot_workbench_sources(context.project_root, runtime)
+    source = snapshot / "src/clients/workbench/src/react/navigationView.tsx"
+    original = source.read_text(encoding="utf-8")
+    anchor = '<div className="native-session-navigation"'
+    assert original.count(anchor) == 1
+    source.write_text(original.replace(anchor, anchor + ' data-hmr-acceptance="version-1"'), encoding="utf-8")
+    original_sha256 = hashlib.sha256(original.encode()).hexdigest()
     (context.artifacts_dir / "source-snapshot.json").write_text(json.dumps({
         **receipt,
         "source": str(source), "original_sha256": original_sha256,

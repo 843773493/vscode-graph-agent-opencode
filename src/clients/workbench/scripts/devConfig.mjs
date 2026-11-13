@@ -131,7 +131,7 @@ export default async function () {
           },
         },
         async resolveId(id, importer) {
-          if (id.startsWith('/out/dev-upstream/')) return join(assetsRoot, id.slice(1));
+          if (id.startsWith('/out/dev-upstream/')) return { id, external: true };
           if (id.endsWith('.css?text')) {
             return this.resolve(id.replace(/\?text$/, '?inline'), importer, { skipSelf: true });
           }
