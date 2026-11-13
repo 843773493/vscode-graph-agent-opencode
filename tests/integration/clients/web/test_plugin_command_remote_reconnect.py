@@ -220,8 +220,12 @@ asyncio.run(server.serve())
     executions = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
     assert len(executions) == 2 and len({item["call_id"] for item in executions}) == 2, receipt
     assert [item["count"] for item in executions] == [1, 2], receipt
-    assert receipt["subscriptionScopes"] == [None, network.workspace_id]
-    assert all(item["request_count"] == 2 and item["old_stream_closed"] for item in receipt["subscriptionReceipts"])
+    assert receipt["subscriptionScopes"] == [network.workspace_id]
+    assert receipt["subscriptionReceipts"] == [{
+        "scope": network.workspace_id, "request_count": 2,
+        "old_stream_closed": True, "current_stream_open": True,
+    }]
     assert len(receipt["calls"]) == 2
-    assert all(call["gateway_id"] == gateway_b and call["gateway_connection_id"] == connection_id for call in receipt["calls"])
+    assert all(call["gateway_id"] == gateway_b and call["gateway_connection_id"] == connection_id
+        and "workspace_id" not in call for call in receipt["calls"])
     assert receipt["executionsBeforeSecondCall"] == 1

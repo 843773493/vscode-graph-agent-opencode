@@ -27,8 +27,6 @@ async function api(path, options = {}) {
 }
 
 const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
-const sortScopes = scopes => [...scopes].sort((left, right) =>
-  left === null ? (right === null ? 0 : -1) : right === null ? 1 : left.localeCompare(right));
 const countExecutions = async () => {
   try { return (await readFile(input.output, 'utf8')).trim().split('\n').filter(Boolean).length; }
   catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
@@ -93,9 +91,9 @@ try {
   const editor = page.locator('.editor-instance .monaco-editor').filter({ visible: true }).last();
   await expect(editor.locator('.view-lines')).toContainText('远程命令归属');
 
-  const scopes = [null, input.workspaceId];
-  await expect.poll(() => receipt.streams.length).toBe(2);
-  expect(sortScopes(receipt.streams.map(stream => stream.target.workspace_id ?? null))).toEqual(scopes);
+  const target = { gateway_id: input.gatewayB, gateway_connection_id: input.connectionId, workspace_id: input.workspaceId };
+  await expect.poll(() => receipt.streams.length).toBe(1);
+  expect(receipt.streams[0].target).toEqual(target);
   const commandId = 'boxteam.plugin:proof.remote-command-ui/commands/execute';
   const palette = page.locator('.quick-input-widget').filter({ visible: true });
   const openCommand = async () => {
@@ -129,9 +127,10 @@ try {
   await expect(page.getByRole('status').filter({ hasText: '已重新连接' })).toBeVisible();
 
   receipt.phase = 'reconnected';
-  await expect.poll(() => receipt.streams.length).toBe(4);
-  await expect.poll(() => receipt.streams.slice(0, 2).every(stream => stream.state !== 'open')).toBe(true);
-  await expect.poll(() => receipt.streams.slice(2).every(stream => stream.state === 'open')).toBe(true);
+  await expect.poll(() => receipt.streams.length).toBe(2);
+  await expect.poll(() => receipt.streams[0].state !== 'open').toBe(true);
+  await expect.poll(() => receipt.streams[1].state === 'open').toBe(true);
+  expect(receipt.streams.map(stream => stream.target)).toEqual([target, target]);
   const snapshot = await api('/api/gateway/service-plugins/commands/publications', {
     method: 'POST', body: { gateway_id: input.gatewayB, gateway_connection_id: input.connectionId },
   });
@@ -149,14 +148,12 @@ try {
   expect(result).toEqual({ value: 'after-reconnect', pid: input.initialProcessId, count: 2 });
   await expect.poll(countExecutions).toBe(2);
   await expect.poll(() => receipt.calls.length).toBe(2);
-  receipt.subscriptionScopes = sortScopes(new Set(receipt.streams.map(stream => stream.target.workspace_id ?? null)));
-  receipt.subscriptionReceipts = scopes.map(scope => {
-    const matching = receipt.streams.filter(stream => (stream.target.workspace_id ?? null) === scope);
-    return { scope, request_count: matching.length, old_stream_closed: matching[0].state !== 'open' };
-  });
+  receipt.subscriptionScopes = [...new Set(receipt.streams.map(stream => stream.target.workspace_id ?? null))];
+  receipt.subscriptionReceipts = [{ scope: input.workspaceId, request_count: receipt.streams.length,
+    old_stream_closed: receipt.streams[0].state !== 'open', current_stream_open: receipt.streams.at(-1).state === 'open' }];
   expect(receipt.calls.map(call => call.call_id).length).toBe(new Set(receipt.calls.map(call => call.call_id)).size);
   expect(receipt.calls.every(call => call.gateway_id === input.gatewayB
-    && call.gateway_connection_id === input.connectionId)).toBe(true);
+    && call.gateway_connection_id === input.connectionId && !Object.hasOwn(call, 'workspace_id'))).toBe(true);
   expect(receipt.pageErrors).toEqual([]);
   receipt.phase = 'complete';
 } catch (error) {

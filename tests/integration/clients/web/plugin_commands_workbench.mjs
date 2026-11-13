@@ -160,7 +160,7 @@ try {
   await menu.press('Enter');
   await page.keyboard.press('Control+Alt+Shift+W');
   await expect.poll(countExecutions).toBe(4 + extraExecutions);
-  assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/events')).length, 2);
+  assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/events')).length, 1);
 
   receipt.phase = 'update-installed-only';
   await install('2.0.0');
@@ -278,8 +278,8 @@ try {
   const source = await api('/api/gateway/config/sources/gateway_mutable_override');
   assert.equal(parseJsonc(source.jsonc).plugins.configuration.values['proof.command-ui'].commands.output, input.output);
   assert.equal((await publications()).length, 0);
-  // 每个窗口各一个 Gateway 和 workspace 持续流；普通命令没有额外发现。
-  assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/events')).length, 4);
+  // 每个窗口用一个工作区完整快照投影 Gateway 和 workspace 命令；普通命令没有额外发现。
+  assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/events')).length, 2);
   assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/registrations')).length, 0);
   assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/call')).length, 9 + extraExecutions);
   receipt.phase = 'complete';
