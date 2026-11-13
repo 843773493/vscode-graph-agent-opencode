@@ -7,6 +7,7 @@ import {
 } from "react";
 import type { SetAppState } from "../contentViewLoaderTypes";
 import type { TurnHistoryInclude } from "../../api/session/sessionTurnHistory";
+import type { SessionTurnBootstrap } from "../../types/backend";
 import {
   dropTurn,
   writeTurnTimelineCache,
@@ -22,6 +23,7 @@ import {
 } from "./page";
 
 export function useSessionTurnHistory({
+  initialBootstrap,
   apiPort,
   sessionId,
   threadId,
@@ -31,6 +33,7 @@ export function useSessionTurnHistory({
   reloadNonce,
   setState,
 }: {
+  initialBootstrap?: Promise<SessionTurnBootstrap>;
   apiPort: number | null;
   sessionId: string | null;
   threadId?: string;
@@ -126,6 +129,7 @@ export function useSessionTurnHistory({
     onMissingTurn: refreshTurnHistory,
   });
   useTurnBootstrap({
+    initialBootstrap,
     apiPort,
     sessionId,
     threadId,

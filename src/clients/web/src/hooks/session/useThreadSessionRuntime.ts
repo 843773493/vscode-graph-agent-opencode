@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { threadHistoryCache } from "../../state/threadHistoryCache";
 import type { SessionTurnTimeline } from "../../state/session/turnTimeline";
 import { listAgents } from "../../api";
-import type { Agent, GatewayWorkspace, Session, WebUiSettings } from "../../types/backend";
+import type { Agent, GatewayWorkspace, Session, SessionTurnBootstrap, WebUiSettings } from "../../types/backend";
 import { INITIAL_APP_STATE } from "../app/appStateSeed";
 import { cloneMaps } from "../../state/appStateMaps";
 import { getConversationsForSession, messageStreamTurnIdForSession } from "../../state/conversations";
@@ -33,6 +33,7 @@ export interface ThreadSessionSeed {
   history?: SessionTurnTimeline | null;
   browserViewScope: string;
   session: Session;
+  bootstrap: Promise<SessionTurnBootstrap>;
   agents: Agent[];
   workspaces: GatewayWorkspace[];
   settings: WebUiSettings;
@@ -80,6 +81,7 @@ export function useThreadSessionRuntime({ owner, seed, active, onSessionCreated,
     return () => { window.removeEventListener("pagehide", flush); flush(); };
   }, [cacheOwner]);
   const history = useSessionTurnHistory({
+    initialBootstrap: seed.bootstrap,
     apiPort: 0, sessionId: owner.sessionId, threadId: owner.threadId,
     workspaceId: owner.workspaceKey, sessionCacheKey: scopeKey, getCurrentTimeline: getCurrentTurnTimeline,
     reloadNonce: state.sessionHistoryReloadNonce, setState,

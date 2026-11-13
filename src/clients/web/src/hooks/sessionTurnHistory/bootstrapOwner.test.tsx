@@ -7,8 +7,65 @@ import {
   turnDetail,
 } from "./testFixtures";
 import { useSessionTurnHistory } from "./useSessionTurnHistory";
+import type { SessionTurnBootstrap } from "../../types/backend";
+import type { SetAppState } from "../contentViewLoaderTypes";
 
 afterEach(restoreTurnHistoryTestGlobals);
+
+test.each(["ready", "partial"] as const)("宿主 %s bootstrap 只用于首次装载，后续校准重新读取权威状态", async (projectionState) => {
+  const apiPort = 9153;
+  installWindow(apiPort);
+  let current = appState();
+  let history!: ReturnType<typeof useSessionTurnHistory>;
+  let bootstrapReads = 0;
+  let historyReads = 0;
+  globalThis.fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    const path = new URL(String(args[0]), `http://127.0.0.1:${apiPort}`).pathname;
+    if (path === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "bootstrap-seed-token" } });
+    if (path.endsWith("/pending-requests")) return emptyPendingResponse();
+    if (path.endsWith("/bootstrap")) {
+      bootstrapReads += 1;
+      return Response.json({ code: 0, message: "ok", request_id: "req-bootstrap-refreshed",
+        data: { ...bootstrap("ready", 2), latest_turn: null } });
+    }
+    if (path.endsWith("/history")) {
+      historyReads += 1;
+      return emptyHistoryPageResponse(`req-seeded-history-${historyReads}`, bootstrapReads === 0 ? 1 : 2);
+    }
+    throw new Error(`未声明的宿主 bootstrap 请求: ${path}`);
+  }, { preconnect: originalFetch.preconnect });
+  let resolveInitial!: (value: SessionTurnBootstrap) => void;
+  const initialBootstrap = new Promise<SessionTurnBootstrap>(resolve => { resolveInitial = resolve; });
+  const getCurrentTimeline = () => current.turnTimelinesBySession.get(SCOPE_KEY) ?? null;
+  const setState: SetAppState = (update) => {
+    current = typeof update === "function" ? update(current) : update;
+  };
+  function Harness(): React.ReactNode {
+    history = useSessionTurnHistory({ initialBootstrap, apiPort, sessionId: SESSION_ID, threadId: THREAD_ID,
+      workspaceId: WORKSPACE_KEY, sessionCacheKey: SCOPE_KEY, getCurrentTimeline, reloadNonce: 0, setState });
+    return null;
+  }
+  let renderer!: ReactTestRenderer;
+  try {
+    await act(async () => { renderer = create(<Harness />); });
+    expect(bootstrapReads).toBe(0);
+    expect(historyReads).toBe(0);
+    expect(getCurrentTimeline()?.phase).toBe("bootstrapping");
+    await act(async () => { resolveInitial({ ...bootstrap(projectionState, 1), latest_turn: null }); });
+    expect(historyReads).toBe(1);
+    expect(getCurrentTimeline()?.threadId).toBe(THREAD_ID);
+    expect(getCurrentTimeline()?.projectionEpoch).toBe(1);
+    await act(async () => {
+      if (projectionState === "partial") await new Promise(resolve => globalThis.setTimeout(resolve, 275));
+      else history.refreshTurnHistory();
+    });
+    expect(bootstrapReads).toBe(1);
+    expect(historyReads).toBe(2);
+    expect(getCurrentTimeline()?.projectionEpoch).toBe(2);
+  } finally {
+    if (renderer) act(() => renderer.unmount());
+  }
+});
 
 test.each(["manual", "event"] as const)("%s 历史校准清空旧窗口但始终保留已确认的 thread owner", async (trigger) => {
   const apiPort = 9152;

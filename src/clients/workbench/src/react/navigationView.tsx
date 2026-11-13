@@ -26,6 +26,7 @@ import { IStorageService, WillSaveStateReason } from '../../upstream/src/vs/plat
 import type { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { DeferredPromise } from '../../upstream/src/vs/base/common/async.js';
 import { ThreadInput } from '../threadInput.js';
+import { ThreadPane, type ThreadEditorOptions } from '../threadPane.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { notifyPluginCommandGatewayReconnected } from '../extensions/pluginCommands.js';
 import { ReactSurface } from './surface.js';
@@ -125,8 +126,9 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     // Session DTO 已携带 catalog 冻结的 main Thread，不再串行查询同一身份。
     if (session.session_id !== sessionId || !session.thread_id) throw new Error(t('workbench.session.mainThreadOwnerMismatch'));
     if (openRequests.current.get(group) !== request) return;
+    const editorOptions: ThreadEditorOptions = { pinned: options.pinned, boxteamSession: session };
     await editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
-      sessionId, threadId: session.thread_id, title: session.title }), { pinned: options.pinned }, group);
+      sessionId, threadId: session.thread_id, title: session.title }), editorOptions, group);
   }, [editors, groups, setActiveSession]);
   useEffect(() => {
     let selection: { group: number; editor: typeof editors.activeEditor } | undefined;
@@ -135,14 +137,16 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       const group = groups.activeGroup.id;
       // 恢复编辑器也会再次发出活动事件；只有实际 Tab／分组改变才取消目录打开。
       if (selection?.group === group && selection.editor === input) return;
-      selection = { group, editor: input };
+      selection = undefined;
       setActiveEditor(input);
       openRequests.current.clear();
       clearActiveSession();
-      if (input instanceof ThreadInput) void input.resolveOwner().then(owner => {
-        if (editors.activeEditor !== input || groups.activeGroup.id !== group || selection?.editor !== input || selection.group !== group) return;
-        return setActiveSession(owner.workspaceKey, owner.sessionId);
-      }).catch(cause => {
+      const pane = editors.activeEditorPane;
+      // 冷恢复先撤销旧打开意图，等所属 Pane 完成后才使用已解析的路由。
+      if (input instanceof ThreadInput && (!(pane instanceof ThreadPane) || pane.threadTarget?.input !== input)) return;
+      selection = { group, editor: input };
+      // 原版在 ThreadPane.setInput 完成后发布活动事件，owner 已由所属 Pane 解析。
+      if (input instanceof ThreadInput) void setActiveSession(input.owner.workspaceKey, input.owner.sessionId).catch(cause => {
         if (editors.activeEditor === input && groups.activeGroup.id === group) reportError(String(cause));
       });
     };

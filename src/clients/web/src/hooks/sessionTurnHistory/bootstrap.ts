@@ -17,6 +17,7 @@ import {
   type SessionTurnTimeline,
 } from "../../state/session/turnTimeline";
 import type { SetAppState } from "../contentViewLoaderTypes";
+import type { SessionTurnBootstrap } from "../../types/backend";
 import { errorMessage } from "../../utils/errorMessage";
 import { timelineForScope } from "./turnLoadSupport";
 
@@ -35,6 +36,7 @@ export function partialBootstrapPollDelay(attempt: number): number {
 }
 
 export function useTurnBootstrap({
+  initialBootstrap,
   apiPort,
   sessionId,
   threadId,
@@ -48,6 +50,7 @@ export function useTurnBootstrap({
   setState,
   loadInitialTurns,
 }: {
+  initialBootstrap?: Promise<SessionTurnBootstrap>;
   apiPort: number | null;
   sessionId: string | null;
   threadId?: string;
@@ -162,15 +165,15 @@ export function useTurnBootstrap({
       };
     });
 
-    const requestBootstrap = async (pollAttempt: number): Promise<void> => {
+    const requestBootstrap = async (pollAttempt: number, suppliedBootstrap?: Promise<SessionTurnBootstrap>): Promise<void> => {
       try {
-        const bootstrap = await getSessionTurnBootstrap(
+        const bootstrap = await (suppliedBootstrap ?? getSessionTurnBootstrap(
           apiPort,
           sessionId,
           workspaceId,
           controller.signal,
           threadId,
-        );
+        ));
         if (controller.signal.aborted || generationRef.current !== targetGeneration) return;
         if (threadId !== undefined && bootstrap.thread_id !== threadId) throw new Error("Turn bootstrap 的 thread owner 与请求不一致");
         const projectionState = bootstrap.projection_state ?? "ready";
@@ -372,13 +375,15 @@ export function useTurnBootstrap({
         controller.abort();
       };
     }
-    void requestBootstrap(0);
+    // 宿主已有的同次权威响应只用于首次挂载；刷新和 partial 轮询仍读取后端。
+    void requestBootstrap(0, isInitialScope ? initialBootstrap : undefined);
     return () => {
       if (pollTimer !== null) globalThis.clearTimeout(pollTimer);
       controller.abort();
     };
   }, [
     apiPort,
+    initialBootstrap,
     generationRef,
     invalidatedTurnIdsRef,
     loadInitialTurns,

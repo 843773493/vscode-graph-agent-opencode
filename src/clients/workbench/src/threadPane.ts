@@ -20,10 +20,12 @@ import { ChatSurface } from './react/chatView.js';
 import { showFileOpenMenu } from './fileOpenMenu.js';
 import './thread.css';
 import type { LLMRequestLogMatchDTO, TraceMatchDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { Session } from '../../web/src/types/backend.js';
 
 import type { TurnNavigationTarget } from "../../web/src/api/session/sessionTurnHistory.js";
 
 export interface ThreadEditorOptions extends IEditorOptions {
+  boxteamSession?: Session;
   boxteamMessage?: TurnNavigationTarget;
   boxteamRequestLog?: LLMRequestLogMatchDTO;
   boxteamTrace?: TraceMatchDTO;
@@ -71,7 +73,7 @@ export class ThreadPane extends EditorPane {
     this.root.dataset.threadId = input.owner.threadId; this.root.dataset.sessionId = input.owner.sessionId;
     this.root.dataset.workspaceId = input.owner.workspaceId;
     this.conversation = new ChatSurface(this.root, input, this.editors, this.isVisible(), (path, anchor) => showFileOpenMenu(path, anchor, input.owner,
-      this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications, this.commands);
+      this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications, this.commands, options?.boxteamSession);
     if (options?.boxteamMessage) this.conversation.revealMessage(options.boxteamMessage);
     if (options?.boxteamRequestLog) this.conversation.revealRequestLog(options.boxteamRequestLog);
     if (options?.boxteamTrace) this.conversation.revealTrace(options.boxteamTrace);

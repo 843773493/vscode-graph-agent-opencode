@@ -13,6 +13,7 @@ import WarmConfirmProvider from '../../../web/src/components/shell/WarmConfirmPr
 import { ComposerContext } from '../../../web/src/hooks/app/appContext.js';
 import { useThreadSessionRuntime, type ThreadSessionSeed } from '../../../web/src/hooks/session/useThreadSessionRuntime.js';
 import { getSession, listAgents } from '../../../web/src/api.js';
+import { getSessionTurnBootstrap } from '../../../web/src/api/session/sessionTurnHistory.js';
 import { browserGatewayId, getBrowserUiSettings } from '../../../web/src/hooks/settings/browserUiSettings.js';
 import type { Session } from '../../../web/src/types/backend.js';
 import { gateway } from '../agentApi.js';
@@ -186,7 +187,7 @@ function ThreadConversation({ input, seed, active, editors, commands, onUpdate, 
   </ComposerContext.Provider></WarmConfirmProvider>;
 }
 
-function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; active: boolean; editors: IEditorService; commands: ICommandService; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
+function ChatView({ input, initialSession, active, editors, commands, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; initialSession?: Session; active: boolean; editors: IEditorService; commands: ICommandService; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
   const owner = input.owner;
   const [seed, setSeed] = useState<ThreadSessionSeed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,6 +196,7 @@ function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, 
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let disposed = false;
+    const controller = new AbortController();
     let cacheOwner: ThreadHistoryOwner | undefined;
     setError(null);
     const cacheLoad = Promise.resolve().then(async () => {
@@ -207,15 +209,24 @@ function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, 
       return null;
     });
     const initialize = async () => {
-      const [session, agents, workspaces, settings, browserViewScope] = await Promise.all([
-        getSession(0, owner.sessionId, owner.workspaceKey), listAgents(0, owner.workspaceKey),
+      // 历史首读与宿主初始化并行；沿原 seed 挂载 Composer，不等待历史响应才能输入。
+      const bootstrap = getSessionTurnBootstrap(0, owner.sessionId, owner.workspaceKey, controller.signal, owner.threadId).then(value => {
+        if (value.session.session_id !== owner.sessionId || value.session.workspace_id !== owner.workspaceId
+          || value.thread_id !== owner.threadId) throw new Error(t('thread.host.initializeOwnerMismatch'));
+        return value;
+      });
+      const seed = Promise.all([
+        // 目录点击的权威 Session 只用于首次初始化；URI、恢复和重试仍真实读取。
+        attempt === 0 && initialSession ? initialSession : getSession(0, owner.sessionId, owner.workspaceKey), listAgents(0, owner.workspaceKey),
         // 会话只需登记归属；显式健康刷新仍由 Gateway 导航入口发起。
         gateway.workspaces(false), getBrowserUiSettings(0), browserGatewayId(0),
-      ]);
-      // 会话响应同时确认 Session 与工作区归属，不再为同一 owner 前置读取 /workspace。
-      if (session.session_id !== owner.sessionId || session.workspace_id !== owner.workspaceId) throw new Error(t('thread.host.initializeOwnerMismatch'));
-      const history = await cacheLoad;
-      if (!disposed) setSeed({ session, agents, workspaces: workspaces.items, settings, browserViewScope, history });
+      ]).then(async ([session, agents, workspaces, settings, browserViewScope]) => {
+        if (session.session_id !== owner.sessionId || session.workspace_id !== owner.workspaceId) throw new Error(t('thread.host.initializeOwnerMismatch'));
+        const history = await cacheLoad;
+        if (!disposed) setSeed({ session, bootstrap, agents, workspaces: workspaces.items, settings, browserViewScope, history });
+      });
+      // 首读可能先于挂载失败；原历史 owner 消费同一拒绝并保留只读缓存及重试出口。
+      await Promise.all([seed, bootstrap.catch(() => undefined)]);
     };
     void initialize().catch(async (cause: unknown) => {
       // 已删除的会话不能继续显示浏览器旧记录，清除镜像后明确显示后端错误。
@@ -228,8 +239,8 @@ function ChatView({ input, active, editors, commands, onUpdate, onFileOpenMenu, 
       }
       if (!disposed) setError(cause instanceof Error ? cause.message : String(cause));
     });
-    return () => { disposed = true; };
-  }, [owner, attempt]);
+    return () => { disposed = true; controller.abort(); };
+  }, [owner, initialSession, attempt]);
   const retry = () => setAttempt(value => value + 1);
   const toolbar = <header className="native-thread-toolbar" role="toolbar" aria-label={t('thread.host.toolbar')}>
     <button type="button" title={t('thread.host.toggleResources')} aria-label={t('thread.host.toggleResources')} aria-expanded={input.resourcesVisible}
@@ -253,7 +264,8 @@ export class ChatSurface {
   constructor(container: HTMLElement, private readonly input: ThreadInput, private readonly editors: IEditorService, visible: boolean,
     private readonly onFileOpenMenu: FileOpenMenuHandler,
     private readonly notifications: INotificationService,
-    private readonly commands: ICommandService) {
+    private readonly commands: ICommandService,
+    private readonly initialSession?: Session) {
     this.surface = new ReactSurface(container, [...productStyles, viewStyle]);
     this.active = visible; this.render();
   }
@@ -300,5 +312,5 @@ export class ChatSurface {
   dispose(): void { this.viewport?.cancel(); this.viewport = undefined; this.draft = undefined; this.surface.dispose(); }
   private readonly onUpdate = () => this.render();
   private readonly onError = (message: string) => this.notifications.error(t('thread.host.ownerError', this.input.owner.title, this.input.owner.sessionId, this.input.owner.threadId, message));
-  private render(): void { this.surface.render(<ChatView input={this.input} editors={this.editors} commands={this.commands} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} />); }
+  private render(): void { this.surface.render(<ChatView input={this.input} initialSession={this.initialSession} editors={this.editors} commands={this.commands} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} />); }
 }

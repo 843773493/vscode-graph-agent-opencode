@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { useSessionTurnHistory } from './useSessionTurnHistory';
+import { getSessionTurnBootstrap } from '../../api/session/sessionTurnHistory';
 import { createSessionTurnTimeline, upsertTurns } from '../../state/session/turnTimeline';
 import { appState, emptyPendingResponse, bootstrap, emptyHistoryPageResponse, installWindow, originalFetch,
   restoreTurnHistoryTestGlobals, SESSION_ID, SCOPE_KEY, THREAD_ID, WORKSPACE_KEY, WORKSPACE_OWNER, turnDetail, wait } from './testFixtures';
@@ -54,7 +55,7 @@ test.each([{ epoch: 1, cachedRevision: 1 }, { epoch: 2, cachedRevision: 8 }])(
   } finally { act(() => renderer.unmount()); }
 });
 
-test.each(['bootstrap', 'history'] as const)(
+test.each(['bootstrap', 'history', 'supplied-bootstrap'] as const)(
   '%s 失败后保留只读镜像和原错误，明确重试取得权威历史后才退出预览', async failureStage => {
     installWindow(9150);
     let state = appState(), recovering = false;
@@ -68,7 +69,7 @@ test.each(['bootstrap', 'history'] as const)(
       const headers = new Headers(args[1]?.headers);
       expect(headers.get('X-BoxTeam-Target-Gateway-Id')).toBe(WORKSPACE_OWNER.gateway_id);
       expect(headers.get('X-BoxTeam-Workspace-Id')).toBe(WORKSPACE_OWNER.workspace_id);
-      if (!recovering && path.endsWith('/' + failureStage)) {
+      if (!recovering && path.endsWith('/' + (failureStage === 'supplied-bootstrap' ? 'bootstrap' : failureStage))) {
         return Response.json({ detail: '历史来源暂不可用，请保留原镜像' }, { status: 503 });
       }
       if (path.endsWith("/pending-requests")) return emptyPendingResponse();
@@ -77,15 +78,19 @@ test.each(['bootstrap', 'history'] as const)(
       if (path.endsWith('/history')) return emptyHistoryPageResponse('history-2', 2);
       throw new Error(`未声明的请求：${path}`);
     }, { preconnect: originalFetch.preconnect });
+    // 与宿主一致，在挂载前启动真实 reader；原 Promise 的拒绝仍交历史 owner 呈现。
+    const initialBootstrap = failureStage === 'supplied-bootstrap'
+      ? getSessionTurnBootstrap(9150, SESSION_ID, WORKSPACE_KEY, undefined, THREAD_ID) : undefined;
     const current = () => state.turnTimelinesBySession.get(SCOPE_KEY)!;
     function Harness({ reloadNonce }: { reloadNonce: number }) {
-      useSessionTurnHistory({ apiPort: 9150, sessionId: SESSION_ID, threadId: THREAD_ID, workspaceId: WORKSPACE_KEY,
+      useSessionTurnHistory({ initialBootstrap, apiPort: 9150, sessionId: SESSION_ID, threadId: THREAD_ID, workspaceId: WORKSPACE_KEY,
         sessionCacheKey: SCOPE_KEY, getCurrentTimeline: current, reloadNonce,
         setState: update => { state = typeof update === 'function' ? update(state) : update; } });
       return null;
     }
     let renderer!: ReactTestRenderer;
     try {
+      await initialBootstrap?.catch(() => undefined);
       await act(async () => { renderer = create(<Harness reloadNonce={0} />); await wait(20); });
       expect(current().orderedTurnIds).toEqual(['job_latest']);
       expect(current().restoredFromCache).toBe(true);
