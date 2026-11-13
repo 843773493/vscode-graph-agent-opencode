@@ -40,10 +40,9 @@ async function fixture(callback, project = path => path.replace(qualified, root)
   });
   const identity = new m.UriIdentityService(files), backupRoot = m.URI.parse('backup:/hot-exit');
   let backups = new m.WorkingCopyBackupService(backupRoot, files, new m.NullLogService());
-  const metadata = [], routes = [];
-  const route = spyOn(m.gateway, 'resolveWorkspace').mockImplementation(async source => {
-    routes.push({ gatewayId: source.gatewayId, workspaceId: source.workspaceId });
-    return JSON.stringify([source.gatewayId, source.workspaceId]);
+  const metadata = [];
+  const route = spyOn(m.gateway, 'resolveWorkspace').mockImplementation(async () => {
+    throw new Error('已知 owner 的文件规范化不应额外预读路由');
   });
   const request = spyOn(m.gateway, 'request').mockImplementation(async (path, options, workspaceKey) => {
     expect(path).toBe('/api/v1/workspace/files/references'); expect(options.method).toBe('POST');
@@ -65,7 +64,7 @@ async function fixture(callback, project = path => path.replace(qualified, root)
   };
   const restore = group => m.canonicalRestoredWorkspaceFiles(group.value, input => ({ input }), files, backups, identity, () => undefined);
   try {
-    await callback({ files, identity, metadata, routes, write, group, restore, get backups() { return backups; },
+    await callback({ files, identity, metadata, route, write, group, restore, get backups() { return backups; },
       restart() { backups.dispose(); backups = new m.WorkingCopyBackupService(backupRoot, files, new m.NullLogService()); } });
   } finally { route.mockRestore(); request.mockRestore(); backups.dispose(); identity.dispose(); files.dispose(); providers.forEach(provider => provider.dispose()); }
 }
@@ -79,7 +78,7 @@ test('文件规范准入按完整 owner 每批至多100条，投影收敛且不�
     expect(canonical[205]).toBe(values[205]); expect(canonical[206]).toBe(values[206]);
     expect(canonical[205].toString()).not.toBe(canonical[0].toString());
     expect(canonical[206].toString()).not.toBe(canonical[0].toString());
-    expect(f.routes).toEqual([owner, other]);
+    expect(f.route).not.toHaveBeenCalled();
     expect(f.metadata.filter(batch => batch.owner[0] === owner.gatewayId).map(batch => batch.paths.length)).toEqual([100, 100, 6]);
     expect(f.metadata.filter(batch => batch.owner[0] === other.gatewayId).map(batch => batch.paths.length)).toEqual([1]);
   });

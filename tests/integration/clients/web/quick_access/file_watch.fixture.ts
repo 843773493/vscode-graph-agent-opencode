@@ -7,6 +7,8 @@ export { gateway } from '../../../../../src/clients/workbench/src/agentApi.js';
 export { workspaceFileUri } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
 export { gatewayWorkspaceKey } from '../../../../../src/clients/web/src/api/workspaceIdentity.js';
 export { installSessionApiFetchMock, unwrapSessionApiFetch } from '../../../../../src/clients/web/src/api/session/sessionApiFetchMock.js';
+export { invalidateGatewayToken } from '../../../../../src/clients/web/src/api/http.js';
+export { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
 
 /** 通过真实注册入口取得 Provider；FileService 注册及出站 HTTP 是显式装具边界。 */
 export function fileProvider(): IFileSystemProvider {

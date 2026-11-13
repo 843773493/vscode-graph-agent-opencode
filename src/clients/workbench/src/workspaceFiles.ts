@@ -28,6 +28,7 @@ import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import { awaitWithAbort } from '../../web/src/utils/abortable.js';
 import { resourceFileRootUri } from '../../web/src/utils/workspaceFileReferences.js';
 import { gateway, GatewayRequestError } from './agentApi.js';
+import { workspaceContext } from './workspaceContext.js';
 import { openWorkspaceFileIntentStore } from '../../web/src/state/workspaceFiles/intentStore.js';
 import { waitForWorkspaceFileOperation, WorkspaceFileIntentRejectedError } from '../../web/src/state/workspaceFiles/dispatcher.js';
 
@@ -329,9 +330,14 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
     const controller = new AbortController();
     const reading = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     // raw 下载结束后仍须保护字节转换，失效或取消的结果不能交付或推进保存基线。
-    const release = onGatewayTokenInvalidated(0, () => controller.abort(
-      new DOMException('Gateway 凭据已失效，请重新读取文件', 'AbortError'),
-    ));
+    const invalidate = () => controller.abort(new DOMException('Gateway 或访问凭据已改变，请重新读取文件', 'AbortError'));
+    const releaseToken = onGatewayTokenInvalidated(0, invalidate);
+    let gatewayId = workspaceContext.getSnapshot().gatewayId;
+    const releaseGateway = workspaceContext.subscribe(() => {
+      const current = workspaceContext.getSnapshot().gatewayId;
+      if (gatewayId && current !== gatewayId) invalidate();
+      gatewayId = current;
+    });
     try {
       const blob = await this.access(resource, workspaceKey => getWorkspaceRawFileBlob(0, source.path, workspaceKey, reading, range), reading);
       reading.throwIfAborted();
@@ -343,7 +349,7 @@ class WorkspaceFiles implements IFileSystemProviderWithFileReadWriteCapability, 
         this.revisions.set(this.key(resource), revision);
       }
       return bytes;
-    } finally { release(); }
+    } finally { releaseToken(); releaseGateway(); }
   }
   readFileStream(resource: URI, options: IFileReadStreamOptions, token: CancellationToken): ReadableStreamEvents<Uint8Array> {
     const stream = newWriteableStream<Uint8Array>(chunks => VSBuffer.concat(chunks.map(chunk => VSBuffer.wrap(chunk))).buffer);

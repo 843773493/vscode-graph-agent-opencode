@@ -14,7 +14,8 @@ await build({ entryPoints: [resolve('tests/integration/clients/web/quick_access/
   bundle: true, format: 'esm', platform: 'browser', target: 'es2024', logLevel: 'silent',
   tsconfig: join(root, 'tsconfig.jsonc'), plugins: [buildSourcePlugin(root, sourceTransform(root, { commit: pinnedUpstreamCommit }, []))] });
 const { fileProvider, FileChangeType, FileSystemProviderErrorCode, toFileSystemProviderErrorCode,
-  gateway, workspaceFileUri, gatewayWorkspaceKey, installSessionApiFetchMock, unwrapSessionApiFetch } = await import(pathToFileURL(bundle).href);
+  gateway, workspaceFileUri, gatewayWorkspaceKey, installSessionApiFetchMock, unwrapSessionApiFetch,
+  invalidateGatewayToken, workspaceContext } = await import(pathToFileURL(bundle).href);
 const owner = workspaceId => ({ gatewayId: 'gateway-test', workspaceId });
 const rootUri = id => `boxteam://gateway-test/workspace/${id}/resources/files/root`;
 const uri = (id, name, root = rootUri(id)) => workspaceFileUri(owner(id), root + '/' + name, root);
@@ -181,5 +182,71 @@ test('外部更新后的 stat 不读取正文或推进原保存 revision', async
     receipt.checks.push('实际raw建立基线；更新后的describe零正文且不推进PUT expected_revision');
   });
 });
+
+for (const phase of ['response', 'blob', 'bytes']) {
+  for (const change of ['gateway-roundtrip', 'credential', 'active-workspace', 'initial-gateway']) {
+    test(`原文件${phase}等待期间${change}遵守身份且不接受迟到保存基线`, async () => {
+      const previous = workspaceContext.getSnapshot(), provider = fileProvider(), resource = uri('A', 'same.txt');
+      workspaceContext.publish({ ...previous, gatewayId: change === 'initial-gateway' ? null : 'gateway-test', activeId: 'A' });
+      const entered = Promise.withResolvers(), release = Promise.withResolvers(), calls = [];
+      const hash = value => createHash('sha256').update(value).digest('hex');
+      let body = 'initial A', readingSignal;
+      installSessionApiFetchMock(async ({ path, init }) => {
+        calls.push(path);
+        if (path !== '/api/v1/workspace/files/raw') throw new Error(`读取出现额外请求：${path}`);
+        readingSignal = init.signal;
+        const blob = new Blob([body]);
+        if (body !== 'initial A') {
+          const wait = async () => { entered.resolve(); await release.promise; };
+          if (phase === 'response') await wait();
+          const arrayBuffer = blob.arrayBuffer.bind(blob);
+          if (phase === 'bytes') blob.arrayBuffer = async () => { await wait(); return arrayBuffer(); };
+          const response = new Response();
+          response.blob = async () => { if (phase === 'blob') await wait(); return blob; };
+          return response;
+        }
+        return new Response(blob);
+      });
+      try {
+        expect(new TextDecoder().decode(await provider.readFile(resource))).toBe('initial A');
+        expect(provider.revisionForBackup(resource)).toBe(hash('initial A'));
+        body = 'late A';
+        const pending = provider.readFile(resource).then(bytes => ({ bytes }), error => ({ error }));
+        await entered.promise;
+        if (change === 'credential') invalidateGatewayToken(0);
+        else if (change === 'gateway-roundtrip') {
+          workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: 'gateway-other' });
+          workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: 'gateway-test' });
+        } else workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: 'gateway-test', activeId: 'B' });
+        const aborted = readingSignal.aborted;
+        release.resolve();
+        const result = await pending;
+        if (change === 'active-workspace' || change === 'initial-gateway') {
+          expect(result.error).toBeUndefined();
+          expect(new TextDecoder().decode(result.bytes)).toBe(body);
+          expect(provider.revisionForBackup(resource)).toBe(hash(body));
+          expect(aborted).toBe(false);
+        } else {
+          expect(result.error).toBeInstanceOf(Error);
+          expect(result.error.message).toContain('Gateway');
+          expect(result.bytes).toBeUndefined();
+          expect(provider.revisionForBackup(resource)).toBe(hash('initial A'));
+          expect(aborted).toBe(true);
+        }
+        expect(calls).toEqual(['/api/v1/workspace/files/raw', '/api/v1/workspace/files/raw']);
+        if (phase === 'bytes') {
+          // 旧读取结清后，新代仍可读取；完成的信号不再保留身份订阅。
+          expect(new TextDecoder().decode(await provider.readFile(resource))).toBe(body);
+          expect(provider.revisionForBackup(resource)).toBe(hash(body));
+          workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: 'gateway-other' });
+          workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: 'gateway-test' });
+          invalidateGatewayToken(0);
+          expect(readingSignal.aborted).toBe(false);
+        }
+        receipt.checks.push({ phase, change, aborted, acceptedBytes: result.bytes?.byteLength ?? 0 });
+      } finally { release.resolve(); unwrapSessionApiFetch(); workspaceContext.publish(previous); }
+    });
+  }
+}
 
 afterAll(() => writeFile(join(run.artifactsDir, 'watch-boundaries.json'), JSON.stringify(receipt, null, 2) + '\n'));
