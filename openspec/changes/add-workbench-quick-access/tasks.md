@@ -29,6 +29,7 @@
 - [ ] 2.4 验证原编辑器组、预览／固定、侧边／后台打开、目标组及视图恢复，文件树单击仍在会话资源内预览，多种打开方式由明确动作触发。
   - 2026-11-13 来源首次可接受项沿原Quick Input聚焦，增量更新按稳定ID保留，目标消失清空而不改投；聚焦不合成selected，原Controller单／多选Esc零交付。真实AGENTS与运行资源补页2 passed／156.38秒；同一正式资产的受管图片／双owner WAV／视频页在首批通过，核真实解码、零原件复制、公开URI关闭重开及原组刷新恢复。AGENTS页仍以正常方向键定位后Enter／Alt+Enter接受，保留只读、owner、零正文与零空分屏断言；原broad定位器匹配回收行及无条件方向键的装具失败原件保留。两批1751输入均未变，main SHA256=`0bae45fe8ed5037362008474f9f7fd5e7f94ca8ccee69182f205b3093da739e6`；文件树单击链路未改，整项仍未完成。
 - [ ] 2.5 用同名跨工作区、route 改变／被复用、main／child、只读与不可文本资源的真实打开入口验证目标隔离，不能只测投影函数。
+  - 2026-11-13 双 Gateway 页面复现 HTTP/1 六连接耗尽：原四条命令流加两条观察流持续占满同源连接，浏览器 health 5 秒超时，独立 socket 同地址 200／31.77ms。窗口现复用原工作区完整命令快照中的 Gateway 贡献，每个 Gateway 选一个明确工作区来源；来源移交、断流、重连、凭据失效与关闭沿原 Registry／reader 释放，无新协议或第二快照缓存。14项原订阅／贡献合同160断言、183份实际转换源码类型及79扩展正式Web构建通过，1125前端输入前后未变。真实容量补验 `run-be1252368a1c`，1 passed／81.25秒／exit0，四条活跃SSE为两条命令＋两条观察，浏览器health 200／11.4ms，原request_id一致；pageErrors为空，关页两条上游shutdown console错误保留。原红证据、新容量收据及独占产物指纹见 `out/tests/temp/2026/11/13/plugin_command_connections/artifacts/` 和 `out/tests/temp/2026/11/13/quick_access_remote/artifacts/capacity-2.json`。只证明本次双目标容量，不据此宣称任意数量工作区容量或整项远端验收完成。
   - 2026-11-13 当前页面补验同名跨工作区AGENTS及无扩展名附件媒体的精确owner、只读与失效来源，pageErrors为空；普通媒体、Diff、配置等旧证据按实际源码差异复用，未把旧主包当作含本片修复。route／main／child与Gateway切回反例来自真实Opener／HTTP客户端的具名宿主边界，不等同真实跨Gateway撤权；通用PDF URI不推断当前Session或扩展原附件预览，Windows／真实远端／Electron仍未由本片证明。
 
 ## 3. 目录与 Thread 发现

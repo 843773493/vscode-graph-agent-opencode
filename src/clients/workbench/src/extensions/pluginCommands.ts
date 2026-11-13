@@ -18,6 +18,11 @@ import { PluginCommandContributions, pluginGatewayContextKey, pluginWorkspaceCon
 import { callPluginCommand, watchPluginCommands } from '../../../web/src/api/pluginCommands.js';
 
 const remoteGatewayReconnected = new Emitter<string>();
+interface CommandStream {
+  target: PluginContributionTarget;
+  gatewayTarget?: PluginContributionTarget;
+  abort: AbortController;
+}
 
 export function notifyPluginCommandGatewayReconnected(connectionId: string): void {
   remoteGatewayReconnected.fire(connectionId);
@@ -31,9 +36,9 @@ export function capturePluginCommandOwner(editors: IEditorService,
   return captureSearchOwner(editors, input);
 }
 
-class PluginCommands extends Disposable {
+export class PluginCommands extends Disposable {
   private readonly contributions: PluginCommandContributions;
-  private readonly streams = new Map<string, { target: PluginContributionTarget; abort: AbortController }>();
+  private readonly streams = new Map<string, CommandStream>();
   private readonly calls = new Set<AbortController>();
 
   constructor(@IEditorService editors: IEditorService, @IEditorGroupsService groups: IEditorGroupsService, @IContextKeyService context: IContextKeyService,
@@ -43,6 +48,12 @@ class PluginCommands extends Disposable {
       (accessor, source, args) => this.execute(accessor, source, args)));
     const gatewayKey = context.createKey<string>(pluginGatewayContextKey, ''), workspaceKey = context.createKey<string>(pluginWorkspaceContextKey, '');
     const scoped = new Map<IContextKeyService, { gateway: ReturnType<typeof context.createKey<string>>; workspace: ReturnType<typeof context.createKey<string>> }>();
+    const removeStream = (key: string, stream: CommandStream) => {
+      stream.abort.abort();
+      this.contributions.remove(stream.target);
+      if (stream.gatewayTarget) this.contributions.remove(stream.gatewayTarget);
+      this.streams.delete(key);
+    };
     const update = () => {
       let owner: PluginCommandOwner | undefined;
       try { owner = capturePluginCommandOwner(editors); } catch { /* 未明确归属时不显示其它目标的贡献。 */ }
@@ -101,19 +112,35 @@ class PluginCommands extends Disposable {
           addTarget(route); addTarget(target);
         }
       }
+      // 工作区完整快照已包含 Gateway 贡献；选一个稳定来源发布，避免重复占用 HTTP/1 长连接。
+      const gatewaySnapshots = new Map<string, PluginContributionTarget>();
+      for (const [key, target] of targets) {
+        if (target.workspace_id) continue;
+        const source = [...targets.values()].filter(candidate => candidate.workspace_id
+          && candidate.gateway_id === target.gateway_id && candidate.gateway_connection_id === target.gateway_connection_id)
+          .sort((a, b) => a.workspace_id!.localeCompare(b.workspace_id!))[0];
+        if (source) { targets.delete(key); gatewaySnapshots.set(pluginTargetKey(source), target); }
+      }
       for (const [key, stream] of this.streams) {
-        if (JSON.stringify(targets.get(key)) !== JSON.stringify(stream.target)) {
-          stream.abort.abort(); this.contributions.remove(stream.target); this.streams.delete(key);
+        if (JSON.stringify(targets.get(key)) !== JSON.stringify(stream.target)
+          || JSON.stringify(gatewaySnapshots.get(key)) !== JSON.stringify(stream.gatewayTarget)) {
+          removeStream(key, stream);
         }
       }
       for (const [key, target] of targets) if (!this.streams.has(key)) {
-        const abort = new AbortController(), stream = { target, abort }; this.streams.set(key, stream);
+        const abort = new AbortController(), gatewayTarget = gatewaySnapshots.get(key), stream = { target, gatewayTarget, abort };
+        this.streams.set(key, stream);
         void watchPluginCommands(target, abort.signal, snapshot => {
           if (this.streams.get(key) !== stream || abort.signal.aborted) return;
-          try { this.contributions.replace(target, snapshot); } catch (error) { notifications.error(error); }
+          try {
+            this.contributions.replace(target, snapshot);
+            if (gatewayTarget) this.contributions.replace(gatewayTarget, { ...snapshot, workspace_id: undefined });
+          } catch (error) { notifications.error(error); }
         }).catch(error => {
           if (abort.signal.aborted) return;
-          this.contributions.remove(target); notifications.error(error);
+          this.contributions.remove(target);
+          if (gatewayTarget) this.contributions.remove(gatewayTarget);
+          notifications.error(error);
           // 保留失败槽位，普通焦点／导航不重试；窗口刷新重新订阅。
         });
       }
@@ -127,21 +154,18 @@ class PluginCommands extends Disposable {
       let retired = false;
       for (const [key, stream] of this.streams) {
         if (stream.target.gateway_connection_id !== connectionId) continue;
-        stream.abort.abort();
-        this.contributions.remove(stream.target);
-        this.streams.delete(key);
+        removeStream(key, stream);
         retired = true;
       }
       if (retired) update();
     }));
     this._register(toDisposable(onGatewayTokenInvalidated(0, () => {
-      for (const stream of this.streams.values()) { stream.abort.abort(); this.contributions.remove(stream.target); }
-      this.streams.clear();
+      for (const [key, stream] of this.streams) removeStream(key, stream);
       for (const call of this.calls) call.abort(new Error(t('plugins.commandIdentityChanged')));
       update();
     })));
     this._register(toDisposable(() => {
-      for (const stream of this.streams.values()) stream.abort.abort(); this.streams.clear();
+      for (const [key, stream] of this.streams) removeStream(key, stream);
       for (const call of this.calls) call.abort(new Error(t('plugins.commandWindowClosed')));
       gatewayKey.reset(); workspaceKey.reset();
       for (const keys of scoped.values()) { keys.gateway.reset(); keys.workspace.reset(); } scoped.clear();

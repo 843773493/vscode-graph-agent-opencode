@@ -101,7 +101,7 @@ export class PluginCommandContributions implements IDisposable {
   replace(target: PluginContributionTarget, snapshot: PluginCommandSnapshotDTO): void {
     if (snapshot.gateway_id !== target.gateway_id || (snapshot.workspace_id ?? undefined) !== target.workspace_id) throw new Error(t('plugins.commandSnapshotTargetMismatch'));
     const targetKey = pluginTargetKey(target), previous = this.targets.get(targetKey) ?? new Map<string, Publication>();
-    // 工作区快照也带 Gateway 声明；该部分只由唯一 Gateway 订阅发布，避免重复句柄。
+    // 一个完整快照可供 Gateway／工作区共用；每个逻辑目标只发布自己的部分。
     const selected = snapshot.publications.filter(item => (item.binding?.workspace_id ?? undefined) === target.workspace_id);
     const candidates = selected.map(item => this.prepare(target, item));
     if (new Set(candidates.map(item => item.key)).size !== candidates.length) throw new Error(t('plugins.commandDuplicateBinding'));
