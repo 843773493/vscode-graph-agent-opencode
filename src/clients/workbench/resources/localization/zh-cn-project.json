@@ -1,5 +1,13 @@
 {
   "contents": {
+    "vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent": {
+      "boxteam.manageProviders.title": "管理模型与 Provider",
+      "boxteam.manageProviders.description": "配置 BoxTeam 的模型 Provider。",
+      "boxteam.manageAgents.title": "管理 Agent",
+      "boxteam.manageAgents.description": "配置 BoxTeam 的 Agent。",
+      "boxteam.manageGateway.title": "管理 Gateway",
+      "boxteam.manageGateway.description": "管理 Gateway 连接与凭据。"
+    },
     "vs/workbench/contrib/webview/browser/webviewService": {
       "boxteam.webview.identityChanged": "Gateway 或访问凭据已改变，请重新打开预览。"
     },

@@ -21,6 +21,7 @@ import { settingsTreeScopeSourcePaths, transformSettingsTreeScope } from './sett
 import { pluginDebugSourcePaths, transformPluginDebug } from './pluginDebugTransform.mjs';
 import { pluginCommandSourcePaths, transformPluginCommands } from './pluginCommandTransform.mjs';
 import { legacyCustomizationPluginSourcePaths, transformLegacyCustomizationPlugins } from './legacyCustomizationPluginTransform.mjs';
+import { harnessWelcomeSourcePaths, transformHarnessWelcome } from './harnessWelcomeTransform.mjs';
 
 export const pinnedUpstreamCommit = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 export const transformedSourcePaths = [...new Set([
@@ -96,6 +97,7 @@ export const transformedSourcePaths = [...new Set([
   ...onboardingKeymapSourcePaths,
   ...chatExtensionCompletionSourcePaths,
   ...legacyCustomizationPluginSourcePaths,
+  ...harnessWelcomeSourcePaths,
   ...settingsEditorScopeSourcePaths,
   ...settingsEditorSourcePaths,
   ...settingsTreeScopeSourcePaths,
@@ -134,6 +136,7 @@ export function sourceTransform(root, productConfiguration, extensions, nlsMessa
     contents = transformExtensionFileEvents(root, path, contents, replaceOnce);
     contents = transformTestingExtensions(root, path, contents, replaceOnce);
     contents = transformOnboardingKeymaps(root, path, contents, replaceOnce);
+    contents = transformHarnessWelcome(root, path, contents, replaceOnce);
     contents = transformChatExtensionCompletion(root, path, contents);
     contents = transformLegacyCustomizationPlugins(root, path, contents, replaceOnce);
     contents = transformFileDialog(root, path, contents, replaceOnce);

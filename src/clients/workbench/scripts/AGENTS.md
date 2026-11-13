@@ -49,6 +49,8 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 `pluginCommandTransform.mjs` 将自有命令接入原 CommandService、菜单动作和 Quick Access 的冻结参数，并为原 KeybindingsRegistry 提供可释放的单条登记及 resolver 失效通知；保留键盘布局和用户覆盖。不得按目标调用全量 `setExtensionKeybindings` 或复制原解析器，不修改固定上游。新增接缝纳入实际转换源码类型检查。
 
 
+`harnessWelcomeTransform.mjs` 将 Provider、Agent 和 Gateway Connections 管理命令追加到原 Getting Started startEntries；只改构建／开发时转换结果，不修改固定 upstream。独立测试调用完整 sourceTransform 并确认原上游文件不变。
+
 原用户 Node／Web Extension Host、VSIX／Gallery 安装与专用构建脚本已退役。浏览器 scanner 只保留产品内置贡献和派生缓存，原 Worker 与 Registry 继续运行；自有包管理沿原配置及 Gateway 插件 owner。
 
 `build.mjs` 不导出无消费者的 esbuild metafile；`immutable-assets.json` 只列实际存在内容地址名称的 chunks、media 与本地化资源。固定名 manifest 保持 revalidation 缓存，不假装 immutable。
