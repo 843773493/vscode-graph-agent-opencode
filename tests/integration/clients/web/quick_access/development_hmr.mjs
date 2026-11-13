@@ -15,6 +15,7 @@ const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_acc
 const result = { classification: 'Integration', phase: 'prepare', routeStubs: [],
   boundary: '独占完整源码副本的原 React 导航观测属性及 NLS 补译；产品 Vite／Gateway；不代替发行或 Electron',
   pageErrors: [], consoleErrors: [], failedResponses: [], websocket: [], initialization: [], changes: [], scripts: [], moduleUrls: [], browserEvents: [] };
+const nlsResponses = [];
 const observationStartedAt = performance.now();
 const recordBrowserEvent = event => result.browserEvents.push({
   at: new Date().toISOString(), elapsed_ms: Math.round(performance.now() - observationStartedAt), ...event,
@@ -91,6 +92,10 @@ try {
     observed.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
     observed.on('response', response => {
       if (response.status() >= 400) result.failedResponses.push({ url: response.url(), status: response.status() });
+      const path = new URL(response.url()).pathname;
+      if (/^\/out\/nls-(?:assets-[a-f0-9]+|zh-cn-[a-f0-9]+)\.json$/.test(path)) {
+        nlsResponses.push(response.json().then(body => ({ path, body }), error => ({ path, error: String(error) })));
+      }
     });
     observed.on('websocket', socket => socket.on('framereceived', ({ payload }) => {
       if (typeof payload === 'string') result.websocket.push(JSON.parse(payload));
@@ -123,6 +128,18 @@ try {
   // health 已等待入口与 optimizer 完成；保留唯一真实页面，避免双页同时全量重载。
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('boxteam.flushViewState'));
   result.lifecycleCommand = 'boxteam.flushViewState';
+  await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('workbench.action.openSettings'); });
+  await expect(page.locator('.settings-editor')).toBeVisible({ timeout: 30000 });
+  result.settingsModuleUrls = await page.evaluate(() => performance.getEntriesByType('resource')
+    .map(entry => new URL(entry.name).pathname).filter(path => path.includes('/shared/core/i18n/index.ts')));
+  expect(result.settingsModuleUrls).toEqual([required('BOXTEAM_HMR_SHARED_I18N_URL')]);
+  result.settingsIdentity = await page.evaluate(async sourceUrl => {
+    const module = await import(sourceUrl);
+    return { locale: module.getLocale(), message: module.t('workbench.settings.editorName', 'Identity') };
+  }, result.settingsModuleUrls[0]);
+  expect(result.settingsIdentity).toEqual({ locale: 'zh-cn', message: '设置 · Identity' });
+  await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('workbench.action.closeActiveEditor'); });
+  await expect(page.locator('.settings-editor')).toBeHidden({ timeout: 30000 });
   result.moduleUrls = await page.evaluate(() => [...new Set(performance.getEntriesByType('resource')
     .map(entry => new URL(entry.name).pathname)
     .filter(path => path.startsWith('/out/dev-upstream/') || path.startsWith('/upstream/src/vs/')
@@ -169,8 +186,31 @@ try {
   const translationAfter = JSON.stringify(messages, null, 2) + '\n';
   result.changes.push({ source: translations, before: createHash('sha256').update(translationBefore).digest('hex'),
     after: createHash('sha256').update(translationAfter).digest('hex') });
-  // 原配置依赖变化自动重建语言资产并重载页面；不清缓存、不手工刷新。
-  await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 120000 }), writeFile(translations, translationAfter)]);
+  // 等待页面 bootstrap 自己请求的新 manifest 与语言资源，不额外发探测请求。
+  const previousManifestUrl = await page.evaluate(() => performance.getEntriesByType('resource')
+    .map(entry => new URL(entry.name).pathname).findLast(path => /^\/out\/nls-assets-[a-f0-9]+\.json$/.test(path)));
+  expect(previousManifestUrl).toMatch(/^\/out\/nls-assets-[a-f0-9]+\.json$/);
+  const previousNlsResponseCount = nlsResponses.length;
+  await writeFile(translations, translationAfter);
+  let updatedNls;
+  await expect.poll(async () => {
+    const responses = await Promise.all(nlsResponses.slice(previousNlsResponseCount));
+    const failedResponse = responses.find(entry => entry.error);
+    if (failedResponse) throw new Error(`读取实际 NLS 响应失败 ${failedResponse.path}: ${failedResponse.error}`);
+    const manifestEntry = responses.find(({ path }) => /^\/out\/nls-assets-[a-f0-9]+\.json$/.test(path)
+      && path !== previousManifestUrl);
+    if (!manifestEntry) return null;
+    const manifest = manifestEntry.body;
+    const localized = responses.find(({ path }) => path === manifest.assets?.['zh-cn'])?.body;
+    if (!localized) return null;
+    updatedNls = { manifest, localized };
+    return updatedNls;
+  }, { timeout: 120000, intervals: [250, 500, 1000] }).toMatchObject({
+    manifest: { buildId: expect.any(String) },
+    localized: { buildId: expect.any(String), contents: { 'vs/workbench/contrib/localization/common/localizationsActions': { chooseLocale: updatedPlaceholder } } },
+  });
+  expect(updatedNls.manifest.buildId).not.toBe(previousManifestUrl.match(/nls-assets-([a-f0-9]+)\.json$/)?.[1]);
+  expect(updatedNls.localized.buildId).toBe(updatedNls.manifest.buildId);
   await expect(page.locator('.native-session-navigation')).toHaveAttribute('data-hmr-acceptance', 'version-2', { timeout: 45000 });
   await command('workbench.action.configureLocale');
   await expect(quick.locator('input').first()).toHaveAttribute('placeholder', updatedPlaceholder);

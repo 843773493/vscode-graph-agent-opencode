@@ -3,7 +3,7 @@ import { buildWorkbenchDependencies } from './devDependencies.mjs';
 import compression from 'compression';
 import { mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve, join, basename } from 'node:path';
+import { resolve, join, basename, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { spawn } from 'node:child_process';
 import { sourceTransform } from './sourceTransform.mjs';
@@ -56,6 +56,10 @@ export default async function () {
           // 翻译输入和转换配置一样沿 Vite 原重启链生效，不能只更新 JSON 模块留下旧 NLS。
           const localizationRoot = join(root, 'resources/localization');
           config.configFileDependencies.push(...[
+            join(root, 'scripts/build.mjs'),
+            join(root, 'scripts/extensions.mjs'),
+            join(root, 'scripts/actionTitles.mjs'),
+            join(root, 'upstream/product.json'),
             join(root, '../shared/core/i18n/messages/en.json'),
             join(root, '../shared/core/i18n/messages/zh-cn.json'),
             join(localizationRoot, 'zh-cn-upstream-main.json'),
@@ -74,7 +78,10 @@ export default async function () {
           vite.httpServer.once('listening', () => {
             const warmup = async () => {
               await rm(join(assetsPrevious, '..'), { recursive: true, force: true });
-              if (existsSync(assetsRoot)) await rename(assetsRoot, assetsPrevious);
+              if (existsSync(assetsRoot)) {
+                await mkdir(dirname(assetsPrevious), { recursive: true });
+                await rename(assetsRoot, assetsPrevious);
+              }
               try {
                 await rename(assetsStage, assetsRoot);
               } catch (error) {

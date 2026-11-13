@@ -53,29 +53,63 @@ def development_snapshot(request: pytest.FixtureRequest) -> Path:
         receipt = json.loads(prior_receipt.read_text(encoding="utf-8"))
         assert receipt["upstream_head"] == "fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca"
         source = snapshot / "src/clients/workbench/src/react/navigationView.tsx"
-        original = source.read_text(encoding="utf-8")
-        version_one = 'data-hmr-acceptance="version-1"'
-        version_two = 'data-hmr-acceptance="version-2"'
-        if original.count(version_one) == 0 and original.count(version_two) == 1:
-            source.write_text(original.replace(version_two, version_one), encoding="utf-8")
-        elif original.count(version_one) == 0:
-            anchor = '<div className="native-session-navigation"'
-            assert original.count(anchor) == 1
-            source.write_text(original.replace(anchor, anchor + " " + version_one), encoding="utf-8")
-        assert source.read_text(encoding="utf-8").count('data-hmr-acceptance="version-1"') == 1
+        workbench_root = context.project_root / "src/clients/workbench"
+        scripts_root = workbench_root / "scripts"
+        implementation_inputs = [
+            *[f"scripts/{path.relative_to(scripts_root).as_posix()}" for path in sorted(scripts_root.rglob("*.mjs"))
+              if ".test." not in path.name],
+            "resources/localization/zh-cn-project.json",
+            "resources/localization/zh-cn-upstream-main.json",
+            "upstream/product.json",
+            "src/bootstrap.ts",
+            "src/main.ts",
+            "src/react/navigationView.tsx",
+            "src/settings/editor.ts",
+            "src/settings/scope.ts",
+            "src/settings/sourceOwner.ts",
+            "src/clients/shared/core/i18n/index.ts",
+            "src/clients/shared/core/i18n/actionTitles.en.json",
+            "src/clients/shared/core/i18n/bootstrapMessages.json",
+            "src/clients/shared/core/i18n/messages/en.json",
+            "src/clients/shared/core/i18n/messages/zh-cn.json",
+            *[f"resources/localization/extensions/{path.name}" for path in sorted(
+                (workbench_root / "resources/localization/extensions").glob("*.i18n.json"),
+            )],
+        ]
+        implementation_hashes = {}
+        for relative in implementation_inputs:
+            current = context.project_root / "src/clients/workbench" / relative
+            if relative.startswith("src/clients/shared/"):
+                current = context.project_root / relative
+            destination = snapshot / "src/clients/workbench" / relative
+            if relative.startswith("src/clients/shared/"):
+                destination = snapshot / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if relative == "src/react/navigationView.tsx":
+                assert hashlib.sha256(current.read_bytes()).hexdigest() == receipt["original_sha256"]
+            shutil.copy2(current, destination)
+            implementation_hashes[relative] = hashlib.sha256(destination.read_bytes()).hexdigest()
+        upstream_dependencies = (
+            "src/vs/workbench/services/preferences/common/preferencesEditorInput.ts",
+            "src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts",
+        )
+        for relative in upstream_dependencies:
+            path = snapshot / "src/clients/workbench/upstream" / relative
+            implementation_hashes[f"upstream/{relative}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        navigation_original = source.read_text(encoding="utf-8")
+        original_sha256 = hashlib.sha256(navigation_original.encode()).hexdigest()
+        assert original_sha256 == receipt["original_sha256"]
+        anchor = '<div className="native-session-navigation"'
+        assert navigation_original.count(anchor) == 1
+        source.write_text(navigation_original.replace(anchor, anchor + ' data-hmr-acceptance="version-1"'), encoding="utf-8")
         project_translations = snapshot / "src/clients/workbench/resources/localization/zh-cn-project.json"
         project_messages = json.loads(project_translations.read_text(encoding="utf-8"))
-        project_messages["contents"].get("vs/workbench/contrib/localization/common/localizationsActions", {}).pop(
-            "chooseLocale", None,
-        )
-        project_translations.write_text(json.dumps(project_messages, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        current_config = context.project_root / "src/clients/workbench/scripts/devConfig.mjs"
-        config_copy = snapshot / "src/clients/workbench/scripts/devConfig.mjs"
-        shutil.copy2(current_config, config_copy)
+        assert project_messages["contents"].get("vs/workbench/contrib/localization/common/localizationsActions", {}).get(
+            "chooseLocale",
+        ) is None
         receipt["reused_from"] = str(snapshot)
-        receipt["reused_dev_config_sha256"] = hashlib.sha256(config_copy.read_bytes()).hexdigest()
-        receipt["boundary"] = "复用完整独占源码快照和已构建静态产物，仅同步并记录本轮 devConfig SHA"
-        original_sha256 = receipt["original_sha256"]
+        receipt["reused_implementation_sha256"] = implementation_hashes
+        receipt["boundary"] = "复用完整源码快照与静态资产；同步完整开发转换链及其本地化输入并记录SHA，仅修改隔离快照观测标记"
     else:
         snapshot, receipt = snapshot_workbench_sources(context.project_root, runtime)
         source = snapshot / "src/clients/workbench/src/react/navigationView.tsx"
@@ -114,6 +148,8 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
     }, indent=2) + "\n", encoding="utf-8")
     command = [node, "scripts/dev.mjs", "--port", str(port), "--gateway", str(client.base_url).rstrip("/"),
                "--outdir", str(runtime / "assets/dist"), "--cache", str(runtime / "vite-cache")]
+    shared_i18n_path = (development_snapshot / "src/clients/shared/core/i18n/index.ts").resolve()
+    shared_i18n_url = "/@fs/" + str(shared_i18n_path).replace("\\", "/").lstrip("/")
     with (context.artifacts_dir / "vite.log").open("x", encoding="utf-8") as log, capture_test_processes():
         process = await asyncio.to_thread(subprocess.Popen, command,
             cwd=development_snapshot / "src/clients/workbench", stdout=log, stderr=subprocess.STDOUT,
@@ -121,6 +157,22 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
         managed = ManagedProcess(process=process, log_file=log)
         register_test_process(managed, managed.close)
         await asyncio.to_thread(wait_for_http_ok, f"{base}/health", process, timeout_seconds=300)
+        bundle_root = runtime / "assets/dist/out/dev-upstream"
+        settings_chunks = []
+        for bundle in bundle_root.rglob("*.js"):
+            contents = bundle.read_text(encoding="utf-8")
+            if "workbench.settings.editorName" in contents:
+                settings_chunks.append((bundle, contents))
+        assert len(settings_chunks) == 1, "设置输入必须唯一地进入 Workbench split bundle"
+        settings_bundle, settings_contents = settings_chunks[0]
+        expected_import = f'import {{ t }} from "{shared_i18n_url}"'
+        assert expected_import in settings_contents, "上游 SettingsEditor 必须导入应用共享 i18n 的唯一 URL"
+        (context.artifacts_dir / "settings-i18n-identity.json").write_text(json.dumps({
+            "settings_bundle": str(settings_bundle),
+            "settings_bundle_sha256": hashlib.sha256(settings_bundle.read_bytes()).hexdigest(),
+            "shared_i18n_url": shared_i18n_url,
+            "shared_i18n_url_import_count": settings_contents.count(expected_import),
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         driver = ["node", "tests/integration/clients/web/quick_access/development_hmr.mjs"]
         supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
         protected = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
@@ -129,7 +181,8 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
             browser = await asyncio.to_thread(subprocess.run, protected, cwd=context.project_root,
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": base,
                      "BOXTEAM_HMR_SOURCE": str(development_snapshot / "src/clients/workbench/src/react/navigationView.tsx"),
-                         "BOXTEAM_HMR_TRANSLATIONS": str(development_snapshot / "src/clients/workbench/resources/localization/zh-cn-upstream-main.json"),
+                     "BOXTEAM_HMR_TRANSLATIONS": str(development_snapshot / "src/clients/workbench/resources/localization/zh-cn-upstream-main.json"),
+                     "BOXTEAM_HMR_SHARED_I18N_URL": shared_i18n_url,
                      "BOXTEAM_BROWSER_RESULT_PATH": str(context.artifacts_dir / "development-hmr.json"),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
                 capture_output=True, text=True, timeout=195, check=False)

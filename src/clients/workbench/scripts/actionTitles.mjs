@@ -65,7 +65,7 @@ export async function writeActionTitleProjection(root, keys) {
     if (!(key in messages)) throw new Error(`Missing English action title: ${key}`);
     return [key, messages[key]];
   }));
-  await writeFile(join(i18n, 'actionTitles.en.json'), `${JSON.stringify(titles)}\n`);
+  await writeIfChanged(join(i18n, 'actionTitles.en.json'), `${JSON.stringify(titles)}\n`);
 }
 
 /** 从双语 catalog 生成启动阶段所需的最小消息投影。 */
@@ -80,5 +80,14 @@ export async function writeBootstrapMessageProjection(root, keys = bootstrapMess
       return [key, catalog[key]];
     })),
   ]));
-  await writeFile(join(i18n, 'bootstrapMessages.json'), `${JSON.stringify(projection)}\n`);
+  await writeIfChanged(join(i18n, 'bootstrapMessages.json'), `${JSON.stringify(projection)}\n`);
+}
+
+async function writeIfChanged(path, contents) {
+  try {
+    if (await readFile(path, 'utf8') === contents) return;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  await writeFile(path, contents);
 }
