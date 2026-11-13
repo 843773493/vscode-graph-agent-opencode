@@ -59,6 +59,7 @@ async function runTaskAction(accessor: ServicesAccessor, action: PersistentTaskA
           description: `${item.gateway_id} · ${item.workspace_id}`, owner: gatewayWorkspaceOwner(item) })),
           { title: t('workbench.automation.chooseWorkspace'), placeHolder: t('workbench.automation.chooseWorkspaceHint') });
         if (!selected) return false;
+        assertAccess();
         owner = selected.owner;
       }
     }

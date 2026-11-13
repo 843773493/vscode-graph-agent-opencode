@@ -32,9 +32,10 @@ const record = index => ({
 export async function automationContract(mode) {
   const before = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
   const requests = [], errors = [], choices = [], opened = [], notices = [], confirmations = [], shows = [];
+  const emptyOwnerCommand = ['command-owner-gateway-returned', 'command-owner-identity'].includes(mode);
   const targets = owners.map((owner, index) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: `工作区 ${index}`, status: 'ready' }));
   const initial = { ...before, gatewayId: 'control-gateway', loading: false, error: null, workspaces: targets,
-    activeId: mode === 'owner-cancel' ? null : gatewayWorkspaceKey(owners[0]) };
+    activeId: mode === 'owner-cancel' || emptyOwnerCommand ? null : gatewayWorkspaceKey(owners[0]) };
   workspaceContext.publish(initial);
   let records = owners.map((_, index) => record(index)), releaseList, releaseWrite, releaseChoice, releaseRead, workspacesCalls = 0, aborted = false;
   if (mode === 'resume') records[0].lifecycle = 'paused';
@@ -86,6 +87,7 @@ export async function automationContract(mode) {
   const quick = { quickAccess: { show: (value, options) => shows.push({ value, options }) }, async pick(items, options) {
     choices.push({ items: items.map(item => ({ label: item.label, action: item.action })), title: options.title });
     if (mode === 'owner-cancel' || mode === 'action-cancel') return undefined;
+    if (emptyOwnerCommand && items[0]?.owner) return new Promise(resolve => { releaseChoice = () => resolve(items[0]); });
     if (mode === 'identity' || mode === 'gateway-returned') return new Promise(resolve => { releaseChoice = () => resolve(items.find(item => item.action === 'pause')); });
     return items[0];
   } };
@@ -151,9 +153,18 @@ export async function automationContract(mode) {
     } else {
       const action = ['pause', 'resume', 'check', 'checkOnly', 'details', 'history', 'edit'].includes(mode) ? mode
         : mode.startsWith('terminate') || mode === 'accepted-terminate-close' ? 'terminate' : 'pause';
-      const supplied = mode === 'origin' || mode === 'owner-cancel' || mode === 'command-list-gateway-returned'
+      const supplied = mode === 'origin' || mode === 'owner-cancel' || mode === 'command-list-gateway-returned' || emptyOwnerCommand
         ? undefined : { owner: { ...owners[0] }, task: structuredClone(records[0]) };
       const operation = commands.executeCommand(taskActionCommand(action), supplied).catch(cause => { errors.push(String(cause)); return false; });
+      if (emptyOwnerCommand) {
+        await until(() => releaseChoice);
+        if (mode === 'command-owner-identity') invalidateGatewayToken(0);
+        else {
+          workspaceContext.publish({ ...initial, gatewayId: null });
+          workspaceContext.publish(initial);
+        }
+        releaseChoice();
+      }
       if (mode === 'command-list-gateway-returned') {
         await until(() => releaseRead);
         workspaceContext.publish({ ...initial, gatewayId: null });

@@ -91,6 +91,13 @@ test('Gateway离开后切回也会锁存，阻止待处理工作区读取进入�
   expect(result.requests.map(item => item.path)).toEqual(['/api/gateway/workspaces']);
   expect(writes(result)).toEqual([]);
 });
+for (const mode of ['command-owner-gateway-returned', 'command-owner-identity']) test(`${mode}在工作区选择期间身份失效，不读取控制面或写入任务`, async () => {
+  const result = await exercise(mode);
+  expect(result.choices).toHaveLength(1);
+  expect(result.requests).toEqual([]);
+  expect(writes(result)).toEqual([]);
+  expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新选择任务']);
+});
 test('任务列表返回前Gateway离开再回到原身份，不展示旧任务选择器', async () => {
   const result = await exercise('command-list-gateway-returned');
   expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新选择任务']);
