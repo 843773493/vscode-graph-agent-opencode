@@ -224,6 +224,55 @@ try {
   const rebuilt = await views();
   expect(rebuilt[cacheKey(a)].timeline.turnsById).toEqual(before[cacheKey(a)].timeline.turnsById);
   result.historyRebuilt = true;
+  await checkpoint('corrupt-one-product-backup-after-document-unload');
+  const storageUrl = new URL('/__working_copy_backup_storage__', host.baseUrl).href;
+  await page.route(storageUrl, route => route.fulfill({ contentType: 'text/html', body: '<title>工作副本备份故障注入</title>' }));
+  await page.goto(storageUrl, { waitUntil: 'domcontentloaded' });
+  const backup = (await recoveryRecords()).filter(record => record.key.includes('/Backups/')
+    && record.text.includes(fileUri) && record.text.endsWith(dirtyBody));
+  expect(backup).toHaveLength(1);
+  const original = backup[0], broken = original.text.replace(/ \{[^\n]*\}\n/, ' {"typeId":\n');
+  expect(broken).not.toBe(original.text);
+  const writeBackup = async text => page.evaluate(async ({ key, text }) => {
+    const request = indexedDB.open('vscode-web-db');
+    const db = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction('vscode-userdata-store', 'readwrite');
+        transaction.oncomplete = resolve; transaction.onabort = () => reject(transaction.error);
+        transaction.objectStore('vscode-userdata-store').put(new TextEncoder().encode(text), key);
+      });
+    } finally { db.close(); }
+  }, { key: original.key, text });
+  await writeBackup(broken);
+  result.backupCorruption = { key: original.key, original: original.text, broken };
+  await checkpoint('corrupt-backup-recovery-rejects-with-original-preserved');
+  await page.goto(host.baseUrl, { waitUntil: 'domcontentloaded' }); await ready();
+  await expect(page.locator('.notifications-toasts')).toContainText('Backup: Invalid metadata in');
+  expect((await recoveryRecords()).find(record => record.key === original.key)?.text).toBe(broken);
+  expect((await recoveryRecords()).filter(record => record.key.includes('/History/'))).toEqual(protectedHistory);
+  expect(await readSavedSettings(page)).toEqual(savedSettings);
+  expect(Object.fromEntries(Object.entries(await views()).filter(([key]) => key.startsWith('draft:')))).toEqual(drafts);
+  result.backupCorruption.rejectedAndPreserved = true;
+  // 仅修复已声明的故障原件；重新进入产品后由原恢复服务读取，不预先填模型。
+  await page.goto(storageUrl, { waitUntil: 'domcontentloaded' });
+  await writeBackup(original.text);
+  await checkpoint('repaired-backup-restores-original-dirty-model');
+  await page.goto(host.baseUrl, { waitUntil: 'domcontentloaded' }); await ready();
+  // 导航先可用，编辑器恢复仍异步进行；等真实working copy恢复后再发起后续操作。
+  await expect(groups.getByRole('tab', { name: /cache-protected\.txt/ })).toHaveCount(2);
+  for (const group of await groups.all()) await expect(group.getByRole('tab', { name: /cache-protected\.txt/ })).toHaveClass(/dirty/);
+  await command('workbench.action.focusFirstEditorGroup');
+  await command('_workbench.open', fileUri, [0, { pinned: true }]);
+  await goTo(0, 1, 1);
+  await expect(editor(groups.first()).locator('.view-lines')).toContainText('尚未保存的正文');
+  result.backupCorruption.recoveredAfterRepair = true;
+  for (const [index, target] of identities.entries()) {
+    await open(target); await expect(pane(target).getByTestId('composer-input')).toHaveValue(`保留草稿 ${index}`);
+  }
+  await page.unroute(storageUrl);
   expect(result.forbiddenWrites).toEqual([]); expect(result.pageErrors).toEqual([]);
   await checkpoint('complete');
 } catch (cause) { failure = cause; }

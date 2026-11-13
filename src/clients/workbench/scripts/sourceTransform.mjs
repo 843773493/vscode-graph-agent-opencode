@@ -35,6 +35,7 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/services/search/common/queryBuilder.ts',
   'src/vs/workbench/services/history/browser/historyService.ts',
   'src/vs/workbench/services/workingCopy/common/workingCopyHistoryTracker.ts',
+  'src/vs/workbench/services/workingCopy/common/workingCopyBackupService.ts',
   'src/vs/workbench/contrib/localHistory/browser/localHistoryCommands.ts',
   'src/vs/workbench/contrib/localHistory/browser/localHistoryTimeline.ts',
   'src/vs/workbench/common/editor/textResourceEditorInput.ts',
@@ -143,6 +144,41 @@ export function sourceTransform(root, productConfiguration, extensions, nlsMessa
     if (path === join(upstream, 'src/vs/workbench/services/workingCopy/common/workingCopyHistoryTracker.ts')) {
       contents = replaceOnce(contents, 'resource.scheme !== this.pathService.defaultUriScheme &&',
         "resource.scheme !== this.pathService.defaultUriScheme && resource.scheme !== 'boxteam-file' &&");
+    }
+    if (path === join(upstream, 'src/vs/workbench/services/workingCopy/common/workingCopyBackupService.ts')) {
+      // 备份属于恢复数据；损坏或拒读不能吞成缺失，再以磁盘正文冒充恢复成功。
+      contents = replaceOnce(contents, '// ignore any errors',
+        'if ((error as FileOperationError).fileOperationResult !== FileOperationResult.FILE_NOT_FOUND) throw error;');
+      contents = replaceOnce(contents, 'if (!backupPreamble) {\n\t\t\t\treturn;\n\t\t\t}',
+        'if (!backupPreamble) throw new Error(`Backup: Invalid preamble in ${backupResource}`);');
+      contents = replaceOnce(contents,
+        '// Unable to find matching string in file\n\t\treturn undefined;',
+        'throw new Error(`Backup: Missing preamble end marker in ${backupResource}`);');
+      contents = replaceOnce(contents,
+        'this.logService.trace(`Backup: Could not find meta end marker in ${backupResource}. The file is probably corrupt (filesize: ${backupStream.size}).`);\n\n\t\t\t\treturn undefined;',
+        'throw new Error(`Backup: Missing preamble end marker in ${backupResource} (filesize: ${backupStream.size})`);');
+      contents = replaceOnce(contents, 'const firstBackupChunk = VSBuffer.concat(peekedBackupStream.buffer);',
+        'try {\nconst firstBackupChunk = VSBuffer.concat(peekedBackupStream.buffer);');
+      contents = replaceOnce(contents, 'res = { value, meta };', `res = { value, meta };
+} catch (error) {
+  // 解析失败也结清原读取流，原备份字节不变。
+  peekedBackupStream.stream.destroy();
+  this.logService.error(error);
+  throw error;
+}`);
+      contents = replaceOnce(contents, 'this.parsePreambleMeta(metaPreamble);',
+        'this.parsePreambleMeta(metaPreamble, backupResource);');
+      contents = replaceOnce(contents, 'this.parsePreambleMeta(preambelRaw.substr(metaStartIndex + 1)).meta as T;',
+        'this.parsePreambleMeta(preambelRaw.substr(metaStartIndex + 1), backupResource).meta as T;');
+      contents = replaceOnce(contents, 'preambleMetaRaw: string | undefined): { typeId:',
+        'preambleMetaRaw: string | undefined, backupResource: URI): { typeId:');
+      contents = replaceOnce(contents, 'if (preambleMetaRaw) {', 'if (preambleMetaRaw !== undefined) {');
+      contents = replaceOnce(contents, 'meta = JSON.parse(preambleMetaRaw);', `meta = JSON.parse(preambleMetaRaw);
+if (!meta || typeof meta !== 'object' || Array.isArray(meta) || ('typeId' in meta && typeof meta.typeId !== 'string')) {
+  throw new Error('Invalid backup metadata');
+}`);
+      contents = replaceOnce(contents, '// ignore JSON parse errors',
+        'throw new Error(`Backup: Invalid metadata in ${backupResource}`, { cause: error });');
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/localHistory/browser/localHistoryCommands.ts')) {
       contents = replaceOnce(contents, 'resource?.scheme !== pathService.defaultUriScheme && resource?.scheme !== Schemas.vscodeUserData',

@@ -286,6 +286,8 @@ def assert_cache_cleanup_result(output: Path, case: ThreadCacheCleanupCase) -> d
     assert result["forbiddenWrites"] == []
     assert all(result[key] for key in ("automaticLocalHistory", "manualLocalHistory", "timelineOwnerPreserved",
                                       "localHistoryPreserved", "dirtyBackupRestored", "splitViewsRestored"))
+    assert result["backupCorruption"]["rejectedAndPreserved"]
+    assert result["backupCorruption"]["recoveredAfterRepair"]
     assert case.recovery_file.read_text(encoding="utf-8").startswith("已保存的历史正文\n")
     assert "尚未保存的正文" not in case.recovery_file.read_text(encoding="utf-8")
     with case.provider.control._condition:
