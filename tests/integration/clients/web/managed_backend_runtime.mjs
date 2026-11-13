@@ -19,7 +19,7 @@ const resultPath = required("BOXTEAM_BROWSER_RESULT_PATH");
 const screenshotPath = required("BOXTEAM_BROWSER_SCREENSHOT_PATH");
 const scope = TestRunContext.fromTestFile("tests/integration/clients/web/test_managed_backend_runtime.py");
 const result = { classification: "Integration", provider_boundary: "OpenAI HTTP stub", route_stubs: [],
-  requests: [], errors: [], cancel: null, joined: null, blocked: null, forced: null, stale: null, removed: null, empty_exit: null, deleted: null };
+  requests: [], errors: [], warm_api_samples: [], cancel: null, joined: null, blocked: null, forced: null, stale: null, removed: null, empty_exit: null, deleted: null };
 let phase = "initial";
 let page;
 let failure;
@@ -32,28 +32,32 @@ try {
   scope.addCleanup("Backend 运行时 context", () => context.close());
   page = await context.newPage();
   page.on("pageerror", (error) => result.errors.push(error.message));
-  page.on("response", async (response) => {
+  page.on("response", (response) => {
     const request = response.request();
     if (request.method() === "POST" && /\/runtime\/(start|stop|restart-safe|restart-force)$/.test(new URL(response.url()).pathname)) {
-      result.requests.push({ phase, path: new URL(response.url()).pathname, status: response.status(), body: request.postDataJSON() });
+      result.requests.push({ phase, path: new URL(response.url()).pathname, status: response.status(), body: request.postDataJSON(),
+        request_id: response.headers()["x-request-id"], gateway_id: request.headers()["x-boxteam-target-gateway-id"],
+        workspace_id: request.headers()["x-boxteam-workspace-id"] });
     }
   });
   async function api(path, { method = "GET", body, expected = 200 } = {}) {
-    const output = await page.evaluate(async ({ path, method, body }) => {
+    const output = await page.evaluate(async ({ path, method, body, gatewayId, primaryId }) => {
       const credential = await fetch("/api/gateway/auth/local-credential");
       const token = (await credential.json()).data.token;
       const response = await fetch(path, {
         method, credentials: "include",
-        headers: { "X-Local-Token": token, ...(body ? { "Content-Type": "application/json" } : {}) },
+        headers: { "X-Local-Token": token, "X-BoxTeam-Target-Gateway-Id": gatewayId,
+          "X-BoxTeam-Workspace-Id": path.match(/\/workspaces\/([^/]+)/)?.[1] ?? primaryId,
+          ...(body ? { "Content-Type": "application/json" } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
       return { status: response.status, payload: await response.json(), requestId: response.headers.get("X-Request-ID") };
-    }, { path, method, body });
+    }, { path, method, body, gatewayId: fixture.gatewayId, primaryId: fixture.primaryId });
     check(output.status === expected, `真实 Gateway HTTP ${output.status}: ${JSON.stringify(output.payload)}`);
     check(output.requestId === output.payload.request_id, "Gateway 请求 ID 不一致");
     return output.payload.data;
   }
-  const panel = page.locator('section[aria-label="Backend 运行时"]');
+  const panel = page.getByRole("region", { name: "托管 Backend 运行时", exact: true });
   const dialog = page.locator('form.workspace-dialog[role="dialog"]');
   async function openRuntime() {
     await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
@@ -61,8 +65,11 @@ try {
     await page.getByRole("dialog", { name: "选择工作区所在设备", exact: true })
       .getByRole("button", { name: "连接新的远程主机…", exact: true }).click();
     const control = page.getByRole("dialog", { name: "Gateway 控制中心", exact: true });
+    const started = performance.now();
     await control.getByRole("button", { name: "服务运行时", exact: true }).click();
     await expect(panel).toBeVisible();
+    await expect(panel.getByLabel("当前完整成员", { exact: true }).filter({ hasText: fixture.primaryId })).toBeVisible();
+    result.first_available_ms ??= performance.now() - started;
   }
   const primaryArticle = () => panel.locator("article").filter({ has: page.locator("h2").filter({ hasText: fixture.primaryName }) }).first();
   async function confirm(action) {
@@ -85,6 +92,8 @@ try {
     const payload = await response.json();
     check(response.status() === expected, `生命周期请求 ${response.status()}: ${JSON.stringify(payload)}`);
     check(response.headers()["x-request-id"] === payload.request_id, "生命周期响应请求 ID 不一致");
+    check(response.request().headers()["x-boxteam-target-gateway-id"] === fixture.gatewayId
+      && response.request().headers()["x-boxteam-workspace-id"] === fixture.primaryId, "生命周期请求 owner 改变");
     return payload.data ?? payload;
   }
   function groupRequest(snapshot) {
@@ -92,11 +101,18 @@ try {
   }
   await page.goto(new URL("/", baseUrl).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
   await page.reload({ waitUntil: "domcontentloaded" });
+  result.initialization = { health: await api("/api/gateway/health"),
+    workspaces: await api("/api/gateway/workspaces"), workspace: await api("/api/v1/workspace") };
+  check(result.initialization.health.gateway_id === fixture.gatewayId
+    && result.initialization.workspaces.active_workspace.workspace_id === fixture.primaryId
+    && result.initialization.workspace.workspace_id === fixture.primaryId, "初始化链路 owner 不一致");
   await openRuntime();
   await primaryArticle().getByRole("button", { name: "安全重启", exact: true }).waitFor({ state: "visible" });
 
   phase = "cancel";
   const before = (await api("/api/gateway/workspaces")).items.find((item) => item.workspace_id === fixture.primaryId);
+  await expect(primaryArticle()).toContainText(fixture.gatewayId);
+  await expect(primaryArticle()).toContainText(before.backend_generation);
   await primaryArticle().getByRole("button", { name: "安全重启", exact: true }).click();
   const cancelText = await confirm("cancel-singleton");
   const afterCancel = (await api("/api/gateway/workspaces")).items.find((item) => item.workspace_id === fixture.primaryId);
@@ -110,19 +126,44 @@ try {
   check(await defaultCheckbox.isDisabled(), "默认成员可被移出");
   await primaryArticle().getByRole("checkbox", { name: fixture.secondaryName, exact: true }).check();
   result.joined = await lifecycleResponse("restart-safe", async () => {
-    await primaryArticle().getByRole("button", { name: "确认成员并安全重启", exact: true }).click();
+    await primaryArticle().getByRole("button", { name: "确认安全重启所选成员", exact: true }).click();
     await confirm("safe");
   });
   check(result.joined.status === "restarted", "成员合并未成功");
   check(result.joined.affected_workspace_ids.length === 2, "合并没有返回完整 affected 集合");
-  await primaryArticle().getByText("运行中 · 2 个工作区共用一个 Backend", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+  await primaryArticle().getByText("运行中 · 共享 2 个工作区", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+  await expect(panel.locator("article")).toHaveCount(1);
+  const members = primaryArticle().getByLabel("当前完整成员", { exact: true });
+  await expect(members.getByRole("listitem")).toHaveCount(2);
+  await expect(members).toContainText(fixture.primaryId);
+  await expect(members).toContainText(fixture.secondaryId);
+  await expect(primaryArticle()).toContainText(result.joined.backend_generation);
+  await page.screenshot({ path: screenshotPath.replace(/\.png$/, "-group.png"), fullPage: true });
+
+  // 本切片沿用原工作区摘要，不新增运行详情 API；只量化这一代表列表。
+  result.warm_api_samples = await page.evaluate(async () => {
+    const token = (await (await fetch("/api/gateway/auth/local-credential")).json()).data.token;
+    const samples = [];
+    for (let index = 0; index < 21; index++) {
+      const started = performance.now();
+      const response = await fetch("/api/gateway/workspaces", { headers: { "X-Local-Token": token } });
+      const text = await response.text(), payload = JSON.parse(text);
+      if (!response.ok || payload.request_id !== response.headers.get("X-Request-ID")) throw new Error(text);
+      samples.push({ elapsed_ms: performance.now() - started, bytes: new TextEncoder().encode(text).length,
+        request_id: payload.request_id, count: payload.data.items.length });
+    }
+    return samples;
+  });
+  const warm = result.warm_api_samples.slice(1).map(sample => sample.elapsed_ms).sort((a, b) => a - b);
+  result.warm_api_budget = { p50: warm[Math.ceil(warm.length * .5) - 1], p95: warm[Math.ceil(warm.length * .95) - 1], max: warm.at(-1) };
+  check(result.warm_api_budget.p95 <= 500 && result.warm_api_budget.max <= 1500, JSON.stringify(result.warm_api_budget));
 
   // 保持真实 Gateway SSE 引用；安全重启必须 blocked，force 在 durable 中断后撤销旧租约。
-  await page.evaluate(async ({ workspaceId }) => {
+  await page.evaluate(async ({ gatewayId, workspaceId }) => {
     const token = (await (await fetch("/api/gateway/auth/local-credential")).json()).data.token;
     const controller = new AbortController();
     const response = await fetch("/api/v1/session-catalog/events/stream", {
-      headers: { "X-Local-Token": token, "X-BoxTeam-Workspace-Id": workspaceId }, signal: controller.signal,
+      headers: { "X-Local-Token": token, "X-BoxTeam-Target-Gateway-Id": gatewayId, "X-BoxTeam-Workspace-Id": workspaceId }, signal: controller.signal,
     });
     if (!response.ok || !response.body) throw new Error(`SSE 连接失败 ${response.status}`);
     const state = { controller, chunks: [], closed: false };
@@ -137,7 +178,7 @@ try {
         }
       } finally { state.closed = true; }
     })();
-  }, { workspaceId: fixture.secondaryId });
+  }, { gatewayId: fixture.gatewayId, workspaceId: fixture.secondaryId });
   phase = "blocked";
   const blockedGeneration = result.joined.backend_generation;
   result.blocked = await lifecycleResponse("restart-safe", async () => {
@@ -149,6 +190,8 @@ try {
   check(result.blocked.blockers.some((item) => item.workspace_id === fixture.secondaryId && item.kind === "proxy_stream"),
     "blocker 丢失另一成员的工作区 ID");
   await panel.getByRole("alert").filter({ hasText: fixture.secondaryId }).waitFor({ state: "visible" });
+  await expect(primaryArticle()).toContainText(blockedGeneration);
+  check(!result.requests.some(request => request.path.endsWith("/restart-force")), "blocked 自动触发了强制操作");
 
   phase = "force";
   result.forced = await lifecycleResponse("restart-force", async () => {
@@ -163,13 +206,13 @@ try {
   }));
   check(result.old_stream.closed && result.old_stream.chunks.join("").includes("gateway-route-invalidated"),
     "旧 SSE 租约未通过真实代理失效");
-  await primaryArticle().getByText("运行中 · 2 个工作区共用一个 Backend", { exact: true }).waitFor({ state: "visible" });
+  await primaryArticle().getByText("运行中 · 共享 2 个工作区", { exact: true }).waitFor({ state: "visible" });
 
   // 用户确认期间另一调用方提交新 generation：真实 CAS 必须拒绝旧选择，并刷新镜像。
   phase = "stale-confirmation";
   await primaryArticle().getByRole("button", { name: "调整成员", exact: true }).click();
   await primaryArticle().getByRole("checkbox", { name: fixture.secondaryName, exact: true }).uncheck();
-  await primaryArticle().getByRole("button", { name: "确认成员并安全重启", exact: true }).click();
+  await primaryArticle().getByRole("button", { name: "确认安全重启所选成员", exact: true }).click();
   await dialog.waitFor({ state: "visible" });
   const oldRequest = groupRequest(result.forced);
   phase = "external-generation-change";
@@ -182,6 +225,8 @@ try {
   check(result.stale.detail === "工作区安全重启失败: stage=workspace_restart_safe, error=ValueError",
     "陈旧合同错误阶段或类别不一致");
   await panel.getByRole("alert").waitFor({ state: "visible" });
+  await expect(panel.getByRole("alert")).toContainText(result.stale.request_id);
+  await expect(panel.getByRole("alert")).toContainText(fixture.gatewayId);
   const fresh = (await api("/api/gateway/workspaces")).items.find((item) => item.workspace_id === fixture.primaryId);
   check(fresh.backend_generation === advanced.backend_generation && fresh.affected_workspace_ids.length === 2,
     "陈旧提交改变了已公布完整组");
@@ -190,7 +235,7 @@ try {
   await primaryArticle().getByRole("button", { name: "调整成员", exact: true }).click();
   await primaryArticle().getByRole("checkbox", { name: fixture.secondaryName, exact: true }).uncheck();
   result.removed = await lifecycleResponse("restart-safe", async () => {
-    await primaryArticle().getByRole("button", { name: "确认成员并安全重启", exact: true }).click();
+    await primaryArticle().getByRole("button", { name: "确认安全重启所选成员", exact: true }).click();
     await confirm("safe");
   });
   check(result.removed.status === "restarted", "完整 desired 成员移出失败");
@@ -205,7 +250,7 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await openRuntime();
   const secondaryArticle = () => panel.locator("article").filter({ has: page.locator("h2").filter({ hasText: fixture.secondaryName }) }).first();
-  await secondaryArticle().getByText("运行中 · 1 个工作区共用一个 Backend", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
+  await secondaryArticle().getByText("运行中 · 共享 1 个工作区", { exact: true }).waitFor({ state: "visible", timeout: 30_000 });
   await secondaryArticle().getByRole("button", { name: "调整成员", exact: true }).click();
   const initiatingCheckbox = secondaryArticle().getByRole("checkbox", { name: fixture.secondaryName, exact: true });
   check(!(await initiatingCheckbox.isDisabled()), "非默认发起成员仍被禁止退出");
@@ -246,6 +291,9 @@ try {
   result.deleted = { workspaces: (await deleteResponse.json()).data, request: deleteBody, confirmation: deleteText };
   check(!result.deleted.workspaces.items.some((item) => item.workspace_id === fixture.secondaryId), "删除成功仍保留目标登记");
   await row.waitFor({ state: "hidden", timeout: 30_000 });
+  for (const action of ["desired-join", "blocked", "force", "stale-confirmation", "desired-remove"]) {
+    check(result.requests.filter(request => request.phase === action).length === 1, `${action} 未按完整组只提交一次`);
+  }
   check(result.errors.length === 0, `页面异常: ${result.errors.join("; ")}`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
 } catch (error) {
