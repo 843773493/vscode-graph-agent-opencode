@@ -119,8 +119,6 @@ import { t } from ${i18n};
     contents = `import { ITargetSettingsContext } from ${scope};
 import { SettingsContextHeader } from ${JSON.stringify(resolve(root, 'src/settings/header.js'))};
 import { ConfigurationEntityView, type DefinitionEditorOptions } from ${JSON.stringify(resolve(root, 'src/settings/entities.js'))};
-import { captureSettingsLocation } from ${editor};
-import { selectSettingsManagementTargetCommand, type ManagementTarget } from ${JSON.stringify(resolve(root, 'src/managementTarget.js'))};
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 ` + contents;
@@ -232,7 +230,6 @@ export class SettingsEditor2 extends EditorPane {`);
     contents = replaceOnce(contents, '\t\tthis.onConfigUpdate(undefined, true);\n\t}\n\n\tprivate onDidDismissExtensionSetting', '\t\tthis.onConfigUpdate(undefined, true, true);\n\t}\n\n\tprivate onDidDismissExtensionSetting');
     contents = replaceOnce(contents, '\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,', `\t\t@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
     @ITargetSettingsContext private readonly targetSettingsContext: ITargetSettingsContext,
-    @ICommandService private readonly commandService: ICommandService,
     @INotificationService private readonly notificationService: INotificationService,
     @IEditorService private readonly editorService: IEditorService,`);
     contents = replaceOnce(contents, 'const model = await this.input.resolve();', 'const model = await input.resolve(this.instantiationService);');
@@ -261,13 +258,9 @@ export class SettingsEditor2 extends EditorPane {`);
       return;
     }
 \t\tconst installedExtensions = await this.extensionManagementService.getInstalled();`);
-    contents = replaceOnce(contents, '\t\tconst targetWidgetContainer = DOM.append(headerControlsContainer,', `    const targetButton = this._register(new Button(headerControlsContainer, defaultButtonStyles));
-    targetButton.label = this.targetSettingsContext.target ? '目标：' + this.targetSettingsContext.target.location.name : '目标：当前工作台';
-    this._register(targetButton.onDidClick(() => this.switchSettingsGateway().catch(error => {
-      if (!isCancellationError(error)) this.notificationService.error(error);
-    })));
-    this.settingsContextHeader = this._register(this.instantiationService.createInstance(SettingsContextHeader,
-      DOM.append(headerControlsContainer, DOM.$('div')), () => { if (this.dimension) this.layoutSplitView(this.dimension); }, kind => this.showDefinitions(kind)));
+    contents = replaceOnce(contents, '\t\tconst targetWidgetContainer = DOM.append(headerControlsContainer,', `    this.settingsContextHeader = this._register(this.instantiationService.createInstance(SettingsContextHeader,
+      DOM.append(headerControlsContainer, DOM.$('div')), () => { if (this.dimension) this.layoutSplitView(this.dimension); }, kind => this.showDefinitions(kind),
+      this.group.id, () => this.entityKind ? this.entityView?.selection ?? {} : {}));
 \t\tconst targetWidgetContainer = DOM.append(headerControlsContainer,`);
     contents = replaceOnce(contents, 'dimension.height - (72 + 11 + 14 /* header height + editor padding */)', 'dimension.height - (this.headerContainer.offsetHeight + 11 + 14)');
     contents = replaceOnce(contents, '{ enableRemoteSettings: true }', '{ enableRemoteSettings: true, beforeTargetChange: () => this.flushSettingsUpdates() }');
@@ -300,14 +293,6 @@ export class SettingsEditor2 extends EditorPane {`);
     delayer.trigger(() => this.flushSettingsUpdates(), manualReset ? 0 : undefined).catch(error => {
       if (!isCancellationError(error)) this.logService.error(error);
     });
-  }
-  private async switchSettingsGateway(): Promise<void> {
-    const selected = await this.commandService.executeCommand<ManagementTarget | undefined>(selectSettingsManagementTargetCommand);
-    if (!selected || this._store.isDisposed) return;
-    const captured = await captureSettingsLocation(this.instantiationService, CancellationToken.None, selected);
-    if (!captured || this._store.isDisposed) return;
-    // 新来源使用新输入；原 dirty 输入留在原编辑器组，不重绑正文或保存基线。
-    await this.group.openEditor(this.instantiationService.createInstance(SettingsEditor2Input, captured.location, captured.document), { pinned: true });
   }
   private notifySettingsDirty(): void {
     this.settingsWriterInput?.notifySettingsDirty();

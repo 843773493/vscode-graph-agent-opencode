@@ -1,4 +1,8 @@
 {
+  "settings.editor.managementGateway": "设置所属 Gateway",
+  "settings.editor.managementScope": "设置范围／工作区",
+  "settings.editor.managementSource": "配置来源",
+  "settings.editor.workspaceUnavailable": "工作区 {0} 尚未就绪（{1}）。",
   "composer.submission.label": "消息接收对账",
   "composer.submission.rejected": "消息未被接受，可编辑后重新提交",
   "composer.submission.unknown": "消息接收结果待确认，原输入已保存",

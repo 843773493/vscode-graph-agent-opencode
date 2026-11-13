@@ -93,6 +93,25 @@ try {
   assert.equal((await api('/api/v1/workspace', other)).data.workspace_id, other.workspaceId);
   result.owners = { a: { gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId }, b: other };
 
+  result.phase = 'navigation-workspace-directory-refresh';
+  await command('boxteam.gateway.connections');
+  const gatewayDialog = page.getByRole('dialog', { name: 'Gateway 控制中心', exact: true });
+  await expect(gatewayDialog).toBeVisible();
+  const refreshedDirectory = page.waitForResponse(response => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/gateway/workspaces');
+  await gatewayDialog.getByRole('button', { name: '刷新连接', exact: true }).click();
+  const directoryResponse = await refreshedDirectory, directoryBody = await directoryResponse.json();
+  assert.equal(directoryResponse.status(), 200, JSON.stringify(directoryBody));
+  assert.equal(directoryBody.request_id, directoryResponse.headers()['x-request-id']);
+  const directory = directoryBody.data;
+  const refreshedSibling = directory.items.find(item => item.workspace_id === other.workspaceId);
+  assert(refreshedSibling, '真实导航刷新返回的 Gateway 工作区目录必须包含刚登记的 B');
+  result.navigationDirectoryRefresh = { requestId: directoryBody.request_id,
+    activeWorkspaceId: directory.active_workspace?.workspace_id,
+    workspaces: directory.items.map(item => ({ workspaceId: item.workspace_id, name: item.name })),
+    includesB: true };
+  await gatewayDialog.getByRole('button', { name: '关闭 Gateway 控制中心' }).click();
+
   result.phase = 'private-override-via-product';
   const privateBefore = await source(fixture, privateKey);
   await open(fixture, privateKey);
@@ -159,6 +178,69 @@ try {
   assert(result.writes.every(write => write.gatewayId === fixture.gatewayId
     && write.workspaceId === (write.sourceKey === privateKey ? fixture.workspaceId
       : write.key === submitted.edit.idempotency_key ? fixture.workspaceId : other.workspaceId)));
+
+  result.phase = 'management-target-selectors';
+  await api(`/api/gateway/workspaces/${other.workspaceId}/activate`, other, { method: 'POST', body: '{}' });
+  const quick = page.locator('.quick-input-widget');
+  const form = page.locator('.editor-group-container.active .configuration-entities[data-definition-kind="agents"]');
+  const header = () => page.locator('.editor-group-container.active .settings-context-label');
+  const chooseGlobalSource = async owner => {
+    const listed = page.waitForResponse(response => response.request().method() === 'GET'
+      && new URL(response.url()).pathname === '/api/v1/config/sources'
+      && response.request().headers()['x-boxteam-workspace-id'] === owner.workspaceId);
+    const opened = command('boxteam.settings.agents');
+    const response = await listed;
+    assert.equal(response.status(), 200);
+    await expect(quick).toBeVisible();
+    await quick.locator('.monaco-list-row').filter({ hasText: privateKey }).click();
+    await opened;
+    await expect(form).toBeVisible();
+    await expect(header()).toContainText(owner.workspaceId);
+  };
+  await focus(0);
+  // 全局入口首次用本地首个登记工作区，不借正在激活的 B 补齐 owner。
+  await chooseGlobalSource(fixture);
+  const markerA = '// A 的目标切换前草稿';
+  const currentPrivate = await source(fixture, privateKey);
+  await open(fixture, privateKey);
+  await replace(0, currentPrivate.jsonc + '\n' + markerA + '\n');
+  await command('boxteam.settings.agents', location(fixture, privateKey));
+  await expect(form).toBeVisible();
+  const writesBeforeTargetSwitch = result.writes.length;
+  const scopeSelector = header().getByRole('combobox', { name: '设置范围／工作区', exact: true });
+  await expect(scopeSelector).toBeEnabled();
+  const selectedScope = () => scopeSelector.evaluate(select => select.selectedOptions[0]?.textContent?.trim());
+  const primaryWorkspace = result.initialization[1].data.items.find(item => item.workspace_id === fixture.workspaceId);
+  assert(primaryWorkspace);
+  await expect.poll(selectedScope).toBe(`${primaryWorkspace.name} · ${fixture.workspaceId}`);
+  const selectedBeforeSwitch = await selectedScope();
+  await scopeSelector.selectOption({ label: `${sibling.name} · ${other.workspaceId}` });
+  await expect(header()).toContainText(other.workspaceId);
+  await expect.poll(selectedScope).toBe(`${sibling.name} · ${other.workspaceId}`);
+  const selectedAfterSwitch = await selectedScope();
+  await expect(form).toBeVisible();
+  await expect(quick).not.toBeVisible();
+  await expect(page.locator('.editor-group-container.active .tab.active')).not.toHaveClass(/\bdirty\b/);
+  // 下次同入口沿管理选择继续 B；来源仍由原选择器决定。
+  await chooseGlobalSource(other);
+  const bPrivate = await source(other, privateKey);
+  const userLayer = bPrivate.layers.find(layer => layer.source_key === sharedKey);
+  assert(userLayer);
+  const sourceSelector = header().getByRole('combobox', { name: '配置来源', exact: true });
+  await expect(sourceSelector).toBeEnabled();
+  await sourceSelector.selectOption({ label: `${userLayer.source_key} · ${userLayer.layer}` });
+  await expect(header()).toContainText(sharedKey);
+  await expect(quick).not.toBeVisible();
+  await open(fixture, privateKey);
+  await expect(text(0)).toContainText(markerA);
+  await expect(tab(0)).toHaveClass(/\bdirty\b/);
+  assert(!(await source(fixture, privateKey)).jsonc.includes(markerA));
+  assert.equal(result.writes.length, writesBeforeTargetSwitch, '管理目标和来源切换不能提交配置');
+  assert.equal((await api('/api/gateway/workspaces', other)).data.active_workspace.workspace_id, other.workspaceId,
+    '管理选择不能改变导航激活工作区');
+  result.targetSelectors = { firstWorkspace: fixture.workspaceId, rememberedWorkspace: other.workspaceId,
+    selectedBeforeSwitch, selectedAfterSwitch,
+    oldDraftPreserved: true, writesUnchanged: true, activeWorkspace: other.workspaceId };
   assert.deepEqual(result.pageErrors, []);
   assert.deepEqual(result.modelRequests, []);
   result.phase = 'completed';

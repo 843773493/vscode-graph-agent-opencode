@@ -12,11 +12,13 @@ import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import type { GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
 import { workspaceContext } from './workspaceContext.js';
+import type { GatewayWorkspace } from '../../web/src/types/backend.js';
 
 type ManagementScope = 'extensions' | 'settings' | 'mcp';
 export type ManagementTarget = GatewayManagementTargetDTO;
 const selections = new Map<ManagementScope, { entryGatewayId: string; target: ManagementTarget }>();
 const selecting = new Map<ManagementScope, AbortController>();
+const workspaceSelections = new Map<string, string>();
 export const selectExtensionManagementTargetCommand = 'boxteam.extensions.selectTarget';
 export const selectSettingsManagementTargetCommand = 'boxteam.settings.selectTarget';
 export const selectMcpManagementTargetCommand = 'boxteam.mcp.selectTarget';
@@ -96,6 +98,37 @@ export function managementGateway(scope: ManagementScope, explicitGatewayId?: st
   return { gateway_id: id, name: id === entry ? t('workbench.managementTarget.local') : id, connection_kind: id === entry ? 'local' : 'remote_gateway' };
 }
 
+/** 只记住管理入口的展示选择，不读取导航 activeId，也不激活工作区。 */
+export function managementWorkspace(scope: ManagementScope, target: Pick<ManagementTarget, 'gateway_id' | 'gateway_connection_id'>, workspaceId?: string): GatewayWorkspace {
+  const entry = workspaceContext.getSnapshot().gatewayId;
+  if (!entry) throw new Error(t('workbench.managementTarget.gatewayNotReady'));
+  const key = JSON.stringify([entry, scope, target.gateway_id, target.gateway_connection_id]);
+  const items = workspaceContext.getSnapshot().workspaces.filter(item => item.gateway_id === target.gateway_id);
+  const id = workspaceId ?? workspaceSelections.get(key);
+  const selected = id === undefined ? items[0] : items.find(item => item.workspace_id === id);
+  if (!selected) throw new Error(t('plugins.noWorkspaces'));
+  if (workspaceId !== undefined) workspaceSelections.set(key, workspaceId);
+  return selected;
+}
+
+/** 下拉与命令共用同一展示选择，不激活工作区。 */
+export function selectManagementTarget(scope: ManagementScope, target: ManagementTarget): void {
+  const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
+  if (!entryGatewayId) throw new Error(t('workbench.managementTarget.gatewayNotReady'));
+  selections.set(scope, { entryGatewayId, target: { ...target } });
+  if (scope === 'extensions') { updateExtensionTitle(); extensionManagementChanged.fire(); }
+  if (scope === 'mcp') { updateMcpTitle(); mcpManagementChanged.fire(); }
+}
+export async function listManagementTargets(signal?: AbortSignal): Promise<ManagementTarget[]> {
+  const entry = workspaceContext.getSnapshot().gatewayId;
+  const directory = await gateway.request<GatewayManagementDirectoryDTO>('/api/gateway/management/gateways', { signal });
+  if (directory.local_gateway_id !== entry || workspaceContext.getSnapshot().gatewayId !== entry) {
+    throw new Error(t('workbench.managementTarget.directoryOwnerMismatch'));
+  }
+  // HTTP 的空路由只在目录入口归一，避免本地目标与冻结输入出现两项身份。
+  return directory.items.map(target => ({ ...target, gateway_connection_id: target.gateway_connection_id ?? undefined }));
+}
+
 export function managementTargetDisplayName(target: ManagementTarget | undefined): string {
   if (!target || target.connection_kind === 'local') return t('workbench.managementTarget.local');
   return target.name;
@@ -117,10 +150,9 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
     const releaseUser = onGatewayTokenInvalidated(0, invalidate);
     const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== entry) invalidate(); });
     try {
-      const directory = await gateway.request<GatewayManagementDirectoryDTO>('/api/gateway/management/gateways', { signal: controller.signal });
+      const targets = await listManagementTargets(controller.signal);
       controller.signal.throwIfAborted();
-      if (directory.local_gateway_id !== entry) throw new Error(t('workbench.managementTarget.directoryOwnerMismatch'));
-      const picked = await quickInput.pick(directory.items.map(target => ({
+      const picked = await quickInput.pick(targets.map(target => ({
         label: target.connection_kind === 'local' ? t('workbench.managementTarget.local') : target.name,
         description: target.gateway_id, detail: target.connection_error ?? target.gateway_connection_id,
         picked: target.gateway_id === current.gateway_id && target.gateway_connection_id === current.gateway_connection_id, target,
@@ -128,10 +160,8 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
         placeHolder: t('workbench.managementTarget.pickHint') }, cancellation.token);
       controller.signal.throwIfAborted();
       if (!picked) return;
-      const target: ManagementTarget = { ...picked.target, gateway_connection_id: picked.target.gateway_connection_id ?? undefined };
-      selections.set(scope, { entryGatewayId: entry, target });
-      if (scope === 'extensions') { updateExtensionTitle(); extensionManagementChanged.fire(); }
-      if (scope === 'mcp') { updateMcpTitle(); mcpManagementChanged.fire(); }
+      const target = picked.target;
+      selectManagementTarget(scope, target);
       return target;
     } finally {
       if (selecting.get(scope) === controller) selecting.delete(scope);

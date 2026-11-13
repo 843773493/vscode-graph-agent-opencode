@@ -6,7 +6,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName, type ManagementTarget } from '../managementTarget.js';
+import { createManagementTargetLifecycle, managementGateway, managementWorkspace, managementTargetDisplayName, type ManagementTarget } from '../managementTarget.js';
 import { manageDefaultAgentSource } from './defaultAgent.js';
 import { configureServicePlugin } from './pluginConfiguration.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
@@ -154,12 +154,13 @@ for (const operation of ['sourceStatus', 'rebaseSource'] as const) registerActio
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.settings.openTarget', title: commandTitle('workbench.settings.openTarget'),
     category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true }); }
-  async run(accessor: ServicesAccessor, target?: ManagementTarget): Promise<void> {
+  async run(accessor: ServicesAccessor, target?: ManagementTarget, scope?: { workspace_id: string }): Promise<void> {
     const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
     const frozen = { ...(target ?? managementGateway('settings')) };
+    const explicit = scope ? { ...scope } : undefined;
     const lifecycle = createManagementTargetLifecycle(t('workbench.settings.reopenSource'));
     try {
-      const captured = await captureSettingsLocation(parent, lifecycle.token, frozen);
+      const captured = await captureSettingsLocation(parent, lifecycle.token, frozen, explicit);
       lifecycle.check();
       if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { pinned: true });
     } finally { lifecycle.dispose(); }
@@ -185,7 +186,7 @@ for (const kind of ['providers', 'agents'] as const) registerAction2(class exten
       lifecycle.check();
       // 全局入口默认本地管理目标的首个工作区；来源选择只发生一次。
       const workspace = frozen?.workspace_id ? frozen : explicitOwner ? { workspace_id: explicitOwner.workspaceId }
-        : workspaceContext.getSnapshot().workspaces.find(item => item.gateway_id === target.gateway_id);
+        : managementWorkspace('settings', target);
       if (!workspace) throw new Error(t('plugins.noWorkspaces'));
       const owner = new ConfigurationSourceOwner({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id, workspace_id: workspace.workspace_id });
       const selected = frozen ? { source_key: frozen.source_key } : await quickInput.pick((await owner.list(lifecycle.signal)).sources.filter(item => item.source_key).map(item => ({

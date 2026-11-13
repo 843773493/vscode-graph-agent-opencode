@@ -18,6 +18,7 @@ import { DefaultSettings, Settings2EditorModel, nullRange } from '../../upstream
 import type { ISetting, ISettingsGroup } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import { ITextFileService, type ITextFileEditorModel, type ITextFileEditorModelManager } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { requireGatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { managementGateway, type ManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -50,7 +51,8 @@ export function parseSettingsLocation(value: unknown): TargetSettingsLocation {
 }
 
 /** 原目标选择只读来源目录，不再发现或准备 Extension Host 的 profile/view。 */
-export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings')):
+export async function captureSettingsLocation(parent: IInstantiationService, token: CancellationToken, target: ManagementTarget = managementGateway('settings'),
+  explicit?: { workspace_id?: string; source_key?: string }):
 Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefined> {
   const quick = parent.invokeFunction(accessor => accessor.get(IQuickInputService));
   const frozen = { ...target };
@@ -68,19 +70,27 @@ Promise<{ location: TargetSettingsLocation; document: SourceDocument } | undefin
     if (refreshed.error) throw new Error(refreshed.error);
     if (refreshed.loading || !refreshed.gatewayId) throw new Error(t('settings.editor.targetsNotRefreshed'));
     const workspaces = refreshed.workspaces;
-    const scope = await quick.pick([{ label: t('settings.editor.gatewayConfiguration'), description: frozen.name, detail: frozen.gateway_id, workspaceId: undefined as string | undefined },
+    const scopes = [{ label: t('settings.editor.gatewayConfiguration'), description: frozen.name, detail: frozen.gateway_id, workspaceId: undefined as string | undefined },
       ...workspaces.filter(workspace => workspace.gateway_id === frozen.gateway_id).map(workspace => ({ label: workspace.name,
-        description: t('settings.editor.workspacePrefix') + workspace.status, detail: workspace.workspace_id, workspaceId: workspace.workspace_id }))],
-    { title: t('settings.editor.chooseTarget'), prompt: `Gateway ${frozen.gateway_id}`, placeHolder: t('settings.editor.readSourceBoundary') }, cancellation.token);
+        description: t('settings.editor.workspacePrefix') + workspace.status, detail: workspace.workspace_id, workspaceId: workspace.workspace_id }))];
+    const scope = explicit ? scopes.find(scope => scope.workspaceId === explicit.workspace_id) : await quick.pick(scopes,
+      { title: t('settings.editor.chooseTarget'), prompt: `Gateway ${frozen.gateway_id}`, placeHolder: t('settings.editor.readSourceBoundary') }, cancellation.token);
     controller.signal.throwIfAborted();
+    if (explicit && !scope) throw new Error(t('workbench.settings.targetOffline'));
     if (!scope) return;
+    if (scope.workspaceId) {
+      const workspace = requireGatewayWorkspaceRequestTarget(workspaces, { gatewayId: frozen.gateway_id, workspaceId: scope.workspaceId });
+      if (workspace.status !== 'ready') throw new Error(t('settings.editor.workspaceUnavailable', workspace.name, workspace.status));
+    }
     const owner = new ConfigurationSourceOwner({ gateway_id: frozen.gateway_id, gateway_connection_id: frozen.gateway_connection_id, workspace_id: scope.workspaceId });
     const listed = await owner.list(controller.signal);
     controller.signal.throwIfAborted();
-    const selected = await quick.pick(listed.sources.filter(source => source.source_key).map(source => ({ label: source.source_key!,
-      description: t('settings.editor.layerPresencePriority', source.layer, source.presence, source.precedence), detail: source.uri ?? undefined })),
-    { title: t('settings.editor.chooseFormalSource'), prompt: `${frozen.gateway_id} · ${scope.label}`, placeHolder: t('settings.editor.sourceAccessBoundary') }, cancellation.token);
+    const sources = listed.sources.filter(source => source.source_key).map(source => ({ label: source.source_key!,
+      description: t('settings.editor.layerPresencePriority', source.layer, source.presence, source.precedence), detail: source.uri ?? undefined }));
+    const selected = explicit?.source_key ? sources.find(source => source.label === explicit.source_key) : await quick.pick(sources,
+      { title: t('settings.editor.chooseFormalSource'), prompt: `${frozen.gateway_id} · ${scope.label}`, placeHolder: t('settings.editor.sourceAccessBoundary') }, cancellation.token);
     controller.signal.throwIfAborted();
+    if (explicit?.source_key && !selected) throw new Error(t('settings.editor.selectedSourceIdentityMissing'));
     if (!selected) return;
     const document = await owner.read(selected.label, undefined, controller.signal);
     controller.signal.throwIfAborted();

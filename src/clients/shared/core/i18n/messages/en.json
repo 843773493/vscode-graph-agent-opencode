@@ -1,4 +1,8 @@
 {
+  "settings.editor.managementGateway": "Settings Gateway",
+  "settings.editor.managementScope": "Settings scope / Workspace",
+  "settings.editor.managementSource": "Settings source",
+  "settings.editor.workspaceUnavailable": "Workspace {0} is not ready ({1}).",
   "composer.submission.label": "Message acceptance reconciliation",
   "composer.submission.rejected": "The message was rejected. Edit it and submit again.",
   "composer.submission.unknown": "Message acceptance is unconfirmed. The original input is saved.",
