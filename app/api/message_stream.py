@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
 from contextlib import aclosing
@@ -179,7 +180,11 @@ async def _stream_message_sse(
             if isinstance(item, str):
                 yield item
                 continue
-            yield _sse_frame(item)
+            # 恢复快照包含整轮正文，严格协议投影不能占住事件循环。
+            if item.get("type") == "stream.snapshot":
+                yield await asyncio.to_thread(_sse_frame, item)
+            else:
+                yield _sse_frame(item)
 
 
 @router.get(
@@ -305,7 +310,8 @@ async def get_message_stream_snapshot(
     except (MessageStreamNotFoundError, MessageStreamError, FileNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(
-        data=_public_snapshot(
+        data=await asyncio.to_thread(
+            _public_snapshot,
             session_id=session_id,
             turn_id=turn_id,
             turn_stream_id=writer.turn_stream_id,
@@ -371,6 +377,6 @@ async def list_message_stream_events(
     except (MessageStreamNotFoundError, MessageStreamError, FileNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     return APIResponse(
-        data=[_public_event_json(event) for event in events],
+        data=await asyncio.to_thread(lambda: [_public_event_json(event) for event in events]),
         request_id=request_id,
     )
