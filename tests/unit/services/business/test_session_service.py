@@ -332,10 +332,10 @@ class TestSessionService:
 
     @pytest.mark.asyncio
     async def test_create_session_with_specified_agent(self):
-        request = SessionCreateRequest(title="Agent Session", agent_id="deep_agent")
+        request = SessionCreateRequest(title="Agent Session", agent_id="coder")
         session = await self.service.create(request)
 
-        assert session.current_agent_id == "default"
+        assert session.current_agent_id == "coder"
 
     @pytest.mark.asyncio
     async def test_public_create_rejects_internal_session_kind(self):
@@ -352,9 +352,9 @@ class TestSessionService:
     async def test_update_session_can_switch_agent(self):
         created = await self.service.create(SessionCreateRequest(title="Switch Agent Session"))
 
-        updated = await self.service.update(created.session_id, SessionUpdateRequest(agent_id="deep_agent"))
+        updated = await self.service.update(created.session_id, SessionUpdateRequest(agent_id="coder"))
 
-        assert updated.current_agent_id == "deep_agent"
+        assert updated.current_agent_id == "coder"
 
     @pytest.mark.asyncio
     async def test_get_session(self):

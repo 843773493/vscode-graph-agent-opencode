@@ -37,7 +37,7 @@ class ConfigAgentToolsMixin:
 
     def get_agent_tool_config(self, agent_id: str | None = None) -> dict[str, Any]:
         config = self._get_effective_config()
-        resolved_agent_id = self._normalize_agent_id(agent_id)
+        resolved_agent_id = config["default_agent"] if agent_id is None else agent_id
         return self._agent_tool_config_from_loaded(
             config,
             agent_id=resolved_agent_id,
@@ -50,19 +50,24 @@ class ConfigAgentToolsMixin:
         """返回当前 Workspace 和 Agent 合并后的唯一工具策略解析器。"""
 
         config = self._get_effective_config()
-        resolved_agent_id = self._normalize_agent_id(agent_id)
+        resolved_agent_id = config["default_agent"] if agent_id is None else agent_id
+        agents = config.get("agents", {})
+        if not isinstance(agents, dict):
+            raise TypeError("agents 配置必须是对象")
+        agent_config = agents.get(resolved_agent_id)
+        if not isinstance(agent_config, dict):
+            if resolved_agent_id not in agents:
+                raise ValueError(f"agent {resolved_agent_id} 不存在")
+            raise TypeError(f"agent {resolved_agent_id} 配置必须是对象")
+        legacy_tool_config = self._agent_tool_config_from_loaded(
+            config,
+            agent_id=resolved_agent_id,
+        )
         tooling = config.get("tooling", {})
         if tooling is None:
             tooling = {}
         if not isinstance(tooling, dict):
             raise TypeError("tooling 配置必须是对象")
-
-        agents = config.get("agents", {})
-        if not isinstance(agents, dict):
-            raise TypeError("agents 配置必须是对象")
-        agent_config = agents.get(resolved_agent_id, {})
-        if not isinstance(agent_config, dict):
-            raise TypeError(f"agent {resolved_agent_id} 配置必须是对象")
         agent_tools = agent_config.get("tools", {})
         if agent_tools is None:
             agent_tools = {}
@@ -105,7 +110,11 @@ class ConfigAgentToolsMixin:
 
         # 现有 allowlist/denylist 和 confirmation_required 继续作为静态限制，
         # 但统一转换到 ToolPolicyResolver，不再由各个运行时调用方分别解释。
-        legacy_policy = self.resolve_agent_tool_policy(resolved_agent_id)
+        legacy_policy = self._resolve_agent_tool_policy_from_loaded(
+            config,
+            agent_id=resolved_agent_id,
+            tool_config=legacy_tool_config,
+        )
         restrictions["execution_disabled"] = list(
             dict.fromkeys(
                 [
@@ -113,10 +122,6 @@ class ConfigAgentToolsMixin:
                     *legacy_policy.disabled_names,
                 ]
             )
-        )
-        legacy_tool_config = self._agent_tool_config_from_loaded(
-            config,
-            agent_id=resolved_agent_id,
         )
         restrictions["confirmation_required"] = list(
             dict.fromkeys(
@@ -157,14 +162,27 @@ class ConfigAgentToolsMixin:
         """返回配置、目录展示和运行时共同使用的权威工具策略。"""
 
         config = self._get_effective_config()
-        resolved_agent_id = self._normalize_agent_id(agent_id)
+        resolved_agent_id = config["default_agent"] if agent_id is None else agent_id
         tool_config = self._agent_tool_config_from_loaded(
             config,
             agent_id=resolved_agent_id,
         )
+        return self._resolve_agent_tool_policy_from_loaded(
+            config,
+            agent_id=resolved_agent_id,
+            tool_config=tool_config,
+        )
+
+    def _resolve_agent_tool_policy_from_loaded(
+        self,
+        config: dict[str, Any],
+        *,
+        agent_id: str,
+        tool_config: dict[str, Any],
+    ) -> ResolvedToolPolicy:
         custom_tool_names = custom_tool_spec_names(
             tool_config["custom"],
-            context=f"agent {resolved_agent_id} 的 tools.custom",
+            context=f"agent {agent_id} 的 tools.custom",
         )
         extension_names = custom_tool_names | self._resolved_mcp_tool_names(tool_config)
         development = config.get("development") or {}
@@ -177,7 +195,7 @@ class ConfigAgentToolsMixin:
             extension_names=extension_names,
             allowlist=tool_config["allowlist"],
             denylist=tool_config["denylist"],
-            context=f"agent {resolved_agent_id} 的工具策略",
+            context=f"agent {agent_id} 的工具策略",
         )
 
     def resolve_agent_confirmation_tool_names(
@@ -185,7 +203,7 @@ class ConfigAgentToolsMixin:
         agent_id: str | None = None,
     ) -> frozenset[str]:
         config = self._get_effective_config()
-        resolved_agent_id = self._normalize_agent_id(agent_id)
+        resolved_agent_id = config["default_agent"] if agent_id is None else agent_id
         tool_config = self._agent_tool_config_from_loaded(
             config,
             agent_id=resolved_agent_id,
@@ -214,20 +232,13 @@ class ConfigAgentToolsMixin:
         agent_id: str,
     ) -> dict[str, Any]:
         agents = config.get("agents", {})
-        if not agents or agent_id not in agents:
-            if agent_id != "default":
-                raise ValueError(f"agent {agent_id} 不存在")
-            return {
-                "allowlist": [],
-                "denylist": [],
-                "confirmation_required": [],
-                "custom": [],
-            }
         if not isinstance(agents, dict):
-            raise ValueError("agents 配置必须是对象")
-        agent_config = agents[agent_id]
+            raise TypeError("agents 配置必须是对象")
+        agent_config = agents.get(agent_id)
         if not isinstance(agent_config, dict):
-            raise ValueError(f"agent {agent_id} 的配置必须是对象")
+            if agent_id not in agents:
+                raise ValueError(f"agent {agent_id} 不存在")
+            raise TypeError(f"agent {agent_id} 的配置必须是对象")
         return self._parse_agent_tool_config(
             agent_config.get("tools", {}),
             agent_id=agent_id,

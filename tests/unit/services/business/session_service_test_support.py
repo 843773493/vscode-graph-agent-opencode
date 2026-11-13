@@ -46,7 +46,13 @@ class SessionServiceConfigStub:
                             "primary_provider": "primary",
                             "fallback_providers": [],
                         }
-                    }
+                    },
+                    "coder": {
+                        "model": {
+                            "primary_provider": "primary",
+                            "fallback_providers": [],
+                        }
+                    },
                 },
                 "llm": {"providers": [{"id": "primary"}]},
             }
@@ -69,11 +75,7 @@ class SessionServiceConfigStub:
         )
 
     def validate_agent_id(self, agent_id: str | None) -> str:
-        resolved = (
-            self._default_agent_id()
-            if agent_id in (None, "deep_agent")
-            else agent_id
-        )
+        resolved = self._default_agent_id() if agent_id is None else agent_id
         agents = self._mapping(self._config.get("agents"))
         if not isinstance(resolved, str) or resolved not in agents:
             raise ValueError(f"agent {resolved} 不存在")

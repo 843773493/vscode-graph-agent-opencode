@@ -15,7 +15,9 @@ from app.services.infrastructure.config_service import ConfigService
 
 
 class RuntimeToolCatalog(Protocol):
-    def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]: ...
+    def get_available_tools(
+        self, agent_id: str | None = None
+    ) -> list[dict[str, Any]]: ...
 
 
 class ToolCatalogService:
@@ -30,7 +32,8 @@ class ToolCatalogService:
         self._runtime_catalog = runtime_catalog
         self._config_service = config_service
 
-    def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]:
+    def get_available_tools(self, agent_id: str | None = None) -> list[dict[str, Any]]:
+        resolved_agent_id = self._config_service.validate_agent_id(agent_id)
         definitions = [
             {
                 **item,
@@ -42,13 +45,13 @@ class ToolCatalogService:
                 ),
                 "kind": item.get("kind", DEFAULT_TOOL_GROUP.kind),
             }
-            for item in self._runtime_catalog.get_available_tools(agent_id)
+            for item in self._runtime_catalog.get_available_tools(resolved_agent_id)
             if item["id"] != "invoke_extension_tool"
         ]
-        tool_config = self._config_service.get_agent_tool_config(agent_id)
+        tool_config = self._config_service.get_agent_tool_config(resolved_agent_id)
         for spec in parse_custom_tool_specs(
             tool_config.get("custom", []),
-            context=f"agent {agent_id} 的 tools.custom",
+            context=f"agent {resolved_agent_id} 的 tools.custom",
         ):
             definition = self._custom_definition(spec)
             definitions.append(definition)

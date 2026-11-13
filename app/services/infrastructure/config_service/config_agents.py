@@ -41,13 +41,10 @@ class ConfigAgentsMixin:
 
     def get_default_agent_id(self) -> str:
         config = self._get_effective_config()
-        default_agent_id = config.get("default_agent")
-        agents = config.get("agents", {})
-
-        if default_agent_id and default_agent_id in agents:
-            return default_agent_id
-
-        return "default"
+        default_agent_id = config["default_agent"]
+        if default_agent_id not in config["agents"]:
+            raise ValueError(f"default_agent 引用了不存在的 Agent: {default_agent_id}")
+        return default_agent_id
 
     def get_workspace_default_agent_id(self) -> str:
         return self._session_defaults.get_workspace_default_agent_id()
@@ -72,14 +69,7 @@ class ConfigAgentsMixin:
         return self._session_defaults.resolve_new_session_provider_id(agent_id)
 
     def _normalize_agent_id(self, agent_id: str | None) -> str:
-        if not agent_id:
-            return self.get_default_agent_id()
-
-        # TODO: 兼容历史别名 deep_agent，后续移除
-        if agent_id == "deep_agent":
-            return self.get_default_agent_id()
-
-        return agent_id
+        return self.get_default_agent_id() if agent_id is None else agent_id
 
     def resolve_agent_id(self, agent_id: str | None) -> str:
         return self._normalize_agent_id(agent_id)
@@ -88,11 +78,6 @@ class ConfigAgentsMixin:
         resolved_agent_id = self._normalize_agent_id(agent_id)
         config = self._get_effective_config()
         agents = config.get("agents", {})
-
-        if not agents:
-            if resolved_agent_id != "default":
-                raise ValueError(f"agent {resolved_agent_id} 不存在")
-            return resolved_agent_id
 
         if resolved_agent_id not in agents:
             raise ValueError(f"agent {resolved_agent_id} 不存在")
@@ -112,16 +97,9 @@ class ConfigAgentsMixin:
         preferred_provider_id: str | None = None,
     ) -> dict[str, Any]:
         config = self._get_effective_config()
-        # 沿用本次已解析的快照，避免 Provider 解析再次反序列化整份配置。
-        providers = self._llm_resolution.get_llm_providers(config)
-
-        if not providers:
-            raise ValueError("未配置任何 LLM provider")
-
-        agents = config.get("agents", {})
-
-        resolved_agent_id = self._normalize_agent_id(agent_id)
-        if not agents or resolved_agent_id not in agents:
+        agents = config["agents"]
+        resolved_agent_id = config["default_agent"] if agent_id is None else agent_id
+        if resolved_agent_id not in agents:
             raise ValueError(f"agent {resolved_agent_id} 不存在")
 
         target_agent = agents[resolved_agent_id]
@@ -141,11 +119,8 @@ class ConfigAgentsMixin:
             )
 
         provider_map: dict[str, dict[str, Any]] = {}
-        for index, provider in enumerate(providers):
-            provider_id = provider.get("id")
-            if not provider_id:
-                provider_id = f"provider_{index}"
-            provider_map[provider_id] = provider
+        for provider in config["llm"]["providers"]:
+            provider_map[provider["id"]] = provider
 
         primary_provider = model_cfg.get("primary_provider")
         fallback_providers = model_cfg.get("fallback_providers", [])
@@ -173,7 +148,8 @@ class ConfigAgentsMixin:
                 raise ValueError(
                     f"agent {resolved_agent_id} 引用了不存在的 provider: {provider_id}"
                 )
-            selected_providers.append(provider)
+            # 只展开此 Agent 的运行凭据；不相关定义缺凭据不能掩盖目标身份错误。
+            selected_providers.append(self._llm_resolution.expand_provider(provider))
 
         runtime_config: dict[str, Any] = {
             "system_prompt": instructions["system_prompt"],

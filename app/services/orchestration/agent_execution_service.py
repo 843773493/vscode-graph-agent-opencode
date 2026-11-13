@@ -549,7 +549,7 @@ class AgentExecutionService(JobStepExecutor):
             candidate = await persisted_pending_tool_candidate(checkpointer, admission)
         return candidate.checkpoint_id if candidate is not None else None
 
-    def _tool_face_definitions(self, agent_id: str) -> list[dict[str, Any]]:
+    def _tool_face_definitions(self, agent_id: str | None) -> list[dict[str, Any]]:
         """缓存不含执行状态的工具定义；与执行共用注册，不初始化模型或图。"""
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
@@ -561,7 +561,7 @@ class AgentExecutionService(JobStepExecutor):
 
         config_snapshot = self._config_service.get_snapshot()
         with self._config_service.use_snapshot(config_snapshot):
-            resolved_agent_id = self._config_service.resolve_agent_id(agent_id)
+            resolved_agent_id = self._config_service.validate_agent_id(agent_id)
             config_revision = self._config_service.get_revision()
             mode_getter = getattr(self._config_service, "get_agent_run_mode", None)
             run_mode = mode_getter() if callable(mode_getter) else None
@@ -610,6 +610,6 @@ class AgentExecutionService(JobStepExecutor):
         self._tool_face_cache[cache_key] = definitions
         return definitions
 
-    def get_available_tools(self, agent_id: str = "default") -> list[dict[str, Any]]:
+    def get_available_tools(self, agent_id: str | None = None) -> list[dict[str, Any]]:
         """工具管理目录：按配置导出完整定义，运行选择由 ToolService 投影。"""
         return self._tool_face_definitions(agent_id)

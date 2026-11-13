@@ -23,9 +23,14 @@ class LlmResolution:
         if not isinstance(agents, dict):
             raise ValueError("agents 配置必须是对象")
 
-        agent_config = agents.get(default_agent_id)
+        if default_agent_id not in agents:
+            raise ValueError(
+                f"default_agent 引用了不存在的 Agent: {default_agent_id}"
+            )
+
+        agent_config = agents[default_agent_id]
         if not isinstance(agent_config, dict):
-            return self.resolve_first_provider_model(config)
+            raise TypeError(f"agent {default_agent_id} 配置必须是对象")
 
         model_config = agent_config.get("model", {})
         if not isinstance(model_config, dict):
@@ -38,18 +43,6 @@ class LlmResolution:
             )
 
         return self.resolve_provider_model(config, primary_provider_id)
-
-    def resolve_first_provider_model(self, config: dict[str, Any]) -> str:
-        providers = config.get("llm", {}).get("providers", [])
-        if not providers:
-            raise ValueError("未配置任何 LLM provider")
-        first_provider = providers[0]
-        if not isinstance(first_provider, dict):
-            raise ValueError("llm.providers 配置项必须是对象")
-        model = first_provider.get("model")
-        if not isinstance(model, str) or not model:
-            raise ValueError("llm.providers[0].model 必须是非空字符串")
-        return model
 
     def resolve_provider_model(self, config: dict[str, Any], provider_id: str) -> str:
         providers = config.get("llm", {}).get("providers", [])

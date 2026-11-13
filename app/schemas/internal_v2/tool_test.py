@@ -9,7 +9,7 @@ ToolTestStatus = Literal["queued", "running", "completed", "failed"]
 
 
 class ToolTestStartRequest(BaseModel):
-    agent_id: str = "default"
+    agent_id: str | None = None
     provider_ids: list[str] = Field(default_factory=list)
     repetitions: int = Field(default=1, ge=1, le=20)
 

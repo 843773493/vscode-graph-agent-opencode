@@ -259,6 +259,9 @@ def agent_execution_dependencies(
     config_service.get_revision.return_value = config_service.get_snapshot.return_value.revision
     config_service.use_snapshot.side_effect = lambda _snapshot: nullcontext()
     config_service.resolve_agent_id.return_value = "test_agent"
+    config_service.validate_agent_id.side_effect = lambda agent_id: (
+        "test_agent" if agent_id is None else agent_id
+    )
     config_service.get_agent_runtime_config.return_value = {
         "providers": [
             {
@@ -682,6 +685,29 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
     assert key[1] == "revision-b"
     assert "ses_test" not in str(key)
     assert service._tool_face_cache[key] == [{"id": "read_file", "name": "read_file"}]
+
+
+def test_tool_face_resolves_default_agent_before_owns_thread_false_assembly(
+    agent_execution_dependencies,
+):
+    service = _build_agent_execution_service(agent_execution_dependencies)
+    assembled: list[tuple[str, bool]] = []
+
+    def build_agent(**kwargs):
+        assembled.append((kwargs["agent_id"], kwargs["owns_thread"]))
+        return []
+
+    with (
+        patch.object(service, "_build_agent", side_effect=build_agent),
+        patch(
+            "app.services.orchestration.agent_execution_service.build_tool_definitions",
+            return_value=[],
+        ),
+    ):
+        assert service.get_available_tools() == []
+
+    assert agent_execution_dependencies["config_service"].validate_agent_id.call_args.args == (None,)
+    assert assembled == [("test_agent", False)]
 
 
 @pytest.mark.asyncio

@@ -91,10 +91,11 @@ class ToolTestService:
         cases = self._registry.cases_for(tool_name)
         if not cases:
             raise ValueError(f"工具尚未提供模型调用测试: {tool_name}")
-        runtime_config = self._config_service.get_agent_runtime_config(request.agent_id)
+        agent_id = self._config_service.resolve_agent_id(request.agent_id)
+        runtime_config = self._config_service.get_agent_runtime_config(agent_id)
         configured_providers = runtime_config.get("providers")
         if not isinstance(configured_providers, list) or not configured_providers:
-            raise ValueError(f"Agent 没有可测试的 provider: {request.agent_id}")
+            raise ValueError(f"Agent 没有可测试的 provider: {agent_id}")
         provider_map = {
             str(provider.get("id")): provider
             for provider in configured_providers

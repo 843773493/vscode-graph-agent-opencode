@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.agents.policy import ToolPolicyResolver
-from app.api.tools import get_tool, update_tool_selection
+from app.api.tools import get_tool, list_tools, update_tool_selection
 from app.main import app
 from app.schemas.internal_v2.tool import (
     ToolSelectionChange,
@@ -24,7 +24,11 @@ from app.services.infrastructure.tool_service import (
 
 
 class _ToolCatalogStub:
+    def __init__(self) -> None:
+        self.agent_ids: list[str] = []
+
     def get_available_tools(self, agent_id: str = "default") -> list[dict]:
+        self.agent_ids.append(agent_id)
         return [
             {
                 "id": "read_file",
@@ -81,8 +85,12 @@ def _service(
     tmp_path: Path,
     *,
     tool_catalog: _ToolCatalogStub | None = None,
+    default_agent_id: str = "default",
 ) -> ToolService:
     config_service = MagicMock()
+    config_service.validate_agent_id.side_effect = (
+        lambda agent_id: default_agent_id if agent_id is None else agent_id
+    )
     config_service.get_tool_policy_resolver.return_value = ToolPolicyResolver(
         policy_defaults={
             "execution_enabled": True,
@@ -226,6 +234,96 @@ async def test_update_selection_persists_and_reports_changed_tool(
         "read_file": (True, True),
         "write_file": (False, False),
     }
+
+
+async def test_omitted_agent_id_uses_resolved_agent_for_catalog_and_selection(
+    tmp_path: Path,
+) -> None:
+    catalog = _ToolCatalogStub()
+    service = _service(
+        tmp_path,
+        tool_catalog=catalog,
+        default_agent_id="coder",
+    )
+
+    changed = await service.update_selection(
+        ToolSelectionPatchRequest(
+            changes=[
+                ToolSelectionChange(
+                    tool_id="write_file",
+                    execution_enabled=False,
+                    model_visible=False,
+                )
+            ]
+        )
+    )
+
+    assert [(tool.tool_id, tool.execution_enabled) for tool in changed] == [
+        ("write_file", False)
+    ]
+    assert catalog.agent_ids and set(catalog.agent_ids) == {"coder"}
+    assert service._config_service.validate_agent_id.call_args_list[0].args == (None,)
+    assert service._selection_store.snapshot("coder").execution_overrides == {
+        "write_file": False
+    }
+    assert service._selection_store.snapshot("default").execution_overrides == {}
+
+
+async def test_tool_list_api_passes_omitted_agent_to_default_resolution(
+    tmp_path: Path,
+) -> None:
+    catalog = _ToolCatalogStub()
+    service = _service(
+        tmp_path,
+        tool_catalog=catalog,
+        default_agent_id="coder",
+    )
+
+    response = await list_tools(
+        _="local-dev-token",
+        request_id="req_tools_default_agent",
+        tool_service=service,
+    )
+
+    assert [tool.tool_id for tool in response.data] == ["read_file", "write_file"]
+    assert catalog.agent_ids == ["coder"]
+
+
+async def test_update_selection_maps_unknown_agent_to_http_400(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+
+    def validate_agent_id(agent_id: str | None) -> str:
+        if agent_id == "missing":
+            raise ValueError(f"agent {agent_id} 不存在")
+        return "default" if agent_id is None else agent_id
+
+    service._config_service.validate_agent_id.side_effect = validate_agent_id
+    request = ToolSelectionPatchRequest(
+        agent_id="missing",
+        changes=[
+            ToolSelectionChange(
+                tool_id="write_file",
+                execution_enabled=False,
+                model_visible=False,
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await update_tool_selection(
+            payload=request,
+            _="local-dev-token",
+            request_id="req_selection_missing_agent",
+            tool_service=service,
+        )
+
+    assert error.value.status_code == 400
+    assert "agent missing 不存在" in error.value.detail
+    assert not (
+        tmp_path / ".boxteam" / "settings" / "tool_selection.json"
+    ).exists()
 
 
 async def test_update_selection_rejects_dependency_conflict_atomically(

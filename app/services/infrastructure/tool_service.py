@@ -27,8 +27,7 @@ class ToolSelectionError(ValueError):
 
 
 class ToolCatalog(Protocol):
-    def get_available_tools(self, agent_id: str = "default") -> list[dict]:
-        ...
+    def get_available_tools(self, agent_id: str | None = None) -> list[dict]: ...
 
 
 class ToolService:
@@ -46,11 +45,15 @@ class ToolService:
         self._test_supported_tools = set(test_supported_tools)
         self._lock = asyncio.Lock()
 
-    async def list(self, agent_id: str = "default") -> list[ToolDTO]:
+    async def list(self, agent_id: str | None = None) -> list[ToolDTO]:
         async with self._lock:
             return await run_sync_shielded(self._list, agent_id)
 
-    def _list(self, agent_id: str) -> list[ToolDTO]:
+    def _list(self, agent_id: str | None) -> list[ToolDTO]:
+        resolved_agent_id = self._config_service.validate_agent_id(agent_id)
+        return self._list_resolved(resolved_agent_id)
+
+    def _list_resolved(self, agent_id: str) -> list[ToolDTO]:
         tools = self._tool_catalog.get_available_tools(agent_id)
         resolver = self._config_service.get_tool_policy_resolver(agent_id)
         selection = self._selection_store.snapshot(agent_id)
@@ -102,12 +105,21 @@ class ToolService:
             test_supported=tool_id in self._test_supported_tools,
         )
 
-    async def get(self, tool_id: str, agent_id: str = "default") -> ToolDTO:
-        tools = {t.tool_id: t for t in await self.list(agent_id)}
+    async def get(self, tool_id: str, agent_id: str | None = None) -> ToolDTO:
+        async with self._lock:
+            return await run_sync_shielded(
+                self._get,
+                tool_id,
+                agent_id,
+            )
+
+    def _get(self, tool_id: str, agent_id: str | None) -> ToolDTO:
+        resolved_agent_id = self._config_service.validate_agent_id(agent_id)
+        tools = {tool.tool_id: tool for tool in self._list_resolved(resolved_agent_id)}
         tool = tools.get(tool_id)
         if tool is None:
             raise ToolNotFoundError(
-                f"Agent {agent_id!r} 不存在工具 {tool_id!r}"
+                f"Agent {resolved_agent_id!r} 不存在工具 {tool_id!r}"
             )
         return tool
 
@@ -119,7 +131,11 @@ class ToolService:
             return await run_sync_shielded(self._update_selection, request)
 
     def _update_selection(self, request: ToolSelectionPatchRequest) -> list[ToolDTO]:
-        tools = self._list(request.agent_id)
+        try:
+            agent_id = self._config_service.validate_agent_id(request.agent_id)
+        except ValueError as error:
+            raise ToolSelectionError(str(error)) from error
+        tools = self._list_resolved(agent_id)
         available = {tool.tool_id for tool in tools}
         changes = {
             change.tool_id: (change.execution_enabled, change.model_visible)
@@ -130,13 +146,13 @@ class ToolService:
             raise ToolSelectionError(
                 f"包含后端不支持的工具: {', '.join(sorted(unknown))}"
             )
-        resolver = self._config_service.get_tool_policy_resolver(request.agent_id)
+        resolver = self._config_service.get_tool_policy_resolver(agent_id)
         execution_overrides = self._selection_store.snapshot(
-            request.agent_id
+            agent_id
         ).execution_overrides
         catalog_tools = {
             tool["id"]: tool
-            for tool in self._tool_catalog.get_available_tools(request.agent_id)
+            for tool in self._tool_catalog.get_available_tools(agent_id)
         }
         for tool_id, (execution_enabled, model_visible) in changes.items():
             tool = catalog_tools[tool_id]
@@ -152,9 +168,7 @@ class ToolService:
             if model_visible and static_policy.model_visibility_locked:
                 raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止对模型可见")
             execution_overrides[tool_id] = execution_enabled
-        candidate_enabled = {
-            tool.tool_id for tool in tools if tool.execution_enabled
-        }
+        candidate_enabled = {tool.tool_id for tool in tools if tool.execution_enabled}
         for tool_id, (execution_enabled, model_visible) in changes.items():
             if not execution_enabled and model_visible:
                 raise ToolSelectionError(
@@ -167,19 +181,16 @@ class ToolService:
         try:
             validate_tool_dependencies(
                 candidate_enabled,
-                context=f"Agent {request.agent_id!r} 的工具开关",
+                context=f"Agent {agent_id!r} 的工具开关",
             )
         except ValueError as error:
             raise ToolSelectionError(str(error)) from error
         try:
             self._selection_store.apply_changes(
-                agent_id=request.agent_id,
+                agent_id=agent_id,
                 changes=changes,
             )
         except ValueError as error:
             raise ToolSelectionError(str(error)) from error
-        refreshed = {tool.tool_id: tool for tool in self._list(request.agent_id)}
-        return [
-            refreshed[tool_id]
-            for tool_id in changes
-        ]
+        refreshed = {tool.tool_id: tool for tool in self._list_resolved(agent_id)}
+        return [refreshed[tool_id] for tool_id in changes]

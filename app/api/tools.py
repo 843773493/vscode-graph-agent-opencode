@@ -32,7 +32,7 @@ router = APIRouter(prefix="/tools", tags=["tools"])
 
 @router.get("", response_model=APIResponse[list[ToolDTO]], summary="获取 Tool 列表")
 async def list_tools(
-    agent_id: str = "default",
+    agent_id: str | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),
@@ -127,7 +127,7 @@ async def start_tool_test(
 @router.get("/{tool_id}", response_model=APIResponse[ToolDTO], summary="获取 Tool 详情")
 async def get_tool(
     tool_id: str,
-    agent_id: str = "default",
+    agent_id: str | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     tool_service: ToolService = Depends(get_tool_service),

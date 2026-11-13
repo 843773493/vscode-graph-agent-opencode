@@ -1,4 +1,4 @@
-"""Provider CRUD 经原来源 HTTP 预检、CAS 与真实配置 owner 提交。"""
+"""Provider／Agent 定义经原来源 HTTP 预检、CAS 与真实配置 owner 提交。"""
 
 from __future__ import annotations
 
@@ -41,6 +41,17 @@ class ProviderCase:
         assert response.status_code == 200, response.text
         assert response.headers["X-Request-ID"] == response.json()["request_id"] == "provider-edit"
         return response.json()["data"]
+
+    async def save(self, payload: dict, key: str, *, url: str = URL) -> dict:
+        document = await self.document(url=url)
+        request = _request(document, payload, key)
+        preview = await self.client.post(url + "/preflight", json=request)
+        assert preview.status_code == 200, preview.text
+        saved = await self.client.put(url, json=request)
+        assert saved.status_code == 200, saved.text
+        assert saved.headers["X-Request-ID"] == saved.json()["request_id"] == "provider-edit"
+        assert saved.json()["data"]["edit"]["source_saved"]
+        return saved.json()["data"]
 
 
 @pytest.fixture
@@ -92,6 +103,88 @@ def _request(document: dict, payload: dict[str, object], key: str) -> dict:
             "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
             "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
             "expected_active_digest": document["active_digest"], "idempotency_key": key}
+
+
+async def test_agent_source_crud_and_remove_override_reveal_lower_definition(
+    provider_case: ProviderCase,
+) -> None:
+    case = provider_case
+    document = await case.document()
+    payload = parse_source_text(document["jsonc"])
+    # deep_agent 是普通稳定 ID，不能被历史别名改绑到 default。
+    payload["agents"]["deep_agent"] = {
+        "name": "来源 Agent", "instructions": {"system_prompt": "用户来源提示词"},
+        "model": {"primary_provider": "primary", "fallback_providers": []},
+    }
+    await case.save(payload, "agent-create")
+    assert case.service.validate_agent_id("deep_agent") == "deep_agent"
+    original = case.service.get_snapshot()
+    runtime = case.service.get_agent_runtime_config("deep_agent")
+    assert runtime["system_prompt"] == "用户来源提示词"
+    assert [provider["id"] for provider in runtime["providers"]] == ["primary"]
+
+    workspace_url = "/api/v1/config/sources/workspace_root_mutable_override"
+    override = {"agents": {"deep_agent": {
+        "name": "本工作区显示名", "instructions": {"system_prompt": "本工作区提示词"},
+    }}}
+    saved = await case.save(override, "agent-override", url=workspace_url)
+    assert saved["effective"]["agents"]["deep_agent"]["name"] == "本工作区显示名"
+    assert saved["effective"]["agents"]["deep_agent"]["model"]["primary_provider"] == "primary"
+    assert parse_source_text(case.source.read_text())["agents"]["deep_agent"]["name"] == "来源 Agent"
+
+    # 删除仅作用于选定层，不写 tombstone，也不删除下层定义。
+    override["agents"].pop("deep_agent")
+    restored = await case.save(override, "agent-restore-inheritance", url=workspace_url)
+    assert "deep_agent" not in parse_source_text(restored["jsonc"])["agents"]
+    assert restored["effective"]["agents"]["deep_agent"]["instructions"]["system_prompt"] == "用户来源提示词"
+
+    document = await case.document()
+    payload = parse_source_text(document["jsonc"])
+    payload["agents"]["deep_agent"]["name"] = "可编辑显示名"
+    edited = await case.save(payload, "agent-edit-name")
+    assert edited["effective"]["agents"]["deep_agent"]["name"] == "可编辑显示名"
+    payload = parse_source_text(edited["jsonc"])
+    payload["agents"].pop("deep_agent")
+    removed = await case.save(payload, "agent-remove-definition")
+    assert "deep_agent" not in removed["effective"]["agents"]
+    for resolve in (case.service.validate_agent_id, case.service.get_agent_runtime_config,
+                    case.service.resolve_new_session_agent_id):
+        with pytest.raises(ValueError, match="agent deep_agent 不存在"):
+            resolve("deep_agent")
+    # 已持有的执行快照仍由原 owner 提供；删除不改写旧快照。
+    with case.service.use_snapshot(original):
+        assert case.service.get_agent_runtime_config("deep_agent")["system_prompt"] == "用户来源提示词"
+
+
+@pytest.mark.parametrize("reference", ["config-default", "workspace-default", "workspace-provider"])
+async def test_agent_remove_rejects_current_defaults_without_writing_source(
+    provider_case: ProviderCase, reference: str,
+) -> None:
+    case = provider_case
+    payload = parse_source_text((await case.document())["jsonc"])
+    payload["agents"]["custom_agent"] = {
+        "name": "默认值引用测试", "instructions": {"system_prompt": "独立定义"},
+        "model": {"primary_provider": "primary", "fallback_providers": []},
+    }
+    if reference == "config-default":
+        payload["default_agent"] = "custom_agent"
+    await case.save(payload, "agent-with-default")
+    if reference == "workspace-default":
+        case.service.set_workspace_default_agent("custom_agent")
+    elif reference == "workspace-provider":
+        case.service.set_workspace_default_provider("custom_agent", "primary")
+    document = await case.document()
+    payload = parse_source_text(document["jsonc"])
+    payload["agents"].pop("custom_agent")
+    request = _request(document, payload, "agent-remove-rejected")
+    original = case.source.read_bytes()
+    active = case.service.get_snapshot()
+    for method, suffix in (("POST", "/preflight"), ("PUT", "")):
+        response = await case.client.request(method, URL + suffix, json=request)
+        assert response.status_code == 422, response.text
+        assert response.headers["X-Request-ID"] == response.json()["request_id"] == "provider-edit"
+    assert case.source.read_bytes() == original and case.service.get_snapshot() is active
+    assert (await case.document(key="agent-remove-rejected"))["edit"] is None
 
 
 async def test_provider_reorder_create_remove_and_cas_share_original_source_writer(provider_case: ProviderCase) -> None:

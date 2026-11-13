@@ -1359,8 +1359,10 @@ def runtime_provider_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize("preferred", [None, "backup"])
+@pytest.mark.parametrize("agent_id", [None, "default"])
 def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_isolated(
     runtime_provider_service: ConfigService, monkeypatch: pytest.MonkeyPatch, preferred: str | None,
+    agent_id: str | None,
 ) -> None:
     service = runtime_provider_service
     decode = ConfigSnapshot.to_dict
@@ -1371,7 +1373,7 @@ def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_iso
         return decode(snapshot)
 
     monkeypatch.setattr(ConfigSnapshot, "to_dict", observe)
-    first = service.get_agent_runtime_config("default", preferred_provider_id=preferred)
+    first = service.get_agent_runtime_config(agent_id, preferred_provider_id=preferred)
     assert len(reads) == 1
     expected_order = ["backup", "primary"] if preferred else ["primary", "backup"]
     assert [provider["id"] for provider in first["providers"]] == expected_order
@@ -1381,12 +1383,35 @@ def test_runtime_provider_resolution_decodes_snapshot_once_and_keeps_results_iso
 
     # 不缓存展开后的凭据或可变配置；同一 revision 的下一次读取仍反映环境变化。
     monkeypatch.setenv("TEST_API_KEY", "updated-key")
-    second = service.get_agent_runtime_config("default", preferred_provider_id=preferred)
+    second = service.get_agent_runtime_config(agent_id, preferred_provider_id=preferred)
     assert len(reads) == 2 and len(set(reads)) == 1
     assert [provider["id"] for provider in second["providers"]] == expected_order
     assert all(provider["api_key"] == "updated-key" for provider in second["providers"])
     assert second["providers"][0]["request_options"]["default_headers"]["X-Runtime"] == "original"
     assert service.get_llm_providers()[0]["api_key"] == "updated-key"
+
+
+@pytest.mark.parametrize("agent_id", ["deep_agent", "removed", ""])
+def test_agent_identity_is_not_replaced_by_default_or_unrelated_credential_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_id: str,
+) -> None:
+    monkeypatch.delenv("UNRELATED_AGENT_PROVIDER_KEY", raising=False)
+    config = _base_config()
+    config["llm"]["providers"][0]["api_key"] = "${UNRELATED_AGENT_PROVIDER_KEY}"
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
+    assert service.get_default_agent_id() == "default"
+    assert service.validate_agent_id(None) == "default"
+    for resolve in (service.validate_agent_id, service.get_agent_runtime_config):
+        with pytest.raises(ValueError, match=f"agent {agent_id} 不存在"):
+            resolve(agent_id)
+
+
+def test_invalid_config_default_agent_is_not_replaced_by_another_definition(tmp_path: Path) -> None:
+    config = _base_config()
+    config["default_agent"] = "removed"
+    service = ConfigService(config_dir=Path.cwd() / "configs", config_path=_write_workspace_config(tmp_path, config))
+    with pytest.raises(ValueError, match="default_agent 引用了不存在的 Agent: removed"):
+        service.get_default_agent_id()
 
 
 def test_instruction_inputs_use_merged_configuration_without_python_prompt_defaults(

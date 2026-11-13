@@ -233,7 +233,7 @@ class _FakeConfigService:
         return agent_id
 
     def get_default_agent_id(self):
-        return "deep_agent"
+        return "default"
 
 
 class _FakeMessageService:
@@ -302,7 +302,7 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
         async def run_session_preparation(self, _session_id, operation):
             return await operation()
 
-        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs):
+        async def start_job(self, session_id: str, message: str, agent_id: str = "default", **kwargs):
             captured["session_id"] = session_id
             captured["message"] = message
             captured["agent_id"] = agent_id
@@ -477,7 +477,7 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_
         async def run_session_preparation(self, _session_id, operation):
             return await operation()
 
-        async def start_job(self, session_id: str, message: str, agent_id: str = "deep_agent", **kwargs):
+        async def start_job(self, session_id: str, message: str, agent_id: str = "default", **kwargs):
             captured["agent_id"] = agent_id
             captured["provider_id"] = kwargs["message_metadata"][
                 "boxteam_session_provider_id"

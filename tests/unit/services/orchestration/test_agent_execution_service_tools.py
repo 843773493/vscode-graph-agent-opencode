@@ -116,7 +116,7 @@ class _FakeSessionService:
         kind = self.kind
 
         class _Session:
-            current_agent_id = "deep_agent"
+            current_agent_id = "default"
 
         session = _Session()
         session.kind = kind
@@ -228,7 +228,7 @@ async def test_agent_includes_background_message_collection_tool(
 
     tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root), session_communication_service=communication_probe,
         session_id="ses_019bca51019973818b63e9d44c0e94f5",
-        agent_id="deep_agent",
+        agent_id="default",
         background_task_registry=background_task_registry,
         background_message_bus=background_message_bus,
         job_event_bus=job_event_bus,
@@ -347,7 +347,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(
 
     tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root), session_communication_service=communication_probe,
         session_id="session_denylist",
-        agent_id="deep_agent",
+        agent_id="default",
         background_task_registry=_BlueprintBackgroundService(),
         background_message_bus=_BlueprintBackgroundService(),
         job_event_bus=job_event_bus,

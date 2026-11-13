@@ -1495,6 +1495,9 @@ def nonagent_tool_probe_service(native_http_server, native_dispatch_workspace):
     }
 
     class ProbeConfig:
+        def resolve_agent_id(self, agent_id: str | None) -> str:
+            return "default" if agent_id is None else agent_id
+
         def get_agent_runtime_config(self, agent_id: str) -> dict[str, object]:
             assert agent_id == "default"
             return {"providers": [provider]}

@@ -25,8 +25,11 @@ from tests.support.tool_test_faults import (
 
 
 class _TwoProviderConfigService:
+    def resolve_agent_id(self, agent_id: str | None) -> str:
+        return "coder" if agent_id is None else agent_id
+
     def get_agent_runtime_config(self, agent_id: str) -> dict[str, Any]:
-        assert agent_id == "default"
+        assert agent_id == "coder"
         return {
             "providers": [
                 {"id": "provider_a", "model": "model-a", "api_key": "secret-a"},
@@ -42,8 +45,48 @@ def test_apply_patch_defaults_to_ten_distinct_cases_and_one_repetition() -> None
     cases = ToolTestRegistry().cases_for("apply_patch")
 
     assert ToolTestStartRequest().repetitions == 1
+    assert ToolTestStartRequest().agent_id is None
     assert len(cases) == 10
     assert len({case.case_id for case in cases}) == 10
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "expected_agent_id"),
+    [(None, "coder"), ("default", "default")],
+)
+@pytest.mark.asyncio
+async def test_tool_test_resolves_omitted_agent_but_preserves_explicit_id(
+    tmp_path: Path,
+    agent_id: str | None,
+    expected_agent_id: str,
+) -> None:
+    class ConfigServiceStub:
+        def __init__(self) -> None:
+            self.runtime_agent_ids: list[str] = []
+
+        def resolve_agent_id(self, candidate: str | None) -> str:
+            return "coder" if candidate is None else candidate
+
+        def get_agent_runtime_config(self, resolved: str) -> dict[str, Any]:
+            self.runtime_agent_ids.append(resolved)
+            return {"providers": []}
+
+    config_service = ConfigServiceStub()
+    service = ToolTestService(
+        config_service=config_service,  # type: ignore[arg-type]
+        registry=ToolTestRegistry(),
+        store=ToolTestStore(root=tmp_path / ".boxteam" / "tool_tests"),
+        workspace_root=tmp_path,
+        asset_root=tmp_path / "assets",
+    )
+
+    with pytest.raises(ValueError, match=expected_agent_id):
+        await service.start(
+            tool_name="apply_patch",
+            request=ToolTestStartRequest(agent_id=agent_id),
+        )
+
+    assert config_service.runtime_agent_ids == [expected_agent_id]
 
 
 class _ConcurrentApplyPatchBoundModel:

@@ -238,11 +238,7 @@ class SessionOrchestrator:
             self._session_service.path_resolver.resolve_thread_node(session_id, thread_id)
             if requested_agent_id is None:
                 requested_agent_id = session.current_agent_id
-            effective_agent_id = self._config_service.resolve_agent_id(requested_agent_id)
-            try:
-                self._config_service.validate_agent_id(effective_agent_id)
-            except ValueError:
-                effective_agent_id = self._config_service.get_default_agent_id()
+            effective_agent_id = self._config_service.validate_agent_id(requested_agent_id)
 
             logger.info("[session_orchestrator] message created: session_id=%s message_id=%s", session_id, message.message_id)
             job_message_metadata = {

@@ -25,7 +25,7 @@ class ToolSelectionChange(BaseModel):
 
 
 class ToolSelectionPatchRequest(BaseModel):
-    agent_id: str = "default"
+    agent_id: str | None = None
     changes: list[ToolSelectionChange] = Field(min_length=1)
 
     @field_validator("changes")
