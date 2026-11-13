@@ -45,6 +45,11 @@ try {
       const match = result.searchRequests.find(item => item.request === response.request());
       if (match) { match.request_id = response.headers()['x-request-id']; delete match.request; }
     });
+    page.on('requestfailed', request => {
+      if (new URL(request.url()).pathname !== '/api/gateway/search') return;
+      const match = result.searchRequests.find(item => item.request === request);
+      if (match) { match.failure = request.failure()?.errorText ?? 'request failed'; delete match.request; }
+    });
   } });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
   const active = (await api('/api/gateway/workspaces')).data.active_workspace;
@@ -115,12 +120,16 @@ try {
   await query.fill('scope token');
   await query.press('Enter');
   await expect(searchEditor.locator('.view-lines')).toContainText('other native quick access scope token');
-  await query.press('Control+s');
-  const restoredScope = () => result.searchRequests.filter(item => item.query === 'scope token'
-    && item.owners.length === 2 && item.request_id);
-  await expect.poll(() => restoredScope().length).toBeGreaterThan(0);
-  expect(restoredScope().every(item => item.owners.join('|')
-    === [owner.workspace_id, otherOwner.workspace_id].sort().join('|'))).toBe(true);
+  const restoredScope = () => result.searchRequests.filter(item => item.query === 'scope token');
+  await expect.poll(() => restoredScope().length > 0
+    && restoredScope().every(item => !item.request)).toBe(true);
+  expect(restoredScope().every(item => !item.failure
+    && item.owners.join('|') === [owner.workspace_id, otherOwner.workspace_id].sort().join('|')
+    && item.request_id)).toBe(true);
+  const activeTab = page.locator('.editor-group-container.active .tabs-container .tab.active');
+  await expect(activeTab).toHaveClass(/dirty/);
+  await command('workbench.action.files.save');
+  await expect(activeTab).not.toHaveClass(/dirty/);
   result.searchEditorScopeRestored = true;
   await saveReceipt();
 
