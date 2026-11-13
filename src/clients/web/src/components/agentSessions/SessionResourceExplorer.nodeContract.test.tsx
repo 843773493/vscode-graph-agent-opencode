@@ -85,6 +85,7 @@ async function renderWithBranchItem(
         catalogSyncKeys={new Map()}
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
+        onCloseSearch={() => undefined}
         onStatusChange={() => undefined}
         onOpenDiagnostic={onOpenDiagnostic}
         onOpenWorkspaceMenu={() => undefined}

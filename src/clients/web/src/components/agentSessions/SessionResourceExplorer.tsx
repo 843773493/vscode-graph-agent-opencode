@@ -1,6 +1,7 @@
 import { formatNumber, t } from '../../../../shared/core/i18n/index.js';
 import { gatewayWorkspaceKey, nullableGatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { resolveCatalogSearchTarget } from "../../api/gateway/catalogSearch";
+import { getSessionCatalogBreadcrumb } from "../../api/session/sessionCatalog";
 import { useState, type ReactNode } from "react";
 import { useSessionResourceExplorer } from "../../hooks/session/useSessionResourceExplorer";
 import type {
@@ -68,6 +69,7 @@ interface SessionResourceExplorerProps {
   sessionCatalogOutboxSnapshot?: SessionCatalogOutboxSnapshot;
 
   onSelectSession: (workspaceId: string, sessionId: string) => void | Promise<void>;
+  onCloseSearch: () => void;
   onPinSession?: (workspaceId: string, sessionId: string) => void;
   onStatusChange: (message: string) => void;
   onOpenDiagnostic: (title: string, detail: string) => void;
@@ -113,6 +115,7 @@ export default function SessionResourceExplorer({
   sessionCatalogOutboxSnapshot,
 
   onSelectSession,
+  onCloseSearch,
   onPinSession,
   onStatusChange,
   onOpenDiagnostic,
@@ -879,7 +882,13 @@ export default function SessionResourceExplorer({
                 if (nodeKind === "workspace") {
                   await onActivateWorkspace(route);
                 } else {
-                  await explorer.revealSearchResult(route, item.breadcrumb_node_ids, nodeKind);
+                  const breadcrumb = nodeKind === "session" && item.session_id && item.owner
+                    ? await getSessionCatalogBreadcrumb(apiPort,
+                      { gateway_id: item.owner.gateway_id, workspace_id: item.owner.workspace_id }, item.session_id)
+                    : undefined;
+                  await explorer.revealSearchResult(route,
+                    breadcrumb?.items.map((node) => node.node_id) ?? item.breadcrumb_node_ids, nodeKind);
+                  if (nodeKind === "session") onCloseSearch();
                   if (item.session_id) await onSelectSession(route, item.session_id);
                 }
               }).catch((error) => handleError(t('navigation.search.revealFailed'), error));

@@ -109,6 +109,7 @@ async function mountExplorer(options: {
         catalogSyncKeys={new Map()}
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
+        onCloseSearch={() => undefined}
         onStatusChange={() => undefined}
         onOpenDiagnostic={() => undefined}
         onOpenWorkspaceMenu={options.onOpenWorkspaceMenu}

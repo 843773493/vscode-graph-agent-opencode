@@ -514,6 +514,7 @@ export default function AgentSessionsPanel({
                 sessionCatalogOutboxRuntime={sessionCatalogOutboxRuntime}
                 sessionCatalogOutboxSnapshot={sessionCatalogOutboxSnapshot}
                 onSelectSession={onSelectWorkspaceSession}
+                onCloseSearch={() => { setSearchOpen(false); setSearchQuery(''); }}
                 onPinSession={onPinSession}
                 onStatusChange={onStatusChange}
                 onOpenDiagnostic={onOpenDiagnostic}

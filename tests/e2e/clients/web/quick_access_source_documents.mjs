@@ -9,15 +9,19 @@ export async function verifySourceDocuments({ page, command, api, result, owner,
   result.sourceDocuments = { reads, queries, writes };
   const observe = request => {
     const path = new URL(request.url()).pathname;
-    const body = request.method() === 'POST' && path === '/api/v1/resources/navigation' ? request.postDataJSON() : undefined;
+    const navigationPath = path === '/api/v1/resources/navigation'
+      || /^\/api\/v1\/workspaces\/[^/]+\/resources\/navigation$/.test(path);
+    const body = request.method() === 'POST' && navigationPath ? request.postDataJSON() : undefined;
     if (body?.operation === 'read') reads.push({ ...body, gatewayId: request.headers()['x-boxteam-target-gateway-id'],
       workspaceId: request.headers()['x-boxteam-workspace-id'] });
     const observed = searchRequest(request);
     if (observed?.path === '/api/gateway/search' || body?.operation === 'search'
       || ['/api/v1/session-catalog/search', '/api/v1/session-threads/search'].includes(path)) queries.push(observed);
     // 原工作区观察流用 POST 建立只读订阅；其余非 GET 请求仍逐一检查。
+    const navigationRead = navigationPath && ['describe', 'list', 'search', 'read'].includes(body?.operation);
     if (!['GET', 'HEAD'].includes(request.method()) && !['/api/gateway/search', '/api/gateway/resource-addresses/parse', '/api/v1/resources/navigation',
-      '/api/v1/workspace/observations/stream'].includes(path)) {
+      '/api/gateway/service-plugins/commands/events',
+      '/api/v1/workspace/observations/stream'].includes(path) && !navigationRead) {
       writes.push({ path, method: request.method() });
     }
   };

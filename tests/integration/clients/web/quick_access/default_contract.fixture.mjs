@@ -358,6 +358,53 @@ export async function symbolContract() {
   }
 }
 
+/** 运行转换后的上游聚合器与真实 Quick Access Provider，替身仅控制注册的 Provider。 */
+export async function symbolProviderFailuresContract(mode) {
+  const calls = [], changes = new Emitter(), accepts = new Emitter(), cancellation = new CancellationTokenSource();
+  let releaseLate;
+  const providers = mode.startsWith('partial') ? [
+    { provideWorkspaceSymbols(query) { calls.push({ provider: 'success', query }); return [{ name: 'NeedleSymbol', kind: 5,
+      location: { uri: uri('symbol-owner.ts'), range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 } } }]; } },
+    { provideWorkspaceSymbols(query) { calls.push({ provider: 'failure', query });
+      if (mode === 'partial-sync') throw new Error('provider-sync-owner-A');
+      return Promise.reject(new Error('provider-async-owner-A')); } },
+  ] : mode.startsWith('full') ? [0, 1].map(index => ({ provideWorkspaceSymbols(query) {
+    calls.push({ provider: `failure-${index}`, query });
+    if (mode === 'full-sync') throw new Error(`provider-sync-owner-${index}`);
+    return Promise.reject(new Error(`provider-async-owner-${index}`));
+  } })) : [{ provideWorkspaceSymbols(query) {
+    calls.push({ provider: 'late', query });
+    return new Promise((_, reject) => { releaseLate = () => reject(new Error('late-provider-rejection')); });
+  } }];
+  const registrations = providers.map(provider => WorkspaceSymbolProviderRegistry.register(provider));
+  const provider = new WorkspaceSymbolsQuickAccess({ getUriLabel: () => 'symbol-owner.ts' }, {}, {}, { getValue: () => ({}) }, {}, {},
+    { getWorkspace: () => ({ folders: ['workspace-a', 'workspace-b'].map(workspaceId => ({ uri: workspaceFileUri({ ...owner, workspaceId },
+      `boxteam://workspace/${workspaceId}/resources/files/root`, `boxteam://workspace/${workspaceId}/resources/files/root`) })) }) });
+  const picker = { value: '#needle', items: [], activeItems: [], keyMods: { alt: false, ctrlCmd: false },
+    onDidChangeValue: changes.event, onDidAccept: accepts.event, onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None };
+  let lifetime;
+  try {
+    lifetime = provider.provide(picker, cancellation.token, { searchOwners: [
+      { ...owner, gatewayId: owner.gatewayId, workspaceId: 'workspace-a' },
+      { ...owner, gatewayId: owner.gatewayId, workspaceId: 'workspace-b' },
+    ] });
+    if (mode === 'cancel-late') {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const beforeDispose = picker.items.map(item => item.label);
+      lifetime.dispose();
+      const afterDispose = picker.items.map(item => item.label);
+      releaseLate();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      return { calls, beforeDispose, afterDispose, afterLate: picker.items.map(item => item.label), busy: picker.busy };
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+    return { calls, items: picker.items.map(item => ({ label: item.label, description: item.description })), busy: picker.busy };
+  } finally {
+    lifetime?.dispose(); cancellation.dispose(true); provider.dispose(); changes.dispose(); accepts.dispose();
+    registrations.forEach(registration => registration.dispose());
+  }
+}
+
 export function helpContract() {
   const registry = Registry.as(Extensions.Quickaccess), registrations = [], accepts = new Emitter(), changes = new Emitter();
   const shows = [], handleAccept = () => {}, options = { searchOwner: owner, handleAccept, includeHelp: true };

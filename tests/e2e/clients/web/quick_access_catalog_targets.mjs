@@ -14,7 +14,7 @@ const workspace = process.env.BOXTEAM_CATALOG_WORKSPACE;
 if (!baseUrl || !resultPath || !otherWorkspace || !workspace) throw new Error('目录快速访问缺少运行参数');
 const run = TestRunContext.fromTestFile('tests/e2e/clients/web/test_quick_access_catalog_targets.py');
 const result = { classification: 'E2E', phase: 'prepare', pageErrors: [], receipts: [], searches: [], forbidden: [],
-  businessRequests: [], notifications: [], consoleErrors: [], quickInputInteractions: [],
+  businessRequests: [], navigationRequests: [], notifications: [], consoleErrors: [], quickInputInteractions: [],
   boundary: '正式 Workbench、真实 Gateway 与托管工作区；Session、child 和 folder 全部由产品 API 创建，无业务替身' };
 let page, failure;
 const searchOwners = request => request.body.scope.mode === 'resume' ? request.body.scope.scope.owners : request.body.scope.owners;
@@ -104,6 +104,10 @@ try {
       result.businessRequests.push({ phase: result.phase, method: request.method(), path: url.pathname, search: url.search,
         gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
     }
+    if (/^\/api\/v1\/session-catalog\/(?:breadcrumb\/[^/]+|children)$/.test(url.pathname)) {
+      result.navigationRequests.push({ phase: result.phase, path: url.pathname, search: url.search,
+        gatewayId: request.headers()['x-boxteam-target-gateway-id'], workspaceId: request.headers()['x-boxteam-workspace-id'] });
+    }
     const observed = searchRequest(request);
     if (observed) result.searches.push({ ...observed, targetGatewayId: request.headers()['x-boxteam-target-gateway-id'] });
     if (request.method() !== 'GET' && /\/(messages|jobs)(\/|$)/.test(url.pathname)) result.forbidden.push(url.pathname);
@@ -142,7 +146,11 @@ try {
   const parentNew = (await mutate(ownerA, 'create_folder', { name: '新目录 A' })).created_node_id;
   const folder = (await mutate(ownerA, 'create_folder', { name: 'catalogfolder 同名目录', parent_node_id: parentA })).created_node_id;
   const folderB = (await mutate(ownerB, 'create_folder', { name: 'catalogfolder 同名目录' })).created_node_id;
+  const parentNested = (await mutate(ownerA, 'create_folder', { name: '新目录 A 子级', parent_node_id: parentNew })).created_node_id;
+  const deepest = (await mutate(ownerA, 'create_folder', { name: '新目录 A 深层', parent_node_id: parentNested })).created_node_id;
   await mutate(ownerA, 'move_node', { target_node_id: session.session_id, parent_node_id: folder });
+  const sessionB = await api('/api/v1/sessions', ownerB, { title: 'catalogexact 同名目标' });
+  await mutate(ownerB, 'move_node', { target_node_id: sessionB.session_id, parent_node_id: folderB });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
 
@@ -179,6 +187,32 @@ try {
   expect((await api(`/api/v1/sessions/${session.session_id}/main-thread`, ownerA)).thread_id).toBe(main.thread_id);
   result.sessionOpensMain = true;
 
+  result.phase = 'session-result-fresh-breadcrumb-and-exact-owner';
+  await page.getByRole('button', { name: '搜索会话', exact: true }).click();
+  const sessionSearch = page.getByRole('searchbox');
+  await sessionSearch.fill('catalogexact');
+  const resultRows = page.locator('.session-resource-search-result').filter({ hasText: 'catalogexact 同名目标' });
+  await expect(resultRows).toHaveCount(2);
+  const targetRow = resultRows.filter({ hasText: '原目录 A' });
+  await expect(targetRow).toHaveCount(1);
+  await mutate(ownerA, 'move_node', { target_node_id: session.session_id, parent_node_id: deepest });
+  const navigationStart = result.navigationRequests.length;
+  await targetRow.click();
+  await expect(page.getByTestId(`catalog-node-${gatewayWorkspaceKey(ownerA)}-${session.session_id}`)).toHaveAttribute('aria-current', 'true');
+  const freshNavigation = result.navigationRequests.slice(navigationStart);
+  const breadcrumbIndex = freshNavigation.findIndex(request => request.path === `/api/v1/session-catalog/breadcrumb/${session.session_id}`);
+  expect(breadcrumbIndex).toBeGreaterThanOrEqual(0);
+  expect(freshNavigation[breadcrumbIndex]).toMatchObject({
+    gatewayId: ownerA.gatewayId, workspaceId: ownerA.workspaceId });
+  const revealRequests = freshNavigation.slice(breadcrumbIndex + 1);
+  for (const nodeId of [parentNew, parentNested, deepest]) {
+    await expect(page.getByTestId(`catalog-node-${gatewayWorkspaceKey(ownerA)}-${nodeId}`).locator('..')).toHaveAttribute('aria-expanded', 'true');
+  }
+  expect(revealRequests.filter(request => request.path === '/api/v1/session-catalog/children')
+    .map(request => new URLSearchParams(request.search).get('parent_node_id'))).toEqual([parentNew, parentNested, deepest]);
+  expect(freshNavigation.every(request => request.gatewayId === ownerA.gatewayId && request.workspaceId === ownerA.workspaceId)).toBe(true);
+  result.sessionUsesFreshBreadcrumbAndExactOwner = true;
+
   result.phase = 'folder-fresh-breadcrumb-and-original-navigation';
   const tabsBefore = await page.locator('.tabs-container .tab').count();
   const childrenBefore = (await api(`/api/v1/sessions/${session.session_id}/child-threads`, ownerA)).items.map(item => item.thread_id);
@@ -196,7 +230,7 @@ try {
   await expect(row.getByRole('button', { name: 'catalogfolder 同名目录', exact: true })).toBeFocused();
   await expect(page.getByTestId(`catalog-node-${gatewayWorkspaceKey(ownerA)}-${parentNew}`).locator('..')).toHaveAttribute('aria-expanded', 'true');
   expect(await page.locator('.tabs-container .tab').count()).toBe(tabsBefore);
-  expect(result.searches.every(request => request.path === '/api/gateway/search'
+  expect(result.searches.filter(request => request.query === 'catalogfolder').every(request => request.path === '/api/gateway/search'
     ? searchOwners(request).length === 1 && searchOwners(request)[0].gateway_id === ownerA.gatewayId
       && searchOwners(request)[0].workspace_id === ownerA.workspaceId
     : request.targetGatewayId === ownerA.gatewayId && request.route === ownerA.workspaceId)).toBe(true);

@@ -623,3 +623,36 @@ test('部分窗口范围零符号查询，身份错误明确显示，原生调�
   expect(result.scopedCalls).toEqual([]);
   expect(result.nativeCalls).toEqual(['needle']);
 }, 10000);
+
+for (const mode of ['partial-sync', 'partial-async']) test(`明确完整窗口的 # 保留成功符号并呈现原 Provider 部分失败（${mode}）`, async () => {
+  const result = await exercise('symbolProviderFailuresContract', mode);
+  expect(result.busy).toBe(false);
+  expect(result.calls).toHaveLength(2);
+  expect(result.calls.every(call => call.query === 'needle')).toBe(true);
+  expect(result.items).toHaveLength(2);
+  expect(result.items.some(item => item.label === 'NeedleSymbol')).toBe(true);
+  const failure = result.items.find(item => item.label.includes('工作区符号不可用'));
+  expect(failure?.label).toContain(mode === 'partial-sync' ? 'provider-sync-owner-A' : 'provider-async-owner-A');
+  expect(failure?.description).toContain('["gateway-a","workspace-a"]、["gateway-a","workspace-b"]');
+  expect(failure?.description).toContain('Provider 2');
+});
+
+for (const mode of ['full-sync', 'full-async']) test(`明确完整窗口的 # 全部 Provider 失败仍显示逐 owner 原因且列表非空（${mode}）`, async () => {
+  const result = await exercise('symbolProviderFailuresContract', mode);
+  expect(result.busy).toBe(false);
+  expect(result.calls).toHaveLength(2);
+  expect(result.items).toHaveLength(2);
+  expect(result.items.every(item => item.label.includes('工作区符号不可用'))).toBe(true);
+  const reasonPrefix = mode === 'full-sync' ? 'Error: provider-sync-owner-' : 'Error: provider-async-owner-';
+  expect(result.items.some(item => item.label.includes(`${reasonPrefix}0`))).toBe(true);
+  expect(result.items.some(item => item.label.includes(`${reasonPrefix}1`))).toBe(true);
+  expect(result.items.every(item => item.description.includes('["gateway-a","workspace-a"]、["gateway-a","workspace-b"]'))).toBe(true);
+});
+
+test('完整窗口 # Provider 在取消后迟到 reject 不发布候选', async () => {
+  const result = await exercise('symbolProviderFailuresContract', 'cancel-late');
+  expect(result.calls).toEqual([{ provider: 'late', query: 'needle' }]);
+  expect(result.beforeDispose).toEqual(['正在查询工作区符号…']);
+  expect(result.afterLate).toEqual(result.afterDispose);
+  expect(result.afterLate.some(label => label.includes('late-provider-rejection'))).toBe(false);
+});

@@ -17,6 +17,8 @@ from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.paths import chromium_temporary_environment
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import close_gateway_process, start_gateway_process
+from tests.support.terminal_plugin import copy_prepared_developer_tools_package
+from tests.harness.python.terminal_plugin import prepare_terminal_plugin_configuration
 from tests.support.workspaces import (
     install_test_workspace_config,
     prepare_test_workspace,
@@ -52,6 +54,7 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
     e2e_workspace_config_path: str,
     catalog_gateway_port: int,
     web_workbench_assets: Path,
+    prepared_developer_tools_package: Path,
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     if not chromium:
@@ -66,6 +69,10 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
     )
     install_test_workspace_config(workspace_root=other, config_path=Path(e2e_workspace_config_path),
                                   schema_path=workspace / ".boxteam/workspace_schema.jsonc")
+    gateway_url = f"http://127.0.0.1:{catalog_gateway_port}"
+    plugin_ids = frozenset({"terminal", "browser"})
+    prepare_terminal_plugin_configuration(workspace, gateway_url, plugin_ids=plugin_ids)
+    prepare_terminal_plugin_configuration(other, gateway_url, plugin_ids=plugin_ids)
     (workspace / "uri@target.txt").write_text("URI link A\n", encoding="utf-8")
     (other / "uri@target.txt").write_text("URI link B\n", encoding="utf-8")
     (workspace / "uri-image.png").write_bytes(base64.b64decode(
@@ -79,9 +86,11 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
             f"---\nname: quick-source\ndescription: 只读来源验收\n---\n# source Skill {label}\n", encoding="utf-8",
         )
     result_path = context.artifacts_dir / "catalog-targets.json"
+    gateway_home = context.boxteam_home_for_node(request.node.nodeid)
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     gateway = start_gateway_process(
         workspace_root=workspace, default_backend_url=None, port=catalog_gateway_port,
-        boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
+        boxteam_home=gateway_home, artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
     )
     try:
@@ -107,6 +116,7 @@ async def test_quick_access_catalog_targets_use_original_navigation_and_exact_th
         assert owner["workspaceId"] != owner["secondaryOwner"]["workspaceId"]
         assert receipt["sessionOpensMain"] is True
         assert receipt["unopenedChildKeepsIdentity"] is True
+        assert receipt["sessionUsesFreshBreadcrumbAndExactOwner"] is True
         assert receipt["folderUsesFreshNavigation"] is True
         assert receipt["deletedFolderRejected"] is True
         assert receipt["folderHasNoThreadOrExecution"] is True

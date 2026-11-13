@@ -188,6 +188,7 @@ async function renderExplorer(options: {
         catalogSyncKeys={new Map()}
         catalogRefreshVersions={new Map()}
         onSelectSession={() => undefined}
+        onCloseSearch={() => undefined}
         onStatusChange={() => undefined}
         onOpenDiagnostic={(title, detail) => diagnostics.push({ title, detail })}
         onOpenWorkspaceMenu={() => undefined}
