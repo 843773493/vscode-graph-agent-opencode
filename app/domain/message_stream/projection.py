@@ -51,23 +51,25 @@ def validate_event_payload(event_type: str, payload: Mapping[str, Any]) -> None:
         )
 
 
-def _copy_state_for_block_delta(
+def _copy_entity_state(
     state: dict[str, Any],
-    block_id: object,
+    collection: str,
+    identity_key: str,
+    entity_id: object,
 ) -> dict[str, Any]:
-    """只复制 block.delta 会改写的状态分支。"""
-    blocks = state.get("blocks")
-    if "blocks" in state and not isinstance(blocks, list):
+    """只复制本次事件会改写的实体，保留已公布的历史快照。"""
+    entities = state.get(collection)
+    if collection in state and not isinstance(entities, list):
         return _clone_json_tree(dict(state))
 
     next_state = dict(state)
-    next_blocks = list(blocks) if isinstance(blocks, list) else []
-    if isinstance(block_id, str):
-        for index, block in enumerate(next_blocks):
-            if isinstance(block, dict) and block.get("block_id") == block_id:
-                next_blocks[index] = _clone_json_tree(block)
+    next_entities = list(entities) if isinstance(entities, list) else []
+    if isinstance(entity_id, str):
+        for index, entity in enumerate(next_entities):
+            if isinstance(entity, dict) and entity.get(identity_key) == entity_id:
+                next_entities[index] = _clone_json_tree(entity)
                 break
-    next_state["blocks"] = next_blocks
+    next_state[collection] = next_entities
     return next_state
 
 
@@ -89,8 +91,9 @@ def apply_event(
     )
     source_state = snapshot if isinstance(snapshot, Mapping) else state
     if event_type == "block.delta":
-        # Store 保留输入快照；只对目标 block 建立可写副本，未触及分支保持共享。
-        next_state = _copy_state_for_block_delta(state, payload.get("block_id"))
+        next_state = _copy_entity_state(state, "blocks", "block_id", payload.get("block_id"))
+    elif event_type in {"tool_call", "tool_call.delta", "tool_call.completed"}:
+        next_state = _copy_entity_state(state, "tool_calls", "tool_call_id", payload.get("tool_call_id"))
     else:
         next_state = _clone_json_tree(dict(source_state))
     if event_type == "stream.opened":

@@ -10,6 +10,8 @@ import pytest
 from app.services.infrastructure.message_stream_store import MessageStreamError
 from tests.unit.services.infrastructure.test_message_stream_store import (
     MessageStreamStoreCase,
+)
+from tests.unit.services.infrastructure.test_message_stream_store import (
     message_stream_store as message_stream_store,  # noqa: PLC0414 - 复用按当前测试文件隔离的 fixture
 )
 
@@ -52,10 +54,15 @@ async def test_delta_reuses_untouched_branches_and_preserves_published_snapshots
             "block_id": "second", "operation": "append", "text": "next",
         })
         assert record.checkpoint == frozen
+        await writer.commit("tool_call.delta", {
+            "tool_call_id": "known-call", "arguments": {"parts": ["updated"]},
+        })
+        assert before == original
+        assert record.checkpoint == frozen
         snapshot = await writer.snapshot()
         snapshot["payload"]["tool_calls"][0]["arguments"]["parts"].append("caller")
         current = await store.get_state(writer.turn_stream_id)
-        assert current["tool_calls"][0]["arguments"]["parts"] == ["original"]
+        assert current["tool_calls"][0]["arguments"]["parts"] == ["updated"]
     finally:
         await store.unsubscribe(subscription)
 
