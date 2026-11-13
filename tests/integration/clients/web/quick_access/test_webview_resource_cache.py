@@ -102,6 +102,13 @@ def assert_webview_result(result_path: Path) -> dict:
     assert deletion["rawReadsBefore"] == deletion["rawReadsAfter"]
     assert deletion["rejection"]["status"] == 404
     assert deletion["restored"]["etag"] != deletion["cached"]["etag"]
+    permission = result["permission"]
+    if os.name != "nt" and os.geteuid() != 0:
+        assert permission["cachedBefore"] == permission["cachedDuring"] == permission["cachedAfter"]
+        assert permission["rejection"]["status"] == 400
+        assert permission["rawReadsBefore"] == permission["rawReadsWhileDenied"] == permission["rawReadsAfterRecovery"]
+    else:
+        assert permission["unsupported"]
     disconnection = result["disconnection"]
     assert disconnection["rejection"]["status"] == 503
     assert disconnection["cachedBefore"] == disconnection["cachedDuring"] == disconnection["cachedAfter"]

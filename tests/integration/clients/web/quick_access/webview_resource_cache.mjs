@@ -1,5 +1,5 @@
 // Integration：原 Markdown 扩展及隔离 Webview，真实 Gateway／FileService，无响应替身。
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
@@ -22,7 +22,9 @@ export async function runWebviewResourceCache({ run, launch }) {
   try {
     const usePage = nextPage => {
       page = nextPage;
-      page.on('pageerror', error => result.pageErrors.push(String(error)));
+      page.on('pageerror', error => result.pageErrors.push({
+        phase: result.phase, message: String(error), stack: error.stack,
+      }));
       page.on('console', message => {
         if (message.type() === 'error') result.consoleErrors.push({ text: message.text(), location: message.location() });
       });
@@ -217,6 +219,49 @@ export async function runWebviewResourceCache({ run, launch }) {
     await expect.poll(async () => (await inspectCache()).some(item => item.url === cachedStyle.url
       && item.etag && item.etag !== cachedStyle.etag && item.bytes > cachedStyle.bytes)).toBe(true);
     result.deletion.restored = (await inspectCache()).find(item => item.url === cachedStyle.url);
+    if (process.platform !== 'win32' && process.getuid() !== 0) {
+      result.phase = 'permission-denied-cached-resource';
+      const mode = (await stat(style)).mode;
+      const cachedBefore = (await inspectCache()).find(item => item.url === cachedStyle.url);
+      expect(cachedBefore?.etag).toBeTruthy();
+      const beforeDenied = raw(cssUri).length;
+      result.permission = { cachedBefore, rawReadsBefore: beforeDenied };
+      try {
+        await chmod(style, 0);
+        const denied = page.waitForResponse(response => response.status() === 400
+          && new URL(response.url()).pathname.endsWith('/resources/navigation')
+          && response.request().postDataJSON()?.uri === cssUri);
+        await command('markdown.preview.refresh');
+        const rejection = await denied;
+        const body = await rejection.json(), headers = await rejection.allHeaders();
+        expect(headers['x-request-id']).toBeTruthy();
+        expect(body.request_id).toBe(headers['x-request-id']);
+        expect(body.detail).toMatchObject({ owner: 'resource_navigation', type: 'PermissionError', errno: 13 });
+        result.permission.rejection = { status: rejection.status(), headers: selectedHeaders(headers), body };
+        await expect.poll(() => result.responses.some(item => item.phase === 'permission-denied-cached-resource'
+          && item.url === cachedStyle.url && item.fromServiceWorker && item.status === 404)).toBe(true);
+        await expect(probe()).not.toHaveCSS('color', 'rgb(101, 112, 123)');
+        await expect(probe()).toHaveCSS('background-color', 'rgb(90, 91, 92)');
+        const cachedDuring = (await inspectCache()).find(item => item.url === cachedStyle.url);
+        expect(cachedDuring).toEqual(cachedBefore);
+        result.permission.cachedDuring = cachedDuring;
+        result.permission.rawReadsWhileDenied = raw(cssUri).length;
+      } finally {
+        await chmod(style, mode);
+      }
+      result.phase = 'permission-restored-cached-resource';
+      await command('markdown.preview.refresh');
+      await expect(probe()).toHaveCSS('color', 'rgb(101, 112, 123)');
+      await expect.poll(() => result.responses.some(item => item.phase === 'permission-restored-cached-resource'
+        && item.url === cachedStyle.url && item.fromServiceWorker && item.status === 200)).toBe(true);
+      result.permission.cachedAfter = (await inspectCache()).find(item => item.url === cachedStyle.url);
+      expect(result.permission.cachedAfter).toEqual(cachedBefore);
+      result.permission.rawReadsAfterRecovery = raw(cssUri).length;
+      expect(raw(cssUri)).toHaveLength(beforeDenied);
+    } else {
+      // TODO: Windows 原生 ACL 验收需由目标机器提供实际权限撤销场景。
+      result.permission = { unsupported: '此场景使用非 root POSIX 原生文件权限；Windows ACL 需另行验收' };
+    }
     const runtime = async action => {
       const receipt = await page.evaluate(async ({ fixture, action }) => {
         const credential = await (await fetch('/api/gateway/auth/local-credential')).json();
