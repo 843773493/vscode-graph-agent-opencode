@@ -49,6 +49,34 @@ async def test_two_roots_resume_subset_with_new_page_budget(network: Network) ->
                                      "output_bytes": response.num_bytes_downloaded})
                 return events
 
+            # Gateway 所在 A 和目标 B 有同名文件、相反规则；查询必须由 B 原 owner 解释。
+            for workspace, excluded in ((network.workspace, "hidden.txt"), (network.secondary, "keep.txt")):
+                selected = workspace / "ignore-owner"
+                selected.mkdir()
+                (selected / ".gitignore").write_text(excluded + "\n", encoding="utf-8")
+                for name in ("hidden.txt", "keep.txt"):
+                    (selected / name).write_text("ignore-proof " + ("relay-a" if workspace == network.workspace else "target-b"), encoding="utf-8")
+            remote_id = workspace_backend_id_for_root(network.secondary)
+            remote_owner = {"gateway_id": network.gateway_id, "workspace_id": remote_id}
+            remote_roots = await client.get("/api/v1/workspace/files/roots", headers={"X-BoxTeam-Workspace-Id": remote_id})
+            remote_roots.raise_for_status()
+            remote_root = remote_roots.json()["data"]["workspace_uri"] + "/ignore-owner"
+            for selected_owner, selected_root, ignore_mode, expected in (
+                (owner, root + "/ignore-owner", "respect", ["keep.txt"]),
+                (remote_owner, remote_root, "respect", ["hidden.txt"]),
+                (remote_owner, remote_root, "none", ["hidden.txt", "keep.txt"]),
+            ):
+                query = {"category": "file", "operation": "content", "query": "ignore-proof", "match_mode": "literal",
+                    "file_targets": [{"owner": selected_owner, "target": {"uri": selected_root,
+                        "search_options": {"ignore_mode": ignore_mode, "include_globs": ["*.txt"]}}}]}
+                events = await search({"scope": {"mode": "selected", "owners": [selected_owner]}, "queries": [query]},
+                                      f"req_ignore_{'relay' if selected_owner == owner else 'target'}_{ignore_mode}")
+                page, = [event.page for event in events if event.type == "page"]
+                assert page is not None and page.files is not None and events[-1].summary is not None
+                assert [hit.uri for hit in page.files.matches] == [selected_root + "/" + name for name in expected]
+                assert all(("relay-a" if selected_owner == owner else "target-b") in hit.text for hit in page.files.matches)
+                assert events[-1].summary.state == "complete"
+
             for operation in ("name", "content"):
                 targets = [{"owner": owner, "target": {"uri": root + "/" + directory,
                     "search_options": {"all_matches": True, "context_lines": 1,

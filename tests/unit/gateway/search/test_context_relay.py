@@ -149,3 +149,37 @@ async def test_context_page_from_another_owner_is_not_published(relay: ContextRe
     assert wrong.state == "failed" and wrong.code == "invalid_response" and wrong.cursor is None
     assert healthy.state == "limited" and healthy.cursor == OWNERS[1]["workspace_id"] + "-cursor"
     assert [event.branch.branch.owner.workspace_id for event in result.events if event.type == "page" and event.branch] == [OWNERS[1]["workspace_id"]]
+    healthy_page, = [event.page for event in result.events if event.type == "page"]
+    assert healthy_page is not None and healthy_page.context is not None
+    healthy_revision = healthy_page.context.revision
+    assert healthy_revision == OWNERS[1]["workspace_id"] + "-revision"
+    assert result.events[0].scope is not None
+    frozen = result.events[0].scope.scope
+
+    # 故障解除后只显式重试原坏支路，不重查健康 owner 或改写其版本。
+    relay.wrong_owner = False
+    relay.requests.clear()
+    recovered = await relay.port.search_gateway_context(relay.query(
+        scope={"mode": "resume", "scope": frozen}, continuations=[{"branch": wrong.branch, "cursor": wrong.cursor}],
+    ))
+    assert [request.url.host for request in relay.requests] == ["owner-0.test"]
+    assert recovered.events[-1].summary is not None
+    restored, = recovered.events[-1].summary.branches
+    assert restored.branch == wrong.branch and restored.state == "limited"
+    assert restored.cursor == OWNERS[0]["workspace_id"] + "-cursor"
+    restored_page, = [event.page for event in recovered.events if event.type == "page"]
+    assert restored_page is not None and restored_page.context is not None
+    assert restored_page.context.revision == OWNERS[0]["workspace_id"] + "-revision"
+
+    # 单独沿健康支路的原 cursor 续查，确认恢复没有污染其独立 revision。
+    relay.requests.clear()
+    continued = await relay.port.search_gateway_context(relay.query(
+        scope={"mode": "resume", "scope": frozen}, continuations=[{"branch": healthy.branch, "cursor": healthy.cursor}],
+    ))
+    assert [request.url.host for request in relay.requests] == ["owner-1.test"]
+    assert json.loads(relay.requests[0].content)["cursor"] == healthy.cursor
+    continued_page, = [event.page for event in continued.events if event.type == "page"]
+    assert continued_page is not None and continued_page.context is not None
+    assert continued_page.context.revision == healthy_revision
+    assert continued_page.context == healthy_page.context
+    assert all(relay.registry.route_reference_counts((owner["gateway_id"], owner["workspace_id"])) == (0, 0) for owner in OWNERS)

@@ -22,8 +22,12 @@ from app.services.business.session_context_resource import (
     workspace_session_inventory_uri,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.backend.sessions.test_runtime_source_pipeline import (
+    _prepare_source_workspace,
+)
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import E2EProcessLease
+from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
@@ -57,6 +61,7 @@ class Network:
     backend_port: int
     artifacts: Path
     backends: list[BackendProcess]
+    model: ModelStreamReplay | None = None
 
     def start(self):
         return start_gateway_process(
@@ -71,6 +76,10 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
     workspace = Path(integration_workspace_root_path)
+    ports = integration_port_block_for_file(Path(request.node.path))
+    use_model_stream = getattr(request, "param", {}).get("model_stream", False)
+    if use_model_stream:
+        workspace = _prepare_source_workspace(context, ports.port(10))
     secondary, stopped = workspace / "secondary-b", workspace / "stopped-c"
     for root in (secondary, stopped):
         prepare_default_test_workspace(workspace_root=root, template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace", fresh_identity=True)
@@ -85,7 +94,6 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
                 (target / name).write_text("🧪 needle\ncontext\nneedle\n", encoding="utf-8")
             (target / "long-preview.txt").write_text("c" * 2200 + "\nnoticeword " + "p" * 2200 + "\n", encoding="utf-8")
             (target / "covered.txt").write_bytes(b"\xffmodel body must not be read")
-    ports = integration_port_block_for_file(Path(request.node.path))
     gateway_home = runtime / "gateway-home"
     copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     gateway_id = load_or_create_gateway_id(gateway_home / "state/gateway/identity.json")
@@ -113,8 +121,12 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
         )
         gateway_url = f"http://127.0.0.1:{service_ports['gateway']}"
         monkeypatch.setenv("BOXTEAM_GATEWAY_URL", gateway_url)
+        model = cleanup.enter_context(model_stream_replay(
+            context.artifacts_dir, runtime_root=runtime,
+            business_assertion="agent-discovers-selected-workspaces-and-searches-canonical-messages",
+        )) if use_model_stream else None
         fixture = Network(workspace, secondary, stopped, gateway_home, gateway_id, service_ports["gateway"],
-                          service_ports["backend-0"], context.artifacts_dir, [])
+                          service_ports["backend-0"], context.artifacts_dir, [], model)
         for index, root in enumerate((workspace, secondary)):
             # 独立 Backend 的配置校验和运行时交接均须指向本装具的 Gateway。
             config_path = root / ".boxteam/workspace.jsonc"
@@ -123,7 +135,9 @@ def network(request: pytest.FixtureRequest, integration_workspace_root_path: str
             config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             backend = start_backend_process(workspace_root=str(root), port=service_ports[f"backend-{index}"], log_name=f"backend-{index}",
                                             boxteam_home=fixture.gateway_home, artifacts_dir=fixture.artifacts,
-                                            env_overrides={"BOXTEAM_RUNTIME_CONTROL_TOKEN": LOCAL_TOKEN_HEADERS["X-Local-Token"]},
+                                            asgi_app="tests.support.e2e_control.communication_backend_app:app" if model else "app.main:app",
+                                            env_overrides={"BOXTEAM_RUNTIME_CONTROL_TOKEN": LOCAL_TOKEN_HEADERS["X-Local-Token"],
+                                                           **(model.environment if model else {})},
                                             )
             cleanup.callback(close_backend_process, backend)
             fixture.backends.append(backend)
