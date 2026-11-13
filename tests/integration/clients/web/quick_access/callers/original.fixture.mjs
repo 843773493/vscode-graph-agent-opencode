@@ -47,7 +47,7 @@ function fixture(items = []) {
     [q.IUriIdentityService, { extUri: q.extUri, onDidChange: q.Event.None }],
     [IQuickInputService, host], [IEditorService, editors],
     [IHistoryService, { getHistory: () => [{ resource: uri('history.txt') }, { resource: q.URI.parse('forbidden:/hidden.txt') }] }],
-    [IContextKeyService, { contextMatchesRules: () => true }], [IKeybindingService, { lookupKeybinding: () => undefined }],
+    [IContextKeyService, { contextMatchesRules: () => true, getContextKeyValue: () => undefined }], [IKeybindingService, { lookupKeybinding: () => undefined }],
     [IOpenerService, { open: fail }], [INotificationService, { error: error => { throw error; } }],
     [IQuickChatService, { enabled: false, open: fail }], [IViewsService, {}], [IFileService, {}],
     [IAccessibilityService, { isScreenReaderOptimized: () => false }], [IAccessibleViewService, {}],
