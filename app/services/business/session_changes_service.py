@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from functools import cache
+from functools import cache, partial
 
 from app.abstractions.session_changes import (
     FileEditSnapshot,
@@ -28,6 +28,7 @@ from app.services.business.session_changes_logic import (
     detect_change_kind,
     group_turn_records,
     preview_session_file_content,
+    summarize_file_records,
     summarize_records,
 )
 from app.services.business.session_service import SessionService
@@ -110,9 +111,11 @@ class SessionChangesService:
     async def list_changesets(self, session_id: str) -> SessionChangesetListDTO:
         def read() -> SessionChangesetListDTO:
             records = self._store.read_records(session_id)
-            # 单次编辑从已保存 patch 取摘要；多次编辑仍按首尾快照计算净变化。
-            build_diff = cache(build_unified_diff)
-            read_edit_text = self._store.edit_text_reader(session_id)
+            # All 与 Turn 的相同编辑组只算一次；只保留记录与计数，不缓存正文。
+            summarize_file = cache(partial(
+                summarize_file_records,
+                read_edit_text=self._store.edit_text_reader(session_id),
+            ))
             items: list[SessionChangesetListItemDTO] = []
             for changeset_id, selected_records in (
                 ("all", records),
@@ -120,8 +123,7 @@ class SessionChangesService:
             ):
                 summary = summarize_records(
                     selected_records,
-                    read_edit_text=read_edit_text,
-                    build_diff=build_diff,
+                    summarize_file=summarize_file,
                 )
                 change_kind, turn_id = changeset_kind_and_turn(changeset_id)
                 items.append(
