@@ -10,6 +10,7 @@
 app/runtime/
 ├── Agent 装配与调度
 │   ├── agent_runtime.py       依赖提供协议、Agent runtime 与工具定义装配
+│   ├── graph_factory.py       闭集图工厂的 SDK 懒加载边界
 │   ├── session_orchestrator.py 用户消息创建与执行调度入口
 │   ├── context_compaction.py   按需装配显式上下文压缩预览
 │   └── tool_test_tools.py      按需装配工具能力测试所需工具

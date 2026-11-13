@@ -30,6 +30,8 @@ middleware 的实际出现会随 denylist/overrides/MCP 连接状态按 generati
 
 注册表采用 events/ 的闭集哲学：只允许代码内注册，不提供运行时可配置的
 factory 注册扩展点；新增 graph family 属于代码变更。
+闭集声明直接注册 runtime 懒构建入口，selector 解析不依赖执行模块导入，
+重 SDK 只在该入口真正构建图时加载。
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from typing import Final, Protocol
 
 from app.agents.tool_invocation_context import ThreadRuntimeBinding
 from app.core.session_control_store import SessionControlStore
+from app.runtime.graph_factory import build_deep_agent_graph
 
 # 摘要形状与 channel_events.py 同一标准：完整 ``sha256:`` + 64 位小写 hex。
 # 只查前缀会让「sha256: + 任意正文」走私，因此必须 fullmatch 全匹配。
@@ -403,6 +406,7 @@ DEEP_AGENT_GRAPH_BINDING: Final[GraphBinding] = GraphBinding(
 
 GRAPH_FACTORY_REGISTRY: Final[GraphFactoryRegistry] = GraphFactoryRegistry()
 """进程级 graph factory 注册表；只允许代码内注册（闭集，无运行时扩展点）。"""
+GRAPH_FACTORY_REGISTRY.register(DEEP_AGENT_GRAPH_BINDING, build_deep_agent_graph)
 
 
 @dataclass(frozen=True, slots=True)

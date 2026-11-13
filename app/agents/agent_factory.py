@@ -947,13 +947,6 @@ def create_my_deep_agent(
     return runtime_agent
 
 
-# OpenSpec 8.4：代码内闭集注册 deep-agent graph family（不提供运行时可配置的
-# 注册扩展点）。resolve 命中即返回本 factory callable；进程重启后 runtime 以
-# 持久化 binding 重新解析到同一 callable，再以精确 thread generation 的
-# ThreadRuntimeBinding 注入归属；factory 不捕获 invocation admission。
-GRAPH_FACTORY_REGISTRY.register(DEEP_AGENT_GRAPH_BINDING, create_my_deep_agent)
-
-
 def create_runtime_deep_agent_for_session(
     *,
     session_id: str,

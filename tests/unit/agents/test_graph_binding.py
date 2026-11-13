@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from app.agents import agent_factory
 from app.agents.graph_binding import (
     DEEP_AGENT_CAPABILITY_PROFILE,
     DEEP_AGENT_GRAPH_BINDING,
@@ -35,6 +34,7 @@ from app.agents.graph_binding import (
 )
 from app.agents.tool_invocation_context import ThreadRuntimeBinding
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
+from app.runtime.graph_factory import build_deep_agent_graph
 from tests.support.canonical_id_at import thread_id_at
 
 _DIGEST_A = "sha256:" + "a" * 64
@@ -417,11 +417,10 @@ def test_deep_agent_graph_binding_is_descriptor_stable() -> None:
 
 
 def test_deep_agent_graph_binding_is_registered_in_process_registry() -> None:
-    # import app.agents.agent_factory 已触发模块级闭集注册。
     assert "deep-agent" in GRAPH_FACTORY_REGISTRY.registered_graph_ids()
     assert (
         GRAPH_FACTORY_REGISTRY.resolve(DEEP_AGENT_GRAPH_BINDING)
-        is agent_factory.create_my_deep_agent
+        is build_deep_agent_graph
     )
 
 
