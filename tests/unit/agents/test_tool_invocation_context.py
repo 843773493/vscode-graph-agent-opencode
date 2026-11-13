@@ -454,7 +454,7 @@ async def test_tool_invocation_does_not_infer_resource_lease_from_public_argumen
     tmp_path: Path,
     tool_invocation_middleware: ToolInvocationContextMiddleware,
 ) -> None:
-    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     # ToolInvocationContext 不再持有资源账本：通用调用链没有可注入的
     # lease 入口，公开参数（如 terminal_id）无法在通用层制造占用。
     assert not hasattr(ToolInvocationContext(), "resource_manager")

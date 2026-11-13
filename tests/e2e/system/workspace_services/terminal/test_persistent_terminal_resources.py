@@ -327,7 +327,7 @@ async def test_historical_terminal_checkpoint_does_not_create_resource_owner(
     resources = await client.get(f"/api/v1/sessions/{session_id}/resources")
     resources.raise_for_status()
     assert all(
-        item["resource_id"] != terminal_id for item in resources.json()["data"]["items"]
+        item["resource_id"] != terminal_id for item in resources.sqlite()["data"]["items"]
     )
     assert (await client.get(f"/api/v1/resources/{terminal_id}")).status_code == 404
 

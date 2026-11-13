@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import inspect
-import json
 import logging
-import os
+import sqlite3
 from collections.abc import Awaitable, Callable
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -19,16 +19,19 @@ from app.services.infrastructure.events.event_channel_service import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from tests.support.resource_owners.lease_storage import (
+    mutate_lease_payload,
+    observe_lease_commits,
+    read_lease_snapshot,
+)
 
 
 def test_optional_lease_expiry_reads_legacy_rows_and_round_trips_deadline(tmp_path):
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     ledger.register_external(resource_id="connection", kind="mcp_connection", lifetime_scope="workspace")
     legacy = ledger.acquire_operation(resource_id="connection", turn_stream_id="holder", operation_id="legacy")
-    payload = json.loads(path.read_text())
-    payload["leases"][0].pop("expires_at")
-    path.write_text(json.dumps(payload))
+    mutate_lease_payload(path, "leases", legacy.lease_id, lambda row: row.pop("expires_at"))
     cold = ExternalResourceLeaseLedger(state_path=path)
     retained = cold.get_lease(legacy.lease_id)
     assert retained is not None and retained.expires_at is None
@@ -50,7 +53,7 @@ def test_optional_lease_expiry_reads_legacy_rows_and_round_trips_deadline(tmp_pa
 def test_repeated_registration_preserves_identity_state_and_lease_without_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cold: bool, status: str,
 ) -> None:
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     ledger.register_external(resource_id="terminal", kind="terminal", lifetime_scope="thread", created_by_turn_id="original")
     lease = ledger.acquire_operation(resource_id="terminal", turn_stream_id="holder", operation_id="original")
@@ -64,7 +67,7 @@ def test_repeated_registration_preserves_identity_state_and_lease_without_writin
         pytest.fail("重复登记不应写盘或刷新时间戳")
 
     with monkeypatch.context() as fault:
-        fault.setattr(os, "fsync", unexpected_write)
+        observe_lease_commits(fault, lambda _path, _changes: unexpected_write(0))
         for register in (ledger.register, ledger.register_external):
             repeated = register(resource_id="terminal", kind="terminal", lifetime_scope="workspace", created_by_turn_id="new")
             assert repeated == record and repeated is not record
@@ -78,7 +81,6 @@ def test_repeated_registration_preserves_identity_state_and_lease_without_writin
     assert ledger.get_lease(lease.lease_id) == pending
     restored = ExternalResourceLeaseLedger(state_path=path)
     assert restored.get("terminal") == record and restored.get_lease(lease.lease_id) == pending
-    assert not path.with_suffix(".tmp").exists()
 
 
 @pytest.fixture(params=["register", "acquire", "release", "settle", "turn", "reconcile", "unknown"])
@@ -99,12 +101,12 @@ async def ledger_change(request: pytest.FixtureRequest) -> tuple[str, Callable[[
     return request.param, mutate
 
 
-@pytest.mark.parametrize("fault", ["fsync", "replace"])
+@pytest.mark.parametrize("fault", ["write", "commit"])
 async def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_operation_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ledger_change, fault: str,
 ) -> None:
     name, mutate = ledger_change
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     for resource_id in ("a", "b"):
         ledger.register_external(resource_id=resource_id, kind="terminal", lifetime_scope="workspace")
@@ -119,22 +121,27 @@ async def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_ope
     before, original_bytes = view(ledger), path.read_bytes()
     failure = OSError(5, "原 lease 发布失败", str(path))
     with monkeypatch.context() as io_fault:
-        if fault == "fsync":
-            def fail_sync(_descriptor: int) -> None:
+        if fault == "write":
+            def unavailable(_path, _changes):
                 raise failure
-            io_fault.setattr(os, "fsync", fail_sync)
+            observe_lease_commits(io_fault, unavailable)
         else:
-            replace = Path.replace
+            connect = sqlite3.connect
 
-            def fail_replace(source: Path, target: Path) -> Path:
-                if target == path:
-                    raise failure
-                return replace(source, target)
-            io_fault.setattr(Path, "replace", fail_replace)
-        with pytest.raises(OSError) as raised:
+            def denied_commit(*args, **kwargs):
+                connection = connect(*args, **kwargs)
+                connection.set_authorizer(lambda action, arg, *_: sqlite3.SQLITE_DENY
+                    if action == sqlite3.SQLITE_TRANSACTION and arg == "COMMIT" else sqlite3.SQLITE_OK)
+                return connection
+
+            io_fault.setattr(sqlite3, "connect", denied_commit)
+        with pytest.raises(OSError if fault == "write" else sqlite3.DatabaseError) as raised:
             await mutate(ledger)
-        assert raised.value.__cause__ is failure
-        assert type(raised.value) is type(failure) and raised.value.errno == failure.errno
+        if fault == "write":
+            assert raised.value.__cause__ is failure
+            assert type(raised.value) is type(failure) and raised.value.errno == failure.errno
+        else:
+            assert isinstance(raised.value.__cause__, sqlite3.DatabaseError)
         assert str(path) not in str(raised.value)
     assert path.read_bytes() == original_bytes
     assert view(ledger) == before
@@ -163,7 +170,7 @@ async def test_failed_lease_publication_keeps_live_and_cold_facts_until_same_ope
 def test_management_lease_can_occupy_unverified_resource_without_changing_original_facts(
     tmp_path: Path, status: str,
 ) -> None:
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     ledger.register_external(resource_id="terminal_a", kind="terminal", lifetime_scope="workspace")
     original = ledger.acquire_operation(resource_id="terminal_a", turn_stream_id="old", operation_id="old")
@@ -185,7 +192,7 @@ def test_management_lease_can_occupy_unverified_resource_without_changing_origin
 async def test_external_state_retains_only_the_explicit_unresolved_operation(
     tmp_path: Path, status: str, unresolved_lease_id: str | None,
 ) -> None:
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     for resource_id in ("terminal_a", "terminal_b"):
         ledger.register_external(resource_id=resource_id, kind="terminal", lifetime_scope="workspace")
@@ -215,7 +222,7 @@ def _ledger_with_state_events(
 ) -> ExternalResourceLeaseLedger:
     """带 resource.state 通知出口的账本与同一事件服务（供订阅断言）。"""
     return ExternalResourceLeaseLedger(
-        state_path=tmp_path / "resources.json",
+        state_path=tmp_path / "resources.sqlite",
         state_events=ResourceStateEventPublisher(
             event_service=event_service,
             owner_domain="external_resource_leases",
@@ -331,7 +338,7 @@ async def test_event_unavailable_keeps_durable_truth_and_records_error(
 
     monkeypatch.setattr(channel, "publish", fail_publish)
     ledger = ExternalResourceLeaseLedger(
-        state_path=tmp_path / "resources.json",
+        state_path=tmp_path / "resources.sqlite",
         state_events=publisher,
     )
     ledger.register(
@@ -360,7 +367,7 @@ async def test_event_unavailable_keeps_durable_truth_and_records_error(
     # durable 事实已经落盘，通知失败绝不回滚。
     status = "settled" if mutation == "settle" else "reconcile_required"
     assert ledger.get_lease("lease_1").status == status
-    cold = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    cold = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     assert cold.get_lease("lease_1") == ledger.get_lease("lease_1")
     assert cold.get("terminal_1") == ledger.get("terminal_1")
     assert cold.get("browser_1") == ledger.get("browser_1")
@@ -393,7 +400,7 @@ async def test_event_unavailable_keeps_durable_truth_and_records_error(
 async def test_turn_cancel_releases_durable_leases_without_stopping_resources(
     tmp_path: Path,
 ) -> None:
-    manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     manager.register(
         resource_id="browser_1",
         kind="browser_context",
@@ -427,16 +434,16 @@ async def test_turn_cancel_releases_durable_leases_without_stopping_resources(
     assert browser is not None and browser.status == "running"
     assert terminal is not None and terminal.status == "running"
 
-    restored = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    restored = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     assert restored.leases_for_turn("stream_1")[0].status == "released"
-    assert json.loads((tmp_path / "resources.json").read_text())
+    assert read_lease_snapshot(tmp_path / "resources.sqlite")["records"]
 
 
 @pytest.mark.asyncio
 async def test_reconcile_never_assumes_missing_external_resource_is_safe(
     tmp_path: Path,
 ) -> None:
-    manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     manager.register(
         resource_id="mcp_1",
         kind="mcp_connection",
@@ -457,7 +464,7 @@ async def test_reconcile_never_assumes_missing_external_resource_is_safe(
 def test_external_resource_registration_requires_explicit_supported_kind(
     tmp_path: Path,
 ) -> None:
-    manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     manager.register_external(
         resource_id="browser_1",
         kind="browser_context",
@@ -480,7 +487,7 @@ async def test_node_debug_process_lease_kept_across_turns_and_settled_by_owner(
     tmp_path: Path,
 ) -> None:
     """typed ``node_debug_process`` 占用由 owner 结清，Turn 收尾不得误释放。"""
-    manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    manager = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     manager.register_external(
         resource_id="node_debug_process:ses_1:main",
         kind="node_debug_process",
@@ -503,7 +510,7 @@ async def test_node_debug_process_lease_kept_across_turns_and_settled_by_owner(
     settled = await manager.settle(lease.lease_id)
     assert settled.status == "settled"
     # 结清结果 durable 落盘，backend 重启后仍可读到。
-    restored = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    restored = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     restored_lease = restored.get_lease(lease.lease_id)
     assert restored_lease is not None
     assert restored_lease.status == "settled"
@@ -516,7 +523,7 @@ async def test_node_debug_process_lease_kept_across_turns_and_settled_by_owner(
 
 def test_two_holders_share_resource_without_interference(tmp_path: Path) -> None:
     """同一资源的两个 holder 各自持有 lease，释放其一不影响另一方。"""
-    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     ledger.register_external(
         resource_id="browser_1",
         kind="browser_context",
@@ -553,7 +560,7 @@ async def test_restart_without_stopper_never_claims_stopped(tmp_path: Path) -> N
     进程重启后 in-process stopper 必然不存在，账本绝不会替 owner 宣称
     外部资源已停止；占用保持 reconcile_required 等待 owner 核实。
     """
-    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     ledger.register_external(
         resource_id="dev_server_1",
         kind="development_server",
@@ -566,7 +573,7 @@ async def test_restart_without_stopper_never_claims_stopped(tmp_path: Path) -> N
         operation_id="serve",
     )
 
-    restarted = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    restarted = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     assert restarted.get_lease("lease_crash") is not None
     # 不提供任何 owner 证据时对账：资源 orphaned、lease reconcile_required。
     records = await restarted.reconcile({})
@@ -581,7 +588,7 @@ async def test_restart_without_stopper_never_claims_stopped(tmp_path: Path) -> N
 
 async def test_provider_unreachable_is_not_reported_as_stopped(tmp_path: Path) -> None:
     """provider 不可达时对账不产生 stopped 语义，只标记 unknown。"""
-    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.json")
+    ledger = ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
     ledger.register_external(
         resource_id="mcp_1",
         kind="mcp_connection",
@@ -613,62 +620,18 @@ async def test_provider_unreachable_is_not_reported_as_stopped(tmp_path: Path) -
         await ledger.settle("mcp_1:missing")
 
 
-def test_load_rejects_non_array_records_or_leases(tmp_path: Path) -> None:
-    """损坏的状态文件（records/leases 不是数组）必须 fail-closed，绝不当空账本。"""
-    state_path = tmp_path / "resources.json"
-    state_path.write_text(
-        json.dumps(
-            {
-                "records": [
-                    {
-                        "resource_id": "terminal_1",
-                        "kind": "terminal",
-                        "lifetime_scope": "turn",
-                        "created_by_turn_id": None,
-                        "status": "running",
-                        "updated_at": "2026-10-01T00:00:00Z",
-                    }
-                ],
-                "leases": "tampered",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(TypeError, match="leases 必须是数组"):
-        ExternalResourceLeaseLedger(state_path=state_path)
-
-
-def test_load_rejects_non_object_entries(tmp_path: Path) -> None:
-    """损坏的状态文件（数组内混入非对象项）必须 fail-closed，绝不静默跳过。"""
-    state_path = tmp_path / "resources.json"
-    state_path.write_text(
-        json.dumps(
-            {
-                "records": [
-                    {
-                        "resource_id": "terminal_1",
-                        "kind": "terminal",
-                        "lifetime_scope": "turn",
-                        "created_by_turn_id": None,
-                        "status": "running",
-                        "updated_at": "2026-10-01T00:00:00Z",
-                    },
-                    "garbage",
-                ],
-                "leases": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(TypeError, match="records\\[1\\] 必须是对象"):
-        ExternalResourceLeaseLedger(state_path=state_path)
+def test_load_rejects_old_json_without_creating_an_empty_database(tmp_path: Path) -> None:
+    legacy = tmp_path / "resources.json"
+    legacy.write_text('{"records": [], "leases": []}')
+    with pytest.raises(RuntimeError, match="旧 JSON"):
+        ExternalResourceLeaseLedger(state_path=tmp_path / "resources.sqlite")
+    assert legacy.read_text() == '{"records": [], "leases": []}'
+    assert not (tmp_path / "resources.sqlite").exists()
 
 
 @pytest.fixture
 async def persisted_lease_ledger(tmp_path: Path) -> tuple[Path, ExternalResourceLeaseLedger]:
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     ledger.register_external(resource_id="terminal_a", kind="terminal", lifetime_scope="workspace")
     ledger.register_external(resource_id="browser_b", kind="browser_context", lifetime_scope="thread")
@@ -690,25 +653,16 @@ async def persisted_lease_ledger(tmp_path: Path) -> tuple[Path, ExternalResource
 
 
 @pytest.mark.parametrize("section", ["records", "leases"])
-@pytest.mark.parametrize("conflicting", [False, True])
-def test_load_rejects_duplicate_identity_without_replacing_occupancy(
-    persisted_lease_ledger: tuple[Path, ExternalResourceLeaseLedger], section: str, conflicting: bool,
+def test_load_rejects_changed_identity_without_replacing_occupancy(
+    persisted_lease_ledger: tuple[Path, ExternalResourceLeaseLedger], section: str,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     path, _ledger = persisted_lease_ledger
     original = path.read_bytes()
-    payload = json.loads(original)
-    duplicate = dict(payload[section][0])
-    if conflicting:
-        duplicate.update({"kind": "browser_context"} if section == "records" else {
-            "resource_id": "browser_b", "holder_thread_id": "thread_b",
-        })
-    index = len(payload[section])
-    payload[section].append(duplicate)
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    key, field = ("terminal_a", "resource_id") if section == "records" else ("active", "lease_id")
+    mutate_lease_payload(path, section, key, lambda row: row.update({field: "changed-identity"}))
     damaged = path.read_bytes()
-    field = "resource_id" if section == "records" else "lease_id"
-    with pytest.raises(TypeError, match=rf"{section}\[{index}\] {field} 重复") as caught:
+    with pytest.raises(TypeError, match="与原身份不一致") as caught:
         ExternalResourceLeaseLedger(state_path=path)
     assert path.read_bytes() == damaged
     assert str(path) not in str(caught.value)
@@ -727,12 +681,12 @@ def test_load_rejects_missing_resource_even_for_finished_lease(
     persisted_lease_ledger: tuple[Path, ExternalResourceLeaseLedger], status: str,
 ) -> None:
     path, _ledger = persisted_lease_ledger
-    payload = json.loads(path.read_bytes())
-    payload["records"] = [record for record in payload["records"] if record["resource_id"] != "terminal_a"]
-    payload["leases"] = [lease for lease in payload["leases"] if lease["lease_id"] in {status, "peer"}]
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("DELETE FROM resource_leases WHERE lease_id NOT IN (?, ?)", (status, "peer"))
+        connection.execute("DELETE FROM resource_records WHERE resource_id='terminal_a'")
+        connection.commit()
     damaged = path.read_bytes()
-    with pytest.raises(TypeError, match=r"leases\[0\] resource_id 未登记") as caught:
+    with pytest.raises(TypeError, match="resource_id 未登记") as caught:
         ExternalResourceLeaseLedger(state_path=path)
     assert str(path) not in str(caught.value)
     assert path.read_bytes() == damaged

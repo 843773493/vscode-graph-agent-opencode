@@ -11,6 +11,7 @@ import pytest
 
 from app.services.business.terminal_resources.operations import TerminalOperations
 from tests.support.resource_owners.browser import BrowserOwnerFixture
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 from tests.unit.services.business.test_resource_operation_close_deadline import (
     bundle as bundle,  # noqa: PLC0414
@@ -63,15 +64,19 @@ async def test_unknown_write_failure_keeps_original_dispatch_through_all_cleanup
         dispatched = True
         raise original
 
-    def unavailable(source: Path, target: Path) -> Path:
+    def reject_write(target: Path) -> None:
         if dispatched and target == (path if storage == "ledger" else store_path):
             raise native
+
+    def unavailable(source: Path, target: Path) -> Path:
+        reject_write(target)
         return replace(source, target)
 
     method = "read_terminal" if isinstance(operation, TerminalOperations) else "perform"
     with monkeypatch.context() as fault:
         fault.setattr(bundle.transport, method, lost)
         fault.setattr(Path, "replace", unavailable)
+        observe_lease_commits(fault, lambda target, _changes: reject_write(target))
         with pytest.raises(OSError) as caught:
             await call(leased_operation)
         assert caught.value.__cause__ is native and caught.value.__context__ is original
@@ -106,7 +111,6 @@ async def test_pre_dispatch_storage_failure_does_not_enter_external_call_or_mark
     owner, path = bundle.owner, bundle.leases._state_path
     assert owner is not None and path is not None
     before, records = path.read_bytes(), owner._store.path.read_bytes()
-    replace = Path.replace
     calls = 0
     native = OSError(28, "派发准备尚未持久", str(path))
 
@@ -115,15 +119,14 @@ async def test_pre_dispatch_storage_failure_does_not_enter_external_call_or_mark
         calls += 1
         raise AssertionError("准备未持久不得进入外部回调")
 
-    def fail(source: Path, target: Path) -> Path:
+    def fail(target: Path, _changes) -> None:
         if target == path:
             raise native
-        return replace(source, target)
 
     method = "read_terminal" if isinstance(operation, TerminalOperations) else "perform"
     with monkeypatch.context() as fault:
         fault.setattr(bundle.transport, method, unexpected)
-        fault.setattr(Path, "replace", fail)
+        observe_lease_commits(fault, fail)
         with pytest.raises(OSError) as caught:
             await call(leased_operation)
         assert caught.value.__cause__ is native
@@ -146,15 +149,12 @@ async def test_formal_receipt_confirmation_failure_cannot_be_released_by_operati
 
     def fail(lease_id: str) -> None:
         assert lease_id == lease.lease_id
-        replace = Path.replace
-
-        def unavailable(source: Path, target: Path) -> Path:
+        def unavailable(target: Path, _changes) -> None:
             if target == path:
                 raise native
-            return replace(source, target)
 
         with monkeypatch.context() as io_fault:
-            io_fault.setattr(Path, "replace", unavailable)
+            observe_lease_commits(io_fault, unavailable)
             original(lease_id)
 
     with monkeypatch.context() as fault:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +18,7 @@ from tests.support.resource_owners.browser import (
     BrowserOwnerFixture,
     build_browser_owner_fixture,
 )
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import (
     SESSION_A,
     SESSION_B,
@@ -91,11 +91,11 @@ async def lease_write(
     gate = LeaseWrite(request.param)
     path = management_case.bundle.leases._state_path
     assert path is not None
-    publishing, loop = Path.replace, asyncio.get_running_loop()
+    loop = asyncio.get_running_loop()
 
-    def publish(source: Path, target: Path) -> Path:
+    def publish(target: Path, changes) -> None:
         if target == path and gate.lease is None:
-            leases = json.loads(source.read_text())["leases"]
+            leases = changes["leases"]
             candidates = [lease for lease in leases if lease["operation_id"] == "management-io"
                           and lease["status"] == ("active" if gate.phase == "acquire" else "released")]
             if candidates:
@@ -106,9 +106,8 @@ async def lease_write(
                 assert gate.free.wait(5), "测试未释放原管理lease写入"
                 if gate.failure is not None:
                     raise gate.failure
-        return publishing(source, target)
 
-    monkeypatch.setattr(Path, "replace", publish)
+    observe_lease_commits(monkeypatch, publish)
     try:
         yield gate
     finally:

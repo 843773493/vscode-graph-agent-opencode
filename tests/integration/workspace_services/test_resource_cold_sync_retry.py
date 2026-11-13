@@ -141,7 +141,7 @@ async def test_real_failed_cold_sync_keeps_unknown_discoverable_and_management_r
                     assert first.headers["X-Request-ID"] == "first-explicit-sync-retry"
                     assert calls == initial_calls + [(rid, frozen, True)]
                     assert effects == []
-                    cold = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+                    cold = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite")
                     assert cold.leases_for_resource(rid) == [lease]
                     result = await api.post(f"/api/v1/resources/{rid}/{action}", json={
                         "expected_revision": frozen,
@@ -159,7 +159,7 @@ async def test_real_failed_cold_sync_keeps_unknown_discoverable_and_management_r
                     assert verified["status"] == final["status"]
                     assert verified["reconciliation_status"] == "verified"
                     assert verified["transport_owner_revision"] == frozen + 1
-                    settled = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json").get_lease(lease.lease_id)
+                    settled = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite").get_lease(lease.lease_id)
                     assert settled is not None and settled.status == "settled"
                     assert not owner._leases.leases_for_resource(rid)
                     assert (await api.get(f"/api/v1/resources/{peer}")).json()["data"] == healthy.json()["data"]

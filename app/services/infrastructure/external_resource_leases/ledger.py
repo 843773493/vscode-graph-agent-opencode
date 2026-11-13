@@ -1,7 +1,7 @@
 """跨 Turn 外部资源的持久 operation lease 账本。
 
 本模块只回答「哪个 holder 以哪次 operation 占用了哪个已登记资源」，
-并把占用状态持久化到工作区 .boxteam/resources.json，供进程重启后的
+并把占用状态持久化到工作区 .boxteam/resources.sqlite，供进程重启后的
 owner 恢复与对账。它不猜测工具参数、不保存 cleanup_policy、不持有任何
 内存 stopper：资源是否真的停止、何时停止，只由实际 owner 验证身份与
 状态后写入结清结果（settle），账本绝不代替 owner 宣称资源已停止。
@@ -10,19 +10,15 @@ owner 恢复与对账。它不猜测工具参数、不保存 cleanup_policy、�
 from __future__ import annotations
 
 import asyncio
-import json
-import os
+import sqlite3
 from collections import deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import ClassVar, Literal, Never, TypeVar
-
-from pydantic import ConfigDict, TypeAdapter
-from pydantic_core import to_json
+from typing import Literal, TypeVar
 
 from app.core.child_process_state import ChildProcessState
 from app.core.failures import failure_detail
@@ -32,44 +28,11 @@ from app.services.infrastructure.events.channel_events import (
     ResourceStateEventPublisher,
 )
 
+from .database import LeaseDatabase
+from .models import ResourceLease, ResourceRecord
+
 _UNSETTLED_LEASE_STATUSES = frozenset({"active", "dispatching", "reconcile_required"})
 _ResultT = TypeVar("_ResultT")
-
-
-@dataclass(slots=True)
-class ResourceRecord:
-    __pydantic_config__: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
-
-    resource_id: str
-    kind: str
-    lifetime_scope: str
-    created_by_turn_id: str | None
-    status: str = "running"
-    updated_at: str = ""
-    process: ChildProcessState | None = None
-    mcp_server_id: str | None = None
-    cleanup_failed: bool = False
-
-
-@dataclass(slots=True)
-class ResourceLease:
-    __pydantic_config__: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
-
-    lease_id: str
-    resource_id: str
-    turn_stream_id: str
-    operation_id: str
-    # 冷恢复必须拒绝非法状态，不能将未识别的占用当作已释放。
-    status: Literal["active", "dispatching", "released", "settled", "reconcile_required"] = "active"
-    updated_at: str = ""
-    holder_session_id: str | None = None
-    holder_thread_id: str | None = None
-    # 期限由实际 owner 执行；账本不能据此假报资源或远端操作已停止。
-    expires_at: str | None = None
-
-
-_RESOURCE_RECORD = TypeAdapter(ResourceRecord)
-_RESOURCE_LEASES = TypeAdapter(list[ResourceLease], config=ConfigDict(hide_input_in_errors=True))
 
 
 class ExternalResourceLeaseLedger:
@@ -95,6 +58,7 @@ class ExternalResourceLeaseLedger:
         state_events: ResourceStateEventPublisher | None = None,
     ) -> None:
         self._state_path = state_path
+        self._database = LeaseDatabase(state_path) if state_path is not None else None
         #: owner 已核实状态变化的轻量通知出口（resource.state/{owner_domain}）。
         #: 账本只在语义上等价于「owner 已核实资源终态」的转换点发布（settle、
         #: reconcile），lease 释放/获取不发布，避免把 Turn 收尾虚报为资源终态。
@@ -483,7 +447,7 @@ class ExternalResourceLeaseLedger:
             lease = None if unresolved_lease_id is None else self._leases.get(unresolved_lease_id)
             if unresolved_lease_id is not None and (lease is None or lease.resource_id != resource_id):
                 raise ValueError(f"未知 operation 不属于此资源的原 lease: {unresolved_lease_id}")
-            # 列表读取会逐项同步；相同状态不重写并 fsync 整个账本。
+            # 列表读取会逐项同步；相同状态不重复提交账本。
             if (record.lifetime_scope == lifetime_scope and record.status == status
                     and (process is None or process == record.process)
                     and (cleanup_failed is None or cleanup_failed == record.cleanup_failed)
@@ -505,98 +469,37 @@ class ExternalResourceLeaseLedger:
         return record
 
     def _load(self) -> None:
-        if self._state_path is None:
-            return
-        with self._io("read"):
-            try:
-                raw = json.loads(self._state_path.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                # 只有尚未创建的账本为空；目录或无权读取不能被当成空账本。
-                return
-        if not isinstance(raw, dict):
-            self._raise_failure("validate", "资源状态文件必须是对象")
-        records: dict[str, ResourceRecord] = {}
-        leases: dict[str, ResourceLease] = {}
-        for index, value in enumerate(self._load_rows(raw, "records")):
-            record = _RESOURCE_RECORD.validate_python(value)
-            if record.resource_id in records:
-                self._raise_failure("validate", f"资源状态文件 records[{index}] resource_id 重复")
-            records[record.resource_id] = record
-        for index, lease in enumerate(_RESOURCE_LEASES.validate_python(self._load_rows(raw, "leases"))):
-            if lease.lease_id in leases:
-                self._raise_failure("validate", f"资源状态文件 leases[{index}] lease_id 重复")
-            if lease.resource_id not in records:
-                self._raise_failure("validate", f"资源状态文件 leases[{index}] resource_id 未登记")
-            leases[lease.lease_id] = lease
-        # 完整核对唯一身份与引用后才发布；不能用覆盖或忽略来修复原占用事实。
-        self._records, self._leases = records, leases
-
-    def _load_rows(
-        self,
-        raw: Mapping[str, object],
-        name: str,
-    ) -> list[dict[str, object]]:
-        """逐项校验持久状态数组；缺省按空数组，损坏一律 fail-closed。
-
-        绝不用 isinstance 静默跳过非对象项，否则被外部改写的状态文件会被当成
-        空账本吸收，重启后 owner 无法对账到真实占用与恢复引用。
-        """
-        rows = raw.get(name, [])
-        if not isinstance(rows, list):
-            self._raise_failure("validate", f"资源状态文件 {name} 必须是数组")
-        for index, row in enumerate(rows):
-            if not isinstance(row, dict):
-                self._raise_failure("validate", f"资源状态文件 {name}[{index}] 必须是对象")
-        return rows
-
-    def _raise_failure(self, stage: str, reason: str, error: OSError | None = None) -> Never:
-        original = error if error is not None else TypeError(reason)
-        original.add_note(f"资源账本位置: {self._state_path}")
-        detail = failure_detail(
-            original, stage=stage, label=f"{reason}: artifact=external_resource_leases",
-        )
-        if isinstance(original, OSError):
-            raise type(original)(original.errno, detail, None, getattr(original, "winerror", None)) from original
-        raise TypeError(detail) from original
+        if self._database is not None:
+            with self._io("read"):
+                self._records, self._leases = self._database.read()
 
     @contextmanager
     def _io(self, stage: str) -> Iterator[None]:
-        """在原账本文件访问点报告失败，原位置仅留诊断和直接原因。"""
+        """保留原错误类别、代码和诊断位置，不发布失败的草稿。"""
         try:
             yield
-        except OSError as error:
-            self._raise_failure(stage, "资源账本文件访问失败", error)
+        except (OSError, sqlite3.Error) as error:
+            error.add_note(f"资源账本位置: {self._state_path}")
+            detail = failure_detail(error, stage=stage, label="资源账本文件访问失败: artifact=external_resource_leases")
+            if isinstance(error, OSError):
+                raise type(error)(error.errno, detail, None, getattr(error, "winerror", None)) from error
+            projected = type(error)(detail)
+            for name in ("sqlite_errorcode", "sqlite_errorname"):
+                if hasattr(error, name):
+                    setattr(projected, name, getattr(error, name))
+            raise projected from error
 
     def _commit(
         self, *, records: Iterable[ResourceRecord] = (), leases: Iterable[ResourceLease] = (),
     ) -> None:
-        """沿唯一写链先发布完整持久快照，再发布内存；失败保留原占用供重试。"""
+        """同一事务只写本次变化；持久成功后再发布内存快照。"""
+        records, leases = tuple(records), tuple(leases)
         next_records = self._records | {record.resource_id: record for record in records}
         next_leases = self._leases | {lease.lease_id: lease for lease in leases}
-        if self._state_path is not None:
+        if self._database is not None:
             with self._io("write"):
-                self._state_path.parent.mkdir(parents=True, exist_ok=True)
-                temp_path = self._state_path.with_suffix(".tmp")
-                payload = {
-                    "records": list(next_records.values()),
-                    "leases": list(next_leases.values()),
-                }
-                with temp_path.open("wb") as stream:
-                    # 直接编码 dataclass，避免深复制及 json.dump 的逐字段 Python 写入。
-                    stream.write(to_json(payload, inf_nan_mode="constants"))
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                temp_path.replace(self._state_path)
-        self._records = next_records
-        self._leases = next_leases
-
-    def ensure_persisted(self, *, state_path: Path) -> None:
-        """安装域登记 locator 前由原账本创建空快照；既有 locator 缺失时由调用方拒绝。"""
-        with self._write_lock:
-            if self._state_path != state_path:
-                raise ValueError("MCP 安装引用必须使用所属工作区的原持久资源账本")
-            if not state_path.exists():
-                self._commit()
+                self._database.commit(records=records, leases=leases)
+        self._records, self._leases = next_records, next_leases
 
     @staticmethod
     def _now() -> str:

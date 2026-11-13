@@ -423,7 +423,7 @@ async def _recover_pending_browser(workspace: Path, control: Path) -> None:
         assert result["status"] == "closed" and result["reconciliation_status"] == "verified"
         assert result["source_thread"] == {"session_id": identity["session_id"], "thread_id": identity["thread_id"]}
         assert not owner._leases.leases_for_resource(rid)
-        cold = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.json")
+        cold = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.sqlite")
         settled = cold.get_lease(origin["lease_id"])
         assert settled is not None and settled.status == "settled"
         assert {key: value for key, value in asdict(settled).items() if key not in {"status", "updated_at"}} == {
@@ -456,7 +456,7 @@ async def test_python_hard_restart_cancels_the_original_native_start_and_settles
         await _wait_worker_file(control / "arrived.json", worker, control / "python-create.stderr.log")
         identity = json.loads((control / "python-created.json").read_text())
         assert identity["pid"] == worker.pid
-        paths = [root / ".boxteam" / name for name in ("browser-resources.json", "resources.json")]
+        paths = [root / ".boxteam" / name for name in ("browser-resources.json", "resources.sqlite")]
         original_bytes = [path.read_bytes() for path in paths]
         worker.kill()
         await asyncio.to_thread(_assert_force_terminated, worker)
@@ -467,7 +467,7 @@ async def test_python_hard_restart_cancels_the_original_native_start_and_settles
             await _wait_worker_file(control / "python-cancelling.json", recovered, control / "python-recover.stderr.log")
             await asyncio.sleep(0.1)
             assert recovered.poll() is None and not (control / "python-recovered.json").exists()
-            pending = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json").get_lease(identity["lease"]["lease_id"])
+            pending = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite").get_lease(identity["lease"]["lease_id"])
             assert pending is not None and pending.status == "reconcile_required"
         finally:
             (control / "release").touch()

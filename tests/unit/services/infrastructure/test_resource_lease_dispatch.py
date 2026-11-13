@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from functools import partial
 from pathlib import Path
 
@@ -11,22 +10,22 @@ import pytest
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 
 
 @pytest.fixture
 def dispatch_ledger(tmp_path: Path) -> tuple[Path, ExternalResourceLeaseLedger]:
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     ledger.register_external(resource_id="terminal", kind="terminal", lifetime_scope="workspace")
     ledger.acquire_operation(resource_id="terminal", turn_stream_id="holder", operation_id="operation", lease_id="original")
     return path, ledger
 
 
-@pytest.mark.parametrize("fault", ["fsync", "replace"])
 @pytest.mark.parametrize("stage", ["dispatch", "confirm", "release"])
 def test_dispatch_publication_failure_keeps_exact_durable_phase_until_explicit_retry(
     dispatch_ledger: tuple[Path, ExternalResourceLeaseLedger], monkeypatch: pytest.MonkeyPatch,
-    fault: str, stage: str,
+    stage: str,
 ) -> None:
     path, ledger = dispatch_ledger
     if stage != "dispatch":
@@ -35,18 +34,9 @@ def test_dispatch_publication_failure_keeps_exact_durable_phase_until_explicit_r
     native = OSError(28, "派发阶段原生写盘失败", str(path))
     change = ledger.mark_operation_dispatched if stage == "dispatch" else partial(ledger.finish_operation_dispatch, release=stage == "release")
     with monkeypatch.context() as io_fault:
-        if fault == "fsync":
-            def fail(_descriptor: int) -> None:
-                raise native
-            io_fault.setattr(os, "fsync", fail)
-        else:
-            replace = Path.replace
-
-            def fail_replace(source: Path, target: Path) -> Path:
-                if target == path:
-                    raise native
-                return replace(source, target)
-            io_fault.setattr(Path, "replace", fail_replace)
+        def unavailable(_path, _changes):
+            raise native
+        observe_lease_commits(io_fault, unavailable)
         with pytest.raises(OSError) as caught:
             change("original")
         assert caught.value.__cause__ is native

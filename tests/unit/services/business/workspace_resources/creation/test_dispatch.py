@@ -9,6 +9,7 @@ import pytest
 
 from app.services.business.terminal_resources.operations import TerminalOperations
 from app.services.infrastructure.external_resource_leases import ResourceLease
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.unit.services.business.workspace_resources.creation.conftest import (
     Operation,
@@ -49,14 +50,18 @@ async def test_lost_creation_receipt_keeps_exact_lease_after_failed_unknown_and_
         dispatched = True
         raise original
 
-    def unavailable(source: Path, target: Path) -> Path:
+    def reject_write(target: Path) -> None:
         if dispatched and target == (ledger_path if storage == "ledger" else owner._store.path):
             raise native
+
+    def unavailable(source: Path, target: Path) -> Path:
+        reject_write(target)
         return replace(source, target)
 
     with monkeypatch.context() as fault:
         fault.setattr(resource_owner.transport, method, lost)
         fault.setattr(Path, "replace", unavailable)
+        observe_lease_commits(fault, lambda target, _changes: reject_write(target))
         with pytest.raises(OSError) as caught:
             await create(operation)
         assert caught.value.__cause__ is native and caught.value.__context__ is original

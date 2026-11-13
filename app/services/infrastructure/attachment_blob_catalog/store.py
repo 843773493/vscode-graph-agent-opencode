@@ -6,6 +6,7 @@ import base64
 import hashlib
 import mimetypes
 import os
+import sqlite3
 import stat
 import sys
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
@@ -513,7 +514,7 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
             try:
                 if await run_sync_shielded(self._try_process_directory, candidate.attachment_id, ledger):
                     released.append(candidate.attachment_id)
-            except (OSError, RuntimeError, ValueError) as error:
+            except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
                 failures.append(error)
         if failures:
             if len(failures) == 1:
@@ -564,7 +565,7 @@ class AttachmentBlobStore(WorkingCopiesMixin, ForkAttachmentStoreMixin, Attachme
                     return False
                 try:
                     return self._release_directory(attachment_id, ledger)
-                except (OSError, RuntimeError, ValueError) as error:
+                except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
                     self._catalog.retain_working_copy(attachment_id,
                         reason=f"工作副本处理未完成：{type(error).__name__}: {error}", now=self._clock())
                     raise

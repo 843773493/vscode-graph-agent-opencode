@@ -155,7 +155,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
                 assert stopped["reconciliation_status"] == "verified"
                 assert calls == ["stop"]
                 assert not owner._leases.leases_for_resource(rid)
-                cold = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.json")
+                cold = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.sqlite")
                 settled = cold.get_lease(lease.lease_id)
                 assert settled is not None and settled.status == "settled"
                 assert {key: value for key, value in asdict(settled).items() if key not in {"status", "updated_at"}} == {key: value for key, value in asdict(lease).items() if key not in {"status", "updated_at"}}
@@ -174,7 +174,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
                         holder_id="request:crash-create", operation_id="crash-create")
                 assert calls == []
                 assert owner._leases.get_lease(lease.lease_id) == lease
-                cold = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.json")
+                cold = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.sqlite")
                 assert cold.get_lease(lease.lease_id) == lease
                 assert (await owner.get_resource(rid))["reconciliation_status"] == "unknown"
                 cancelled = await owner.command(rid, action="stop", expected_revision=revision,
@@ -182,7 +182,7 @@ async def _recover_worker(workspace: Path, barrier: Path, output: Path, kind: Re
                 assert cancelled["status"] == "deleted" and cancelled["reconciliation_status"] == "verified"
                 assert cancelled["thread_associations"] == [] and cancelled["source_thread"] == restored["source_thread"]
                 assert calls == ["cancel_creation"] and not owner._leases.leases_for_resource(rid)
-                settled = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.json").get_lease(lease.lease_id)
+                settled = ExternalResourceLeaseLedger(state_path=workspace / ".boxteam/resources.sqlite").get_lease(lease.lease_id)
                 assert settled is not None and settled.status == "settled"
                 assert settled.operation_id == lease.operation_id and settled.turn_stream_id == lease.turn_stream_id
                 runtime = await owner._transport.get_resource(rid)
@@ -220,7 +220,7 @@ def test_creation_hard_restart_preserves_exact_lease_until_original_owner_proof(
         assert barrier.exists(), "创建未到达原transport派发/回执边界"
         identity = json.loads(barrier.read_text())
         assert identity["pid"] == worker.pid and identity["happened"] is happened
-        paths = [workspace / ".boxteam" / name for name in (f"{kind}-resources.json", "resources.json")]
+        paths = [workspace / ".boxteam" / name for name in (f"{kind}-resources.json", "resources.sqlite")]
         original_bytes = [path.read_bytes() for path in paths]
         worker.kill()
         _assert_force_terminated(worker)

@@ -13,6 +13,7 @@ import pytest
 from app.abstractions.workspace_resources import ResourceSnapshot
 from app.services.business.browser_resources.operations import BrowserOperations
 from app.services.business.terminal_resources.operations import TerminalOperations
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.unit.services.business.workspace_resources.test_record_write_lifetime import (
     OwnerFixture,
@@ -60,24 +61,31 @@ async def creation_write(
     assert ledger_path is not None
     phase = request.param
     target_path = resource_owner.owner._store.path if phase == "intent" else ledger_path
-    ordinal = {"intent": 1, "register": 1, "acquire": 2, "prepare": 3}[phase]
     gate = CreationWrite(phase)
     loop, replace = asyncio.get_running_loop(), Path.replace
-    writes = 0
+
+    def wait_for_write() -> None:
+        if not gate.writers:
+            gate.writers.append(get_ident())
+            loop.call_soon_threadsafe(gate.entered.set)
+            assert gate.release.wait(5), "测试未释放原创建写入"
+            if gate.failure is not None:
+                raise gate.failure
 
     def publishing(source: Path, target: Path) -> Path:
-        nonlocal writes
-        if target == target_path:
-            writes += 1
-            if writes == ordinal:
-                gate.writers.append(get_ident())
-                loop.call_soon_threadsafe(gate.entered.set)
-                assert gate.release.wait(5), "测试未释放原创建写入"
-                if gate.failure is not None:
-                    raise gate.failure
+        if phase == "intent" and target == target_path:
+            wait_for_write()
         return replace(source, target)
 
+    def ledger_write(target: Path, changes) -> None:
+        selected = bool(changes["records"]) if phase == "register" else any(
+            lease["status"] == ("active" if phase == "acquire" else "dispatching") for lease in changes["leases"]
+        )
+        if phase != "intent" and target == ledger_path and selected:
+            wait_for_write()
+
     monkeypatch.setattr(Path, "replace", publishing)
+    observe_lease_commits(monkeypatch, ledger_write)
     try:
         yield gate
     finally:

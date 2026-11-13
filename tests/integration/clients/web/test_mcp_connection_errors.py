@@ -23,6 +23,7 @@ from tests.support.api_helpers import create_session
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原 MCP handler
 )
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 
 
 async def test_web_denial_original_deadline_and_disconnect_keep_authoritative_state(
@@ -36,8 +37,8 @@ async def test_web_denial_original_deadline_and_disconnect_keep_authoritative_st
         title = "MCP 授权拒绝与真实期限"
         session = await create_session(client, title)
         thread = (await client.get(f"/api/v1/sessions/{session}/main-thread")).json()["data"]["thread_id"]
-        ledger_path = case.mount.workspace_root / ".boxteam/resources.json"
-        before = {item["resource_id"]: item for item in json.loads(ledger_path.read_text())["records"]}
+        ledger_path = case.mount.workspace_root / ".boxteam/resources.sqlite"
+        before = {item["resource_id"]: item for item in read_lease_snapshot(ledger_path)["records"]}
         observed = await browser_runner(case, base_url=str(client.base_url), session_title=title, session_id=session, thread_id=thread, mode="errors")
         response = await client.get("/api/v1/mcp/connection-operations")
         assert response.status_code == 200, response.text
@@ -66,7 +67,7 @@ async def test_web_denial_original_deadline_and_disconnect_keep_authoritative_st
         assert response.status_code == 200, response.text
         servers = {item["server_id"]: item for item in response.json()["data"]}
         assert servers["secure"]["status"] != "ready" and servers["schema"]["status"] == "ready"
-        after = {item["resource_id"]: item for item in json.loads(ledger_path.read_text())["records"]}
+        after = {item["resource_id"]: item for item in read_lease_snapshot(ledger_path)["records"]}
         closed, = [item for identity, item in after.items() if identity not in before]
         assert closed["kind"] == "mcp_connection" and closed["status"] == "stopped"
         assert all(after[identity]["status"] == item["status"] == "running" for identity, item in before.items())

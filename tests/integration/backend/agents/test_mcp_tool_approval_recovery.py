@@ -32,6 +32,7 @@ from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 原真实 MCP
 )
 from tests.support.processes.workspace import start_backend_process, terminate_process
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 
 
 async def test_process_exit_during_approval_rejects_old_decision_and_allows_new_execution(
@@ -54,8 +55,8 @@ async def test_process_exit_during_approval_rejects_old_decision_and_allows_new_
         job = accepted.json()["data"]["job_id"]
         approval, = await read_approvals(client, job)
         next_call = str(UUID(hex=replay.control.next_uuid(f"model_call/{session}/{thread}")))
-        ledger_path = case.mount.workspace_root / ".boxteam/resources.json"
-        before = json.loads(ledger_path.read_text())
+        ledger_path = case.mount.workspace_root / ".boxteam/resources.sqlite"
+        before = read_lease_snapshot(ledger_path)
         qualified = [lease for lease in before["leases"] if lease["holder_session_id"] == session and lease["status"] == "active"]
         assert {lease["lease_id"].split(":", 1)[0] for lease in qualified} == {"mcp-prepared", "mcp-execution"}
         old_connection, = {lease["resource_id"] for lease in qualified}
@@ -81,7 +82,7 @@ async def test_process_exit_during_approval_rejects_old_decision_and_allows_new_
             }],
         })
         assert late.status_code == 404 and job in late.text, late.text
-        after = json.loads(ledger_path.read_text())
+        after = read_lease_snapshot(ledger_path)
         assert {lease["status"] for lease in after["leases"] if lease["holder_session_id"] == session} == {"released"}
         # 冷 owner 没有原 socket 的核实证据；原账本将其标为 orphaned，不宣称已停止。
         assert next(record for record in after["records"] if record["resource_id"] == old_connection)["status"] == "orphaned"
@@ -110,7 +111,7 @@ async def test_process_exit_during_approval_rejects_old_decision_and_allows_new_
         assert submitted.status_code == 200, submitted.text
         await wait_for_job_done(client, new_job, max_attempts=90)
         assert [json.loads(line)["arguments"] for line in original.receipts.read_text().splitlines()] == [{"proof": "approval-4"}]
-        after = json.loads(ledger_path.read_text())
+        after = read_lease_snapshot(ledger_path)
         active_connections = {record["resource_id"] for record in after["records"] if record["kind"] == "mcp_connection" and record["status"] == "running"}
         assert len(active_connections) == 1 and old_connection not in active_connections
         with RolloutCheckpointSaver(case.mount.workspace_root / ".boxteam/sessions") as saver:

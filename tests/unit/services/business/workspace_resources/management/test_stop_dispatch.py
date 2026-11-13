@@ -9,6 +9,7 @@ import pytest
 
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.external_resource_leases import ResourceLease
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.support.resource_owners.terminal import (
     TerminalOwnerFixture,
@@ -52,12 +53,15 @@ async def test_stop_committed_externally_is_not_replayed_after_local_failure(
             raise lost
         return result
 
-    def unavailable(source: Path, target: Path) -> Path:
+    def reject_write(target: Path) -> None:
         nonlocal failures
         target_path = owner._store.path if failure_stage == "owner" else path if failure_stage == "ledger" else None
         if committed and failures == 0 and target == target_path:
             failures += 1
             raise native
+
+    def unavailable(source: Path, target: Path) -> Path:
+        reject_write(target)
         return publishing(source, target)
 
     def confirming(lease_id: str) -> None:
@@ -69,6 +73,7 @@ async def test_stop_committed_externally_is_not_replayed_after_local_failure(
         fault.setattr(bundle.transport, "stop_resource", stopping)
         fault.setattr(bundle.transport, "delete_resource", stopping)
         fault.setattr(Path, "replace", unavailable)
+        observe_lease_commits(fault, lambda target, _changes: reject_write(target))
         fault.setattr(bundle.leases, "finish_operation_dispatch", confirming)
         with pytest.raises(ConnectionError if failure_stage == "receipt" else OSError) as caught:
             await bundle.command(rid, action=action, expected_revision=revision)

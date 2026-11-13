@@ -9,6 +9,7 @@ import pytest
 
 from app.services.infrastructure.external_resource_leases import ResourceLease
 from tests.support.resource_owners.browser import BrowserOwnerFixture
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 from tests.unit.services.business.workspace_resources.test_transport_grant_deadline import (
@@ -42,16 +43,20 @@ async def test_failed_unknown_persistence_cannot_release_an_unconfirmed_grant(
         issued.append(await issue(resource_id, **arguments))
         raise failure
 
-    def unavailable(source: Path, target: Path) -> Path:
+    def reject_write(target: Path) -> None:
         nonlocal failures
         if issued and target == (path if storage == "ledger" else owner._store.path) and (persistent or failures == 0):
             failures += 1
             raise native
+
+    def unavailable(source: Path, target: Path) -> Path:
+        reject_write(target)
         return replace(source, target)
 
     with monkeypatch.context() as fault:
         fault.setattr(bundle.transport, "issue_transport_grant", lost)
         fault.setattr(Path, "replace", unavailable)
+        observe_lease_commits(fault, lambda target, _changes: reject_write(target))
         with pytest.raises(OSError) as caught:
             await grant(rid)
         assert caught.value.__cause__ is native and caught.value.__context__ is failure

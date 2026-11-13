@@ -6,6 +6,7 @@
 resource_owners/
 ├── sessions.py  共用 Session/Thread 身份、定位与写准入替身
 ├── terminal.py  TerminalOwnerFixture、真实 owner/租约、TerminalTransportFake
+├── lease_storage.py  账本持久事实读取、损坏注入与事务观察
 └── browser.py   BrowserOwnerFixture、真实 owner/租约、BrowserTransportFake
 ```
 

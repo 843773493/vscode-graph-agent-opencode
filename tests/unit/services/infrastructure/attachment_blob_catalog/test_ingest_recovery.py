@@ -50,7 +50,7 @@ class RecoveryCase:
 async def recovery_case(tmp_path: Path, session_bundle_factory) -> AsyncIterator[RecoveryCase]:
     for identity in (SESSION_ID, PEER_ID):
         session_bundle_factory(tmp_path / ".boxteam/sessions", identity)
-    with closing(AttachmentBlobStore(tmp_path, leases=ExternalResourceLeaseLedger(state_path=tmp_path / ".boxteam/resources.json"))) as store:
+    with closing(AttachmentBlobStore(tmp_path, leases=ExternalResourceLeaseLedger(state_path=tmp_path / ".boxteam/resources.sqlite"))) as store:
         ref, = await store.persist_inline(SESSION_ID, [AttachmentRef(
             file_id="inline:recovery.txt", name="recovery.txt", content_type="text/plain",
             data_url="data:text/plain;base64,Y3dk",

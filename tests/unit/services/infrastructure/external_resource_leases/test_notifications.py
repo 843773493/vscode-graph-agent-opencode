@@ -19,6 +19,7 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
     ResourceLease,
 )
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 
 
 @dataclass
@@ -35,7 +36,7 @@ class LedgerCase:
 
 @pytest.fixture
 async def ledger_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[LedgerCase]:
-    events, path = EventChannelService(), tmp_path / "resources.json"
+    events, path = EventChannelService(), tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path, state_events=ResourceStateEventPublisher(
         event_service=events, owner_domain="external_resource_leases",
     ))
@@ -43,7 +44,7 @@ async def ledger_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
         ledger.register_external(resource_id=rid, kind="terminal", lifetime_scope="workspace")
         ledger.acquire_operation(resource_id=rid, turn_stream_id=f"holder-{rid}", operation_id=f"op-{rid}", lease_id=rid)
     case = LedgerCase(ledger, path, events)
-    loop, replace = asyncio.get_running_loop(), Path.replace
+    loop = asyncio.get_running_loop()
     channel = events.channel("resource.state/external_resource_leases")
     publish = channel.publish
     debug = loop.get_debug()
@@ -57,17 +58,16 @@ async def ledger_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
         case.deliveries.append((get_ident(), event.resource_id, lease.status))
         return publish(event)
 
-    def write(source: Path, target: Path) -> Path:
+    def write(target: Path, changes) -> None:
         if target == path and not case.writers:
             case.writers.append(get_ident())
             loop.call_soon_threadsafe(case.entered.set)
             assert case.free.wait(5), "测试未放行原终态提交"
             if case.failure is not None:
                 raise case.failure
-        return replace(source, target)
 
     monkeypatch.setattr(channel, "publish", publishing)
-    monkeypatch.setattr(Path, "replace", write)
+    observe_lease_commits(monkeypatch, write)
     try:
         yield case
     finally:

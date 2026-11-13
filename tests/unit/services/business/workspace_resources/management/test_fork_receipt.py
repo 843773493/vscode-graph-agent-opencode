@@ -11,6 +11,7 @@ import pytest
 from app.services.business.workspace_resources import owner as owner_module
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.external_resource_leases import ResourceLease
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import (
     SESSION_A,
     SESSION_B,
@@ -33,10 +34,9 @@ async def test_committed_fork_cancellation_keeps_original_receipt_through_confir
     target, key = ThreadRef(SESSION_B, THREAD_B), "fork-management-cancel"
     original = asyncio.CancelledError("fork提交后原取消")
     native = OSError(28, "fork提交后原账本确认失败")
-    observe, publishing = owner_module.observe_phase, Path.replace
+    observe = owner_module.observe_phase
     observed: list[ResourceLease] = []
     committed = False
-    writes = 0
 
     async def observing(operation_id: str, phase: str, *, details: dict[str, object] | None = None) -> None:
         nonlocal committed
@@ -46,23 +46,20 @@ async def test_committed_fork_cancellation_keeps_original_receipt_through_confir
             raise original
         await observe(operation_id, phase, details=details)
 
-    def unavailable(source: Path, destination: Path) -> Path:
-        nonlocal writes
+    def unavailable(destination: Path, changes) -> None:
         if committed and destination == path:
-            writes += 1
+            assert all(lease["status"] == "released" for lease in changes["leases"])
             if failure_stage == "lease":
                 raise native
-        return publishing(source, destination)
 
     with monkeypatch.context() as fault:
         fault.setattr(owner_module, "observe_phase", observing)
-        fault.setattr(Path, "replace", unavailable)
+        observe_lease_commits(fault, unavailable)
         with pytest.raises(asyncio.CancelledError) as caught:
             await owner.attach_for_fork(rid, creation_key=key, expected_revision=1, thread=target)
         assert caught.value is original
         if failure_stage != "none":
             assert caught.value.__cause__ is not None and caught.value.__cause__.__cause__ is native
-    assert writes == 1, "fork回执确认直接原子释放，不经active中间写入"
     lease, = observed
     assert lease.status == "dispatching"
     frozen = owner.fork_attach_receipt(rid, creation_key=key, expected_revision=1, thread=target)

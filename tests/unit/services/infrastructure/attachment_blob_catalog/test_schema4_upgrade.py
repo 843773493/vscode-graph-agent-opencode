@@ -85,7 +85,7 @@ async def schema4_case(tmp_path: Path, session_bundle_factory) -> Schema4Case:
 def upgraded_store(schema4_case: Schema4Case):
     case = schema4_case
     with closing(AttachmentBlobStore(case.root,
-        leases=ExternalResourceLeaseLedger(state_path=case.root / ".boxteam/resources.json"))) as store:
+        leases=ExternalResourceLeaseLedger(state_path=case.root / ".boxteam/resources.sqlite"))) as store:
         yield store
 
 

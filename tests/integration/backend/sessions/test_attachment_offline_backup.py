@@ -25,11 +25,16 @@ from app.services.infrastructure.attachment_blob_catalog.migration.preflight imp
     BackupSource,
     checked_path,
     file_digest,
+    read_database,
+)
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
 )
 from tests.integration.backend.sessions.attachment_migration.legacy_inputs import (
     BODY,
     BackupCase,
 )
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 
 MODULE = "app.services.infrastructure.attachment_blob_catalog.migration"
 
@@ -59,6 +64,13 @@ def cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 async def test_prepare_and_verify_via_cli_preserve_product_history_and_pending_input(backup_case: BackupCase) -> None:
     case = backup_case
+    ledger_path = case.workspace / ".boxteam/resources.sqlite"
+    ledger = ExternalResourceLeaseLedger(state_path=ledger_path)
+    ledger.register_external(resource_id="stopped-terminal", kind="terminal", lifetime_scope="workspace")
+    lease = ledger.acquire_operation(resource_id="stopped-terminal", turn_stream_id="turn", operation_id="operation")
+    ledger.release(lease.lease_id)
+    ledger.update_external_state("stopped-terminal", lifetime_scope="workspace", status="stopped")
+    original_ledger = read_lease_snapshot(ledger_path)
     source_hash = file_digest(case.original)
     result = cli("prepare", "--workspace", str(case.workspace), "--output", str(case.output))
     assert result.returncode == 0, result.stderr
@@ -77,6 +89,12 @@ async def test_prepare_and_verify_via_cli_preserve_product_history_and_pending_i
     assert file_digest(case.original) == source_hash
     with closing(sqlite3.connect(root / "attachments/catalog.sqlite")) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (3,)
+    with read_database(case.output / "data/resources.sqlite", frozen=True) as connection:
+        restored_ledger = {section: [json.loads(row[0]) for row in connection.execute(
+            f"SELECT payload FROM resource_{section} ORDER BY rowid"
+        )] for section in ("records", "leases")}
+    assert restored_ledger == original_ledger
+    assert read_lease_snapshot(ledger_path) == original_ledger
     assert not list(case.output.rglob("*-wal"))
     assert not list(case.output.rglob("*-shm"))
     manifest = json.loads((case.output / "manifest.json").read_bytes())
@@ -178,9 +196,9 @@ async def test_owner_creation_before_ledger_registration_blocks_offline_backup(
     original = source.read_bytes()
     (record,) = json.loads(original)["records"]
     assert record["status"] == "creating" and record["reconciliation_status"] == "reconcile_required"
-    ledger = case.workspace / ".boxteam/resources.json"
+    ledger = case.workspace / ".boxteam/resources.sqlite"
     if ledger.exists():
-        assert record["resource_id"] not in {row["resource_id"] for row in json.loads(ledger.read_bytes())["records"]}
+        assert record["resource_id"] not in {row["resource_id"] for row in read_lease_snapshot(ledger)["records"]}
     with pytest.raises(RuntimeError, match="外部资源 owner 尚未收敛"):
         backup.prepare_backup(case.workspace, case.output)
     assert not case.output.exists()

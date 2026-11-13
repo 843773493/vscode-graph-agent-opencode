@@ -47,7 +47,7 @@ class RawCase:
 async def raw_case(empty_workspace_scope, session_bundle_factory) -> AsyncIterator[RawCase]:
     _, root = empty_workspace_scope
     session_bundle_factory(root / ".boxteam/sessions", SESSION)
-    leases = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+    leases = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite")
     with closing(AttachmentBlobStore(root, leases=leases)) as store:
         content = (Path.cwd() / "tests/fixtures/workspaces/default_test_workspace/assets/test.jpg").read_bytes()
         ref, = await store.persist_inline(SESSION, [AttachmentRef(

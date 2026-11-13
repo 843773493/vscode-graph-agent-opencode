@@ -66,7 +66,7 @@ async def test_paginated_catalog_and_notification_publish_complete_revision(brid
         initial = {name: {"type": "object"} for name in ("probe", "second", "third")}
         endpoint.definitions.write_text(json.dumps(initial), encoding="utf-8")
         owner = McpCatalogOwner(
-            leases=ExternalResourceLeaseLedger(state_path=endpoint.context.workspace_root / ".boxteam/resources.json"),
+            leases=ExternalResourceLeaseLedger(state_path=endpoint.context.workspace_root / ".boxteam/resources.sqlite"),
             raw_config={"servers": {"schema": {
                 "enabled": True, "transport": "streamable_http", "url": endpoint.url,
                 "headers": {"X-Local-Token": token},

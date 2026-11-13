@@ -148,7 +148,7 @@ async def test_real_recovery_preserves_completed_failure_and_original_unknown_le
                         assert pending is not None and set(pending) == {failed, blocked}
                         assert pending[failed].revision == frozen[failed] and pending[failed].management_only
                         assert pending[blocked].revision == frozen[blocked] and not pending[blocked].management_only
-                        cold = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+                        cold = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite")
                         assert cold.leases_for_resource(failed) == [lease]
                         assert not cold.leases_for_resource(blocked) and not cold.leases_for_resource(healthy)
                         for rid in ids:
@@ -169,7 +169,7 @@ async def test_real_recovery_preserves_completed_failure_and_original_unknown_le
                 stopped = await api.post(f"/api/v1/resources/{failed}/stop", json={"expected_revision": frozen[failed]})
                 assert stopped.status_code == 200, stopped.text
                 assert stopped.json()["data"]["status"] == ("terminated" if kind == "terminal" else "closed")
-                settled = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json").get_lease(lease.lease_id)
+                settled = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite").get_lease(lease.lease_id)
                 assert settled is not None and settled.status == "settled"
                 run.write_result("passed", {"kind": kind, "ending": ending, "resource_ids": ids,
                                            "lease_id": lease.lease_id, "calls": calls,

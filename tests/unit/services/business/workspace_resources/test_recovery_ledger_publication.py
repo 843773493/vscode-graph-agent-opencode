@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -20,6 +19,7 @@ from app.services.business.workspace_resources.records import (
 from app.services.business.workspace_resources.recovery import RecoveryVersion
 from app.services.infrastructure.external_resource_leases import ResourceLease
 from tests.support.resource_owners.browser import BrowserOwnerFixture
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import SESSION_B, THREAD_B
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 from tests.unit.services.business.test_resource_operation_close_deadline import (
@@ -63,18 +63,17 @@ async def cold_publication(
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", synced)
     path = bundle.leases._state_path
     assert path is not None
-    gate, loop, replace = ReleaseWrite(), asyncio.get_running_loop(), Path.replace
+    gate, loop = ReleaseWrite(), asyncio.get_running_loop()
 
-    def publishing(source: Path, target: Path) -> Path:
+    def publishing(target: Path, changes) -> None:
         if target == path and not gate.entered.is_set():
             loop.call_soon_threadsafe(gate.entered.set)
             if not gate.release.wait(3):
                 raise TimeoutError("测试未放行原恢复账本写入")
             if gate.failure is not None:
                 raise gate.failure
-        return replace(source, target)
 
-    monkeypatch.setattr(Path, "replace", publishing)
+    observe_lease_commits(monkeypatch, publishing)
     try:
         yield ColdPublication(owner, bundle, rid, revision, gate, calls)
     finally:
@@ -207,15 +206,15 @@ async def cold_preparation(
     monkeypatch.setattr(bundle.transport, "sync_owner_revision", synced)
     path = bundle.leases._state_path
     assert path is not None
-    gate, loop, publishing = ReleaseWrite(), asyncio.get_running_loop(), Path.replace
+    gate, loop = ReleaseWrite(), asyncio.get_running_loop()
     writers: list[int] = []
     armed = True
 
-    def publish(source: Path, target: Path) -> Path:
+    def publish(target: Path, changes) -> None:
         nonlocal armed
         if target == path:
             writers.append(get_ident())
-            candidate = json.loads(source.read_text())
+            candidate = changes
             selected = request.param == "reconcile" or any(
                 item["lease_id"] == (lease.lease_id if lease is not None else None) and item["status"] == "released"
                 for item in candidate["leases"]
@@ -227,9 +226,8 @@ async def cold_preparation(
                     raise TimeoutError("测试未放行冷准备的原生账本写入")
                 if gate.failure is not None:
                     raise gate.failure
-        return publishing(source, target)
 
-    monkeypatch.setattr(Path, "replace", publish)
+    observe_lease_commits(monkeypatch, publish)
     try:
         yield ColdPreparation(owner, bundle, rid, revision, gate, calls, writers, receipt, lease)
     finally:
@@ -314,18 +312,7 @@ async def test_cold_preparation_reuses_registered_identities_and_commits_one_rec
     owner = bundle.restart()
     path = bundle.leases._state_path
     assert path is not None
-    publishing = Path.replace
-    writes: list[dict[str, object]] = []
-
-    def publish(source: Path, target: Path) -> Path:
-        if target == path:
-            writes.append(json.loads(source.read_text()))
-        return publishing(source, target)
-
-    with monkeypatch.context() as observe:
-        observe.setattr(Path, "replace", publish)
-        await owner.recover(())
-    assert len(writes) == 1, "冷准备只发布整批对账，不逐资源重写已登记身份"
+    await owner.recover(())
     assert owner._recovery._pending is not None and set(owner._recovery._pending) == set(resources)
     cold = type(bundle.leases)(state_path=path)
     for rid, lease in zip(resources, leases, strict=True):

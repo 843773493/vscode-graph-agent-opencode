@@ -39,6 +39,7 @@ from tests.harness.python.terminal_plugin import (
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.scope import register_test_process
 from tests.support.processes.workspace import terminate_process
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 
 ResourceKind = Literal["terminal", "browser"]
@@ -372,14 +373,14 @@ async def test_force_termination_unknown_stop_new_process_preserves_owner_and_do
         record = next(item for item in json.loads((workspace / ".boxteam" / f"{kind}-resources.json").read_text())["records"] if item["resource_id"] == identity["rid"])
         assert record["status"] == "stopping"
         assert record["retention_scope"] == retention_scope
-        ledger = json.loads((workspace / ".boxteam" / "resources.json").read_text())
+        ledger = read_lease_snapshot(workspace / ".boxteam" / "resources.sqlite")
         assert next(item for item in ledger["leases"] if item["lease_id"] == identity["lease_id"])["status"] == "dispatching"
         child.kill()
         await asyncio.to_thread(_assert_force_terminated, child)
         # 恢复进程尚未启动：活实例已经有持久权威记录，不能靠重扫外部实例补造。
         killed_record = next(item for item in json.loads((workspace / ".boxteam" / f"{kind}-resources.json").read_text())["records"] if item["resource_id"] == identity["rid"])
         assert killed_record == record
-        assert json.loads((workspace / ".boxteam" / "resources.json").read_text()) == ledger
+        assert read_lease_snapshot(workspace / ".boxteam" / "resources.sqlite") == ledger
         if kind == "terminal":
             terminal = TerminalManagerClient(
                 workspace_id=load_or_create_workspace_id(workspace),

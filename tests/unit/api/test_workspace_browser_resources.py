@@ -119,7 +119,7 @@ def test_runtime_inventory_rejection_publishes_facts_without_foreign_identity(
     reason = "unregistered_identity" if foreign_identity is not None else "duplicate_identity"
     rejected = {**original, f"{kind}_id": rejected_id}
     owner_file = bundle.root / ".boxteam" / f"{kind}-resources.json"
-    lease_file = bundle.root / ".boxteam" / "resources.json"
+    lease_file = bundle.root / ".boxteam" / "resources.sqlite"
     before = (owner_file.read_bytes(), lease_file.read_bytes())
 
     async def invalid_inventory() -> list[dict[str, object]]:
@@ -175,7 +175,7 @@ def test_runtime_working_directory_rejects_native_root_without_changing_owner(
     resource_id = resource["resource_id"]
     original = dict(bundle.transport.records[resource_id])
     owner_file = bundle.root / ".boxteam" / f"{kind}-resources.json"
-    lease_file = bundle.root / ".boxteam" / "resources.json"
+    lease_file = bundle.root / ".boxteam" / "resources.sqlite"
     before = (owner_file.read_bytes(), lease_file.read_bytes())
 
     async def invalid_inventory() -> list[dict[str, object]]:

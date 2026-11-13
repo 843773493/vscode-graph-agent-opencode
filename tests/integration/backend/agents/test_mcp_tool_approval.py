@@ -28,6 +28,7 @@ from tests.support.api_waiters import wait_for_job_done
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 唯一真实 MCP 资产
 )
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 
 
 @pytest.fixture
@@ -143,7 +144,7 @@ async def test_approval_resumes_original_calls_across_http_replacement(
         approval = approvals[0]
         assert [action["tool_call_id"] for action in approval["actions"]] == [call["id"] for call in calls]
         assert not original.receipts.exists() and not replacement.receipts.exists()
-        before = json.loads((case.mount.workspace_root / ".boxteam/resources.json").read_text())
+        before = read_lease_snapshot(case.mount.workspace_root / ".boxteam/resources.sqlite")
         qualified = [lease for lease in before["leases"] if lease["holder_session_id"] == session
                      and lease["lease_id"].startswith("mcp-prepared:") and lease["status"] == "active"]
         assert len(qualified) == 1 and qualified[0]["holder_thread_id"] == thread
@@ -201,7 +202,7 @@ async def test_approval_resumes_original_calls_across_http_replacement(
                 assembly = saver.get_context_assembly(session, thread, assembly_id=assembly_id)
                 assert normalize_wire_request(record["request"]) == assembly.request_hash_preimage
                 assembly.validate_hashes()
-        after = json.loads((case.mount.workspace_root / ".boxteam/resources.json").read_text())
+        after = read_lease_snapshot(case.mount.workspace_root / ".boxteam/resources.sqlite")
         assert {lease["status"] for lease in after["leases"] if lease["holder_session_id"] == session} == {"released"}
 
 
@@ -230,8 +231,8 @@ async def test_approval_wait_obeys_current_execution_boundary(
         assert (await client.get("/api/v1/jobs/tool-approvals", params={"session_id": session, "thread_id": thread})).json()["data"] == approvals
         approval = approvals[0]
         assert len(approval["actions"]) == 2
-        ledger_path = case.mount.workspace_root / ".boxteam/resources.json"
-        leases = json.loads(ledger_path.read_text())["leases"]
+        ledger_path = case.mount.workspace_root / ".boxteam/resources.sqlite"
+        leases = read_lease_snapshot(ledger_path)["leases"]
         original_qualification = [lease for lease in leases if lease["holder_session_id"] == session
                                   and lease["lease_id"].startswith("mcp-prepared:") and lease["status"] == "active"]
         assert len(original_qualification) == 1
@@ -241,7 +242,7 @@ async def test_approval_wait_obeys_current_execution_boundary(
             assert 0 < remaining <= 60
             started = monotonic()
             for _ in range(400):
-                leases = json.loads(ledger_path.read_text())["leases"]
+                leases = read_lease_snapshot(ledger_path)["leases"]
                 original_lease = next(lease for lease in leases if lease["lease_id"] == original_qualification[0]["lease_id"])
                 if original_lease["status"] == "released":
                     assert datetime.now(UTC) >= deadline
@@ -311,5 +312,5 @@ async def test_approval_wait_obeys_current_execution_boundary(
                     assembly.validate_hashes()
         assert not original.receipts.exists()
         assert (await client.get(f"/api/v1/jobs/{job}/approvals")).json()["data"] == []
-        leases = json.loads(ledger_path.read_text())["leases"]
+        leases = read_lease_snapshot(ledger_path)["leases"]
         assert {lease["status"] for lease in leases if lease["holder_session_id"] == session} == {"released"}

@@ -631,7 +631,7 @@ def _build_app_container(
         owner_domain="external_resource_leases",
     )
     external_resource_leases = ExternalResourceLeaseLedger(
-        state_path=resolved_boxteam_root / "resources.json",
+        state_path=resolved_boxteam_root / "resources.sqlite",
         state_events=external_resource_state_events,
     )
     def native_directories() -> GatewayNativeDirectoryClient:

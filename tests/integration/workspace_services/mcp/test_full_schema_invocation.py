@@ -112,7 +112,7 @@ async def schema_server_case(request: pytest.FixtureRequest, bridge_endpoint_fac
     async with bridge_endpoint_factory() as (endpoint, token):
         root = endpoint.context.workspace_root
         owner = McpCatalogOwner(
-            leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json"),
+            leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite"),
             raw_config={"supervision": {"sealed_call_timeout_seconds": getattr(request, "param", 1800)}, "servers": {"schema": {
                 "enabled": True, "transport": "streamable_http", "url": endpoint.url,
                 "headers": {"X-Local-Token": token},
@@ -159,7 +159,7 @@ async def test_real_http_lifecycle_is_owned_across_distinct_caller_tasks(
         for runtime in runtimes:
             record = case.owner._leases.get(runtime.connection_ref)
             assert record is not None and record.status == "running" and record.process is None
-            cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
+            cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.sqlite")
             assert cold.get(runtime.connection_ref) == record
         case.publish({"type": "object", "required": ["text"]})
         await asyncio.create_task(case.owner.relist_servers_without_notifications())

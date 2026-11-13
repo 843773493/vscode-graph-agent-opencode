@@ -23,6 +23,7 @@ from app.core.resource_uri import resource_display_uri
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.terminal_plugin import terminal_plugin_gateway_for_workspace
 from tests.support.ports import integration_port_block_for_file
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
     workspace_tool_runtime,
@@ -213,7 +214,7 @@ async def test_real_terminal_startup_failure_preserves_identity_and_requires_sto
     native, = state["terminals"]
     assert native["terminal_id"] == rid
     assert native["release_reason"] == "terminal_startup_failed"
-    ledger = json.loads((root / ".boxteam/resources.json").read_text())
+    ledger = read_lease_snapshot(root / ".boxteam/resources.sqlite")
     lease, = [item for item in ledger["leases"] if item["resource_id"] == rid]
     original_lease_id = lease["lease_id"]
     receipt = error.creation_receipt
@@ -246,7 +247,7 @@ async def test_real_terminal_startup_failure_preserves_identity_and_requires_sto
     if lose_receipt:
         assert calls == [rid]
     # 新建领域 owner 从原文件恢复；不得重放 POST 或替产品填写终态。
-    cold_leases = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+    cold_leases = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite")
     cold = TerminalResourceOwner(
         working_directories=owner._working_directories, file_paths=owner._file_paths,
         sessions=owner._sessions, threads=owner._threads, transport=owner._transport,
@@ -359,7 +360,7 @@ async def test_real_terminal_tool_uses_one_cwd_for_native_paths_and_directory_ur
             assert owner._leases.leases_for_resource(result["terminal_id"]) == []
             receipts.append(result)
     state_files = [
-        owner._store.path, owner.workspace_root / ".boxteam/resources.json",
+        owner._store.path, owner.workspace_root / ".boxteam/resources.sqlite",
         owner.workspace_root / ".boxteam/terminal-manager/terminals.json",
     ]
     before = {path: path.read_bytes() for path in state_files}
@@ -507,7 +508,7 @@ async def test_actual_python_crash_stopped_pty_settles_persisted_lease_and_allow
         )
         assert crashed.returncode == 71, crashed.stderr
         identity = json.loads(crashed.stdout.splitlines()[-1])
-        persisted = json.loads((root / ".boxteam" / "resources.json").read_text())
+        persisted = read_lease_snapshot(root / ".boxteam" / "resources.sqlite")
         assert next(lease for lease in persisted["leases"] if lease["lease_id"] == identity["lease_id"])["status"] == "active"
         workspace_id = load_or_create_workspace_id(root)
         with (

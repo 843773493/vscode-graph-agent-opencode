@@ -45,7 +45,7 @@ async def listing_case(empty_workspace_scope, session_bundle_factory) -> AsyncIt
     _, root = empty_workspace_scope
     for identity in (SESSION, PEER):
         session_bundle_factory(root / ".boxteam/sessions", identity)
-    leases = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+    leases = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite")
     with closing(AttachmentBlobStore(root, leases=leases)) as store:
         thread = store._path_resolver.main_thread_id(SESSION)
         refs = []

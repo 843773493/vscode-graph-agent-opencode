@@ -40,6 +40,7 @@ from tests.integration.workspace_services.mcp.schema_server import (
 from tests.support.api_helpers import create_session
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.plugin_package import install_plugin_async
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 
 scripted_model_replay = replay_case.scripted_model_replay
 scripted_debug_backend_port = replay_case.scripted_debug_backend_port
@@ -205,7 +206,7 @@ async def test_product_discovery_parallel_results_and_cold_checkpoint(
         assert counts == {records[1]["identity"]["model_call_id"]}
     receipts = [json.loads(line) for line in result_server_receipts_path.read_text().splitlines()]
     assert sorted(receipt["arguments"]["result_mode"] for receipt in receipts) == ["error", "success"]
-    ledger = json.loads((workspace / ".boxteam/resources.json").read_text())
+    ledger = read_lease_snapshot(workspace / ".boxteam/resources.sqlite")
     qualifications = [lease for lease in ledger["leases"] if lease["holder_session_id"] == session
                       and lease["lease_id"].startswith("mcp-prepared:")]
     assert len(qualifications) == len(records)
@@ -301,7 +302,7 @@ async def test_product_progress_then_disconnect_keeps_unknown_in_cold_history(
             assembly.validate_hashes()
     received = [json.loads(line) for line in result_server_receipts_path.read_text().splitlines()]
     assert len([row for row in received if row["arguments"].get("call_mode") == "disconnect"]) == 1
-    ledger = json.loads((workspace / ".boxteam/resources.json").read_text())
+    ledger = read_lease_snapshot(workspace / ".boxteam/resources.sqlite")
     qualifications = [lease for lease in ledger["leases"] if lease["holder_session_id"] == session
                       and lease["lease_id"].startswith("mcp-prepared:")]
     assert len(qualifications) == len(records)

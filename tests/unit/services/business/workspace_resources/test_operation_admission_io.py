@@ -17,6 +17,7 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from tests.support.resource_owners.browser import BrowserOwnerFixture
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 from tests.unit.services.business.test_resource_operation_close_deadline import (
@@ -76,8 +77,7 @@ async def admission_write(
 ) -> AsyncIterator[AdmissionWrite]:
     path = bundle.leases._state_path
     assert path is not None
-    pending = path.with_suffix(".tmp")
-    loop, replace = asyncio.get_running_loop(), Path.replace
+    loop = asyncio.get_running_loop()
     gate = AdmissionWrite()
     owner = bundle.owner
     assert owner is not None
@@ -92,9 +92,9 @@ async def admission_write(
         finally:
             acquiring = False
 
-    def publishing(source: Path, target: Path) -> Path:
+    def publishing(target: Path, changes) -> None:
         # 只计原lease获取的写盘；后续派发/回执阶段不属于这份准入故障点。
-        if source == pending and acquiring:
+        if target == path and acquiring:
             gate.threads.append(get_ident())
             if len(gate.threads) == 1:
                 loop.call_soon_threadsafe(gate.entered.set)
@@ -102,9 +102,8 @@ async def admission_write(
                     raise TimeoutError("测试未放行 lease 准入写盘，事件循环可能被阻塞")
                 if gate.failure is not None:
                     raise gate.failure
-        return replace(source, target)
 
-    monkeypatch.setattr(Path, "replace", publishing)
+    observe_lease_commits(monkeypatch, publishing)
     monkeypatch.setattr(owner, "_acquire", acquire_original)
     try:
         yield gate

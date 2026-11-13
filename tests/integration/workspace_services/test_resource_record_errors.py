@@ -28,6 +28,7 @@ from tests.integration.workspace_services.browser.test_browser_owner_revision_dr
 from tests.integration.workspace_services.test_resource_release import (
     resource_api as resource_api,  # noqa: PLC0414
 )
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.workspace_tool_runtime import workspace_tool_runtime
 from tests.support.workspaces import render_test_workspace_config
 
@@ -87,7 +88,7 @@ async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explici
 
             request_id = f"resource-record-{kind}-failure"
             with monkeypatch.context() as patch:
-                patch.setattr(Path, "replace", fail_publication)
+                observe_lease_commits(patch, fail_publication)
                 if log_failure:
                     patch.setattr(logging.Logger, "callHandlers", fail_owner_log)
                 failed = await client.post(endpoint, json={"session_id": sid, "title": "未发布的资源"},
@@ -96,7 +97,7 @@ async def test_resource_creation_disk_failure_keeps_old_owner_and_allows_explici
             assert failed.headers["X-Request-ID"] == failed.json()["request_id"] == request_id
             assert failed.json()["message"] == "请求处理失败: stage=http_request, error=PermissionError, errno=13"
             assert "stage=write" in caplog.text and f"kind={kind}" in caplog.text
-            assert str(root) not in failed.text and str(pending) not in failed.text
+            assert str(root) not in failed.text and str(ledger_path) not in failed.text
             assert "owner-log-secret" not in failed.text
             if log_failure:
                 assert any(str(sink_error) in note for note in native_error.__notes__)
@@ -140,16 +141,13 @@ async def test_grant_ledger_failure_preserves_original_occupation_and_does_not_d
                 assert ledger_path is not None
                 records, ledger = owner._store.path.read_bytes(), ledger_path.read_bytes()
                 external = await owner._transport.get_resource(rid)
-                pending = ledger_path.with_suffix(".tmp")
-                native = PermissionError(errno.EACCES, "lease 发布失败", str(pending))
-                replace = Path.replace
+                native = PermissionError(errno.EACCES, "lease 发布失败", str(ledger_path))
                 issue = owner._transport.issue_transport_grant
                 issued: list[str] = []
 
-                def fail_publication(path: Path, target: Path) -> Path:
-                    if path == pending:
+                def fail_publication(target: Path, _changes) -> None:
+                    if target == ledger_path:
                         raise native
-                    return replace(path, target)
 
                 async def observe_grant(resource_id: str, **kwargs):
                     issued.append(resource_id)
@@ -158,13 +156,13 @@ async def test_grant_ledger_failure_preserves_original_occupation_and_does_not_d
                 request_id = f"lease-failure-{kind}"
                 arguments = {"expected_revision": 1, "thread": response.json()["data"]["source_thread"]}
                 with monkeypatch.context() as patch:
-                    patch.setattr(Path, "replace", fail_publication)
+                    observe_lease_commits(patch, fail_publication)
                     patch.setattr(owner._transport, "issue_transport_grant", observe_grant)
                     failed = await client.post(f"/api/v1/resources/{rid}/transport-grant", json=arguments,
                                                headers={"X-Request-ID": request_id})
                 assert failed.status_code == 500, failed.text
                 assert failed.headers["X-Request-ID"] == failed.json()["request_id"] == request_id
-                assert str(root) not in failed.text and str(pending) not in failed.text
+                assert str(root) not in failed.text and str(ledger_path) not in failed.text
                 assert failed.json()["message"] == "请求处理失败: stage=http_request, error=PermissionError, errno=13"
                 assert "artifact=external_resource_leases" in caplog.text and "stage=write" in caplog.text
                 assert not issued and ledger_path.read_bytes() == ledger
@@ -247,7 +245,7 @@ async def test_resource_creation_receipt_failure_preserves_origin_and_stop_recon
             assert pending.status == "reconcile_required" and pending.operation_id == request_id
             assert pending.turn_stream_id == f"request:{request_id}" and pending.resource_id == rid
             assert pending.holder_session_id == sid and pending.holder_thread_id == record.source_thread.thread_id
-            ledger_path = root / ".boxteam/resources.json"
+            ledger_path = root / ".boxteam/resources.sqlite"
             assert ExternalResourceLeaseLedger(state_path=ledger_path).get_lease(pending.lease_id) == pending
             assert "/private/" not in owner._store.path.read_text()
             found = await client.get(f"/api/v1/resources/{rid}")

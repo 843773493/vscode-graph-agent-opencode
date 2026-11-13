@@ -10,9 +10,13 @@ import pytest
 from app.core.identifier import create_prefixed_id
 from app.core.resource_uri import parse_resource_uri
 from app.schemas.internal_v2.message import AttachmentRef
-from app.services.infrastructure.attachment_blob_catalog.store import AttachmentBlobStore
+from app.services.infrastructure.attachment_blob_catalog.store import (
+    AttachmentBlobStore,
+)
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.external_resource_leases import ExternalResourceLeaseLedger
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.workspace_service import WorkspaceService
 
 
@@ -23,7 +27,7 @@ async def attachment_case(tmp_path: Path, session_bundle_factory):
     config = Mock(spec=ConfigService)
     config.get_workspace_file_default_limit.return_value = 500
     store = AttachmentBlobStore(
-        tmp_path, leases=ExternalResourceLeaseLedger(state_path=tmp_path / ".boxteam/resources.json"),
+        tmp_path, leases=ExternalResourceLeaseLedger(state_path=tmp_path / ".boxteam/resources.sqlite"),
     )
     service = WorkspaceService(config_service=config, workspace_root=tmp_path, attachments=store)
     try:

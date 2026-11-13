@@ -155,7 +155,7 @@ async def test_unverified_startup_keeps_directory_until_original_management_stop
         for field in ("os_pid", "process_group_id", "process_session_id", "process_start_time", "created_at"):
             assert final_native[field] == native[field]
         assert not leases.leases_for_resource(rid) and not leases.leases_for_resource(attachment_id)
-        cold_ledger = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+        cold_ledger = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite")
         for lease in (operation_lease, directory_lease):
             settled = cold_ledger.get_lease(lease.lease_id)
             assert settled is not None and settled.status == "settled"

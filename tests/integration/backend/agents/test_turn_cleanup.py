@@ -42,7 +42,7 @@ async def test_product_turn_cleanup_waits_for_ledger_and_preserves_failed_scope(
     writer_threads: list[int] = []
     resource_id, lease_id, peer_id = "test-turn-resource", "test-turn-lease", "test-peer-lease"
     commit, release_turn = ledger._commit, ledger.release_turn_leases
-    failure = PermissionError(13, "Turn lease 写盘拒绝", str(case.workspace / ".boxteam/resources.json"))
+    failure = PermissionError(13, "Turn lease 写盘拒绝", str(case.workspace / ".boxteam/resources.sqlite"))
 
     def observed_release(turn_stream_id: str) -> list[ResourceLease]:
         streams.append(turn_stream_id)
@@ -107,7 +107,7 @@ async def test_product_turn_cleanup_waits_for_ledger_and_preserves_failed_scope(
         assert streams == [stream_id] * (2 if fail_first_write else 1)
 
     assert registry.get(stream_id) is registry.get_inbox(stream_id) is None
-    restored = ExternalResourceLeaseLedger(state_path=case.workspace / ".boxteam/resources.json")
+    restored = ExternalResourceLeaseLedger(state_path=case.workspace / ".boxteam/resources.sqlite")
     lease, peer = restored.get_lease(lease_id), restored.get_lease(peer_id)
     assert lease is not None and lease.status == "released" and lease.turn_stream_id == stream_id
     assert peer is not None and peer.status == "active" and peer.turn_stream_id == "test-peer-turn"

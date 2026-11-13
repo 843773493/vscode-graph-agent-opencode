@@ -124,7 +124,7 @@ async def test_cold_peer_recovers_while_first_real_listing_receipt_is_pending(
                         assert runtime[identity_key] == original[identity_key]
                         assert runtime[identity_key] is not None
                         assert not ExternalResourceLeaseLedger(
-                            state_path=root / ".boxteam/resources.json",
+                            state_path=root / ".boxteam/resources.sqlite",
                         ).leases_for_resource(resource_id)
                     run.write_result("passed", {
                         "kind": kind, "revisions": revisions,

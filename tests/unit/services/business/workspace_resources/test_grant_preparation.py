@@ -11,6 +11,7 @@ import pytest
 
 from app.services.business.workspace_resources import operations as operations_module
 from tests.support.resource_owners.browser import BrowserOwnerFixture
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 from tests.unit.services.business.workspace_resources.test_transport_grant_deadline import (
     bundle as bundle,  # noqa: PLC0414
@@ -31,30 +32,25 @@ async def test_original_grant_preparation_write_settles_before_unlock_without_la
     assert owner is not None and path is not None
     before = owner._store.path.read_bytes()
     entered, free, loop = asyncio.Event(), Event(), asyncio.get_running_loop()
-    replace, issue = Path.replace, bundle.transport.issue_transport_grant
-    writes = 0
+    issue = bundle.transport.issue_transport_grant
     issued: list[str] = []
     native = OSError(28, "授权派发准备写入失败")
     writers: list[int] = []
 
-    def publishing(source: Path, target: Path) -> Path:
-        nonlocal writes
-        if target == path:
-            writes += 1
-            if writes == 2:
-                writers.append(get_ident())
-                loop.call_soon_threadsafe(entered.set)
-                assert free.wait(5), "测试未释放授权准备的原写入"
-                if write_fails:
-                    raise native
-        return replace(source, target)
+    def publishing(target: Path, changes) -> None:
+        if target == path and any(lease["status"] == "dispatching" for lease in changes["leases"]):
+            writers.append(get_ident())
+            loop.call_soon_threadsafe(entered.set)
+            assert free.wait(5), "测试未释放授权准备的原写入"
+            if write_fails:
+                raise native
 
     async def issuing(resource_id: str, **arguments):
         issued.append(resource_id)
         return await issue(resource_id, **arguments)
 
     with monkeypatch.context() as fault:
-        fault.setattr(Path, "replace", publishing)
+        observe_lease_commits(fault, publishing)
         fault.setattr(bundle.transport, "issue_transport_grant", issuing)
         pending = asyncio.create_task(grant(rid))
         try:

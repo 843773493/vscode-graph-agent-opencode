@@ -40,9 +40,8 @@ def runtime_context() -> tuple[MessageStreamStore, SessionCatalogPathResolver, s
     workspace_root = output_root / "workspace"
     if workspace_root.exists():
         shutil.rmtree(workspace_root)
-    resource_state_path = output_root / "runtime" / "resources.json"
+    resource_state_path = output_root / "runtime" / "resources.sqlite"
     resource_state_path.unlink(missing_ok=True)
-    resource_state_path.with_suffix(".tmp").unlink(missing_ok=True)
     sessions_root = workspace_root / ".boxteam" / "sessions"
     resolver = get_session_path_resolver(sessions_root)
     resolver.initialize()

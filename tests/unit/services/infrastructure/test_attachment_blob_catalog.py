@@ -134,7 +134,7 @@ def _original_path(store: AttachmentBlobStore, file_id: str) -> Path:
 def _store(tmp_path: Path, session_bundle_factory, *session_ids: str) -> AttachmentBlobStore:
     for session_id in session_ids:
         session_bundle_factory(tmp_path / ".boxteam" / "sessions", session_id)
-    return AttachmentBlobStore(tmp_path, leases=ExternalResourceLeaseLedger(state_path=tmp_path / ".boxteam/resources.json"))
+    return AttachmentBlobStore(tmp_path, leases=ExternalResourceLeaseLedger(state_path=tmp_path / ".boxteam/resources.sqlite"))
 
 
 async def test_upload_restricts_original_before_publication(

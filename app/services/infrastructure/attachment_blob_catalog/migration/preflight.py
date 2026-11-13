@@ -33,6 +33,7 @@ from app.services.infrastructure.attachment_blob_catalog.blob_identity import (
 from app.services.infrastructure.attachment_blob_catalog.schema import (
     _SCHEMA_STATEMENTS,
 )
+from app.services.infrastructure.external_resource_leases.database import LeaseDatabase
 from app.services.infrastructure.rollout_context.fork.source_capture import (
     read_captured_snapshot,
 )
@@ -290,7 +291,18 @@ def plan_backup(workspace: Path) -> tuple[str, int, list[BackupSource]]:
     add(_source(root, "workspace-identity.json"))
     for source in _external_owner_sources(workspace, workspace_id):
         add(source)
+    # 旧 JSON 仍是本显式离线迁移的输入契约；线上新账本只使用 SQLite。
     ledger = checked_path(root, "resources.json")
+    database = checked_path(root, "resources.sqlite")
+    if database.exists():
+        if ledger.exists():
+            raise RuntimeError("离线迁移存在两份外部资源账本，拒绝猜测权威来源")
+        records, leases = LeaseDatabase(database).read()
+        if any(record.status != "stopped" for record in records.values()) or any(
+            lease.status not in {"released", "settled"} for lease in leases.values()
+        ):
+            raise RuntimeError("离线迁移存在未核实的外部资源或占用")
+        add(_source(root, "resources.sqlite", database=True))
     if ledger.exists():
         payload = json.loads(ledger.read_text())
         for name, terminal in (("records", {"stopped"}), ("leases", {"released", "settled"})):

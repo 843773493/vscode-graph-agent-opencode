@@ -78,7 +78,7 @@ async def test_hard_exit_resumes_working_copy_without_changing_resource_or_histo
             catalog = cleanup.enter_context(closing(build_session_catalog_components(
                 root / ".boxteam/sessions", read_workspace_id(root))))
             cleanup.enter_context(catalog_provider_scope(catalog))
-            ledger = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json")
+            ledger = ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite")
             store = cleanup.enter_context(closing(module.AttachmentBlobStore(
                 root, path_resolver=catalog.resolver, leases=ledger)))
             saver = cleanup.enter_context(RolloutCheckpointSaver(

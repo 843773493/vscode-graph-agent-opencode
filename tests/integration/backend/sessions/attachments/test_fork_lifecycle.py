@@ -110,7 +110,7 @@ async def test_directory_claim_and_release_share_holder_before_target_publicatio
         root = Path(sys.argv[1])
         catalog = build_session_catalog_components(root / ".boxteam/sessions", read_workspace_id(root))
         store = AttachmentBlobStore(root, path_resolver=catalog.resolver,
-            leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json"))
+            leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite"))
         try:
             result = asyncio.run(store.process_pending_directories())
             print(json.dumps({"released": result}), flush=True)

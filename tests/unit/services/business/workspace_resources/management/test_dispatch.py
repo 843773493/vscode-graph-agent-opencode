@@ -9,6 +9,7 @@ import pytest
 
 from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.external_resource_leases import ResourceLease
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import (
     SESSION_A,
     SESSION_B,
@@ -49,16 +50,20 @@ async def test_unknown_write_failure_protects_exact_management_lease(
         dispatched = True
         raise failure
 
-    def unavailable(source: Path, target: Path) -> Path:
+    def reject_write(target: Path) -> None:
         nonlocal failures
         if dispatched and target == (ledger_path if storage == "ledger" else owner._store.path):
             failures += 1
             raise native
+
+    def unavailable(source: Path, target: Path) -> Path:
+        reject_write(target)
         return replace(source, target)
 
     with monkeypatch.context() as fault:
         fault.setattr(bundle.transport, "sync_owner_revision", lost)
         fault.setattr(Path, "replace", unavailable)
+        observe_lease_commits(fault, lambda target, _changes: reject_write(target))
         with pytest.raises(OSError) as caught:
             if action == "release-thread":
                 await owner.release_thread(SESSION_A, THREAD_A, 1)

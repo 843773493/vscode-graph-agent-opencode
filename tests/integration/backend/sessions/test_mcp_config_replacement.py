@@ -31,6 +31,7 @@ from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 复用真实 HTTP/MCP 协议 Server
 )
 from tests.support.processes.gateway import LOCAL_TOKEN_HEADERS
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 
 
 async def wait_status(service, predicate):
@@ -206,7 +207,7 @@ async def test_watcher_replacement_preserves_sealed_network_target_and_publishes
                         assembly = container.checkpointer.get_context_assembly(session, thread, assembly_id=assembly_id)
                         assert assembly.request_hash_preimage == normalize_wire_request(record["request"])
                         assembly.validate_hashes()
-                    ledger = json.loads((container.workspace_root / ".boxteam/resources.json").read_text(encoding="utf-8"))
+                    ledger = read_lease_snapshot(container.workspace_root / ".boxteam/resources.sqlite")
                     resources = {record["resource_id"] for record in ledger["records"] if record["kind"] == "mcp_connection"}
                     assert resources
                     assert {lease["holder_session_id"] for lease in ledger["leases"]} == {session}

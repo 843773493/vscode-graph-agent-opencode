@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import errno
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Iterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from textwrap import dedent
 
@@ -38,6 +38,7 @@ from tests.integration.test_terminal_owner_tool_invocation import (
     terminal_workspace_root_path as terminal_workspace_root_path,  # noqa: PLC0414
 )
 from tests.support.ports import integration_port_block_for_file
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.workspace_tool_runtime import (
     WorkspaceToolRuntime,
     workspace_tool_runtime,
@@ -106,16 +107,13 @@ async def test_verified_startup_failure_releases_the_real_attachment_workdir(
     if ledger_failure:
         ledger_path = leases._state_path
         assert ledger_path is not None
-        temporary = ledger_path.with_suffix(".tmp")
-        temporary.mkdir()
         original = store._catalog.require_available_directory(attachment_id)
-        try:
-            failure_type = PermissionError if os.name == "nt" else IsADirectoryError
-            with pytest.raises(failure_type, match="artifact=external_resource_leases: stage=write") as failure:
+        with closing(sqlite3.connect(ledger_path)) as locked:
+            locked.execute("BEGIN IMMEDIATE")
+            with pytest.raises(sqlite3.OperationalError, match="artifact=external_resource_leases: stage=write") as failure:
                 await store.process_pending_directories()
-            assert failure.value.errno == (errno.EACCES if os.name == "nt" else errno.EISDIR)
-            cause = failure.value.__cause__
-            assert isinstance(cause, OSError) and cause.filename == str(temporary)
+            assert failure.value.sqlite_errorcode == sqlite3.SQLITE_BUSY
+            assert isinstance(failure.value.__cause__, sqlite3.OperationalError)
             pending = store._catalog.get_directory(attachment_id)
             assert pending is not None and pending.availability == "releasing"
             assert pending.relative_locator == original.relative_locator
@@ -124,8 +122,6 @@ async def test_verified_startup_failure_releases_the_real_attachment_workdir(
             registered = cold.get(attachment_id)
             assert registered is not None and registered.status == "running"
             assert cold.leases_for_resource(attachment_id) == []
-        finally:
-            temporary.rmdir()
     assert await store.process_pending_directories() == (attachment_id,)
     assert not directory.exists()
     registered = leases.get(attachment_id)
@@ -373,9 +369,9 @@ async def test_failed_directory_lease_settlement_blocks_release_until_original_s
         assert process_running(pid)
         original, = leases.leases_for_resource(attachment_id)
         store.release_thread_references(session_id, message.thread_id)
-        path = container.workspace_root / ".boxteam/resources.json"
+        path = container.workspace_root / ".boxteam/resources.sqlite"
         failure = OSError(5, "目录占用结清写盘失败")
-        replace, stop = Path.replace, owner._transport.stop_resource
+        stop = owner._transport.stop_resource
         calls: list[str] = []
 
         async def record_stop(resource_id: str, *, reason: str | None = None):
@@ -384,15 +380,14 @@ async def test_failed_directory_lease_settlement_blocks_release_until_original_s
 
         monkeypatch.setattr(owner._transport, "stop_resource", record_stop)
 
-        def fail_settlement(source: Path, target: Path) -> Path:
+        def fail_settlement(target: Path, changes) -> None:
             if target == path and any(lease["lease_id"] == original.lease_id and lease["status"] == "settled"
-                                      for lease in json.loads(source.read_text())["leases"]):
+                                      for lease in changes["leases"]):
                 raise failure
-            return replace(source, target)
 
         snapshot = await owner.get_resource(terminal_id)
         with monkeypatch.context() as io_fault:
-            io_fault.setattr(Path, "replace", fail_settlement)
+            observe_lease_commits(io_fault, fail_settlement)
             with pytest.raises(OSError) as rejected:
                 await owner.command(terminal_id, action="stop", expected_revision=snapshot["owner_revision"],
                                     holder_id="request:durable-stop", operation_id="durable-stop")

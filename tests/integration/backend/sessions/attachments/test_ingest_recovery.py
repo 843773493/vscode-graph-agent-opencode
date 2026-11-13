@@ -148,7 +148,7 @@ def ingest_case(request: pytest.FixtureRequest, session_bundle_factory):
     root = prepare_test_workspace(workspace_root=context.workspace_root,
         template_root=Path.cwd() / "tests/fixtures/workspaces", template_items=())
     session_bundle_factory(root / ".boxteam/sessions", SESSION)
-    with closing(AttachmentBlobStore(root, leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.json"))) as store, RolloutCheckpointSaver(root / ".boxteam/sessions", attachment_store=store) as saver:
+    with closing(AttachmentBlobStore(root, leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite"))) as store, RolloutCheckpointSaver(root / ".boxteam/sessions", attachment_store=store) as saver:
         messages = MessageService(main_thread_resolver=store._path_resolver.main_thread_id,
                                   checkpointer=saver, attachment_store=store, workspace_root=root)
         yield IngestCase(root, store, saver, messages)

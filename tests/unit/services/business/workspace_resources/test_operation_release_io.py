@@ -18,6 +18,7 @@ from app.services.business.terminal_resources.operations import TerminalOperatio
 from app.services.business.workspace_resources import operations as resource_operations
 from app.services.infrastructure.external_resource_leases import ResourceLease
 from tests.support.resource_owners.browser import BrowserOwnerFixture
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.support.resource_owners.terminal import TerminalOwnerFixture
 from tests.unit.services.business.test_resource_operation_close_deadline import (
@@ -62,13 +63,11 @@ def install_release_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> ReleaseWrite:
     assert bundle.leases._state_path is not None
-    pending = bundle.leases._state_path.with_suffix(".tmp")
     loop = asyncio.get_running_loop()
-    original = Path.replace
     gate = ReleaseWrite()
 
-    def publishing(path: Path, target: Path) -> Path:
-        if path == pending and gate.enabled:
+    def publishing(target: Path, changes) -> None:
+        if target == bundle.leases._state_path and gate.enabled:
             gate.threads.append(get_ident())
             if len(gate.threads) == 1:
                 loop.call_soon_threadsafe(gate.entered.set)
@@ -76,9 +75,8 @@ def install_release_write(
                     raise TimeoutError("测试未放行 lease 原生写入，事件循环可能被阻塞")
                 if gate.failure is not None:
                     raise gate.failure
-        return original(path, target)
 
-    monkeypatch.setattr(Path, "replace", publishing)
+    observe_lease_commits(monkeypatch, publishing)
     return gate
 
 

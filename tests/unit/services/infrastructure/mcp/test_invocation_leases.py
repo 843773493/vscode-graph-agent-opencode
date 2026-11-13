@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
@@ -28,11 +27,12 @@ from app.services.infrastructure.mcp.extension_catalog import (
 )
 from app.services.infrastructure.mcp.invocation import McpResourceUse
 from tests.support.mcp.session_doubles import FakeMcpSessionFactory
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 
 
 @pytest.fixture
 async def lease_case(tmp_path, resource_use, request):
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     owner = McpCatalogOwner(
         raw_config={"supervision": {"sealed_call_timeout_seconds": getattr(request, "param", 1800)},
@@ -434,7 +434,7 @@ class StartupRecoveryWrite:
 async def startup_recovery_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
 ) -> AsyncIterator[StartupRecoveryWrite]:
-    path = tmp_path / "resources.json"
+    path = tmp_path / "resources.sqlite"
     ledger = ExternalResourceLeaseLedger(state_path=path)
     # 局部启动恢复合同直接经唯一账本准备占用，不冒称真实模型或进程崩溃验收。
     for resource_id, kind in (("old-mcp", "mcp_connection"), ("peer-terminal", "terminal")):
@@ -457,16 +457,16 @@ async def startup_recovery_write(
         workspace_root=tmp_path, event_service=EventChannelService(), leases=ledger, session_factory=factory,
     )
     case = StartupRecoveryWrite(owner, ledger, path, factory, pending, request.param)
-    publishing, loop = Path.replace, asyncio.get_running_loop()
+    loop = asyncio.get_running_loop()
     close_handles, loop_thread = owner.execution_handles.close, get_ident()
 
     def close_on_loop() -> None:
         assert get_ident() == loop_thread, "asyncio定时器及内存handle清理应留在原事件循环"
         close_handles()
 
-    def publish(source: Path, target: Path) -> Path:
+    def publish(target: Path, changes) -> None:
         if target == path:
-            candidate = json.loads(source.read_text())
+            candidate = changes
             if any(item["lease_id"] == pending[case.blocked_index].lease_id and item["status"] == "released"
                    for item in candidate["leases"]) and not case.entered.is_set():
                 case.threads.append(get_ident())
@@ -475,10 +475,9 @@ async def startup_recovery_write(
                     raise TimeoutError("测试未放行原MCP冷恢复写入，事件循环可能被阻塞")
                 if case.failure is not None:
                     raise case.failure
-        return publishing(source, target)
 
     with monkeypatch.context() as observe:
-        observe.setattr(Path, "replace", publish)
+        observe_lease_commits(observe, publish)
         observe.setattr(owner.execution_handles, "close", close_on_loop)
         try:
             yield case

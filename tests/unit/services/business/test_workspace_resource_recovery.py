@@ -68,7 +68,7 @@ async def test_expiry_before_sync_preserves_facts_and_releases_only_its_own_wait
     monkeypatch.setattr(bundle.transport, "list_resources", blocked_listing)
     before = owner._store.get(rid)
     assert before is not None
-    ledger = (bundle.root / ".boxteam/resources.json").read_bytes()
+    ledger = (bundle.root / ".boxteam/resources.sqlite").read_bytes()
     first = None
     lock = owner._resource_lock(rid)
     if phase == "concurrent_listing":
@@ -96,7 +96,7 @@ async def test_expiry_before_sync_preserves_facts_and_releases_only_its_own_wait
             assert stored is not None and stored.reconciliation_status == "verified"
         else:
             assert owner._store.get(rid) == before
-            assert (bundle.root / ".boxteam/resources.json").read_bytes() == ledger
+            assert (bundle.root / ".boxteam/resources.sqlite").read_bytes() == ledger
             assert owner._recovery._pending is None
         if first is not None:
             assert not first.done()
@@ -361,7 +361,7 @@ async def test_stale_cold_management_does_not_revoke_the_pending_version(
     owner = bundle.restart()
     await owner.recover(())
     before = owner._store.path.read_bytes()
-    ledger = (bundle.root / ".boxteam/resources.json").read_bytes()
+    ledger = (bundle.root / ".boxteam/resources.sqlite").read_bytes()
     with pytest.raises(ResourceConflict, match="版本冲突"):
         await owner.command(
             rid, action=action, expected_revision=1,
@@ -369,7 +369,7 @@ async def test_stale_cold_management_does_not_revoke_the_pending_version(
         )
     assert owner._recovery._pending == {rid: RecoveryVersion(2)}
     assert owner._store.path.read_bytes() == before
-    assert (bundle.root / ".boxteam/resources.json").read_bytes() == ledger
+    assert (bundle.root / ".boxteam/resources.sqlite").read_bytes() == ledger
     assert (await bundle.transport.get_resource(rid))["transport_owner_revision"] == 1
     assert not bundle.transport.deleted
 
@@ -381,7 +381,7 @@ async def test_related_cold_delete_keeps_pending_authorization_unchanged(
     owner = bundle.restart()
     await owner.recover(())
     before = owner._store.path.read_bytes()
-    ledger = (bundle.root / ".boxteam/resources.json").read_bytes()
+    ledger = (bundle.root / ".boxteam/resources.sqlite").read_bytes()
     with pytest.raises(ResourceConflict, match="仍有关联"):
         await owner.command(
             rid, action="delete", expected_revision=2,
@@ -389,7 +389,7 @@ async def test_related_cold_delete_keeps_pending_authorization_unchanged(
         )
     assert owner._recovery._pending == {rid: RecoveryVersion(2)}
     assert owner._store.path.read_bytes() == before
-    assert (bundle.root / ".boxteam/resources.json").read_bytes() == ledger
+    assert (bundle.root / ".boxteam/resources.sqlite").read_bytes() == ledger
     assert (await bundle.transport.get_resource(rid))["transport_owner_revision"] == 1
     assert not bundle.transport.deleted
 

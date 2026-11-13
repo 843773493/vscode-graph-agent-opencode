@@ -99,7 +99,7 @@ class BrowserOwnerFixture:
     owner: BrowserResourceOwner | None = field(init=False)
 
     def restart(self) -> BrowserResourceOwner:
-        self.leases = ExternalResourceLeaseLedger(state_path=self.root / ".boxteam" / "resources.json")
+        self.leases = ExternalResourceLeaseLedger(state_path=self.root / ".boxteam" / "resources.sqlite")
         self.owner = BrowserResourceOwner(
             workspace_root=self.root, workspace_id=WORKSPACE_ID, sessions=self.sessions,
             threads=self.sessions, transport=self.transport, leases=self.leases,

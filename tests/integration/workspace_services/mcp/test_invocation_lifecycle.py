@@ -141,7 +141,7 @@ async def test_cancelled_envelope_keeps_durable_unknown_after_turn_cleanup_and_c
         assert sibling.status == "success"
         assert (record := ledger.get(binding.connection_ref)) is not None and record.status == "running"
         assert ledger.leases_for_resource(binding.connection_ref) == [lease]
-    cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
+    cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.sqlite")
     assert (record := cold.get(binding.connection_ref)) is not None and record.status == "stopped"
     assert (retained := cold.get_lease(lease.lease_id)) is not None and retained.status == "reconcile_required"
 
@@ -240,7 +240,7 @@ async def test_expired_sealed_call_is_paired_and_never_reaches_real_server(
         assert case.received() == []
         resource_id = binding.resolve("mcp__schema__probe").connection_ref
         assert resource_id is not None
-        cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
+        cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.sqlite")
         record = cold.get(resource_id)
         assert record is not None and record.status == "running"
         assert not cold.leases_for_resource(resource_id)
@@ -272,7 +272,7 @@ async def test_progress_writer_failure_is_reported_instead_of_sdk_swallowing_it(
 async def http_schema_server_case(http_schema_endpoint_factory):
     async with http_schema_endpoint_factory("http") as endpoint:
         owner = McpCatalogOwner(
-            leases=ExternalResourceLeaseLedger(state_path=endpoint.context.workspace_root / ".boxteam/resources.json"),
+            leases=ExternalResourceLeaseLedger(state_path=endpoint.context.workspace_root / ".boxteam/resources.sqlite"),
             raw_config={"servers": {"schema": {"enabled": True, "transport": "streamable_http", "url": endpoint.url}}},
             workspace_root=endpoint.context.workspace_root, event_service=EventChannelService(),
             session_factory=sdk_http_session_factory,
@@ -355,7 +355,7 @@ async def test_real_http_protocol_error_is_confirmed_in_activity_and_lease(
     assert "https://example.invalid/authorize" not in repr(commits)
     assert case.received() == [{"name": "probe", "arguments": {"call_mode": "protocol_error"}}]
 
-    cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.json")
+    cold = ExternalResourceLeaseLedger(state_path=case.workspace_root / ".boxteam/resources.sqlite")
     record = cold.get(target.connection_ref)
     assert record is not None and record.status == "running"
     assert cold.leases_for_resource(target.connection_ref) == []

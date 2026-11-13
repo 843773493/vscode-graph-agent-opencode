@@ -245,7 +245,7 @@ async def test_attachment_request_rebuild_survives_derived_edit_release_and_rest
                 assert preview.size == (512, 256)
             assert (root / "derived/result.txt").read_text(encoding="utf-8") == changed_text
         with closing(AttachmentBlobStore(target.workspace, leases=ExternalResourceLeaseLedger(
-                state_path=target.workspace / ".boxteam/resources.json",
+                state_path=target.workspace / ".boxteam/resources.sqlite",
             ))) as store:
             assert await store.process_pending_directories() == ()
             assert (root / "derived/result.txt").read_text(encoding="utf-8") == changed_text

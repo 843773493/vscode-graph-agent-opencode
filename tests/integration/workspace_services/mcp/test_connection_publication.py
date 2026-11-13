@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -29,6 +28,7 @@ from tests.integration.workspace_services.mcp.test_full_schema_invocation import
     schema_server_case as schema_server_case,  # noqa: PLC0414 - 复用真实 SDK 与正式隔离工作区
 )
 from tests.support.mcp.http_endpoint import sdk_http_session_factory
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 
 
 @dataclass
@@ -55,22 +55,21 @@ class PublicationGate:
 async def publication_gate(
     schema_server_case: SchemaServerCase, monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[PublicationGate]:
-    """仅暂扣原子替换；保留 SDK 原 task、账本锁、fsync 与发布顺序。"""
-    gate = PublicationGate(schema_server_case.workspace_root / ".boxteam/resources.json")
-    loop, replace = asyncio.get_running_loop(), Path.replace
+    """仅暂扣原账本事务；保留 SDK 原 task、账本锁与发布顺序。"""
+    gate = PublicationGate(schema_server_case.workspace_root / ".boxteam/resources.sqlite")
+    loop = asyncio.get_running_loop()
 
-    def publish(source: Path, target: Path) -> Path:
+    def publish(target: Path, changes) -> None:
         if target == gate.path and gate.writer_thread is None and gate.resource_id:
-            records = json.loads(source.read_text(encoding="utf-8"))["records"]
+            records = changes["records"]
             if any(row["resource_id"] == gate.resource_id and row["status"] == gate.status for row in records):
                 gate.writer_thread = get_ident()
                 loop.call_soon_threadsafe(gate.entered.set)
                 assert gate.release.wait(4), "测试未放行原连接账本发布"
                 if gate.failure is not None:
                     raise gate.failure
-        return replace(source, target)
 
-    monkeypatch.setattr(Path, "replace", publish)
+    observe_lease_commits(monkeypatch, publish)
     try:
         yield gate
     finally:
@@ -82,7 +81,7 @@ async def initializing_exit_owner(bridge_endpoint_factory):
     async with bridge_endpoint_factory(args=["-c", "import sys; sys.stdin.buffer.readline(); sys.exit(17)"]) as (endpoint, token):
         context = endpoint.context
         owner = McpCatalogOwner(
-            leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json"),
+            leases=ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.sqlite"),
             raw_config={"servers": {"exiting": {"enabled": True, "transport": "streamable_http",
                 "url": endpoint.url, "headers": {"X-Local-Token": token}}}},
             workspace_root=context.workspace_root, event_service=EventChannelService(),
@@ -114,7 +113,7 @@ async def test_initialize_eof_keeps_protocol_error_and_cold_connection_state(ini
     record, = [record for record in owner._leases.records_by_kind("mcp_connection")
                if record.resource_id.startswith(f"mcp-connection:v1:{owner._instance_id}:")]
     assert record.status == "unknown" and record.process is None
-    cold = ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.json")
+    cold = ExternalResourceLeaseLedger(state_path=context.workspace_root / ".boxteam/resources.sqlite")
     assert cold.get(record.resource_id) == record
     assert owner._session_scope is None
     await owner.shutdown()
@@ -224,7 +223,7 @@ async def test_initialization_callback_control_exception_still_closes_candidate(
         with pytest.raises(ConnectionAbort) as caught:
             await owner.connect_server("schema", admit=lambda: None, on_initialized=initialized)
         assert caught.value is original
-        records = ExternalResourceLeaseLedger(state_path=schema_server_case.workspace_root / ".boxteam/resources.json").records_by_kind("mcp_connection")
+        records = ExternalResourceLeaseLedger(state_path=schema_server_case.workspace_root / ".boxteam/resources.sqlite").records_by_kind("mcp_connection")
         owned = [record for record in records if record.resource_id.startswith(f"mcp-connection:v1:{owner._instance_id}:")]
         assert len(owned) == 2 and all(record.status == "stopped" for record in owned)
         assert owner.get_tool_ids() == frozenset()

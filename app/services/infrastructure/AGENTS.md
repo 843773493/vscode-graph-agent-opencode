@@ -4,13 +4,14 @@
 
 ## 模块职责树
 
-下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 30 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
+下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 29 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
 
 ```text
 infrastructure/
 ├── attachment_blob_catalog/   附件正文 blob、locator、fork 引用与回收
 ├── config/                    配置解析、事件游标和重载状态组件
 ├── config_service/            工作区 ConfigService 实现
+├── external_resource_leases/   资源身份、operation lease 与增量事务
 ├── events/                    有界事件 channel 与 typed 事件合同
 ├── gateway_search/            复用原 Gateway 连接的发现与联邦搜索传输
 ├── mcp/                       MCP 连接、工具目录与 Agent 工具适配
@@ -29,8 +30,7 @@ infrastructure/
 └── 根级模块（仍实际放在本层）
     ├── 外部服务客户端与资源租约
     │   ├── browser_manager_client.py
-    │   ├── terminal_manager_client.py
-    │   └── external_resource_leases.py
+    │   └── terminal_manager_client.py
     ├── Gateway 通信客户端
     │   ├── gateway_client_common.py
     │   ├── gateway_communication_client.py

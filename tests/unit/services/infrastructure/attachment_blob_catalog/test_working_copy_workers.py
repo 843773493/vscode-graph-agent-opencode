@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 import threading
 from collections.abc import AsyncIterator
 from contextlib import closing
@@ -62,7 +63,7 @@ class WorkingCopyCase:
 @pytest.fixture
 async def copy_case(tmp_path: Path, session_bundle_factory) -> AsyncIterator[WorkingCopyCase]:
     session_bundle_factory(tmp_path / ".boxteam/sessions", SESSION_ID)
-    ledger_path = tmp_path / ".boxteam/resources.json"
+    ledger_path = tmp_path / ".boxteam/resources.sqlite"
     leases = ExternalResourceLeaseLedger(state_path=ledger_path)
     with closing(AttachmentBlobStore(tmp_path, leases=leases)) as store:
         ref, = await store.persist_inline(SESSION_ID, [AttachmentRef(
@@ -170,7 +171,7 @@ async def test_local_fork_claim_hands_retention_to_target_runtime_without_export
     snapshot, = store.capture_fork_attachments(record, same_storage_owner=True, references=((ref.file_id, True),))
     assert snapshot.source_attachment_id == snapshot.target_attachment_id
     store.release_session_references(record.source_session_id)
-    leases = ExternalResourceLeaseLedger(state_path=store._workspace_root / ".boxteam/resources.json")
+    leases = ExternalResourceLeaseLedger(state_path=store._workspace_root / ".boxteam/resources.sqlite")
     assert await store.process_pending_directories(leases=leases) == ()  # prepared claim 保护发布前的来源。
     claims = store._catalog.fork_attachment_claim_ids(record.copy_operation_id)
     store._catalog.reserve_fork_attachment_owners(copy_operation_id=record.copy_operation_id, claim_ids=claims)
@@ -198,7 +199,7 @@ async def test_cross_workspace_export_claim_retains_source_until_original_releas
     snapshot, = case.snapshots
     assert snapshot.source_attachment_id != snapshot.target_attachment_id
     source.release_session_references(record.source_session_id)
-    leases = ExternalResourceLeaseLedger(state_path=source._workspace_root / ".boxteam/resources.json")
+    leases = ExternalResourceLeaseLedger(state_path=source._workspace_root / ".boxteam/resources.sqlite")
     directory = source._catalog.get_directory(snapshot.source_attachment_id)
     assert directory.release_pending == 1
     assert await source.process_pending_directories(leases=leases) == ()
@@ -384,10 +385,12 @@ async def test_working_copy_real_ledger_file_failure_retains_deletion_for_same_e
     case, store = copy_case, copy_case.store
     record = store._catalog.get_directory(case.attachment_id)
     assert record is not None
-    temporary = case.ledger_path.with_suffix(".tmp")
-    temporary.mkdir()
-    with pytest.raises((IsADirectoryError, PermissionError)):
-        await store.process_pending_directories(leases=case.leases)
+    with closing(sqlite3.connect(case.ledger_path)) as locked:
+        locked.execute("BEGIN IMMEDIATE")
+        with pytest.raises(sqlite3.OperationalError, match="artifact=external_resource_leases: stage=write") as failure:
+            await store.process_pending_directories(leases=case.leases)
+        assert failure.value.sqlite_errorcode == sqlite3.SQLITE_BUSY
+        assert isinstance(failure.value.__cause__, sqlite3.OperationalError)
     pending = store._catalog.get_directory(case.attachment_id)
     assert pending is not None
     assert pending.availability == "releasing"
@@ -398,7 +401,6 @@ async def test_working_copy_real_ledger_file_failure_retains_deletion_for_same_e
     cold = ExternalResourceLeaseLedger(state_path=case.ledger_path)
     assert (persisted := cold.get(case.attachment_id)) is not None
     assert persisted.status == "running"
-    temporary.rmdir()
     assert await store.process_pending_directories(leases=case.leases) == (case.attachment_id,)
     assert (final := store._catalog.get_directory(case.attachment_id)) is not None
     assert final.availability == "released"

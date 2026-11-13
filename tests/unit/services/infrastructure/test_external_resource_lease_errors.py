@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import errno
-import json
 import logging
-import os
+import sqlite3
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -17,6 +16,11 @@ from pydantic import ValidationError
 
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
+)
+from app.services.infrastructure.external_resource_leases.database import LeaseDatabase
+from tests.support.resource_owners.lease_storage import (
+    mutate_lease_payload,
+    observe_lease_commits,
 )
 
 
@@ -40,35 +44,28 @@ def ledger_log_failure(
 
 @pytest.fixture
 def ledger(tmp_path: Path) -> tuple[ExternalResourceLeaseLedger, Path]:
-    path = tmp_path / "private" / "resources.json"
+    path = tmp_path / "private" / "resources.sqlite"
     owner = ExternalResourceLeaseLedger(state_path=path)
     owner.register_external(resource_id="terminal_original", kind="terminal", lifetime_scope="workspace")
     owner.acquire_operation(resource_id="terminal_original", turn_stream_id="holder", operation_id="original")
     return owner, path
 
 
-@pytest.mark.parametrize("payload,reason", [
-    ([], "必须是对象"),
-    ({"records": "private-path"}, "records 必须是数组"),
-    ({"leases": "private-path"}, "leases 必须是数组"),
-    ({"records": [{}, "private-path"]}, "records[1] 必须是对象"),
-    ({"leases": [{}, "private-path"]}, "leases[1] 必须是对象"),
-])
-def test_bad_envelope_reports_field_without_file_location(
-    ledger: tuple[ExternalResourceLeaseLedger, Path], payload: object, reason: str,
+def test_bad_database_reports_failure_without_file_location(
+    ledger: tuple[ExternalResourceLeaseLedger, Path],
     caplog: pytest.LogCaptureFixture, ledger_log_failure: OSError | None,
 ) -> None:
     owner, path = ledger
     before = path.read_bytes()
-    damaged = json.dumps(payload).encode()
+    damaged = b"private-path is not a SQLite database"
     path.write_bytes(damaged)
-    with caplog.at_level("ERROR"), pytest.raises(TypeError) as raised:
+    with caplog.at_level("ERROR"), pytest.raises(sqlite3.DatabaseError) as raised:
         ExternalResourceLeaseLedger(state_path=path)
     detail = str(raised.value)
     assert str(path) not in detail and "private-path" not in detail
-    assert reason in detail and "artifact=external_resource_leases" in detail and "stage=validate" in detail
+    assert "artifact=external_resource_leases" in detail and "stage=read" in detail
     assert str(path) in caplog.text and path.read_bytes() == damaged
-    assert isinstance(raised.value.__cause__, TypeError)
+    assert isinstance(raised.value.__cause__, sqlite3.DatabaseError)
     if ledger_log_failure is not None:
         assert "diagnostic_sink_error=OSError" in detail
         assert any(str(ledger_log_failure) in note for note in raised.value.__cause__.__notes__)
@@ -81,7 +78,7 @@ def test_bad_envelope_reports_field_without_file_location(
     assert cold.leases_for_resource("terminal_original") == owner.leases_for_resource("terminal_original")
 
 
-@pytest.mark.parametrize("stage", ["read", "mkdir", "open", "fsync", "replace"])
+@pytest.mark.parametrize("stage", ["read", "write"])
 def test_native_failure_preserves_original_lease_and_explicit_retry(
     ledger: tuple[ExternalResourceLeaseLedger, Path], stage: str,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
@@ -93,21 +90,9 @@ def test_native_failure_preserves_original_lease_and_explicit_retry(
     original_leases = owner.leases_for_resource("terminal_original")
     native = PermissionError(errno.EACCES, "原生拒绝", str(path))
     with caplog.at_level("ERROR"), monkeypatch.context() as fault:
-        if stage == "fsync":
-            def fail_sync(_fd: int) -> None:
-                raise native
-            fault.setattr(os, "fsync", fail_sync)
-        else:
-            method = {"read": "read_text", "mkdir": "mkdir", "open": "open", "replace": "replace"}[stage]
-            target = path if stage == "read" else path.parent if stage == "mkdir" else path.with_suffix(".tmp")
-            original_method = getattr(Path, method)
-
-            def fail_target(current: Path, *args: object, **kwargs: object) -> object:
-                if current == target:
-                    raise native
-                return original_method(current, *args, **kwargs)
-
-            fault.setattr(Path, method, fail_target)
+        def unavailable(*args, **kwargs):
+            raise native
+        fault.setattr(LeaseDatabase, "read" if stage == "read" else "commit", unavailable)
         with pytest.raises(PermissionError) as raised:
             if stage == "read":
                 ExternalResourceLeaseLedger(state_path=path)
@@ -134,14 +119,14 @@ def test_native_failure_preserves_original_lease_and_explicit_retry(
 
 
 def test_directory_cannot_replace_a_missing_ledger(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    path = tmp_path / "private" / "resources.json"
+    path = tmp_path / "private" / "resources.sqlite"
     path.mkdir(parents=True)
     sentinel = path / "unrelated"
     sentinel.write_bytes(b"untouched")
-    with caplog.at_level("ERROR"), pytest.raises(OSError) as raised:
+    with caplog.at_level("ERROR"), pytest.raises(sqlite3.OperationalError) as raised:
         ExternalResourceLeaseLedger(state_path=path)
     assert str(path) not in str(raised.value)
-    assert isinstance(raised.value.__cause__, OSError) and str(path) in caplog.text
+    assert isinstance(raised.value.__cause__, sqlite3.Error) and str(path) in caplog.text
     assert sentinel.read_bytes() == b"untouched"
     sentinel.unlink()
     path.rmdir()
@@ -149,7 +134,7 @@ def test_directory_cannot_replace_a_missing_ledger(tmp_path: Path, caplog: pytes
 
 
 def test_memory_and_not_yet_created_ledgers_keep_their_contract(tmp_path: Path) -> None:
-    path = tmp_path / "not-created" / "resources.json"
+    path = tmp_path / "not-created" / "resources.sqlite"
     assert ExternalResourceLeaseLedger(state_path=path).get("absent") is None
     assert not path.parent.exists()
     owner = ExternalResourceLeaseLedger()
@@ -163,9 +148,8 @@ def test_cold_load_rejects_invalid_lease_status_without_losing_occupancy(
 ) -> None:
     owner, path = ledger
     original = path.read_bytes()
-    payload = json.loads(original)
-    payload["leases"][0]["status"] = invalid_status
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    lease, = owner.leases_for_resource("terminal_original")
+    mutate_lease_payload(path, "leases", lease.lease_id, lambda row: row.update({"status": invalid_status}))
     damaged = path.read_bytes()
     with pytest.raises(ValidationError) as caught:
         ExternalResourceLeaseLedger(state_path=path)
@@ -185,7 +169,6 @@ def competing_writes(
     ledger: tuple[ExternalResourceLeaseLedger, Path], monkeypatch: pytest.MonkeyPatch,
 ) -> Callable[[Callable[[], object], Callable[[], object]], tuple[object, object]]:
     owner, path = ledger
-    replace = Path.replace
 
     def run(first_action: Callable[[], object], second_action: Callable[[], object]) -> tuple[object, object]:
         entered, release_first, second_started, second_finished = (Event() for _ in range(4))
@@ -195,11 +178,10 @@ def competing_writes(
 
         original = read_published()
 
-        def pause_first_replace(current: Path, target: Path) -> Path:
-            if current == path.with_suffix(".tmp") and not entered.is_set():
+        def pause_first_commit(target: Path, changes) -> None:
+            if target == path and not entered.is_set():
                 entered.set()
                 assert release_first.wait(5), "测试未放行原账本写入"
-            return replace(current, target)
 
         def second_write() -> object:
             second_started.set()
@@ -208,13 +190,13 @@ def competing_writes(
             finally:
                 second_finished.set()
 
-        monkeypatch.setattr(Path, "replace", pause_first_replace)
+        observe_lease_commits(monkeypatch, pause_first_commit)
         with ThreadPoolExecutor(max_workers=3) as pool:
             first = pool.submit(first_action)
             second: Future[object] | None = None
             try:
                 assert entered.wait(2)
-                # 在途文件写入不发布草稿，也不阻塞读取最后成功的内存快照。
+                # 在途事务不发布草稿，也不阻塞读取最后成功的内存快照。
                 assert pool.submit(read_published).result(timeout=2) == original
                 second = pool.submit(second_write)
                 assert second_started.wait(2)
@@ -273,7 +255,6 @@ def test_competing_writers_preserve_both_mutations_and_published_reads(
         assert len(cold.leases_for_turn("parallel")) == 1
     if mutation == "update":
         assert record.lifetime_scope == "thread"
-    assert not path.with_suffix(".tmp").exists()
 
 
 @pytest.mark.parametrize(("mutation", "lease_status", "resource_status", "scope"), [
@@ -317,4 +298,3 @@ def test_competing_mutations_recheck_state_after_previous_commit(
     assert (record.status, record.lifetime_scope) == (resource_status, scope)
     assert lease is not None and lease == owner.get_lease(original_lease.lease_id) and lease.status == lease_status
     assert cold.leases_for_turn("parallel") == []
-    assert not path.with_suffix(".tmp").exists()

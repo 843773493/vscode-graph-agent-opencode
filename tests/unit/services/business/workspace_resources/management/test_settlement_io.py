@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from threading import Event, get_ident
 
@@ -13,6 +12,7 @@ from app.services.business.workspace_resources.records import ThreadRef
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
+from tests.support.resource_owners.lease_storage import observe_lease_commits
 from tests.support.resource_owners.sessions import SESSION_A, THREAD_A
 from tests.unit.services.business.workspace_resources.test_record_write_lifetime import (
     OwnerFixture,
@@ -45,26 +45,24 @@ async def test_stop_keeps_original_lock_until_old_lease_settlement_finishes(
     assert pending_lease.status == "reconcile_required"
     path, loop = ledger._state_path, asyncio.get_running_loop()
     entered, released, contender_entered = asyncio.Event(), Event(), asyncio.Event()
-    replace = Path.replace
     writers: list[int] = []
     native = OSError(28, "原旧占用结清写入失败")
 
-    def write(source: Path, target: Path) -> Path:
+    def write(target: Path, changes) -> None:
         if target == path and not writers:
-            rows = json.loads(source.read_text())["leases"]
+            rows = changes["leases"]
             if any(row["lease_id"] == pending_lease.lease_id and row["status"] == "settled" for row in rows):
                 writers.append(get_ident())
                 loop.call_soon_threadsafe(entered.set)
                 assert released.wait(5), "测试未放行原结清写入"
                 if write_fails:
                     raise native
-        return replace(source, target)
 
     async def contending() -> None:
         async with owner._resource_lock(rid):
             contender_entered.set()
 
-    monkeypatch.setattr(Path, "replace", write)
+    observe_lease_commits(monkeypatch, write)
     stopping = asyncio.create_task(owner.command(
         rid, action="stop", expected_revision=1, holder_id="request:stop-io", operation_id="stop-io",
     ))

@@ -30,11 +30,12 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 )
 from tests.support.api_helpers import create_session
 from tests.support.e2e_control.harness import control_request
+from tests.support.resource_owners.lease_storage import read_lease_snapshot
 
 
 def resource_leases(case: CommunicationCase, resource_id: str) -> list[dict[str, object]]:
     """只读唯一持久账本，不通过构造 owner 帮产品结算。"""
-    ledger = json.loads((case.workspace / ".boxteam/resources.json").read_bytes())
+    ledger = read_lease_snapshot(case.workspace / ".boxteam/resources.sqlite")
     return [item for item in ledger["leases"] if item["resource_id"] == resource_id]
 
 
