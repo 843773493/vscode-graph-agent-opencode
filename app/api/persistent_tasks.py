@@ -123,7 +123,7 @@ async def check_task(task_id: str, payload: PersistentTaskCheckRequest, request_
 
 
 @router.get("/{task_id}/runs", response_model=APIResponse[PersistentTaskRunListDTO])
-async def task_runs(task_id: str, request_id: RequestId,
+def task_runs(task_id: str, request_id: RequestId,
                     service: TaskService):
     try:
         return APIResponse(data=PersistentTaskRunListDTO(items=service.runs(task_id)), request_id=request_id)
