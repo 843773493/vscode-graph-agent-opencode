@@ -80,6 +80,8 @@ Thread 分支候选合同同时运行真实名称查询与最近编辑器投影�
 
 `test_static_upgrade` 复制正式 Workbench 产物，仅在副本的 main／原 editor Worker 追加可观测版本标记；同一真实 Gateway 和 Chromium 保留 HTTP 缓存，核对内容地址分块热读零正文、main／Worker 再验证304、升级后实际执行新版本及缺失 Worker 失败。副本改写是明确的 Integration 装具边界，不修改共享构建、不预写缓存、不替换响应，不代替打包 Electron 或 Webview 隔离宿主验收。
 
+同模块的本地化升级场景从完整源码快照分别正式构建 A/B，只在独占源码中改变产品文案和上游 NLS 补译；Gateway 同端口正常重启、Chromium 同 profile 正常关闭重开。核原初始化 owner／request_id、旧 ETag 的真实条件请求、同批 manifest／语言资源及两份实际界面文案、热读零正文；不手改产物、预写 HTTP 缓存或替换业务响应，也不把源码构建验证称作正式 Electron 发行验收。`source_snapshot.py` 与真实 Vite 场景复用完整 archive／差异／未跟踪文件及固定上游，只链接只读依赖。
+
 `test_development_hmr` 使用完整 Git 源码快照和当前差异、固定上游副本及只读依赖链接，经产品 Node／Vite 入口和真实 Gateway 打开页面；只在独占副本中修改导航观测属性，验证自动更新通知及新页面内容，不手动刷新、不替换响应。Vite 可以按原行为自动整页重载；脚本 URL 按路径核对并保留查询参数原件。依赖链接引起的字体访问拒绝及原生关闭诊断如实保留，不据 HMR 通过宣称界面零错误、发行或 Electron 验收。
 
 `test_webview_resource_cache` 经真实 Gateway 和正式 Workbench 打开原 Markdown 预览；CSS、字体及贡献扩展脚本沿原隔离 Worker 加载，无响应替身。核首次正文、热读时仍有 describe 且不重传 raw、更新后新正文与样式、Cache Storage 的 ETag／字体 MIME。Web 使用独立持久 profile，正常关闭 Chromium 后同来源重启，仍通过原 describe 校验而不新增 CSS／字体／保留样式的 raw 请求。业务场景导出后由真实打包 Electron 复用，各宿主显式提供自己的运行上下文；两者的证据分别保留。模型回放仅提供启动配置，要求零模型请求；本项不代替身份切换或其它平台验收，官方 Worker 缓存写入沿原上游尽力而为合同。回环代理的条件头／304 透传另由 `workbench_server.test.mjs` 的明确 HTTP 替身验证。
