@@ -10,6 +10,8 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/
 import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import type { ResourceNavigationResultDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gateway } from './agentApi.js';
+import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
+import { workspaceContext } from './workspaceContext.js';
 
 const scheme = 'boxteam-source';
 
@@ -42,19 +44,32 @@ export class SourceDocuments extends Disposable implements ITextModelContentProv
     const existing = this.models.getModel(resource);
     if (existing) return existing;
     const source = sourceDocumentSource(resource);
-    const target = await gateway.resolveWorkspaceTarget(source);
-    if (target.status !== 'ready') throw new Error(t('workbench.source.workspaceUnavailable', target.status));
-    const result = await gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/navigation', {
-      method: 'POST', body: JSON.stringify({ uri: source.uri, operation: 'read', read_format: 'auto',
-        max_bytes: 33554432, max_response_bytes: 50331648 }),
-    }, gatewayWorkspaceKey(target));
-    if (!result.node || result.node.uri !== source.uri || result.node.resource_shape !== 'file') throw new Error(t('workbench.source.responseMismatch'));
-    if (result.truncated) throw new Error(t('workbench.source.truncated', result.truncation_reason));
-    if (result.media_type !== 'text' || result.content_encoding !== 'utf-8' || result.content == null) {
-      throw new Error(t('workbench.source.textRequired'));
-    }
-    // resolver 合并同一资源的并发引用；语言只依据展示文件名，不影响业务定位。
-    return this.models.createModel(result.content, this.languages.createByFilepathOrFirstLine(resource), resource);
+    const controller = new AbortController();
+    const invalidate = () => controller.abort(new Error(t('quickAccess.resource.identityChanged')));
+    const releaseToken = onGatewayTokenInvalidated(0, invalidate);
+    let gatewayId = workspaceContext.getSnapshot().gatewayId;
+    const releaseGateway = workspaceContext.subscribe(() => {
+      const current = workspaceContext.getSnapshot().gatewayId;
+      if (gatewayId && current !== gatewayId) invalidate();
+      gatewayId = current;
+    });
+    try {
+      const target = await gateway.resolveWorkspaceTarget(source, controller.signal);
+      controller.signal.throwIfAborted();
+      if (target.status !== 'ready') throw new Error(t('workbench.source.workspaceUnavailable', target.status));
+      const result = await gateway.request<ResourceNavigationResultDTO>('/api/v1/resources/navigation', {
+        signal: controller.signal, method: 'POST', body: JSON.stringify({ uri: source.uri, operation: 'read', read_format: 'auto',
+          max_bytes: 33554432, max_response_bytes: 50331648 }),
+      }, gatewayWorkspaceKey(target));
+      controller.signal.throwIfAborted();
+      if (!result.node || result.node.uri !== source.uri || result.node.resource_shape !== 'file') throw new Error(t('workbench.source.responseMismatch'));
+      if (result.truncated) throw new Error(t('workbench.source.truncated', result.truncation_reason));
+      if (result.media_type !== 'text' || result.content_encoding !== 'utf-8' || result.content == null) {
+        throw new Error(t('workbench.source.textRequired'));
+      }
+      // resolver 合并同一资源的并发引用；语言只依据展示文件名，不影响业务定位。
+      return this.models.createModel(result.content, this.languages.createByFilepathOrFirstLine(resource), resource);
+    } finally { releaseToken(); releaseGateway(); }
   }
 }
 

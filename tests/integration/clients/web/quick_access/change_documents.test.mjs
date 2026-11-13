@@ -12,6 +12,7 @@ const upstream = './src/clients/workbench/upstream/src/vs/';
 await build({ stdin: { contents: `
 import './tests/harness/js/workbench-locale.ts';
 export { ChangeDocuments } from './src/clients/workbench/src/changeFiles.js';
+export { SourceDocuments, sourceDocumentUri } from './src/clients/workbench/src/sourceDocuments.js';
 export { changeFileUri, changeFileSource, normalizeReadonlyInput, ReadonlyDocumentSerializer, UnavailableReadonlyDocumentInput } from './src/clients/workbench/src/readonlyDocuments.js';
 export { ThreadInput, ThreadSerializer, UnavailableThreadInput } from './src/clients/workbench/src/threadInput.js';
 export { setLocaleResources } from './src/clients/shared/core/i18n/index.js';
@@ -53,7 +54,7 @@ const receipt = { boundary: '真实内容Provider、TextModelResolverService及T
 
 async function fixture(callback) {
   const texts = new Map(), created = [], destroyed = [], calls = [], refs = [];
-  const state = { latest: 'edit-1', fail: false, kind: 'modify', missing: false, paused: undefined, responseSession: owner.sessionId };
+  const state = { latest: 'edit-1', fail: false, kind: 'modify', missing: false, paused: undefined, routePaused: undefined, responseSession: owner.sessionId };
   const models = {
     onModelRemoved: m.Event.None,
     getModel(resource) { return texts.get(resource.toString()) ?? null; },
@@ -79,15 +80,20 @@ async function fixture(callback) {
   const resolver = new m.TextModelResolverService(instantiation, files, { getElements: () => ({ past: [], future: [] }) },
     models, { asCanonicalUri: resource => resource });
   const documents = new m.ChangeDocuments(resolver, models, languages);
-  const routes = spyOn(m.gateway, 'resolveWorkspaceTarget').mockImplementation(async target => ({
-    gateway_id: target.gatewayId, workspace_id: target.workspaceId, connection_kind: 'local', status: 'ready',
-  }));
+  const sources = new m.SourceDocuments(resolver, models, languages);
+  const routes = spyOn(m.gateway, 'resolveWorkspaceTarget').mockImplementation(async target => {
+    if (state.routePaused) await state.routePaused.promise;
+    return { gateway_id: target.gatewayId, workspace_id: target.workspaceId, connection_kind: 'local', status: 'ready' };
+  });
   m.installSessionApiFetchMock(async ({ path, init }) => {
     const headers = new Headers(init.headers), gatewayId = headers.get('X-BoxTeam-Target-Gateway-Id'), workspaceId = headers.get('X-BoxTeam-Workspace-Id');
     const target = `${gatewayId}/${workspaceId}`;
     calls.push({ path, gatewayId, workspaceId });
     if (state.paused) await state.paused.promise;
     if (state.fail) throw new Error('原更改读取失败');
+    if (path === '/api/v1/resources/navigation') return Response.json({ code: 0, message: 'ok', request_id: 'source-' + calls.length,
+      data: { node: { uri: JSON.parse(init.body).uri, resource_shape: 'file' }, content: target + ' source',
+        media_type: 'text', content_encoding: 'utf-8', truncated: false } });
     return Response.json({ code: 0, message: 'ok', request_id: 'changes-' + calls.length,
       data: { session_id: state.responseSession, changeset_id: decodeURIComponent(path.split('/').at(-1)), files: [{ ...file,
         file_path: file.file_path.replace(owner.gatewayId, gatewayId).replace(owner.workspaceId, workspaceId),
@@ -99,9 +105,10 @@ async function fixture(callback) {
   try { await callback({ read, state, calls, texts, created, destroyed, routes, documents }); }
   finally {
     state.paused?.resolve();
+    state.routePaused?.resolve();
     for (const ref of refs) ref.dispose();
     await Promise.resolve(); await Promise.resolve();
-    documents.dispose(); resolver.dispose(); instantiation.dispose();
+    documents.dispose(); sources.dispose(); resolver.dispose(); instantiation.dispose();
     routes.mockRestore(); m.unwrapSessionApiFetch();
   }
 }
@@ -382,6 +389,79 @@ test('并发两侧与多引用只读一次变更集，释放一份仍可用，�
     expect(f.texts.size).toBe(0); expect(f.destroyed).toHaveLength(2);
     await f.read(uri()); expect(f.calls).toHaveLength(2);
     receipt.checks.push('真实resolver并发共享／只读／最后引用释放；前后侧共用1次HTTP；关闭后重读');
+  });
+});
+
+for (const kind of ['change', 'source']) for (const phase of ['route', 'read']) for (const invalidation of ['credential', 'gateway-returned']) {
+  test(`只读恢复${kind}在${phase}中${invalidation}后，迟到正文不创建模型且可重新读取`, async () => {
+    const previous = m.workspaceContext.getSnapshot();
+    m.workspaceContext.publish({ ...previous, gatewayId: owner.gatewayId });
+    try { await fixture(async f => {
+      const barrier = Promise.withResolvers();
+      f.state[phase === 'route' ? 'routePaused' : 'paused'] = barrier;
+      const resource = kind === 'change' ? uri() : m.sourceDocumentUri(owner,
+        `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/skills/skill-a/source.md`);
+      const pending = f.read(resource).then(() => ({ resolved: true }), error => ({ error: String(error) }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(f.routes.mock.calls).toHaveLength(1); expect(f.calls).toHaveLength(phase === 'read' ? 1 : 0);
+      if (invalidation === 'credential') m.invalidateGatewayToken(0);
+      else {
+        m.workspaceContext.publish({ ...previous, gatewayId: otherGateway });
+        m.workspaceContext.publish({ ...previous, gatewayId: owner.gatewayId });
+      }
+      barrier.resolve();
+      const result = await pending;
+      expect(result).not.toHaveProperty('resolved');
+      expect(result.error).toContain('Gateway 或访问凭据已改变');
+      expect(f.texts.size).toBe(0); expect(f.created).toEqual([]);
+      expect(f.calls).toHaveLength(phase === 'read' ? 1 : 0);
+      f.state.routePaused = f.state.paused = undefined;
+      const current = await f.read(resource);
+      expect(current.object.textEditorModel.getValue()).toContain(ownerKey);
+      expect(f.created).toHaveLength(1);
+    }); } finally { m.workspaceContext.publish(previous); }
+  });
+}
+
+for (const kind of ['change', 'source']) test(`只读恢复${kind}允许首次Gateway发布与同Gateway活动工作区切换，已加载模型继续复用`, async () => {
+  const previous = m.workspaceContext.getSnapshot();
+  m.workspaceContext.publish({ ...previous, gatewayId: null });
+  try { await fixture(async f => {
+    f.state.routePaused = Promise.withResolvers();
+    const resource = kind === 'change' ? uri() : m.sourceDocumentUri(owner,
+      `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/skills/skill-a/source.md`);
+    const pending = f.read(resource);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    m.workspaceContext.publish({ ...previous, gatewayId: owner.gatewayId });
+    m.workspaceContext.publish({ ...previous, gatewayId: owner.gatewayId, activeId: 'another-workspace' });
+    f.state.routePaused.resolve();
+    const first = await pending;
+    m.invalidateGatewayToken(0);
+    const loaded = await f.read(resource);
+    expect(loaded.object).toBe(first.object); expect(f.created).toHaveLength(1); expect(f.calls).toHaveLength(1);
+  }); } finally { m.workspaceContext.publish(previous); }
+});
+
+test('旧更改打开作用域失效后，重开读取当前版本且旧作用域结清不打断新并发读取', async () => {
+  await fixture(async f => {
+    const entered = Promise.withResolvers(), oldRelease = Promise.withResolvers(), newEntered = Promise.withResolvers(), newRelease = Promise.withResolvers();
+    const source = m.changeFileSource(uri());
+    const old = f.documents.withFile(source, async () => { entered.resolve(); await oldRelease.promise; })
+      .then(() => ({ resolved: true }), error => ({ error: String(error) }));
+    let current;
+    try {
+      await entered.promise;
+      m.invalidateGatewayToken(0); f.state.latest = 'edit-2';
+      current = f.documents.withFile(source, async file => { newEntered.resolve(); await newRelease.promise; return file.latest_edit_id; });
+      await newEntered.promise; expect(f.calls).toHaveLength(2);
+      oldRelease.resolve(); expect((await old).error).toContain('Gateway 或访问凭据已改变');
+      const after = await f.read(uri('after', owner, 'edit-2'));
+      expect(after.object.textEditorModel.getValue()).toContain('after edit-2'); expect(f.calls).toHaveLength(2);
+      newRelease.resolve(); expect(await current).toBe('edit-2');
+    } finally {
+      oldRelease.resolve(); newRelease.resolve();
+      await Promise.allSettled([old, current]);
+    }
   });
 });
 

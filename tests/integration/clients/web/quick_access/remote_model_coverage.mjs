@@ -156,6 +156,7 @@ try {
   try {
     await showBoth('firstprogress'); await held.promise;
     await expect(quick).toContainText('LOCAL-FIRST'); await expect(quick).not.toContainText('A-REMOTE'); await expect(quick).not.toContainText('B-REMOTE');
+    await expect(quick.locator('.quick-input-visible-count')).toHaveText('1 个结果');
     result.firstProgressText = await quick.innerText();
     expect(requests('local-first-progress')[0].body.queries[0].limit).toBe(1);
     expect(requests('local-first-progress')[0].body.max_results).toBe(2);
@@ -164,6 +165,8 @@ try {
     await expect(quick.locator('.monaco-progress-container.active')).toHaveCount(0);
     await expect(quick).not.toContainText('A-TAIL');
     await expect(quick.locator('.monaco-list-row').filter({ hasText: /firstprogress (LOCAL-FIRST|A-REMOTE|B-REMOTE)/ })).toHaveCount(3);
+    await expect(quick).toContainText('本次查询覆盖受限');
+    await expect(quick.locator('.quick-input-visible-count')).toHaveText('3 个结果');
     await expect.poll(() => receipts('local-first-progress').length).toBe(2);
     expect(receipts('local-first-progress').map(receipt => receipt.summary.returned_results)).toEqual([2, 1]);
     result.finalProgressText = await quick.innerText(); result.firstProgress = true;

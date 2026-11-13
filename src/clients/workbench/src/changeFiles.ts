@@ -8,8 +8,9 @@ import { IModelService } from '../upstream/src/vs/editor/common/services/model.j
 import { ITextModelService, type ITextModelContentProvider } from '../upstream/src/vs/editor/common/services/resolverService.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
 import type { SessionChangesetDTO, SessionFileChangeDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import { gatewayWorkspaceRequestHeaders } from '../../web/src/api/http.js';
+import { gatewayWorkspaceRequestHeaders, onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import { gateway } from './agentApi.js';
+import { workspaceContext } from './workspaceContext.js';
 import { changeFileSource, changeFileUri, type ChangeSource } from './readonlyDocuments.js';
 import { Action2, MenuId, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
 import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/contextkey.js';
@@ -22,7 +23,7 @@ const scheme = 'boxteam-change';
 /** 原 resolver 共享并释放不可变模型；只合并在途读取，不保存第二份历史正文。 */
 export class ChangeDocuments extends Disposable implements ITextModelContentProvider {
   static readonly ID = 'boxteam.changeDocuments';
-  private readonly pending = new Map<string, { promise: Promise<SessionChangesetDTO>; readers: number }>();
+  private readonly pending = new Map<string, { promise: Promise<SessionChangesetDTO>; readers: number; signal: AbortSignal; release(): void }>();
   constructor(
     @ITextModelService resolver: ITextModelService,
     @IModelService private readonly models: IModelService,
@@ -36,28 +37,45 @@ export class ChangeDocuments extends Disposable implements ITextModelContentProv
     const { owner, changesetId } = source;
     const key = JSON.stringify([owner.gatewayId, owner.workspaceId, owner.sessionId, changesetId]);
     let pending = this.pending.get(key);
-    if (!pending) {
+    if (!pending || pending.signal.aborted) {
+      const controller = new AbortController();
+      const invalidate = () => controller.abort(new Error(t('quickAccess.resource.identityChanged')));
+      const releaseToken = onGatewayTokenInvalidated(0, invalidate);
+      let gatewayId = workspaceContext.getSnapshot().gatewayId;
+      const releaseGateway = workspaceContext.subscribe(() => {
+        const current = workspaceContext.getSnapshot().gatewayId;
+        if (gatewayId && current !== gatewayId) invalidate();
+        gatewayId = current;
+      });
       const promise = (async () => {
-        const target = await gateway.resolveWorkspaceTarget(owner);
+        const target = await gateway.resolveWorkspaceTarget(owner, controller.signal);
+        controller.signal.throwIfAborted();
         if (target.status !== 'ready') throw new Error(t('workbench.changes.workspaceUnavailable', target.status));
         const data = await gateway.request<SessionChangesetDTO>(`/api/v1/sessions/${encodeURIComponent(owner.sessionId)}/changesets/${encodeURIComponent(changesetId)}`,
-          { headers: gatewayWorkspaceRequestHeaders(target) }, gatewayWorkspaceKey(target));
+          { signal: controller.signal, headers: gatewayWorkspaceRequestHeaders(target) }, gatewayWorkspaceKey(target));
+        controller.signal.throwIfAborted();
         if (data.session_id !== owner.sessionId || data.changeset_id !== changesetId) throw new Error(t('workbench.changes.ownerMismatch'));
         return data;
       })();
-      pending = { promise, readers: 0 };
+      pending = { promise, readers: 0, signal: controller.signal, release() { releaseToken(); releaseGateway(); } };
       this.pending.set(key, pending);
     }
     pending.readers++;
     try {
       const data = await pending.promise;
+      pending.signal.throwIfAborted();
       const file = data.files.find(file => file.file_path === source.filePath);
       if (!file) throw new Error(t('workbench.changes.fileRemoved'));
       // URI 打开与前后模型在同一次读取作用域内消费；结清即释放，不缓存第二份正文。
-      return await use(file);
+      const result = await use(file);
+      pending.signal.throwIfAborted();
+      return result;
     } finally {
       pending.readers--;
-      if (pending.readers === 0) this.pending.delete(key);
+      if (pending.readers === 0) {
+        if (this.pending.get(key) === pending) this.pending.delete(key);
+        pending.release();
+      }
     }
   }
 
