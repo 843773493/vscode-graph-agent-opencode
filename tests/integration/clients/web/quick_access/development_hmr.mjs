@@ -14,15 +14,79 @@ const required = name => {
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_development_hmr.py');
 const result = { classification: 'Integration', phase: 'prepare', routeStubs: [],
   boundary: '独占完整源码副本的原 React 导航观测属性及 NLS 补译；产品 Vite／Gateway；不代替发行或 Electron',
-  pageErrors: [], consoleErrors: [], failedResponses: [], websocket: [], initialization: [], changes: [], scripts: [] };
+  pageErrors: [], consoleErrors: [], failedResponses: [], websocket: [], initialization: [], changes: [], scripts: [], moduleUrls: [], browserEvents: [] };
+const observationStartedAt = performance.now();
+const recordBrowserEvent = event => result.browserEvents.push({
+  at: new Date().toISOString(), elapsed_ms: Math.round(performance.now() - observationStartedAt), ...event,
+});
+const requestStarts = new Map(), observedPages = new Set();
+const requestCounts = { issued: {}, settled: {}, failed: {}, longest_ms: {} }, requestFailures = [];
+const requestPath = request => new URL(request.url()).pathname;
+const requestCategory = path => path.includes('/node_modules/') || path.startsWith('/node_modules/') ? 'node_modules'
+  : path.startsWith('/out/dev-upstream/') ? 'upstream-bundle'
+  : path.startsWith('/upstream/') ? 'upstream'
+  : path.startsWith('/src/') || path.startsWith('/@fs/') ? 'project-source'
+  : path.startsWith('/api/') ? 'api' : 'other';
+const count = (counts, category) => { counts[category] = (counts[category] ?? 0) + 1; };
+const recordDuration = (category, elapsed) => {
+  requestCounts.longest_ms[category] = Math.max(requestCounts.longest_ms[category] ?? 0, elapsed);
+};
+const summarizeRequests = () => {
+  const active = [...requestStarts.values()].map(started => ({
+    path: started.path, category: started.category, method: started.method, type: started.type,
+    elapsed_ms: Math.round(performance.now() - started.startedAt),
+  }));
+  return { ...requestCounts, requestFailures,
+    inFlight: Object.fromEntries([...new Set(active.map(item => item.category))]
+      .map(category => [category, active.filter(item => item.category === category).length])),
+    longestInFlight: active.sort((left, right) => right.elapsed_ms - left.elapsed_ms).slice(0, 20),
+  };
+};
+const trackPage = observed => {
+  observedPages.add(observed);
+  observed.on('close', () => recordBrowserEvent({ type: 'page-close', url: observed.url() }));
+  observed.on('crash', error => recordBrowserEvent({ type: 'page-crash', error: String(error) }));
+  observed.on('framenavigated', frame => {
+    if (frame === observed.mainFrame()) recordBrowserEvent({ type: 'main-frame-navigation', url: frame.url() });
+  });
+  observed.on('request', request => {
+    const startedAt = performance.now();
+    const path = requestPath(request);
+    const category = requestCategory(path);
+    requestStarts.set(request, { startedAt, path, category, method: request.method(), type: request.resourceType() });
+    count(requestCounts.issued, category);
+  });
+  observed.on('requestfinished', async request => {
+    const started = requestStarts.get(request);
+    if (!started) return;
+    requestStarts.delete(request);
+    const response = await request.response();
+    const elapsed = Math.round(performance.now() - started.startedAt);
+    count(requestCounts.settled, started.category);
+    recordDuration(started.category, elapsed);
+    if (response && response.status() >= 400) requestFailures.push({ path: started.path, category: started.category, status: response.status() });
+  });
+  observed.on('requestfailed', request => {
+    const started = requestStarts.get(request);
+    if (!started) return;
+    requestStarts.delete(request);
+    const elapsed = Math.round(performance.now() - started.startedAt);
+    count(requestCounts.failed, started.category);
+    recordDuration(started.category, elapsed);
+    requestFailures.push({ path: started.path, category: started.category, elapsed_ms: elapsed, error: request.failure()?.errorText });
+  });
+};
 let page, failure;
 try {
   const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'),
     headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  browser.on('disconnected', () => recordBrowserEvent({ type: 'browser-disconnected' }));
+  recordBrowserEvent({ type: 'browser-connected' });
   run.addCleanup('hmr-browser', () => browser.close());
   const context = await browser.newContext();
   run.addCleanup('hmr-context', () => context.close());
   context.on('page', observed => {
+    trackPage(observed);
     observed.on('pageerror', error => result.pageErrors.push(String(error)));
     observed.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
     observed.on('response', response => {
@@ -56,10 +120,13 @@ try {
     }
     return [health, workspaces, workspace];
   });
-  // 预构建完成后，新页面仍须正确加载 React 热更新运行时。
-  page = await context.newPage();
-  await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('.native-session-navigation')).toHaveAttribute('data-hmr-acceptance', 'version-1', { timeout: 45000 });
+  // health 已等待入口与 optimizer 完成；保留唯一真实页面，避免双页同时全量重载。
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('boxteam.flushViewState'));
+  result.lifecycleCommand = 'boxteam.flushViewState';
+  result.moduleUrls = await page.evaluate(() => [...new Set(performance.getEntriesByType('resource')
+    .map(entry => new URL(entry.name).pathname)
+    .filter(path => path.startsWith('/out/dev-upstream/') || path.startsWith('/upstream/src/vs/')
+      || path.startsWith('/@fs/')))].sort());
   result.phase = 'source-update';
   const source = required('BOXTEAM_HMR_SOURCE'), before = await readFile(source, 'utf8');
   expect(before.split('data-hmr-acceptance="version-1"')).toHaveLength(2);
@@ -116,11 +183,18 @@ try {
 } catch (error) {
   failure = error;
   result.error = String(error?.stack ?? error);
+  result.requestMetrics = summarizeRequests();
+  result.pages = await Promise.all([...observedPages].map(async observed => ({
+    path: new URL(observed.url()).pathname,
+    title: await observed.title().catch(() => ''),
+    readyState: await observed.evaluate(() => document.readyState).catch(() => 'unavailable'),
+  })));
   if (page) {
     try { await page.screenshot({ path: join(run.artifactsDir, 'development-hmr-failure.png') }); }
     catch (diagnosticError) { failure = new AggregateError([failure, diagnosticError], 'HMR 验证及截图均失败'); }
   }
 } finally {
+  result.requestMetrics ??= summarizeRequests();
   try { await run.close(); }
   catch (cleanupError) { failure = failure ? new AggregateError([failure, cleanupError], 'HMR 验证及清理均失败') : cleanupError; }
   await writeFile(required('BOXTEAM_BROWSER_RESULT_PATH'), JSON.stringify(result, null, 2) + '\n');

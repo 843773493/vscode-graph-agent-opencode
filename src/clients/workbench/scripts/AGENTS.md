@@ -22,7 +22,7 @@ Web 与 Electron 共用的唯一完整 Code OSS 工作台入口。复用同级 w
 
 `dev.mjs` 为统一开发栈提供 JSON `/health`；`--outdir` 沿用构建入口的静态资源输出语义，`--cache` 只指定 Vite 派生缓存目录。正常开发默认使用本目录 dist 和 Vite 默认缓存，正式测试必须显式传入自己 runtime 下的输出／缓存目录；两者都不能改变业务工作区或用户配置。
 
-`devConfig.mjs` 使用 Vite 原生源码服务：固定 Code OSS 及第三方依赖沿 Rolldown 预构建，业务源码沿 React SWC 按需转换和热更新；两者复用 sourceTransform，保留参数装饰器及类字段赋值语义。扫描仅从产品源码入口开始；上游反向引用的业务模块保留真实源码 URL，不能复制服务或类身份。转换脚本及内置元数据变化须使 Vite 预构建缓存失效，普通重启复用缓存。
+`devConfig.mjs` 使用 Vite 原生源码服务。`devDependencies.mjs` 从 Workbench 业务入口收集直接引用的上游模块，以单次 esbuild 多入口 split build 共享上游模块身份；业务源码继续由 Vite／React SWC 按需转换和热更新，上游反向引用业务模块时保留真实 `/src` 或 `/@fs` URL。esbuild 与 Vite 复用 `sourceTransform`，保留参数装饰器及类字段赋值语义。依赖预构建关闭自动发现，只显式预构建 React owner 和含 CommonJS 传递依赖的 Web package；大型纯 ESM 依赖由 Vite 按需服务。开发输出位于显式 `--outdir` 下的 `out/dev-upstream/`，启动或配置重载时重建，普通模块热更新不触发重建。
 
 开发服务的 health 等待源码入口预热及依赖预构建完成后才返回 200／ok，错误保留原原因；源码和转换脚本仍由 Vite 监视、热更新或配置重载，不用发布 bundle 回退代替开发入口。
 

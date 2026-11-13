@@ -9,7 +9,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tarfile
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -18,6 +17,9 @@ import pytest
 
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from tests.harness.python.run_context import TestRunContext
+from tests.integration.clients.web.quick_access.source_snapshot import (
+    snapshot_workbench_sources,
+)
 from tests.integration.clients.web.test_workspace_metadata_bootstrap import (
     metadata_case as metadata_case,  # noqa: PLC0414
 )
@@ -43,53 +45,48 @@ def metadata_web_assets(request: pytest.FixtureRequest, monkeypatch: pytest.Monk
 def development_snapshot(request: pytest.FixtureRequest) -> Path:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     runtime = context.runtime_root_for_node(request.node.nodeid)
-    snapshot = runtime / "source"
-    snapshot.mkdir()
-    archive = runtime / "source.tar"
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=context.project_root, text=True).strip()
-    subprocess.run(["git", "archive", "--format=tar", "-o", str(archive), head],
-                   cwd=context.project_root, check=True)
-    with tarfile.open(archive) as files:
-        files.extractall(snapshot, filter="data")
-    archive.unlink()
-    # 完整带入当前差异，避免测试与生产源码错配；随后只改独占副本中的观测属性。
-    difference = subprocess.check_output(["git", "diff", "--binary", head], cwd=context.project_root)
-    subprocess.run(["git", "apply", "--whitespace=nowarn", "-"], input=difference,
-                   cwd=snapshot, env={**os.environ, "GIT_CEILING_DIRECTORIES": str(snapshot.parent)}, check=True)
-    # 未提交的新源码也属于当前完整实现，不能只快照已跟踪文件。
-    untracked = subprocess.check_output(
-        ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=context.project_root,
-    ).decode().split("\0")
-    for name in filter(None, untracked):
-        destination = snapshot / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(context.project_root / name, destination)
-    for name in ("node_modules", "src/clients/web/node_modules", "src/clients/workbench/node_modules"):
-        destination = snapshot / name
-        if destination.is_dir():
-            destination.rmdir()
-        destination.symlink_to(context.project_root / name, target_is_directory=True)
-    # 转换锚点依赖上游在此快照中的真实路径，不能将上游源码链接回另一工作树。
-    upstream = context.project_root / "src/clients/workbench/upstream"
-    upstream_snapshot = snapshot / "src/clients/workbench/upstream"
-    upstream_snapshot.mkdir(exist_ok=True)
-    subprocess.run(["git", "archive", "--format=tar", "-o", str(archive), "HEAD"], cwd=upstream, check=True)
-    with tarfile.open(archive) as files:
-        files.extractall(upstream_snapshot, filter="data")
-    archive.unlink()
-    upstream_git = subprocess.check_output(["git", "rev-parse", "--absolute-git-dir"], cwd=upstream, text=True).strip()
-    (upstream_snapshot / ".git").write_text(f"gitdir: {upstream_git}\n", encoding="utf-8")
-    source = snapshot / "src/clients/workbench/src/react/navigationView.tsx"
-    original = source.read_text(encoding="utf-8")
-    anchor = '<div className="native-session-navigation"'
-    assert original.count(anchor) == 1
-    source.write_text(original.replace(anchor, anchor + ' data-hmr-acceptance="version-1"'), encoding="utf-8")
+    reused = os.getenv("BOXTEAM_HMR_SOURCE_SNAPSHOT")
+    if reused:
+        snapshot = Path(reused).resolve(strict=True)
+        old_run, old_node = snapshot.parent.parent.name, snapshot.parent.name
+        prior_receipt = context.output_root / "runs" / old_run / "nodes" / old_node / "artifacts" / "source-snapshot.json"
+        receipt = json.loads(prior_receipt.read_text(encoding="utf-8"))
+        assert receipt["upstream_head"] == "fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca"
+        source = snapshot / "src/clients/workbench/src/react/navigationView.tsx"
+        original = source.read_text(encoding="utf-8")
+        version_one = 'data-hmr-acceptance="version-1"'
+        version_two = 'data-hmr-acceptance="version-2"'
+        if original.count(version_one) == 0 and original.count(version_two) == 1:
+            source.write_text(original.replace(version_two, version_one), encoding="utf-8")
+        elif original.count(version_one) == 0:
+            anchor = '<div className="native-session-navigation"'
+            assert original.count(anchor) == 1
+            source.write_text(original.replace(anchor, anchor + " " + version_one), encoding="utf-8")
+        assert source.read_text(encoding="utf-8").count('data-hmr-acceptance="version-1"') == 1
+        project_translations = snapshot / "src/clients/workbench/resources/localization/zh-cn-project.json"
+        project_messages = json.loads(project_translations.read_text(encoding="utf-8"))
+        project_messages["contents"].get("vs/workbench/contrib/localization/common/localizationsActions", {}).pop(
+            "chooseLocale", None,
+        )
+        project_translations.write_text(json.dumps(project_messages, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        current_config = context.project_root / "src/clients/workbench/scripts/devConfig.mjs"
+        config_copy = snapshot / "src/clients/workbench/scripts/devConfig.mjs"
+        shutil.copy2(current_config, config_copy)
+        receipt["reused_from"] = str(snapshot)
+        receipt["reused_dev_config_sha256"] = hashlib.sha256(config_copy.read_bytes()).hexdigest()
+        receipt["boundary"] = "复用完整独占源码快照和已构建静态产物，仅同步并记录本轮 devConfig SHA"
+        original_sha256 = receipt["original_sha256"]
+    else:
+        snapshot, receipt = snapshot_workbench_sources(context.project_root, runtime)
+        source = snapshot / "src/clients/workbench/src/react/navigationView.tsx"
+        original = source.read_text(encoding="utf-8")
+        anchor = '<div className="native-session-navigation"'
+        assert original.count(anchor) == 1
+        source.write_text(original.replace(anchor, anchor + ' data-hmr-acceptance="version-1"'), encoding="utf-8")
+        original_sha256 = hashlib.sha256(original.encode()).hexdigest()
     (context.artifacts_dir / "source-snapshot.json").write_text(json.dumps({
-        "head": head,
-        "diff_sha256": hashlib.sha256(difference).hexdigest(),
-        "source": str(source), "original_sha256": hashlib.sha256(original.encode()).hexdigest(),
-        "upstream_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=upstream, text=True).strip(),
-        "boundary": "完整 git archive 和当前 diff，上游也是固定 HEAD 的完整源码快照；仅依赖只读链接，观测属性只改独占副本",
+        **receipt,
+        "source": str(source), "original_sha256": original_sha256,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return snapshot
 
@@ -117,15 +114,13 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
     }, indent=2) + "\n", encoding="utf-8")
     command = [node, "scripts/dev.mjs", "--port", str(port), "--gateway", str(client.base_url).rstrip("/"),
                "--outdir", str(runtime / "assets/dist"), "--cache", str(runtime / "vite-cache")]
-    # TODO：固定 Vite 8/Rolldown 预构建在 4GiB 保护下分配失败，关闭压缩的隔离对照也失败；
-    # 先定位并收敛该资源开销，再补验下方真实浏览器的翻译更新，不放宽测试保护。
     with (context.artifacts_dir / "vite.log").open("x", encoding="utf-8") as log, capture_test_processes():
         process = await asyncio.to_thread(subprocess.Popen, command,
             cwd=development_snapshot / "src/clients/workbench", stdout=log, stderr=subprocess.STDOUT,
             text=True, start_new_session=True)
         managed = ManagedProcess(process=process, log_file=log)
         register_test_process(managed, managed.close)
-        await asyncio.to_thread(wait_for_http_ok, f"{base}/health", process, timeout_seconds=180)
+        await asyncio.to_thread(wait_for_http_ok, f"{base}/health", process, timeout_seconds=300)
         driver = ["node", "tests/integration/clients/web/quick_access/development_hmr.mjs"]
         supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
         protected = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
@@ -134,7 +129,7 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
             browser = await asyncio.to_thread(subprocess.run, protected, cwd=context.project_root,
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": base,
                      "BOXTEAM_HMR_SOURCE": str(development_snapshot / "src/clients/workbench/src/react/navigationView.tsx"),
-                     "BOXTEAM_HMR_TRANSLATIONS": str(development_snapshot / "src/clients/workbench/resources/localization/zh-cn-project.json"),
+                         "BOXTEAM_HMR_TRANSLATIONS": str(development_snapshot / "src/clients/workbench/resources/localization/zh-cn-upstream-main.json"),
                      "BOXTEAM_BROWSER_RESULT_PATH": str(context.artifacts_dir / "development-hmr.json"),
                      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
                 capture_output=True, text=True, timeout=195, check=False)

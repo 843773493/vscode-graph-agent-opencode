@@ -93,7 +93,7 @@ export function managementGateway(scope: ManagementScope, explicitGatewayId?: st
   const selection = selections.get(scope);
   if (selection && selection.entryGatewayId === entry && (!explicitGatewayId || selection.target.gateway_id === explicitGatewayId)) return { ...selection.target };
   const id = explicitGatewayId ?? entry;
-  return { gateway_id: id, name: id === entry ? '本地' : id, connection_kind: id === entry ? 'local' : 'remote_gateway' };
+  return { gateway_id: id, name: id === entry ? t('workbench.managementTarget.local') : id, connection_kind: id === entry ? 'local' : 'remote_gateway' };
 }
 
 export function managementTargetDisplayName(target: ManagementTarget | undefined): string {
@@ -110,7 +110,7 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
     const quickInput = accessor.get(IQuickInputService);
     const current = managementGateway(scope), entry = workspaceContext.getSnapshot().gatewayId!;
     const controller = new AbortController(), cancellation = new CancellationTokenSource();
-    selecting.get(scope)?.abort(new Error('同一管理视图已重新选择目标'));
+    selecting.get(scope)?.abort(new Error(t('workbench.managementTarget.selectionSuperseded')));
     selecting.set(scope, controller);
     controller.signal.addEventListener('abort', () => cancellation.cancel(), { once: true });
     const invalidate = () => { controller.abort(new Error(t('workbench.managementTarget.accessChanged'))); cancellation.cancel(); };
@@ -119,7 +119,7 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
     try {
       const directory = await gateway.request<GatewayManagementDirectoryDTO>('/api/gateway/management/gateways', { signal: controller.signal });
       controller.signal.throwIfAborted();
-      if (directory.local_gateway_id !== entry) throw new Error('管理目录不属于当前页面 Gateway');
+      if (directory.local_gateway_id !== entry) throw new Error(t('workbench.managementTarget.directoryOwnerMismatch'));
       const picked = await quickInput.pick(directory.items.map(target => ({
         label: target.connection_kind === 'local' ? t('workbench.managementTarget.local') : target.name,
         description: target.gateway_id, detail: target.connection_error ?? target.gateway_connection_id,

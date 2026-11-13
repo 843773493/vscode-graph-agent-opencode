@@ -1,10 +1,9 @@
 import react from '@vitejs/plugin-react-swc';
-import { workbenchDependencies } from './devDependencies.mjs';
+import { buildWorkbenchDependencies } from './devDependencies.mjs';
 import compression from 'compression';
-import { createHash } from 'node:crypto';
-import { readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import { spawn } from 'node:child_process';
 import { sourceTransform } from './sourceTransform.mjs';
@@ -12,6 +11,7 @@ import { createWorkbenchServer } from './server.mjs';
 
 export default async function () {
   const root = resolve(import.meta.dirname, '..');
+  const codiconsAssets = await realpath(join(root, 'node_modules/@vscode/codicons/dist'));
   const { values } = parseArgs({ options: {
     port: { type: 'string', default: process.env.BOXTEAM_DEV_FRONTEND_PORT ?? '8411' },
     host: { type: 'string', default: process.env.BOXTEAM_DEV_LISTEN_HOST ?? '127.0.0.1' },
@@ -20,21 +20,27 @@ export default async function () {
     cache: { type: 'string' },
   } });
   const assetsRoot = resolve(values.outdir);
+  if (assetsRoot === root || basename(assetsRoot) !== 'dist') throw new Error('开发资源输出必须是独立的 dist 目录');
+  const assetsStage = join(assetsRoot, '..', '.dev-next', 'dist');
+  const assetsPrevious = join(assetsRoot, '..', '.dev-previous', 'dist');
+  await rm(join(assetsRoot, '..', '.dev-next'), { recursive: true, force: true });
+  await mkdir(join(assetsStage, '..'), { recursive: true });
 
-  // 扩展、Worker 和 FileAccess 资源仍来自唯一的发布构建；业务源码直接交给 Vite。
+  // 新代完整就绪后再替换发布静态树，配置重启期间旧页面仍能读取旧 NLS manifest。
   await new Promise((fulfill, reject) => {
-    const build = spawn('bun', ['scripts/build.mjs', '--assets-only', '--outdir', assetsRoot], { cwd: root, stdio: 'inherit' });
+    const build = spawn('bun', ['scripts/build.mjs', '--assets-only', '--outdir', assetsStage], { cwd: root, stdio: 'inherit' });
     build.on('error', reject);
     build.on('exit', code => code === 0 ? fulfill() : reject(new Error(`Workbench 开发资源构建失败 (${code})`)));
   });
   const loadJSON = async path => JSON.parse(await readFile(path, 'utf8'));
-  const version = await loadJSON(join(assetsRoot, 'version.json'));
+  const version = await loadJSON(join(assetsStage, 'version.json'));
   const product = await loadJSON(join(root, 'upstream/product.json'));
-  const extensions = await loadJSON(join(assetsRoot, 'builtin-extensions.json'));
-  const localizationAssets = await loadJSON(join(assetsRoot, 'localization-assets.json'));
+  const extensions = await loadJSON(join(assetsStage, 'builtin-extensions.json'));
+  const localizationAssets = await loadJSON(join(assetsStage, 'localization-assets.json'));
   const transformSource = sourceTransform(root, { ...product, ...version, quality: 'stable' }, extensions, new Map(), localizationAssets);
-  const dependencies = await workbenchDependencies(root, transformSource);
-  const assets = createWorkbenchServer({ root: assetsRoot });
+  const dependencies = await buildWorkbenchDependencies(root, transformSource, join(assetsStage, 'out'));
+  const webPackages = ['react-markdown', 'react-virtuoso', 'rehype-sanitize', 'remark-gfm'];
+  let assets;
   const { promise: ready, resolve: markReady, reject: markFailed } = Promise.withResolvers();
   const startedAt = performance.now();
 
@@ -57,20 +63,29 @@ export default async function () {
             ...(await readdir(join(localizationRoot, 'extensions'))).filter(name => name.endsWith('.i18n.json'))
               .map(name => join(localizationRoot, 'extensions', name)),
           ].map(file => file.replaceAll('\\', '/')));
-          // Vite 只把 optimizer 插件名计入缓存；转换实现和内置元数据变化必须使旧预构建失效。
-          const hash = createHash('sha256').update(JSON.stringify({ version, product, extensions }));
-          for (const file of [...config.configFileDependencies].sort()) hash.update(await readFile(file));
-          dependencies.plugin.name = 'workbench-optimized-source-' + hash.digest('hex').slice(0, 16);
         },
         configureServer(vite) {
+          // 页面源码在完整静态代发布并预热前不能开始导入旧配置指向的新资源。
+          vite.middlewares.use((request, response, next) => {
+            const pathname = new URL(request.url, 'http://localhost').pathname;
+            if (pathname === '/health' || pathname.startsWith('/api/')) { next(); return; }
+            void ready.then(() => next(), next);
+          });
           vite.httpServer.once('listening', () => {
             const warmup = async () => {
+              await rm(join(assetsPrevious, '..'), { recursive: true, force: true });
+              if (existsSync(assetsRoot)) await rename(assetsRoot, assetsPrevious);
+              try {
+                await rename(assetsStage, assetsRoot);
+              } catch (error) {
+                if (existsSync(assetsPrevious)) await rename(assetsPrevious, assetsRoot);
+                throw error;
+              }
+              await rm(join(assetsPrevious, '..'), { recursive: true, force: true });
+              assets = createWorkbenchServer({ root: assetsRoot });
               const client = vite.environments.client;
               await Promise.all(['/src/bootstrap.ts', '/src/agent.contribution.ts'].map(id => client.transformRequest(id)));
               await client.waitForRequestsIdle();
-              const optimizer = client.depsOptimizer;
-              await optimizer.scanProcessing;
-              await Promise.all(Object.values(optimizer.metadata.discovered).map(dependency => dependency.processing));
               markReady();
               console.log('Workbench 开发入口预热完成：' + Math.round(performance.now() - startedAt) + 'ms');
             };
@@ -99,7 +114,7 @@ export default async function () {
               assets.emit('request', request, response);
             } else next();
           });
-          vite.httpServer.on('close', () => assets.close());
+          vite.httpServer.on('close', () => assets?.close());
         },
         transformIndexHtml: {
           order: 'pre',
@@ -109,16 +124,14 @@ export default async function () {
           },
         },
         async resolveId(id, importer) {
+          if (id.startsWith('/out/dev-upstream/')) return join(assetsRoot, id.slice(1));
           if (id.endsWith('.css?text')) {
             return this.resolve(id.replace(/\?text$/, '?inline'), importer, { skipSelf: true });
           }
-          if (importer?.includes('/upstream/') && id.includes('node_modules/')) {
-            return this.resolve(join(root, 'node_modules', id.split('node_modules/').at(-1)), importer, { skipSelf: true });
-          }
         },
         transform(code, id) {
-          if (id.startsWith(join(root, 'src'))) return dependencies.transform(code, id);
-          if (id.endsWith('.ts')) return transformSource(id, code);
+          const sourcePath = id.split('?', 1)[0];
+          if (sourcePath.startsWith(join(root, 'src'))) return dependencies.transform(code, sourcePath);
         },
       },
       react({
@@ -131,22 +144,23 @@ export default async function () {
     resolve: {
       dedupe: ['react', 'react-dom'],
       // CSS 的 url() 使用 Vite 资源解析器，字体路径必须在这里参与解析。
-      alias: [dependencies.alias, { find: './codicon.ttf', replacement: join(root, 'node_modules/@vscode/codicons/dist/codicon.ttf') }],
+      alias: [
+        ...webPackages.map(name => ({ find: name, replacement: join(root, '../web/node_modules', name) })),
+        { find: './codicon.ttf', replacement: join(root, 'node_modules/@vscode/codicons/dist/codicon.ttf') },
+      ],
     },
     define: { __BOXTEAM_NLS_MANIFEST__: JSON.stringify(version.localization.nlsManifest) },
-    // 固定上游压缩预构建；业务模块仍由 SWC 按需转换，保留源码热更新。
+    // 上游模块在同次 esbuild split build 中共享身份，React 继续由 Vite 预构建。
     optimizeDeps: {
-      entries: ['src/bootstrap.ts', 'src/agent.contribution.ts'],
-      include: ['react', 'react-dom/client', 'react/jsx-dev-runtime', ...dependencies.include],
-      rolldownOptions: {
-        transform: { target: 'es2024', decorator: { legacy: true }, assumptions: { setPublicClassFields: true }, typescript: { removeClassFieldsWithoutInitializer: true } },
-        output: { minify: true, sourcemapExcludeSources: true },
-        plugins: [dependencies.plugin],
-      },
+      include: [
+        'react', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-dom', 'react-dom/client',
+        ...webPackages,
+      ],
+      noDiscovery: true,
     },
     server: {
       host: values.host, port: Number(values.port), strictPort: true,
-      fs: { allow: [resolve(root, '..')] },
+      fs: { allow: [resolve(root, '..'), assetsRoot, codiconsAssets] },
       proxy: { '/api': { target: values.gateway, changeOrigin: true, xfwd: true, ws: true, timeout: 0 } },
     },
   };
