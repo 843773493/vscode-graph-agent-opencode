@@ -91,40 +91,21 @@ def _compact(
     if isinstance(value, Mapping):
         source_item_count = len(value)
         result: dict[str, object] = {}
-        member_json_bytes: dict[str, tuple[int, int]] = {}
         result_json_bytes = 2
         child_budget = max(64, max_bytes // max(source_item_count, 1))
-        for key, child in value.items():
-            result_key = str(key)
+        # 先合并字符串化后重名的键，保持原先“最后一个值覆盖”的语义；
+        # 前缀放不下时直接停止，不再递归压缩最终会丢弃的尾部值。
+        for result_key, child in {str(key): child for key, child in value.items()}.items():
             compacted_child, child_json_bytes = _compact(child, child_budget)
             key_json_bytes = len(_encoded(result_key))
-            previous_member_bytes = member_json_bytes.get(result_key)
-            if previous_member_bytes is None:
-                if result:
-                    result_json_bytes += 1
-                result_json_bytes += key_json_bytes + 1 + child_json_bytes
-            else:
-                result_json_bytes += child_json_bytes - previous_member_bytes[1]
+            member_bytes = key_json_bytes + 1 + child_json_bytes + bool(result)
+            if result_json_bytes + member_bytes > max_bytes:
+                break
             result[result_key] = compacted_child
-            member_json_bytes[result_key] = (key_json_bytes, child_json_bytes)
-        while result_json_bytes > max_bytes and result:
-            result_key = next(reversed(result))
-            key_json_bytes, child_json_bytes = member_json_bytes.pop(result_key)
-            result_json_bytes -= key_json_bytes + 1 + child_json_bytes
-            if len(result) > 1:
-                result_json_bytes -= 1
-            result.pop(result_key)
+            result_json_bytes += member_bytes
         if len(result) < source_item_count:
-            marker_key = "__boxteam_truncated__"
-            marker_value_bytes = len(_encoded(True))
-            previous_member_bytes = member_json_bytes.get(marker_key)
-            if previous_member_bytes is None:
-                if result:
-                    result_json_bytes += 1
-                result_json_bytes += len(_encoded(marker_key)) + 1 + marker_value_bytes
-            else:
-                result_json_bytes += marker_value_bytes - previous_member_bytes[1]
-            result[marker_key] = True
+            result["__boxteam_truncated__"] = True
+            result_json_bytes = len(_encoded(result))
         if result_json_bytes <= max_bytes:
             return result, result_json_bytes
         fallback = _truncation_fallback(serialized_value, max_bytes)

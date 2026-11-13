@@ -70,7 +70,8 @@ def end_upstream_capture(
     attempts = _UPSTREAM_ATTEMPTS.get()
     if attempts is None:
         raise RuntimeError("upstream 请求采集上下文未初始化")
-    result = [_safe_value(attempt) for attempt in attempts]
+    # 各写入入口已完成脱敏和转换；只冻结 attempt 字段，避免在事件循环重复遍历正文。
+    result = [dict(attempt) for attempt in attempts]
     _UPSTREAM_ATTEMPTS.reset(token)
     return result
 
@@ -111,18 +112,18 @@ def record_upstream_request(
     if attempts is None:
         return
     attempts.append(
-        {
+        _safe_value({
             "call_type": call_type,
             "provider": provider,
             "model": model,
             "api_base": api_base,
             # 直接保留 Saver 签发的引用；日志不从 Provider payload 重建封存事实。
-            "sealed_dispatch": _safe_value(asdict(dispatch_ref)) if dispatch_ref is not None else None,
+            "sealed_dispatch": asdict(dispatch_ref) if dispatch_ref is not None else None,
             "resource_refs": [ref.model_dump(mode="json") for ref in resource_refs],
-            "request": _safe_value(request),
+            "request": request,
             "response": None,
             "error": None,
-        }
+        })
     )
 
 

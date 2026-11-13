@@ -13,7 +13,7 @@ from langchain.agents.middleware.types import ExtendedModelResponse, StateT
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 from langgraph.runtime import Runtime
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from app.agents.upstream_request_trace import (
     begin_upstream_capture,
@@ -34,48 +34,6 @@ LLM_LOG_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _LOG_WRITE_LOCK = Lock()
 
 
-class _MessageLog(BaseModel):
-    """一条已转换为 JSON 值的 LangChain 消息。"""
-
-    model_config = ConfigDict(extra="allow")
-
-    type: str
-    content: JsonValue = ""
-    additional_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
-    response_metadata: dict[str, JsonValue] = Field(default_factory=dict)
-    tool_calls: list[dict[str, JsonValue]] = Field(default_factory=list)
-    tool_call_id: str | None = None
-
-
-class _ToolLog(RootModel[dict[str, JsonValue]]):
-    """一项保持原有字段结构的 JSON 工具定义。"""
-
-
-class _LLMRequestLog(BaseModel):
-    timestamp: int = Field(description="同一次 handler 结束或失败后的日志组装 UTC epoch 毫秒，与完整日志共用 logged_at_ms；不是请求发出时刻。")
-    session_id: str
-    job_id: str | None = None
-    model_name: str | None = None
-    messages: list[_MessageLog]
-    tools: list[_ToolLog] | None = None
-    system_message: _MessageLog | None = None
-
-
-class _LLMResponseLog(BaseModel):
-    result: list[_MessageLog]
-    structured_response: JsonValue = None
-    error: JsonValue = None
-
-
-class _LLMFullLog(BaseModel):
-    timestamp: int = Field(description="同一次 handler 结束或失败后的日志组装 UTC epoch 毫秒，与请求记录共用 logged_at_ms；不是请求发出时刻。")
-    session_id: str
-    job_id: str | None = None
-    request: _LLMRequestLog
-    response: _LLMResponseLog
-    upstream: dict[str, JsonValue]
-
-
 def _json_value(value: object) -> JsonValue:
     return _JSON_VALUE_ADAPTER.validate_python(value)
 
@@ -90,12 +48,21 @@ def _json_object(value: object, *, label: str) -> dict[str, JsonValue]:
     return normalized
 
 
-def _serialize_message(message: BaseMessage) -> _MessageLog:
+def _serialize_message(message: BaseMessage) -> dict[str, JsonValue]:
+    # 消息模型已完成 JSON 转换，只补日志统一字段，不再套模型校验后重新展开。
     payload = message.model_dump(mode="json")
-    return _MessageLog.model_validate(payload)
+    return {
+        "type": payload["type"],
+        "content": payload.get("content", ""),
+        "additional_kwargs": payload.get("additional_kwargs", {}),
+        "response_metadata": payload.get("response_metadata", {}),
+        "tool_calls": payload.get("tool_calls", []),
+        "tool_call_id": payload.get("tool_call_id"),
+        **payload,
+    }
 
 
-def _serialize_tool(tool: BaseTool | dict[str, Any]) -> _ToolLog:
+def _serialize_tool(tool: BaseTool | dict[str, Any]) -> dict[str, JsonValue]:
     if isinstance(tool, BaseTool):
         payload: object = {
             "type": "tool",
@@ -107,7 +74,7 @@ def _serialize_tool(tool: BaseTool | dict[str, Any]) -> _ToolLog:
         payload = dict(tool)
     else:
         raise TypeError(f"不支持的模型工具定义类型: {type(tool).__name__}")
-    return _ToolLog(root=_json_object(payload, label="模型工具定义"))
+    return _json_object(payload, label="模型工具定义")
 
 
 def _response_messages(
@@ -172,57 +139,49 @@ class LLMLoggingMiddleware(AgentMiddleware[StateT, Any, Any]):
             if request.tools
             else []
         )
-        request_log = _LLMRequestLog(
-            timestamp=logged_at_ms,
-            session_id=session_id,
-            job_id=self._execution_admission(request.runtime).job_id,
-            model_name=(
+        job_id = self._execution_admission(request.runtime).job_id
+        request_log = {
+            "timestamp": logged_at_ms,
+            "session_id": session_id,
+            "job_id": job_id,
+            "model_name": (
                 getattr(request.model, "model_name", None)
                 or getattr(request.model, "model", None)
             ),
-            messages=[_serialize_message(message) for message in request.messages],
-            tools=serialized_tools or None,
-            system_message=(
+            "messages": [_serialize_message(message) for message in request.messages],
+            "tools": serialized_tools or None,
+            "system_message": (
                 _serialize_message(request.system_message)
                 if request.system_message is not None
                 else None
             ),
-        )
+        }
         response_messages = _response_messages(response) if response is not None else []
-        response_log = _LLMResponseLog(
-            result=[_serialize_message(message) for message in response_messages],
-            structured_response=_json_value(
+        response_log = {
+            "result": [_serialize_message(message) for message in response_messages],
+            "structured_response": _json_value(
                 getattr(response, "structured_response", None) if response is not None else None
             ),
-            error=execution_failure_message(error) if error is not None else None,
-        )
-        full_log = _LLMFullLog(
-            timestamp=logged_at_ms,
-            session_id=session_id,
-            job_id=request_log.job_id,
-            request=request_log,
-            response=response_log,
-            upstream={"attempts": _json_value(upstream_attempts)},
-        )
+            "error": execution_failure_message(error) if error is not None else None,
+        }
 
         log_filename_timestamp_ns = time.time_ns()
         log_file = (
             self._session_log_dir(session_id)
             / f"{log_filename_timestamp_ns}.json"
         )
-        payload = full_log.model_dump(mode="json")
         bounded_payload = {
-            "timestamp": payload["timestamp"],
-            "session_id": payload["session_id"],
-            "job_id": payload["job_id"],
+            "timestamp": logged_at_ms,
+            "session_id": session_id,
+            "job_id": job_id,
             "request": bound_json_value(
-                payload["request"], max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
+                request_log, max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
             ),
             "response": bound_json_value(
-                payload["response"], max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
+                response_log, max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
             ),
             "upstream": bound_json_value(
-                payload["upstream"], max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
+                {"attempts": _json_value(upstream_attempts)}, max_bytes=LLM_LOG_MAX_PAYLOAD_BYTES
             ),
         }
         serialized_log = json.dumps(bounded_payload, ensure_ascii=False, separators=(",", ":"))
