@@ -489,6 +489,21 @@ test('文件符号退出恢复原活动文件且不重查，无匹配不丢来�
   expect(result.releases.filter(item => item === result.target)).toHaveLength(3);
 });
 
+for (const kind of ['credential', 'gateway', 'gateway-returned']) test(`最近历史 ${kind} 失效后旧候选不可移除、接受或创建分屏`, async () => {
+  const result = await exercise('historyIdentityContract', kind);
+  expect(result.labels).toEqual(['Gateway 或访问凭据已改变，请重新打开快速访问']);
+  expect(result.selected).toBe(0); expect(result.historyCount).toBe(1);
+  expect(result.opened).toEqual([]); expect(result.addedGroups).toBe(0);
+  expect(result.errors).toHaveLength(3);
+  expect(result.errors.every(error => error.includes('Gateway 或访问凭据已改变'))).toBe(true);
+});
+
+for (const kind of ['credential', 'gateway']) test(`最近历史范围选择 ${kind} 失效后取消Picker且不重开旧列表`, async () => {
+  const result = await exercise('historyScopeIdentityContract', kind);
+  expect(result.reopened).toEqual([]); expect(result.cancelled).toBe(true);
+  expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('Gateway 或访问凭据已改变');
+});
+
 test('quickNavigate 只按所选 owner 的历史顺序导航，不混入补充项或帮助且不发查询', async () => {
   const result = await exercise('quickNavigateContract');
   expect(result.empty.map(item => item.id)).toEqual(result.resources);

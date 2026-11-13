@@ -12,7 +12,9 @@
 
 `test_thread_cache_cleanup.py` 与 Web 共用产品执行生成的历史、原文件保存及历史／备份、明确 Thread 镜像清理和分屏恢复场景；原生通过正常 BrowserWindow.close 后同 profile 重启，不能以 renderer 刷新代替。包 fixture 可显式复用 `BOXTEAM_TEST_PACKAGED_ELECTRON` 指定的不可变产物，登记 ASAR 摘要；未指定仍沿真实打包入口，不把复用包算作本轮发行验收。
 
-`test_recent_history.py` 与 Web 共用真实消息生成、原 Session Command／确认／目录 outbox 删除及同名替代对象的业务步骤。原生两次正常关窗后以同来源／固定 profile 重启，不提前 flush；核最近旧 owner 的真实404、旧聊天镜像清除、单条最近项移除，以及幸存 Thread 的正文／草稿和同名新业务对象保留。产物归本测试同名镜像路径；只读浏览器存储，不预写历史或替换响应，不代替损坏格式、异常退出、Windows／macOS 或正式发行验收。
+`test_recent_history.py` 与 Web 共用真实消息生成、原 Session Command／确认／目录 outbox 删除及同名替代对象的业务步骤。原生两次正常关窗后以同来源／固定 profile 重启，不提前 flush；核最近旧 owner 的真实404、旧聊天镜像清除、单条最近项移除，以及幸存 Thread 的正文／草稿和同名新业务对象保留。
+
+同模块的恢复场景共用 `recent_history.mjs`：原资源／命令历史和三项输入记忆经产品生成，三种损坏记录只在正常关窗重开并离开产品文档后逐条注入；随后仍正常关窗重启，核明确错误、单条移除与相邻草稿保留。凭据负例只改下一次 HTTP 发送头，原 Gateway 返回真实401／request_id；工作区通过原 managed API 和隔离目录搬迁验证路径复用与稳定身份。原打开失败移除单条历史的行为保留，规范 URI 重开仍恢复原草稿。产物归本测试同名镜像路径，不预写正常恢复状态或新增产品 IPC；不代替真实双 Gateway 切换、异常退出、Windows／macOS 或正式发行验收。
 
 # 可修改内容
 

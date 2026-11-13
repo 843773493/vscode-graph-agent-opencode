@@ -388,8 +388,8 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     if (token.isCancellationRequested) return [];
     return picks.map(pick => pick.type === 'separator' ? pick : {
       ...pick, attach: undefined, id: `${active.id}:symbol:${pick.index}`, resource: active.resource,
-      trigger: (_index, mods) => { this.report(this.open(run, { resource: active.resource! }, mods, false, true, undefined, pick.range?.selection)); return TriggerAction.CLOSE_PICKER; },
-      accept: (mods, event) => this.report(this.open(run, { resource: active.resource! }, mods, event.inBackground, false, undefined, pick.range?.selection)),
+      trigger: (_index, mods) => { this.report(this.open(run, { resource: active.resource! }, mods, false, true, pick.range?.selection)); return TriggerAction.CLOSE_PICKER; },
+      accept: (mods, event) => this.report(this.open(run, { resource: active.resource! }, mods, event.inBackground, false, pick.range?.selection)),
     });
   }
 
@@ -449,14 +449,13 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
         ...(copyReference ? [{ iconClass: ThemeIcon.asClassName(Codicon.copy), tooltip: t('quickAccess.copyUri') }] : []),
         ...(forkThread ? [{ iconClass: ThemeIcon.asClassName(Codicon.repoForked), tooltip: t('quickAccess.forkContext') }] : [])],
       trigger: (index, mods) => {
+        this.assertAccess(run);
         if (side && index === 0) { this.report(open(mods, false, true)); return TriggerAction.CLOSE_PICKER; }
         if (editor && index === Number(side)) { this.history.removeFromHistory(editor); return TriggerAction.REMOVE_ITEM; }
         if (copyReference && index === Number(side) + Number(!!editor)) {
-          this.assertAccess(run);
           this.report(this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(COPY_RESOURCE_URI, resource)));
         }
         if (forkThread && index === Number(side) + Number(!!editor) + Number(copyReference)) {
-          this.assertAccess(run);
           const owner = ThreadInput.fromResource(resource).owner;
           this.report(this.instantiation.invokeFunction(accessor => accessor.get(ICommandService).executeCommand(sessionActionCommands.fork, {
             owner: { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId }, sessionId: owner.sessionId, source: { threadId: owner.threadId },
@@ -522,12 +521,16 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
   }
 
   private async chooseScope(run: AccessRun): Promise<void> {
+    this.assertAccess(run);
     const query = run.picker.value, activeId = run.picker.activeItems[0]?.id;
+    const lifetime = new DisposableStore(), cancellation = new CancellationTokenSource();
+    this.watchIdentity(lifetime, () => { run.invalidated = true; cancellation.cancel(); });
     let selected: WorkspaceOwner[] | undefined;
-    try { selected = await chooseSearchOwners(this.quickInput, run.owners); }
+    try { selected = await chooseSearchOwners(this.quickInput, run.owners, cancellation.token); this.assertAccess(run); }
     finally {
+      lifetime.dispose(); cancellation.dispose();
       // 新的独立 Quick Input 已经打开时，不抢回焦点或改写其查询。
-      if (!this.quickInput.currentQuickInput) {
+      if (!run.invalidated && !this.quickInput.currentQuickInput) {
         const providerOptions: AccessOptions = { ...run.options, searchGroup: run.group, searchOwners: selected ?? run.owners,
           searchRestore: selected ? undefined : { query, activeId } };
         this.quickInput.quickAccess.show(query, { preserveValue: true, providerOptions });
@@ -571,8 +574,9 @@ export class WorkspaceQuickAccess extends PickerQuickAccessProvider<ResourcePick
     await this.opener.open(uri, options);
   }
 
-  private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, group = this.targetGroup(run, mods, side), selection?: IRange): Promise<void> {
+  private async open(run: AccessRun, editor: EditorInput | IResourceEditorInput, mods: IKeyMods, background: boolean, side = false, selection?: IRange): Promise<void> {
     this.assertAccess(run);
+    const group = this.targetGroup(run, mods, side);
     const options = { pinned: mods.ctrlCmd || background || this.openPinned(), preserveFocus: background,
       selection: editor.resource?.scheme === 'boxteam-thread' ? undefined : selection ?? run.range };
     if (isEditorInput(editor)) await this.editors.openEditor(editor, options, group);

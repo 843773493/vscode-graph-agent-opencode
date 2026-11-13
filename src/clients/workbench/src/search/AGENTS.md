@@ -26,6 +26,8 @@ Quick Access 分支只按后端 `state` 区分取消与失败：`cancelled` 显�
 
 Thread 名称与最近候选的分支按钮直接交同一 Session Command，保留候选中的完整 Gateway／工作区／Session／Thread 身份，不先打开候选；消息与 Trace 正文命中不以缺少快照的候选按钮创建分支。
 
+最近历史的接受、侧开、移除和引用动作均先核本次身份有效，再创建组或调用原 owner；失效的旧回调不得继续展示动作。范围选择切换到独立 Quick Input 后仍拥有同一身份约束，取消原选择且不重开失效列表，结束即释放订阅；沿原 CancellationToken，不维护第二套范围状态。
+
 运行日志与 Gateway 自有日志使用同一联邦客户端的 `runtime_log` 查询；每个 Gateway 的每种明确来源各一条分支，同时选择时保留两者。工作区只筛选关联进程，共享文件不按工作区重复查询。原行引用仅作具名诊断定位动作，不新造资源 URI，接受后交给原 Gateway 诊断视图精确读取。
 
 `#` 的明确工作区范围必须等于原 IWorkspaceContextService 的完整窗口工作区集合，确认后才调用原 WorkspaceSymbolProviderRegistry。部分范围和没有 Provider 时显示具体原因，不查其它目标后过滤，不恢复旧用户宿主。原排序、接受、resolve 和取消继续由原 SymbolsQuickAccessProvider 持有。

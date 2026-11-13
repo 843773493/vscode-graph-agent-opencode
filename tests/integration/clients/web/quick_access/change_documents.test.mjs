@@ -23,6 +23,8 @@ export { EditorExtensions, EditorsOrder } from '${upstream}workbench/common/edit
 export { Registry } from '${upstream}platform/registry/common/platform.js';
 export { ITextEditorService } from '${upstream}workbench/services/textfile/common/textEditorService.js';
 export { gateway } from './src/clients/workbench/src/agentApi.js';
+export { workspaceContext } from './src/clients/workbench/src/workspaceContext.js';
+export { invalidateGatewayToken } from './src/clients/web/src/api/http.js';
 export { installSessionApiFetchMock, unwrapSessionApiFetch } from './src/clients/web/src/api/session/sessionApiFetchMock.js';
 export { TextModelResolverService } from '${upstream}workbench/services/textmodelResolver/common/textModelResolverService.js';
 export { ITextFileService } from '${upstream}workbench/services/textfile/common/textfiles.js';
@@ -265,6 +267,62 @@ test('Thread 切换启动语言不改变精确身份、分屏展示态或有效�
     for (const input of restored) input.dispose();
   }
   receipt.checks.push('真实ThreadInput／serializer在两语保持同一稳定URI和JSON；copy独立展示态，用户内容不变');
+});
+
+test('Thread 在途owner解析共用读取，凭据或Gateway改变后拒绝迟到路由，重开重新解析', async () => {
+  const before = m.workspaceContext.getSnapshot();
+  try {
+    for (const kind of ['credential', 'gateway', 'gateway-returned']) {
+      m.workspaceContext.publish({ ...before, gatewayId: owner.gatewayId });
+      const input = new m.ThreadInput({ ...owner, workspaceKey: 'old-route', threadId: 'exact-child', title: '原历史' });
+      const pending = Promise.withResolvers();
+      const routes = spyOn(m.gateway, 'resolveWorkspace').mockImplementation(() => pending.promise);
+      try {
+        const first = input.resolveOwner(), second = input.resolveOwner();
+        const settled = Promise.allSettled([first, second]);
+        expect(routes).toHaveBeenCalledTimes(1);
+        if (kind === 'credential') m.invalidateGatewayToken(0);
+        else {
+          m.workspaceContext.publish({ ...before, gatewayId: otherGateway });
+          if (kind === 'gateway-returned') m.workspaceContext.publish({ ...before, gatewayId: owner.gatewayId });
+        }
+        pending.resolve('late-route');
+        const results = await settled;
+        for (const result of results) {
+          expect(result.status).toBe('rejected');
+          expect(result.reason.message).toContain('Gateway 或访问凭据已改变');
+        }
+        expect(input.owner.workspaceKey).toBe('old-route');
+        expect(routes.mock.calls[0][1].aborted).toBe(true);
+        routes.mockResolvedValue('current-route');
+        expect(await input.resolveOwner()).toBe(input.owner);
+        expect(input.owner.workspaceKey).toBe('current-route');
+        expect(routes).toHaveBeenCalledTimes(2);
+      } finally { pending.resolve('cleanup'); routes.mockRestore(); input.dispose(); }
+    }
+  } finally { m.workspaceContext.publish(before); }
+  receipt.checks.push('真实ThreadInput共用在途解析；凭据／Gateway／切回均拒绝迟到路由且不写owner；重开重新解析');
+});
+
+test('Thread 启动时首次Gateway发布及同身份登记更新仍沿原路由解析', async () => {
+  const before = m.workspaceContext.getSnapshot();
+  m.workspaceContext.publish({ ...before, gatewayId: null });
+  const input = new m.ThreadInput({ ...owner, workspaceKey: '', threadId: 'exact-child', title: '恢复原记录' });
+  const pending = Promise.withResolvers();
+  const routes = spyOn(m.gateway, 'resolveWorkspace').mockImplementation(() => pending.promise);
+  try {
+    const resolving = input.resolveOwner();
+    m.workspaceContext.publish({ ...before, gatewayId: owner.gatewayId });
+    m.workspaceContext.publish({ ...before, gatewayId: owner.gatewayId, activeId: 'another-workspace' });
+    pending.resolve('new-route');
+    expect(await resolving).toBe(input.owner);
+    expect(input.owner.workspaceKey).toBe('new-route');
+    expect(routes).toHaveBeenCalledTimes(1);
+    const serialized = new m.ThreadSerializer().serialize(input);
+    expect(serialized).not.toContain('new-route');
+    expect(JSON.parse(serialized).target).toEqual({ ...owner, threadId: 'exact-child' });
+  } finally { pending.resolve('cleanup'); routes.mockRestore(); input.dispose(); m.workspaceContext.publish(before); }
+  receipt.checks.push('初次Gateway发布和同身份登记更新不废弃恢复；实际新路由仍不进入序列化');
 });
 
 test('有效来源恢复只交原工厂，工厂本身失败保留原错误而不转为坏记录', () => {

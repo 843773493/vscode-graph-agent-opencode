@@ -4,6 +4,8 @@ import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { IEditorSerializer, IUntypedEditorInput, isResourceEditorInput } from '../upstream/src/vs/workbench/common/editor.js';
 import { IInstantiationService } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { gateway, type ThreadOwner } from './agentApi.js';
+import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
+import { workspaceContext } from './workspaceContext.js';
 import type { IResourceEditorInput } from '../upstream/src/vs/platform/editor/common/editor.js';
 import type { WebUiLayoutSettings } from '../../web/src/types/backend.js';
 import type { TurnAttachmentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
@@ -63,10 +65,21 @@ export class ThreadInput extends EditorInput {
   }
   async resolveOwner(): Promise<ThreadOwner> {
     if (!this.resolving) {
-      this.resolving = gateway.resolveWorkspace(this.owner).then(workspaceKey => {
+      const controller = new AbortController();
+      let gatewayId = workspaceContext.getSnapshot().gatewayId;
+      const invalidate = () => controller.abort(new Error(t('quickAccess.resource.identityChanged')));
+      const releaseToken = onGatewayTokenInvalidated(0, invalidate);
+      const releaseGateway = workspaceContext.subscribe(() => {
+        const current = workspaceContext.getSnapshot().gatewayId;
+        // 冷启动的首次身份发布不是切换；发布后即冻结，包括离开后又切回。
+        if (gatewayId && current !== gatewayId) invalidate();
+        else gatewayId = current;
+      });
+      this.resolving = gateway.resolveWorkspace(this.owner, controller.signal).then(workspaceKey => {
+        controller.signal.throwIfAborted();
         this.owner.workspaceKey = workspaceKey;
         return this.owner;
-      }).finally(() => { this.resolving = undefined; });
+      }).finally(() => { releaseToken(); releaseGateway(); this.resolving = undefined; });
     }
     return this.resolving;
   }

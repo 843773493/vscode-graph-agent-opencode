@@ -68,19 +68,21 @@ const uri = name => workspaceFileUri(owner, root + '/' + name, root);
 
 /** 仅替原 Picker 事件和宿主服务；实际 Provider、取消及接受逻辑均来自生产源码。 */
 function defaultAccess(options, history = [], opener = { open() { throw new Error('delegate 不应被 URI opener 抢占'); } },
-  editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } }, quickNavigate = false, instantiation) {
-  const changes = new Emitter(), accepts = new Emitter(), cancellation = new CancellationTokenSource();
+  editors = { openEditor() { throw new Error('只选择调用方不应打开编辑器'); } }, quickNavigate = false, instantiation,
+  notifications = { error(error) { throw error; } }, quickInput = {}) {
+  const changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
   const picker = { value: '', items: [], activeItems: [], selectedItems: [], keyMods: { alt: false, ctrlCmd: false },
-    buttons: [], quickNavigate: quickNavigate ? { keybindings: [] } : undefined, onDidTriggerButton: Event.None,
+    buttons: [], quickNavigate: quickNavigate ? { keybindings: [] } : undefined, onDidTriggerButton: buttons.event,
     onDidHide: Event.None, onDidChangeActive: Event.None, onDidChangeValue: changes.event, onDidAccept: accepts.event,
     onDidTriggerItemButton: Event.None, onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
-  const group = { id: 1 }, groups = { groups: [], activeGroup: group, getGroup: id => id === group.id ? group : undefined };
+  const group = { id: 1 }, groups = { groups: [], activeGroup: group, getGroup: id => id === group.id ? group : undefined,
+    findGroup: () => undefined, addGroup() { const added = { id: this.groups.length + 2 }; this.groups.push(added); return added; } };
   const provider = new WorkspaceQuickAccess(instantiation ?? { createInstance: () => new PickerEditorState(editors, groups) }, editors, groups,
-    { getHistory: () => history }, { getValue: () => undefined }, {}, {}, { lookupKeybinding: () => undefined },
-    opener, { error(error) { throw error; } }, { enabled: false }, {});
+    { getHistory: () => history, removeFromHistory(editor) { history.splice(history.indexOf(editor), 1); } },
+    { getValue: () => undefined }, quickInput, {}, { lookupKeybinding: () => undefined }, opener, notifications, { enabled: false }, {});
   const lifetime = provider.provide(picker, cancellation.token, options);
-  return { picker, accepts, change(value) { picker.value = value; changes.fire(); },
-    dispose() { cancellation.dispose(true); lifetime.dispose(); provider.dispose(); changes.dispose(); accepts.dispose(); } };
+  return { picker, groups, accepts, triggerButton: button => buttons.fire(button), change(value) { picker.value = value; changes.fire(); },
+    dispose() { cancellation.dispose(true); lifetime.dispose(); provider.dispose(); changes.dispose(); accepts.dispose(); buttons.dispose(); } };
 }
 
 /** 只替换语言服务与模型引用，核真实 Provider 的模式转换和引用释放。 */
@@ -252,6 +254,53 @@ export async function identityContract() {
   // 已释放 Provider 不再订阅失效通知。
   invalidateGatewayToken(0);
   return results;
+}
+
+/** 保留旧候选回调，验证失效后连展示动作和空分屏也不再执行。 */
+export async function historyIdentityContract(kind) {
+  const before = workspaceContext.getSnapshot(), opened = [], errors = [];
+  workspaceContext.publish({ ...before, gatewayId: owner.gatewayId });
+  const history = [{ resource: uri('history.txt'), label: '真实历史入口' }];
+  const f = defaultAccess({ searchOwner: owner }, history, undefined,
+    { async openEditor(input) { opened.push(input.resource.toString()); } }, true, undefined,
+    { error(error) { errors.push(String(error)); } });
+  try {
+    const pick = f.picker.items.find(item => item.id === history[0].resource.toString());
+    if (!pick) throw new Error('原最近历史未公布候选');
+    if (kind === 'credential') invalidateGatewayToken(0);
+    else {
+      workspaceContext.publish({ ...before, gatewayId: 'gateway-b' });
+      if (kind === 'gateway-returned') workspaceContext.publish({ ...before, gatewayId: owner.gatewayId });
+    }
+    try { pick.trigger(1, { alt: false, ctrlCmd: false }); } catch (cause) { errors.push(String(cause)); }
+    try { pick.trigger(0, { alt: false, ctrlCmd: false }); } catch (cause) { errors.push(String(cause)); }
+    pick.accept({ alt: true, ctrlCmd: false }, { inBackground: false });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return { opened, errors, historyCount: history.length, addedGroups: f.groups.groups.length,
+      selected: f.picker.selectedItems.length, labels: f.picker.items.map(item => item.label) };
+  } finally { f.dispose(); workspaceContext.publish(before); }
+}
+
+export async function historyScopeIdentityContract(kind) {
+  const before = workspaceContext.getSnapshot(), pending = Promise.withResolvers(), errors = [], reopened = [];
+  workspaceContext.publish({ ...before, gatewayId: owner.gatewayId, loading: false, error: null,
+    workspaces: [{ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: '原历史范围', status: 'ready' }] });
+  let selection;
+  const quick = { quickAccess: { show: (...args) => reopened.push(args) },
+    pick(items, _options, token) { selection = { items, token }; return pending.promise; } };
+  const f = defaultAccess({ searchOwner: owner }, [{ resource: uri('history.txt') }], undefined, undefined, false, undefined,
+    { error: cause => errors.push(String(cause)) }, quick);
+  try {
+    f.triggerButton(f.picker.buttons[0]);
+    if (!selection) throw new Error('范围选择没有进入原Picker');
+    // 原 Quick Input 切换 Provider 后释放旧 run，范围选择仍须拥有独立身份生命周期。
+    f.dispose();
+    if (kind === 'credential') invalidateGatewayToken(0);
+    else workspaceContext.publish({ ...before, gatewayId: 'gateway-b' });
+    pending.resolve(selection.items);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return { reopened, errors, cancelled: selection.token?.isCancellationRequested ?? false };
+  } finally { pending.resolve(undefined); f.dispose(); workspaceContext.publish(before); }
 }
 
 export function selectContract() {

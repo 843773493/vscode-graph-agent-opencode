@@ -71,35 +71,63 @@ async def history_cache_case(
         close_gateway_process(gateway)
 
 
-async def test_closed_resources_survive_history_reload_without_deleting_business_state(
+@dataclass(frozen=True)
+class RecentHistoryCase:
+    context: TestRunContext
+    gateway_url: str
+    workspace: Path
+    other: Path
+    replacement: Path
+    provider: ModelStreamReplay
+
+
+@pytest.fixture
+def recent_history_case(
     request: pytest.FixtureRequest,
     metadata_case: tuple[httpx.AsyncClient, TestRunContext, Path, ModelStreamReplay],
-) -> None:
+) -> RecentHistoryCase:
     client, context, workspace, provider = metadata_case
-    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
-    assert chromium, "最近历史验收需要 Chromium"
     (workspace / "history.txt").write_text("A history file", encoding="utf-8")
     (workspace / "AGENTS.md").write_text("A history source", encoding="utf-8")
-    other = prepare_default_test_workspace(
-        workspace_root=context.workspace_root / "history-B",
+    workspaces = [prepare_default_test_workspace(
+        workspace_root=context.workspace_root / context.run_root.name / context.runtime_root_for_node(request.node.nodeid).name / name,
         template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace", fresh_identity=True,
-    )
-    install_test_workspace_config(workspace_root=other, config_path=workspace / ".boxteam/workspace.jsonc",
-                                  schema_path=context.project_root / "configs/workspace_schema.jsonc")
+    ) for name in ("history-B", "history-C")]
+    for target in workspaces:
+        install_test_workspace_config(workspace_root=target, config_path=workspace / ".boxteam/workspace.jsonc",
+                                      schema_path=context.project_root / "configs/workspace_schema.jsonc")
+    return RecentHistoryCase(context, str(client.base_url).rstrip("/"), workspace, *workspaces, provider)
+
+
+async def test_closed_resources_survive_history_reload_without_deleting_business_state(
+    request: pytest.FixtureRequest,
+    recent_history_case: RecentHistoryCase,
+) -> None:
+    case = recent_history_case
+    context = case.context
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "最近历史验收需要 Chromium"
     output = context.artifacts_dir / "recent-history.json"
-    command = ["node", "tests/integration/clients/web/quick_access/recent_history.mjs"]
+    supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304",
+               "--timeout-seconds", "210", "--", "node", "tests/integration/clients/web/quick_access/recent_history.mjs"]
     with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
         completed = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
-            env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": str(client.base_url).rstrip("/"),
-                 "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_HISTORY_OTHER_WORKSPACE": str(other),
+            env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": case.gateway_url,
+                 "BOXTEAM_BROWSER_RESULT_PATH": str(output), "BOXTEAM_HISTORY_OTHER_WORKSPACE": str(case.other),
+                 "BOXTEAM_HISTORY_REPLACEMENT_WORKSPACE": str(case.replacement),
                  "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium},
-            capture_output=True, text=True, timeout=150, check=False)
+            capture_output=True, text=True, timeout=225, check=False)
     (context.artifacts_dir / "browser.stdout.raw").write_text(completed.stdout, encoding="utf-8")
     (context.artifacts_dir / "browser.stderr.raw").write_text(completed.stderr, encoding="utf-8")
     (context.artifacts_dir / "browser-process.json").write_text(json.dumps({
         "command": command, "exit_code": completed.returncode,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert_recent_history_result(output, case)
+
+
+def assert_recent_history_result(output: Path, case: RecentHistoryCase) -> dict:
     result = json.loads(output.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert result["restoredClosedHistory"] and result["reopenDeduplicated"] and result["removedHistoryOnly"]
@@ -107,11 +135,24 @@ async def test_closed_resources_survive_history_reload_without_deleting_business
     assert [item["mode"] for item in result["recovery"]] == ["unknown-version", "missing-owner", "broken-json"]
     assert all(item["retainedAcrossReload"] and item["displayOnlyRemoval"] and item["targetReads"] == 0
                for item in result["recovery"])
-    assert result["searches"] == [] and result["executions"] == []
-    assert (workspace / "history.txt").read_text(encoding="utf-8") == "A history file"
-    with provider.control._condition:
-        calls = {key: count for key, count in provider.control._counters.items() if key.startswith("model_call/")}
+    assert result["searches"] and all(item["phase"] == "original-input-memory-and-command-history" for item in result["searches"])
+    assert result["executions"] == []
+    assert [item["preserve"] for item in result["inputMemory"]] == [True, False]
+    assert all(item["defaultRestored"] == item["commandRestored"] == item["textRestored"] == item["preserve"]
+               for item in result["inputMemory"])
+    assert result["commandHistory"]["restoredAfterRestart"] and result["commandHistory"]["displayOnlyRemoval"]
+    assert result["credentialRecovery"]["rejectedBeforeBusinessReads"] and result["credentialRecovery"]["freshReopen"]
+    assert result["credentialRecovery"]["failedHistoryRemoved"]
+    assert result["storedIdentity"] == {"tokenStored": False, "transportEndpointStored": False}
+    assert result["routeRecovery"]["rejectedWithoutBusinessReads"] and result["routeRecovery"]["reopenedOriginalDraft"]
+    assert result["routeRecovery"]["failedHistoryRemoved"]
+    assert result["routeRecovery"]["replacement"]["workspaceId"] != result["routeRecovery"]["previous"]["workspaceId"]
+    assert result["routeRecovery"]["relocated"]["workspaceId"] == result["routeRecovery"]["previous"]["workspaceId"]
+    assert (case.workspace / "history.txt").read_text(encoding="utf-8") == "A history file"
+    with case.provider.control._condition:
+        calls = {key: count for key, count in case.provider.control._counters.items() if key.startswith("model_call/")}
     assert calls == {}, "浏览历史和编辑草稿不得触发模型调用"
+    return result
 
 
 @dataclass(frozen=True)
