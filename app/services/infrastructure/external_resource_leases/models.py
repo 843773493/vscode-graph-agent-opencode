@@ -42,4 +42,3 @@ class ResourceLease:
 
 RESOURCE_RECORD = TypeAdapter(ResourceRecord)
 RESOURCE_LEASES = TypeAdapter(list[ResourceLease], config=ConfigDict(hide_input_in_errors=True))
-
