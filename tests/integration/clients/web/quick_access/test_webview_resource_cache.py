@@ -113,6 +113,10 @@ def assert_webview_result(result_path: Path) -> dict:
     assert disconnection["rejection"]["status"] == 503
     assert disconnection["cachedBefore"] == disconnection["cachedDuring"] == disconnection["cachedAfter"]
     assert disconnection["rawReadsBefore"] == disconnection["rawReadsWhileDisconnected"] == disconnection["rawReadsAfterReconnect"]
+    identity = result["identity"]
+    assert identity["rejection"]["status"] == 401
+    assert identity["revokedDisplay"] and identity["reopenedWithOriginalOwner"]
+    assert identity["rawReadsBefore"] == identity["rawReadsAfter"]
     return result
 
 

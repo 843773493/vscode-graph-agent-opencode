@@ -326,6 +326,49 @@ export async function runWebviewResourceCache({ run, launch }) {
     result.disconnection.cachedAfter = (await inspectCache()).find(item => item.url === cachedStyle.url);
     expect(result.disconnection.cachedAfter).toEqual(cachedBeforeDisconnect);
     result.disconnection.rawReadsAfterReconnect = raw(cssUri).length;
+    result.phase = 'credentials-revoke-visible-webview';
+    const entriesBeforeRevocation = await inspectCache();
+    const readsBeforeRevocation = raw(cssUri).length;
+    let credentialRejection;
+    const credentialPattern = '**/api/gateway/workspaces?check_health=false';
+    const reject = async route => {
+      // 只改变这次真实请求的凭据；401及request_id仍由 Gateway 产生。
+      const response = await route.fetch({ headers: { ...route.request().headers(),
+        'x-local-token': 'expired-webview-cache-credential' } });
+      const body = await response.json();
+      credentialRejection = { status: response.status(), detail: body.detail, requestId: body.request_id,
+        header: response.headers()['x-request-id'] };
+      expect(credentialRejection.status).toBe(401);
+      expect(credentialRejection.detail).toBe('invalid local token');
+      expect(credentialRejection.requestId).toBeTruthy();
+      expect(credentialRejection.requestId).toBe(credentialRejection.header);
+      await route.fulfill({ response });
+    };
+    await page.route(credentialPattern, reject, { times: 1 });
+    try {
+      const action = await command('boxteam.workspace.activate', {
+        gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId,
+      }).then(() => ({ succeeded: true }), cause => ({ error: String(cause) }));
+      expect(action.error).toContain('Gateway 或访问凭据已改变');
+      expect(credentialRejection).toBeTruthy();
+      await expect(page.locator('iframe.webview')).toHaveCount(0);
+      await expect(page.locator('.notifications-toasts')).toContainText('Gateway 或访问凭据已改变，请重新打开预览。');
+    } finally { await page.unroute(credentialPattern, reject); }
+    expect(raw(cssUri)).toHaveLength(readsBeforeRevocation);
+    result.phase = 'credentials-reopen-validates-original-owner';
+    await command('_workbench.open', uri, [undefined, { pinned: true }]);
+    await command('markdown.showPreview');
+    await expect(probe()).toHaveText('原文件 CSS 与字体', { timeout: 60000 });
+    await expect(probe()).toHaveCSS('color', 'rgb(101, 112, 123)');
+    await expect.poll(() => result.requests.some(item => item.phase === result.phase && item.body
+      && JSON.parse(item.body).uri === cssUri && JSON.parse(item.body).operation === 'describe')).toBe(true);
+    expect(raw(cssUri)).toHaveLength(readsBeforeRevocation);
+    const entriesAfterRevocation = await inspectCache();
+    expect(entriesAfterRevocation).toEqual(expect.arrayContaining(entriesBeforeRevocation));
+    result.identity = { rejection: credentialRejection, revokedDisplay: true, reopenedWithOriginalOwner: true,
+      entriesBefore: entriesBeforeRevocation, entriesAfter: entriesAfterRevocation,
+      rawReadsBefore: readsBeforeRevocation, rawReadsAfter: raw(cssUri).length };
+    // TODO：固定隔离宿主的 trackFocus 在 iframe body 建立前可能抛错；保留断言，待上游修复。
     expect(result.pageErrors).toEqual([]);
     result.phase = 'complete';
   } catch (error) {

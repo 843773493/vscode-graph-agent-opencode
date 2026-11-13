@@ -74,6 +74,7 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/contrib/webview/common/webview.ts',
   'src/vs/workbench/api/common/extHostWebview.ts',
   'src/vs/workbench/contrib/webview/browser/resourceLoading.ts',
+  'src/vs/workbench/contrib/webview/browser/webviewService.ts',
   'src/vs/platform/webview/common/mimeTypes.ts',
   'extensions/markdown-language-features/src/preview/preview.ts',
   ...searchEditorSourcePaths,
@@ -448,6 +449,32 @@ export class AgentPluginService extends Disposable implements IAgentPluginServic
     if (path === join(upstream, 'src/vs/workbench/api/common/extHostWebview.ts')) {
       contents = replaceOnce(contents, 'return asWebviewUri(resource, this.#remoteInfo);',
         'return asWebviewUri(resource, this.#remoteInfo, this.#options.localResourceRoots ?? getDefaultLocalResourceRoots(this.#extension, this.#workspace));');
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/webview/browser/webviewService.ts')) {
+      contents = `import { onGatewayTokenInvalidated } from ${JSON.stringify(resolve(root, '../web/src/api/http.js'))};\nimport { workspaceContext } from ${JSON.stringify(join(root, 'src/workspaceContext.js'))};\nimport { INotificationService } from '../../../../platform/notification/common/notification.js';\nimport { localize } from '../../../../nls.js';\n` + contents;
+      contents = replaceOnce(contents, "import { Disposable, DisposableStore }", "import { Disposable, DisposableStore, toDisposable }");
+      contents = replaceOnce(contents, '@IInstantiationService protected readonly _instantiationService: IInstantiationService,',
+        '@IInstantiationService protected readonly _instantiationService: IInstantiationService,\n@INotificationService notificationService: INotificationService,');
+      const initialized = 'this._webviewThemeDataProvider = this._instantiationService.createInstance(WebviewThemeDataProvider);';
+      contents = replaceOnce(contents, initialized, `${initialized}
+// 沿原集合及 dispose 释放受控页面、Worker 通道和在途读取，不清持久缓存。
+const invalidate = () => {
+  let revoked = false;
+  for (const webview of this._webviews) {
+    if (webview.contentOptions.localResourceRoots?.some(root => root.scheme === 'boxteam-file')) {
+      webview.dispose();
+      revoked = true;
+    }
+  }
+  if (revoked) notificationService.warn(localize('boxteam.webview.identityChanged', "Gateway or access credentials changed. Reopen the preview."));
+};
+this._register(toDisposable(onGatewayTokenInvalidated(0, invalidate)));
+let gateway = workspaceContext.getSnapshot().gatewayId;
+this._register(toDisposable(workspaceContext.subscribe(() => {
+  const next = workspaceContext.getSnapshot().gatewayId;
+  if (gateway && gateway !== next) invalidate();
+  gateway = next;
+})));`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/webview/browser/resourceLoading.ts')) {
       contents = `import { workspaceFileMimeType } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\n` + contents;

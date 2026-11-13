@@ -136,13 +136,13 @@ for (const decoding of [false, true]) test(`身份失效撤销原 Pane ${decodin
   invalidateGatewayToken(0);
   expect(f.viewer._image.src).toBe('');
   expect(f.editor.fileSize).toBeUndefined();
-  expect(f.editor._message.label.textContent).toContain('访问凭据已改变');
+  expect(f.editor._message.label.textContent).toBe('Gateway or access credentials changed. Reopen the image.');
   expect(f.watches()).toBe(0);
   expect(f.revokeUrl.mock.calls).toEqual([['blob:image-1']]);
   f.decodes[0]!.resolve();
   await loading;
   expect(f.viewer._image.src).toBe('');
-  expect(f.editor._message.label.textContent).toContain('访问凭据已改变');
+  expect(f.editor._message.label.textContent).toBe('Gateway or access credentials changed. Reopen the image.');
   expect(f.revokeUrl).toHaveBeenCalledTimes(1);
   // 已撤销 input 不接受 watcher 的自动重读。
   f.changes.fire({ contains: () => true });
@@ -208,7 +208,7 @@ test('身份失效期间读盘迟到完成，不进入 Blob 或解码阶段', as
   expect(f.createUrl).not.toHaveBeenCalled();
   expect(f.decodes).toHaveLength(0);
   expect(f.viewer._image.src).toBe('');
-  expect(f.editor._message.label.textContent).toContain('访问凭据已改变');
+  expect(f.editor._message.label.textContent).toBe('Gateway or access credentials changed. Reopen the image.');
 });
 
 test('切换 input 立即释放未完成解码的 URL，迟到完成只保留新图', async () => {
