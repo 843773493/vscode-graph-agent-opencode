@@ -73,7 +73,8 @@ function nextDeliveryPolicy(policy: DeliveryPolicy): DeliveryPolicy {
   return "after_turn";
 }
 
-function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?: (controller: ComposerDraftController | undefined) => void }) {
+function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?: string; onDraftReady?: (controller: ComposerDraftController | undefined) => void;
+  onManageConfiguration?: (kind: 'providers' | 'agents', id: string) => void }) {
   const {
     state,
     setStatus,
@@ -907,6 +908,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                     onSelect={handleAgentSelect}
                     onSetWorkspaceDefault={handleWorkspaceDefaultAgent}
                     onKeyDown={handleAgentMenuKeyDown}
+                    onManage={onManageConfiguration ? () => { setAgentMenuOpen(false); onManageConfiguration('agents', currentAgent); } : undefined}
                   />
                   <ComposerModelControl
                     controlRef={modelMenuRef}
@@ -919,6 +921,7 @@ function Composer({ threadId, onDraftReady }: { threadId?: string; onDraftReady?
                     onSelect={handleModelSelect}
                     onSetWorkspaceDefault={handleWorkspaceDefaultProvider}
                     onKeyDown={handleModelMenuKeyDown}
+                    onManage={onManageConfiguration ? () => { setModelMenuOpen(false); onManageConfiguration('providers', currentProviderId); } : undefined}
                   />
                   <ComposerToolControl
                     apiPort={state.apiPort ?? DEFAULT_BACKEND_PORT}

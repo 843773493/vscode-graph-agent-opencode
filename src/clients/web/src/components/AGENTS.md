@@ -17,6 +17,7 @@ components/
 ├── contextInspection/   冻结请求的 selection 与 history 只读检查
 ├── eventQueue/          诊断事件历史的分页与滚动窗口
 ├── nodeDebug/           Node.js 源码调试工作台与调试视图
+├── settings/            原来源 JSONC 模型上的 Provider／Agent 表单
 └── deliveryPolicyPresentation.ts 消息投递策略的纯展示文案
 ```
 

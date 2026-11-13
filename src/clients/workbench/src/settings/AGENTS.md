@@ -20,7 +20,7 @@
 
 当前窗口的主题、布局及编辑器设置继续使用原 WorkspaceService／registry。业务设置只从正式来源 JSONC 及目标安装 schema 投影原设置树，不读旧 Extension Host profile/view，不向窗口 IConfigurationService 注册业务值。输入仅保存稳定 Gateway／工作区／来源；每组 child 和模型引用随原 Pane 关闭回收，同一来源表单与 JSON 共用原文本模型、dirty、undo、保存及备份。切换目标打开新输入，不重绑原草稿。
 
-设置标题只投影冻结归属和原 owner 已有保存／生效状态，不为展示轮询或重复读取配置。只读来源禁用原表单控件；实际写入始终由原 source writer 判权，秘密参数使用原受保护参数入口。
+设置标题只投影冻结归属和原 owner 已有保存／生效状态，不为展示轮询或重复读取配置。`entities.tsx` 在同一个 Settings Pane 内托管 Provider／Agent 表单，直接编辑原来源文本模型；定义 ID 不重命名，继承定义定位原来源，Provider 数组覆盖显式确认。只读来源禁用原表单控件；实际写入始终由原 source writer 判权，秘密参数使用原受保护参数入口。
 
 正式来源 JSONC 只显式保存；来源保存、层导入和运行生效分别展示。相对 schema 读取直接复用同一文档回执的 `json_schema`，不能把 schema 文件名当成另一个来源反复请求。查询提交不改变草稿基线；冲突显式重新预检，未知保存仅沿原键查询，不能把后续已变正文当作当前草稿已保存。
 

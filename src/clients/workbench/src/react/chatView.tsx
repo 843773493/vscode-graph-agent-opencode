@@ -161,7 +161,11 @@ function ThreadConversation({ input, seed, active, editors, commands, onUpdate, 
         onRemovePending={actions.removePendingRequest} onChangePendingPolicy={actions.updatePendingRequestPolicy} />
       <PendingQueueBar conversations={runtime.conversations} onClear={actions.clearPendingRequests}
         onRemove={actions.removePendingRequest} onChangePolicy={actions.updatePendingRequestPolicy} />
-      <Composer threadId={owner.threadId} onDraftReady={onDraftReady} />
+      <Composer threadId={owner.threadId} onDraftReady={onDraftReady} onManageConfiguration={(kind, id) => {
+        void commands.executeCommand(kind === 'providers' ? 'boxteam.settings.modelsProviders' : 'boxteam.settings.agents',
+          { gatewayId: owner.gatewayId, workspaceId: owner.workspaceId }, id)
+          .catch(error => onError(error instanceof Error ? error.message : String(error)));
+      }} />
     </div>{input.resourcesVisible ? <button type="button" className="layout-sash" aria-label={t('thread.host.resizeResources')}
       title={t('thread.host.resizeResourcesHint')} onDoubleClick={() => { input.resourceRatio = 0.42; setResourceRatio(0.42); }}
       onPointerDown={event => {
@@ -283,9 +287,16 @@ export class ChatSurface {
     if (!this.viewport) throw new Error(t('thread.host.viewportNotReady'));
     return this.viewport;
   }
-  private readonly onDraftReady = (controller: ComposerDraftController | undefined) => { this.draft = controller; };
+  private configurationControl?: 'providers' | 'agents';
+  private readonly onDraftReady = (controller: ComposerDraftController | undefined) => {
+    this.draft = controller;
+    if (controller && this.configurationControl) this.focusConfigurationControl(this.configurationControl);
+  };
   private readonly onViewportReady = (controller: ThreadViewportController | undefined) => { this.viewport = controller; };
   focus(): void { this.surface.focus('textarea'); }
+  focusConfigurationControl(kind: 'providers' | 'agents'): void {
+    this.configurationControl = this.surface.focus(kind === 'providers' ? '.composer-model-pill' : '.composer-agent-button') ? undefined : kind;
+  }
   dispose(): void { this.viewport?.cancel(); this.viewport = undefined; this.draft = undefined; this.surface.dispose(); }
   private readonly onUpdate = () => this.render();
   private readonly onError = (message: string) => this.notifications.error(t('thread.host.ownerError', this.input.owner.title, this.input.owner.sessionId, this.input.owner.threadId, message));

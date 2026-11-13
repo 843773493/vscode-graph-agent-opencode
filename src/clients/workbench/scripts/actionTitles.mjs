@@ -10,6 +10,7 @@ export const actionTitleKeys = [
   'workbench.settings.openPluginParameters', 'workbench.settings.openPluginParametersCategory',
   'workbench.settings.openDefaultAgentSource', 'workbench.settings.openSource',
   'workbench.settings.inspectSourceStatus', 'workbench.settings.rebaseSourceDraft', 'workbench.settings.openTarget',
+  'workbench.settings.modelsProviders', 'workbench.settings.agents',
   'quickAccess.mode.sessions', 'quickAccess.mode.threads', 'quickAccess.mode.content',
   'quickAccess.workspace.actionTitle', 'quickAccess.sources.actionTitle', 'quickAccess.automation.actionTitle',
   'plugins.attachWorkspaceTitle',

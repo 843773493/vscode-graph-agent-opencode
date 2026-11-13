@@ -13,6 +13,7 @@ export default function ComposerAgentControl({
   onSelect,
   onSetWorkspaceDefault,
   onKeyDown,
+  onManage,
 }: {
   controlRef: React.RefObject<HTMLDivElement>;
   agents: Agent[];
@@ -23,6 +24,7 @@ export default function ComposerAgentControl({
   onSelect: (agentId: string) => void;
   onSetWorkspaceDefault: (agentId: string) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void;
+  onManage?: () => void;
 }): React.ReactNode {
   return (
     <div
@@ -101,6 +103,7 @@ export default function ComposerAgentControl({
               </span>
             </button>
           )}
+          {onManage ? <button type="button" role="menuitem" className="composer-agent-menu-item" onClick={onManage}>{t('workbench.settings.agents')}</button> : null}
         </div>
       </AnchoredOverlay>
     </div>

@@ -94,9 +94,23 @@ const { settingsEditorIdentity, settingsHistoryLocation, parseSettingsLocation, 
       DefaultSettings, Settings2EditorModel, nullRange, parse, setProperty, applyEdits, configSourceEditorUri,
       configSourceFiles: files => files.getProvider(),
     });
+class HeaderElement {
+  style = {};
+  children = [];
+  text = '';
+  append(...children) { this.children.push(...children); }
+  addEventListener() {}
+  set textContent(value) { this.text = value; this.children = []; }
+  get textContent() { return this.text + this.children.map(child => child.textContent).join(''); }
+}
 const { SettingsContextHeader } = evaluate(await source('src/settings/header.ts', true), ['SettingsContextHeader'], {
-  Disposable, ITargetSettingsContext, sourceStatus: () => '来源状态',
+  Disposable, ITargetSettingsContext, ICommandService: serviceIdentifier(), INotificationService: serviceIdentifier(), sourceStatus: () => '来源状态',
+  document: { createElement: () => new HeaderElement() }, clearNode: element => { element.textContent = ''; },
 });
+const { definitionObject, definitionValue } = evaluate(await source('../web/src/components/settings/ConfigurationEntities.tsx', true),
+  ['definitionObject', 'definitionValue'], {});
+const { ConfigurationEntityView } = evaluate(await source('src/settings/entities.tsx', true), ['ConfigurationEntityView'],
+  { Disposable, definitionObject, definitionValue }, ['create', 'inheritedProviders']);
 const parseSearchQuery = evaluate(await source('workbench/contrib/preferences/browser/settingsTreeModels.ts'),
   ['tagRegex', 'extensionRegex', 'featureRegex', 'idRegex', 'languageRegex', 'parseQuery'], {
     MODIFIED_SETTING_TAG, POLICY_SETTING_TAG, AGENTS_WINDOW_SETTING_TAG, ENABLE_LANGUAGE_FILTER,
@@ -380,12 +394,47 @@ function makeSource(locationValue) {
 }
 
 function settingsHeaderText(target) {
-  const element = { style: {} };
-  const header = new SettingsContextHeader(element, () => {}, { target });
+  const element = new HeaderElement();
+  const header = new SettingsContextHeader(element, () => {}, () => {}, { target });
   const text = element.textContent;
   header.dispose();
   return text;
 }
+
+scenario('Gateway 来源标题不把工作区定义入口投向首个工作区，窗口和工作区入口仍可用', () => {
+  const fixture = makeSource(location({ workspace_id: undefined }));
+  try {
+    expect(settingsHeaderText(fixture.source)).not.toContain(t('workbench.settings.modelsProviders'));
+    expect(settingsHeaderText(fixture.source)).not.toContain(t('configuration.entities.agentsTitle'));
+    expect(settingsHeaderText(undefined)).toContain(t('workbench.settings.modelsProviders'));
+    const workspace = makeSource(location());
+    try { expect(settingsHeaderText(workspace.source)).toContain(t('configuration.entities.agentsTitle')); }
+    finally { workspace.source.dispose(); }
+  } finally { fixture.source.dispose(); }
+});
+
+scenario('创建同 ID Agent 须确认继承覆盖，取消不编辑，确认后的 inline 提示词解除下层文件覆盖', async () => {
+  for (const confirmed of [false, true]) {
+    const edits = [], confirmations = [];
+    const values = ['coder', '本层名称', '本次输入的提示词'];
+    const source = { readDraft: () => ({}), model: { textEditorModel: { getVersionId: () => 1 } },
+      document: { source_key: 'workspace', layers: [
+        { source_key: 'user', precedence: 1, payload: { agents: { coder: { instructions: { system_prompt_file: 'boxteam-source://gateway/prompt.md' } } },
+          llm: { providers: [{ id: 'primary' }] } } },
+        { source_key: 'workspace', precedence: 2, payload: {} },
+      ] }, editPath: (...args) => edits.push(args) };
+    const view = Object.assign(new ConfigurationEntityView(), { kind: 'agents', source, check() {}, render() {},
+      lifetime: { token: CancellationToken.None }, input: async () => values.shift(), quick: { pick: async () => ({ label: 'primary' }) },
+      dialogs: { confirm: async options => { confirmations.push(options); return { confirmed }; } } });
+    await view.create();
+    expect(confirmations).toHaveLength(1);
+    expect(confirmations[0].message).toContain('coder');
+    expect(edits).toHaveLength(confirmed ? 1 : 0);
+    if (confirmed) expect(edits[0]).toEqual([['agents', 'coder'], { name: '本层名称',
+      instructions: { system_prompt: '本次输入的提示词', system_prompt_file: null }, model: { primary_provider: 'primary' } }]);
+    view.dispose();
+  }
+});
 
 function childServices(source, configurationCalls) {
   const configurationService = {
@@ -586,6 +635,7 @@ scenario('凭据失效保留各管理目标并取消在途选择，页面 Gatewa
   let entry = 'gateway-a', delayedPick;
   const remote = { gateway_id: 'gateway-b', name: 'B', connection_kind: 'remote_gateway', gateway_connection_id: 'route-b' };
   const environment = {
+    t, actionTitles: { 'workbench.managementTarget.selectExtensions': 'Select Extension Target', 'workbench.managementTarget.selectMcp': 'Select MCP Target', 'workbench.managementTarget.selectSettings': 'Select Settings Target' },
     CancellationTokenSource, MutableDisposable, Emitter,
     Action2: class { constructor(description) { this.id = description.id; } },
     MenuId: {}, MenuRegistry: { appendMenuItem: () => toDisposable(() => {}) }, ContextKeyExpr: { equals: () => ({}) },

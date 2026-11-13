@@ -164,10 +164,19 @@ export class SourceSettings extends Disposable {
     if (!field) throw new Error(t('settings.editor.fieldOutsideSchema'));
     if (!this.document.writable) throw new Error(t('settings.editor.currentSourceReadOnly'));
     if (field.schema.writeOnly === true) throw new Error(t('settings.editor.useProtectedSecretInput'));
-    const text = this.model.textEditorModel!, source = text.getValue(), errors: ParseError[] = [];
-    parse(source, errors);
-    if (errors.length) throw new Error(t('settings.editor.invalidDraftUnchanged'));
-    const edits = setProperty(source, field.path, value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
+    this.editPath(field.path, value);
+  }
+  readDraft(): Record<string, unknown> {
+    const errors: ParseError[] = [], payload: unknown = parse(this.model.textEditorModel!.getValue(), errors);
+    if (errors.length || !payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error(t('settings.editor.invalidDraftForForm'));
+    return payload as Record<string, unknown>;
+  }
+  /** 实体表单与原设置控件只修改同一 JSONC 文本模型，保存继续交原来源 writer。 */
+  editPath(path: (string | number)[], value: unknown): void {
+    if (!this.document.writable) throw new Error(t('settings.editor.currentSourceReadOnly'));
+    this.readDraft();
+    const text = this.model.textEditorModel!, source = text.getValue();
+    const edits = setProperty(source, path, value, { insertSpaces: true, tabSize: 2, eol: source.includes('\r\n') ? '\r\n' : '\n' });
     text.pushEditOperations(null, [{ range: text.getFullModelRange(), text: applyEdits(source, edits) }], () => null);
   }
   private buildFields(): void {

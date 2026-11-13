@@ -1,0 +1,17 @@
+.configuration-entities { height: 100%; overflow: auto; padding: 12px 24px; box-sizing: border-box; color: var(--vscode-foreground); }
+.configuration-entities button { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 1px solid transparent; padding: 5px 10px; cursor: pointer; }
+.configuration-entities button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.configuration-entities button:disabled { opacity: .5; cursor: default; }
+.configuration-entities :is(button,input,textarea):focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+.configuration-entity-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
+.configuration-entity-columns { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: 24px; }
+.configuration-entity-columns nav { display: flex; flex-direction: column; gap: 4px; }
+.configuration-entity-columns nav button { display: flex; flex-direction: column; text-align: left; overflow-wrap: anywhere; }
+.configuration-entity-columns nav button[aria-pressed=true] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+.configuration-entity-columns small { margin-top: 4px; opacity: .8; overflow-wrap: anywhere; }
+.configuration-entity-columns article { min-width: 0; }
+.configuration-entity-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
+.configuration-entity-field :is(input,textarea) { box-sizing: border-box; width: 100%; padding: 6px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); font: inherit; }
+.configuration-entity-field textarea { resize: vertical; }
+.configuration-entities [role=alert] { color: var(--vscode-errorForeground); }
+@media (max-width: 650px) { .configuration-entity-columns { grid-template-columns: 1fr; } }

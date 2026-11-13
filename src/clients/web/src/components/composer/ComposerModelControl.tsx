@@ -16,6 +16,7 @@ export default function ComposerModelControl({
   onSelect,
   onSetWorkspaceDefault,
   onKeyDown,
+  onManage,
 }: {
   controlRef: React.RefObject<HTMLDivElement>;
   providers: AgentProvider[];
@@ -27,6 +28,7 @@ export default function ComposerModelControl({
   onSelect: (providerId: string) => void;
   onSetWorkspaceDefault: (providerId: string) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void;
+  onManage?: () => void;
 }): React.ReactNode {
   const current = providers.find(
     (provider) => provider.provider_id === currentProviderId,
@@ -53,7 +55,7 @@ export default function ComposerModelControl({
           : t("composer.model.select", label)}
         aria-haspopup="menu"
         aria-expanded={open}
-        disabled={disabled}
+        disabled={disabled && !onManage}
         onClick={onToggle}
       >
         <span
@@ -127,6 +129,7 @@ export default function ComposerModelControl({
               </div>
             );
           })}
+          {onManage ? <button type="button" role="menuitem" className="composer-model-menu-item" onClick={onManage}>{t('workbench.settings.modelsProviders')}</button> : null}
         </div>
       </AnchoredOverlay>
     </div>

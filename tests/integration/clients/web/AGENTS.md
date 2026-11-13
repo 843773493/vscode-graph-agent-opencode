@@ -78,3 +78,5 @@ web/
 `test_thread_editor_identity.py` 经正式 Workbench、真实 Gateway 和托管工作区创建 Session，再通过原版打开命令与会话导航核对稳定 Thread 身份、标签去重、分屏及刷新恢复。只有歧义场景向真实登记列表复制一条明确替身记录；未知 Gateway 与歧义均不得读取对应业务 Session。替身卸载等待在途回调结束，避免清理阶段继续处理已释放的 route；保留 request_id、页面错误、原始输出和失败截图。原版关闭空组后在当前组重开已存在资源时复用标签，不要求另建重复标签；该检查不能代替真实远端重连或 Electron 原生恢复验收。
 
 `workbench_build_metadata.test.mjs` 使用真实 esbuild 产物核对流式 metadata 与原对象等价、官方 analyzeMetafile 结果及写入失败传播；这是构建结构检查，不替代正式 Workbench 构建或产品页面。
+
+`test_configuration_entities.py` 经真实 Gateway 和 Workbench 的原 Settings Pane 创建、编辑、保存并移除 Provider／Agent 定义；切换 JSONC 核同一未保存模型，重载后按固定来源重开。关键配置状态由产品表单及原预检／CAS 入口产生，不预写历史或发模型请求；只使用本测试工作区、Home、端口与产物。密码输入、跨工作区共享冲突和完整默认值行为仍由对应场景验收。

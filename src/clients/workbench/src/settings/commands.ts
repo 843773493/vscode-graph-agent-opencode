@@ -18,6 +18,7 @@ import type { IUntypedFileEditorInput } from '../../upstream/src/vs/workbench/co
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IConfigurationService } from '../../upstream/src/vs/platform/configuration/common/configuration.js';
+import type { ISettingsEditorOptions } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import type { ITextEditorOptions } from '../../upstream/src/vs/platform/editor/common/editor.js';
 import type { TargetSettingsLocation } from './scope.js';
 import { ConfigurationSourceOwner, sourceStatus } from './sourceOwner.js';
@@ -25,6 +26,7 @@ import { configSourceFiles, configSourceScheme } from './sourceEditor.js';
 import { t } from '../../../shared/core/i18n/index.js';
 import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 import type { ConfigSourceLayer } from '../../../web/src/types/protocol.js';
+import type { DefinitionEditorOptions } from './entities.js';
 
 function commandTitle(key: keyof typeof actionTitles): { value: string; original: string } {
   return { value: t(key), original: actionTitles[key] };
@@ -159,5 +161,43 @@ registerAction2(class extends Action2 {
       const captured = await captureSettingsLocation(parent, cancellation.token);
       if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { pinned: true });
     } finally { cancellation.dispose(); }
+  }
+});
+
+// 两个实体入口只选择原 Settings 输入的内容，不建立专用输入或另一份配置草稿。
+for (const kind of ['providers', 'agents'] as const) registerAction2(class extends Action2 {
+  constructor() { super({ id: kind === 'providers' ? 'boxteam.settings.modelsProviders' : 'boxteam.settings.agents',
+    title: kind === 'providers' ? commandTitle('workbench.settings.modelsProviders') : commandTitle('workbench.settings.agents'),
+    category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true }); }
+  async run(accessor: ServicesAccessor, location?: TargetSettingsLocation | WorkspaceOwner, definitionId?: string): Promise<void> {
+    const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
+    const quickInput = accessor.get(IQuickInputService), groups = accessor.get(IEditorGroupsService);
+    const groupId = groups.activeGroup.id;
+    const frozen = location && 'source_key' in location ? parseSettingsLocation(location) : undefined;
+    if (frozen && !frozen.workspace_id) throw new Error(t('configuration.entities.workspaceRequired'));
+    const explicitOwner = location && 'workspaceId' in location ? { ...location } : undefined;
+    const target = frozen ?? managementGateway('settings', explicitOwner?.gatewayId);
+    const lifecycle = createManagementTargetLifecycle(t('workbench.settings.reopenSource'));
+    try {
+      await workspaceContext.ensureReady();
+      lifecycle.check();
+      // 全局入口默认本地管理目标的首个工作区；来源选择只发生一次。
+      const workspace = frozen?.workspace_id ? frozen : explicitOwner ? { workspace_id: explicitOwner.workspaceId }
+        : workspaceContext.getSnapshot().workspaces.find(item => item.gateway_id === target.gateway_id);
+      if (!workspace) throw new Error(t('plugins.noWorkspaces'));
+      const owner = new ConfigurationSourceOwner({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id, workspace_id: workspace.workspace_id });
+      const selected = frozen ? { source_key: frozen.source_key } : await quickInput.pick((await owner.list(lifecycle.signal)).sources.filter(item => item.source_key).map(item => ({
+        label: item.source_key!, description: `${item.layer} · ${item.presence}`, source_key: item.source_key!,
+      })), { title: t(kind === 'providers' ? 'workbench.settings.modelsProviders' : 'workbench.settings.agents'), placeHolder: t('workbench.settings.modelsProvidersHint') }, lifecycle.token);
+      lifecycle.check();
+      if (!selected) return;
+      const document = await owner.read(selected.source_key, undefined, lifecycle.signal);
+      lifecycle.check();
+      if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
+      const options: ISettingsEditorOptions & DefinitionEditorOptions = { pinned: true, definitionKind: kind, definitionId };
+      await editors.openEditor(parent.createInstance(SettingsEditor2Input, { ...owner.target, version: 2,
+        source_key: selected.source_key, name: frozen?.name ?? workspaceContext.getSnapshot().workspaces.find(item => item.gateway_id === target.gateway_id && item.workspace_id === workspace.workspace_id)?.name ?? workspace.workspace_id! }, document),
+        options, groupId);
+    } finally { lifecycle.dispose(); }
   }
 });

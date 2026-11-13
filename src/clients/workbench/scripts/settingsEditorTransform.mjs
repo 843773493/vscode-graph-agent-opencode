@@ -118,6 +118,7 @@ import { t } from ${i18n};
   if (path === paths[2]) {
     contents = `import { ITargetSettingsContext } from ${scope};
 import { SettingsContextHeader } from ${JSON.stringify(resolve(root, 'src/settings/header.js'))};
+import { ConfigurationEntityView, type DefinitionEditorOptions } from ${JSON.stringify(resolve(root, 'src/settings/entities.js'))};
 import { captureSettingsLocation } from ${editor};
 import { selectSettingsManagementTargetCommand, type ManagementTarget } from ${JSON.stringify(resolve(root, 'src/managementTarget.js'))};
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
@@ -131,7 +132,40 @@ export class SettingsEditor2 extends EditorPane {`);
     contents = replaceOnce(contents, '\tprivate pendingSettingUpdate: { key: string; value: unknown; languageFilter: string | undefined } | null = null;', `  private readonly pendingSettingUpdates = new Map<string, PendingSettingsUpdate>();
   private pendingSettingWrite: Promise<void> | undefined;
   private settingsWriterInput: SettingsEditor2Input | undefined;
-  private settingsContextHeader: SettingsContextHeader | undefined;`);
+  private settingsContextHeader: SettingsContextHeader | undefined;
+  private entityView: ConfigurationEntityView | undefined;
+  private entityContainer!: HTMLElement;
+  private entityKind: DefinitionEditorOptions['definitionKind'];`);
+    contents = replaceOnce(contents, '\t\tthis.createBody(this.rootElement);', `\t\tthis.createBody(this.rootElement);
+    this.entityContainer = DOM.append(this.rootElement, DOM.$('div'));
+    this.entityContainer.style.cssText = 'display:none;min-height:0';`);
+    contents = replaceOnce(contents, '\t\treturn this.viewState;\n\t}\n\n\toverride setOptions', `\t\treturn { ...this.viewState, ...(this.entityKind ? this.entityView?.selection : {}) };
+\t}\n\n\toverride setOptions`);
+    contents = replaceOnce(contents, '\tprivate _setOptions(options: ISettingsEditorOptions): void {', `\tprivate _setOptions(options: ISettingsEditorOptions): void {
+    const definition = options as ISettingsEditorOptions & DefinitionEditorOptions;
+    const restored = options.viewState as DefinitionEditorOptions | undefined;
+    if (definition.definitionKind || restored?.definitionKind) this.showDefinitions(definition.definitionKind ?? restored?.definitionKind, definition.definitionId ?? restored?.definitionId);
+    else if (options.query !== undefined) this.showDefinitions();`);
+    contents = replaceOnce(contents, '\t\tsuper.clearInput();', `    if (this.entityView) {
+      this.entityView.dispose(); this.entityView = undefined; this.entityKind = undefined;
+      this.entityContainer.style.display = 'none'; this.bodyContainer.style.display = '';
+    }
+\t\tsuper.clearInput();`);
+    contents = replaceOnce(contents, '\t\tsuper.focus();\n\n\t\tif (this._currentFocusContext', '\t\tsuper.focus();\n    if (this.entityKind) { this.entityView?.focus(); return; }\n\n\t\tif (this._currentFocusContext');
+    contents = replaceOnce(contents, '\tprivate layoutSplitView(dimension: DOM.Dimension): void {', `  private showDefinitions(kind?: DefinitionEditorOptions['definitionKind'], id?: string): void {
+    const source = this.targetSettingsContext.target;
+    this.entityKind = source?.location.workspace_id ? kind : undefined;
+    this.bodyContainer.style.display = this.entityKind ? 'none' : '';
+    this.entityContainer.style.display = this.entityKind ? 'block' : 'none';
+    if (source && this.entityKind) {
+      this.entityView ??= this.modelDisposables.add(this.instantiationService.createInstance(ConfigurationEntityView, this.entityContainer, source, this.group.id));
+      this.entityView.show(this.entityKind, id);
+    }
+    if (this.dimension) this.layoutSplitView(this.dimension);
+  }
+
+\tprivate layoutSplitView(dimension: DOM.Dimension): void {`);
+    contents = replaceOnce(contents, '\t\tthis.splitView.el.style.height = `${listHeight}px`;', "    if (this.entityKind) { this.entityContainer.style.height = Math.max(0, listHeight) + 'px'; return; }\n\t\tthis.splitView.el.style.height = `${listHeight}px`;");
     // 三种搜索共用原查询取消源；输入去抖、scope 变化及 Pane 释放不能留下独立 AI 任务。
     contents = replaceOnce(contents, 'CancelablePromise, createCancelablePromise, Delayer, raceTimeout', 'Delayer, raceTimeout');
     contents = replaceOnce(contents, '\tprivate aiSearchPromise: CancelablePromise<void> | null = null;\n', '');
@@ -151,7 +185,7 @@ export class SettingsEditor2 extends EditorPane {`);
   }
 
 \tprivate async onSearchInputChanged(expandResults: boolean): Promise<void> {`);
-    contents = replaceOnce(contents, '\t\t\tconst searchVal = this.searchWidget.getValue();', '\t\t\tthis.cancelSettingsSearch();\n\t\t\tconst searchVal = this.searchWidget.getValue();');
+    contents = replaceOnce(contents, '\t\t\tconst searchVal = this.searchWidget.getValue();', '\t\t\tif (this.entityKind) this.showDefinitions();\n\t\t\tthis.cancelSettingsSearch();\n\t\t\tconst searchVal = this.searchWidget.getValue();');
     contents = replaceOnce(contents, 'this.searchInputDelayer.trigger(() => this.onSearchInputChanged(true));', `this.searchInputDelayer.trigger(() => this.onSearchInputChanged(true)).catch(error => {
         if (!isCancellationError(error)) this.logService.error(error);
       });`);
@@ -207,6 +241,8 @@ export class SettingsEditor2 extends EditorPane {`);
     contents = replaceOnce(contents, 'options = options || validateSettingsEditorOptions({});', 'options = options || validateSettingsEditorOptions({});\n    if (this.targetSettingsContext.target) options = { ...options, target: ConfigurationTarget.USER_REMOTE };');
     contents = replaceOnce(contents, 'this.settingsTargetsWidget.settingsTarget = ConfigurationTarget.USER_LOCAL;', 'this.settingsTargetsWidget.settingsTarget = this.targetSettingsContext.target ? ConfigurationTarget.USER_REMOTE : ConfigurationTarget.USER_LOCAL;');
     contents = replaceOnce(contents, '\t\tthis.modelDisposables.clear();', `\t\tthis.modelDisposables.clear();
+    this.entityView = undefined;
+    this.showDefinitions();
     this.settingsWriterInput = input;
     this.modelDisposables.add({ dispose: () => { this.settingsWriterInput = undefined; } });
     this.modelDisposables.add(input.registerSettingsWriter(this.group.id, {
@@ -231,7 +267,7 @@ export class SettingsEditor2 extends EditorPane {`);
       if (!isCancellationError(error)) this.notificationService.error(error);
     })));
     this.settingsContextHeader = this._register(this.instantiationService.createInstance(SettingsContextHeader,
-      DOM.append(headerControlsContainer, DOM.$('div')), () => { if (this.dimension) this.layoutSplitView(this.dimension); }));
+      DOM.append(headerControlsContainer, DOM.$('div')), () => { if (this.dimension) this.layoutSplitView(this.dimension); }, kind => this.showDefinitions(kind)));
 \t\tconst targetWidgetContainer = DOM.append(headerControlsContainer,`);
     contents = replaceOnce(contents, 'dimension.height - (72 + 11 + 14 /* header height + editor padding */)', 'dimension.height - (this.headerContainer.offsetHeight + 11 + 14)');
     contents = replaceOnce(contents, '{ enableRemoteSettings: true }', '{ enableRemoteSettings: true, beforeTargetChange: () => this.flushSettingsUpdates() }');
