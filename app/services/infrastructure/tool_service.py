@@ -103,6 +103,10 @@ class ToolService:
             execution_enabled=policy.execution_enabled,
             model_visible=policy.model_visible,
             test_supported=tool_id in self._test_supported_tools,
+            execution_locked=policy.execution_locked,
+            model_visibility_locked=policy.model_visibility_locked,
+            availability=tool.get("availability"),
+            availability_detail=tool.get("availability_detail"),
         )
 
     async def get(self, tool_id: str, agent_id: str | None = None) -> ToolDTO:

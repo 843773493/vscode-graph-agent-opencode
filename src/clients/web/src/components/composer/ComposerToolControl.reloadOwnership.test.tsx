@@ -94,6 +94,12 @@ function installToolCatalogFetch(catalogs: Record<string, Deferred>): void {
     if (request.path === "/api/v1/tools/tests") {
       return apiSuccessResponse({ items: [], next_cursor: null, has_more: false });
     }
+    if (request.path === "/api/v1/agents") {
+      return apiSuccessResponse(["agent_a", "agent_b"].map(agent_id => ({
+        agent_id, name: agent_id, model: "test-model", tools: [], capabilities: [],
+        providers: [{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }],
+      })));
+    }
     return undefined;
   }, { token: "tool-reload-token" });
 }
@@ -111,7 +117,9 @@ function toolCatalogPayload(toolId: string) {
     kind: "default",
     execution_enabled: true,
     model_visible: true,
-    test_supported: false,
+    test_supported: true,
+    execution_locked: false,
+    model_visibility_locked: false,
   }];
 }
 
@@ -140,6 +148,7 @@ async function renderAndOpen(props: {
         agentId={props.agentId}
         workspaceId={props.workspaceId}
         onStatus={() => undefined}
+        providers={[{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }]}
       />,
     );
   });
@@ -168,6 +177,7 @@ describe("工具目录加载的 owner 归属", () => {
           agentId="agent_b"
           workspaceId={WORKSPACE_KEYS[0]}
           onStatus={() => undefined}
+          providers={[{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }]}
         />,
       );
     });
@@ -249,6 +259,15 @@ describe("工具测试进度轮询的 owner 归属", () => {
     await act(async () => {
       findButton(renderer, "composer-tool-test-button").props.onClick();
     });
+    const testInputs = renderer.root.findAll((node) => node.type === "input");
+    await act(async () => {
+      testInputs[0]?.props.onChange({ target: { checked: true } });
+      testInputs[1]?.props.onChange({ target: { value: "1" } });
+      testInputs[2]?.props.onChange({ target: { checked: true } });
+    });
+    const confirm = renderer.root.find((node) => node.type === "button"
+      && node.children.join("").includes("开始测试"));
+    await act(async () => { confirm.props.onClick(); });
     await flush();
 
     // 触发一轮轮询：请求发出后保持挂起，属于第一个 Gateway。
@@ -266,6 +285,7 @@ describe("工具测试进度轮询的 owner 归属", () => {
           agentId="agent_a"
           workspaceId={WORKSPACE_KEYS[1]}
           onStatus={() => undefined}
+          providers={[]}
         />,
       );
     });

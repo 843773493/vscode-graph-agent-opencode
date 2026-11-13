@@ -76,3 +76,15 @@ for (const [kind, titleKey, openKey, icon, order] of [
     openCommandActionDescriptor: { id: `${id}.focus`, title: { value: t(openKey), original: actionTitles[openKey] } },
   }], container);
 }
+const toolsContainerId = 'boxteam.tools';
+const toolsContainer = containers.registerViewContainer({
+  id: toolsContainerId, title: { value: t('workbench.view.tools'), original: actionTitles['workbench.view.tools'] },
+  icon: Codicon.tools, order: 8, ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [toolsContainerId, { mergeViewWithContainerWhenSingleView: true }]),
+  storageId: toolsContainerId, hideIfEmpty: true,
+}, ViewContainerLocation.Panel);
+views.registerViews([{
+  id: 'boxteam.tools.view', name: { value: t('workbench.view.tools'), original: actionTitles['workbench.view.tools'] },
+  canToggleVisibility: true, canMoveView: true, ctorDescriptor: new SyncDescriptor(WorkspacePanel),
+  openCommandActionDescriptor: { id: 'boxteam.tools.focus', title: { value: t('workbench.view.openTools'), original: actionTitles['workbench.view.openTools'] } },
+}],
+toolsContainer);

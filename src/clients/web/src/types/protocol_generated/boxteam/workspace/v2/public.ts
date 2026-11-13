@@ -2554,6 +2554,10 @@ export interface ToolDTO {
   execution_enabled: boolean;
   model_visible: boolean;
   test_supported?: boolean | undefined;
+  execution_locked?: boolean | undefined;
+  model_visibility_locked?: boolean | undefined;
+  availability?: string | undefined;
+  availability_detail?: string | undefined;
 }
 
 export interface ToolSelectionChange {
@@ -19854,6 +19858,10 @@ function createBaseToolDTO(): ToolDTO {
     execution_enabled: false,
     model_visible: false,
     test_supported: undefined,
+    execution_locked: undefined,
+    model_visibility_locked: undefined,
+    availability: undefined,
+    availability_detail: undefined,
   };
 }
 
@@ -19872,6 +19880,14 @@ export const ToolDTO: MessageFns<ToolDTO> = {
       execution_enabled: isSet(object.execution_enabled) ? globalThis.Boolean(object.execution_enabled) : false,
       model_visible: isSet(object.model_visible) ? globalThis.Boolean(object.model_visible) : false,
       test_supported: isSet(object.test_supported) ? globalThis.Boolean(object.test_supported) : undefined,
+      execution_locked: isSet(object.execution_locked) ? globalThis.Boolean(object.execution_locked) : undefined,
+      model_visibility_locked: isSet(object.model_visibility_locked)
+        ? globalThis.Boolean(object.model_visibility_locked)
+        : undefined,
+      availability: isSet(object.availability) ? globalThis.String(object.availability) : undefined,
+      availability_detail: isSet(object.availability_detail)
+        ? globalThis.String(object.availability_detail)
+        : undefined,
     };
   },
 
@@ -19913,6 +19929,18 @@ export const ToolDTO: MessageFns<ToolDTO> = {
     if (message.test_supported !== undefined) {
       obj.test_supported = message.test_supported;
     }
+    if (message.execution_locked !== undefined) {
+      obj.execution_locked = message.execution_locked;
+    }
+    if (message.model_visibility_locked !== undefined) {
+      obj.model_visibility_locked = message.model_visibility_locked;
+    }
+    if (message.availability !== undefined) {
+      obj.availability = message.availability;
+    }
+    if (message.availability_detail !== undefined) {
+      obj.availability_detail = message.availability_detail;
+    }
     return obj;
   },
 
@@ -19933,6 +19961,10 @@ export const ToolDTO: MessageFns<ToolDTO> = {
     message.execution_enabled = object.execution_enabled ?? false;
     message.model_visible = object.model_visible ?? false;
     message.test_supported = object.test_supported ?? undefined;
+    message.execution_locked = object.execution_locked ?? undefined;
+    message.model_visibility_locked = object.model_visibility_locked ?? undefined;
+    message.availability = object.availability ?? undefined;
+    message.availability_detail = object.availability_detail ?? undefined;
     return message;
   },
 };

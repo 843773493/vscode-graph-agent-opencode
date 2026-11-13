@@ -38,6 +38,7 @@ class ToolCatalogService:
             {
                 **item,
                 "origin": item.get("origin", "builtin"),
+                "availability": item.get("availability", "unknown") if item.get("origin", "builtin") != "builtin" else item.get("availability"),
                 "group_id": item.get("group_id", DEFAULT_TOOL_GROUP.group_id),
                 "group_name": item.get(
                     "group_name",
@@ -81,6 +82,7 @@ class ToolCatalogService:
             "id": spec.name,
             "name": spec.name,
             "origin": "custom",
+            "availability": "unknown",
             "description": spec.description or f"工作区扩展工具 {spec.name}",
             "parameters": parameters,
             "category": group_fields["kind"],

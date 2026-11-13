@@ -42,6 +42,8 @@ export async function startToolTest(
   toolId: string,
   agentId: string,
   workspaceId?: string | null,
+  providerIds: string[] = [],
+  repetitions = 1,
 ): Promise<ToolTestRun> {
   return unwrapApiData(await requestJson<APIResponse<ToolTestRun>>(
     port,
@@ -49,7 +51,7 @@ export async function startToolTest(
     {
       method: "POST",
       headers: workspaceHeader(workspaceId),
-      body: JSON.stringify({ agent_id: agentId, provider_ids: [] }),
+      body: JSON.stringify({ agent_id: agentId, provider_ids: providerIds, repetitions }),
     },
   ));
 }

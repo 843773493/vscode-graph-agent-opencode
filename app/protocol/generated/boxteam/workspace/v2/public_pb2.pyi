@@ -4212,7 +4212,7 @@ class TimestampedDTO(_message.Message):
     def __init__(self, created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class ToolDTO(_message.Message):
-    __slots__ = ("tool_id", "name", "origin", "description", "parameters", "category", "group_id", "group_name", "kind", "execution_enabled", "model_visible", "test_supported")
+    __slots__ = ("tool_id", "name", "origin", "description", "parameters", "category", "group_id", "group_name", "kind", "execution_enabled", "model_visible", "test_supported", "execution_locked", "model_visibility_locked", "availability", "availability_detail")
     TOOL_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     ORIGIN_FIELD_NUMBER: _ClassVar[int]
@@ -4225,6 +4225,10 @@ class ToolDTO(_message.Message):
     EXECUTION_ENABLED_FIELD_NUMBER: _ClassVar[int]
     MODEL_VISIBLE_FIELD_NUMBER: _ClassVar[int]
     TEST_SUPPORTED_FIELD_NUMBER: _ClassVar[int]
+    EXECUTION_LOCKED_FIELD_NUMBER: _ClassVar[int]
+    MODEL_VISIBILITY_LOCKED_FIELD_NUMBER: _ClassVar[int]
+    AVAILABILITY_FIELD_NUMBER: _ClassVar[int]
+    AVAILABILITY_DETAIL_FIELD_NUMBER: _ClassVar[int]
     tool_id: str
     name: str
     origin: str
@@ -4237,7 +4241,11 @@ class ToolDTO(_message.Message):
     execution_enabled: bool
     model_visible: bool
     test_supported: bool
-    def __init__(self, tool_id: _Optional[str] = ..., name: _Optional[str] = ..., origin: _Optional[str] = ..., description: _Optional[str] = ..., parameters: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., category: _Optional[str] = ..., group_id: _Optional[str] = ..., group_name: _Optional[str] = ..., kind: _Optional[str] = ..., execution_enabled: _Optional[bool] = ..., model_visible: _Optional[bool] = ..., test_supported: _Optional[bool] = ...) -> None: ...
+    execution_locked: bool
+    model_visibility_locked: bool
+    availability: str
+    availability_detail: str
+    def __init__(self, tool_id: _Optional[str] = ..., name: _Optional[str] = ..., origin: _Optional[str] = ..., description: _Optional[str] = ..., parameters: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., category: _Optional[str] = ..., group_id: _Optional[str] = ..., group_name: _Optional[str] = ..., kind: _Optional[str] = ..., execution_enabled: _Optional[bool] = ..., model_visible: _Optional[bool] = ..., test_supported: _Optional[bool] = ..., execution_locked: _Optional[bool] = ..., model_visibility_locked: _Optional[bool] = ..., availability: _Optional[str] = ..., availability_detail: _Optional[str] = ...) -> None: ...
 
 class ToolSelectionChange(_message.Message):
     __slots__ = ("tool_id", "execution_enabled", "model_visible")

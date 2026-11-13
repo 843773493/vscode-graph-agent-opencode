@@ -1,7 +1,7 @@
 import { gatewayWorkspaceKey, type WorkspaceOwner } from "../../../web/src/api/workspaceIdentity.js";
 import { t } from '../../../shared/core/i18n/index.js';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { getWorkspace } from '../../../web/src/api/workspace.js';
+import { getWorkspace, listAgents } from '../../../web/src/api/workspace.js';
 import type { GatewayWorkspace } from '../../../web/src/types/backend.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import type { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
@@ -17,6 +17,8 @@ import type { WorkspaceResourceDTO } from '../../../web/src/api/workspaceResourc
 import { resourceActionCommand } from '../resources/runtimeActions.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { ThreadInput } from '../threadInput.js';
+import ComposerToolControl from '../../../web/src/components/composer/ComposerToolControl.js';
+import type { Agent } from '../../../web/src/types/backend.js';
 import { ReactSurface } from './surface.js';
 import { TaskView } from './taskView.js';
 import { productStyles } from './productStyles.js';
@@ -24,15 +26,17 @@ import style from './workspacePanelView.css?text';
 import panelStyle from '../../../web/src/styles/foundation/workbenchPanel.css?text';
 import portStyle from '../../../web/src/styles/workspace/portForwardPanel.css?text';
 
-type PanelKind = 'terminal' | 'browser' | 'output' | 'ports' | 'automation';
+type PanelKind = 'terminal' | 'browser' | 'output' | 'ports' | 'automation' | 'tools';
 const panelKinds: Record<string, PanelKind> = {
   'boxteam.workspace.terminal': 'terminal', 'boxteam.workspace.output': 'output',
   'boxteam.browser.view': 'browser',
   'boxteam.ports.view': 'ports', 'boxteam.automation.tasks': 'automation',
+  'boxteam.tools.view': 'tools',
 };
 const panelLabelKeys: Record<PanelKind, string> = {
   terminal: 'workbench.view.workspaceTerminal', browser: 'workbench.view.browser',
   output: 'workbench.view.workspaceOutput', ports: 'workbench.view.ports', automation: 'workbench.view.automation',
+  tools: 'workbench.view.tools',
 };
 const toolbar = (tools: ReactNode) => <div className="native-workspace-panel-toolbar">{tools}</div>;
 interface ResourceReveal { owner: WorkspaceOwner; resourceId: string }
@@ -92,8 +96,40 @@ function WorkspaceProduct({ kind, workspace, editors, active, input, commands, n
     case 'output': return <section className="gateway-log-panel native-workspace-panel-product" data-testid="gateway-log-panel">
       <GatewayLogContent apiPort={0} workspaceId={gatewayWorkspaceKey(workspace)} active={active} renderToolbar={toolbar} />
     </section>;
+    case 'tools': return <WorkspaceToolManager workspace={workspace} active={active} />;
     case 'ports': return <WarmConfirmProvider><WorkspacePortForwardPanel apiPort={0} workspace={workspace} active={active} /></WarmConfirmProvider>;
   }
+}
+
+function WorkspaceToolManager({ workspace, active }: { workspace: GatewayWorkspace; active: boolean }) {
+  const [agents, setAgents] = useState<Agent[] | null>(null);
+  const [selected, setSelected] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+  useEffect(() => {
+    let disposed = false;
+    setAgents(null); setError(null); setSelected('');
+    void listAgents(0, gatewayWorkspaceKey(workspace)).then(value => {
+      if (disposed) return;
+      setAgents(value);
+      setSelected(value.find(agent => agent.workspace_default)?.agent_id ?? value[0]?.agent_id ?? '');
+    }).catch(cause => { if (!disposed) setError(String(cause)); });
+    return () => { disposed = true; };
+  }, [workspace.gateway_id, workspace.workspace_id]);
+  if (error) return <p role="alert">{error}</p>;
+  if (!agents) return <p role="status">{t('composer.tools.loading')}</p>;
+  if (!agents.length) return <p role="status">{t('composer.tools.noAgents')}</p>;
+  const agent = agents.find(item => item.agent_id === selected);
+  return <section className="native-workspace-panel-product native-workspace-tools" data-agent-id={selected}>
+    <header><label>{t('composer.tools.agentOwner')}
+      <select value={selected} onChange={event => setSelected(event.target.value)} aria-label={t('composer.tools.agentOwner')}>
+        {agents.map(item => <option key={item.agent_id} value={item.agent_id}>{item.name} · {item.agent_id}</option>)}
+      </select>
+    </label><span>{t('composer.tools.workspaceAgentImpact')}</span></header>
+    {agent ? <ComposerToolControl apiPort={0} agentId={agent.agent_id} workspaceId={gatewayWorkspaceKey(workspace)}
+      inline active={active} onStatus={setStatus} providers={agent.providers} /> : null}
+    {status ? <p role="status">{status}</p> : null}
+  </section>;
 }
 
 function WorkspacePanelView({ editors, kind, visible, commands, notifications, reveal }: {

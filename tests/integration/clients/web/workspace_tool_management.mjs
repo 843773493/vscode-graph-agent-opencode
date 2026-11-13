@@ -1,0 +1,114 @@
+import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { chromium } from 'playwright';
+import { expect } from 'playwright/test';
+
+const fixture = JSON.parse(process.env.BOXTEAM_TOOLS_FIXTURE);
+const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
+assert(artifacts, '必须设置正式测试产物目录');
+const result = { phase: 'initialization', pageErrors: [], requests: [], changes: [] };
+let browser, page;
+try {
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
+  page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
+  page.setDefaultTimeout(15000);
+  page.on('pageerror', error => result.pageErrors.push(error.message));
+  page.on('request', request => {
+    if (request.url().includes('/api/v1/tools')) result.requests.push({ method: request.method(), url: request.url(), body: request.postData() });
+  });
+  const api = (url, body) => page.evaluate(async ({ url, body, owner }) => {
+    const credential = (await (await fetch('/api/gateway/auth/local-credential')).json()).data;
+    const headers = { 'X-Local-Token': credential.token, 'X-BoxTeam-Target-Gateway-Id': owner.gatewayId, 'X-BoxTeam-Workspace-Id': owner.workspaceId };
+    if (body) headers['Content-Type'] = 'application/json';
+    const response = await fetch(url, { method: body ? 'PATCH' : 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+    const envelope = await response.json();
+    if (!response.ok || envelope.request_id !== response.headers.get('X-Request-ID')) throw new Error(JSON.stringify(envelope));
+    return { status: response.status, requestId: envelope.request_id, data: envelope.data };
+  }, { url, body, owner: fixture });
+  const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
+  await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#workbench .monaco-workbench')).toBeVisible({ timeout: 30000 });
+  await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
+  for (const url of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) await api(url);
+  result.phase = 'no-session-workspace-tools';
+  await command('boxteam.tools.focus');
+  const panel = page.locator('[data-panel-kind="tools"]');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByLabel('Agent', { exact: true })).toBeVisible();
+  const owner = { gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId };
+  const toolOwner = await api(`/api/v1/workspace`);
+  assert.equal(toolOwner.data.workspace_id, fixture.workspaceId);
+  const agentId = await panel.getByLabel('Agent', { exact: true }).inputValue();
+  assert(agentId);
+  const catalog = await api(`/api/v1/tools?agent_id=${encodeURIComponent(agentId)}`);
+  result.owner = { ...owner, agentId, requestId: catalog.requestId };
+  await expect(panel.locator('.composer-tool-menu')).toBeVisible();
+  const rows = panel.locator('.composer-tool-item');
+  await expect(rows.first()).toBeVisible();
+  await expect(rows.first()).toContainText('参数 schema');
+
+  const testButton = rows.getByRole('button', { name: '测试', exact: true }).first();
+  if (await testButton.isEnabled()) {
+    await testButton.click();
+    const dialog = panel.getByRole('dialog');
+    await expect(dialog).toContainText('可能产生真实费用');
+    await expect(dialog.getByRole('button', { name: '开始测试', exact: true })).toBeDisabled();
+    const providers = dialog.locator('input[type="checkbox"]');
+    assert((await providers.count()) >= 2, '所选 Agent 必须提供至少一个可用 Provider');
+    await providers.first().check();
+    await expect(dialog.getByRole('button', { name: '开始测试', exact: true })).toBeDisabled();
+    await dialog.getByLabel('我了解这次测试可能产生模型费用', { exact: true }).check();
+    await expect(dialog.getByRole('button', { name: '开始测试', exact: true })).toBeDisabled();
+    await dialog.getByLabel('运行次数', { exact: true }).fill('2');
+    await expect(dialog.getByRole('button', { name: '开始测试', exact: true })).toBeEnabled();
+    await dialog.getByRole('button', { name: '关闭工具面板', exact: true }).click();
+  }
+  assert.equal(result.requests.some(request => request.method === 'POST' && /\/tests(?:$|\?)/.test(request.url)), false, '未确认的模型测试不能产生POST');
+
+  const mutable = catalog.data.find(tool => !tool.execution_locked && !tool.model_visibility_locked);
+  if (mutable) {
+    const row = rows.filter({ hasText: mutable.name }).first();
+    const toggle = async (capability, currentValue, value) => {
+      const label = capability === 'execution'
+        ? mutable.name + '：' + (currentValue ? '关闭工具能力' : '开启工具能力')
+        : mutable.name + '：' + (currentValue ? '隐藏工具说明' : '显示工具说明');
+      if (currentValue === value) return;
+      const request = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === '/api/v1/tools/selection');
+      await row.getByRole('button', { name: label, exact: true }).click();
+      const response = await request;
+      assert.equal(response.status(), 200, await response.text());
+      const envelope = await response.json();
+      assert.equal(envelope.request_id, response.headers()['x-request-id']);
+      const requestHeaders = response.request().headers();
+      assert.equal(requestHeaders['x-boxteam-target-gateway-id'], fixture.gatewayId);
+      assert.equal(requestHeaders['x-boxteam-workspace-id'], fixture.workspaceId);
+      const body = response.request().postDataJSON();
+      assert.equal(body.agent_id, agentId);
+      assert.deepEqual(body.changes.map(change => change.tool_id), [mutable.tool_id]);
+      assert.equal(envelope.data.length, 1);
+      assert.equal(envelope.data[0].tool_id, mutable.tool_id);
+      result.changes.push({ requestId: envelope.request_id, body, changed: envelope.data });
+    };
+    await toggle('execution', mutable.execution_enabled, !mutable.execution_enabled);
+    const interim = await api('/api/v1/tools?agent_id=' + encodeURIComponent(agentId));
+    const current = interim.data.find(tool => tool.tool_id === mutable.tool_id);
+    await toggle('execution', current.execution_enabled, mutable.execution_enabled);
+    const afterExec = await api('/api/v1/tools?agent_id=' + encodeURIComponent(agentId));
+    const after = afterExec.data.find(tool => tool.tool_id === mutable.tool_id);
+    await toggle('model', after.model_visible, mutable.model_visible);
+    const restored = await api(`/api/v1/tools?agent_id=${encodeURIComponent(agentId)}`);
+    const finalTool = restored.data.find(tool => tool.tool_id === mutable.tool_id);
+    assert.equal(finalTool.execution_enabled, mutable.execution_enabled);
+    assert.equal(finalTool.model_visible, mutable.model_visible);
+  }
+  assert.equal(result.pageErrors.length, 0, JSON.stringify(result.pageErrors));
+  await page.screenshot({ path: path.join(artifacts, 'workspace-tools.png') });
+  result.phase = 'completed';
+} catch (error) {
+  result.error = String(error?.stack ?? error); process.exitCode = 1;
+  if (page) { await page.screenshot({ path: path.join(artifacts, 'failure.png') }); result.body = await page.locator('body').innerText(); }
+} finally {
+  await writeFile(path.join(artifacts, 'result.json'), JSON.stringify(result, null, 2));
+  await browser?.close();
+}

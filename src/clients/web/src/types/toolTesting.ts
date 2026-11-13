@@ -21,6 +21,10 @@ export type ToolCatalogItem = Omit<
   | "execution_enabled"
   | "model_visible"
   | "test_supported"
+  | "execution_locked"
+  | "model_visibility_locked"
+  | "availability"
+  | "availability_detail"
 > & {
   parameters: Record<string, unknown>;
   origin: ToolOrigin;
@@ -30,6 +34,10 @@ export type ToolCatalogItem = Omit<
   execution_enabled: boolean;
   model_visible: boolean;
   test_supported: boolean;
+  execution_locked: boolean;
+  model_visibility_locked: boolean;
+  availability?: string;
+  availability_detail?: string;
 };
 
 export type ToolSelectionChange = ToolSelectionChangeDTO;

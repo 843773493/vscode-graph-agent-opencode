@@ -16,6 +16,10 @@ class ToolDTO(BaseModel):
     execution_enabled: bool
     model_visible: bool
     test_supported: bool = False
+    execution_locked: bool = False
+    model_visibility_locked: bool = False
+    availability: str | None = None
+    availability_detail: str | None = None
 
 
 class ToolSelectionChange(BaseModel):

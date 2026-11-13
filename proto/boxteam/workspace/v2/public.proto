@@ -2523,6 +2523,10 @@ message ToolDTO {
   bool execution_enabled = 10;
   bool model_visible = 11;
   optional bool test_supported = 12;
+  optional bool execution_locked = 13;
+  optional bool model_visibility_locked = 14;
+  optional string availability = 15;
+  optional string availability_detail = 16;
 }
 
 message ToolSelectionChange {

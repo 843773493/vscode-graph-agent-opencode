@@ -104,6 +104,7 @@ def test_catalog_exposes_declared_extensions_with_static_policy_metadata(
         item["origin"] == "custom"
         for item in definitions[2:]
     )
+    assert all(item["availability"] == "unknown" for item in definitions[2:])
 
 
 def test_catalog_groups_default_session_context_extensions_as_collaboration(

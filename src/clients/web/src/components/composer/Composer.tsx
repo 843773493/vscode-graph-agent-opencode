@@ -928,6 +928,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
                     agentId={currentAgent}
                     workspaceId={currentWorkspaceId}
                     onStatus={setStatus}
+                    providers={currentProviders}
                   />
                   <ComposerActionButtons
                     hasContent={hasContent}

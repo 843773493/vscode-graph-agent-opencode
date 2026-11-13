@@ -30,6 +30,85 @@
   overflow: hidden;
 }
 
+.composer-tool-menu-inline {
+  width: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.composer-tool-control-inline {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.native-workspace-tools {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: auto;
+}
+
+.native-workspace-tools > header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--bt-panel-border);
+  color: var(--bt-text-muted);
+}
+
+.native-workspace-tools > header label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.native-workspace-tools select {
+  min-width: 180px;
+  padding: 4px 8px;
+}
+
+.composer-tool-control-inline > .composer-tool-menu {
+  flex: 1;
+  min-height: 0;
+}
+
+.composer-tool-test-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--bt-text-primary) 38%, transparent);
+}
+
+.composer-tool-test-confirm > section {
+  display: grid;
+  gap: 10px;
+  width: min(440px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--bt-panel-border);
+  border-radius: var(--bt-radius-large);
+  background: var(--bt-menu-background);
+  color: var(--bt-menu-foreground);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--bt-text-primary) 24%, transparent);
+}
+
+.composer-tool-test-confirm label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .composer-tool-menu-header {
   display: flex;
   align-items: center;

@@ -19,7 +19,7 @@ export const actionTitleKeys = [
   'workbench.view.workspaceTerminal', 'workbench.view.openWorkspaceTerminal',
   'workbench.view.workspaceOutput', 'workbench.view.openWorkspaceOutput', 'workbench.view.ports',
   'workbench.view.openPorts', 'workbench.view.mcp', 'workbench.view.openMcp',
-  'workbench.view.browser', 'workbench.view.openBrowser',
+  'workbench.view.browser', 'workbench.view.openBrowser', 'workbench.view.tools', 'workbench.view.openTools',
   'workbench.resource.copyUri', 'workbench.resource.attachToChat',
   'workbench.resource.selectSourcesForChat', 'workbench.resource.pasteSelectionToChat',
   'workbench.resource.focus', 'workbench.thread.clearHistoryCache',

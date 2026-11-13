@@ -11026,6 +11026,26 @@ export declare type ToolDTO = Message<"boxteam.workspace.v2.ToolDTO"> & {
    * @generated from field: optional bool test_supported = 12;
    */
   testSupported?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool execution_locked = 13;
+   */
+  executionLocked?: boolean | undefined;
+
+  /**
+   * @generated from field: optional bool model_visibility_locked = 14;
+   */
+  modelVisibilityLocked?: boolean | undefined;
+
+  /**
+   * @generated from field: optional string availability = 15;
+   */
+  availability?: string | undefined;
+
+  /**
+   * @generated from field: optional string availability_detail = 16;
+   */
+  availabilityDetail?: string | undefined;
 };
 
 /**

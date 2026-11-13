@@ -44,6 +44,7 @@ export default function ComposerToolTree({
   savingToolIds,
   runs,
   testingTools,
+  canRunTests,
   collapsedGroups,
   onToggleCollapsed,
   onToggleGroupCapability,
@@ -56,6 +57,7 @@ export default function ComposerToolTree({
   savingToolIds: Set<string>;
   runs: Map<string, ToolTestRun>;
   testingTools: Set<string>;
+  canRunTests: boolean;
   collapsedGroups: Set<string>;
   onToggleCollapsed: (groupId: string) => void;
   onToggleGroupCapability: (
@@ -109,7 +111,7 @@ export default function ComposerToolTree({
                     aria-pressed={ariaPressed(executionState)}
                     aria-label={t(executionState === "on" ? "composer.tools.disableExecution" : "composer.tools.enableExecution", group.name)}
                     title={t(executionState === "on" ? "composer.tools.disableGroupHint" : "composer.tools.enableGroupHint")}
-                    disabled={groupSaving}
+                    disabled={groupSaving || group.items.every((tool) => tool.execution_locked)}
                     onClick={() => onToggleGroupCapability(group, "execution")}
                   >
                     <span className="codicon codicon-tools" aria-hidden="true" />
@@ -121,7 +123,7 @@ export default function ComposerToolTree({
                     aria-pressed={ariaPressed(modelState)}
                     aria-label={t(modelState === "on" ? "composer.tools.hideDefinition" : "composer.tools.showDefinition", group.name)}
                     title={t(modelState === "on" ? "composer.tools.hideDefinitionHint" : "composer.tools.showDefinitionHint")}
-                    disabled={groupSaving || executionState === "off"}
+                    disabled={groupSaving || executionState === "off" || group.items.every((tool) => tool.model_visibility_locked)}
                     onClick={() => onToggleGroupCapability(group, "model")}
                   >
                     <span className="codicon codicon-eye" aria-hidden="true" />
@@ -135,6 +137,9 @@ export default function ComposerToolTree({
                   const running = testingTools.has(tool.tool_id);
                   const saving = savingToolIds.has(tool.tool_id);
                   const failedAttempts = run?.attempts.filter((attempt) => !attempt.passed) ?? [];
+                  const availabilityLabel = tool.availability === "available" ? t("composer.tools.sourceAvailable")
+                    : tool.availability === "unavailable" ? t("composer.tools.sourceUnavailable")
+                      : t("composer.tools.sourceUnknown");
                   return (
                     <div className="composer-tool-item" key={tool.tool_id}>
                       <div className="composer-tool-item-main">
@@ -146,7 +151,7 @@ export default function ComposerToolTree({
                             aria-pressed={tool.execution_enabled}
                             aria-label={t(tool.execution_enabled ? "composer.tools.disableExecution" : "composer.tools.enableExecution", tool.name)}
                             title={t(tool.execution_enabled ? "composer.tools.disableHint" : "composer.tools.enableHint")}
-                            disabled={saving}
+                            disabled={saving || tool.execution_locked}
                             onClick={() => onToggleToolExecution(tool.tool_id)}
                           >
                             <span className="codicon codicon-tools" aria-hidden="true" />
@@ -158,7 +163,7 @@ export default function ComposerToolTree({
                             aria-pressed={tool.model_visible}
                             aria-label={t(tool.model_visible ? "composer.tools.hideDefinition" : "composer.tools.showDefinition", tool.name)}
                             title={t(tool.model_visible ? "composer.tools.hideDefinitionHint" : "composer.tools.showDefinitionHint")}
-                            disabled={saving || !tool.execution_enabled}
+                            disabled={saving || tool.model_visibility_locked || !tool.execution_enabled}
                             onClick={() => onToggleToolModelVisibility(tool.tool_id)}
                           >
                             <span className="codicon codicon-eye" aria-hidden="true" />
@@ -181,6 +186,10 @@ export default function ComposerToolTree({
                             </span>
                           </span>
                           <span>{tool.description || t("composer.tools.backendTool")}</span>
+                          {tool.origin !== "builtin" ? <span>{t("composer.tools.sourceOrigin", tool.origin === "mcp" ? t("composer.tools.origin.mcp") : t("composer.tools.origin.custom"))} · {availabilityLabel}{tool.availability_detail ? " · " + tool.availability_detail : ""}</span> : null}
+                          {tool.execution_locked ? <span>{t("composer.tools.policyExecutionLocked")}</span> : null}
+                          {tool.model_visibility_locked ? <span>{t("composer.tools.policyVisibilityLocked")}</span> : null}
+                          <details><summary>{t("composer.tools.parameters")}</summary><pre>{JSON.stringify(tool.parameters, null, 2)}</pre></details>
                         </span>
                       </div>
                       <div className="composer-tool-test-summary">
@@ -192,7 +201,7 @@ export default function ComposerToolTree({
                         <button
                           type="button"
                           className="composer-tool-test-button"
-                          disabled={!tool.test_supported || running}
+                          disabled={!tool.test_supported || running || !canRunTests}
                           title={
                             tool.test_supported
                               ? t("composer.tools.testNamed", tool.name)
