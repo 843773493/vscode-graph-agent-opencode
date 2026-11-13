@@ -199,8 +199,9 @@
 
 覆盖规范：键盘确认取消与返回必须沿用原版语义；焦点转移失焦关闭和定位预览必须遵守原版行为；原版快速访问操作习惯必须保留；原版服务与项目同名能力必须区分实际接入条件。
 
-- [ ] 14.1 按 design 六类 22 项交互基准验证自动焦点、提示、高亮、分层列表、行内 Tooltip、上下／翻页／首尾、Enter／修饰键、Esc 与返回。
-- [ ] 14.2 验证支持 Provider 的后台连续接受、失焦设置、取消定位预览恢复、IME／ARIA、主题、输入记忆及活动项／滚动保持，浏览器拦截键保留可用命令。
+- [x] 14.1 按 design 六类 22 项交互基准验证自动焦点、提示、高亮、分层列表、行内 Tooltip、上下／翻页／首尾、Enter／修饰键、Esc 与返回。
+- [x] 14.2 验证支持 Provider 的后台连续接受、失焦设置、取消定位预览恢复、IME／ARIA、主题、输入记忆及活动项／滚动保持，浏览器拦截键保留可用命令。
+  - 2026-11-13 原 Quick Input 六类交互闭环：正式 Gateway／Backend／Workbench／Chromium 的独立矩阵通过，最终 `run-4463ef22ed4f` 为1 passed／42.28秒、外层48.31秒、exit0、incomplete_stages=0、观测峰值RSS合计2.45GB。真实24候选核自动焦点／模式提示／帮助返回、高亮／次要归属／图标／行内Tooltip、方向／翻页／首尾／环绕、固定与侧开、同一浮层两次后台接受后两Tab保留、Esc、预览位置恢复、失焦设置、取消不记忆／接受后记忆、活动身份及滚动保持、实际IME输入／ARIA和主题切换；沿原命令入口提供浏览器键位的可用路径。加载／迟到取消与快慢合并复用原76项默认Provider及16.20的已核证据，不复制上游控件。页面与console错误均为空；默认共享构建、显式可复用不可变dist的fixture已经迁齐。最终主包 SHA-256 `777386e7efd30f7d36638d338360ab70b962d4d9c3aaf0fecaf2fa5b1a209f02`，183份转换源码类型和79扩展正式构建通过；完整Web类型的并发TerminalContent测试错误单独保留，不据此声称全树全绿。准确命令／前后指纹见 `out/tests/temp/2026/11/13/file_read_identity/artifacts/interactions-continuous.json`，正式页面原件位于 `out/tests/integration/clients/web/quick_access/test_quick_access_interactions/runs/run-4463ef22ed4f/nodes/node-ef08793132e0/artifacts/`。本项完成适用原交互合同，其余Electron／跨平台与全功能矩阵仍由15组追踪。
 - [x] 14.3 按全功能矩阵核原生 term／task／debug／debug consoles／mcpr 的实际服务与项目 owner 映射；原服务缺条件不伪报互通，项目核心入口仍真实可用。
 - [x] 14.4 核 ext／ext install／issue 的实际宿主及发行配置条件，记录可用或明确缺失原因，不为快速访问新增原生扩展体系或外部发行服务。
   - 2026-11-13 条件 Provider 矩阵：正式 Workbench／真实 Gateway／Backend 页面通过，`run-85a9e739d002`，1 passed／154.44秒（含独占门排队）／exit0。键盘完整遍历原帮助虚拟列表，再进入 term、task、debug、debug consoles；核原服务空态及无匹配过滤，未创建原生终端／任务／Adapter，不将项目资源混入原列表。项目终端／Browser 的既有真实 owner 操作证据仍归11.5，项目持续任务与调试沿原专属命令。mcpr 因原 ChatContextKeys.enabled 未满足而未发布，不回退文件搜索伪报互通。

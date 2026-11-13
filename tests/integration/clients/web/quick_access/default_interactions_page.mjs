@@ -141,6 +141,14 @@ try {
   await expect(quick).toBeVisible();
   await expect(input).toBeFocused();
   await expect(page.getByRole('tab', { name: /qa-interaction-target-04\.txt/ })).toBeVisible();
+  await input.fill('qa-interaction-target-06');
+  await expect(quick.getByRole('option', { name: /^qa-interaction-target-06\.txt/ })).toHaveClass(/focused/);
+  await input.press('End');
+  await input.press('ArrowRight');
+  await expect(quick).toBeVisible();
+  await expect(input).toBeFocused();
+  await expect(page.getByRole('tab', { name: /qa-interaction-target-04\.txt/ })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /qa-interaction-target-06\.txt/ })).toBeVisible();
   await page.keyboard.press('Escape');
   await command('workbench.action.quickOpen', 'qa-interaction-target-05');
   await expect(quick.getByRole('option', { name: /^qa-interaction-target-05\.txt/ })).toHaveClass(/focused/);
