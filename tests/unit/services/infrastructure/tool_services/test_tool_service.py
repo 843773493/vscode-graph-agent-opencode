@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from threading import Event
 from unittest.mock import MagicMock
 
 import pytest
@@ -304,3 +306,40 @@ def test_public_api_does_not_expose_context_free_tool_invoke() -> None:
     assert not any(
         path.endswith("/invoke") for path in app.openapi()["paths"]
     )
+
+
+@pytest.mark.parametrize("cancel_first", [False, True])
+async def test_cold_list_does_not_block_or_overlap_catalog_builds(
+    tmp_path: Path, cancel_first: bool,
+) -> None:
+    started, release = Event(), Event()
+    calls: list[str] = []
+
+    class BlockingCatalog(_ToolCatalogStub):
+        def get_available_tools(self, agent_id: str = "default") -> list[dict]:
+            calls.append(agent_id)
+            if len(calls) == 1:
+                started.set()
+                assert release.wait(5), "事件循环应能继续运行并释放构建"
+            return super().get_available_tools(agent_id)
+
+    service = _service(tmp_path, tool_catalog=BlockingCatalog())
+    first = asyncio.create_task(service.list("default"))
+    second = None
+    try:
+        assert await asyncio.to_thread(started.wait, 5)
+        if cancel_first:
+            first.cancel()
+        second = asyncio.create_task(service.list("coder"))
+        await asyncio.sleep(0)
+        assert calls == ["default"]
+    finally:
+        release.set()
+        if cancel_first:
+            with pytest.raises(asyncio.CancelledError):
+                await first
+        else:
+            assert len(await first) == 2
+        if second is not None:
+            assert len(await second) == 2
+    assert calls == ["default", "coder"]

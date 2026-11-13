@@ -134,6 +134,38 @@ def _build_summarization_middleware(
     ]
 
 
+def build_deep_agent_tool_middleware(
+    *, backend: BackendProtocol, workspace_root: Path,
+    resource_navigation: ResourceNavigation, text_mutations: WorkspaceTextMutationOwner,
+    artifact_reader: ResourceFileReader, permissions: list[FilesystemPermission] | None,
+    resolved_tool_denylist: set[str],
+) -> tuple[SourceOwnedTodoListMiddleware | None, FilesystemMiddleware]:
+    """目录和执行共用的、无需模型的工具注册。"""
+    todo_middleware = (
+        SourceOwnedTodoListMiddleware(system_prompt="", tool_description=TODO_TOOL_DESCRIPTION)
+        if "write_todos" not in resolved_tool_denylist else None
+    )
+    filesystem_middleware = FilesystemMiddleware(
+        backend=backend,
+        system_prompt="",
+        custom_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
+        _permissions=permissions,
+        tool_token_limit_before_evict=None,
+    )
+    configure_workspace_filesystem_tools(
+        filesystem_middleware,
+        workspace_root=workspace_root,
+        resource_navigation=resource_navigation,
+        text_mutations=text_mutations,
+        artifact_reader=artifact_reader,
+    )
+    _filter_middleware_tools(
+        filesystem_middleware,
+        resolved_tool_denylist | FILESYSTEM_INTERNAL_TOOL_DENYLIST,
+    )
+    return todo_middleware, filesystem_middleware
+
+
 def build_deep_agent_middleware(
     *,
     model: BaseChatModel,
@@ -161,13 +193,14 @@ def build_deep_agent_middleware(
         tool_invocation_context_middleware,
         tool_output_middleware,
     ]
-    if "write_todos" not in resolved_tool_denylist:
-        deepagent_middleware.append(
-            SourceOwnedTodoListMiddleware(
-                system_prompt="",
-                tool_description=TODO_TOOL_DESCRIPTION,
-            )
-        )
+    todo_middleware, filesystem_middleware = build_deep_agent_tool_middleware(
+        backend=backend, workspace_root=workspace_root,
+        resource_navigation=resource_navigation, text_mutations=text_mutations,
+        artifact_reader=artifact_reader, permissions=permissions,
+        resolved_tool_denylist=resolved_tool_denylist,
+    )
+    if todo_middleware is not None:
+        deepagent_middleware.append(todo_middleware)
     append_skill_middlewares(
         deepagent_middleware,
         catalog=resolved_skills,
@@ -178,24 +211,6 @@ def build_deep_agent_middleware(
         source_registry=source_registry,
         context_source_reactor=context_source_reactor,
         execution_owned_catalog=execution_owned_skill_catalog,
-    )
-    filesystem_middleware = FilesystemMiddleware(
-        backend=backend,
-        system_prompt="",
-        custom_tool_descriptions=FILESYSTEM_TOOL_DESCRIPTIONS,
-        _permissions=permissions,
-        tool_token_limit_before_evict=None,
-    )
-    configure_workspace_filesystem_tools(
-        filesystem_middleware,
-        workspace_root=workspace_root,
-        resource_navigation=resource_navigation,
-        text_mutations=text_mutations,
-        artifact_reader=artifact_reader,
-    )
-    _filter_middleware_tools(
-        filesystem_middleware,
-        resolved_tool_denylist | FILESYSTEM_INTERNAL_TOOL_DENYLIST,
     )
     if filesystem_middleware.tools:
         deepagent_middleware.append(filesystem_middleware)

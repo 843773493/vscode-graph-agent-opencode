@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -21,7 +20,7 @@ from app.core.background_message_bus import BackgroundMessageBus
 from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.runtime.agent_runtime import build_agent_tool_definitions
+from app.runtime.agent_runtime import build_tool_definitions
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from tests.support.background_work import build_background_registry
@@ -211,14 +210,7 @@ def test_tool_catalog_uses_model_visible_schema_without_runtime_fields():
         assert runtime.tool_call_id
         return value
 
-    tool_node = SimpleNamespace(
-        data=SimpleNamespace(tools_by_name={runtime_aware_tool.name: runtime_aware_tool})
-    )
-    agent = SimpleNamespace(
-        get_graph=lambda: SimpleNamespace(nodes={"tools": tool_node})
-    )
-
-    definitions = build_agent_tool_definitions(agent)
+    definitions = build_tool_definitions([runtime_aware_tool])
 
     assert len(definitions) == 1
     assert definitions[0]["name"] == "runtime_aware_tool"
@@ -243,14 +235,7 @@ def test_mcp_catalog_definition_uses_extension_group_metadata():
         """读取文件。"""
         return value
 
-    tool_node = SimpleNamespace(
-        data=SimpleNamespace(tools_by_name={read_file.name: read_file})
-    )
-    agent = SimpleNamespace(
-        get_graph=lambda: SimpleNamespace(nodes={"tools": tool_node})
-    )
-
-    definitions = build_agent_tool_definitions(agent, extension_tools=[mcp_status])
+    definitions = build_tool_definitions([read_file], extension_tools=[mcp_status])
     mcp_definition = next(
         definition for definition in definitions if definition["name"] == "mcp_status"
     )

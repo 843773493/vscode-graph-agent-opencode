@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import Context
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from langchain_core.tools import BaseTool
 
@@ -58,8 +58,8 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.runtime.agent_runtime import (
     AgentRuntimeDependencyProvider,
-    build_agent_tool_definitions,
     build_session_agent_runtime,
+    build_tool_definitions,
 )
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.job.service import JobState
@@ -96,7 +96,7 @@ from app.services.orchestration.thread_residency import (
     ThreadRuntimeLease,
 )
 
-# 工具面 blueprint 检查用的合成会话：只用于装配一次完整工具面并抽取定义，
+# 工具注册检查用的合成会话：不初始化模型、不编译图、不创建 durable owner，
 # 不进入任何业务会话账目。抽出的定义不捕获该会话，仅用于 Provider 工具目录。
 _TOOL_INSPECTION_SESSION_ID: Final[str] = "tools_inspection_session"
 RUNTIME_SHUTDOWN_WAIT_SECONDS = 30.0
@@ -229,12 +229,12 @@ class AgentExecutionService(JobStepExecutor):
         owns_thread: bool = True,
         lifetime_scope: LifetimeScope | None = None,
         skill_catalog: PublishedSkillCatalog | None = None,
-    ) -> AgentEventSource:
-        """一个 thread generation 的编译边界。
+    ) -> AgentEventSource | list[BaseTool]:
+        """构建 thread runtime，或只返回管理目录需要的工具注册。
 
         session/thread 由 ``ThreadRuntimeBinding`` 显式注入，编译时不携带 invocation。
 
-        ``owns_thread=False`` 只用于抽取工具面 blueprint 的合成构建：该构建不
+        ``owns_thread=False`` 只注册并返回工具集合，不创建模型或图，也不
         代表任何 durable thread，因此既不建立捕获会话身份的 workspace source
         reactor/CSM 订阅，也不为合成会话持久化 GraphBinding。Provider 可见工具面
         （信封 + ``skill_load`` + 内置/自定义工具）由同一工厂规则产出，与是否
@@ -360,7 +360,7 @@ class AgentExecutionService(JobStepExecutor):
                         lifetime_scope=scope,
                         skill_catalog=skill_catalog,
                     )
-                    return StepAgentRuntime(agent, resource_activation), skill_catalog, resource_registry
+                    return StepAgentRuntime(cast(AgentEventSource, agent), resource_activation), skill_catalog, resource_registry
 
             runtime, skill_catalog, resource_registry = await asyncio.to_thread(compile_agent)
             start_workspace_skill_catalog_publication(
@@ -551,16 +551,7 @@ class AgentExecutionService(JobStepExecutor):
         return candidate.checkpoint_id if candidate is not None else None
 
     def _tool_face_definitions(self, agent_id: str) -> list[dict[str, Any]]:
-        """管理目录的工具面定义（不含 Session/Thread 的 blueprint 投影）。
-
-        缓存有正当的非会话价值：装配一个完整 deep agent 并按图抽取工具定义
-        是昂贵构建产物，工具目录/选择查询会反复命中原样结果。缓存键不含
-        session/thread，缓存值只是导出的纯 DTO；建立它时用的合成会话仅用于
-        装配一次工具面，抽取出的定义不捕获该会话，也不携带执行状态。真实
-        精确 thread generation 的 session/thread 依赖由 ThreadRuntimeBinding
-        注入；每轮 admission 由 Runner 绑定。运行选择只由 ToolService 投影为
-        开关状态，不能用于裁剪管理目录，否则禁用后将无法查询和重新启用。
-        """
+        """缓存不含执行状态的工具定义；与执行共用注册，不初始化模型或图。"""
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
 
@@ -589,7 +580,7 @@ class AgentExecutionService(JobStepExecutor):
             if cached is not None:
                 return cached
 
-            agent = self._build_agent(
+            registered_tools = self._build_agent(
                 session_id=_TOOL_INSPECTION_SESSION_ID,
                 thread_id=create_prefixed_id("thr"),
                 agent_id=resolved_agent_id,
@@ -602,8 +593,8 @@ class AgentExecutionService(JobStepExecutor):
                 resource_activation=None,
                 owns_thread=False,
             )
-            definitions = build_agent_tool_definitions(
-                agent,
+            definitions = build_tool_definitions(
+                cast(list[BaseTool], registered_tools),
                 extension_tools=mcp_tools,
             )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 
 from app.agents.policy import (
@@ -8,6 +9,7 @@ from app.agents.policy import (
     ToolPolicyResolver,
     validate_tool_dependencies,
 )
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.tool import (
     ToolDTO,
     ToolSelectionPatchRequest,
@@ -42,8 +44,13 @@ class ToolService:
         self._selection_store = selection_store
         self._config_service = config_service
         self._test_supported_tools = set(test_supported_tools)
+        self._lock = asyncio.Lock()
 
     async def list(self, agent_id: str = "default") -> list[ToolDTO]:
+        async with self._lock:
+            return await run_sync_shielded(self._list, agent_id)
+
+    def _list(self, agent_id: str) -> list[ToolDTO]:
         tools = self._tool_catalog.get_available_tools(agent_id)
         resolver = self._config_service.get_tool_policy_resolver(agent_id)
         selection = self._selection_store.snapshot(agent_id)
@@ -108,7 +115,11 @@ class ToolService:
         self,
         request: ToolSelectionPatchRequest,
     ) -> list[ToolDTO]:
-        tools = await self.list(request.agent_id)
+        async with self._lock:
+            return await run_sync_shielded(self._update_selection, request)
+
+    def _update_selection(self, request: ToolSelectionPatchRequest) -> list[ToolDTO]:
+        tools = self._list(request.agent_id)
         available = {tool.tool_id for tool in tools}
         changes = {
             change.tool_id: (change.execution_enabled, change.model_visible)
@@ -167,7 +178,7 @@ class ToolService:
             )
         except ValueError as error:
             raise ToolSelectionError(str(error)) from error
-        refreshed = {tool.tool_id: tool for tool in await self.list(request.agent_id)}
+        refreshed = {tool.tool_id: tool for tool in self._list(request.agent_id)}
         return [
             refreshed[tool_id]
             for tool_id in changes

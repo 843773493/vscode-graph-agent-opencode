@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Never
 
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import InterruptOnConfig
@@ -30,6 +30,7 @@ from app.agents.agent_tools import build_default_tools
 from app.agents.custom_tools import build_custom_tool_bundle
 from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
+    build_deep_agent_tool_middleware,
 )
 from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
@@ -71,6 +72,10 @@ from app.agents.skill_runtime import (
     append_skill_middlewares,
 )
 from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
+from app.agents.summarization.tool_middleware import (
+    create_compact_conversation_tool,
+    create_read_compaction_history_tool,
+)
 from app.agents.tool_identity import TOOL_DISCOVERY_NAME, tool_definition_name
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
@@ -381,7 +386,7 @@ def resolve_agent_id(agent_id: str | None, config_service: ConfigService | None 
 
 def create_my_deep_agent(
     *,
-    model: BaseChatModel,
+    model: BaseChatModel | None,
     instruction_producers: Sequence[InstructionProducerSpec],
     tool_selection_reader: ToolSelectionReader,
     checkpointer: BaseCheckpointSaver | None = None,
@@ -932,6 +937,27 @@ def create_my_deep_agent(
         resolved_tool_names,
         context=f"agent {agent_id} 的运行时工具策略",
     )
+    if not owns_thread:
+        # 目录到工具注册即结束；不创建模型、压缩引擎或编译执行图。
+        def require_execution_context(*_args: object) -> Never:
+            raise RuntimeError("工具目录没有 SessionThread 执行上下文")
+
+        tool_middleware = build_deep_agent_tool_middleware(
+            backend=backend, workspace_root=workspace_root,
+            resource_navigation=resource_navigation, text_mutations=text_mutations,
+            artifact_reader=read_artifact, permissions=permissions,
+            resolved_tool_denylist=resolved_tool_denylist,
+        )
+        return [
+            *(tool for item in tool_middleware if item is not None for tool in item.tools),
+            *(tool for tool in (
+                create_compact_conversation_tool(require_execution_context, require_execution_context),
+                create_read_compaction_history_tool(require_execution_context, require_execution_context),
+            ) if tool.name not in resolved_tool_denylist),
+            *resolved_tools,
+        ]
+    if model is None:
+        raise RuntimeError("Agent 执行需要真实模型")
     for producer in instruction_producers:
         register_instruction_producer(context_source_manager, producer)
     team_policy_revision = sha256_jcs({"content": TEAM_COORDINATION_SYSTEM_PROMPT})
@@ -1124,11 +1150,14 @@ def create_runtime_deep_agent_for_session(
     if config_service is None:
         raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
     service = config_service
-    runtime = build_runtime_for_agent(
-        agent_id=agent_id,
-        config_service=service,
-        prompt_cache_key=session_id,
-        preferred_provider_id=preferred_provider_id,
+    runtime = (
+        build_runtime_for_agent(
+            agent_id=agent_id,
+            config_service=service,
+            prompt_cache_key=session_id,
+            preferred_provider_id=preferred_provider_id,
+        )
+        if owns_thread else None
     )
     tool_config = service.get_agent_tool_config(agent_id)
     tool_policy = service.resolve_agent_tool_policy(agent_id)
@@ -1152,7 +1181,7 @@ def create_runtime_deep_agent_for_session(
             "create_runtime_deep_agent_for_session 需要显式传入 SessionService"
         )
 
-    model = override_model if override_model is not None else runtime["model"]
+    model = override_model if override_model is not None else (runtime["model"] if runtime is not None else None)
 
     # 真实 thread 只由 creation 冻结的精确 selector 分派；合成工具面没有 durable owner。
     binding = (
@@ -1167,14 +1196,14 @@ def create_runtime_deep_agent_for_session(
     return builder(
         model=model,
         response_format=response_format,
-        instruction_producers=runtime["instruction_producers"],
+        instruction_producers=runtime["instruction_producers"] if runtime is not None else (),
         tool_selection_reader=tool_selection_reader,
         checkpointer=checkpointer,
         session_id=session_id,
         thread_id=thread_id,
         agent_id=agent_id,
         model_routing_middleware=runtime["model_routing"]
-        if model_routing_enabled and override_model is None
+        if runtime is not None and model_routing_enabled and override_model is None
         else None,
         sender_agent_id=sender_agent_id,
         enabled_tool_names=enabled_tool_names,

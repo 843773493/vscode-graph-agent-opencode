@@ -228,23 +228,17 @@ def get_configured_custom_tool_names(
     return names
 
 
-def build_agent_tool_definitions(
-    agent: Any,
+def build_tool_definitions(
+    registered_tools: Sequence[BaseTool],
     *,
     extension_tools: Sequence[BaseTool] = (),
 ) -> list[dict[str, Any]]:
-    from app.agents.graph_tool_adapter import extract_agent_tools_by_name
+    """从唯一工具注册导出目录，参数投影与模型请求一致。"""
     from app.agents.model_tool_schema import export_model_tool_json_schema
 
-    """返回 Agent 当前可用工具定义，隐藏 DeepAgents 图结构细节。"""
-    tool_map = extract_agent_tools_by_name(agent)
+    tool_map = {tool.name: tool for tool in registered_tools}
     if not tool_map:
-        raise RuntimeError(
-            "无法从 Agent 实例中提取工具列表。\n"
-            "Agent 图中未找到包含 tools_by_name 的节点。\n"
-            "这是严重错误，需要立即修复，不能静默降级。"
-        )
-
+        raise RuntimeError("Agent 工具注册为空，无法导出工具目录")
     for tool in extension_tools:
         if tool.name in tool_map:
             raise RuntimeError(f"扩展工具与 Agent 工具命名冲突: {tool.name}")

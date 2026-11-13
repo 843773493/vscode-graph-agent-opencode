@@ -654,7 +654,7 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
             side_effect=[object(), object()],
         ) as build_runtime,
         patch(
-            "app.services.orchestration.agent_execution_service.build_agent_tool_definitions",
+            "app.services.orchestration.agent_execution_service.build_tool_definitions",
             side_effect=fake_definitions,
         ),
     ):

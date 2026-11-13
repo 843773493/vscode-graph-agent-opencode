@@ -138,8 +138,6 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         policy_rules={},
         restrictions={},
     )
-    built_agent = MagicMock()
-    built_agent.with_config.return_value = built_agent
     checkpointer = RolloutCheckpointSaver(tmp_path / "sessions")
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
     resource_registry = ResourceRegistry()
@@ -148,7 +146,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
     )
     required = {
-        "model": MagicMock(),
+        "model": None,
         "instruction_producers": runtime_instruction_producers(
             agent_id="default", content="测试提示词", config_revision="config:1",
             runtime_identity_description="测试身份说明", provider_candidates=(("fixture", "model"),),
@@ -193,18 +191,18 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         patch.object(agent_factory, "build_workspace_skill_catalog") as build_catalog,
         patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(
-            agent_factory, "build_deep_agent_middleware", return_value=[]
+            agent_factory, "build_deep_agent_middleware", side_effect=AssertionError("目录不构建执行中间件")
         ) as build_middleware,
         patch.object(agent_factory, "ToolOutputMiddleware"),
         patch.object(agent_factory, "ToolInvocationContextMiddleware"),
         patch.object(agent_factory, "ContextSourceReactor") as reactor,
         patch.object(agent_factory, "ModelCallExecution"),
-        patch.object(agent_factory, "create_model_call_agent", return_value=built_agent),
+        patch.object(agent_factory, "create_model_call_agent", side_effect=AssertionError("目录不编译图")),
         patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
     ):
         gateway_token = set_current_gateway_id("gateway_ed824856cf39565635b0e5a6bf8e08da")
         try:
-            agent_factory.create_my_deep_agent(**required)
+            tools = agent_factory.create_my_deep_agent(**required)
         finally:
             reset_current_gateway_id(gateway_token)
 
@@ -214,7 +212,6 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     assert call["lifecycle_event_sink"] is None
     reactor.assert_not_called()
     build_catalog.assert_not_called()
-    middleware_kwargs = build_middleware.call_args.kwargs
-    assert middleware_kwargs["resolved_skills"] is None
-    assert middleware_kwargs["source_registry"] is None
-    assert middleware_kwargs["context_source_reactor"] is None
+    build_middleware.assert_not_called()
+    names = {tool.name for tool in tools}
+    assert {"read_file", "write_todos", "compact_conversation", "read_compaction_history"} <= names
