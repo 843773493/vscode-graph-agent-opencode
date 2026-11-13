@@ -14,6 +14,10 @@
 
 文件搜索合同覆盖显式额外文件的名称／精确正文分支、owner隔离及目录分页前去重；HTTP页资产区分真实文件节点与目录。完整模型覆盖页面通过原文件编辑器修改node_modules中的未保存模型，沿真实Search Editor开启ignore，核本地正文、负命中、原Gateway请求及磁盘不变，不预写模型或替换业务响应。
 
+`test_remote_model_coverage` 使用两个真实 Gateway／Backend 和相同 workspace UUID，经原编辑器修改本地模型，核分区覆盖身份、A+B 小配额、合法续页、仅 A、onlyOpenEditors、首批本地结果及剩余远端配额。SSH 连接沿既有 loopback 装具；仅具名出站失败和一次真实回执延迟为故障边界，原匹配、调度和 SSE 不替换。核真实请求／终态计量、原 owner 身份、模型变化后旧 cursor／重试拒绝，不把状态提示行当正文匹配或将回环验收称为真实跨机。
+
+`scoped_query.test.mjs` 的范围加载场景经真实 sourceTransform、HTTP 客户端和身份事件，在路由或根元数据的明确 HTTP 延迟边界触发凭据失效及 Gateway 往返切换；迟到数据不能形成新范围，活动工作区变化及初次身份发布仍保持发起 owner。完成后验证订阅释放；不将该服务合同称作完整 Workbench 撤权页面。
+
 `test_recent_history` 由真实产品入口创建 A/B 同名 Session，打开 Thread／文件／来源后关闭，并经原 `prepareToClose()` 提交展示态再刷新；只读核原 IndexedDB 的 `history.entries`，不预写存储。冷启动从原范围选择器明确选择 A，不先打开资源补造历史；验证去重、单条移除不关闭 Tab／删除业务、两次恢复及 A/B 草稿。普通页面刷新未完成异步提交、导航默认范围、Electron 和异常退出不由该场景证明。
 
 同页 Thread 恢复负例先经产品打开两组并恢复原草稿，页面卸载后只破坏 B 的一条真实序列化记录，分别注入未知版本、缺失 owner 与坏 JSON；原错误占位页保留具体原因，两次恢复不读取 B，单条移除保留 A、B 业务和草稿。该明确故障注入不代表正常流程预写浏览器状态，也不代替 Electron 固定 profile 验收。
