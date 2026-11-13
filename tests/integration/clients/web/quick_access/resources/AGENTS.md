@@ -47,3 +47,7 @@ Thread 引用页面经产品消息及 fork 创建 main／child，再从最近候
 工具结果页面先经产品消息生成来源历史，再用原 fork 入口创建 child，并由 child 实际执行工具；不能用来源摘要冒充 child 的原工具行。发现按公开 metadata 的 `invoke_extension_tool` 标识，取消零正文读取，接受沿原 around 定位并展开原 ToolRow，核 owner／revision／canonical item／Turn／tool_call_id／request_id 及零重放。Backend 与 Gateway 共用该场景隔离 Home，普通业务验证复用已准备的不可变插件包，并沿正式绑定入口启用能力。
 
 来源多选合同同时执行原来源 Provider、Composer Command 和 URI 客户端，仅替换 HTTP／Picker／writer 的具名边界；覆盖跨 Gateway 来源、Gateway 配置、发起 child 附件、独立范围、两阶段取消与身份／接收者失效。真实 Composer 页面另核工作区 B 的 AGENTS／Skill 从未打开即加入 A 草稿及刷新恢复；不能把合同装具称为真实跨 Gateway 或 Electron 验收。
+
+`test_remote_gateway_uri.py` 经正式 Workbench、两个真实 Gateway／独立 Backend 和相同工作区 UUID，核规范 URI 的目标、复制、只读、迟到解析、main／durable child、双组草稿恢复及登记路由重解。复用原网络装具的 loopback SSH 配对执行／隧道及既有受控 ID／时钟 composition，模型只沿一次精确 model_stream 准备历史；不预写业务状态。每次页面初始化以当前文档的原命令订阅证明 Gateway 身份已发布，截图交既有运行上下文逆序清理；不新增产品 hook 或健康预读。
+
+容量变体保留 CDP 请求／响应／终结和实际 HTTP 连接身份，独立 socket 仅作诊断，页面同源请求必须成功。停机与旧端口被独立 Gateway 占用时，原 B 来源读取须精确 409、通知可见且未下发任何 Backend、零新 Tab／空分屏及零自动改投；替代 Gateway 对旧凭据的两条发现请求按原认证合同返回 401。原后台目录同步若尝试旧登记，也只允许精确 A→B 的 catalog export 401，并核相同 request_id 未交付任何 Backend；不能宣称验证了认证成功后的 Gateway 身份不匹配。显式删除旧登记并注册 B 新端口后，沿同一公开 URI 重开，不将此 Integration 证据表述为真实 SSH、Electron 或其它平台验收。
