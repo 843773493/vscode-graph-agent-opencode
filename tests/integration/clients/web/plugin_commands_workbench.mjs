@@ -279,7 +279,12 @@ try {
   assert.equal(parseJsonc(source.jsonc).plugins.configuration.values['proof.command-ui'].commands.output, input.output);
   assert.equal((await publications()).length, 0);
   // 每个窗口用一个工作区完整快照投影 Gateway 和 workspace 命令；普通命令没有额外发现。
-  assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/events')).length, 2);
+  const commandEventRequests = receipt.requests.filter(request => request.url.endsWith('/commands/events'));
+  const activeWorkspaceTarget = { gateway_id: gatewayId, workspace_id: receipt.initialization[2].workspace_id };
+  assert(activeWorkspaceTarget.workspace_id);
+  assert.equal(commandEventRequests.length, 2);
+  assert.deepEqual(commandEventRequests.map(request => JSON.parse(request.body ?? '{}')),
+    [activeWorkspaceTarget, activeWorkspaceTarget]);
   assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/registrations')).length, 0);
   assert.equal(receipt.requests.filter(request => request.url.endsWith('/commands/call')).length, 9 + extraExecutions);
   receipt.phase = 'complete';
