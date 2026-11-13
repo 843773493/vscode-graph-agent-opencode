@@ -89,7 +89,8 @@ class SearchContextInput(BaseModel):
     )
     query: str = Field(min_length=1, description="要搜索的文本或正则表达式。")
     sources: list[SessionContextSearchSource] = Field(
-        default_factory=lambda: ["effective_context"]
+        default_factory=lambda: ["effective_context"],
+        description="session_catalog 只检索目录，命中 revision 不可用于读取消息；展开时先 read_context 获取消息修订。effective_context 命中可带 record_index 和 revision 展开。",
     )
     match_mode: SessionContextMatchMode = "literal"
     case_sensitive: bool = False

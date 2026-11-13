@@ -67,7 +67,6 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
     request: pytest.FixtureRequest, restart_source_case: RestartRuntimeSourceCase,
 ) -> None:
     case = restart_source_case
-    assert case.mount is not None
     backend = case.backends[-1]
     gateway = await asyncio.to_thread(start_gateway_process, workspace_root=case.workspace,
         default_backend_url=f"http://127.0.0.1:{backend.port}", port=integration_port_block_for_file(Path(request.node.path)).port(20),
@@ -124,7 +123,7 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
             gateway_id = (await ui.get("/api/gateway/health")).json()["data"]["gateway_id"]
             listing = (await ui.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
             owner = listing["active_workspace"]
-            assert owner == {"gateway_id": gateway_id, "workspace_id": case.mount.workspace_id}
+            assert owner == {"gateway_id": gateway_id, "workspace_id": backend.workspace_id}
             ui.headers.update({
                 "X-BoxTeam-Workspace-Id": owner["workspace_id"],
                 "X-BoxTeam-Target-Gateway-Id": owner["gateway_id"],
@@ -363,8 +362,10 @@ async def test_context_search_keeps_original_source_and_cursor_after_backend_res
             "continuations": [{"branch": branch.branch.model_dump(mode="json"), "cursor": branch.cursor}]}, "req_context_changed_source")
         assert stale[-1].summary is not None
         rejected, = stale[-1].summary.branches
-        assert rejected.state == "failed" and rejected.code == "invalid_context_cursor" and rejected.cursor == branch.cursor
-        assert rejected.error_owner == "session_context_cursor" and rejected.reason == "query_mismatch"
+        # 目录与消息各自绑定来源修订，跨来源续页先由原版本校验拒绝。
+        assert rejected.state == "failed" and rejected.code == "snapshot_changed" and rejected.cursor == branch.cursor
+        assert rejected.error_owner is None and rejected.reason is None
+        assert rejected.http_status == 409 and not rejected.retryable
         assert len(case.requests()) == 1 and not transport._http_client.cookies
 
         # 经真实模型工具入口消费相同 Provider；不替产品准备执行或工具结果。

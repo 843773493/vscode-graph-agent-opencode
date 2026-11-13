@@ -166,7 +166,7 @@ class SessionContextSearchMatchDTO(BaseModel):
     scope: SessionContextScope
     preview: str
     source: SessionContextSearchSource
-    revision: str
+    revision: str = Field(description="命中来源的修订；session_catalog 只用于目录定位，展开消息时由 read_context 获取消息修订。")
     record_index: int | None = None
     match_start: int
     match_end: int

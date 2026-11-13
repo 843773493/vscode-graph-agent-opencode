@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -161,7 +162,7 @@ class SessionContextQueryService:
             if resource.kind == "workspace_sessions":
                 return await self._freeze_inventory(resource)
 
-            snapshot = await self._load_snapshot(resource)
+            snapshot = await self._load_snapshot(resource, await self._load_session(resource))
             if request.record_index is not None:
                 items = self._selected_record_items(snapshot, resource, request)
             elif request.view == "information":
@@ -253,6 +254,8 @@ class SessionContextQueryService:
                 match = expression.search(candidate.text)
                 if match is not None:
                     found.append((candidate, match))
+                # 大量历史逐条匹配时让出事件循环，避免搜索阻塞同工作区的其它请求。
+                await asyncio.sleep(0)
 
             require_cursor_offset_in_range(offset, len(found), uri=resource.uri)
             selected = found[offset : offset + request.max_results]
@@ -504,72 +507,48 @@ class SessionContextQueryService:
     ) -> tuple[list[_SearchCandidate], str]:
         if not sources:
             raise ValueError("sources 不能为空")
+        single_session = resource.kind == "session"
+        sessions = (
+            [await self._load_session(resource)]
+            if single_session
+            else await self._list_sessions(self._workspace_id)
+        )
         candidates: list[_SearchCandidate] = []
-        revisions: list[str] = []
-        if resource.kind == "session":
-            snapshot = await self._load_snapshot(resource)
-            revisions.append(snapshot.revision)
+        revisions = [] if single_session else [sessions_revision(sessions)]
+        for session in sessions:
+            session_resource = resource if single_session else parse_session_context_ref(
+                resource_identity=session_resource_identity(session.workspace_id, session.session_id),
+                uri=session_resource_uri(
+                    session.workspace_id, session.session_id,
+                    gateway_authority=resource.gateway_authority,
+                ),
+                scope="workspace",
+            )
             if "session_catalog" in sources:
-                session = await self._session_lookup.get(snapshot.session_id)
+                text = json.dumps(public_session_data(session), ensure_ascii=False)
+                catalog_revision = f"catalog:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+                revisions.append(catalog_revision)
                 candidates.append(
                     _SearchCandidate(
-                        resource_identity=snapshot.resource_identity,
-                        uri=snapshot.uri,
-                        scope=snapshot.scope,
+                        resource_identity=session_resource.resource_identity,
+                        uri=session_resource.uri,
+                        scope=session_resource.scope,
                         source="session_catalog",
-                        text=json.dumps(
-                            public_session_data(session), ensure_ascii=False
-                        ),
-                        revision=snapshot.revision,
+                        text=text,
+                        revision=catalog_revision,
                     )
                 )
-            await self._append_session_search_candidates(
-                candidates,
-                snapshot,
-                sources,
-            )
-            return candidates, snapshot.revision
-        else:
-            sessions = await self._list_sessions(self._workspace_id)
-            revisions.append(sessions_revision(sessions))
-            for session in sessions:
-                session_id = session.session_id
-                session_uri = session_resource_uri(
-                    session.workspace_id,
-                    session_id,
-                    gateway_authority=resource.gateway_authority,
-                )
-                session_identity = session_resource_identity(
-                    session.workspace_id,
-                    session_id,
-                )
-                session_resource = parse_session_context_ref(
-                    resource_identity=session_identity,
-                    uri=session_uri,
-                    scope="workspace",
-                )
-                snapshot = await self._load_snapshot(session_resource)
+            if {"effective_context", "session_information"}.intersection(sources):
+                # 消息正文仍需确认物理会话及 main thread；目录搜索只消费 catalog。
+                if not single_session:
+                    session = await self._load_session(session_resource)
+                snapshot = await self._load_snapshot(session_resource, session)
                 revisions.append(snapshot.revision)
-                if "session_catalog" in sources:
-                    candidates.append(
-                        _SearchCandidate(
-                            resource_identity=session_identity,
-                            uri=session_uri,
-                            scope="workspace",
-                            source="session_catalog",
-                            text=json.dumps(
-                                public_session_data(session), ensure_ascii=False
-                            ),
-                            revision=snapshot.revision,
-                        )
-                    )
-                if {"effective_context", "session_information"}.intersection(sources):
-                    await self._append_session_search_candidates(
-                        candidates,
-                        snapshot,
-                        sources,
-                    )
-        revision = hashlib.sha256("\n".join(revisions).encode("utf-8")).hexdigest()
+                await self._append_session_search_candidates(candidates, snapshot, sources)
+        revision = (
+            revisions[0] if single_session and len(revisions) == 1
+            else hashlib.sha256("\n".join(revisions).encode("utf-8")).hexdigest()
+        )
         return candidates, revision
 
     async def _append_session_search_candidates(
@@ -618,10 +597,10 @@ class SessionContextQueryService:
     async def _load_snapshot(
         self,
         resource: ParsedSessionContextResource,
+        session: SessionDTO,
     ) -> _SessionContextSnapshot:
         if resource.session_id is None:
             raise ValueError(f"URI 不是单个 session 资源: {resource.uri}")
-        session = await self._load_session(resource)
         if session.thread_id is None:
             raise RuntimeError(
                 "SessionDTO 缺少权威 main thread_id: "

@@ -768,6 +768,42 @@ async def test_search_literal_by_default_regex_explicit_and_structured_match_can
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("inventory", [False, True])
+async def test_catalog_search_revision_tracks_directory_and_mixed_search_tracks_messages(
+    session_context_service_factory, inventory,
+):
+    source = _FakeMessageSource()
+    service = session_context_service_factory(source)
+    request = (_workspace_inventory_search_request if inventory else _session_search_request)(
+        query="会话", sources=["session_catalog"], max_results=1,
+    )
+    first = await service.search_context(request)
+    mixed_request = request.model_copy(update={"sources": ["session_catalog", "effective_context"]})
+    mixed = await service.search_context(mixed_request)
+
+    source.records.append({"role": "assistant", "content": "新增消息"})
+    assert await service.search_context(request) == first
+    with pytest.raises(SessionContextRevisionChangedError):
+        await service.search_context(mixed_request.model_copy(update={"revision": mixed.revision}))
+    if first.has_more:
+        following = await service.search_context(request.model_copy(update={"cursor": first.next_cursor}))
+        assert following.matches[0].resource_identity != first.matches[0].resource_identity
+        with pytest.raises(SessionContextRevisionChangedError):
+            await service.search_context(mixed_request.model_copy(update={"cursor": first.next_cursor}))
+        with pytest.raises(SessionContextCursorError) as caught:
+            await service.search_context(request.model_copy(update={"cursor": first.next_cursor, "query": "新查询"}))
+        assert caught.value.reason == "query_mismatch"
+
+    match = first.matches[0]
+    expanded = await service.read_context(_session_request(view="messages"))
+    assert expanded.revision != match.revision
+    assert expanded.items[-1].text == "新增消息"
+    service._session_lookup.sessions[0].title += " 已重命名"
+    with pytest.raises(SessionContextRevisionChangedError):
+        await service.search_context(request.model_copy(update={"revision": first.revision}))
+
+
+@pytest.mark.asyncio
 async def test_large_search_budget_checks_each_match_without_copying_prior_matches(
     session_context_service_factory,
     monkeypatch: pytest.MonkeyPatch,
