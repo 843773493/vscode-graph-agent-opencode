@@ -12,6 +12,8 @@
 
 `test_thread_cache_cleanup.py` 与 Web 共用产品执行生成的历史、原文件保存及历史／备份、明确 Thread 镜像清理和分屏恢复场景；原生通过正常 BrowserWindow.close 后同 profile 重启，不能以 renderer 刷新代替。包 fixture 可显式复用 `BOXTEAM_TEST_PACKAGED_ELECTRON` 指定的不可变产物，登记 ASAR 摘要；未指定仍沿真实打包入口，不把复用包算作本轮发行验收。
 
+`test_recent_history.py` 与 Web 共用真实消息生成、原 Session Command／确认／目录 outbox 删除及同名替代对象的业务步骤。原生两次正常关窗后以同来源／固定 profile 重启，不提前 flush；核最近旧 owner 的真实404、旧聊天镜像清除、单条最近项移除，以及幸存 Thread 的正文／草稿和同名新业务对象保留。产物归本测试同名镜像路径；只读浏览器存储，不预写历史或替换响应，不代替损坏格式、异常退出、Windows／macOS 或正式发行验收。
+
 # 可修改内容
 
 - Linux 原生 Electron 的产物构建、窗口操作、独立 profile、固定页面来源和缓存恢复验收。

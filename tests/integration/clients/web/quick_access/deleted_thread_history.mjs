@@ -1,22 +1,23 @@
 // Integration：真实执行生成镜像，原目录命令删除后从最近历史重开；只读浏览器存储核对结果。
 import { writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 import { TestRunContext } from '../../../../harness/js/run-context.mjs';
 
 const required = name => { const value = process.env[name]; if (!value) throw new Error(`已删历史验收缺少 ${name}`); return value; };
+export async function runDeletedThreadHistory({ run, launch }) {
 const output = required('BOXTEAM_BROWSER_RESULT_PATH'), identities = JSON.parse(required('BOXTEAM_CACHE_THREADS'));
-const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_recent_history.py');
 const result = { classification: 'Integration', phase: 'initialize', pageErrors: [], reads: [], writes: [], receipts: [], executions: [],
   boundary: '真实 Gateway／Backend／正式 Workbench；model_stream 经消息入口生成历史，原 Session Command／确认／outbox 删除；不预写浏览器状态或替换响应。' };
 const pending = [], responseErrors = [], records = new WeakMap();
 const phase = async value => { result.phase = value; await writeFile(output, JSON.stringify(result, null, 2) + '\n'); };
-let page, failure;
+let page, quick, failure;
 try {
-  const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'), headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage'] });
-  run.addCleanup('已删历史 Chromium', () => browser.close());
-  page = await browser.newPage({ viewport: { width: 1700, height: 1000 } });
+  const host = await launch({ run, result, usePage(next) {
+  page = next;
+  quick = page.locator('.quick-input-widget');
   page.setDefaultTimeout(15_000);
   page.on('pageerror', cause => result.pageErrors.push(String(cause)));
   page.on('request', request => {
@@ -40,6 +41,8 @@ try {
       expect(record.requestId).toBe(record.header);
     })().catch(cause => responseErrors.push(String(cause))));
   });
+  } });
+  await page.setViewportSize({ width: 1700, height: 1000 });
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const api = async (path, owner, body) => {
     const receipt = await page.evaluate(async ({ path, owner, body }) => {
@@ -74,13 +77,12 @@ try {
   const pane = target => page.locator(`section.boxteam-thread[data-workspace-id="${target.workspace_id}"]`
     + `[data-session-id="${target.session_id}"][data-thread-id="${target.thread_id}"]`);
   const ready = () => expect(page.locator('.native-session-navigation')).toBeVisible({ timeout: 30_000 });
-  await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' }); await ready();
+  await ready();
   const [a, b] = identities;
   expect((await data('/api/gateway/health')).gateway_id).toBe(a.gateway_id);
   expect((await data('/api/gateway/workspaces?check_health=false')).items)
     .toContainEqual(expect.objectContaining({ gateway_id: a.gateway_id, workspace_id: a.workspace_id }));
   expect((await data('/api/v1/workspace', a)).workspace_id).toBe(a.workspace_id);
-  const quick = page.locator('.quick-input-widget');
   const pick = target => quick.locator(`[data-quick-input-id="${resource(target)}"]`);
   const open = async target => {
     await command('workbench.action.quickOpen', uri(target));
@@ -92,7 +94,11 @@ try {
   for (const [index, target] of identities.entries()) {
     await open(target); await pane(target).getByTestId('composer-input').fill(`已删历史保留草稿 ${index}`);
   }
-  await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
+  // 只读核正常调度落盘；原生关窗前不由测试提前 flush 展示态。
+  await expect.poll(async () => {
+    const saved = await views();
+    return identities.every(target => saved[cacheKey(target)]?.timeline.orderedTurnIds.length > 0);
+  }).toBe(true);
   const before = await views();
   for (const target of identities) expect(before[cacheKey(target)].timeline.orderedTurnIds.length).toBeGreaterThan(0);
   result.cachedBeforeDelete = identities.map(target => ({ resource: resource(target), key: cacheKey(target),
@@ -128,8 +134,13 @@ try {
   result.replacement = { sessionId: replacement.session_id, threadId: replacementThread.thread_id, title: replacement.title };
   // 关闭目标的展示镜像确实仍在，不能靠此前被清理而让重开反例空转。
   expect((await views())[cacheKey(a)]).toBeTruthy();
-  await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
-  await page.reload({ waitUntil: 'domcontentloaded' }); await ready();
+  await host.reload(); await ready();
+  const restored = await views();
+  for (const target of identities) {
+    expect(restored[cacheKey(target)].timeline.orderedTurnIds).toEqual(before[cacheKey(target)].timeline.orderedTurnIds);
+  }
+  result.cachedAfterRestart = identities.map(target => ({ key: cacheKey(target),
+    turnIds: restored[cacheKey(target)].timeline.orderedTurnIds }));
 
   await phase('reopen-deleted-history');
   await command('workbench.action.quickOpen', '');
@@ -147,6 +158,7 @@ try {
   await expect(pane({ ...a, session_id: replacement.session_id, thread_id: replacementThread.thread_id })).toHaveCount(0);
   await expect.poll(() => result.reads.some(item => item.phase === result.phase && item.path === `/api/v1/sessions/${a.session_id}` && item.status === 404)).toBe(true);
   const reopenReads = result.reads.filter(item => item.phase === result.phase);
+  for (const read of reopenReads) expect(read).toMatchObject({ gatewayId: a.gateway_id, workspaceId: a.workspace_id });
   expect(reopenReads.some(item => item.path.includes(replacement.session_id))).toBe(false);
   expect(reopenReads.some(item => /\/(bootstrap|history)(?:\/|$)/.test(item.path))).toBe(false);
   result.oldTargetRejected = true; result.oldCacheRemoved = true; result.sameNameNotOpened = true;
@@ -165,8 +177,7 @@ try {
   await expect(pane(b).getByTestId('composer-input')).toHaveValue('已删历史保留草稿 1');
   expect((await views())[cacheKey(b)].timeline.orderedTurnIds).toEqual(before[cacheKey(b)].timeline.orderedTurnIds);
   result.historyRemovalOnly = true; result.survivorPreserved = true;
-  await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
-  await page.reload({ waitUntil: 'domcontentloaded' }); await ready();
+  await host.reload(); await ready();
   await expect(pane(b).getByTestId('composer-input')).toHaveValue('已删历史保留草稿 1');
   await command('workbench.action.quickOpen', '');
   await expect(pick(a)).toHaveCount(0); await expect(pick(b)).toHaveCount(1); await page.keyboard.press('Escape');
@@ -176,10 +187,34 @@ try {
   await phase('complete');
 } catch (cause) { failure = cause; result.error = String(cause.stack ?? cause); }
 finally {
-  try {
-    if (failure && page) await page.screenshot({ path: output.replace(/\.json$/, '.failure.png'), fullPage: true })
-      .catch(cause => { result.screenshotError = String(cause); });
-    await writeFile(output, JSON.stringify(result, null, 2) + '\n');
-  } finally { await run.close(); }
+  if (failure && page) await page.screenshot({ path: output.replace(/\.json$/, '.failure.png'), fullPage: true })
+    .catch(cause => { result.screenshotError = String(cause); });
+  try { await run.close(); }
+  catch (cause) {
+    result.cleanupError = String(cause);
+    failure = failure ? new AggregateError([failure, cause], '已删历史验收及关闭均失败') : cause;
+  }
+  await writeFile(output, JSON.stringify(result, null, 2) + '\n');
 }
 if (failure) throw failure;
+return result;
+}
+
+async function launchChromium({ run, usePage }) {
+  const browser = await chromium.launch({ executablePath: required('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'), headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+  run.addCleanup('已删历史 Chromium', () => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1700, height: 1000 } });
+  usePage(page);
+  await page.goto(required('BOXTEAM_BROWSER_BASE_URL'), { waitUntil: 'domcontentloaded' });
+  return { async reload() {
+    await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
+    await page.reload({ waitUntil: 'domcontentloaded' });
+  } };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  await runDeletedThreadHistory({
+    run: TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_recent_history.py'), launch: launchChromium,
+  });
+}

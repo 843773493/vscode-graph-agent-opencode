@@ -220,6 +220,10 @@ async def test_deleted_thread_recent_history_rejects_cached_content_and_same_nam
         "command": command, "exit_code": completed.returncode,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert_deleted_history_result(output, case)
+
+
+def assert_deleted_history_result(output: Path, case: ThreadCacheCleanupCase) -> dict:
     result = json.loads(output.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
     assert all(result[key] for key in ("oldTargetRejected", "oldCacheRemoved", "sameNameNotOpened", "historyRemovalOnly",
@@ -230,6 +234,7 @@ async def test_deleted_thread_recent_history_rejects_cached_content_and_same_nam
         calls = [count for key, count in case.provider.control._counters.items() if key.startswith("model_call/")]
     assert sorted(calls) == [1, 1], "历史拒绝及移除不能重新执行消息"
     assert case.recovery_file.read_text(encoding="utf-8") == "原始磁盘正文\n"
+    return result
 
 
 def assert_cache_cleanup_result(output: Path, case: ThreadCacheCleanupCase) -> dict:
