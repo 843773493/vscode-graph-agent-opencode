@@ -479,6 +479,7 @@ async def test_rollout_history_around_loading_real_web_chain(
         assert result["canonicalMixedMessageRestored"] is True
         assert result["responseActionsVisible"] is True
         assert result["responseActionLabels"] == [
+            "从此消息创建分支",
             "朗读（暂未开放）",
             "复制",
             "有帮助（暂未开放）",

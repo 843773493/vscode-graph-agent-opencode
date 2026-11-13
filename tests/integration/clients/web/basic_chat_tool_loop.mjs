@@ -174,7 +174,7 @@ async function verifyPreviewTabs(page, owner) {
   // 通过原版关闭按钮释放 EditorPane，再从导航重开；关闭不能变成删除业务会话。
   for (const current of [spareTab, mainTab]) {
     await current.hover();
-    await current.getByRole("button", { name: /^Close(?: \(|$)/ }).click();
+    await current.getByRole("button", { name: /^(?:Close|关闭)(?: \(|$)/ }).click();
     await expect(current).toHaveCount(0);
   }
   await expect(group.locator("section.boxteam-thread")).toHaveCount(0);
