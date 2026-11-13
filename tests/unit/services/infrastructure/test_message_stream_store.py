@@ -2121,6 +2121,7 @@ async def test_repeated_compaction_keeps_ordered_lifecycles_across_snapshot_and_
         turn_stream_id=writer.turn_stream_id,
     )
     replayed_snapshot = await restarted_writer.snapshot()
+    assert replayed_snapshot["payload"] == final_snapshot["payload"]
     assert replayed_snapshot["event_seq"] == 16
     replayed_activities = replayed_snapshot["payload"]["activities"]
     assert [activity["activity_id"] for activity in replayed_activities] == [

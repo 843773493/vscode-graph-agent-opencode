@@ -1,6 +1,9 @@
 from copy import deepcopy
 
-from app.domain.message_stream.projection import apply_event
+from app.domain.message_stream.projection import (
+    apply_event,
+    backfill_lifecycle_metadata,
+)
 
 
 def _block_delta(block_id: str, text: str, event_seq: int) -> dict[str, object]:
@@ -55,3 +58,44 @@ def test_block_delta_copies_target_and_preserves_previous_snapshots() -> None:
     assert after_b["blocks"][0] is after_a["blocks"][0]
     assert after_b["blocks"][1] is not after_a["blocks"][1]
     assert after_b["blocks"][1]["text"] == "b2"
+
+
+def test_backfill_restores_lifecycles_without_overwriting_later_metadata() -> None:
+    state = {}
+    events = []
+    for collection, identity_key, started, completed in (
+        ("model_calls", "model_call_id", "model.started", "model.failed"),
+        ("blocks", "block_id", "block.started", "block.completed"),
+        ("tool_calls", "tool_call_id", "tool_call", "tool_call.completed"),
+        ("tool_executions", "tool_execution_id", "tool.started", "tool.completed"),
+        ("activities", "activity_id", "activity.started", "activity.failed"),
+    ):
+        # 同名实体属于各自集合；重复 ID 仍只更新首个实体。
+        state[collection] = [{identity_key: "shared"}, {identity_key: "shared"}]
+        for seq, kind in ((1, started), (2, completed)):
+            events.append({
+                "type": kind, "event_seq": seq, "emitted_at": f"time-{seq}",
+                "payload": {identity_key: "shared"},
+            })
+    state["blocks"][0].update(last_event_seq=10, updated_at="later")
+
+    backfill_lifecycle_metadata(state, events)
+
+    for collection, entities in state.items():
+        first, duplicate = entities
+        assert first["started_seq"] == 1
+        assert first["started_at"] == "time-1"
+        assert first["completed_seq"] == 2
+        assert first["completed_at"] == "time-2"
+        assert first["last_event_seq"] == (10 if collection == "blocks" else 2)
+        assert first["updated_at"] == ("later" if collection == "blocks" else "time-2")
+        assert "started_seq" not in duplicate
+
+    backfill_lifecycle_metadata(state, [{
+        "type": "stream.interrupted", "event_seq": 11,
+        "emitted_at": "terminal", "payload": {},
+    }])
+    for entities in state.values():
+        assert entities[0]["completed_seq"] == 2
+        assert entities[1]["completed_seq"] == 11
+        assert entities[1]["completed_at"] == "terminal"

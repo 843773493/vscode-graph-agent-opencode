@@ -440,24 +440,20 @@ def _mark_entity_lifecycle(
             entity["completed_at"] = event_timestamp
 
 
-def _find_model_call(
-    state: dict[str, Any],
-    model_call_id: object,
-) -> dict[str, Any] | None:
-    if not isinstance(model_call_id, str) or not model_call_id:
-        return None
-    for model_call in state.get("model_calls", []):
-        if (
-            isinstance(model_call, dict)
-            and model_call.get("model_call_id") == model_call_id
-        ):
-            return model_call
-    return None
+_LIFECYCLE_ID_KEYS = {
+    "model_calls": "model_call_id",
+    "blocks": "block_id",
+    "tool_calls": "tool_call_id",
+    "tool_executions": "tool_execution_id",
+    "activities": "activity_id",
+}
 
 
 def _mark_event_lifecycle(
     state: dict[str, Any],
     event: Mapping[str, Any],
+    *,
+    entity_index: Mapping[tuple[str, str], dict[str, Any]] | None = None,
 ) -> None:
     event_type = str(event.get("type") or "")
     payload = event.get("payload")
@@ -473,73 +469,59 @@ def _mark_event_lifecycle(
         "activity.failed",
     }
     if event_type in {"model.started", "model.completed", "model.failed"}:
-        model_call = _find_model_call(
-            state,
-            payload.get("model_call_id") or event.get("model_call_id"),
-        )
-        if model_call is not None:
-            _mark_entity_lifecycle(model_call, event, completed=completed)
+        collection = "model_calls"
     elif event_type in {"block.started", "block.delta", "block.completed"}:
-        block = _find_block(state, payload.get("block_id") or event.get("block_id"))
-        if block is not None:
-            _mark_entity_lifecycle(block, event, completed=completed)
+        collection = "blocks"
     elif event_type in {"tool_call", "tool_call.delta", "tool_call.completed"}:
-        tool_call_id = payload.get("tool_call_id") or event.get("tool_call_id")
-        if isinstance(tool_call_id, str) and tool_call_id:
-            for tool_call in state.get("tool_calls", []):
-                if (
-                    isinstance(tool_call, dict)
-                    and tool_call.get("tool_call_id") == tool_call_id
-                ):
-                    _mark_entity_lifecycle(tool_call, event, completed=completed)
-                    break
+        collection = "tool_calls"
     elif event_type in {"tool.started", "tool.completed"}:
-        tool_execution_id = payload.get("tool_execution_id") or event.get(
-            "tool_execution_id"
-        )
-        if isinstance(tool_execution_id, str) and tool_execution_id:
-            for execution in state.get("tool_executions", []):
-                if (
-                    isinstance(execution, dict)
-                    and execution.get("tool_execution_id") == tool_execution_id
-                ):
-                    _mark_entity_lifecycle(execution, event, completed=completed)
-                    break
+        collection = "tool_executions"
     elif event_type.startswith("activity."):
-        activity_id = payload.get("activity_id")
-        if isinstance(activity_id, str) and activity_id:
-            for activity in state.get("activities", []):
-                if (
-                    isinstance(activity, dict)
-                    and activity.get("activity_id") == activity_id
-                ):
-                    _mark_entity_lifecycle(activity, event, completed=completed)
-                    break
+        collection = "activities"
     elif event_type in {"stream.interrupted", "stream.failed"}:
-        for model_call in state.get("model_calls", []):
-            if isinstance(model_call, dict) and "completed_seq" not in model_call:
-                _mark_entity_lifecycle(model_call, event, completed=True)
-        for block in state.get("blocks", []):
-            if isinstance(block, dict) and "completed_seq" not in block:
-                _mark_entity_lifecycle(block, event, completed=True)
-        for tool_call in state.get("tool_calls", []):
-            if isinstance(tool_call, dict) and "completed_seq" not in tool_call:
-                _mark_entity_lifecycle(tool_call, event, completed=True)
-        for execution in state.get("tool_executions", []):
-            if isinstance(execution, dict) and "completed_seq" not in execution:
-                _mark_entity_lifecycle(execution, event, completed=True)
-        for activity in state.get("activities", []):
-            if isinstance(activity, dict) and "completed_seq" not in activity:
-                _mark_entity_lifecycle(activity, event, completed=True)
+        for collection in _LIFECYCLE_ID_KEYS:
+            for entity in state.get(collection, []):
+                if isinstance(entity, dict) and "completed_seq" not in entity:
+                    _mark_entity_lifecycle(entity, event, completed=True)
+        return
+    else:
+        return
+
+    identity_key = _LIFECYCLE_ID_KEYS[collection]
+    entity_id = payload.get(identity_key)
+    if collection != "activities":
+        entity_id = entity_id or event.get(identity_key)
+    if not isinstance(entity_id, str) or (not entity_id and collection != "blocks"):
+        return
+    if entity_index is None:
+        entity = next(
+            (
+                item for item in state.get(collection, [])
+                if isinstance(item, dict) and item.get(identity_key) == entity_id
+            ),
+            None,
+        )
+    else:
+        entity = entity_index.get((collection, entity_id))
+    if entity is not None:
+        _mark_entity_lifecycle(entity, event, completed=completed)
 
 
 def backfill_lifecycle_metadata(
     state: dict[str, Any],
     events: Sequence[Mapping[str, Any]],
 ) -> None:
-    """从已有事件日志为旧 checkpoint 补齐实体生命周期序号。"""
+    """按实体索引回填生命周期，避免每条历史事件重复遍历全部实体。"""
+    entity_index: dict[tuple[str, str], dict[str, Any]] = {}
+    for collection, identity_key in _LIFECYCLE_ID_KEYS.items():
+        for entity in state.get(collection, []):
+            if isinstance(entity, dict):
+                entity_id = entity.get(identity_key)
+                if isinstance(entity_id, str):
+                    # 与普通事件归并一致，同 ID 只更新列表中的首个实体。
+                    entity_index.setdefault((collection, entity_id), entity)
     for event in events:
-        _mark_event_lifecycle(state, event)
+        _mark_event_lifecycle(state, event, entity_index=entity_index)
 
 
 def _set_terminal_active_state(
