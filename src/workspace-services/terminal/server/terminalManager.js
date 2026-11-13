@@ -74,6 +74,7 @@ export class TerminalManager {
     this.shutdownTerminalIds = new Set();
     this.persistRequested = false;
     this.persistPromise = null;
+    this.pendingPersist = null;
     /** @type {Map<string, TerminalTransportGrant>} */
     this.transportGrants = new Map();
   }
@@ -127,31 +128,40 @@ export class TerminalManager {
     };
   }
 
-  async persist() {
+  persist() {
     this.persistRequested = true;
+    const pending = this.pendingPersist ??= Promise.withResolvers();
     if (!this.persistPromise) {
-      // 先登记共享Promise再取快照，同轮请求合并；同步异常也能释放本次保存。
-      this.persistPromise = Promise.resolve().then(() => this.drainPersistRequests());
+      // 同轮请求共享确认；写入开始后新来的请求归下一轮，不延长此前调用的等待。
+      this.persistPromise = pending.promise;
+      queueMicrotask(() => { void this.drainPersistRequests(); });
     }
-    await this.persistPromise;
+    return pending.promise;
   }
 
   async drainPersistRequests() {
-    try {
-      while (this.persistRequested) {
-        this.persistRequested = false;
+    while (this.pendingPersist) {
+      const pending = this.pendingPersist;
+      this.pendingPersist = null;
+      this.persistPromise = pending.promise;
+      this.persistRequested = false;
+      try {
         await this.stateStore.write({
           updated_at: nowIso(),
           terminals: [...this.terminalsById.values()].map((session) => session.toRecord()),
         });
+      } catch (error) {
+        // 原错误交给本轮与尚未开始的等待方；保留脏状态，只由后续显式调用重试。
+        this.persistRequested = true;
+        pending.reject(error);
+        this.pendingPersist?.reject(error);
+        this.pendingPersist = null;
+        this.persistPromise = null;
+        return;
       }
-    } catch (error) {
-      // 保留尚未落盘的当前状态，交下一次显式请求保存，不自动重试。
-      this.persistRequested = true;
-      throw error;
-    } finally {
-      this.persistPromise = null;
+      pending.resolve();
     }
+    this.persistPromise = null;
   }
 
   list() {

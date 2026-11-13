@@ -553,49 +553,63 @@ test("同轮保存只写最终状态，全部等待方在写入完成后返回",
   assert.deepEqual(saved, [[{ version: 100 }]]);
 });
 
-test("写入期间的新保存请求串行落盘，等待方不提前成功", async () => {
-  const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
-  const entered = [Promise.withResolvers(), Promise.withResolvers()];
-  const release = [Promise.withResolvers(), Promise.withResolvers()];
-  let version = 1;
-  let active = 0;
-  let maximumActive = 0;
-  let completed = 0;
-  const saved = [];
-  const requests = [];
-  manager.terminalsById.set("term_save", { toRecord: () => ({ version }) });
-  manager.stateStore.write = async (payload) => {
-    const index = saved.length;
-    saved.push(structuredClone(payload.terminals));
-    active += 1;
-    maximumActive = Math.max(maximumActive, active);
-    entered[index].resolve();
-    await release[index].promise;
-    active -= 1;
-  };
-  const save = () => requests.push(manager.persist().then(() => { completed += 1; }));
-  try {
-    save();
-    await entered[0].promise;
-    for (let index = 2; index <= 101; index += 1) {
-      version = index;
+for (const fails of [false, true]) {
+  test(`保存按批次确认，后续写入${fails ? "失败不追溯已确认调用" : "不延长已确认调用"}`, async () => {
+    const manager = new TerminalManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+    const entered = [Promise.withResolvers(), Promise.withResolvers()];
+    const release = [Promise.withResolvers(), Promise.withResolvers()];
+    let version = 1;
+    let active = 0;
+    let maximumActive = 0;
+    let completed = 0;
+    const saved = [];
+    const requests = [];
+    const failure = new Error("后续批次保存失败");
+    manager.terminalsById.set("term_save", { toRecord: () => ({ version }) });
+    manager.stateStore.write = async (payload) => {
+      const index = saved.length;
+      saved.push(structuredClone(payload.terminals));
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      entered[index].resolve();
+      await release[index].promise;
+      active -= 1;
+      if (fails && index === 1) throw failure;
+    };
+    const save = () => requests.push(manager.persist().then(() => { completed += 1; }));
+    try {
       save();
-    }
-    assert.equal(completed, 0);
-    release[0].resolve();
-    await entered[1].promise;
-    assert.equal(completed, 0);
-    release[1].resolve();
-    await Promise.all(requests);
+      await entered[0].promise;
+      for (let index = 2; index <= 101; index += 1) {
+        version = index;
+        save();
+      }
+      assert.equal(completed, 0);
+      release[0].resolve();
+      await entered[1].promise;
+      await new Promise(setImmediate);
+      assert.equal(completed, 1);
+      if (fails) {
+        version = 102;
+        save();
+      }
+      const results = Promise.allSettled(requests);
+      release[1].resolve();
+      const settled = await results;
 
-    assert.deepEqual(saved, [[{ version: 1 }], [{ version: 101 }]]);
-    assert.equal(maximumActive, 1);
-    assert.equal(completed, 101);
-  } finally {
-    for (const gate of release) gate.resolve();
-    await Promise.allSettled(requests);
-  }
-});
+      assert.deepEqual(saved, [[{ version: 1 }], [{ version: 101 }]]);
+      assert.equal(maximumActive, 1);
+      assert.equal(settled[0].status, "fulfilled");
+      assert.equal(settled.slice(1).every((result) => fails
+        ? result.status === "rejected" && result.reason === failure
+        : result.status === "fulfilled"), true);
+      assert.equal(completed, fails ? 1 : 101);
+    } finally {
+      for (const gate of release) gate.resolve();
+      await Promise.allSettled(requests);
+    }
+  });
+}
 
 for (const failureStage of ["snapshot", "sync_writer", "async_writer"]) {
   test(`${failureStage}失败传给全部等待方，修复后可再次保存`, async () => {

@@ -61,21 +61,32 @@ export class TerminalStateStore {
       }
       stage = "目录创建";
       await mkdir(this.stateDir, { recursive: true });
-      const stateFilePayload = {
+      const stateFileMetadata = {
         schema_version: STATE_SCHEMA_VERSION,
         workspace_id: this.workspaceId,
         updated_at: stateSnapshot.updated_at,
-        terminals: stateSnapshot.terminals,
       };
-      stage = "正文编码";
-      const serialized = `${JSON.stringify(stateFilePayload, null, 2)}\n`;
+      // 原生 writer 逐条消费编码结果，避免全部历史缓冲同步编码后才交还事件循环。
+      function* encodedState() {
+        stage = "正文编码";
+        const metadata = JSON.stringify(stateFileMetadata);
+        stage = "正文写入";
+        yield `${metadata.slice(0, -1)},"terminals":[`;
+        for (let index = 0; index < stateSnapshot.terminals.length; index += 1) {
+          stage = "正文编码";
+          const record = JSON.stringify(stateSnapshot.terminals[index]);
+          stage = "正文写入";
+          yield `${index ? "," : ""}${record ?? "null"}`;
+        }
+        yield "]}\n";
+      }
       stage = "正文写入";
-      await writeFile(temporaryFile, serialized, "utf8");
+      await writeFile(temporaryFile, encodedState(), "utf8");
       stage = "文件发布";
       await rename(temporaryFile, this.stateFile);
     } catch (writeError) {
       let cause = writeError;
-      if (stage === "正文写入" || stage === "文件发布") {
+      if (stage === "正文编码" || stage === "正文写入" || stage === "文件发布") {
         try {
           await rm(temporaryFile, { force: true });
         } catch (cleanupError) {

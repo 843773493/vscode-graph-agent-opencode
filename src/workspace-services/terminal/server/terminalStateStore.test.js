@@ -161,7 +161,7 @@ test("编码失败保留已发布状态且不把序列化异常正文公开", as
   const originalBytes = await readFile(store.stateFile);
   const circular = {};
   circular[store.stateFile] = circular;
-  await assert.rejects(store.write({ ...snapshot("未发布"), terminals: [circular] }), (error) => {
+  await assert.rejects(store.write({ ...snapshot("未发布"), terminals: [...snapshot("先写入临时文件的记录").terminals, circular] }), (error) => {
     assert.equal(error.code, "terminal_records_write_failed");
     assert(error.message.includes("stage=正文编码"));
     assert(!error.message.includes(store.stateFile));
