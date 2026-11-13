@@ -18,7 +18,7 @@ const text = (value: unknown): string => typeof value === 'string' ? value : '';
 
 /** 只投影当前来源草稿及下层原文，不在客户端重建一份生效配置。 */
 export function ConfigurationEntities({ kind, draft, document, selectedId, error, onSelect, onEdit,
-  onCreate, onRemove, onRestoreProviders, onSetSecret, pendingSubmission, onQuerySubmission, onSetDefaultAgent, onOpenSource, onOpenSessionSelection, onSave }: {
+  onCreate, onRemove, onRestoreProviders, onSetSecret, pendingSubmission, onQuerySubmission, onSetDefaultAgent, onManageSessionDefaults, onOpenSource, onOpenSessionSelection, onSave }: {
   kind: DefinitionKind; draft?: DefinitionObject; document: ConfigSourceDocumentDTO; selectedId?: string; error?: string;
   onSelect: (id: string) => void;
   onEdit: (id: string, path: (string | number)[], value: unknown) => void;
@@ -26,6 +26,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, error
   onSetDefaultAgent: (id: string) => void;
   onOpenSource: (sourceKey?: string) => void; onSave: () => void;
   onOpenSessionSelection?: () => void;
+  onManageSessionDefaults?: () => void;
   onSetSecret?: (id: string) => void; pendingSubmission?: string; onQuerySubmission?: () => void;
 }) {
   const selectedLayer = document.layers.find(layer => layer.source_key === document.source_key);
@@ -81,6 +82,7 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, error
       <button type="button" disabled={!document.writable || !draft} onClick={onSave}>{t('configuration.entities.save')}</button>
       <button type="button" onClick={() => onOpenSource()}>{t('configuration.entities.openJsonc')}</button>
       {onOpenSessionSelection ? <button type="button" onClick={onOpenSessionSelection}>{t('configuration.entities.openSessionSelection')}</button> : null}
+      {onManageSessionDefaults ? <button type="button" onClick={onManageSessionDefaults}>{t('configuration.entities.manageSessionDefaults')}</button> : null}
     </div>
     {pendingSubmission ? <p role="status">{t('settings.editor.originalSaveUnknown', pendingSubmission)} <button type="button" onClick={onQuerySubmission}>{t('configuration.entities.querySave')}</button></p> : null}
     <p>{t('configuration.entities.sourceBoundary', document.source_key)}</p>

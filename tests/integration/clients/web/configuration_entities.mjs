@@ -25,12 +25,14 @@ try {
   });
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
   const api = (url, owner, init = {}) => page.evaluate(async ({ url, owner, init }) => {
+    const started = performance.now();
     const credential = (await (await fetch('/api/gateway/auth/local-credential')).json()).data;
     const response = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', 'X-Local-Token': credential.token, 'X-BoxTeam-Target-Gateway-Id': owner.gatewayId,
       'X-BoxTeam-Workspace-Id': owner.workspaceId } });
-    const envelope = await response.json();
+    const raw = await response.text(), envelope = JSON.parse(raw);
     if (!response.ok || envelope.request_id !== response.headers.get('X-Request-ID')) throw new Error(JSON.stringify(envelope));
-    return { status: response.status, requestId: envelope.request_id, data: envelope.data };
+    return { status: response.status, requestId: envelope.request_id, data: envelope.data,
+      bytes: new TextEncoder().encode(raw).byteLength, elapsedMs: performance.now() - started };
   }, { url, owner, init });
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible({ timeout: 30000 });
@@ -268,6 +270,90 @@ try {
   await quick.locator('.monaco-list-row').filter({ hasText: '定义管理返回会话' }).click();
   await expect(thread.locator('.composer-agent-button')).toBeFocused();
   result.sessionSelection = { sessionId: session.session_id, threadId: mainThread.thread_id };
+  result.phase = 'workspace-session-defaults';
+  await command('boxteam.settings.agents', location, 'coder');
+  await expect(form('agents')).toBeVisible();
+  const beforeDefaults = (await api(sourceUrl, fixture)).data;
+  const beforeSession = (await api('/api/v1/sessions/' + session.session_id, fixture)).data;
+  const activeAgents = (await api('/api/v1/agents', fixture)).data;
+  const coder = activeAgents.find(agent => agent.agent_id === 'coder');
+  assert(coder && !coder.workspace_default, 'fixture必须提供与原默认值不同的 coder');
+  const providerId = coder.providers[0].provider_id;
+  // 来源 default_agent 保留为未保存草稿；会话默认值仍使用当前 active 定义和独立 owner。
+  await form('agents').getByRole('button', { name: '设为本来源的配置默认 Agent', exact: true }).click();
+  await expect(page.locator('.tabs-container .tab.active')).toHaveClass(/\bdirty\b/);
+  const sourceWritesBeforeDefaults = result.writes.length;
+  const defaultsWrites = [];
+  page.on('request', request => {
+    if (request.method() === 'PUT' && /\/api\/v1\/agents\/(?:workspace-default|[^/]+\/workspace-default-provider)$/.test(new URL(request.url()).pathname)) {
+      const headers = request.headers();
+      defaultsWrites.push({ path: new URL(request.url()).pathname, body: request.postDataJSON(), headers: {
+        'x-boxteam-target-gateway-id': headers['x-boxteam-target-gateway-id'],
+        'x-boxteam-workspace-id': headers['x-boxteam-workspace-id'],
+      } });
+    }
+  });
+  const openDefaults = async () => {
+    await form('agents').getByRole('button', { name: '工作区新会话默认值', exact: true }).click();
+    await expect(quick).toBeVisible();
+    await quick.locator('.monaco-list-row').filter({ hasText: 'coder' }).click();
+    await expect(quick).toBeVisible();
+  };
+  await openDefaults();
+  await quick.locator('.monaco-list-row').filter({ hasText: '设为新会话默认 Agent' }).click();
+  await expect(modal).toContainText(fixture.workspaceId);
+  await modal.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(defaultsWrites.length, 0, '取消默认值确认必须零PUT');
+  await openDefaults();
+  await quick.locator('.monaco-list-row').filter({ hasText: '设为新会话默认 Agent' }).click();
+  const agentDefaultResponse = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname === '/api/v1/agents/workspace-default');
+  await modal.getByRole('button', { name: '保存新会话默认值', exact: true }).click();
+  const changedAgent = await agentDefaultResponse, changedAgentEnvelope = await changedAgent.json();
+  assert.equal(changedAgent.status(), 200);
+  assert.equal(changedAgentEnvelope.request_id, changedAgent.headers()['x-request-id']);
+  assert.equal(changedAgentEnvelope.data.length, activeAgents.length);
+  assert.equal(changedAgentEnvelope.data.find(agent => agent.workspace_default).agent_id, 'coder');
+  await openDefaults();
+  await quick.locator('.monaco-list-row').filter({ hasText: `设为 ${coder.agent_id} 的新会话默认 Provider` }).click();
+  const providerDefaultResponse = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname === '/api/v1/agents/coder/workspace-default-provider');
+  await modal.getByRole('button', { name: '保存新会话默认值', exact: true }).click();
+  const changedProvider = await providerDefaultResponse, changedProviderEnvelope = await changedProvider.json();
+  assert.equal(changedProvider.status(), 200);
+  assert.equal(changedProviderEnvelope.request_id, changedProvider.headers()['x-request-id']);
+  assert.equal(changedProviderEnvelope.data.length, activeAgents.length);
+  assert.equal(changedProviderEnvelope.data.find(agent => agent.agent_id === 'coder').providers.find(provider => provider.workspace_default).provider_id, providerId);
+  assert.equal(defaultsWrites.length, 2);
+  assert.deepEqual(defaultsWrites.map(write => write.body), [
+    { agent_id: coder.agent_id }, { provider_id: providerId },
+  ]);
+  assert(defaultsWrites.every(write => write.headers['x-boxteam-target-gateway-id'] === fixture.gatewayId
+    && write.headers['x-boxteam-workspace-id'] === fixture.workspaceId));
+  assert.equal(result.writes.length, sourceWritesBeforeDefaults, 'SessionDefaults不能提交未保存的来源');
+  const afterDefaults = (await api(sourceUrl, fixture)).data;
+  assert.equal(afterDefaults.file_digest, beforeDefaults.file_digest);
+  assert.equal(afterDefaults.jsonc, beforeDefaults.jsonc);
+  await expect(page.locator('.tabs-container .tab.active')).toHaveClass(/\bdirty\b/);
+  const preserved = (await api('/api/v1/sessions/' + session.session_id, fixture)).data;
+  assert.equal(preserved.current_agent_id, beforeSession.current_agent_id);
+  assert.equal(preserved.current_provider_id, beforeSession.current_provider_id);
+  const nextSession = (await api('/api/v1/sessions', fixture, { method: 'POST', body: JSON.stringify({ title: '采用新默认值的会话' }) })).data;
+  assert.equal(nextSession.current_agent_id, 'coder');
+  assert.equal(nextSession.current_provider_id, providerId);
+  result.sessionDefaults = { cancelled: true, writes: defaultsWrites, agentReceipt: changedAgentEnvelope,
+    providerReceipt: changedProviderEnvelope, originalSessionId: session.session_id, newSessionId: nextSession.session_id };
+  // 本切片只采一个实际复用的列表 API；保存来源详情仍沿已有领域证据。
+  const samples = [];
+  for (let index = 0; index < 21; index++) {
+    const sample = await api('/api/v1/agents', fixture);
+    samples.push({ elapsedMs: sample.elapsedMs, bytes: sample.bytes, requestId: sample.requestId, count: sample.data.length });
+  }
+  const warm = samples.slice(1).map(sample => sample.elapsedMs).sort((a, b) => a - b);
+  result.defaultsMeasurements = { population: activeAgents.length, first: samples[0], samples,
+    p50: warm[Math.ceil(warm.length * .50) - 1], p95: warm[Math.ceil(warm.length * .95) - 1], max: warm.at(-1) };
+  assert(result.defaultsMeasurements.p95 <= 500, 'Agent列表暖p95超过500ms');
+  assert(result.defaultsMeasurements.max <= 1500, 'Agent列表暖最大值超过1500ms');
   assert.equal(result.modelRequests.length, 0);
   assert(result.writes.every(write => write.gateway_id === fixture.gatewayId && write.workspace_id === fixture.workspaceId));
   assert.deepEqual(result.pageErrors, []);

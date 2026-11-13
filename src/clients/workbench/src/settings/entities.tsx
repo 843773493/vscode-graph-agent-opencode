@@ -13,6 +13,7 @@ import { ThreadInput } from '../threadInput.js';
 import { ThreadPane } from '../threadPane.js';
 import { ReactSurface } from '../react/surface.js';
 import { createManagementTargetLifecycle } from '../managementTarget.js';
+import { listAgents, setWorkspaceDefaultAgent, setWorkspaceDefaultProvider } from '../../../web/src/api/workspace.js';
 import type { SourceSettings } from './editor.js';
 
 export interface DefinitionEditorOptions { definitionKind?: DefinitionKind; definitionId?: string }
@@ -59,6 +60,7 @@ export class ConfigurationEntityView extends Disposable {
       onCreate={() => this.run(() => this.create())} onRemove={id => this.run(() => this.remove(id))}
       onRestoreProviders={() => this.run(() => this.restoreProviders())}
       onSetDefaultAgent={id => this.run(() => this.source.editPath(['default_agent'], id))}
+      onManageSessionDefaults={() => this.run(() => this.manageSessionDefaults())}
       onOpenSessionSelection={() => this.run(() => this.openSessionSelection())}
       onOpenSource={sourceKey => this.run(async () => {
         await this.commands.executeCommand('boxteam.settings.openSource', {
@@ -68,6 +70,47 @@ export class ConfigurationEntityView extends Disposable {
       onSave={() => this.run(async () => {
         if (!await this.source.model.save()) throw new Error(t('configuration.entities.saveIncomplete'));
       })} />);
+  }
+  private async manageSessionDefaults(): Promise<void> {
+    // 新会话默认值属于 SessionDefaults，与本来源尚未保存的定义分开操作。
+    const { gateway_id, workspace_id, gateway_connection_id } = this.source.location;
+    if (!workspace_id) throw new Error(t('configuration.entities.workspaceRequired'));
+    const target = { gateway_id, workspace_id, gateway_connection_id };
+    const agents = await listAgents(0, target, this.lifetime.signal);
+    this.check();
+    const selected = await this.quick.pick(agents.map(agent => ({ label: agent.name, description: agent.agent_id,
+      detail: t('configuration.entities.sessionDefaultsSummary', agent.model,
+        agent.providers.find(provider => provider.workspace_default)?.provider_id ?? '',
+        agent.workspace_default ? t('configuration.entities.workspaceDefaultAgent') : ''), agent })),
+      { title: t('configuration.entities.manageSessionDefaults'),
+        placeHolder: t('configuration.entities.sessionDefaultsBoundary', gateway_id, workspace_id) }, this.lifetime.token);
+    this.check(); if (!selected) return;
+    const { agent } = selected;
+    const action = await this.quick.pick([
+      { label: t('configuration.entities.useWorkspaceDefaultAgent'), description: agent.agent_id, providerId: undefined as string | undefined },
+      ...agent.providers.map(provider => ({ label: provider.provider_id, description: provider.model,
+        detail: t('configuration.entities.useWorkspaceDefaultProvider', agent.agent_id), providerId: provider.provider_id })),
+    ], { title: t('configuration.entities.manageSessionDefaults'),
+      placeHolder: t('configuration.entities.sessionDefaultsBoundary', gateway_id, workspace_id) }, this.lifetime.token);
+    this.check(); if (!action) return;
+    const confirmed = await this.dialogs.confirm({ type: 'question', message: action.providerId === undefined
+      ? t('configuration.entities.useWorkspaceDefaultAgent') : t('configuration.entities.useWorkspaceDefaultProvider', agent.agent_id),
+      detail: `${gateway_id} · ${workspace_id} · ${agent.agent_id}${action.providerId === undefined ? '' : ' · ' + action.providerId}\n`
+        + t('configuration.entities.sessionDefaultsSaveBoundary'), primaryButton: t('configuration.entities.confirmSessionDefault') });
+    this.check(); if (!confirmed.confirmed) return;
+    const summary = (value: Awaited<ReturnType<typeof listAgents>>) => t('configuration.entities.sessionDefaultsCurrent',
+      value.find(item => item.workspace_default)?.agent_id ?? '', agent.agent_id,
+      value.find(item => item.agent_id === agent.agent_id)?.providers.find(item => item.workspace_default)?.provider_id ?? '');
+    try {
+      const updated = action.providerId === undefined ? await setWorkspaceDefaultAgent(0, agent.agent_id, target)
+        : await setWorkspaceDefaultProvider(0, agent.agent_id, action.providerId, target);
+      this.notifications.info(summary(updated));
+    } catch (error) {
+      // 失败仅重读原 owner，不重放写入；原回执和重读错误都保留。
+      const latest = await listAgents(0, target).catch(readError => { throw new AggregateError([error, readError],
+        [error, readError].map(cause => cause instanceof Error ? cause.message : String(cause)).join('\n')); });
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\n${summary(latest)}`, { cause: error });
+    }
   }
   private async setSecret(id: string): Promise<void> {
     if (this.source.pendingSubmission) { await this.source.querySubmission(); return; }

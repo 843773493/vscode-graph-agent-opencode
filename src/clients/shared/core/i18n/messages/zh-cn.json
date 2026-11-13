@@ -3933,5 +3933,14 @@
   "configuration.entities.secretSettleDetail": "密码不会进入文本草稿。请先沿原保存流程结清修改，或取消后自行撤销草稿。",
   "configuration.entities.secretTarget": "为 Gateway {0} · 工作区 {1} · Provider {2} 输入 API 密钥；只在确认后保存到该目标原配置来源。",
   "configuration.entities.secretDraftChanged": "来源草稿在密码输入期间已变化，请先处理草稿后重新输入。",
-  "configuration.entities.saveInProgress": "当前来源已有保存进行中，请等待原提交结清。"
+  "configuration.entities.saveInProgress": "当前来源已有保存进行中，请等待原提交结清。",
+  "configuration.entities.manageSessionDefaults": "工作区新会话默认值",
+  "configuration.entities.sessionDefaultsSummary": "配置 primary：{0} · 新会话 Provider：{1} · {2}",
+  "configuration.entities.workspaceDefaultAgent": "工作区默认 Agent",
+  "configuration.entities.sessionDefaultsBoundary": "Gateway {0} · 工作区 {1}。只使用当前生效的定义，不读取未保存的来源草稿。",
+  "configuration.entities.useWorkspaceDefaultAgent": "设为新会话默认 Agent",
+  "configuration.entities.useWorkspaceDefaultProvider": "设为 {0} 的新会话默认 Provider",
+  "configuration.entities.sessionDefaultsSaveBoundary": "立即保存到原工作区会话默认值；不修改来源 JSONC、现有会话选择或运行中的任务。",
+  "configuration.entities.confirmSessionDefault": "保存新会话默认值",
+  "configuration.entities.sessionDefaultsCurrent": "当前新会话默认 Agent：{0} · {1} 的默认 Provider：{2}"
 }

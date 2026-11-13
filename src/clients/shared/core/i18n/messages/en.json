@@ -3933,5 +3933,14 @@
   "configuration.entities.secretSettleDetail": "Passwords stay outside the text draft. Complete the existing save flow first, or cancel and discard your draft explicitly.",
   "configuration.entities.secretTarget": "Enter an API key for Gateway {0} · workspace {1} · Provider {2}. It is saved to that target’s existing source only after confirmation.",
   "configuration.entities.secretDraftChanged": "The source draft changed while entering the password. Resolve the draft before entering it again.",
-  "configuration.entities.saveInProgress": "A save is already in progress for this source. Wait for it to finish."
+  "configuration.entities.saveInProgress": "A save is already in progress for this source. Wait for it to finish.",
+  "configuration.entities.manageSessionDefaults": "Workspace defaults for new sessions",
+  "configuration.entities.sessionDefaultsSummary": "Configured primary: {0} · new-session Provider: {1} · {2}",
+  "configuration.entities.workspaceDefaultAgent": "Workspace default Agent",
+  "configuration.entities.sessionDefaultsBoundary": "Gateway {0} · workspace {1}. Uses active definitions, not the unsaved source draft.",
+  "configuration.entities.useWorkspaceDefaultAgent": "Use as the default Agent for new sessions",
+  "configuration.entities.useWorkspaceDefaultProvider": "Use as the default Provider for new sessions with {0}",
+  "configuration.entities.sessionDefaultsSaveBoundary": "Saves immediately to the existing workspace session defaults. Source JSONC, existing sessions and running tasks are unchanged.",
+  "configuration.entities.confirmSessionDefault": "Save new-session default",
+  "configuration.entities.sessionDefaultsCurrent": "Current new-session default Agent: {0} · default Provider for {1}: {2}"
 }
