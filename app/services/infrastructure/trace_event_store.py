@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import threading
+import sqlite3
 import zlib
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
-from app.abstractions.trace_event_sink import TraceAppendReceipt
-from app.abstractions.turn_history import (
-    TurnBootstrapBatch,
-    TurnMigrationSnapshot,
-    TurnRecoveryBatch,
-)
 from app.core.path_utils import get_session_path_resolver
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.event import Event
 from app.schemas.internal_v2.trace_search import TraceLocationDTO, TraceReferenceDTO
 from app.services.infrastructure.turn_history.trace_cursor import (
@@ -22,14 +16,14 @@ from app.services.infrastructure.turn_history.trace_cursor import (
     events_after_cursor,
     offset_after_event,
 )
-from app.services.infrastructure.turn_history.trace_index import TraceTurnIndex
-from app.services.infrastructure.turn_history.trace_index_compaction import _AnyEvent
-from app.services.infrastructure.turn_history.trace_index_rebuild import (
-    rebuild_trace_turn_index,
+from app.services.infrastructure.turn_history.trace_database import (
+    TraceDatabase,
+    job_threads,
 )
 from app.services.infrastructure.turn_history.trace_page import (
     TRACE_PAGE_MAX_BYTES,
     TraceEventPage,
+    parse_trace_record,
     read_trace_event_page,
 )
 from app.services.infrastructure.turn_history.trace_search import (
@@ -43,75 +37,42 @@ from app.services.infrastructure.turn_history.trace_stream import (
     iter_trace_event_lines,
     stream_trace_records,
 )
-from app.services.infrastructure.turn_history.trace_writer import (
-    MESSAGE_TRACE_TYPES,
-    TraceEventWriter,
-)
 
 __all__ = ["TraceCursorGoneError", "TraceEventStore"]
-
-# 会话级锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
 TRACE_STORE_LOCK_SHARDS = 64
 
 
 class TraceEventStore:
     def __init__(self, sessions_dir: Path) -> None:
-        self._sessions_dir = sessions_dir
         self._path_resolver = get_session_path_resolver(sessions_dir)
-        self._append_locks: tuple[asyncio.Lock, ...] = tuple(
+        self._append_locks = tuple(
             asyncio.Lock() for _ in range(TRACE_STORE_LOCK_SHARDS)
         )
-        self._file_locks: tuple[threading.RLock, ...] = tuple(
-            threading.RLock() for _ in range(TRACE_STORE_LOCK_SHARDS)
-        )
-        # 会话级唤醒 Condition 同样按 session_id 分片：分片数固定，同 shard 的
-        # 读/写命中同一个 Condition，既保住「同会话 append 唤醒同会话 reader」的
-        # 语义，又不会随历史会话数无界增长。跨会话共用 shard 只会带来无副作用的
-        # 伪唤醒（reader 醒来后仍只按自己的文件重新读）。
-        self._conditions: tuple[asyncio.Condition, ...] = tuple(
+        self._conditions = tuple(
             asyncio.Condition() for _ in range(TRACE_STORE_LOCK_SHARDS)
         )
 
     @staticmethod
-    def _shard(key: str, size: int) -> int:
-        # 分片用 crc32 而非 hash() 以保证跨进程确定，不引入哈希随机化。
-        return zlib.crc32(key.encode("utf-8")) % size
+    def _shard(session_id: str) -> int:
+        return zlib.crc32(session_id.encode("utf-8")) % TRACE_STORE_LOCK_SHARDS
 
     def _append_lock(self, session_id: str) -> asyncio.Lock:
-        # 分片锁池：同一 session_id 恒得同一把锁（保住同会话 append 互斥），数量恒
-        # 为分片数（有界），不随历史会话数增长。
-        return self._append_locks[self._shard(session_id, len(self._append_locks))]
-
-    def _file_lock(self, session_id: str) -> threading.RLock:
-        # 分片锁池：同一 session_id 恒得同一把锁（保住同会话文件读写互斥），数量恒
-        # 为分片数（有界），不随历史会话数增长。
-        return self._file_locks[self._shard(session_id, len(self._file_locks))]
+        return self._append_locks[self._shard(session_id)]
 
     def _condition_for(self, session_id: str) -> asyncio.Condition:
-        # 分片 Condition 池：同一 session_id 恒得同一个 Condition（保住 append
-        # 唤醒对应 reader 的语义），数量恒为分片数（有界）。
-        return self._conditions[self._shard(session_id, len(self._conditions))]
+        return self._conditions[self._shard(session_id)]
 
-    def _trace_file(self, session_id: str) -> Path:
+    def _database_path(self, session_id: str) -> Path:
         return (
             self._path_resolver.resolve_session_node_for_runtime(session_id)
             / "logs"
             / "traces"
-            / "events.jsonl"
+            / "trace.sqlite"
         )
 
     def list_session_ids(self) -> list[str]:
         return sorted(
-            node.node_id
-            for node in self._path_resolver.list_nodes(kind="session")
-        )
-
-    def _message_trace_file(self, session_id: str) -> Path:
-        return (
-            self._path_resolver.resolve_session_node_for_runtime(session_id)
-            / "logs"
-            / "traces"
-            / "messages.jsonl"
+            node.node_id for node in self._path_resolver.list_nodes(kind="session")
         )
 
     async def _notify(self, session_id: str) -> None:
@@ -119,68 +80,13 @@ class TraceEventStore:
         async with condition:
             condition.notify_all()
 
-    def _append_event_files(
-        self,
-        session_id: str,
-        event: Event,
-    ) -> TraceAppendReceipt:
-        with self._file_lock(session_id):
-            return TraceEventWriter(
-                trace_file=self._trace_file(session_id),
-                message_file=self._message_trace_file(session_id),
-                indexed_event_types=MESSAGE_TRACE_TYPES,
-            ).append(session_id, event)
+    def _append_event(self, session_id: str, event: Event) -> None:
+        TraceDatabase(self._database_path(session_id)).append(event)
 
-    async def append(self, session_id: str, event: Event) -> TraceAppendReceipt:
+    async def append(self, session_id: str, event: Event) -> None:
         async with self._append_lock(session_id):
-            receipt = await asyncio.to_thread(
-                self._append_event_files,
-                session_id,
-                event,
-            )
+            await run_sync_shielded(self._append_event, session_id, event)
         await self._notify(session_id)
-        return receipt
-
-    def read_turn_bootstrap_batch(
-        self,
-        session_id: str,
-        *,
-        max_events: int,
-        max_bytes: int,
-    ) -> TurnBootstrapBatch:
-        with self._file_lock(session_id):
-            return TraceTurnIndex(self._trace_file(session_id).parent).bootstrap_batch(
-                max_events=max_events,
-                max_bytes=max_bytes,
-            )
-
-    def ensure_turn_index(self, session_id: str) -> None:
-        with self._file_lock(session_id):
-            index = TraceTurnIndex(self._trace_file(session_id).parent)
-            snapshot = index.snapshot()
-            if snapshot is not None and not snapshot.has_unindexed_prefix:
-                return
-            rebuild_trace_turn_index(
-                trace_path=self._trace_file(session_id),
-                message_path=self._message_trace_file(session_id),
-                trace_dir=self._trace_file(session_id).parent,
-                indexed_event_types=MESSAGE_TRACE_TYPES,
-            )
-
-    def read_turn_recovery_batch(
-        self,
-        session_id: str,
-        *,
-        after_event_id: str | None,
-        max_events: int,
-        max_bytes: int,
-    ) -> TurnRecoveryBatch:
-        with self._file_lock(session_id):
-            return TraceTurnIndex(self._trace_file(session_id).parent).recovery_batch(
-                after_event_id=after_event_id,
-                max_events=max_events,
-                max_bytes=max_bytes,
-            )
 
     def read_events(
         self,
@@ -188,10 +94,11 @@ class TraceEventStore:
         after_event_id: str | None = None,
         tail_limit: int | None = None,
     ) -> list[Event]:
-        events = list(self.iter_events(
-            session_id,
-            tail_limit=tail_limit if after_event_id is None else None,
-        ))
+        events = list(
+            self.iter_events(
+                session_id, tail_limit=tail_limit if after_event_id is None else None
+            )
+        )
         return events_after_cursor(session_id, events, after_event_id)
 
     def read_terminal_job_statuses(
@@ -225,26 +132,25 @@ class TraceEventStore:
         return statuses
 
     def latest_event_cursor(self, session_id: str) -> str | None:
-        """读取事件日志尾部的可验证传输游标，供新 SSE 连接跳过历史事件。"""
-        with self._file_lock(session_id):
-            file = self._trace_file(session_id)
-            latest = self._read_last_event_line(file)
-            if latest is None:
+        with TraceDatabase(self._database_path(session_id)).connection() as connection:
+            row = (
+                connection.execute(
+                    "SELECT start,end,raw,event_id FROM trace_events ORDER BY start DESC LIMIT 1"
+                ).fetchone()
+                if connection
+                else None
+            )
+            if row is None:
                 return None
-            start, end, line = latest
-            try:
-                raw_event = json.loads(line.decode("utf-8"))
-                event = _AnyEvent.model_validate(raw_event).root
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Trace 尾部事件无法解析: session_id={session_id}"
-                ) from exc
-        return encode_trace_cursor(
-            event_id=event.event_id,
-            start=start,
-            end=end,
-            line=line,
-        )
+            record = parse_trace_record(
+                session_id, row[0], row[1], row[2].encode("utf-8")
+            )
+            return encode_trace_cursor(
+                event_id=record.event.event_id,
+                start=record.start,
+                end=record.end,
+                line=record.line,
+            )
 
     def read_trace_page(
         self,
@@ -254,36 +160,41 @@ class TraceEventStore:
         limit: int,
         max_bytes: int = TRACE_PAGE_MAX_BYTES,
     ) -> TraceEventPage:
-        with self._file_lock(session_id):
+        with TraceDatabase(self._database_path(session_id)).connection() as connection:
             return read_trace_event_page(
                 session_id=session_id,
-                file=self._trace_file(session_id),
+                connection=connection,
                 cursor=cursor,
                 limit=limit,
                 max_bytes=max_bytes,
             )
 
     def event_threads(self, session_id: str, events: list[Event]) -> dict[str, str]:
-        """Session 文件内按已提交 Job 事实投影 Thread 身份，Goal 明确归 main。"""
-        with self._file_lock(session_id):
-            return self._event_threads(session_id, events, {})
+        with TraceDatabase(self._database_path(session_id)).connection() as connection:
+            return self._event_threads(connection, session_id, events)
 
     def _event_threads(
-        self, session_id: str, events: list[Event], owners: dict[str, str],
+        self,
+        connection: sqlite3.Connection | None,
+        session_id: str,
+        events: list[Event],
     ) -> dict[str, str]:
-        job_ids = {event.job_id for event in events if event.type not in {"goal_updated", "goal_cleared"}}
-        trace_dir = self._trace_file(session_id).parent
-        missing = job_ids - owners.keys()
-        if missing:
-            owners.update(TraceTurnIndex(trace_dir).job_threads(session_id, missing))
-        result = {}
+        jobs = {
+            event.job_id
+            for event in events
+            if event.type not in {"goal_updated", "goal_cleared"}
+        }
+        owners = job_threads(connection, session_id, jobs)
+        result: dict[str, str] = {}
         main: str | None = None
         for event in events:
-            if event.type == "goal_updated" or event.type == "goal_cleared":
-                # catalog 的 main Thread 不可变，同批只查询一次；仍逐条检查事件归属。
+            if event.type in {"goal_updated", "goal_cleared"}:
                 if main is None:
                     main = self._path_resolver.main_thread_id(session_id)
-                if event.payload.session_id != session_id or event.payload.thread_id != main:
+                if (
+                    event.payload.session_id != session_id
+                    or event.payload.thread_id != main
+                ):
                     raise ValueError("Goal 事件归属与 Session main Thread 不一致")
                 result[event.event_id] = main
             else:
@@ -291,222 +202,81 @@ class TraceEventStore:
         return result
 
     def search_session_events(
-        self, session_id: str, query: str, *, limit: int,
-        position: TraceSearchPosition | None, budget: TraceSearchBudget,
+        self,
+        session_id: str,
+        query: str,
+        *,
+        limit: int,
+        position: TraceSearchPosition | None,
+        budget: TraceSearchBudget,
     ) -> TraceSearchPage:
-        with self._file_lock(session_id):
-            # 仅在本次持锁搜索内复用已完整校验的 Job 归属；条目数受扫描预算约束，
-            # 新请求重新查询，不能把后续追加的归属冲突隐藏在跨请求缓存中。
-            owners: dict[str, str] = {}
-            return search_trace_events(session_id, self._trace_file(session_id), query,
-                limit=limit, position=position, budget=budget,
-                event_threads=lambda events: self._event_threads(session_id, events, owners))
+        with TraceDatabase(self._database_path(session_id)).connection() as connection:
+            return search_trace_events(
+                session_id,
+                connection,
+                query,
+                limit=limit,
+                position=position,
+                budget=budget,
+                event_threads=lambda events: self._event_threads(
+                    connection, session_id, events
+                ),
+            )
 
     def locate(self, reference: TraceReferenceDTO) -> TraceLocationDTO:
-        with self._file_lock(reference.session_id):
-            return locate_trace_event(self._trace_file(reference.session_id), reference,
-                event_threads=lambda events: self.event_threads(reference.session_id, events))
-
-    def capture_turn_migration_snapshot(
-        self,
-        session_id: str,
-    ) -> TurnMigrationSnapshot:
-        """在一次同步文件锁内捕获语义 Trace 边界和全量事件水位。"""
-        with self._file_lock(session_id):
-            message_file = self._message_trace_file(session_id)
-            message_trace_size = (
-                message_file.stat().st_size if message_file.exists() else 0
-            )
-            index_snapshot = TraceTurnIndex(
-                self._trace_file(session_id).parent
-            ).snapshot()
-            return TurnMigrationSnapshot(
-                message_trace_size=message_trace_size,
-                event_cursor=(
-                    index_snapshot.event_cursor if index_snapshot is not None else None
-                ),
-                projected_event_offset=(
-                    index_snapshot.projected_message_offset
-                    if index_snapshot is not None
-                    and index_snapshot.event_cursor is not None
-                    else None
+        with TraceDatabase(
+            self._database_path(reference.session_id)
+        ).connection() as connection:
+            return locate_trace_event(
+                connection,
+                reference,
+                event_threads=lambda events: self._event_threads(
+                    connection, reference.session_id, events
                 ),
             )
 
-    def iter_message_events(
-        self,
-        session_id: str,
-        *,
-        before_offset: int | None = None,
-    ) -> Iterator[Event]:
-        """逐行读取迁移所需语义事件，避免把完整 Trace 驻留内存。"""
-        if before_offset is not None and before_offset < 0:
-            raise ValueError("Trace 迁移读取边界不能小于 0")
-        file = self._message_trace_file(session_id)
-        if not file.exists():
-            if before_offset not in {None, 0}:
-                raise TypeError(
-                    "Trace 语义迁移边界越过不存在的文件: "
-                    f"session_id={session_id}, before_offset={before_offset}"
+    def iter_message_events(self, session_id: str) -> Iterator[Event]:
+        with TraceDatabase(self._database_path(session_id)).connection() as connection:
+            if connection is not None:
+                rows = connection.execute(
+                    "SELECT raw FROM trace_events WHERE is_message=1 ORDER BY start"
                 )
-            return
-        if before_offset == 0:
-            return
-        with file.open("rb") as stream:
-            line_number = 0
-            while line := stream.readline():
-                line_number += 1
-                current_offset = stream.tell()
-                if before_offset is not None and current_offset > before_offset:
-                    raise RuntimeError(
-                        "Trace 语义迁移边界落在事件行中间: "
-                        f"session_id={session_id}, before_offset={before_offset}, "
-                        f"line={line_number}"
-                    )
-                stripped = line.strip().decode("utf-8")
-                if not stripped:
-                    if before_offset is not None and current_offset == before_offset:
-                        return
-                    continue
-                try:
-                    yield self._parse_event(stripped)
-                except Exception as error:
-                    raise RuntimeError(
-                        "Trace 语义迁移事件损坏: "
-                        f"session_id={session_id}, line={line_number}"
-                    ) from error
-                if before_offset is not None and current_offset == before_offset:
-                    return
-            final_offset = stream.tell()
-        if before_offset is not None and final_offset != before_offset:
-            raise RuntimeError(
-                "Trace 语义迁移边界越过文件末尾: "
-                f"session_id={session_id}, before_offset={before_offset}, "
-                f"size={final_offset}"
-            )
+                yield from iter_trace_event_lines(
+                    session_id=session_id, lines=(row[0] for row in rows)
+                )
 
     def iter_events(
-        self,
-        session_id: str,
-        *,
-        tail_limit: int | None = None,
+        self, session_id: str, *, tail_limit: int | None = None
     ) -> Iterator[Event]:
-        """逐行消费完整 Trace；调用方须耗尽迭代器才能完成历史校验。"""
-        file = self._trace_file(session_id)
-        if not file.exists():
-            return
-        if tail_limit is not None:
-            yield from iter_trace_event_lines(
-                session_id=session_id,
-                lines=self._read_last_lines(file, tail_limit),
-            )
-        else:
-            with file.open(encoding="utf-8") as stream:
-                yield from iter_trace_event_lines(session_id=session_id, lines=stream)
-
-    @staticmethod
-    def _read_last_lines(file: Path, limit: int) -> list[str]:
-        if limit < 1:
+        """恢复必须耗尽快照中的全部事件，完整协议与归属校验仍由原调用方执行。"""
+        if tail_limit is not None and tail_limit < 1:
             raise ValueError("Trace tail_limit 必须大于 0")
-        block_size = 64 * 1024
-        chunks: list[bytes] = []
-        newline_count = 0
-        with file.open("rb") as stream:
-            stream.seek(0, 2)
-            position = stream.tell()
-            while position > 0 and newline_count <= limit:
-                read_size = min(block_size, position)
-                position -= read_size
-                stream.seek(position)
-                chunk = stream.read(read_size)
-                chunks.append(chunk)
-                newline_count += chunk.count(b"\n")
-        raw_lines = b"".join(reversed(chunks)).splitlines()
-        return [line.decode("utf-8") for line in raw_lines[-limit:]]
-
-    @staticmethod
-    def _read_last_event_line(file: Path) -> tuple[int, int, bytes] | None:
-        if not file.exists() or file.stat().st_size == 0:
-            return None
-
-        with file.open("rb") as stream:
-            file_size = file.stat().st_size
-            content_end = file_size
-            while content_end > 0:
-                stream.seek(content_end - 1)
-                if stream.read(1) != b"\n":
-                    break
-                content_end -= 1
-            if content_end == 0:
-                return None
-
-            search_end = content_end
-            line_start = 0
-            while search_end > 0:
-                chunk_start = max(0, search_end - 64 * 1024)
-                stream.seek(chunk_start)
-                chunk = stream.read(search_end - chunk_start)
-                newline_index = chunk.rfind(b"\n")
-                if newline_index >= 0:
-                    line_start = chunk_start + newline_index + 1
-                    break
-                search_end = chunk_start
-
-            line_end = content_end + (1 if content_end < file_size else 0)
-            stream.seek(line_start)
-            line = stream.read(line_end - line_start)
-        return line_start, line_end, line
+        with TraceDatabase(self._database_path(session_id)).connection() as connection:
+            if connection is None:
+                return
+            if tail_limit is None:
+                rows = connection.execute("SELECT raw FROM trace_events ORDER BY start")
+            else:
+                rows = connection.execute(
+                    "SELECT raw FROM (SELECT start,raw FROM trace_events ORDER BY start DESC LIMIT ?) ORDER BY start",
+                    (tail_limit,),
+                )
+            yield from iter_trace_event_lines(
+                session_id=session_id, lines=(row[0] for row in rows)
+            )
 
     def ensure_cursor(self, session_id: str, after_event_id: str | None) -> None:
-        """在响应 SSE 之前验证游标，使失效游标能返回明确的 HTTP 状态。"""
-        if after_event_id is None:
-            return
-        self._offset_after_event(
-            session_id, self._trace_file(session_id), after_event_id
-        )
+        if after_event_id is not None:
+            with TraceDatabase(
+                self._database_path(session_id)
+            ).connection() as connection:
+                offset_after_event(session_id, connection, after_event_id)
 
-    async def stream_events(
-        self,
-        session_id: str,
-        after_event_id: str | None = None,
-    ):
-        file = self._trace_file(session_id)
-        offset = (
-            self._offset_after_event(session_id, file, after_event_id)
-            if after_event_id is not None
-            else 0
-        )
+    async def stream_events(self, session_id: str, after_event_id: str | None = None):
         async for record in stream_trace_records(
             session_id=session_id,
-            file=file,
-            initial_offset=offset,
+            database=TraceDatabase(self._database_path(session_id)),
             requested_cursor=after_event_id,
             condition=self._condition_for(session_id),
         ):
             yield record
-
-    async def stream_message_events(
-        self, session_id: str
-    ) -> AsyncGenerator[Event, None]:
-        async for record in stream_trace_records(
-            session_id=session_id,
-            file=self._message_trace_file(session_id),
-            initial_offset=0,
-            requested_cursor=None,
-            condition=self._condition_for(session_id),
-        ):
-            yield record.event
-
-    def _offset_after_event(
-        self, session_id: str, file: Path, after_event_id: str
-    ) -> int:
-        return offset_after_event(
-            session_id,
-            file,
-            self._trace_file(session_id).parent,
-            after_event_id,
-        )
-
-    @staticmethod
-    def _parse_event(line: str) -> Event:
-        return _AnyEvent.model_validate_json(line).root

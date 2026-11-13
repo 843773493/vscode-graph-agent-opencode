@@ -277,9 +277,10 @@ async def test_startup_rejects_invalid_trace(pending_checkpoint_inspector,
     session_root = session_bundle_factory(
         tmp_path / ".boxteam" / "sessions", "ses_019b7e56befb747788f3efc9aace9dbc"
     )
-    trace_file = session_root / "logs" / "traces" / "events.jsonl"
+    trace_file = session_root / "logs/traces/trace.sqlite"
     trace_file.parent.mkdir(parents=True, exist_ok=True)
-    trace_file.write_text(
+    from tests.support.trace_storage import inject_trace_record
+    inject_trace_record(trace_file,
         json.dumps(
             {
                 "event_id": "evt_legacy_text_start",
@@ -292,7 +293,6 @@ async def test_startup_rejects_invalid_trace(pending_checkpoint_inspector,
             }
         )
         + "\n",
-        encoding="utf-8",
     )
     runtime, _ = build_runtime(
         pending_checkpoint_inspector=pending_checkpoint_inspector,

@@ -39,6 +39,7 @@ from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.trace_storage import inject_trace_record, trace_bytes
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
     build_catalog_workspace,
@@ -189,12 +190,12 @@ async def cold_container_factory(
 
 
 def _trace_path(case: RecoveryCase, session_id: str) -> Path:
-    return case.session_paths[session_id] / "logs" / "traces" / "events.jsonl"
+    return case.session_paths[session_id] / "logs" / "traces" / "trace.sqlite"
 
 
 def _trace_snapshot(case: RecoveryCase) -> dict[str, bytes]:
     return {
-        session_id: path.read_bytes() if path.exists() else b""
+        session_id: trace_bytes(path) if path.exists() else b""
         for session_id in case.session_paths
         for path in [_trace_path(case, session_id)]
     }
@@ -219,7 +220,7 @@ def _execution_facts(case: RecoveryCase) -> dict[str, object]:
 
 
 def _producer_events(case: RecoveryCase) -> list[dict]:
-    original = _trace_path(case, case.session_id).read_bytes()
+    original = trace_bytes(_trace_path(case, case.session_id))
     (case.artifacts / "producer-events.jsonl").write_bytes(original)
     events = [json.loads(line) for line in original.splitlines()]
     expected = dict(zip(case.job_ids, case.thread_ids, strict=True))
@@ -266,7 +267,7 @@ async def test_current_job_trace_cold_runtime_rejects_live_exact_thread_holder(
     (case.artifacts / "recovered-facts.json").write_text(
         json.dumps(facts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
-    (case.artifacts / "recovered-events.jsonl").write_bytes(_trace_path(case, case.session_id).read_bytes())
+    (case.artifacts / "recovered-events.jsonl").write_bytes(trace_bytes(_trace_path(case, case.session_id)))
 
 
 @pytest.mark.asyncio
@@ -284,7 +285,6 @@ async def test_current_job_trace_owner_conflict_fails_before_recovery_writes(
         if event["type"] == "job_created" and event["job_id"] == case.job_ids[1]
     )
     target_session_id = case.session_id
-    target_events = events
     if fault.startswith("cross_trace") or fault == "created_session_vs_trace":
         other_session_id = await case.source.create_session("另一会话 owner")
         other_thread_id = case.source.resolver.main_thread_id(other_session_id)
@@ -300,7 +300,6 @@ async def test_current_job_trace_owner_conflict_fails_before_recovery_writes(
         injected["event_id"] = create_prefixed_id("evt")
         injected["payload"].update(session_id=other_session_id, thread_id=other_thread_id)
         target_session_id = other_session_id
-        target_events = [injected]
     elif fault == "created_session_vs_trace":
         injected = copy.deepcopy(created)
         injected["event_id"] = create_prefixed_id("evt")
@@ -322,15 +321,13 @@ async def test_current_job_trace_owner_conflict_fails_before_recovery_writes(
     # 合法 owner 冲突经正式 writer 追加 typed event，保持 Trace 派生索引同步。
     if fault == "missing_created_thread":
         trace_path = _trace_path(case, target_session_id)
-        trace_path.write_text(
-            "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in target_events),
-            encoding="utf-8",
-        )
+        inject_trace_record(trace_path, json.dumps(created, ensure_ascii=False) + "\n", event_id=created["event_id"])
+
     else:
         event_type = JobStartedEvent if injected["type"] == "job_started" else JobCreatedEvent
         await case.store.append(target_session_id, event_type.model_validate(injected))
     (case.artifacts / "fault-events.jsonl").write_bytes(
-        _trace_path(case, target_session_id).read_bytes(),
+        trace_bytes(_trace_path(case, target_session_id)),
     )
     traces_before = _trace_snapshot(case)
     facts_before = _execution_facts(case)

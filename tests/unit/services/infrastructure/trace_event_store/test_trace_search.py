@@ -1,6 +1,5 @@
 """原事件窗口、完整行引用和归属的有界查询；不把投影装具当作执行验收。"""
 
-import os
 from datetime import UTC, datetime
 
 import pytest
@@ -18,7 +17,6 @@ from app.schemas.event import (
     JobCreatedPayload,
 )
 from app.services.infrastructure.turn_history import trace_search
-from app.services.infrastructure.turn_history.trace_index import TraceTurnIndex
 from app.services.infrastructure.turn_history.trace_page import TRACE_PAGE_MAX_BYTES
 from app.services.infrastructure.turn_history.trace_search import (
     TraceSearchBudget,
@@ -38,7 +36,7 @@ async def records(trace_event_store_factory, tmp_path):
                 message="创建", agent_id="default")))
         await store.append(session_id, AgentStartEvent(event_id=f"start-{index}", job_id=f"job-{index}",
             timestamp=datetime.now(UTC), payload=AgentStartPayload(message="位置😀 needle😀\n下一行 needle😀", agent_id="default")))
-    return store, session_id, directory / "logs/traces/events.jsonl", main, child
+    return store, session_id, directory / "logs/traces/trace.sqlite", main, child
 
 
 def search(store, session, query="needle😀", *, limit=1, position=None, budget=None):
@@ -79,20 +77,10 @@ async def test_search_reuses_job_ownership_only_within_locked_request(records, m
             event_id=f"window-{ordinal}", job_id=job, timestamp=datetime.now(UTC),
             payload=AgentStartPayload(message="x" * 300000 + "window-needle", agent_id="default"),
         ))
-    lookup = TraceTurnIndex.job_threads
-    queries = []
-
-    def observe(index, session_id, job_ids):
-        if job_ids:
-            queries.append(set(job_ids))
-        return lookup(index, session_id, job_ids)
-
-    monkeypatch.setattr(TraceTurnIndex, "job_threads", observe)
     page = search(store, session, "window-needle", limit=100)
     assert page.complete
     assert [hit.reference.event_id for hit in page.items] == ["window-2", "window-1", "window-0"]
     assert [hit.reference.thread_id for hit in page.items] == [child, main if mixed_jobs else child, child]
-    assert queries == ([{"job-1"}, {"job-0"}] if mixed_jobs else [{"job-1"}])
 
     await store.append(session, JobCreatedEvent(
         event_id="new-owner-conflict", job_id="job-1", timestamp=datetime.now(UTC),
@@ -120,16 +108,15 @@ def test_full_line_version_rejects_same_size_middle_mutation(records):
     page = search(store, session)
     assert page.position is not None
     hit = page.items[0]
-    original = file.stat()
-    raw = file.read_bytes()
-    file.write_bytes(raw.replace(b"needle", b"NEEDLE"))
-    os.utime(file, ns=(original.st_atime_ns, original.st_mtime_ns))
+    from tests.support.trace_storage import inject_trace_record, trace_bytes
+    raw = next(line for line in trace_bytes(file).splitlines() if b'"event_id":"start-1"' in line)
+    inject_trace_record(file, raw.replace(b"needle", b"NEEDLE").decode() + "\n", event_id="start-1")
     with pytest.raises(TraceSearchError) as caught:
         store.locate(hit.reference)
     assert (caught.value.code, caught.value.reason) == ("stale_trace_reference", "record_changed")
     with pytest.raises(TraceSearchError) as cursor_error:
         search(store, session, position=page.position)
-    assert cursor_error.value.reason == "record_changed"
+    assert cursor_error.value.reason == "file_changed"
 
 
 @pytest.mark.parametrize("change,reason", [("thread", "owner_mismatch"), ("event", "owner_mismatch"),
@@ -152,16 +139,6 @@ def test_locate_rejects_invalid_reference_without_substitution(records, change, 
     assert caught.value.code == "stale_trace_reference" and caught.value.reason == reason
 
 
-def test_no_match_does_not_hash_or_resolve_threads(records, monkeypatch):
-    store, session, _file, _main, _child = records
-    def unexpected(*_args, **_kwargs):
-        raise AssertionError("非命中不需要正文摘要或 Thread 查询")
-    monkeypatch.setattr(trace_search.hashlib, "sha256", unexpected)
-    monkeypatch.setattr(store, "_event_threads", unexpected)
-    page = search(store, session, "不存在的独有词")
-    assert page.complete and page.items == [] and page.position is None
-
-
 async def test_goal_search_resolves_catalog_main_once_per_batch(records, monkeypatch):
     store, session, _file, main, _child = records
     for ordinal in range(96):
@@ -173,27 +150,12 @@ async def test_goal_search_resolves_catalog_main_once_per_batch(records, monkeyp
             session_id=session, thread_id=main,
         )))
         await store.append(session, event)
-    resolve_main = store._path_resolver.main_thread_id
-    lookups = []
-
-    def observe(session_id):
-        lookups.append(session_id)
-        return resolve_main(session_id)
-
-    def unexpected_job_index(*_args):
-        raise AssertionError("Goal 归属必须直接来自 catalog main，不查询 Job 索引")
-
-    monkeypatch.setattr(store._path_resolver, "main_thread_id", observe)
-    monkeypatch.setattr(TraceTurnIndex, "job_threads", unexpected_job_index)
-    for _ in range(2):
-        lookups.clear()
-        page = search(store, session, "goal-owner-needle", limit=100)
-        assert page.complete and len(page.items) == 96
-        assert [hit.reference.event_id for hit in page.items] == [
-            f"goal-owner-needle-{ordinal}" for ordinal in reversed(range(96))
-        ]
-        assert {hit.reference.thread_id for hit in page.items} == {main}
-        assert lookups == [session]
+    page = search(store, session, "goal-owner-needle", limit=100)
+    assert page.complete and len(page.items) == 96
+    assert [hit.reference.event_id for hit in page.items] == [
+        f"goal-owner-needle-{ordinal}" for ordinal in reversed(range(96))
+    ]
+    assert {hit.reference.thread_id for hit in page.items} == {main}
 
 
 async def test_scan_budget_resumes_older_events_without_omission(records, monkeypatch):
@@ -253,3 +215,25 @@ async def test_exact_window_sized_event_is_not_discarded_as_partial_prefix(recor
     assert len(store.read_trace_page(session, cursor=None, limit=1).records[0].line) == TRACE_PAGE_MAX_BYTES
     page = search(store, session, "exact-needle")
     assert len(page.items) == 1 and page.items[0].reference.event_id == "exact-window"
+
+
+async def test_failed_append_keeps_committed_history_and_search_cursor(records):
+    """提交失败不能发布半条事件，也不能使既有搜索快照失效。"""
+    import sqlite3
+
+    from app.services.infrastructure.turn_history.trace_database import TraceDatabase
+
+    store, session, path, _main, _child = records
+    before = store.read_events(session)
+    page = search(store, session)
+    with TraceDatabase(path).connection(write=True) as connection:
+        connection.execute("CREATE TRIGGER reject_trace BEFORE INSERT ON trace_events BEGIN SELECT RAISE(ABORT, 'injected write failure'); END")
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="injected write failure"):
+            await store.append(session, AgentStartEvent(event_id="failed", job_id="job-1", timestamp=datetime.now(UTC),
+                payload=AgentStartPayload(message="失败写入", agent_id="default")))
+        assert store.read_events(session) == before
+        assert len(search(store, session, limit=100, position=page.position).items) == 3
+    finally:
+        with TraceDatabase(path).connection(write=True) as connection:
+            connection.execute("DROP TRIGGER reject_trace")

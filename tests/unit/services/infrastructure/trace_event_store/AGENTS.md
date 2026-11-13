@@ -8,17 +8,15 @@
 trace_event_store/
 ├── conftest.py                         # 每测试隔离的 TraceEventStore factory fixture
 ├── test_trace_event_recorder.py        # JobEventBus 到会话 trace 的持久化边界
-├── test_trace_event_store.py           # 锁池、追加读取、流与诊断分页
+├── test_trace_event_store.py           # 追加读取、首次建库、流与诊断分页
 ├── test_trace_search.py                # 原窗口预算、精确 Thread、Unicode 与完整行引用
-├── test_trace_event_payloads.py        # 事件投影、消息事件与会话目录边界
-├── test_trace_turn_index.py            # turn 快照、索引建立与提交恢复
-├── test_trace_append_recovery.py       # 中断追加事务的恢复与尾部修复
-└── test_trace_cursor_recovery.py       # 语义游标、索引复用与旧索引恢复
+├── test_trace_event_payloads.py        # 语义筛选、事件正文与会话目录边界
+└── test_trace_cursor_recovery.py       # 公开游标绑定与流恢复
 ```
 
 # 可修改内容
 
-- 可以维护上述测试模块，按对应职责补充 TraceEventStore 和 turn index 的行为覆盖。
+- 可以维护上述测试模块，按对应职责补充 TraceEventStore 和 SQLite Trace 的行为覆盖。
 - 可以维护 `test_trace_event_recorder.py` 中 JobEventBus、TraceEventRecorder 与 trace store
   的持久化边界测试。
 - 可以维护 `trace_event_store_factory` fixture；它必须为单个测试创建合法会话 bundle 和
@@ -27,7 +25,7 @@ trace_event_store/
 
 # 不可修改内容
 
-- 不得在测试中复制 TraceEventStore 或 turn index 的生产逻辑，也不得通过放宽持久化、
+- 不得在测试中复制 TraceEventStore 或 SQLite Trace 的生产逻辑，也不得通过放宽持久化、
   顺序、游标、恢复或错误断言来满足当前实现。
 - 不得将会话目录路径规则或 event/index 状态的权威来源改为测试 helper 的约定。
 - 不得把仅服务于本目录的 fixture 扩展成生产模块 API；跨目录复用时应迁入现有测试支持层。

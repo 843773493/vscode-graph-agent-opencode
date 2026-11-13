@@ -573,7 +573,8 @@ async def test_cold_child_dispatch_and_result_keep_creation_gateway_source(
             assert reply["thread_id"] == main_thread_id
             compiled_child = [event for event in control.events if event["phase"] == "agent.graph.compiled" and event.get("details", {}).get("thread_id") == record["child_thread_id"]]
             assert compiled_child and all(event["pid"] != crashed_pid for event in compiled_child)
-            traces = [json.loads(line) for line in (session_node / "logs" / "traces" / "messages.jsonl").read_text().splitlines()]
+            from tests.support.trace_storage import trace_bytes
+            traces = [json.loads(line) for line in trace_bytes(session_node / "logs/traces/trace.sqlite").splitlines()]
             jobs = {event["job_id"]: event for event in traces if event["type"] == "job_created"}
             assert jobs[parent_job_id]["payload"]["request_id"] == request_id
             assert jobs[intent["job_id"]]["payload"]["gateway_id"] == gateway_id

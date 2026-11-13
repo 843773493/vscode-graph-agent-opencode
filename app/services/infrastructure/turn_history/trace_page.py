@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
+
+from pydantic import RootModel
 
 from app.schemas.event import Event
 
@@ -13,7 +15,11 @@ from .trace_cursor import (
     event_line_digest,
     event_line_sample,
 )
-from .trace_index_compaction import _AnyEvent
+
+
+class _AnyEvent(RootModel[Event]):
+    pass
+
 
 TRACE_PAGE_MAX_BYTES = 512 * 1024
 _TRACE_PAGE_CURSOR_PREFIX = "tp1."
@@ -21,10 +27,6 @@ _TRACE_PAGE_CURSOR_PREFIX = "tp1."
 
 class TracePageBudgetExceededError(RuntimeError):
     """单条 Trace 事件超过诊断页固定读取预算。"""
-
-
-class TracePageBoundaryError(RuntimeError):
-    """指定读取上界没有落在完整 JSONL 事件边界。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,111 +94,81 @@ def _decode_page_cursor(cursor: str) -> _PageCursorPosition:
     return position
 
 
-def _validate_page_cursor(file: Path, cursor: str) -> int:
-    position = _decode_page_cursor(cursor)
-    if not file.is_file() or file.stat().st_size < position.line_end:
-        raise ValueError("Trace page cursor 越过文件末尾")
-    _read_and_verify_line(
-        file,
-        start=position.line_start,
-        end=position.line_end,
-        digest=position.line_digest,
-        label="Trace page cursor",
-    )
-    return position.line_start
-
-
 def read_trace_event_page(
     *,
     session_id: str,
-    file: Path,
+    connection: sqlite3.Connection | None,
     cursor: str | None,
     limit: int,
     max_bytes: int = TRACE_PAGE_MAX_BYTES,
     before_offset: int | None = None,
 ) -> TraceEventPage:
-    if limit < 1:
-        raise ValueError("Trace page limit 必须大于 0")
-    if max_bytes < 1:
-        raise ValueError("Trace page max_bytes 必须大于 0")
-    if not file.is_file() or file.stat().st_size == 0:
-        if cursor is not None:
-            raise TraceCursorGoneError(session_id, cursor)
-        return TraceEventPage(records=[], next_cursor=None, has_more=False, bytes_read=0)
+    if limit < 1 or max_bytes < 1:
+        raise ValueError("Trace page limit 和 max_bytes 必须大于 0")
+    tail = (
+        connection.execute(
+            "SELECT end FROM trace_events ORDER BY start DESC LIMIT 1"
+        ).fetchone()
+        if connection is not None
+        else None
+    )
+    size = tail[0] if tail else 0
     try:
-        page_end = (
-            _validate_page_cursor(file, cursor)
-            if cursor is not None
-            else before_offset if before_offset is not None else file.stat().st_size
-        )
-        if not 0 <= page_end <= file.stat().st_size:
-            raise ValueError("Trace 页边界越过文件范围")
+        if cursor is not None:
+            position = _decode_page_cursor(cursor)
+            _read_and_verify_line(
+                connection,
+                start=position.line_start,
+                end=position.line_end,
+                digest=position.line_digest,
+                label="Trace page cursor",
+            )
+            before = position.line_start
+        else:
+            before = before_offset if before_offset is not None else size
+        if before and (
+            connection is None
+            or connection.execute(
+                "SELECT 1 FROM trace_events WHERE end=?", (before,)
+            ).fetchone()
+            is None
+        ):
+            raise ValueError("Trace page 边界不在已提交事件末尾")
+        if before < 0 or before > size:
+            raise ValueError("Trace page 边界越界")
     except ValueError as error:
         raise TraceCursorGoneError(session_id, cursor or "") from error
-    if page_end == 0:
-        return TraceEventPage(records=[], next_cursor=None, has_more=False, bytes_read=0)
-
-    read_start = max(0, page_end - max_bytes)
-    with file.open("rb") as stream:
-        stream.seek(page_end - 1)
-        if stream.read(1) != b"\n":
-            raise TracePageBoundaryError("Trace 诊断页边界不是完整 JSONL 行")
-        starts_at_boundary = read_start == 0
-        if read_start > 0:
-            stream.seek(read_start - 1)
-            starts_at_boundary = stream.read(1) == b"\n"
-        stream.seek(read_start)
-        payload = stream.read(page_end - read_start)
-    bytes_read = len(payload)
-    if not starts_at_boundary:
-        first_newline = payload.find(b"\n")
-        if first_newline < 0:
-            raise TracePageBudgetExceededError(
-                f"Trace 单事件超过诊断页读取预算: max_bytes={max_bytes}"
-            )
-        read_start += first_newline + 1
-        payload = payload[first_newline + 1 :]
-
-    if not payload and read_start > 0:
-        raise TracePageBudgetExceededError(
-            f"Trace 单事件超过诊断页读取预算: max_bytes={max_bytes}"
+    selected: list[TraceEventRecord] = []
+    bytes_read = 0
+    if connection is not None:
+        boundaries = connection.execute(
+            "SELECT start,end FROM trace_events WHERE start<? ORDER BY start DESC LIMIT ?",
+            (before, limit),
         )
-    selected_reversed: list[tuple[int, int, bytes]] = []
-    line_end_offset = len(payload)
-    while line_end_offset:
-        line_content_end_offset = (
-            line_end_offset - 1
-            if payload[line_end_offset - 1] == ord("\n")
-            else line_end_offset
-        )
-        line_start_offset = payload.rfind(b"\n", 0, line_content_end_offset) + 1
-        line = payload[line_start_offset:line_end_offset]
-        if line.strip():
-            selected_reversed.append(
-                (
-                    read_start + line_start_offset,
-                    read_start + line_end_offset,
-                    line,
-                )
-            )
-            if len(selected_reversed) == limit:
+        for start, end in boundaries:
+            if bytes_read + end - start > max_bytes:
+                if not selected:
+                    raise TracePageBudgetExceededError(
+                        f"Trace 单事件超过诊断页读取预算: max_bytes={max_bytes}"
+                    )
                 break
-        line_end_offset = line_start_offset
-    selected = list(reversed(selected_reversed))
-    records = [parse_trace_record(session_id, start, end, line) for start, end, line in selected]
-    if not selected:
-        return TraceEventPage(
-            records=[], next_cursor=None, has_more=False, bytes_read=bytes_read
-        )
-    oldest_line_start, oldest_line_end, oldest_line = selected[0]
-    has_more = oldest_line_start > 0
+            raw = (
+                connection.execute(
+                    "SELECT raw FROM trace_events WHERE start=?", (start,)
+                )
+                .fetchone()[0]
+                .encode("utf-8")
+            )
+            selected.append(parse_trace_record(session_id, start, end, raw))
+            bytes_read += len(raw)
+    selected.reverse()
+    oldest = selected[0] if selected else None
+    has_more = oldest is not None and oldest.start > 0
     return TraceEventPage(
-        records=records,
+        records=selected,
         next_cursor=(
             _encode_page_cursor(
-                line_start=oldest_line_start,
-                line_end=oldest_line_end,
-                line=oldest_line,
+                line_start=oldest.start, line_end=oldest.end, line=oldest.line
             )
             if has_more
             else None
@@ -206,7 +178,9 @@ def read_trace_event_page(
     )
 
 
-def parse_trace_record(session_id: str, start: int, end: int, line: bytes) -> TraceEventRecord:
+def parse_trace_record(
+    session_id: str, start: int, end: int, line: bytes
+) -> TraceEventRecord:
     try:
         event = _AnyEvent.model_validate_json(line).root
     except Exception as error:

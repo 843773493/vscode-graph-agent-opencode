@@ -3,40 +3,54 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
 
 from app.schemas.event import Event
 
-from .trace_index import TraceTurnIndex
-
 
 class TraceCursorGoneError(RuntimeError):
-    """请求的事件游标已不在当前 trace 文件中。"""
+    """请求的事件游标已不在当前 Trace 中。"""
 
     def __init__(self, session_id: str, cursor: str) -> None:
         self.session_id = session_id
         self.cursor = cursor
-        super().__init__(f"Trace 事件游标不存在: session_id={session_id}, cursor={cursor}")
+        super().__init__(
+            f"Trace 事件游标不存在: session_id={session_id}, cursor={cursor}"
+        )
 
 
-def bind_trace_cursor(cursor: str | None, *, session_id: str, thread_id: str | None, kind: str) -> str | None:
-    """公开游标绑定查询身份；内部文件偏移仍复用唯一的现有校验链路。"""
+def bind_trace_cursor(
+    cursor: str | None, *, session_id: str, thread_id: str | None, kind: str
+) -> str | None:
+    """公开游标绑定查询身份；内部逻辑偏移复用已提交事件校验。"""
     if cursor is None:
         return None
-    payload = json.dumps([session_id, thread_id, kind, cursor], separators=(",", ":")).encode()
+    payload = json.dumps(
+        [session_id, thread_id, kind, cursor], separators=(",", ":")
+    ).encode()
     return "ts2." + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def unbind_trace_cursor(cursor: str | None, *, session_id: str, thread_id: str | None, kind: str) -> str | None:
+def unbind_trace_cursor(
+    cursor: str | None, *, session_id: str, thread_id: str | None, kind: str
+) -> str | None:
     if cursor is None:
         return None
     try:
         if not cursor.startswith("ts2."):
             raise ValueError("Trace scope cursor 前缀无效")
         encoded = cursor[4:]
-        value = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
-        if not isinstance(value, list) or len(value) != 4 or value[:3] != [session_id, thread_id, kind] or not isinstance(value[3], str) or not value[3]:
+        value = json.loads(
+            base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        )
+        if (
+            not isinstance(value, list)
+            or len(value) != 4
+            or value[:3] != [session_id, thread_id, kind]
+            or not isinstance(value[3], str)
+            or not value[3]
+        ):
             raise ValueError("Trace scope cursor 的 Session/Thread/用途不匹配")
         return value[3]
     except (ValueError, TypeError, UnicodeError) as error:
@@ -84,12 +98,18 @@ def encode_trace_cursor(
     if start < 0 or end <= start or end - start != len(line):
         raise ValueError("Trace cursor offset 与事件行长度不一致")
     raw = json.dumps(
-        {"e": event_id, "s": start, "n": end,
-         "h": event_line_digest(len(line), event_line_sample(line))},
+        {
+            "e": event_id,
+            "s": start,
+            "n": end,
+            "h": event_line_digest(len(line), event_line_sample(line)),
+        },
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
-    return _TRACE_CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return _TRACE_CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip(
+        "="
+    )
 
 
 def _decode_trace_cursor(cursor: str) -> _TraceCursorPosition | None:
@@ -118,45 +138,32 @@ def _decode_trace_cursor(cursor: str) -> _TraceCursorPosition | None:
 
 
 def _read_and_verify_line(
-    file: Path,
+    connection: sqlite3.Connection | None,
     *,
     start: int,
     end: int,
     digest: str,
     label: str,
 ) -> None:
-    """校验 [start, end) 恰为一行：起点前是换行，且首尾样本摘要与 digest 一致。"""
+    row = (
+        connection.execute(
+            "SELECT end, substr(CAST(raw AS BLOB),1,?), substr(CAST(raw AS BLOB),-?) FROM trace_events WHERE start=?",
+            (TRACE_EVENT_LINE_SAMPLE_BYTES, TRACE_EVENT_LINE_SAMPLE_BYTES, start),
+        ).fetchone()
+        if connection is not None
+        else None
+    )
+    if row is None or row[0] != end:
+        raise ValueError(f"{label} 未指向已提交事件")
     size = end - start
-    with file.open("rb") as stream:
-        if start > 0:
-            stream.seek(start - 1)
-            if stream.read(1) != b"\n":
-                raise ValueError(f"{label} 未指向事件行起点")
-        stream.seek(start)
-        if size <= TRACE_EVENT_LINE_SAMPLE_BYTES * 2:
-            sample = stream.read(size)
-        else:
-            prefix = stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
-            stream.seek(end - TRACE_EVENT_LINE_SAMPLE_BYTES)
-            sample = prefix + stream.read(TRACE_EVENT_LINE_SAMPLE_BYTES)
+    # 短行首尾样本重叠，仍与编码时的整行摘要完全一致。
+    sample = (
+        (row[1] + row[2][-min(TRACE_EVENT_LINE_SAMPLE_BYTES, size - len(row[1])) :])
+        if size > len(row[1])
+        else row[1]
+    )
     if event_line_digest(size, sample) != digest:
         raise ValueError(f"{label} 对应事件已变化")
-
-
-def _offset_from_transport_cursor(file: Path, cursor: str) -> int | None:
-    position = _decode_trace_cursor(cursor)
-    if position is None:
-        return None
-    if not file.is_file() or file.stat().st_size < position.end:
-        raise ValueError("Trace transport cursor 越过文件末尾")
-    _read_and_verify_line(
-        file,
-        start=position.start,
-        end=position.end,
-        digest=position.digest,
-        label="Trace transport cursor",
-    )
-    return position.end
 
 
 def events_after_cursor(
@@ -174,19 +181,35 @@ def events_after_cursor(
 
 def offset_after_event(
     session_id: str,
-    file: Path,
-    trace_dir: Path,
+    connection: sqlite3.Connection | None,
     after_event_id: str,
 ) -> int:
-    if not file.exists():
-        raise TraceCursorGoneError(session_id, after_event_id)
     try:
-        transport_offset = _offset_from_transport_cursor(file, after_event_id)
+        position = _decode_trace_cursor(after_event_id)
+        if position is not None:
+            _read_and_verify_line(
+                connection,
+                start=position.start,
+                end=position.end,
+                digest=position.digest,
+                label="Trace transport cursor",
+            )
+            row = connection.execute(
+                "SELECT event_id FROM trace_events WHERE start=?", (position.start,)
+            ).fetchone()
+            if row[0] != position.event_id:
+                raise ValueError("Trace transport cursor 的事件身份不一致")
+            return position.end
     except ValueError as error:
         raise TraceCursorGoneError(session_id, after_event_id) from error
-    if transport_offset is not None:
-        return transport_offset
-    indexed_offset = TraceTurnIndex(trace_dir).trace_offset_after_event(after_event_id)
-    if indexed_offset is not None:
-        return indexed_offset
+    row = (
+        connection.execute(
+            "SELECT end,is_message FROM trace_events WHERE event_id=? ORDER BY start LIMIT 1",
+            (after_event_id,),
+        ).fetchone()
+        if connection is not None
+        else None
+    )
+    if row is not None and row[1]:
+        return row[0]
     raise TraceCursorGoneError(session_id, after_event_id)

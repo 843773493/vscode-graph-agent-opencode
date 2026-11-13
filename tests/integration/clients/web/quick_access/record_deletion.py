@@ -25,7 +25,7 @@ def delete_record(category: str, workspace: Path, serialized_reference: str, bac
             trace = TraceReferenceDTO.model_validate_json(serialized_reference)
             store = TraceEventStore(sessions)
             store.locate(trace)
-            path = store._trace_file(trace.session_id)
+            path = store._database_path(trace.session_id)
         else:
             raise ValueError(f"不支持的记录删除故障类别: {category}")
         size = path.stat().st_size

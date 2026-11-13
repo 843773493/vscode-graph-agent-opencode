@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator, Iterable, Iterator
-from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -14,8 +13,10 @@ from .trace_cursor import (
     TraceCursorGoneError,
     TraceStreamRecord,
     encode_trace_cursor,
+    offset_after_event,
 )
-from .trace_index_compaction import _AnyEvent
+from .trace_database import TraceDatabase
+from .trace_page import _AnyEvent, parse_trace_record
 
 _TRACE_STREAM_BATCH_BYTES = 512 * 1024
 
@@ -53,85 +54,72 @@ def iter_trace_event_lines(*, session_id: str, lines: Iterable[str]) -> Iterator
 
 
 def _read_trace_batch(
-    *,
-    session_id: str,
-    file: Path,
-    offset: int,
-) -> tuple[int, list[tuple[dict[str, object], bytes, int, int]]]:
-    with file.open("rb") as stream:
-        stream.seek(offset)
-        raw_records: list[tuple[dict[str, object], bytes, int, int]] = []
-        batch_end = offset + _TRACE_STREAM_BATCH_BYTES
-        # 按完整事件行分批；单条大事件仍完整读取，不改变其解析和游标。
-        while offset < batch_end and (line := stream.readline()):
-            line_start = offset
-            offset = stream.tell()
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                raw_event = json.loads(stripped.decode("utf-8"))
-            except Exception as error:
-                raise RuntimeError(
-                    "Trace 流遇到损坏行: "
-                    f"session_id={session_id} "
-                    f"line={stripped[:200]!r}"
-                ) from error
-            if not isinstance(raw_event, dict):
-                raise TypeError(
-                    f"Trace 流事件必须是 JSON object: session_id={session_id}"
-                )
-            raw_records.append((raw_event, line, line_start, offset))
+    database: TraceDatabase, session_id: str, offset: int
+) -> list[tuple[int, int, bytes]]:
+    with database.connection() as connection:
+        if connection is None:
+            if offset:
+                raise TraceCursorGoneError(session_id, "<stream-offset>")
+            return []
+        if (
+            offset
+            and connection.execute(
+                "SELECT 1 FROM trace_events WHERE end=?", (offset,)
+            ).fetchone()
+            is None
+        ):
+            raise TraceCursorGoneError(session_id, "<stream-offset>")
+        records: list[tuple[int, int, bytes]] = []
+        size = 0
+        for row in connection.execute(
+            "SELECT start,end,raw FROM trace_events WHERE start>=? ORDER BY start LIMIT 128",
+            (offset,),
+        ):
+            raw = row[2].encode("utf-8")
+            records.append((row[0], row[1], raw))
+            size += len(raw)
+            if size >= _TRACE_STREAM_BATCH_BYTES:
+                break
+        return records
 
-    return offset, raw_records
+
+def _initial_offset(
+    database: TraceDatabase, session_id: str, cursor: str | None
+) -> int:
+    if cursor is None:
+        return 0
+    with database.connection() as connection:
+        return offset_after_event(session_id, connection, cursor)
 
 
 async def stream_trace_records(
     *,
     session_id: str,
-    file: Path,
-    initial_offset: int,
+    database: TraceDatabase,
     requested_cursor: str | None,
     condition: asyncio.Condition,
 ) -> AsyncGenerator[TraceStreamRecord, None]:
-    offset = initial_offset
+    offset = await run_sync_shielded(
+        _initial_offset, database, session_id, requested_cursor
+    )
     while True:
-        if file.exists():
-            file_size = file.stat().st_size
-            if file_size < offset:
-                raise TraceCursorGoneError(
-                    session_id,
-                    requested_cursor or "<stream-offset>",
-                )
-            if file_size > offset:
-                offset, raw_records = await run_sync_shielded(
-                    _read_trace_batch,
-                    session_id=session_id,
-                    file=file,
-                    offset=offset,
-                )
-                for raw_event, line, line_start, line_end in raw_records:
-                    try:
-                        event = _AnyEvent.model_validate(raw_event).root
-                    except Exception as error:
-                        raise RuntimeError(
-                            "Trace 流事件协议无效: "
-                            f"session_id={session_id} event={raw_event!r}"
-                        ) from error
-                    yield TraceStreamRecord(
-                        event=event,
-                        cursor=encode_trace_cursor(
-                            event_id=event.event_id,
-                            start=line_start,
-                            end=line_end,
-                            line=line,
-                        ),
-                    )
-                # 尚有积压时立即读取下一批，不进入等待新事件的轮询。
-                continue
-
+        # 空快照检查与注册等待共享 Condition，避免提交通知落入两者之间而多等一秒。
         async with condition:
-            try:
-                await asyncio.wait_for(condition.wait(), timeout=1.0)
-            except TimeoutError:
-                pass
+            records = await run_sync_shielded(
+                _read_trace_batch, database, session_id, offset
+            )
+            if not records:
+                try:
+                    await asyncio.wait_for(condition.wait(), timeout=1.0)
+                except TimeoutError:
+                    pass
+                continue
+        for start, end, raw in records:
+            record = parse_trace_record(session_id, start, end, raw)
+            yield TraceStreamRecord(
+                event=record.event,
+                cursor=encode_trace_cursor(
+                    event_id=record.event.event_id, start=start, end=end, line=raw
+                ),
+            )
+            offset = end

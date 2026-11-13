@@ -721,7 +721,7 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
             ]
             for container, node in zip((a, b), nodes, strict=True):
                 assert node.is_relative_to(container.workspace_root / ".boxteam/sessions")
-                assert (node / "logs/traces/events.jsonl").is_file()
+                assert (node / "logs/traces/trace.sqlite").is_file()
             for container, session_id in zip((a, b), sessions, strict=True):
                 writer = await container.message_stream_store.open(thread_id=container.message_stream_store._path_resolver.main_thread_id(session_id),
                     session_id=session_id, turn_id=job_id, job_id=job_id,

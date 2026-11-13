@@ -88,29 +88,8 @@ async def test_store_appends_message_trace_for_key_events(
     message_events = store.iter_message_events(session_id)
     assert [e.type for e in message_events] == ["job_created", "text_end", "tool_call_start", "tool_call_end"]
 
-    message_file = session_dir / "logs" / "traces" / "messages.jsonl"
-    assert message_file.exists()
-
-
-@pytest.mark.asyncio
-async def test_store_stream_message_events(tmp_path: Path, trace_event_store_factory):
-    session_id = "ses_019c1c9fcd4479dd826a58516b537118"
-    store, _ = trace_event_store_factory(session_id)
-
-    stream = store.stream_message_events(session_id)
-
-    event = TextEndEvent(
-        event_id="evt_text",
-        part_id="part_text",
-        job_id="job_4",
-        timestamp=datetime.now(UTC),
-        payload=TextEndPayload(kind="markdown", text="hello"),
-    )
-    await store.append(session_id, event)
-
-    received = await asyncio.wait_for(stream.asend(None), timeout=2.0)
-    assert received.event_id == "evt_text"
-    assert received.type == "text_end"
+    assert (session_dir / "logs/traces/trace.sqlite").exists()
+    assert not (session_dir / "logs/traces/messages.jsonl").exists()
 
 
 @pytest.mark.asyncio
@@ -121,13 +100,13 @@ async def test_store_file_write_does_not_block_event_loop(
 ):
     store, _ = trace_event_store_factory("ses_019be193ee33734eb2580cb970f434dc")
     release_write = threading.Event()
-    original_append = store._append_event_files
+    original_append = store._append_event
 
     def slow_append(session_id, event):
         release_write.wait(timeout=1.0)
         original_append(session_id, event)
 
-    monkeypatch.setattr(store, "_append_event_files", slow_append)
+    monkeypatch.setattr(store, "_append_event", slow_append)
     event = AgentStartEvent(
         event_id="evt_slow_disk",
         job_id="job_slow_disk",
@@ -153,8 +132,8 @@ def test_read_events_rejects_legacy_events_without_part_identity(
 ):
     session_id = "ses_019c4ae91d6a71ec8407f65a47e2c841"
     store, session_dir = trace_event_store_factory(session_id)
-    trace_file = session_dir / "logs" / "traces" / "events.jsonl"
-    trace_file.parent.mkdir(parents=True)
+    from tests.support.trace_storage import inject_trace_record
+    trace_file = session_dir / "logs/traces/trace.sqlite"
     base = {
         "job_id": "job_legacy",
         "step_id": None,
@@ -169,10 +148,7 @@ def test_read_events_rejects_legacy_events_without_part_identity(
             "payload": {"kind": "reasoning", "text": "先分析"},
         }
     ]
-    trace_file.write_text(
-        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in legacy_events),
-        encoding="utf-8",
-    )
+    inject_trace_record(trace_file, json.dumps(legacy_events[0], ensure_ascii=False) + "\n")
 
     with pytest.raises(RuntimeError, match="Trace 事件协议无效"):
         store.read_events(session_id)
@@ -206,5 +182,21 @@ async def test_store_rejects_manual_session_move_before_writing(
             ),
         )
 
-    assert not (target / "logs" / "traces" / "events.jsonl").exists()
+    assert not (target / "logs/traces/trace.sqlite").exists()
     assert not source.exists()
+
+
+async def test_old_jsonl_is_rejected_without_hiding_or_changing_history(trace_event_store_factory):
+    store, node = trace_event_store_factory(create_prefixed_id("ses"))
+    legacy = node / "logs/traces/events.jsonl"
+    legacy.parent.mkdir(parents=True)
+    original = b'{"old":"history"}\n'
+    legacy.write_bytes(original)
+    session = node.name
+    with pytest.raises(RuntimeError, match="旧 JSONL 格式"):
+        store.read_events(session)
+    with pytest.raises(RuntimeError, match="旧 JSONL 格式"):
+        await store.append(session, AgentStartEvent(event_id="new", job_id="job", timestamp=datetime.now(UTC),
+            payload=AgentStartPayload(message="start", agent_id="default")))
+    assert legacy.read_bytes() == original
+    assert not (node / "logs/traces/trace.sqlite").exists()

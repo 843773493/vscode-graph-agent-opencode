@@ -22,6 +22,7 @@
 │   ├── gateway_managed_backends.py        Gateway托管后端的显式进程替身
 │   └── session_catalog_owner.py           测试catalog连接的登记与释放
 ├── 会话与历史数据前提（`rollout/skill_catalog.py` 构造局部冻结输入，经正式 load 激活）
+│   ├── trace_storage.py                 SQLite Trace 故障注入及原始证据读取
 │   ├── canonical_id_at.py / graph_binding.py  确定性身份与图绑定
 │   ├── catalog_session_bundle.py          catalog、物理节点和会话控制数据的统一播种
 │   ├── job_thread_fixture.py              Job测试的Thread与执行绑定

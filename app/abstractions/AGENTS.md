@@ -21,7 +21,7 @@ app/abstractions/
 │   ├── job_service.py              Job 服务调用端口
 │   ├── job_step_executor.py        Job 执行步骤端口
 │   ├── pending_request_store.py    等待处理请求存储
-│   ├── trace_event_sink.py         Trace 事件写入回执
+│   ├── trace_event_sink.py         Trace 事件持久化写入端口
 │   ├── turn_history.py             Turn 历史读取端口
 │   └── turn_terminal_status.py     Turn 与工具结果终态
 ├── Agent 与协作边界

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from app.domain.itemized.execution_queue import ExecutionQueueInput
 import asyncio
 import json
 import sqlite3
@@ -40,6 +39,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.domain.itemized.execution_queue import ExecutionQueueInput
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.prompting.factory import PromptSection, internal_message_factory
@@ -671,10 +671,11 @@ async def test_restart_rejects_started_trace_missing_owner(
         )
         / "logs"
         / "traces"
-        / "events.jsonl"
+        / "trace.sqlite"
     )
     trace_file.parent.mkdir(parents=True, exist_ok=True)
-    trace_file.write_text(
+    from tests.support.trace_storage import inject_trace_record
+    inject_trace_record(trace_file,
         json.dumps(
             {
                 "event_id": create_prefixed_id("evt"),
@@ -685,7 +686,6 @@ async def test_restart_rejects_started_trace_missing_owner(
             }
         )
         + "\n",
-        encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="Trace 事件协议无效"):
         await runner_case.container.runtime_service.reconcile_stale_executions()

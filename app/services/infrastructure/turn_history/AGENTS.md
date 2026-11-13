@@ -1,6 +1,6 @@
 # 目录用途
 
-`turn_history/` 实现会话节点内按完整 Job Turn 组织的派生读取模型及其崩溃恢复持久化。
+`turn_history/` 实现会话节点内的 Trace 持久化、按 Job Turn 组织的读取模型及恢复边界。
 
 ## 可修改内容
 
@@ -15,8 +15,9 @@
 
 ## 规范
 
-- 本目录按聚焦组件拆分（`trace_index.py`/`trace_index_storage.py`/`trace_page.py`/`trace_stream.py`/`trace_writer.py`/`trace_cursor.py`），不设统一门面；`trace_stream.py` 负责事件行解析与增量读取，列表读取和启动恢复共用 `iter_trace_event_lines`，不物化整份文本和原始 JSON 对象列表。完整校验须耗尽迭代器，并保留后续格式损坏优先于前面协议错误的归因顺序。协议实现由 `app/services/infrastructure/trace_event_store.py` 的 `TraceEventStore` 承载，operation 应用和分页分别下沉。
-- manifest 是 active operation generation 和 projection epoch 的权威来源。
+- Trace 正文唯一存于会话节点 `logs/traces/trace.sqlite`，`trace_database.py` 负责事务与结构化索引，SQL 迁移位于 `migrations/`。生成列及索引从正文自动维护，不另写 JSONL、消息副本或 compact 索引。
+- `trace_page.py` 负责有界分页和事件解析，`trace_stream.py` 分批补读与完整恢复解析，`trace_search.py` 保留 JSON 展示文本的字面匹配与预算。普通查询只消费命中事件及目标 Job 的 owner 事实；启动恢复必须耗尽完整快照，所有校验通过后才能发布恢复结果。
 - 损坏、越界或不一致必须快速失败，禁止扫描磁盘后猜测修复。
 - 单个实现文件尽量控制在 400 行以内。
-- `trace_search.py` 复用 `trace_page.py` 的完整事件窗口、解析与位置，按原存储锁搜索并定点核验一行；Thread 归属仍由原 Job 索引提供。只有命中行计算完整正文版本，不把传输游标的首尾采样摘要当作内容版本。
+- 搜索续页绑定 SQLite 提交版本；追加或改写后明确失效。传输游标绑定事件逻辑字节边界和采样摘要，搜索引用校验完整正文 SHA256；正文只存一份。
+- 不为开发中间 JSONL 自动导入、修复或双读；存在旧数据而无 SQLite 时明确报错，保留原件。

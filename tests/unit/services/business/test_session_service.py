@@ -503,7 +503,7 @@ class TestSessionService:
         for relative_path in (
             "rollout/rollout.jsonl",
             "rollout/index.sqlite",
-            "logs/traces/events.jsonl",
+            "logs/traces/trace.sqlite",
             "logs/llm_requests/1.json",
             "resources/background_tasks.json",
             "context/history.md",
@@ -594,10 +594,6 @@ class TestSessionService:
             payload=JobStartedPayload(session_id=created.session_id, thread_id=created.thread_id),
         ))
 
-        trace_dir = get_session_path(created.session_id) / "logs" / "traces"
-        trace_dir.mkdir(parents=True, exist_ok=True)
-        trace_file = trace_dir / "events.jsonl"
-
         trace_event = {
             "event_id": "evt_1",
             "session_id": created.session_id,
@@ -612,10 +608,8 @@ class TestSessionService:
             },
         }
 
-        with trace_file.open("a", encoding="utf-8") as stream:
-            stream.write(
-            json.dumps(trace_event, ensure_ascii=False) + "\n",
-            )
+        from app.schemas.event import AgentStartEvent
+        await self.service._trace_event_store.append(created.session_id, AgentStartEvent.model_validate(trace_event))
 
         page = await self.service.list_trace_events(created.session_id)
 
@@ -636,7 +630,7 @@ class TestSessionService:
 
         trace_dir = get_session_path(created.session_id) / "logs" / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
-        trace_file = trace_dir / "events.jsonl"
+        trace_file = trace_dir / "trace.sqlite"
 
         legacy_trace_event = {
             "timestamp": 1710000000000,
@@ -644,10 +638,8 @@ class TestSessionService:
             "data": {"message": "hello", "agent_id": "deep_agent"},
         }
 
-        trace_file.write_text(
-            json.dumps(legacy_trace_event, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        from tests.support.trace_storage import inject_trace_record
+        inject_trace_record(trace_file, json.dumps(legacy_trace_event, ensure_ascii=False) + "\n")
 
         with pytest.raises(RuntimeError, match="Trace 事件协议无效"):
             await self.service.list_trace_events(created.session_id)
@@ -660,10 +652,6 @@ class TestSessionService:
             payload=JobStartedPayload(session_id=created.session_id, thread_id=created.thread_id),
         ))
 
-        trace_dir = get_session_path(created.session_id) / "logs" / "traces"
-        trace_dir.mkdir(parents=True, exist_ok=True)
-        trace_file = trace_dir / "events.jsonl"
-
         first_event = {
             "event_id": "evt_1",
             "job_id": "job_1",
@@ -673,10 +661,8 @@ class TestSessionService:
             "type": "agent_start",
             "payload": {"message": "hello", "agent_id": "deep_agent"},
         }
-        with trace_file.open("a", encoding="utf-8") as stream:
-            stream.write(
-            json.dumps(first_event, ensure_ascii=False) + "\n",
-            )
+        from app.schemas.event import AgentStartEvent, ToolCallStartEvent
+        await self.service._trace_event_store.append(created.session_id, AgentStartEvent.model_validate(first_event))
 
         stream = self.service.stream_trace_events(created.session_id)
         owner_trace, _ = await asyncio.wait_for(anext(stream), timeout=1)
@@ -704,12 +690,7 @@ class TestSessionService:
                 "args": {},
             },
         }
-        trace_file.write_text(
-            trace_file.read_text(encoding="utf-8")
-            + json.dumps(second_event, ensure_ascii=False)
-            + "\n",
-            encoding="utf-8",
-        )
+        await self.service._trace_event_store.append(created.session_id, ToolCallStartEvent.model_validate(second_event))
 
         second, second_cursor = await asyncio.wait_for(stream.__anext__(), timeout=2.0)
         assert second.event_id == "evt_2"

@@ -158,10 +158,13 @@ async def test_http_cursor_keeps_machine_reason(catalog, trace_http, records, ch
         elif change == "catalog":
             await catalog._session_service.create(SessionCreateRequest(title="目录变动"))
         else:
+            from app.services.infrastructure.turn_history.trace_database import (
+                TraceDatabase,
+            )
             for owner in records:
-                path = catalog._path_resolver.resolve_session_node_for_runtime(owner.session_id) / "logs/traces/events.jsonl"
-                with path.open("ab") as stream:
-                    stream.write(b"\n")
+                path = catalog._path_resolver.resolve_session_node_for_runtime(owner.session_id) / "logs/traces/trace.sqlite"
+                with TraceDatabase(path).connection(write=True) as connection:
+                    connection.execute("UPDATE trace_events SET raw=raw || ' '")
         rejected = await client.post("/api/v1/search", json=request | {"cursor": cursor})
         assert rejected.status_code == (400 if code == "invalid_trace_search_cursor" else 409), rejected.text
         assert rejected.json()["detail"] == {"owner": "trace_event_store", "code": code,

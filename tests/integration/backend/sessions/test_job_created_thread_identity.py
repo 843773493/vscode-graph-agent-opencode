@@ -46,6 +46,7 @@ from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
 from tests.harness.python.run_context import TestRunContext
+from tests.support.trace_storage import trace_bytes
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
 
@@ -195,7 +196,7 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
         expected[dispatch.job_id] = thread_id
 
     assert len(set(expected.values())) == 2
-    raw_trace = (case.trace_dir / "events.jsonl").read_bytes()
+    raw_trace = trace_bytes(case.trace_dir / "trace.sqlite")
     (case.artifacts_dir / "events.jsonl").write_bytes(raw_trace)
     raw_events = [
         json.loads(line)
@@ -233,7 +234,7 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
     tasks = [job.task for job in case.jobs._jobs.values() if job.task is not None]
     await asyncio.wait_for(asyncio.gather(*tasks), timeout=5)
     # 冷重开读取端，不能依赖 Recorder 或 JobService 的进程内 owner map。
-    cold_store = TraceEventStore(sessions_dir=case.store._sessions_dir)
+    cold_store = TraceEventStore(sessions_dir=case.sessions.path_resolver.sessions_root)
     case.sessions._trace_event_store = cold_store
     base = f"/api/v1/sessions/{case.session_id}/traces"
     aggregate = await job_events_client.get(base)

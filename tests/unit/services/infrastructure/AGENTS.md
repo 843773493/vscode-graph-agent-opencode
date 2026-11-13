@@ -21,7 +21,6 @@ infrastructure/
 ├── team/                  # 团队协作服务
 ├── tool_services/         # 工具目录、选择、输出存储与服务接口
 ├── trace_event_store/     # 事件采集、trace 存储、索引和恢复
-├── turn_history/          # 回合历史索引读取与重建
 ├── workspace_activity/    # 工作区活动事件与游标
 ├── workspace_files/       # 工作区文件路径、读取写入、资源观察与持久操作
 ├── workspace_service_clients/ # Browser/Terminal 辅助服务 HTTP client

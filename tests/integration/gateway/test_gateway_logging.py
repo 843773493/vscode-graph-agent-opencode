@@ -241,9 +241,10 @@ def test_warning_keeps_real_terminal_tool_bytes_and_workspace_records(logging_ca
     persisted = [json.loads(path.read_text(encoding="utf-8")) for path in logs]
     model_tools = [message for record in persisted for message in record["request"]["messages"] if message["type"] == "tool"]
     assert len(model_tools) == 1 and json.loads(model_tools[0]["content"]) == result
-    trace = node / "logs/traces/events.jsonl"
+    trace = node / "logs/traces/trace.sqlite"
     assert trace.stat().st_size > 0
-    assert result["terminal_id"] in trace.read_text(encoding="utf-8")
+    from tests.support.trace_storage import trace_bytes
+    assert result["terminal_id"] in trace_bytes(trace).decode("utf-8")
     global_files = [path for path in (case.home / "state/logs").rglob("*") if path.is_file()]
     assert all(path.name != "rollout.jsonl" and "llm_requests" not in path.parts and "traces" not in path.parts for path in global_files)
     assert _states(case.client) == settings

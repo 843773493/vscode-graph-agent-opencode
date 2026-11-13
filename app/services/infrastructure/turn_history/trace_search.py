@@ -1,10 +1,10 @@
-"""原 Trace 页的有界正文查询与单记录定位，不维护正文副本或搜索索引。"""
+"""SQLite 已提交快照中的有界正文查询与单记录定位。"""
 
 import hashlib
 import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from time import monotonic
 from typing import Literal
 
@@ -22,7 +22,6 @@ from app.services.mapping.trace_event_mapper import TraceEventMapper
 from .trace_cursor import TraceCursorGoneError
 from .trace_page import (
     TRACE_PAGE_MAX_BYTES,
-    TracePageBoundaryError,
     TracePageBudgetExceededError,
     parse_trace_record,
     read_trace_event_page,
@@ -78,28 +77,22 @@ class TraceSearchPage:
     limited_reason: TraceSearchLimit | None = None
 
 
-def _file_version(file: Path) -> tuple[str, int] | None:
-    try:
-        stat = file.stat()
-    except FileNotFoundError:
-        return None
-    return f"{stat.st_dev}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}", stat.st_size
-
-
 def _text(event: Event) -> str:
     return json.dumps(event.model_dump(mode="json"), ensure_ascii=False, indent=2)
 
 
 def search_trace_events(
-    session_id: str, file: Path, query: str, *, limit: int, position: TraceSearchPosition | None,
+    session_id: str, connection: sqlite3.Connection | None, query: str, *, limit: int, position: TraceSearchPosition | None,
     budget: TraceSearchBudget, event_threads: Callable[[list[Event]], dict[str, str]],
 ) -> TraceSearchPage:
-    observed = _file_version(file)
-    if observed is None:
+    if connection is None:
         if position is not None:
             raise TraceSearchError("stale_trace_search_cursor", "file_deleted", "Trace 文件已删除，请重新查询")
         return TraceSearchPage([])
-    revision, size = observed
+    state = connection.execute("SELECT identity,revision FROM trace_revision WHERE id=1").fetchone()
+    revision = f"{state[0]}:{state[1]}"
+    tail = connection.execute("SELECT end FROM trace_events ORDER BY start DESC LIMIT 1").fetchone()
+    size = tail[0] if tail else 0
     if position is not None and position.file_revision != revision:
         raise TraceSearchError("stale_trace_search_cursor", "file_changed", "Trace 已追加或改写，请重新查询")
     before = position.before_offset if position else size
@@ -117,12 +110,12 @@ def search_trace_events(
         if MAX_SEARCH_BYTES - budget.scanned_bytes < TRACE_PAGE_MAX_BYTES:
             return TraceSearchPage(items, next_position, False, "byte_limit")
         try:
-            page = read_trace_event_page(session_id=session_id, file=file, cursor=None,
+            page = read_trace_event_page(session_id=session_id, connection=connection, cursor=None,
                 before_offset=before, limit=MAX_SEARCH_RECORDS - budget.scanned_records)
         except TracePageBudgetExceededError:
             budget.scanned_bytes += min(before, TRACE_PAGE_MAX_BYTES)
             return TraceSearchPage(items, complete=False, limited_reason="item_size_limit")
-        except (TraceCursorGoneError, TracePageBoundaryError) as error:
+        except TraceCursorGoneError as error:
             raise TraceSearchError("invalid_trace_search_cursor", "position_out_of_bounds", "Trace cursor 位置越界") from error
         budget.scanned_bytes += page.bytes_read
         if not page.records:
@@ -170,17 +163,16 @@ def search_trace_events(
 
 
 def locate_trace_event(
-    file: Path, reference: TraceReferenceDTO, *, event_threads: Callable[[list[Event]], dict[str, str]],
+    connection: sqlite3.Connection | None, reference: TraceReferenceDTO, *, event_threads: Callable[[list[Event]], dict[str, str]],
 ) -> TraceLocationDTO:
     length = reference.line_end - reference.line_start
     if length > TRACE_PAGE_MAX_BYTES:
         raise TraceSearchError("stale_trace_reference", "record_size_limit", "命中的 Trace 记录超过读取上限")
-    try:
-        with file.open("rb") as stream:
-            stream.seek(reference.line_start)
-            raw = stream.read(length)
-    except FileNotFoundError as error:
-        raise TraceSearchError("stale_trace_reference", "file_deleted", "命中的 Trace 文件已删除") from error
+    if connection is None:
+        raise TraceSearchError("stale_trace_reference", "file_deleted", "命中的 Trace 已删除")
+    row = connection.execute("SELECT raw FROM trace_events WHERE start=? AND end=?",
+                             (reference.line_start, reference.line_end)).fetchone()
+    raw = row[0].encode("utf-8") if row is not None else b""
     if hashlib.sha256(raw).hexdigest() != reference.content_version:
         raise TraceSearchError("stale_trace_reference", "record_changed", "命中的 Trace 记录已变化或裁剪")
     record = parse_trace_record(reference.session_id, reference.line_start, reference.line_end, raw)
