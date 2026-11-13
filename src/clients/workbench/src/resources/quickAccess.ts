@@ -59,6 +59,7 @@ interface SourceRun {
   thread?: { owner: WorkspaceOwner; session_id: string; thread_id: string };
   recipient?: ComposerResourceTarget | null;
   referencesOnly: boolean;
+  hasFocusedPick: boolean;
 }
 
 /** 来源候选沿固定根导航发现本地文件，配置 Skill 只消费 accepted metadata。 */
@@ -80,7 +81,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     const run: SourceRun = { picker, owners: (options.searchOwners ?? (options.searchOwner ? [options.searchOwner] : [])).map(owner => ({ ...owner })),
       gatewayId: workspaceContext.getSnapshot().gatewayId, group: options.resourceGroup ?? this.groups.activeGroup.id,
       ownerError: options.searchOwnerError, invalidated: false, signal: controller.signal, referencesOnly: options.resourceReferencesOnly === true,
-      picks: [], loading: true };
+      picks: [], loading: true, hasFocusedPick: false };
     this.run = run;
     const input = this.editors.activeEditor;
     const pane = this.editors.activeEditorPane;
@@ -112,7 +113,10 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       const value = picker.value;
       this.report((async () => {
         let invalidated = false;
-        const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+        const releaseToken = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+        const releaseGateway = workspaceContext.subscribe(() => {
+          if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidated = true;
+        });
         try {
           picker.hide();
           const owners = await chooseSearchOwners(this.quick, run.owners);
@@ -120,7 +124,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
           this.assertAccess(run);
           const providerOptions: ResourceAccessOptions = { ...options, searchOwners: owners ?? run.owners, resourceGroup: run.group, resourceThread: run.thread, resourceRecipient: run.recipient };
           this.quick.quickAccess.show(value, { providerOptions });
-        } finally { release(); }
+        } finally { releaseToken(); releaseGateway(); }
       })());
     }));
     lifetime.add(access.token.onCancellationRequested(() => controller.abort()));
@@ -137,14 +141,24 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
     if (token.isCancellationRequested || run.signal.aborted) return null;
     run.refresh = () => {
       if (token.isCancellationRequested || run.signal.aborted || run.invalidated || this.run !== run) return;
-      const activeId = run.picker.activeItems[0]?.id, selected = new Set(run.picker.selectedItems.map(item => item.id));
+      const currentActive = run.picker.activeItems[0];
+      const currentActiveIsPick = !!currentActive && !currentActive.disabled
+        && (typeof currentActive.accept === 'function' || typeof currentActive.trigger === 'function');
+      if (currentActiveIsPick) run.hasFocusedPick = true;
+      const selected = new Set(run.picker.selectedItems.map(item => item.id));
       const keep = run.picker.keepScrollPosition;
       try {
         run.picker.keepScrollPosition = true;
         const picks = this.sourcePicks(run, filter);
+        const active = currentActiveIsPick
+          ? picks.find(item => item.id === currentActive.id && !item.disabled && (item.accept || item.trigger))
+          : undefined;
+        const nextActive = active ?? (!run.hasFocusedPick ? picks.find(item => typeof item.accept === 'function' && !item.disabled) : undefined);
+        if (nextActive) run.hasFocusedPick = true;
         run.picker.items = picks;
-        run.picker.selectedItems = picks.filter(item => selected.has(item.id));
-        if (activeId) run.picker.activeItems = picks.filter(item => item.id === activeId);
+        const selectedPicks = picks.filter(item => selected.has(item.id) && typeof item.accept === 'function' && !item.disabled);
+        run.picker.selectedItems = selectedPicks;
+        run.picker.activeItems = nextActive ? [nextActive] : [];
         run.picker.busy = run.loading;
       } finally { run.picker.keepScrollPosition = keep; }
     };
@@ -473,7 +487,10 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
   private async chooseRuntimeAction(run: SourceRun, owner: WorkspaceOwner, resource: WorkspaceResourceDTO): Promise<void> {
     const value = run.picker.value;
     let invalidated = false;
-    const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+    const releaseToken = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+    const releaseGateway = workspaceContext.subscribe(() => {
+      if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) invalidated = true;
+    });
     try {
       this.assertAccess(run);
       const actions = (Object.keys(resourceActionLabels) as ResourceAction[]).filter(action => resource.available_actions.includes(action));
@@ -490,7 +507,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       const thread = selected.action === 'attach' && run.thread?.owner.gatewayId === owner.gatewayId && run.thread.owner.workspaceId === owner.workspaceId
         ? { session_id: run.thread.session_id, thread_id: run.thread.thread_id } : undefined;
       await this.commands.executeCommand(resourceActionCommand(selected.action), { owner, resource, thread });
-    } finally { release(); }
+    } finally { releaseToken(); releaseGateway(); }
   }
   private report(operation: Promise<unknown>): void { void operation.catch(cause => this.notifications.error(cause)); }
 }

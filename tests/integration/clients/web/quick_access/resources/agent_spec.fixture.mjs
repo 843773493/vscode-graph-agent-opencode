@@ -3,6 +3,8 @@ import { Emitter, Event } from '../../../../../../src/clients/workbench/upstream
 import { CancellationTokenSource } from '../../../../../../src/clients/workbench/upstream/src/vs/base/common/cancellation.js';
 import { CommandsRegistry } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
 import { IClipboardService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/clipboard/common/clipboardService.js';
+import { QuickAccessController } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/browser/quickAccess.js';
+import { PickerHost } from '../callers/picker.fixture.mjs';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
 import { ResourceOpener } from '../../../../../../src/clients/workbench/src/resourceOpener.js';
 import { sourceDocumentSource } from '../../../../../../src/clients/workbench/src/sourceDocuments.js';
@@ -20,7 +22,8 @@ const uri = `boxteam://workspace/${owners[0].workspaceId}/resources/agent-spec/r
 export async function agentSpecContract(mode) {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), itemButtons = new Emitter(), cancellation = new CancellationTokenSource();
   const requests = [], opened = [], references = [], errors = [], shows = [], choices = [], copied = [];
-  let releaseRead, releaseParse, aborted = false, released = 0, addedGroups = 0, rowsBeforeCancel;
+  let releaseRead, releaseParse, releaseConfiguration, aborted = false, released = 0, addedGroups = 0, rowsBeforeCancel;
+  const focusMode = mode.startsWith('focus-');
   const targets = owners.map((owner, index) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId,
     name: `来源 ${index}`, status: mode === 'stopped' && index === 1 ? 'stopped' : 'ready' }));
   workspaceContext.publish({ ...previous, gatewayId: owners[0].gatewayId, loading: false, error: null,
@@ -30,7 +33,13 @@ export async function agentSpecContract(mode) {
     const headers = new Headers(init?.headers), body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push({ path, method, body, gateway: headers.get('X-BoxTeam-Target-Gateway-Id') });
     if (path === '/api/gateway/workspaces') return ok({ items: targets, active_workspace: targets[0] });
-    if (path === '/api/gateway/config/sources' || path === '/api/v1/config/sources') return ok({ sources: [] });
+    if (path === '/api/gateway/config/sources' || path === '/api/v1/config/sources') {
+      if (focusMode && path === '/api/gateway/config/sources') return new Promise(resolve => {
+        releaseConfiguration = () => resolve(ok({ sources: [{ source_key: 'inline:0', layer: 'inline', precedence: 0,
+          presence: 'present', uri: 'boxteam://inline/probe/resources/config/gateway_inline' }] }));
+      });
+      return ok({ sources: [] });
+    }
     if (path === '/api/v1/resources/skill-sources') return ok({ workspace_id: owners[0].workspaceId, entries: [] });
     if (path === '/api/v1/resources/gateway-skills') return ok({ gateway_id: headers.get('X-BoxTeam-Target-Gateway-Id'), workspace_id: owners[0].workspaceId, revision: 'fixed', available: true, entries: [] });
     if (path === '/api/v1/resources/local-skills') return ok({ workspace_id: owners[0].workspaceId, entries: [] });
@@ -41,7 +50,7 @@ export async function agentSpecContract(mode) {
     if (path === '/api/v1/resources/agent-spec') {
       const result = () => ok({ node: { uri, resource_shape: mode === 'unsupported' ? 'domain_object' : 'file', operations: ['describe', 'read'] },
         entries: [], matches: [], contexts: [], truncated: false, view: 'live' });
-      if ((mode === 'close' || mode === 'identity') && !releaseRead) {
+      if ((mode === 'close' || mode === 'identity' || focusMode) && !releaseRead) {
         init.signal.addEventListener('abort', () => { aborted = true; });
         return new Promise(resolve => { releaseRead = () => resolve(result()); });
       }
@@ -49,17 +58,30 @@ export async function agentSpecContract(mode) {
     }
     if (path === '/api/gateway/resource-addresses/parse') {
       if (mode === 'open-parse-identity') invalidateGatewayToken(0);
+      if (mode === 'open-parse-gateway-returned') {
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[0].gatewayId });
+      }
       const owner = owners.find(item => item.gatewayId === body.resource_gateway_id) ?? owners[0];
       const result = () => ok({ gateway_id: ['mismatch', 'copy-mismatch'].includes(mode) ? owners[0].gatewayId : owner.gatewayId,
         scope: 'workspace', scope_id: owner.workspaceId, kind: 'agent-spec', uri,
         reference_uri: `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/agent-spec/root/AGENTS.md` });
-      if (['freeze', 'copy-identity', 'copy-gateway'].includes(mode)) return new Promise(resolve => { releaseParse = () => resolve(result()); });
+      if (['freeze', 'copy-identity', 'copy-gateway', 'copy-gateway-returned'].includes(mode)) return new Promise(resolve => { releaseParse = () => resolve(result()); });
       return result();
     }
     throw new Error(`非预期来源请求: ${method} ${path}`);
   });
   const quick = { quickAccess: { show: (value, options) => shows.push({ value, options }) },
-    async pick(items) { choices.push(items.map(item => item.label)); return undefined; } };
+    async pick(items) {
+      choices.push(items.map(item => item.label));
+      if (mode === 'scope-gateway-returned') {
+        // 原 Controller 隐藏来源选择器后会释放 provide 的身份订阅。
+        lifetime.dispose();
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[0].gatewayId });
+      }
+      return undefined;
+    } };
   const group = { id: 7 }, groups = { activeGroup: group,
     getGroup: id => mode === 'closed-group' ? undefined : { id },
     findGroup: () => undefined, addGroup() { addedGroups += 1; return { id: 8 }; } };
@@ -67,13 +89,17 @@ export async function agentSpecContract(mode) {
     : key === 'workbench.editor.enablePreview' && mode === 'no-preview' ? false : true };
   const models = { async createModelReference(resource) { references.push(sourceDocumentSource(resource));
     if (mode === 'open-model-identity') invalidateGatewayToken(0);
-    if (mode === 'open-model-gateway') workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+    if (['open-model-gateway', 'open-model-gateway-returned'].includes(mode)) {
+      workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+      if (mode.endsWith('-returned')) workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[0].gatewayId });
+    }
     return { object: {}, dispose() { released += 1; } }; } };
   const opener = new ResourceOpener({ registerOpener: () => ({ dispose() {} }) },
     { openEditor: async (input, id) => opened.push({ source: sourceDocumentSource(input.resource), options: input.options, group: id }) },
     groups, configuration, models, {}, { getAssociationsForResource: () => [] });
   const notifications = { error: cause => errors.push(String(cause)) };
-  const picker = { value: 'resource ag', items: [], activeItems: [], selectedItems: [], buttons: [],
+  const focusHost = focusMode ? new PickerHost() : undefined;
+  const picker = focusHost?.createQuickPick() ?? { value: 'resource ag', items: [], activeItems: [], selectedItems: [], buttons: [],
     keyMods: { alt: mode === 'side' || mode.startsWith('open-'), ctrlCmd: mode === 'pinned' }, onDidChangeValue: changes.event,
     onDidAccept: accepts.event, onDidTriggerButton: buttons.event, onDidTriggerItemButton: itemButtons.event,
     onDidTriggerSeparatorButton: Event.None, hide() { this.hidden = true; } };
@@ -84,29 +110,56 @@ export async function agentSpecContract(mode) {
     } }, ...args);
   } };
   const provider = new ResourceQuickAccess(quick, opener, groups, configuration, notifications, commands, {});
-  const options = mode === 'no-owner' ? { searchOwnerError: '发起来源未明确' } : { searchOwners: owners };
-  const lifetime = provider.provide(picker, cancellation.token, options);
+  const options = mode === 'no-owner' ? { searchOwnerError: '发起来源未明确' } : { searchOwners: focusMode ? [owners[0]] : owners };
+  const controller = focusMode ? new QuickAccessController({ createQuickPick: () => picker }, { createInstance: () => provider },
+    { contextMatchesRules: () => true, getContextKeyValue: () => undefined }, {}) : undefined;
+  const pendingPick = controller?.pick('resource ', { canPickMany: mode === 'focus-many-cancel', providerOptions: options });
+  const lifetime = focusMode ? { dispose() {} } : provider.provide(picker, cancellation.token, options);
+  let focus;
   const until = async predicate => {
     for (let i = 0; i < 200; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
     throw new Error('来源合同未收敛');
   };
   try {
-    if (mode === 'close' || mode === 'identity') {
+    if (focusMode) {
+      await until(() => releaseRead && releaseConfiguration);
+      // Picker 宿主边界保留原加载行焦点；候选与后续更新均由真实 Provider 发布。
+      picker.activeItems = [picker.items.find(item => item.id === 'source-pending')];
+      releaseRead();
+      await until(() => picker.items.some(item => item.accept));
+      const first = picker.items.find(item => item.accept);
+      focus = { firstId: first.id, initialActive: picker.activeItems.map(item => item.id), initialSelected: picker.selectedItems.map(item => item.id) };
+      if (mode === 'focus-removed') {
+        picker.value = 'resource inline';
+        picker.activeItems = [picker.items.find(item => item.id === 'source-pending')];
+      }
+      releaseConfiguration();
+      await until(() => !picker.busy);
+      focus.finalActive = picker.activeItems.map(item => item.id);
+      focus.finalSelected = picker.selectedItems.map(item => item.id);
+      focus.hasReplacement = picker.items.some(item => item.accept && item.id !== first.id);
+      focus.activeObjectRefreshed = picker.activeItems[0] !== first;
+      picker.hide();
+      focus.cancelled = (await pendingPick).map(item => item.id);
+    } else if (mode === 'close' || mode === 'identity') {
       await until(() => releaseRead);
       if (mode === 'close') { rowsBeforeCancel = picker.items.map(item => item.id); lifetime.dispose(); }
       else invalidateGatewayToken(0);
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
     } else {
       await until(() => !picker.busy && picker.items.length > 0);
-      if (mode === 'scope-cancel') {
-        buttons.fire(picker.buttons[0]); await until(() => shows.length);
+      if (mode === 'scope-cancel' || mode === 'scope-gateway-returned') {
+        buttons.fire(picker.buttons[0]); await until(() => shows.length || errors.length);
       } else if (mode.startsWith('copy')) {
         const item = picker.items[1];
         itemButtons.fire({ item, button: item.buttons[0] });
-        if (['copy-identity', 'copy-gateway'].includes(mode)) {
+        if (['copy-identity', 'copy-gateway', 'copy-gateway-returned'].includes(mode)) {
           await until(() => releaseParse);
           if (mode === 'copy-identity') invalidateGatewayToken(0);
-          else workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+          else {
+            workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+            if (mode.endsWith('-returned')) workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[0].gatewayId });
+          }
           releaseParse();
         }
         await until(() => copied.length || errors.length);
@@ -123,11 +176,11 @@ export async function agentSpecContract(mode) {
         await until(() => opened.length || errors.length);
       }
     }
-    return { requests, opened, references, errors, shows, choices, copied, hidden: !!picker.hidden, aborted, released, addedGroups, rowsBeforeCancel,
+    return { requests, opened, references, errors, shows, choices, copied, focus, hidden: !!picker.hidden, aborted, released, addedGroups, rowsBeforeCancel,
       rows: picker.items.map(item => ({ id: item.id, label: item.label, highlights: item.highlights, selectable: !!item.accept,
         copy: !!item.buttons?.some(button => button.tooltip === '复制资源 URI') })) };
   } finally {
-    lifetime.dispose(); cancellation.dispose(true); provider.dispose(); opener.dispose();
+    lifetime.dispose(); controller?.dispose(); focusHost?.dispose(); cancellation.dispose(true); provider.dispose(); opener.dispose();
     changes.dispose(); accepts.dispose(); buttons.dispose(); itemButtons.dispose(); unwrapSessionApiFetch(); workspaceContext.publish(previous);
   }
 }
@@ -152,11 +205,19 @@ export async function resourceOpenTargetContract(mode) {
       thread_id: kind === 'thread' ? threadId : null });
     if (path === '/api/gateway/workspaces') {
       if (mode.endsWith('route-identity')) invalidateGatewayToken(0);
+      if (mode.endsWith('route-gateway-returned')) {
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owner.gatewayId });
+      }
       return ok({ items: [target] });
     }
     if (path === `/api/v1/sessions/${sessionId}/main-thread`) {
       if (mode.endsWith('main-identity')) invalidateGatewayToken(0);
       if (mode.endsWith('main-gateway')) workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+      if (mode.endsWith('main-gateway-returned')) {
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owners[1].gatewayId });
+        workspaceContext.publish({ ...workspaceContext.getSnapshot(), gatewayId: owner.gatewayId });
+      }
       return ok({ session_id: sessionId, thread_id: threadId });
     }
     throw new Error(`资源打开产生非预期请求 ${method} ${path}`);

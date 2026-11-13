@@ -65,9 +65,12 @@ export class ResourceOpener extends Disposable implements IOpener {
       try { sourceOwner = captureSearchOwner(this.editors); } catch { /* 目标自包含的 URI 不需要发起编辑器归属。 */ }
     }
     let invalidated = false;
-    const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+    const releaseToken = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+    const releaseGateway = workspaceContext.subscribe(() => {
+      if (workspaceContext.getSnapshot().gatewayId !== gatewayId) invalidated = true;
+    });
     const assertAccess = () => {
-      if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) {
+      if (invalidated) {
         throw new Error(t('quickAccess.resource.identityChanged'));
       }
     };
@@ -165,7 +168,7 @@ export class ResourceOpener extends Disposable implements IOpener {
       if (input instanceof ThreadInput) await this.editors.openEditor(input, editorOptions, group.id);
       else await this.editors.openEditor(input, group.id);
       return true;
-    } finally { for (const reference of references) reference.dispose(); release(); }
+    } finally { for (const reference of references) reference.dispose(); releaseToken(); releaseGateway(); }
   }
 }
 

@@ -46,9 +46,12 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
   const gatewayId = workspaceContext.getSnapshot().gatewayId;
   if (!gatewayId) throw new Error(t('workbench.resource.gatewayMissing'));
   let invalidated = false;
-  const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+  const releaseToken = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+  const releaseGateway = workspaceContext.subscribe(() => {
+    if (workspaceContext.getSnapshot().gatewayId !== gatewayId) invalidated = true;
+  });
   const assertAccess = () => {
-    if (invalidated || workspaceContext.getSnapshot().gatewayId !== gatewayId) throw new Error(t('workbench.resource.referenceAccessChanged'));
+    if (invalidated) throw new Error(t('workbench.resource.referenceAccessChanged'));
   };
   try {
     if (configuration) {
@@ -87,7 +90,7 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
     }
     if (usage === 'chat' && address.kind === 'changes') throw new Error(t('workbench.resource.attachChangesUnavailable'));
     return address.reference_uri;
-  } finally { release(); }
+  } finally { releaseToken(); releaseGateway(); }
 }
 
 const referenceContext = ContextKeyExpr.or(...['boxteam-file', 'boxteam-source', 'boxteam-thread', 'boxteam-change', configSourceScheme].map(scheme => ContextKeyExpr.equals('resourceScheme', scheme)));

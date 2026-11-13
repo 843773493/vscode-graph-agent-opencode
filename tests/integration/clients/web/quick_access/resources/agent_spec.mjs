@@ -65,12 +65,25 @@ try {
   const quick = page.locator('.quick-input-widget'), input = quick.locator('input').first(), groups = page.locator('.editor-group-container');
   const text = index => groups.nth(index).locator('.editor-instance .monaco-editor').filter({ visible: true }).locator('.view-lines');
   const camelOwner = owner => ({ gatewayId: owner.gateway_id, workspaceId: owner.workspace_id });
-  const candidate = owner => quick.locator('.monaco-list-row').filter({ hasText: 'AGENTS.md' }).filter({ hasText: owner.workspace_id });
+  const candidate = owner => quick.getByRole('option', {
+    name: new RegExp(`^AGENTS\\.md, .*${owner.gateway_id} · ${owner.workspace_id} · `),
+  });
+  const focusCandidate = async owner => {
+    const item = candidate(owner);
+    await expect(item).toBeVisible(); await input.focus();
+    const count = Number(await item.getAttribute('aria-setsize'));
+    // 早到的有效来源保持原焦点；用正常方向键选择本场景要验证的精确 AGENTS。
+    for (let index = 0; index <= count; index++) {
+      if ((await item.getAttribute('class'))?.split(/\s+/).includes('focused')) return;
+      await page.keyboard.press('ArrowDown');
+    }
+    await expect(item).toHaveClass(/(?:^|\s)focused(?:\s|$)/);
+  };
   const show = async owner => {
     if (owner) await command('boxteam.quickAccess.resources', camelOwner(owner));
     else await command('boxteam.quickAccess.resources');
     await expect(input).toHaveValue('resource ');
-    await expect(candidate(owner ?? b)).toBeVisible();
+    await focusCandidate(owner ?? b);
   };
   const currentReads = () => result.reads.filter(item => item.phase === result.phase);
   await phase('browse'); await show(a);
@@ -84,6 +97,7 @@ try {
   await phase('copy-unopened');
   const tabsBeforeCopy = await page.locator('.tab').count();
   await show(b);
+  await candidate(b).hover();
   await candidate(b).getByRole('button', { name: '复制资源 URI', exact: true }).click();
   await expect.poll(() => result.receipts.some(item => item.phase === result.phase && item.path === '/api/gateway/resource-addresses/parse')).toBe(true);
   const copyReceipt = result.receipts.find(item => item.phase === result.phase && item.path === '/api/gateway/resource-addresses/parse');
@@ -96,7 +110,7 @@ try {
   await quick.locator('.monaco-list-row').filter({ hasText: a.workspace_id }).getByRole('checkbox').uncheck();
   await quick.locator('.monaco-list-row').filter({ hasText: b.workspace_id }).getByRole('checkbox').check();
   await quick.getByRole('button', { name: '确定', exact: true }).click();
-  await expect(candidate(b)).toBeVisible(); await input.focus(); await page.keyboard.press('Enter');
+  await focusCandidate(b); await page.keyboard.press('Enter');
   await expect(text(0)).toContainText('AGENTS-OWNER-B');
   expect(currentReads()).toHaveLength(1); expect(currentReads()[0]).toMatchObject({ workspaceId: b.workspace_id, body: { operation: 'read' } });
   expect(result.parses.filter(item => item.phase === result.phase)).toHaveLength(1);

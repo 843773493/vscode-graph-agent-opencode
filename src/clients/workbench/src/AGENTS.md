@@ -18,7 +18,9 @@ Web 与 Electron 共用的唯一完整 Code OSS 工作台入口。复用同级 w
 
 配置 URI 的 Opener 先经唯一 grammar 解析，再匹配原配置 owner 公布的 URI／source_key 并交原 JSONC 来源命令；远端 reference 仅由同一 parser 在目标 owner 上归一，不截取文件名推断来源、不交普通只读文档 Provider。发起组、选项和 owner 在异步读取前冻结，凭据或 Gateway 改变拒绝迟到打开。
 
-所有规范 URI 的打开共用单次身份生命周期，覆盖解析、重解路由、main Thread 查询及只读模型取得；身份失效后不继续读取、不创建侧边组或打开旧输入，已取得的模型引用仍沿原 resolver 释放。不追加健康探测或自动重试。
+所有规范 URI 的打开共用单次身份生命周期，覆盖解析、重解路由、main Thread 查询及只读模型取得；已绑定 Gateway 离开后切回仍失效，不继续读取、不创建侧边组或打开旧输入。已取得的模型引用仍沿原 resolver 释放，结束时释放凭据与 Gateway 订阅。不追加健康探测或自动重试；复制引用同样拒绝本次生命周期中曾失效的结果。
+
+来源发现的首次可接受候选沿原 Quick Input 聚焦，后续更新按稳定 ID 保留；已聚焦目标消失后清空，不改投其它候选。聚焦不生成已选择项，Esc 取消仍零交付。来源范围及运行资源二级选择在原 picker 隐藏后继续监听本次凭据与 Gateway 身份，结束即释放。
 
 文件、来源文档及精确 Thread 的复制引用共用 `resourceActions` 的原 Action／Command，编辑器菜单、文件菜单与 Quick Access 不另写复制逻辑。规范引用由 Gateway 唯一 URI owner 提供，包含明确 Gateway；Thread 只交付已有稳定身份，不查历史或启动目标。复制不打开资源、不读取正文、不固定版本或激活来源。
 

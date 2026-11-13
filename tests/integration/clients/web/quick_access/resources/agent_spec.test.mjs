@@ -38,7 +38,7 @@ test('来源候选直接复制原规范引用，不打开、不读正文且保�
   expect(result.copied).toEqual([`boxteam://gateway_${'b'.repeat(32)}/workspace/019a0000-0000-7000-8000-000000000001/resources/agent-spec/root/AGENTS.md`]);
   expect(result.hidden).toBe(false); expect(result.opened).toEqual([]); expect(result.references).toEqual([]);
 });
-for (const mode of ['copy-mismatch', 'copy-identity', 'copy-gateway']) test(`${mode}拒绝把错误或迟到的引用写入剪贴板`, async () => {
+for (const mode of ['copy-mismatch', 'copy-identity', 'copy-gateway', 'copy-gateway-returned']) test(`${mode}拒绝把错误或迟到的引用写入剪贴板`, async () => {
   const result = await exercise(mode);
   expect(result.errors.join('')).toMatch(/归属不匹配|身份|凭据/);
   expect(result.copied).toEqual([]); expect(result.references).toEqual([]); expect(result.opened).toEqual([]);
@@ -62,6 +62,27 @@ test('范围取消保留原owner与发起组，且零打开', async () => {
   expect(result.shows).toHaveLength(1); expect(result.shows[0].options.providerOptions.resourceGroup).toBe(7);
   expect(result.shows[0].options.providerOptions.searchOwners).toHaveLength(2);
   expect(parses(result)).toEqual([]); expect(result.references).toEqual([]);
+});
+test('二级范围选择期间Gateway离开后切回仍拒绝重新打开旧来源', async () => {
+  const result = await exercise('scope-gateway-returned');
+  expect(result.errors.join('')).toContain('凭据已改变'); expect(result.shows).toEqual([]);
+  expect(result.choices).toHaveLength(1); expect(parses(result)).toEqual([]); expect(result.opened).toEqual([]);
+});
+for (const mode of ['focus-cancel', 'focus-many-cancel']) test(`${mode}首次真实候选自动聚焦，原Controller取消仍零交付`, async () => {
+  const result = await exercise(mode);
+  expect(result.errors).toEqual([]);
+  expect(result.focus.initialActive).toEqual([result.focus.firstId]);
+  expect(result.focus.finalActive).toEqual([result.focus.firstId]);
+  expect(result.focus.activeObjectRefreshed).toBe(true);
+  expect(result.focus.initialSelected).toEqual([]); expect(result.focus.finalSelected).toEqual([]);
+  expect(result.focus.cancelled).toEqual([]); expect(parses(result)).toEqual([]); expect(result.opened).toEqual([]);
+});
+test('已聚焦来源消失后新候选不替代原目标，取消零交付', async () => {
+  const result = await exercise('focus-removed');
+  expect(result.errors).toEqual([]); expect(result.focus.initialActive).toEqual([result.focus.firstId]);
+  expect(result.focus.hasReplacement).toBe(true); expect(result.focus.finalActive).toEqual([]);
+  expect(result.focus.finalSelected).toEqual([]); expect(result.focus.cancelled).toEqual([]);
+  expect(parses(result)).toEqual([]); expect(result.opened).toEqual([]);
 });
 for (const mode of ['stopped', 'unsupported', 'no-owner']) test(`${mode}明确能力错误且不伪造可打开候选`, async () => {
   const result = await exercise(mode); expect(parses(result)).toEqual([]); expect(result.opened).toEqual([]);
@@ -89,12 +110,12 @@ test('发起编辑器组关闭时释放原引用且不创建空分屏', async ()
   expect(result.errors.join('')).toContain('编辑器组已关闭'); expect(result.released).toBe(1);
   expect(result.opened).toEqual([]); expect(result.addedGroups).toBe(0);
 });
-for (const mode of ['open-parse-identity', 'open-model-identity', 'open-model-gateway']) test(`${mode}拒绝身份改变后的迟到打开并释放引用`, async () => {
+for (const mode of ['open-parse-identity', 'open-model-identity', 'open-model-gateway', 'open-parse-gateway-returned', 'open-model-gateway-returned']) test(`${mode}拒绝身份改变后的迟到打开并释放引用`, async () => {
   const result = await exercise(mode);
   expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('Gateway 或访问凭据已改变');
   expect(result.opened).toEqual([]); expect(result.addedGroups).toBe(0);
-  expect(result.references).toHaveLength(mode === 'open-parse-identity' ? 0 : 1);
-  expect(result.released).toBe(mode === 'open-parse-identity' ? 0 : 1);
+  expect(result.references).toHaveLength(mode.startsWith('open-parse-') ? 0 : 1);
+  expect(result.released).toBe(mode.startsWith('open-parse-') ? 0 : 1);
 });
 for (const mode of ['file', 'thread', 'session']) test(`${mode}规范URI沿原目标与编辑器选项打开`, async () => {
   const result = await exercise(mode, 'resourceOpenTargetContract');
@@ -104,7 +125,8 @@ for (const mode of ['file', 'thread', 'session']) test(`${mode}规范URI沿原�
   else expect(result.opened[0].owner).toMatchObject({ ...result.owner, threadId: result.threadId });
   expect(result.requests.filter(item => item.path.endsWith('/main-thread'))).toHaveLength(mode === 'session' ? 1 : 0);
 });
-for (const mode of ['file-route-identity', 'thread-route-identity', 'session-route-identity', 'session-main-identity', 'session-main-gateway']) test(`${mode}重解路由与main期间身份改变不继续打开`, async () => {
+for (const mode of ['file-route-identity', 'thread-route-identity', 'session-route-identity', 'session-main-identity', 'session-main-gateway',
+  'file-route-gateway-returned', 'thread-route-gateway-returned', 'session-route-gateway-returned', 'session-main-gateway-returned']) test(`${mode}重解路由与main期间身份改变不继续打开`, async () => {
   const result = await exercise(mode, 'resourceOpenTargetContract');
   expect(result.errors).toHaveLength(1); expect(result.errors[0]).toContain('Gateway 或访问凭据已改变');
   expect(result.opened).toEqual([]); expect(result.addedGroups).toBe(0);

@@ -18,7 +18,9 @@ HTTP Skill 页面通过原配置与真实来源建立 accepted 快照，记录�
 
 Provider 合同区分单次 provide 的本地筛选与重新打开的当前发现；取消要观察实际 AbortSignal，所有 owner 的 AGENTS／Skill metadata 共用三并发，不用跨生命周期缓存或第二套索引。
 
-`agent_spec` 合同同时运行真实规范 URI Opener／HTTP 客户端，在解析、路由、main Thread 和模型取得的具名服务边界改变身份，核迟到打开拒绝、引用释放及零空分屏；正常文件／精确 child／Session 保留同一打开选项。不把这些宿主边界当真实身份撤销产品验收。
+`agent_spec` 合同同时运行真实规范 URI Opener／HTTP 客户端，在解析、路由、main Thread 和模型取得的具名服务边界改变身份，包含 Gateway 离开后切回，核迟到打开拒绝、引用释放及零空分屏；复制同样拒绝切回后的迟到结果。正常文件／精确 child／Session 保留同一打开选项。不把这些宿主边界当真实身份撤销产品验收。
+
+首次来源聚焦合同运行真实 Provider 与原 QuickAccessController，只替换 Picker 宿主和具名 HTTP 回执，核加载行不阻止首次真实候选聚焦、按 ID 续焦、原目标消失不改投及单选／多选取消零交付；正式 AGENTS 页保留 Enter 与 Alt+Enter 打开断言。二级范围选择核原 picker 释放后 Gateway 离开并切回仍拒绝恢复旧来源。
 
 配置复制合同执行同一资源 Command／URI parser 和正式来源目录客户端，分别核候选直接复用 URI、编辑器只查原目录、无 URI 逻辑来源拒绝，以及身份失效；HTTP 回执与剪贴板宿主为具名装具，完整 JSONC 页面继续负责真实 Gateway 接线及原保存回归。
 
