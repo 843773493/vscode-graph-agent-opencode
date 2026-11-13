@@ -3967,5 +3967,19 @@
   "configuration.entities.useWorkspaceDefaultProvider": "Use as the default Provider for new sessions with {0}",
   "configuration.entities.sessionDefaultsSaveBoundary": "Saves immediately to the existing workspace session defaults. Source JSONC, existing sessions and running tasks are unchanged.",
   "configuration.entities.confirmSessionDefault": "Save new-session default",
-  "configuration.entities.sessionDefaultsCurrent": "Current new-session default Agent: {0} · default Provider for {1}: {2}"
+  "configuration.entities.sessionDefaultsCurrent": "Current new-session default Agent: {0} · default Provider for {1}: {2}",
+  "workbench.skills.openGatewaySources": "Edit Gateway Skill Sources",
+  "workbench.skills.openWorkspaceSources": "Edit Workspace Skill Sources",
+  "workbench.skills.refreshGatewaySources": "Refresh Local Gateway Skill Sources",
+  "workbench.skills.refreshWorkspaceSources": "Refresh Workspace Skill Sources",
+  "workbench.skills.identityChanged": "Gateway identity or access credentials changed. Start the Skill operation again.",
+  "workbench.skills.gatewayNotReady": "The local Gateway is not ready.",
+  "workbench.skills.noConfigSources": "The selected target has no configuration source to open.",
+  "workbench.skills.workspaceUnavailable": "Workspace {0} is not ready ({1}).",
+  "workbench.skills.gatewayOwnerMismatch": "Gateway Skill refresh returned a different Gateway owner.",
+  "workbench.skills.workspaceOwnerMismatch": "Workspace Skill refresh returned a different Workspace owner.",
+  "workbench.skills.refreshGatewayComplete": "Local Gateway Skill sources refreshed · {0}.",
+  "workbench.skills.refreshWorkspaceComplete": "Workspace Skill sources refreshed · {0}.",
+  "workbench.skills.available": "available",
+  "workbench.skills.unavailable": "some sources are unavailable"
 }

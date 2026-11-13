@@ -3967,5 +3967,19 @@
   "configuration.entities.useWorkspaceDefaultProvider": "设为 {0} 的新会话默认 Provider",
   "configuration.entities.sessionDefaultsSaveBoundary": "立即保存到原工作区会话默认值；不修改来源 JSONC、现有会话选择或运行中的任务。",
   "configuration.entities.confirmSessionDefault": "保存新会话默认值",
-  "configuration.entities.sessionDefaultsCurrent": "当前新会话默认 Agent：{0} · {1} 的默认 Provider：{2}"
+  "configuration.entities.sessionDefaultsCurrent": "当前新会话默认 Agent：{0} · {1} 的默认 Provider：{2}",
+  "workbench.skills.openGatewaySources": "编辑 Gateway Skill 来源",
+  "workbench.skills.openWorkspaceSources": "编辑工作区 Skill 来源",
+  "workbench.skills.refreshGatewaySources": "刷新本机 Gateway Skill 来源",
+  "workbench.skills.refreshWorkspaceSources": "刷新工作区 Skill 来源",
+  "workbench.skills.identityChanged": "Gateway 身份或访问凭据已改变，请重新发起 Skill 操作。",
+  "workbench.skills.gatewayNotReady": "本机 Gateway 尚未就绪。",
+  "workbench.skills.noConfigSources": "所选目标没有可打开的配置来源。",
+  "workbench.skills.workspaceUnavailable": "工作区 {0} 尚未就绪（{1}）。",
+  "workbench.skills.gatewayOwnerMismatch": "Gateway Skill 刷新回执的 Gateway 归属不匹配。",
+  "workbench.skills.workspaceOwnerMismatch": "工作区 Skill 刷新回执的工作区归属不匹配。",
+  "workbench.skills.refreshGatewayComplete": "本机 Gateway Skill 来源已刷新 · {0}。",
+  "workbench.skills.refreshWorkspaceComplete": "工作区 Skill 来源已刷新 · {0}。",
+  "workbench.skills.available": "来源可用",
+  "workbench.skills.unavailable": "部分来源不可用"
 }
