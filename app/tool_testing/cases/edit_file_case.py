@@ -5,19 +5,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from deepagents.middleware.filesystem import FilesystemMiddleware
-from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.prebuilt.tool_node import ToolRuntime
-
-from app.agents.workspace_backend import build_workspace_backend
-from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
 from app.core.hashing import sha256_hex
-from app.services.infrastructure.resource_platform.sources.resource_navigation import (
-    ResourceNavigation,
-)
-from app.services.infrastructure.workspace_files.text_owner import (
-    WorkspaceTextMutationOwner,
-)
+from app.runtime.tool_test_tools import build_edit_file_test_tool
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 from app.tool_testing.sandbox import ToolTestFilePaths
 
@@ -68,7 +57,7 @@ class EditFileScenarioCase:
             "不要把 Markdown 标记或额外分隔符放进参数，不要修改文件中的其他任何内容，"
             "也不要只在正文中描述操作。"
         )
-        tool, runtime = _select_tool(file_paths)
+        tool, runtime = build_edit_file_test_tool(file_paths)
         return PreparedToolTest(
             prompt=prompt,
             tool=tool,
@@ -200,44 +189,3 @@ def create_edit_file_cases() -> list[EditFileScenarioCase]:
             ),
         ),
     ]
-
-
-def _select_tool(file_paths: ToolTestFilePaths) -> tuple[BaseTool, ToolRuntime]:
-    workspace_root, workspace_id = file_paths.workspace, file_paths.workspace_id
-    middleware = FilesystemMiddleware(backend=build_workspace_backend(workspace_root))
-    navigation = ResourceNavigation(
-        workspace_root=workspace_root,
-        workspace_id=workspace_id,
-        file_paths=file_paths,
-    )
-    configure_workspace_filesystem_tools(
-        middleware,
-        workspace_root=workspace_root,
-        resource_navigation=navigation,
-        text_mutations=WorkspaceTextMutationOwner(paths=file_paths),
-    )
-    matches = [tool for tool in middleware.tools if tool.name == "edit_file"]
-    if len(matches) != 1:
-        raise RuntimeError(
-            "FilesystemMiddleware 中 edit_file 工具数量异常: "
-            f"expected=1, actual={len(matches)}"
-        )
-    tool = matches[0]
-    if not isinstance(tool, StructuredTool):
-        raise TypeError(
-            "FilesystemMiddleware 的 edit_file 不是 StructuredTool: "
-            f"actual={type(tool).__name__}"
-        )
-    if tool.func is None or tool.coroutine is None:
-        raise RuntimeError("FilesystemMiddleware 的 edit_file 缺少同步或异步实现")
-
-    runtime = ToolRuntime(
-        state={},
-        context=None,
-        config={},
-        stream_writer=lambda _: None,
-        tool_call_id="model-tool-test-edit-file",
-        store=None,
-        tools=[tool],
-    )
-    return tool, runtime

@@ -22,7 +22,6 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command
 
-from app.agents.context_compaction_adapter import AgentSummarizationCompactor
 from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.summarization.planning import (
     build_cache_preserving_event,
@@ -52,6 +51,7 @@ from app.core.model_request_context import current_summary_candidate
 from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     closed_tool_prefix_cutoffs,
 )

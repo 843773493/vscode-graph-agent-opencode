@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 
 from langchain_core.messages import HumanMessage
 
-from app.agents.agent_factory import AGENT_GRAPH_RECURSION_LIMIT, resolve_agent_id
 from app.agents.checkpoint_recovery import (
     CheckpointRecoveryRejectedError,
     pending_tool_checkpoint,
@@ -57,6 +56,7 @@ from app.domain.itemized.execution_admission import (
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
 from app.runtime.agent_runtime import (
+    AGENT_GRAPH_RECURSION_LIMIT,
     get_configured_custom_tool_names,
 )
 from app.schemas.event import ModelTokenUsagePayload
@@ -204,7 +204,7 @@ class StepRunner:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
         config_snapshot = self.ports.config_service.get_snapshot()
         with self.ports.config_service.use_snapshot(config_snapshot):
-            resolved_agent_id = resolve_agent_id(agent_id, self.ports.config_service)
+            resolved_agent_id = self.ports.config_service.resolve_agent_id(agent_id)
             agent_runtime_config = self.ports.config_service.get_agent_runtime_config(
                 resolved_agent_id
             )

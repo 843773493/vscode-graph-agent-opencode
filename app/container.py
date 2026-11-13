@@ -18,9 +18,7 @@ from app.abstractions.session_context import WorkspaceSessionContextClientProtoc
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
-from app.agents.context_compaction_adapter import AgentSummarizationCompactor
 from app.agents.graph_binding import SessionControlGraphBindingStore
-from app.agents.workspace_backend import build_workspace_backend
 from app.core.background_message_bus import BackgroundMessageBus
 from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.env import get_project_root
@@ -42,6 +40,7 @@ from app.core.session_control_store import SessionControlStore
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.gateway.auth import get_gateway_local_token
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
+from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS, RuntimeClockPorts
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
@@ -1114,7 +1113,7 @@ def _build_app_container(
     )
     summarization_compactor = AgentSummarizationCompactor(
         config_service=config_service,
-        history_backend=build_workspace_backend(resolved_workspace_root),
+        workspace_root=resolved_workspace_root,
     )
     context_compaction_service = ContextCompactionService(
         checkpoint_store=context_checkpoint_store,

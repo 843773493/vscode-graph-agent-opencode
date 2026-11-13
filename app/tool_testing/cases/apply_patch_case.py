@@ -5,10 +5,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from app.agents.tools.apply_patch import create_apply_patch_tool
-from app.services.infrastructure.workspace_files.text_owner import (
-    WorkspaceTextMutationOwner,
-)
+from app.runtime.tool_test_tools import build_apply_patch_test_tool
 from app.tool_testing.definitions import PreparedToolTest, ToolTestEvaluation
 from app.tool_testing.sandbox import ToolTestFilePaths
 
@@ -49,11 +46,7 @@ class ApplyPatchScenarioCase:
                 expected_versions[relative_path] = (
                     "sha256:" + sha256(file_contents).hexdigest()
                 )
-        apply_patch_tool = create_apply_patch_tool(
-            text_mutations=WorkspaceTextMutationOwner(
-                paths=file_paths,
-            ),
-        )
+        apply_patch_tool = build_apply_patch_test_tool(file_paths)
         return PreparedToolTest(
             prompt=(
                 self.prompt_template

@@ -10,8 +10,11 @@
 app/runtime/
 ├── Agent 装配与调度
 │   ├── agent_runtime.py       依赖提供协议、Agent runtime 与工具定义装配
-│   └── session_orchestrator.py 用户消息创建与执行调度入口
+│   ├── session_orchestrator.py 用户消息创建与执行调度入口
+│   ├── context_compaction.py   按需装配显式上下文压缩预览
+│   └── tool_test_tools.py      按需装配工具能力测试所需工具
 ├── 模型 Provider 运行时
+│   ├── provider_model.py      本地配置校验与按需模型构造
 │   ├── litellm_runtime.py     SDK 懒加载、模型目录缓存与后台刷新
 │   ├── model_stream.py        显式配置的模型流传输装配
 │   ├── provider_errors.py    Provider 错误分类，使用时才加载 SDK 类型

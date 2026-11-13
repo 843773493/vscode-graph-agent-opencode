@@ -11,10 +11,7 @@ from langchain_core.messages import (
     message_chunk_to_message,
 )
 
-from app.agents.agent_factory import (
-    build_model_from_provider,
-    build_runtime_for_agent,
-)
+from app.agents.agent_factory import build_runtime_for_agent
 from app.agents.providers.litellm_chat import (
     BoxteamLiteLLMChatModel,
     _StreamPartState,
@@ -34,6 +31,7 @@ from app.agents.upstream_request_trace import (
     record_upstream_response,
 )
 from app.core.failures import is_provider_failure
+from app.runtime.provider_model import build_model_from_provider
 from app.services.orchestration.agent_stream_helpers import (
     is_tracked_chat_model_event,
 )

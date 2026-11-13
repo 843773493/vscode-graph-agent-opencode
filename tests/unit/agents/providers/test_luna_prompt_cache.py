@@ -17,7 +17,7 @@ from langchain_core.messages import (
     message_chunk_to_message,
 )
 
-from app.agents.agent_factory import build_model_from_provider
+from app.runtime.provider_model import build_model_from_provider
 from app.services.infrastructure.config_service import ConfigService
 
 CONVERSATION_ROUNDS = 3

@@ -11,6 +11,7 @@ import pytest
 
 from app.agents import agent_factory
 from app.agents.policy import DEFAULT_AGENT_TOOL_NAMES
+from app.runtime import provider_model
 from app.services.business.agent_service import AgentService
 from app.services.infrastructure.config_service import ConfigService
 
@@ -115,7 +116,7 @@ async def test_agent_list_rechecks_oauth_credentials_without_sdk(
     def unexpected_sdk(*_args, **_kwargs):
         raise AssertionError("Agent 列表不得初始化 SDK 或登记 SDK 模型能力")
 
-    monkeypatch.setattr(agent_factory, "build_model_from_provider", unexpected_sdk)
+    monkeypatch.setattr(provider_model, "build_model_from_provider", unexpected_sdk)
     monkeypatch.setattr(chatgpt_auth, "ensure_litellm_chatgpt_model_capabilities", unexpected_sdk)
     service = AgentService(config_service=ConfigService(config_dir=Path.cwd() / "configs", config_path=config_path))
 

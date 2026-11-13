@@ -12,10 +12,10 @@ from typing import Any, Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-from app.agents.agent_factory import build_model_from_provider
 from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id
 from app.core.trace_middleware import get_current_request_id
+from app.runtime.provider_model import build_model_from_provider
 from app.schemas.internal_v2.tool_test import (
     ToolTestAttemptDTO,
     ToolTestProviderResultDTO,

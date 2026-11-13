@@ -1,18 +1,9 @@
-"""缓存优先压缩的常量、错误类型、LangGraph 状态 schema 与压缩分区。
-
-承载策略常量、SummaryToolCallError、CachePreservingSummarizationState（LangGraph 状态
-schema，含 Annotated/PrivateStateAttr 运行期契约）与 CachePreservingPartition。"""
+"""缓存优先压缩的纯状态、策略常量与错误类型。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import (
-    Annotated,
-    NotRequired,
-)
 
-from deepagents.middleware.summarization import SummarizationState
-from langchain.agents.middleware.types import PrivateStateAttr
 from langchain_core.messages import AnyMessage
 
 CACHE_PRESERVING_STRATEGY = "cache_preserving"
@@ -37,13 +28,6 @@ class SummaryGenerationError(RuntimeError):
 
 class CompactionReductionError(RuntimeError):
     """生成的摘要没有缩短本次上下文。"""
-
-
-class CachePreservingSummarizationState(SummarizationState):
-    """缓存压缩额外维护一次性强制压缩标记。"""
-
-    _force_cache_compaction: Annotated[NotRequired[bool], PrivateStateAttr]
-    _compaction_continuation: Annotated[NotRequired[bool], PrivateStateAttr]
 
 
 @dataclass(slots=True)

@@ -58,6 +58,9 @@ if TYPE_CHECKING:
     )
 
 
+AGENT_GRAPH_RECURSION_LIMIT = 9999
+
+
 class AgentRuntimeDependencyProvider(Protocol):
     def get_goal_service(self) -> SessionGoalService: ...
     def get_message_service(self) -> MessageService: ...
@@ -134,10 +137,9 @@ def build_session_agent_runtime(
 ) -> Any:
     from app.agents.agent_factory import (
         create_runtime_deep_agent_for_session,
-        resolve_agent_id,
     )
 
-    resolved_agent_id = resolve_agent_id(agent_id, config_service)
+    resolved_agent_id = config_service.resolve_agent_id(agent_id)
     checkpointer = dependency_provider.get_checkpointer()
     if checkpointer is None:
         raise RuntimeError("AgentRuntimeDependencyProvider 必须显式提供 checkpointer")

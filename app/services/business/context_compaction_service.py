@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
-from app.agents.context_compaction_adapter import AgentSummarizationCompactor
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.schemas.internal_v2.session import SessionCompactResultDTO
 from app.services.business.session_service import SessionService
 

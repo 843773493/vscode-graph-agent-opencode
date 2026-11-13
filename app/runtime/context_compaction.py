@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
-from deepagents.backends import CompositeBackend
 from langchain_core.messages import AnyMessage, BaseMessage
 
-from app.agents.agent_factory import build_runtime_for_agent
-from app.agents.summarization.factory import (
-    create_cache_preserving_summarization_middleware,
-)
-from app.agents.summarization.planning import build_safe_compaction_partition
-from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.summarization.projection import apply_summarization_event
+from app.core.shielded_cleanup import run_sync_shielded
 from app.services.infrastructure.config_service import ConfigService
 
 
@@ -27,10 +22,10 @@ class AgentSummarizationCompactor:
         self,
         *,
         config_service: ConfigService,
-        history_backend: CompositeBackend,
+        workspace_root: Path,
     ) -> None:
         self._config_service = config_service
-        self._history_backend = history_backend
+        self._workspace_root = workspace_root
 
     async def check(
         self,
@@ -40,7 +35,9 @@ class AgentSummarizationCompactor:
         event: object,
     ) -> ContextCompactionCheck:
         messages = self._as_any_messages(raw_messages)
-        summarization = self._build_summarization(agent_id)
+        summarization = await run_sync_shielded(self._build_summarization, agent_id)
+
+        from app.agents.summarization.planning import build_safe_compaction_partition
         effective_messages = apply_summarization_event(messages, event)
         partition = build_safe_compaction_partition(
             summarization,
@@ -59,13 +56,20 @@ class AgentSummarizationCompactor:
         )
 
     def _build_summarization(self, agent_id: str):
+        from app.agents.agent_factory import build_runtime_for_agent
+        from app.agents.summarization.factory import (
+            create_cache_preserving_summarization_middleware,
+        )
+        from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
+        from app.agents.workspace_backend import build_workspace_backend
+
         runtime = build_runtime_for_agent(
             agent_id=agent_id,
             config_service=self._config_service,
         )
         summarization = create_cache_preserving_summarization_middleware(
             runtime["model"],
-            self._history_backend,
+            build_workspace_backend(self._workspace_root),
             # 预览装配没有 durable Saver owner；端口仅在真实触发压缩时
             # 才会被调用，按合成装配合同给显式失败端口，不静默跳过。
             compaction_preflight=NoDurableOwnerCompactionPreflight(),

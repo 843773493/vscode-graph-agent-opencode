@@ -11,7 +11,6 @@ import pytest
 from fastapi import FastAPI
 
 from app.agents.context_checkpoint_store import ContextCompactionCheckpoint
-from app.agents.context_compaction_adapter import ContextCompactionCheck
 from app.api.deps import (
     get_context_compaction_service,
     get_job_service,
@@ -22,6 +21,7 @@ from app.api.deps import (
 from app.api.sessions import router as sessions_router
 from app.core.job_event_bus import JobEventBus
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.context_compaction import ContextCompactionCheck
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation.operations import (
     NavigationMutationEnqueueRequest,

@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from app.agents.agent_factory import build_model_from_provider
+from app.runtime.provider_model import build_model_from_provider
 from app.services.infrastructure.config_service import ConfigService
 
 # 标记：真实 API 测试必须显式开启，避免本机残留凭据让单元测试访问网络。

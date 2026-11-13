@@ -14,7 +14,6 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
 from app.abstractions.session_changes import SessionChangesRecorderProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
-from app.agents.agent_factory import resolve_agent_id
 from app.agents.checkpoint_recovery import (
     CheckpointRecoveryRejectedError,
     persisted_pending_tool_candidate,
@@ -562,7 +561,7 @@ class AgentExecutionService(JobStepExecutor):
 
         config_snapshot = self._config_service.get_snapshot()
         with self._config_service.use_snapshot(config_snapshot):
-            resolved_agent_id = resolve_agent_id(agent_id, self._config_service)
+            resolved_agent_id = self._config_service.resolve_agent_id(agent_id)
             config_revision = self._config_service.get_revision()
             mode_getter = getattr(self._config_service, "get_agent_run_mode", None)
             run_mode = mode_getter() if callable(mode_getter) else None

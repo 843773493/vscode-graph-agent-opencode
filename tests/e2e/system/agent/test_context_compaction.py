@@ -19,13 +19,13 @@ from langchain_core.messages import (
     message_chunk_to_message,
 )
 
-from app.agents.agent_factory import build_model_from_provider
 from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.upstream_request_trace import (
     begin_upstream_capture,
     end_upstream_capture,
 )
 from app.core.checkpoint_config import build_checkpoint_config
+from app.runtime.provider_model import build_model_from_provider
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.boundary.compaction_boundary_adapter import (
     closed_tool_prefix_cutoffs,

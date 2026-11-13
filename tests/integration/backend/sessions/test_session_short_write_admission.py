@@ -15,7 +15,6 @@ from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
 
 from app.agents.context_checkpoint_store import ContextCompactionCheckpoint
-from app.agents.context_compaction_adapter import ContextCompactionCheck
 from app.api.deps import (
     get_context_compaction_service,
     get_goal_service,
@@ -28,6 +27,7 @@ from app.api.sessions import router as sessions_router
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.runtime.context_compaction import ContextCompactionCheck
 from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,

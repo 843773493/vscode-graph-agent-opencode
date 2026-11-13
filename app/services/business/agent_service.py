@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from app.agents.agent_factory import provider_configuration_error
+from app.runtime.provider_model import provider_configuration_error
 from app.schemas.internal_v2.agent import AgentDTO, AgentProviderDTO
 from app.services.infrastructure.config_service import ConfigService
 

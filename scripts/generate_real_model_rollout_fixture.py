@@ -28,7 +28,6 @@ from langchain_core.tools import tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.base import empty_checkpoint
 
-from app.agents.agent_factory import build_model_from_provider
 from app.agents.provider_api_mode import parse_provider_api_mode
 from app.agents.providers.openai_responses import BoxteamOpenAIResponsesModel
 from app.agents.providers.wire_finalize import (
@@ -51,6 +50,7 @@ from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.runtime.provider_model import build_model_from_provider
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,

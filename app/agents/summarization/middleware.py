@@ -14,17 +14,26 @@ from collections.abc import (
 from dataclasses import replace
 from itertools import chain
 from typing import (
+    Annotated,
     Any,
     ClassVar,
+    NotRequired,
 )
 
 # TODO: DeepAgents 暴露公共的压缩扩展基类后，改用公共 API，避免依赖私有实现类。
-from deepagents.middleware.summarization import _DeepAgentsSummarizationMiddleware
+from deepagents.middleware.summarization import (
+    SummarizationState,
+    _DeepAgentsSummarizationMiddleware,
+)
 from langchain.agents.middleware import (
     ModelRequest,
     ModelResponse,
 )
-from langchain.agents.middleware.types import ExtendedModelResponse, hook_config
+from langchain.agents.middleware.types import (
+    ExtendedModelResponse,
+    PrivateStateAttr,
+    hook_config,
+)
 from langchain_core.exceptions import ContextOverflowError
 from langchain_core.messages import (
     AnyMessage,
@@ -54,7 +63,6 @@ from app.agents.summarization.state import (
     CACHE_PRESERVING_STRATEGY,
     CACHE_REPLACEMENT_STRATEGY,
     CachePreservingPartition,
-    CachePreservingSummarizationState,
     CompactionReductionError,
     SummaryGenerationError,
     SummaryTextError,
@@ -83,6 +91,13 @@ from app.services.orchestration.activity_runtime import (
     activity_failure_message,
     current_activity_runtime,
 )
+
+
+class CachePreservingSummarizationState(SummarizationState):
+    """缓存压缩额外维护一次性强制压缩标记。"""
+
+    _force_cache_compaction: Annotated[NotRequired[bool], PrivateStateAttr]
+    _compaction_continuation: Annotated[NotRequired[bool], PrivateStateAttr]
 
 
 class CachePreservingSummarizationMiddleware(_DeepAgentsSummarizationMiddleware):

@@ -24,7 +24,6 @@ app/agents/
 │   └── tool_result_text.py、tool_invocation_context.py
 ├── [模型上下文与摘要]
 │   ├── checkpoint_recovery.py、context_checkpoint_store.py
-│   ├── context_compaction_adapter.py
 │   └── summarization/              摘要计划、投影、重试和状态
 ├── [运行中间件与调用上下文]
 │   ├── tool_confirmation_middleware.py

@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.agents import agent_factory
 from app.core import failures
+from app.runtime import provider_model
 from app.services.infrastructure.config_service import ConfigService
 
 
@@ -56,10 +57,10 @@ def runtime_config(provider_config: dict[str, object]) -> ConfigService:
 ])
 def test_local_configuration_rejection_is_shared_by_list_and_execution(provider_config, changed, reason):
     provider = {**provider_config, **changed}
-    message = agent_factory.provider_configuration_error(provider)
+    message = provider_model.provider_configuration_error(provider)
     assert reason in message
     with pytest.raises((TypeError, ValueError)) as caught:
-        agent_factory.build_model_from_provider(provider, {})
+        provider_model.build_model_from_provider(provider, {})
     assert str(caught.value) == message
 
 
@@ -90,9 +91,9 @@ def test_provider_native_failure_does_not_become_a_public_runtime_error(
     if broken_log:
         failures.logger.addHandler(handler)
     try:
-        monkeypatch.setattr(agent_factory, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
+        monkeypatch.setattr(provider_model if entry == "availability" else agent_factory, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
         if entry == "availability":
-            message = agent_factory.provider_configuration_error(provider_config)
+            message = provider_model.provider_configuration_error(provider_config)
             assert message is not None
         else:
             with pytest.raises(RuntimeError) as caught:
@@ -125,9 +126,9 @@ def test_provider_business_rejection_keeps_its_existing_message(
     def fail(*_args: object, **_kwargs: object) -> None:
         raise error
 
-    monkeypatch.setattr(agent_factory, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
+    monkeypatch.setattr(provider_model if entry == "availability" else agent_factory, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
     if entry == "availability":
-        assert agent_factory.provider_configuration_error(provider_config) == str(error)
+        assert provider_model.provider_configuration_error(provider_config) == str(error)
     else:
         with pytest.raises(RuntimeError, match="当前选择的模型配置不可用.*OAuth 凭据缺少账号信息") as caught:
             agent_factory.build_runtime_for_agent("default", runtime_config)
