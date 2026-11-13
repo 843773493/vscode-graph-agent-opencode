@@ -29,6 +29,8 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/browser/quickaccess.ts',
   'src/vs/platform/quickinput/browser/quickAccess.ts',
   'src/vs/platform/quickinput/common/quickAccess.ts',
+  'src/vs/platform/quickinput/common/quickInput.ts',
+  'src/vs/platform/quickinput/browser/quickInputList.ts',
   'src/vs/platform/quickinput/browser/helpQuickAccess.ts',
   'src/vs/workbench/services/search/common/queryBuilder.ts',
   'src/vs/workbench/services/history/browser/historyService.ts',
@@ -696,6 +698,14 @@ if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`)
     if (path === join(upstream, 'src/vs/platform/quickinput/common/quickAccess.ts')) {
       contents = replaceOnce(contents, 'export interface IQuickAccessOptions {',
         'export interface IQuickAccessOptions {\n/** 仅 pick 显式启用原 QuickPick 多选，show 保持原打开行为。 */\nreadonly canPickMany?: boolean;');
+    }
+    if (path === join(upstream, 'src/vs/platform/quickinput/common/quickInput.ts')) {
+      contents = replaceOnce(contents, "\ttype?: 'item';", "\ttype?: 'item';\n\t/** 诊断项仍可展示和操作，但不计入搜索结果。 */\n\texcludeFromResultCount?: boolean;");
+    }
+    if (path === join(upstream, 'src/vs/platform/quickinput/browser/quickInputList.ts')) {
+      // CountBadge 与 aria-live 共用原 visibleCount，不另建搜索计数状态。
+      contents = replaceOnce(contents, 'this._itemElements.filter(e => !e.hidden).length',
+        'this._itemElements.filter(e => !e.hidden && !e.item.excludeFromResultCount).length');
     }
     if (path === join(upstream, 'src/vs/platform/quickinput/browser/quickAccess.ts')) {
       contents = replaceOnce(contents, '@IContextKeyService private readonly contextKeyService: IContextKeyService',

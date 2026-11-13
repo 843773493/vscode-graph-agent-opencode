@@ -21,6 +21,16 @@ import { IReplaceService } from '../../../../../src/clients/workbench/upstream/s
 import { INotebookSearchService } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/search/common/notebookSearch.js';
 import { INotebookEditorService } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/notebook/browser/services/notebookEditorService.js';
 import { WorkspaceTextQuickAccess } from '../../../../../src/clients/workbench/src/search/textQuickAccess.js';
+import { QuickInputController } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/browser/quickInputController.js';
+import { ContextKeyService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/contextkey/browser/contextKeyService.js';
+import { IContextMenuService, IContextViewService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/contextview/browser/contextView.js';
+import { ContextViewService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/contextview/browser/contextViewService.js';
+import { ILayoutService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/layout/browser/layoutService.js';
+import { IListService, ListService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/list/browser/listService.js';
+import { IKeybindingService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/keybinding/common/keybinding.js';
+import { IThemeService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/theme/common/themeService.js';
+import { IAccessibilityService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/accessibility/common/accessibility.js';
+import { InMemoryStorageService, IStorageService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/storage/common/storage.js';
 
 const owners = [{ gatewayId: 'gateway-a', workspaceId: 'workspace-a' }, { gatewayId: 'gateway-b', workspaceId: 'workspace-a' }];
 const root = owner => `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root`;
@@ -101,7 +111,8 @@ async function fixture(asset, searchOverride) {
       const selected = request.continuations.find(item => JSON.stringify(item.branch) === JSON.stringify(branch));
       if (request.continuations.length && !selected) continue;
       const failed = result.failures?.find(failure => failure.owner === target.owner.gateway_id);
-      const state = { branch, state: failed?.state ?? 'complete', retryable: !!failed?.retryable, allocated_results: query.limit,
+      const state = { branch, state: failed?.state ?? (result.limited ? 'limited' : 'complete'),
+        ...(result.limited && !failed ? { code: 'result_limit' } : {}), retryable: !!failed?.retryable, allocated_results: query.limit,
         returned_results: failed ? 0 : 1, ...(failed ? { code: 'execution_failed', message: '原分支 [不执行](command:close) <b>正文</b>',
           error_owner: 'workspace_files', reason: failed.state === 'cancelled' ? 'request_cancelled' : 'read_failed', ...failed, owner: undefined } : {}) };
       states.push(state);
@@ -188,6 +199,59 @@ export async function recovery(state, multiple = false) {
     return { before, busy, labels: labels(picker), matches: matched(picker), requests: f.calls.map(call => call.request),
       selectedRoot: root(owners[0]), successfulRoot: root(owners[1]) };
   } finally { release(); f.close(); }
+}
+
+/** 原 Controller、QuickPick、List、Tree 和 CountBadge；配置／布局等宿主服务为装具。 */
+export async function resultCount() {
+  const f = await fixture(async () => ({ limited: true, failures: [{ owner: owners[0].gatewayId, state: 'failed', retryable: true }] }));
+  const lifetime = new q.DisposableStore(), container = document.body.appendChild(document.createElement('div'));
+  Object.assign(container.style, { width: '800px', height: '600px' });
+  try {
+    const source = f.show();
+    await until(() => !source.busy && source.items.some(item => item.buttons?.length));
+    const configuration = { getValue: () => undefined, onDidChangeConfiguration: q.Event.None };
+    const services = new q.ServiceCollection(
+      [q.IConfigurationService, configuration],
+      [ILayoutService, { mainContainer: container, activeContainer: container, getContainer: () => container, onDidLayoutContainer: q.Event.None }],
+      [IListService, lifetime.add(new ListService())], [IStorageService, lifetime.add(new InMemoryStorageService())],
+      [IContextMenuService, { onDidShowContextMenu: q.Event.None }],
+      [IKeybindingService, { mightProducePrintableCharacter: () => false, softDispatch: () => ({ kind: 0 }), lookupKeybinding: () => undefined }],
+      [IThemeService, { onDidColorThemeChange: q.Event.None, getColorTheme: () => ({ type: 'dark', getColor: () => undefined }) }],
+      [IAccessibilityService, { isScreenReaderOptimized: () => false, onDidChangeScreenReaderOptimized: q.Event.None,
+        isMotionReduced: () => false, onDidChangeReducedMotion: q.Event.None, alwaysUnderlineAccessKeys: async () => false }],
+    );
+    const instantiation = lifetime.add(new q.InstantiationService(services, true));
+    services.set(IContextKeyService, lifetime.add(instantiation.createInstance(ContextKeyService)));
+    services.set(IContextViewService, lifetime.add(instantiation.createInstance(ContextViewService)));
+    const controller = lifetime.add(instantiation.createInstance(QuickInputController, { container, idPrefix: 'countTest',
+      ignoreFocusOut: () => true, returnFocus() {}, backKeybindingLabel() {}, setContextKey() {}, linkOpenerDelegate() {},
+      hoverDelegate: { delay: 0, showHover() {} }, styles: Object.fromEntries(['button', 'countBadge', 'inputBox', 'toggle',
+        'keybindingLabel', 'list', 'progressBar', 'widget', 'pickerGroup'].map(key => [key, {}])) }));
+    controller.layout({ height: 600, width: 800 }, 0);
+    const picker = lifetime.add(controller.createQuickPick({ useSeparators: true }));
+    let pressed = 0; lifetime.add(picker.onDidTriggerItemButton(() => pressed++));
+    picker.items = source.items; picker.show();
+    const count = () => container.querySelector('.quick-input-visible-count').textContent;
+    const snapshot = () => ({ count: count(), labels: [...container.querySelectorAll('.quick-input-list .label-name')].map(node => node.textContent),
+      ariaLive: container.querySelector('.quick-input-visible-count').getAttribute('aria-live') });
+    await tick();
+    const before = snapshot(), match = picker.items.find(item => item.match), failed = picker.items.find(item => item.buttons?.length);
+    const notice = picker.items.find(item => item.label?.includes('本次查询覆盖受限'));
+    if (!notice) throw new Error('原 Provider 未返回限制提示');
+    picker.activeItems = [match];
+    const active = picker.activeItems[0] === match;
+    const failedRow = [...container.querySelectorAll('.quick-input-list .monaco-list-row')]
+      .find(row => row.textContent.includes('文件搜索失败'));
+    const button = failedRow?.querySelector('.action-label');
+    if (!button) throw new Error('原列表未呈现诊断重试按钮');
+    button.click();
+    picker.value = 'ok.txt'; await tick(); const filtered = snapshot();
+    picker.value = ''; picker.items = [{ label: '默认候选' }, { label: '显式普通候选', excludeFromResultCount: false }, failed];
+    await tick(); const ordinary = snapshot();
+    picker.items = [failed, notice]; await tick(); const onlyNotices = snapshot();
+    return { before, filtered, ordinary, onlyNotices, active, pressed,
+      failuresExcluded: source.items.filter(item => !item.match && item.type !== 'separator').every(item => item.excludeFromResultCount === true) };
+  } finally { lifetime.dispose(); container.remove(); f.close(); }
 }
 
 export async function cancelRetry(mode) {

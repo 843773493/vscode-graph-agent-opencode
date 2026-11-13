@@ -36,9 +36,9 @@ function failureDetail(error: unknown): string {
 
 function searchFailure(error: unknown): IPickerQuickAccessItem[] {
   const branches = workspaceSearchBranchErrors(error);
-  return branches ? branches.map(branch => ({ label: escapeIcons(branch.message),
+  return branches ? branches.map(branch => ({ label: escapeIcons(branch.message), excludeFromResultCount: true,
     iconClass: ThemeIcon.asClassName(branch.cause.branch!.state === 'cancelled' ? Codicon.info : Codicon.error) }))
-    : [{ label: escapeIcons(t(isCancellationError(error) ? 'quickAccess.files.cancelled' : 'quickAccess.files.failed', failureDetail(error))),
+    : [{ label: escapeIcons(t(isCancellationError(error) ? 'quickAccess.files.cancelled' : 'quickAccess.files.failed', failureDetail(error))), excludeFromResultCount: true,
       iconClass: ThemeIcon.asClassName(isCancellationError(error) ? Codicon.info : Codicon.error) }];
 }
 
@@ -65,9 +65,9 @@ class ScopedTextSearch extends TextSearchQuickAccess {
         limited ||= !!complete.limitHit;
       };
       const notices = (): IPickerQuickAccessItem[] => {
-        const items: IPickerQuickAccessItem[] = messages.map(message => ({ label: escapeIcons(message.text),
+        const items: IPickerQuickAccessItem[] = messages.map(message => ({ label: escapeIcons(message.text), excludeFromResultCount: true,
           iconClass: ThemeIcon.asClassName(message.type === TextSearchCompleteMessageType.Information ? Codicon.info : Codicon.warning) }));
-        if (limited) items.push({ label: t('quickAccess.queryLimited', t('quickAccess.moreResults')), iconClass: ThemeIcon.asClassName(Codicon.warning) });
+        if (limited) items.push({ label: t('quickAccess.queryLimited', t('quickAccess.moreResults')), excludeFromResultCount: true, iconClass: ThemeIcon.asClassName(Codicon.warning) });
         for (const failure of failures) {
           const branch = failure.error instanceof WorkspaceSearchBranchError ? failure.error : undefined;
           items.push({ ...searchFailure(failure.error)[0],
@@ -156,7 +156,7 @@ export class WorkspaceTextQuickAccess extends Disposable implements IQuickAccess
       operation.clear();
       picker.activeItems = picker.selectedItems = [];
       picker.buttons = [];
-      picker.items = [{ label: t('quickAccess.identityChangedReopen') }];
+      picker.items = [{ label: t('quickAccess.identityChangedReopen'), excludeFromResultCount: true }];
       picker.busy = false;
     };
     operation.add(toDisposable(onGatewayTokenInvalidated(0, invalidate)));

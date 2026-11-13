@@ -116,3 +116,13 @@ test('原%超过同步展示上限仍消费同一次异步错误，原30文件�
   expect(new Set(result.matches).size).toBe(30);
   expect(result.labels.filter(label => label?.includes('sync-limit-request'))).toHaveLength(1);
 });
+
+test('原结果计数只计正文候选，诊断／重试／活动项与默认QuickPick行为保持', async () => {
+  const result = await exercise('resultCount');
+  expect(result.before.count).toBe('1 Results'); expect(result.before.ariaLive).toBe('polite');
+  expect(result.before.labels.some(label => label.includes('本次查询覆盖受限'))).toBe(true);
+  expect(result.before.labels.some(label => label.includes('文件搜索失败'))).toBe(true);
+  expect(result.filtered.count).toBe('1 Results');
+  expect(result.ordinary.count).toBe('2 Results'); expect(result.onlyNotices.count).toBe('0 Results');
+  expect(result.active).toBe(true); expect(result.pressed).toBe(1); expect(result.failuresExcluded).toBe(true);
+});
