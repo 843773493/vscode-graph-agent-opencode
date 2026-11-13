@@ -6,6 +6,7 @@ import WarmConfirmProvider, { useWarmConfirm } from '../../../web/src/components
 import SessionNameDialog from '../../../web/src/components/overlays/SessionNameDialog.js';
 import SessionContextForkDialog from '../../../web/src/components/overlays/SessionContextForkDialog.js';
 import GatewayControlCenter from '../../../web/src/components/workspace/gateway/GatewayControlCenter.js';
+import type { GatewayControlRequest } from '../../../web/src/components/workspace/gateway/GatewayControlCenter.js';
 import { useSessionCatalogActions } from '../../../web/src/hooks/shell/useSessionCatalogActions.js';
 import { useSessionInformationClipboard } from '../../../web/src/hooks/session/useSessionInformationClipboard.js';
 import { useWorkspaceInformationClipboard } from '../../../web/src/hooks/workspace/useWorkspaceInformationClipboard.js';
@@ -41,7 +42,7 @@ import { workspaceActionCommands, type WorkspaceAction, type WorkspaceActionHand
 import { sessionActionCommands, type SessionAction, type SessionActionHandlers } from '../search/sessionActions.js';
 import type { SessionForkSourceSelection } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
 
-function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, bindSessionActions, configuration, catalogReveal, diagnosticLocation }: {
+function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, bindSessionActions, configuration, catalogReveal, diagnosticLocation, gatewayControl }: {
   editors: IEditorService; groups: IEditorGroupsService; notifications: INotificationService;
   storage: IStorageService;
   commands: ICommandService;
@@ -50,6 +51,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   configuration: IConfigurationService;
   catalogReveal?: CatalogRevealRequest;
   diagnosticLocation?: GatewayDiagnosticLogLocateRequest;
+  gatewayControl?: GatewayControlRequest;
 }) {
   const confirm = useWarmConfirm();
   const [gatewayOpen, setGatewayOpen] = useState(false);
@@ -58,6 +60,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
   useEffect(() => {
     if (diagnosticLocation) setGatewayOpen(true);
   }, [diagnosticLocation]);
+  useEffect(() => { if (gatewayControl) setGatewayOpen(true); }, [gatewayControl]);
   const [diagnostic, setDiagnostic] = useState<{ title: string; detail: string } | null>(null);
   const [activeEditor, setActiveEditor] = useState(() => editors.activeEditor);
   const gesture = useRef({ pinned: false, sideBySide: false });
@@ -199,7 +202,9 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
       activeGatewayWorkspaceId={state.activeGatewayWorkspaceId} removingGatewayWorkspaceIds={state.removingGatewayWorkspaceIds}
       workspaceSwitching={state.workspaceSwitching} onActivateWorkspace={activateWorkspace} onSetWorkspaceParent={runtime.setWorkspaceParent}
       onRefreshWorkspaceSessions={runtime.refreshGatewayWorkspaceSessions} onRemoveWorkspace={actions.removeWorkspace}
-      onAddWorkspace={runtime.addManagedGatewayWorkspace} onOpenGatewayControl={() => setGatewayOpen(true)}
+      onAddWorkspace={runtime.addManagedGatewayWorkspace} onOpenGatewayControl={() => {
+        void commands.executeCommand('boxteam.gateway.connections').catch(cause => reportError(String(cause)));
+      }}
       onReconnectWorkspace={reconnectWorkspace} onStartWorkspace={startWorkspace}
       onStopWorkspace={backendActions.stop} onRenameWorkspace={runtime.renameGatewayWorkspace}
       onCopySessionInformation={copySession} onCopyWorkspaceInformation={copyWorkspace} onSelectWorkspaceSession={openSession}
@@ -221,6 +226,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
     {gatewayOpen ? <div className="native-navigation-dialog" role="dialog" aria-label={t('navigation.workspace.gatewayControl')}>
       <button type="button" className="sidebar-icon-button" aria-label={t('navigation.workspace.closeGatewayControl')} onClick={() => { setGatewayOpen(false); setDismissedLocation(diagnosticLocation); }}><span className="codicon codicon-close" /></button>
       <GatewayControlCenter apiPort={0} workspaces={state.gatewayWorkspaces} gatewayError={state.gatewayError}
+        request={gatewayControl}
         onAddSsh={runtime.addSshGatewayWorkspace} onRefresh={runtime.refreshGatewayState}
         onRemoteGatewayReconnected={notifyPluginCommandGatewayReconnected}
         onStart={startWorkspace} onStop={backendActions.stop}
@@ -238,7 +244,7 @@ function NavigationView({ editors, groups, notifications, storage, commands, bin
 
 export class NavigationSurface {
   private readonly surface: ReactSurface;
-  private readonly render: (request?: CatalogRevealRequest, diagnostic?: GatewayDiagnosticLogLocateRequest) => void;
+  private readonly render: (request?: CatalogRevealRequest, diagnostic?: GatewayDiagnosticLogLocateRequest, gatewayControl?: GatewayControlRequest) => void;
   private reveal?: AbortController;
   private workspaceActions?: WorkspaceActionHandlers;
   private actionsReady?: DeferredPromise<WorkspaceActionHandlers>;
@@ -254,8 +260,9 @@ export class NavigationSurface {
       this.sessionActions = actions;
       if (actions && this.sessionActionsReady) { void this.sessionActionsReady.complete(actions); this.sessionActionsReady = undefined; }
     };
-    this.render = (catalogReveal, diagnosticLocation) => this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
+    this.render = (catalogReveal, diagnosticLocation, gatewayControl) => this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
       notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} bindSessionActions={bindSessionActions} catalogReveal={catalogReveal} diagnosticLocation={diagnosticLocation}
+      gatewayControl={gatewayControl}
       configuration={configuration} /></WarmConfirmProvider>);
     this.render();
   }
@@ -267,6 +274,7 @@ export class NavigationSurface {
     await this.workspaceActions[action](workspaceKey);
   }
   revealDiagnosticLog(request: GatewayDiagnosticLogLocateRequest): void { this.render(undefined, request); }
+  openGatewayControl(request: GatewayControlRequest): void { this.render(undefined, undefined, request); }
   async runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void, source?: SessionForkSourceSelection): Promise<void> {
     if (!this.sessionActions) await (this.sessionActionsReady ??= new DeferredPromise<SessionActionHandlers>()).p;
     assertAccess();

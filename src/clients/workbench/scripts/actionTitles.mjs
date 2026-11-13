@@ -6,6 +6,7 @@ export const actionTitleKeys = [
   'workbench.changes.openPatch', 'workbench.debug.startScript',
   'workbench.identityRecovery.import', 'workbench.mcp.openServer',
   'workbench.workspaceAction.activate', 'workbench.workspaceAction.reconnect', 'workbench.workspaceAction.start',
+  'gateway.control.connections', 'gateway.control.connectionsAndCredentials',
   'workbench.sessionAction.rename', 'workbench.sessionAction.fork', 'workbench.sessionAction.delete',
   'workbench.settings.openPluginParameters', 'workbench.settings.openPluginParametersCategory',
   'workbench.settings.openDefaultAgentSource', 'workbench.settings.openSource',

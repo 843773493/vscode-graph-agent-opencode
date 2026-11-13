@@ -14,7 +14,6 @@ import type {
 } from "../../../types/backend";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import type { GatewayBackendRuntimeActions } from "./GatewayBackendRuntimePanel";
-import GatewayInboundAccessPanel from "./GatewayInboundAccessPanel";
 import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 import { errorMessage } from "../../../utils/errorMessage";
 import type { GatewayDiagnosticLogLocateRequest } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
@@ -24,6 +23,10 @@ const GatewayBackendRuntimePanel = lazy(() => import("./GatewayBackendRuntimePan
 const GatewayConnectionDialog = lazy(() => import("./GatewayConnectionDialog"));
 const GatewayDiagnosticsPanel = lazy(() => import("./GatewayDiagnosticsPanel"));
 const GatewayThemeSettings = lazy(() => import("./GatewayThemeSettings"));
+const GatewayInboundAccessPanel = lazy(() => import("./GatewayInboundAccessPanel"));
+
+export type GatewayControlPage = "connections" | "credentials" | "theme" | "diagnostics" | "runtime";
+export interface GatewayControlRequest { page: GatewayControlPage }
 
 export { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
@@ -37,6 +40,7 @@ interface GatewayControlCenterProps extends GatewayBackendRuntimeActions {
   background: AppearanceBackground;
   onUpdateBackground: (value: AppearanceBackground) => Promise<void>;
   onSelectColorTheme: () => Promise<void>;
+  request?: GatewayControlRequest;
   diagnosticLocation?: GatewayDiagnosticLogLocateRequest;
   onCloseDiagnosticLocation?: () => void;
 }
@@ -52,6 +56,7 @@ export default function GatewayControlCenter({
   background,
   onUpdateBackground,
   onSelectColorTheme,
+  request,
   diagnosticLocation, onCloseDiagnosticLocation,
 }: GatewayControlCenterProps) {
   const confirm = useWarmConfirm();
@@ -66,7 +71,8 @@ export default function GatewayControlCenter({
   const [reconnectingId, setReconnectingId] = useState<string | null>(null);
   const [restartingDevelopment, setRestartingDevelopment] = useState(false);
   const [deviceRevision, setDeviceRevision] = useState(0);
-  const [activePage, setActivePage] = useState<"connections" | "theme" | "diagnostics" | "runtime">("connections");
+  const [activePage, setActivePage] = useState<GatewayControlPage>(request?.page ?? "connections");
+  useEffect(() => { if (request) setActivePage(request.page); }, [request]);
   useEffect(() => { if (diagnosticLocation) setActivePage("diagnostics"); }, [diagnosticLocation]);
 
   const loadHealth = useCallback(async () => {
@@ -184,13 +190,13 @@ export default function GatewayControlCenter({
             <p>{t("gateway.control.system")}</p>
             <button type="button" className={activePage === "theme" ? "active" : undefined} aria-current={activePage === "theme" ? "page" : undefined} onClick={() => setActivePage("theme")}><span className="codicon codicon-color-mode" aria-hidden="true" />{t("gateway.control.theme")}</button>
             <button type="button" className={activePage === "runtime" ? "active" : undefined} aria-current={activePage === "runtime" ? "page" : undefined} onClick={() => setActivePage("runtime")}><span className="codicon codicon-pulse" aria-hidden="true" />{t("gateway.control.runtime")}</button>
-            <button type="button" disabled><span className="codicon codicon-shield" aria-hidden="true" />{t("gateway.control.connectionsAndCredentials")}</button>
+            <button type="button" className={activePage === "credentials" ? "active" : undefined} aria-current={activePage === "credentials" ? "page" : undefined} onClick={() => setActivePage("credentials")}><span className="codicon codicon-shield" aria-hidden="true" />{t("gateway.control.connectionsAndCredentials")}</button>
             <button type="button" className={activePage === "diagnostics" ? "active" : undefined} aria-current={activePage === "diagnostics" ? "page" : undefined} onClick={() => setActivePage("diagnostics")}><span className="codicon codicon-output" aria-hidden="true" />{t("gateway.control.diagnostics")}</button>
           </section>
         </nav>
         <div className="gateway-control-sidebar-status">
           <strong><span className={available ? undefined : "offline"} />{available ? t("gateway.control.gatewayAvailable") : t("gateway.control.gatewayUnavailable")}</strong>
-          <code>127.0.0.1:{apiPort}</code>
+          <code>{health?.gateway_id}</code>
           <small>{t("gateway.control.remoteConnectionCount", remoteGatewayGroups.length)}</small>
         </div>
       </aside>
@@ -200,8 +206,8 @@ export default function GatewayControlCenter({
           <header className="gateway-control-header">
             <div>
               <span>{t("gateway.control.localControlPlane")}</span>
-              <h1 id="gateway-control-title">{activePage === "connections" ? t("gateway.control.connections") : activePage === "theme" ? t("gateway.control.theme") : activePage === "runtime" ? t("gateway.control.runtime") : t("gateway.control.diagnostics")}</h1>
-              <p>{activePage === "connections" ? t("gateway.control.connectionsDescription") : activePage === "theme" ? t("gateway.control.themeDescription") : activePage === "runtime" ? t("gateway.control.runtimeDescription") : t("gateway.control.diagnosticsDescription")}</p>
+              <h1 id="gateway-control-title">{activePage === "connections" ? t("gateway.control.connections") : activePage === "credentials" ? t("gateway.control.connectionsAndCredentials") : activePage === "theme" ? t("gateway.control.theme") : activePage === "runtime" ? t("gateway.control.runtime") : t("gateway.control.diagnostics")}</h1>
+              <p>{activePage === "connections" ? t("gateway.control.connectionsDescription") : activePage === "credentials" ? t("gateway.control.credentialsDescription") : activePage === "theme" ? t("gateway.control.themeDescription") : activePage === "runtime" ? t("gateway.control.runtimeDescription") : t("gateway.control.diagnosticsDescription")}</p>
             </div>
             {activePage === "connections" ? <div className="gateway-control-actions">
               {health?.development_restart_available ? (
@@ -235,6 +241,9 @@ export default function GatewayControlCenter({
             ) : activePage === "diagnostics" ? (
               diagnosticLocation ? <GatewayDiagnosticLogLocation apiPort={apiPort} request={diagnosticLocation} workspaces={workspaces}
                 onClose={() => onCloseDiagnosticLocation?.()} /> : <GatewayDiagnosticsPanel apiPort={apiPort} workspaces={workspaces} />
+            ) : activePage === "credentials" ? (
+              <GatewayInboundAccessPanel apiPort={apiPort} revision={deviceRevision}
+                onAddDevice={() => setConnectionDialogMode("external-device")} />
             ) : <>
 
           <div className="gateway-console-feedback-slot">
@@ -299,11 +308,6 @@ export default function GatewayControlCenter({
             )}
           </section>
 
-          <GatewayInboundAccessPanel
-            apiPort={apiPort}
-            revision={deviceRevision}
-            onAddDevice={() => setConnectionDialogMode("external-device")}
-          />
             </>}
           </Suspense>
         </div>

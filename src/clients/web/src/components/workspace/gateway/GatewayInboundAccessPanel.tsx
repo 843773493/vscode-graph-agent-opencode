@@ -12,6 +12,12 @@ import type {
 import { formatLocalDateTime } from "../../../utils/format";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
 import { errorMessage } from "../../../utils/errorMessage";
+import { HttpRequestError } from "../../../api/http";
+
+function accessError(error: unknown): string {
+  return error instanceof HttpRequestError && error.requestId
+    ? `${errorMessage(error)} · request_id=${error.requestId}` : errorMessage(error);
+}
 
 interface GatewayInboundAccessPanelProps {
   apiPort: number;
@@ -44,7 +50,7 @@ export default function GatewayInboundAccessPanel({
     } catch (loadError) {
       setInbound(null);
       setDevices([]);
-      setError(errorMessage(loadError));
+      setError(accessError(loadError));
     } finally {
       setLoading(false);
     }
@@ -74,7 +80,8 @@ export default function GatewayInboundAccessPanel({
       setDevices(result.items);
       await load();
     } catch (revokeError) {
-      setError(errorMessage(revokeError));
+      await load();
+      setError((readError) => [accessError(revokeError), readError].filter(Boolean).join("\n"));
     } finally {
       setRevokingId(null);
     }
@@ -99,7 +106,18 @@ export default function GatewayInboundAccessPanel({
         </div>
       </div>
 
-      {error ? <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>{t("gateway.inbound.readFailed")}</strong><span>{error}</span></div></div> : null}
+      {error ? <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>{t("gateway.inbound.operationFailed")}</strong><span>{error}</span></div></div> : null}
+
+      {inbound ? <div className="gateway-federation-peers" aria-label={t("gateway.inbound.scope")}>
+        <h3>{t("gateway.inbound.owner")}</h3>
+        <code>{inbound.gateway_id}</code>
+        <p>{t("gateway.inbound.localOnly")}</p>
+        <h3>{t("gateway.inbound.workspaces")}</h3>
+        <p>{t("gateway.inbound.workspaceScope")}</p>
+        {inbound.items.length ? <ul>{inbound.items.map((workspace) => <li key={workspace.workspace_id}>
+          <strong>{workspace.name}</strong> <code>{workspace.workspace_id}</code>
+        </li>)}</ul> : <p>{t("gateway.inbound.noAuthorizedWorkspaces")}</p>}
+      </div> : null}
 
       {loading ? (
         <div className="gateway-connection-state"><span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />{t("gateway.inbound.loading")}</div>
@@ -119,13 +137,13 @@ export default function GatewayInboundAccessPanel({
             </article>
           ))}
         </div>
-      ) : (
+      ) : !error ? (
         <div className="gateway-connection-empty">
           <span className="codicon codicon-device-mobile" aria-hidden="true" />
           <strong>{t("gateway.inbound.noDevices")}</strong>
           <p>{t("gateway.inbound.noDevicesDetail")}</p>
         </div>
-      )}
+      ) : null}
 
       {gatewayPeers.length > 0 ? (
         <div className="gateway-federation-peers">
@@ -133,12 +151,17 @@ export default function GatewayInboundAccessPanel({
           {gatewayPeers.map((peer) => (
             <article key={peer.connection_id}>
               <span className="codicon codicon-remote" aria-hidden="true" />
-              <div><strong>{peer.peer_gateway_id}</strong><small>{t("gateway.inbound.credentialExpiresAt", formatLocalDateTime(peer.credential_expires_at))}</small></div>
+              <div><strong>{peer.peer_gateway_id}</strong><small>{peer.connection_id}</small><small>{t("gateway.inbound.credentialExpiresAt", formatLocalDateTime(peer.credential_expires_at))}</small></div>
               <span className="gateway-authorization-status authorized">{t("gateway.inbound.authorized")}</span>
             </article>
           ))}
         </div>
       ) : null}
+      <div className="gateway-federation-peers" aria-label={t("gateway.inbound.credentialManagement")}>
+        <h3>{t("gateway.inbound.credentialManagement")}</h3>
+        <p>{t("gateway.inbound.deviceCredentialManagement")}</p>
+        <p>{t("gateway.inbound.otherCredentialManagement")}</p>
+      </div>
     </section>
   );
 }

@@ -20,6 +20,12 @@ import type { WorkspaceAction } from './search/workspaceActions.js';
 import type { SessionAction } from './search/sessionActions.js';
 import type { SessionForkSourceSelection } from '../../web/src/hooks/shell/useSessionForkDialog.js';
 import { t } from '../../shared/core/i18n/index.js';
+import { Action2, MenuId, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
+import { IViewsService } from '../upstream/src/vs/workbench/services/views/common/viewsService.js';
+import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
+import type { GatewayControlRequest } from '../../web/src/components/workspace/gateway/GatewayControlCenter.js';
+import { createManagementTargetLifecycle } from './managementTarget.js';
+import actionTitles from '../../shared/core/i18n/actionTitles.en.json';
 
 /** 原版视图只管理布局；完整导航及菜单复用既有 React 产品。 */
 export class SessionNavigation extends ViewPane {
@@ -53,6 +59,10 @@ export class SessionNavigation extends ViewPane {
     if (!this.surface) throw new Error(t('quickAccess.gatewayDiagnosticsUnavailable'));
     this.surface.revealDiagnosticLog(request);
   }
+  openGatewayControl(request: GatewayControlRequest): void {
+    if (!this.surface) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
+    this.surface.openGatewayControl(request);
+  }
   runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void, source?: SessionForkSourceSelection): Promise<void> {
     if (!this.surface) throw new Error(t('workbench.sessionAction.navigationUnavailable'));
     return this.surface.runSessionAction(action, sessionId, title, workspaceKey, assertAccess, source);
@@ -63,3 +73,22 @@ export class SessionNavigation extends ViewPane {
   }
   override dispose(): void { this.surface?.dispose(); super.dispose(); }
 }
+
+for (const [page, id, titleKey] of [
+  ['connections', 'boxteam.gateway.connections', 'gateway.control.connections'],
+  ['credentials', 'boxteam.gateway.credentials', 'gateway.control.connectionsAndCredentials'],
+] as const) registerAction2(class extends Action2 {
+  constructor() { super({ id, title: { value: t(titleKey), original: actionTitles[titleKey] }, f1: true,
+    menu: [{ id: MenuId.GlobalActivity, group: '2_boxteam', order: page === 'connections' ? 1 : 2 },
+      ...(page === 'credentials' ? [{ id: MenuId.AccountsContext, group: '2_boxteam', order: 1 }] : [])] }); }
+  async run(accessor: ServicesAccessor, gatewayId?: string): Promise<void> {
+    const views = accessor.get(IViewsService);
+    const lifecycle = createManagementTargetLifecycle(t('workbench.workspaceAction.identityChanged'), gatewayId);
+    try {
+      const view = await views.openView<SessionNavigation>('boxteam.sessions', false);
+      lifecycle.check();
+      if (!view) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
+      view.openGatewayControl({ page });
+    } finally { lifecycle.dispose(); }
+  }
+});
