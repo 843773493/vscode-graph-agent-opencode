@@ -58,7 +58,7 @@ export async function verifyTextModelSharing({ page, command, api, result, targe
   const external = contentA.replace('A source 01', 'A external authoritative');
   await writeFile(join(workspace, name), external);
   await command('workbench.action.files.save');
-  const conflict = page.getByText(/Failed to save 'cache-model.txt': The content of the file is newer/).first();
+  const conflict = page.getByText('无法保存"cache-model.txt": 文件的内容较新。请将您的版本与文件内容进行比较，或用您的更改覆盖文件内容。', { exact: true }).first();
   await expect(conflict).toBeVisible();
   result.textModelConflict = { message: await conflict.innerText() };
   await expect(lines(0)).toContainText('A unsaved shared');

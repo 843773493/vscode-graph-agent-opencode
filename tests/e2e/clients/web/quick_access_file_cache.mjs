@@ -64,7 +64,7 @@ try {
   expect(activation.status).toBe(200);
   expect(activation.body.data.active_workspace).toEqual({ gateway_id: ownerA.gatewayId, workspace_id: ownerA.workspaceId });
   await page.goto(baseUrl);
-  await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('.native-session-navigation')).toBeVisible({ timeout: 30_000 });
   const health = await api('/api/gateway/health'), listing = await api('/api/gateway/workspaces');
   expect(health.status).toBe(200); expect(listing.status).toBe(200);
   result.phase = 'build-static-cache-policy';
@@ -115,6 +115,13 @@ try {
     expect(item.response['x-request-id']).toBeTruthy();
     return item;
   };
+  const raw = (target, name, headers = {}, endpoint = 'raw', cache) => page.evaluate(async ({ target, name, headers, endpoint, cache }) => {
+    const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
+    const response = await fetch(`/api/v1/workspace/files/${endpoint}?${new URLSearchParams({ path: target.rootUri + '/' + name })}`,
+      { cache, headers: { 'X-Local-Token': token, 'X-BoxTeam-Target-Gateway-Id': target.gatewayId,
+        'X-BoxTeam-Workspace-Id': target.workspaceId, ...headers } });
+    return { status: response.status, headers: Object.fromEntries(response.headers), bytes: [...new Uint8Array(await response.arrayBuffer())] };
+  }, { target, name, headers, endpoint, cache });
   result.phase = 'original-image-cold';
   await openImage(targets[0], 1);
   const cold = await completeRead(targets[0], 0, 200);
@@ -178,6 +185,34 @@ try {
   const watched = await completeRead(targets[0], beforeWatcher, 200);
   expect(watched.response.etag).not.toBe(updated.response.etag);
   result.watcherUpdatedImage = true;
+  result.phase = 'browser-hard-reload';
+  const beforeHardReload = imageReads(targets[0]).length;
+  await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
+  // 走浏览器标准硬刷新，保留真实页面恢复及原图片读取链。
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+    cdp.send('Page.reload', { ignoreCache: true })]);
+  await expect(page.locator('.native-session-navigation')).toBeVisible({ timeout: 30000 });
+  await expect.poll(() => page.locator('.image-preview-editor').filter({ visible: true }).locator('img')
+    .evaluate(element => [element.naturalWidth, element.naturalHeight])).toEqual([1, 1]);
+  const refreshed = await completeRead(targets[0], beforeHardReload, 304);
+  expect(refreshed.encodedBodyBytes).toBe(0);
+  expect(refreshed.wireRequest['if-none-match']).toBe(watched.response.etag);
+  expect(refreshed.response.etag).toBe(watched.response.etag);
+  expect(refreshed.response['x-request-id']).not.toBe(watched.response['x-request-id']);
+  result.hardReload = { status: refreshed.wireStatus, bytes: refreshed.encodedBodyBytes,
+    etag: refreshed.response.etag, requestId: refreshed.response['x-request-id'] };
+  result.phase = 'explicit-resource-reload';
+  const beforeForcedRead = imageReads(targets[0]).length;
+  // 硬刷新文档不会把随后异步 fetch 全部变成无条件读取；资源调用方用标准 reload 明确重取。
+  const forced = await raw(targets[0], 'cache-image.png', {}, 'raw', 'reload');
+  expect(forced.status).toBe(200);
+  expect(Buffer.from(forced.bytes)).toEqual(Buffer.from(process.env.BOXTEAM_CACHE_ORIGINAL, 'base64'));
+  const bypassed = await completeRead(targets[0], beforeForcedRead, 200);
+  expect(bypassed.encodedBodyBytes).toBe(cold.encodedBodyBytes);
+  expect(bypassed.response.etag).toBe(watched.response.etag);
+  expect(bypassed.wireRequest['if-none-match']).toBeUndefined();
+  result.forcedResourceRead = { status: bypassed.wireStatus, bytes: bypassed.encodedBodyBytes,
+    etag: bypassed.response.etag, requestId: bypassed.response['x-request-id'] };
   const imageFailure = page.locator('.image-preview-editor').filter({ visible: true }).locator('.editor-placeholder-label-container');
   if (process.platform !== 'win32') {
     result.phase = 'visible-image-permission-failure';
@@ -185,7 +220,7 @@ try {
     const beforeDenied = imageReads(targets[0]).length;
     try {
       await chmod(path, 0);
-      await expect(imageFailure).toContainText('Unable to read image');
+      await expect(imageFailure).toContainText('无法读取图片：');
       await expect(visibleImage).not.toBeVisible();
       // 此原生延迟 I/O 由现有 TraceMiddleware 发布500，不能误写为API授权拒绝403。
       await expect.poll(() => imageReads(targets[0]).slice(beforeDenied).some(item => item.finished && item.wireStatus === 500)).toBe(true);
@@ -201,13 +236,6 @@ try {
   }
   result.openingRequestCounts = Object.fromEntries(['original-image-cold', 'original-image-warm', 'same-path-other-owner']
     .map(phase => [phase, result.network.filter(item => item.phase === phase).length]));
-  const raw = (target, name, headers = {}, endpoint = 'raw') => page.evaluate(async ({ target, name, headers, endpoint }) => {
-    const token = (await (await fetch('/api/gateway/auth/local-credential')).json()).data.token;
-    const response = await fetch(`/api/v1/workspace/files/${endpoint}?${new URLSearchParams({ path: target.rootUri + '/' + name })}`,
-      { headers: { 'X-Local-Token': token, 'X-BoxTeam-Target-Gateway-Id': target.gatewayId,
-        'X-BoxTeam-Workspace-Id': target.workspaceId, ...headers } });
-    return { status: response.status, headers: Object.fromEntries(response.headers), bytes: [...new Uint8Array(await response.arrayBuffer())] };
-  }, { target, name, headers, endpoint });
   result.phase = 'text-revalidation-and-save-cas';
   const original = await api(`/api/v1/workspace/files/content?${new URLSearchParams({ path: targets[0].rootUri + '/cache-text.txt' })}`,
     { headers: ownerHeaders(ownerA) });
@@ -218,6 +246,18 @@ try {
   const textReads = result.network.filter(item => new URL(item.url).searchParams.get('path') === targets[0].rootUri + '/cache-text.txt');
   await expect.poll(() => textReads.at(-1)?.wireStatus).toBe(304);
   expect(textReads.at(-1).encodedBodyBytes).toBe(0);
+  const otherTextCold = await raw(targets[1], 'cache-text.txt'), otherTextWarm = await raw(targets[1], 'cache-text.txt');
+  expect(new TextDecoder().decode(new Uint8Array(otherTextWarm.bytes))).toBe('原文件 B 🧪\n');
+  expect(otherTextWarm.bytes).toEqual(otherTextCold.bytes);
+  expect(otherTextCold.headers.etag).not.toBe(textCold.headers.etag);
+  const otherTextReads = result.network.filter(item => new URL(item.url).searchParams.get('path') === targets[1].rootUri + '/cache-text.txt');
+  await expect.poll(() => otherTextReads.at(-1)?.wireStatus).toBe(304);
+  expect(otherTextReads.at(-1).encodedBodyBytes).toBe(0);
+  for (const item of otherTextReads) {
+    expect(item.wireRequest['x-boxteam-target-gateway-id']).toBe(targets[1].gatewayId);
+    expect(item.wireRequest['x-boxteam-workspace-id']).toBe(targets[1].workspaceId);
+  }
+  result.textOwnersIsolated = true;
   result.textRevalidated = true;
   await writeFile(join(workspace, 'cache-text.txt'), 'external change 🧪\n');
   const changed = await raw(targets[0], 'cache-text.txt');
@@ -238,14 +278,14 @@ try {
   await unlink(join(workspace, 'cache-image.png'));
   const missing = await raw(targets[0], 'cache-image.png');
   expect(missing.status).toBe(404); expect(missing.headers['cache-control']).toBe('no-store');
-  await expect(imageFailure).toContainText('Unable to read image');
+  await expect(imageFailure).toContainText('无法读取图片：');
   await expect(visibleImage).not.toBeVisible();
   result.deletedImageFailureVisible = true;
   await writeFile(join(workspace, 'cache-image.png'), Buffer.from(process.env.BOXTEAM_CACHE_ORIGINAL, 'base64'));
   await expect.poll(() => visibleImage.evaluate(element => element.naturalWidth)).toBe(1);
   await expect(imageFailure).not.toBeVisible();
   result.deletedImageRecovery = true;
-  result.receipts = { textCold, textWarm, changed, conflict, range, download, denied, wrongOwner, missing };
+  result.receipts = { textCold, textWarm, otherTextCold, otherTextWarm, changed, conflict, range, download, denied, wrongOwner, missing };
   result.errorsNoStore = true;
   await verifyTextModelSharing({ page, command, api, result, targets, workspace, other });
   result.phase = 'passed';

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import shutil
 import struct
 import subprocess
+import sys
 import zlib
 from collections.abc import Iterator
 from pathlib import Path
@@ -67,16 +69,29 @@ def cache_gateway_port(request: pytest.FixtureRequest) -> Iterator[int]:
         lease.release()
 
 
+@pytest.fixture
+def cache_web_assets(request: pytest.FixtureRequest) -> Path:
+    prepared = os.getenv("BOXTEAM_FILE_CACHE_ASSETS")
+    assets = Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue("web_workbench_assets")
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    with (assets / "out/main.js").open("rb") as main:
+        fingerprint = hashlib.file_digest(main, "sha256").hexdigest()
+    (context.artifacts_dir / "assets.json").write_text(json.dumps({
+        "assets": str(assets), "main_sha256": fingerprint, "prepared": bool(prepared),
+    }) + "\n", encoding="utf-8")
+    return assets
+
+
 async def test_original_image_editor_revalidates_private_file_cache(
     request: pytest.FixtureRequest, e2e_workspace_root_path: str, e2e_workspace_config_path: str,
-    cache_gateway_port: int, web_workbench_assets: Path, image_versions: tuple[bytes, bytes],
+    cache_gateway_port: int, cache_web_assets: Path, image_versions: tuple[bytes, bytes],
 ) -> None:
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "原图片缓存验收需要 Chromium"
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    immutable = json.loads((web_workbench_assets / "immutable-assets.json").read_text())
+    immutable = json.loads((cache_web_assets / "immutable-assets.json").read_text())
     assert immutable and "out/main.js" not in immutable
-    assert all((web_workbench_assets / path).is_file() for path in immutable)
+    assert all((cache_web_assets / path).is_file() for path in immutable)
     workspace = Path(e2e_workspace_root_path)
     other = prepare_test_workspace(
         workspace_root=workspace / "B", template_root=context.project_root / "tests/fixtures/workspaces/default_test_workspace",
@@ -95,8 +110,10 @@ async def test_original_image_editor_revalidates_private_file_cache(
     gateway = await asyncio.to_thread(start_gateway_process,
         workspace_root=workspace, default_backend_url=None, port=cache_gateway_port,
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
-        extra_env={"BOXTEAM_WEB_ASSETS": str(web_workbench_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
-    command = ["bun", "tests/e2e/clients/web/quick_access_file_cache.mjs"]
+        extra_env={"BOXTEAM_WEB_ASSETS": str(cache_web_assets), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
+    supervisor = context.project_root / "app/runtime" / ("windows_job.py" if sys.platform == "win32" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "150", "--",
+               "node", "tests/e2e/clients/web/quick_access_file_cache.mjs"]
     try:
         with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp") as temporary:
             process = await asyncio.to_thread(subprocess.run, command, cwd=context.project_root,
@@ -104,7 +121,7 @@ async def test_original_image_editor_revalidates_private_file_cache(
                      "BOXTEAM_BROWSER_RESULT_PATH": str(result_path), "BOXTEAM_CACHE_WORKSPACE": str(workspace),
                      "BOXTEAM_CACHE_OTHER": str(other), "BOXTEAM_CACHE_UPDATE": base64.b64encode(image_versions[1]).decode(),
                      "BOXTEAM_CACHE_ORIGINAL": base64.b64encode(image_versions[0]).decode(),
-                     "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium}, capture_output=True, text=True, timeout=150, check=False)
+                     "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium}, capture_output=True, text=True, timeout=165, check=False)
         (context.artifacts_dir / "browser.stdout.raw").write_text(process.stdout)
         (context.artifacts_dir / "browser.stderr.raw").write_text(process.stderr)
         (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": process.returncode}) + "\n")
@@ -118,11 +135,15 @@ async def test_original_image_editor_revalidates_private_file_cache(
         assert result["phase"] == "passed" and result["pageErrors"] == []
         assert result["imageRevalidated"] and result["updatedImage"] and result["ownerIsolated"]
         assert result["watcherUpdatedImage"]
+        assert result["hardReload"]["status"] == 304 and result["hardReload"]["bytes"] == 0
+        assert result["forcedResourceRead"]["status"] == 200
+        assert result["forcedResourceRead"]["bytes"] == len(image_versions[0])
         assert result["deletedImageFailureVisible"] and result["deletedImageRecovery"]
         if os.name != "nt":
             assert result["permissionFailureVisible"] and result["permissionRecovery"]
         assert result["staticCachePolicy"]
-        assert result["textRevalidated"] and result["staleSaveRejected"] and result["errorsNoStore"]
+        assert result["textRevalidated"] and result["textOwnersIsolated"]
+        assert result["staleSaveRejected"] and result["errorsNoStore"]
         assert result["textModels"]["ownerIsolated"] and result["textModels"]["dirtyExternalConflict"]
     finally:
         await asyncio.to_thread(close_gateway_process, gateway)
