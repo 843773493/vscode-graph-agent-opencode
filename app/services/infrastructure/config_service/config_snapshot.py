@@ -324,7 +324,7 @@ class ConfigSnapshotMixin:
         )
         secret_bindings = build_secret_binding_summary(
             snapshot.to_dict(),
-            resolve_environment=True,
+            resolve_environment=loaded_pending is not None,
         )
         secret_binding_digest = hashlib.sha256(
             json.dumps(
