@@ -10,7 +10,7 @@ from typing import Literal
 
 from app.abstractions.session_changes import StoredFileEdit
 from app.core.atomic_fs import native_io_path
-from app.core.path_utils import get_session_path_resolver, safe_join
+from app.core.path_utils import SafePathRoot, get_session_path_resolver
 from app.core.trace_middleware import get_current_gateway_id
 from app.schemas.internal_v2.session_changes import (
     SessionChangesetDTO,
@@ -63,8 +63,8 @@ class SessionChangesStore:
             handle.write("\n")
 
     def read_records(self, session_id: str) -> list[StoredFileEdit]:
-        changes_dir = self._session_changes_dir(session_id)
-        index_file = native_io_path(changes_dir / EDIT_INDEX_FILE)
+        changes_root = SafePathRoot(self._session_changes_dir(session_id))
+        index_file = native_io_path(changes_root.path / EDIT_INDEX_FILE)
         try:
             handle = index_file.open("r", encoding="utf-8")
         except FileNotFoundError:
@@ -82,7 +82,7 @@ class SessionChangesStore:
                         f"文件变更索引损坏: session_id={session_id}, line={line_number}"
                     ) from exc
                 record = StoredFileEdit(**data)
-                self._edit_path_in(changes_dir, record.edit_id)
+                self._edit_path_in(changes_root, record.edit_id)
                 if record.session_id != session_id:
                     raise ValueError(f"文件变更索引归属错误: session_id={session_id}, line={line_number}")
                 records.append(replace(record, file_path=self.normalize_file_reference(record.file_path)))
@@ -123,13 +123,13 @@ class SessionChangesStore:
 
     def edit_text_reader(self, session_id: str) -> Callable[[str, Literal["before", "after", "diff"]], str]:
         """在调用方的同一次会话读准入内复用 locator，不跨请求保存路径。"""
-        changes_dir = self._session_changes_dir(session_id)
+        changes_root = SafePathRoot(self._session_changes_dir(session_id))
 
         def read(edit_id: str, phase: Literal["before", "after", "diff"]) -> str:
             if phase not in {"before", "after", "diff"}:
                 raise ValueError("文件变更内容必须为 before、after 或 diff")
             filename = "diff.patch" if phase == "diff" else f"{phase}.txt"
-            file_path = self._edit_path_in(changes_dir, edit_id, filename)
+            file_path = self._edit_path_in(changes_root, edit_id, filename)
             try:
                 with native_io_path(file_path).open(
                     encoding="utf-8", newline="" if phase == "diff" else None,
@@ -179,13 +179,13 @@ class SessionChangesStore:
         return self._path_resolver.resolve_session_node(session_id) / "changes"
 
     def _edit_dir(self, session_id: str, edit_id: str) -> Path:
-        return self._edit_path_in(self._session_changes_dir(session_id), edit_id)
+        return self._edit_path_in(SafePathRoot(self._session_changes_dir(session_id)), edit_id)
 
     @staticmethod
-    def _edit_path_in(changes_dir: Path, edit_id: str, *parts: str) -> Path:
+    def _edit_path_in(changes_root: SafePathRoot, edit_id: str, *parts: str) -> Path:
         if re.fullmatch(r"edit_[0-9a-f]{12}", edit_id) is None:
             raise ValueError("文件变更 edit_id 格式错误")
-        return safe_join(changes_dir, "edits", edit_id, *parts)
+        return changes_root.join("edits", edit_id, *parts)
 
     def _ensure_changes_dir(self, session_id: str) -> Path:
         changes_dir = self._session_changes_dir(session_id)

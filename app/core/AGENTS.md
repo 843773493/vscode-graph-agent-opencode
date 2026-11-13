@@ -65,6 +65,7 @@ app/core/
 - `key_lock_pool.py`：进程内 per-key 串行锁的中立实现（`KeyLockPool` 固定分片锁池）。
   同一 key 经 `crc32` 恒命中同一把 `asyncio.Lock`，锁对象数量恒为分片数，不随历史
   key 数无界增长。会话创建、child thread 创建与子树删除三条链路共用，单点承载。
+- `path_utils.py` 的 `SafePathRoot` 只在调用方同一次受保护操作内固定真实根，逐目标仍解析链接并验证边界；`safe_join` 的单次调用复用同一实现。不得跨请求缓存根或省略目标校验。
 - `session_control_primitives.py`：per-session `session-control.sqlite` 各垂直链路共享的形态原语（`CONTROL_DATABASE_NAME`、`SHA256_HEX_PATTERN`、`EXECUTION_BINDING_ID_PATTERN`、`EXECUTION_JOB_ID_PATTERN` 与 `validate_claim_fields`）。只放跨子包共用的形态约束与校验器，不放任何表的 DDL、行投影或读写方法。
 - `session_control_thread_catalog/`：thread catalog 与 lifecycle fence 一条垂直链路（main/child 权威指针、生命周期闸门 CAS、已发布 child 的冻结 locator 解析、当前 GraphBinding 列形状校验）。只放这两张表的职责；creation record、execution intent、operation lease、owner binding 与通信账本不放这里。
 - `session_control_thread_owner_binding/`：thread owner binding 字段槽一条垂直链路（`thread_owner_bindings` 行投影、canonical JSON 列表槽解析、2.1 负面合同校验、ensure/get/update，以及该表行插入的唯一 SQL 实现）。只放 owner 侧记录槽；prefix epoch 的语义仍属 ContextStore domain owner，ToolSet applied 唯一权威为 sealed assembly binding，本表不得保存 desired/applied ToolSet 镜像。

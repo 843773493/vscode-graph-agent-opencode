@@ -435,28 +435,22 @@ def resolve_native_file_path(
     return resolved_path
 
 
+class SafePathRoot:
+    """单次受保护操作内固定的真实根；逐个目标仍解析链接并检查边界。"""
+
+    def __init__(self, base_path: Path) -> None:
+        self.path = _resolve_native_path(base_path)
+
+    def join(self, *paths: str) -> Path:
+        joined = _resolve_native_path(self.path.joinpath(*paths))
+        if not joined.is_relative_to(self.path):
+            raise ForbiddenError("Path traversal detected")
+        return joined
+
+
 def safe_join(base_path: Path, *paths: str) -> Path:
-    """
-    Safely join paths and prevent directory traversal attacks.
-
-    Args:
-        base_path: Base directory to restrict access to
-        *paths: Path components to join
-
-    Returns:
-        Resolved absolute path
-
-    Raises:
-        ForbiddenError: If path traversal is detected
-    """
-    base = _resolve_native_path(base_path)
-    joined = _resolve_native_path(base.joinpath(*paths))
-
-    # 确保生成的路径仍然在基础目录范围内
-    if not joined.is_relative_to(base):
-        raise ForbiddenError("Path traversal detected")
-
-    return joined
+    """单次拼接沿同一个真实根解析与边界检查实现。"""
+    return SafePathRoot(base_path).join(*paths)
 
 
 def get_session_path(session_id: str) -> Path:

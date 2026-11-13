@@ -69,7 +69,7 @@
 - 保持每个文件单一职责。
 - 出现业务失败时直接抛出明确错误，不要静默降级。
 - Agent 列表只校验 Provider 本地配置及必要凭据，必须在线程中执行并保持逐 Provider 顺序及配置错误原文；SDK 初始化和构造校验留在执行入口。凭据可独立更新，不得按配置 revision 缓存可用状态，不阻塞工作区事件循环的健康检查。
-- Session Changes 列表只生成摘要，单次编辑复用已保存 patch；同一文件多次编辑仍比较首尾快照，保留相互抵消的净变化。列表按 Turn 一次分组，正文 reader 在同一次会话准入内复用 locator，逐文件仍检查 edit_id 与路径边界，不跨请求缓存路径或正文。涉及 CR/CRLF 的 patch 沿用快照读取的统一换行语义；未消费快照的缺失在详情读取时报错，不为列表重读全部正文或新建持久化缓存。
+- Session Changes 列表只生成摘要，单次编辑复用已保存 patch；同一文件多次编辑仍比较首尾快照，保留相互抵消的净变化。列表按 Turn 一次分组，索引和正文 reader 在同一次会话准入内复用已解析的真实根，逐文件仍检查 edit_id 与路径边界，不跨请求缓存路径或正文。涉及 CR/CRLF 的 patch 沿用快照读取的统一换行语义；未消费快照的缺失在详情读取时报错，不为列表重读全部正文或新建持久化缓存。
 - 冷读在 topology shared 下取得 Session shared guard 并确认 catalog active 后立即释放 topology；Session guard 覆盖全部读取句柄。child thread 列表及后续团队/运行态投影由 API 持有同一次读准入，内部查询不嵌套取得 topology。
 - 优先通过协议隔离依赖，避免循环引用。
 - 上下文目录搜索只消费 catalog，不加载消息历史；目录命中 revision 只绑定目录数据，消息展开从 read_context 取得消息修订。混合来源搜索的续页同时绑定已选来源；effective_context 命中仍可用 record_index 和内容 revision 展开。批量正文匹配须让出事件循环，避免阻塞其它工作区请求。
