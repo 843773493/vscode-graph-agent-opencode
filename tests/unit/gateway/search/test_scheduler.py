@@ -373,6 +373,68 @@ def test_default_order_is_category_then_frozen_scope(
     assert [job.key.owner for job in jobs[:7]] == list(scope.scope.owners)
 
 
+async def test_content_order_preserves_distinct_owners_and_original_page_order(
+    scope: GatewaySearchScopeResolutionDTO,
+) -> None:
+    selected = scope.model_copy(update={"scope": scope.scope.model_copy(update={"owners": scope.scope.owners[1::-1]}),
+                                        "branches": scope.branches[1::-1]})
+    original_scope = selected.model_dump(mode="json")
+    request = FederatedSearchRequest.model_validate({
+        "scope": {"mode": "resume", "scope": selected.scope}, "max_results": 8,
+        "queries": [{"category": category, "operation": "content", "match_mode": "literal", "query": "needle"}
+                    for category in ("tool_result", "message")],
+    })
+    jobs = plan_search(request, selected)
+    expected = [(category, owner) for category in ("message", "tool_result") for owner in selected.scope.owners]
+    assert [(job.key.category, job.key.owner) for job in jobs] == expected
+    release_first = asyncio.Event()
+
+    async def query(job: SearchJob) -> SearchPage:
+        assert job.key.owner is not None
+        if job.key == jobs[0].key:
+            await release_first.wait()
+        thread = {
+            "workspace_id": job.key.owner.workspace_id, "session_id": "same-session", "thread_id": "same-child",
+            "thread_uri": thread_resource_uri(job.key.owner.workspace_id, "same-session", "same-child",
+                                               gateway_authority=job.key.owner.gateway_id),
+            "kind": "child", "title": "同名 Thread", "session_title": "同名 Session", "created_at": datetime.now(UTC),
+        }
+        domain = WorkspaceMessageSearchResultsDTO.model_validate({
+            "catalog_revision": 1, "items": [{"thread": thread, "match": {
+                "turn_id": "same-turn", "message_id": None, "role": "assistant", "preview": "needle", "preview_start_codepoint": 0,
+                "reference": {"item_id": item_id, "content_hash": "same-version", "start_codepoint": 0,
+                              "end_codepoint": 6, "category": job.key.category},
+            }} for item_id in ("z-first", "a-second")],
+            "cursor": "original-owner-position", "complete": False, "limited_reason": "result_limit",
+            "scanned_sessions": 1, "scanned_threads": 1, "scanned_items": 2, "scanned_bytes": 12,
+        })
+        return SearchPage(WorkspaceSearchResultDTO(
+            provider_id=f"canonical-{job.key.category}", workspace_id=job.key.owner.workspace_id,
+            category=job.key.category, operation="content", contract_version=1, state="limited",
+            limited_reason="result_limit", messages=domain,
+        ))
+
+    def publish(event: FederatedSearchEventDTO) -> bool:
+        if event.type == "page":
+            release_first.set()
+        return True
+
+    events = [event async for event in search_events(jobs, selected, request_id="content-order", query=query,
+                                                     budget=NameSearchBudget.create(None), publish=publish)]
+    pages = [event for event in events if event.type == "page"]
+    assert pages[0].branch is not None and pages[0].branch.branch != jobs[0].key
+    assert len(pages) == 4
+    for event in pages:
+        assert event.page is not None and event.page.messages is not None
+        assert [item.match.reference.item_id for item in event.page.messages.items] == ["z-first", "a-second"]
+        assert event.page.messages.cursor == "original-owner-position"
+    summary = events[-1].summary
+    assert summary is not None and summary.order == "category-scope-owner-v1" and summary.state == "incomplete"
+    assert [(branch.branch.category, branch.branch.owner) for branch in summary.branches] == expected
+    assert summary.returned_results == 8 and all(branch.returned_results == 2 for branch in summary.branches)
+    assert selected.model_dump(mode="json") == original_scope
+
+
 async def test_diagnostic_order_and_quota_follow_first_gateway_in_frozen_scope() -> None:
     gateway_a, gateway_b = (f"gateway_{letter * 32}" for letter in ("a", "b"))
     owners = [{"gateway_id": gateway, "workspace_id": f"00000000-0000-4000-8000-{index:012d}"}

@@ -172,6 +172,17 @@ def events(response: httpx.Response) -> list[FederatedSearchEventDTO]:
     return result
 
 
+@pytest.mark.parametrize("on_query", [False, True])
+async def test_relevance_without_shared_contract_is_rejected_before_dispatch(search_http: SearchHTTP, on_query: bool) -> None:
+    updates = {"queries": [{"category": "catalog", "query": "needle", "order": "relevance"}]} if on_query else {"order": "relevance"}
+    response = await search_http.search(**updates)
+    assert response.status_code == 422, response.text
+    assert response.headers["X-Request-ID"] == "req_search"
+    errors = [(item["type"], item["loc"]) for item in response.json()["detail"]]
+    assert ("extra_forbidden", ["body", "queries", 0, "order"] if on_query else ["body", "order"]) in errors
+    assert search_http.requests == []
+
+
 async def test_only_explicit_a_b_receive_same_request_and_original_owner_cursor(search_http: SearchHTTP) -> None:
     result = events(await search_http.search())
     assert len(search_http.requests) == 2

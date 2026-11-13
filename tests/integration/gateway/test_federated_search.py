@@ -188,6 +188,7 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
                             assert event["request_id"] == request_id
                             events.append(event)
                 assert events[0]["type"] == "scope" and events[-1]["type"] == "end"
+                assert events[-1]["summary"]["order"] == "category-scope-owner-v1"
                 assert [event["sequence"] for event in events] == list(range(1, len(events) + 1))
                 assert response.num_bytes_downloaded <= MAX_SEARCH_OUTPUT_BYTES
                 observations.append({"request": payload, "events": events, "output_bytes": response.num_bytes_downloaded})
@@ -239,6 +240,21 @@ async def test_exact_scopes_partial_failure_and_restart_continuation(network: Ne
             }
             b_page = next(event for event in pages if event["page"]["workspace_id"] == owners[workspace_b]["workspace_id"])
             frozen = both[0]["scope"]["scope"]
+
+            # 请求排列和网络完成顺序不决定排名；同名跨 owner 保留原页，导航顺序不变。
+            ordered = await search({"scope": {"mode": "selected", "owners": [owners[workspace_b], owners[workspace_a]]},
+                "queries": [{"category": "thread", "query": "Shared", "limit": 1}, query]}, "req_federation_order")
+            assert [(branch["branch"]["category"], branch["branch"]["owner"]) for branch in ordered[-1]["summary"]["branches"]] == [
+                (category, owners[workspace_id]) for category in ("catalog", "thread") for workspace_id in (workspace_b, workspace_a)
+            ]
+            catalog_pages = [event["page"] for event in ordered if event["type"] == "page" and event["page"]["category"] == "catalog"]
+            assert len(catalog_pages) == 2
+            for page in catalog_pages:
+                assert page["catalog"]["items"][0]["node"]["session_id"] == sessions[page["workspace_id"]][0]
+            navigation_order = (await client.get("/api/gateway/workspaces", params={"check_health": False})).json()["data"]
+            assert [(item["gateway_id"], item["workspace_id"]) for item in navigation_order["items"]] == [
+                (item["gateway_id"], item["workspace_id"]) for item in listing["items"]
+            ]
 
             for request_id, change, code in (
                 ("req_federation_unsupported_mode", {"match_mode": "literal"}, "unsupported_option"),
