@@ -104,6 +104,8 @@ StateStore的八个原生存储失败出口统一由本文件私有`recordStorag
 
 ## 画面交付与观测
 
+`frameSubscription` 仅切换连接的画面交付，不改变 attach 归属、资源保护、页面执行或用户锁。所有连接暂停后停止 screencast；任一连接恢复时重启并捕获当前画面，不重放隐藏前的旧帧。切页、导航、设备设置与档位切换均依据实际画面消费者；连接待发帧和 ACK 定时器在暂停时丢弃，累计交付统计保留。控制消息仍经共享 JSON schema 投影与传输入口校验。
+
 页面负责产生帧，连接流控负责是否发送；不要把每个连接的 ACK 或待发帧状态放入共享页面。操作队列需要保留业务操作顺序，画面和指针移动则允许合并过时的中间值，二者不共用一套队列。
 
 `backend.js` 负责接入和路由，二进制帧编码及跨连接封包复用归 `transport/protocol.js`；连接的待发帧和 ACK 归 `transport/browserFrameFlow.js`。共享 schema 适配仍在上一层 `browser/protocol/`，不能在传输目录另建一套协议来源。

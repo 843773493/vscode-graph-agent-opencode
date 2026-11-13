@@ -2,6 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { encodeBinaryFrame, encodeServerMessage, parseClientMessage } from "./protocol.js";
 
 describe("浏览器二进制画面合同", () => {
+  test("画面订阅明确指定boolean，不接受缺省或文本值", () => {
+    for (const enabled of [true, false]) {
+      expect(parseClientMessage(JSON.stringify({ type: "frameSubscription", browserId: "browser_1", enabled })).enabled).toBe(enabled);
+    }
+    for (const enabled of [undefined, "false"]) {
+      expect(() => parseClientMessage(JSON.stringify({ type: "frameSubscription", browserId: "browser_1", enabled }))).toThrow("enabled 必须是 boolean");
+    }
+  });
+
   const frame = {
     frameId: 42, browserId: "browser_1", pageId: "page_1",
     width: 640, height: 480, pageScaleFactor: 1,

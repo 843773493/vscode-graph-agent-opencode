@@ -174,6 +174,10 @@ describe("浏览器最新帧流控", () => {
     expect(state.timers.size).toBe(0);
     state.flow.socket.bufferedAmount = 0;
     expect(state.flow.offer({ frameId: 41 })).toBe(true);
+    state.flow.offer({ frameId: 42 });
+    state.flow.discardPending();
+    expect(state.timers.size).toBe(0);
+    expect(state.flow.snapshot()).toMatchObject({ frames_sent: 1, has_pending_frame: false, awaiting_frame_id: null });
     state.flow.close();
 
     expect(state.flow.offer({ frameId: 42 })).toBe(false);

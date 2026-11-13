@@ -92,7 +92,7 @@ export class BrowserFrameFlow {
     };
   }
 
-  reset() {
+  discardPending() {
     this.pendingFrame = null;
     this.awaitingFrameId = null;
     this.awaitingFrameSentAtClockMs = null;
@@ -101,6 +101,10 @@ export class BrowserFrameFlow {
       this.cancel(this.bufferRetryTimer);
       this.bufferRetryTimer = null;
     }
+  }
+
+  reset() {
+    this.discardPending();
     this.framesSent = 0;
     this.framesSuperseded = 0;
     this.ackTimeouts = 0;

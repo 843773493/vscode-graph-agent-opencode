@@ -1317,14 +1317,12 @@ export class BrowserSession extends EventEmitter {
     this.lastFrame = entry.lastFrame;
     this.record.page_id = pageId;
     this.record.document_revision = this.documentRevision;
-    if (this.clients.size > 0 && this.record.status === "running") {
+    if (this.record.status === "running") {
       await this.startScreencast();
     }
     if (this.record.status === "running") {
       const state = await this.syncAndEmitState();
-      if (this.clients.size > 0) {
-        await this.captureCurrentPageFrame(entry);
-      }
+      await this.captureCurrentPageFrame(entry);
       return state;
     }
     return this.snapshot();
@@ -1765,7 +1763,7 @@ export class BrowserSession extends EventEmitter {
       activeEntry.navigationError = null;
     }
     const state = await this.syncAndEmitState();
-    if (this.clients.size > 0 && activeEntry) {
+    if (activeEntry) {
       await this.captureCurrentPageFrame(activeEntry);
     }
     return state;
@@ -1785,7 +1783,7 @@ export class BrowserSession extends EventEmitter {
       if (this.activePageId === pageId) this.record.navigation_error = failure;
       reportingStage = "sync_navigation_state";
       await this.syncAndEmitState();
-      if (this.clients.size > 0 && entry) {
+      if (entry) {
         reportingStage = "capture_navigation_frame";
         await this.captureCurrentPageFrame(entry);
       }
@@ -1948,7 +1946,7 @@ export class BrowserSession extends EventEmitter {
       await this.manager.persist();
       return this.snapshot();
     }
-    if (this.clients.size === 0 && this.streaming) {
+    if (!this.hasFrameConsumers() && this.streaming) {
       await this.stopScreencast();
     }
     if (this.clients.size === 0 && this.record.resource_state === "active") {
@@ -1958,10 +1956,36 @@ export class BrowserSession extends EventEmitter {
     return await this.syncAndEmitState({ persist: false });
   }
 
+  hasFrameConsumers() {
+    return [...this.clients].some((client) => !client.frameDeliveryPaused);
+  }
+
+  async setClientFrameDelivery(client, enabled) {
+    this.assertTransport(client);
+    // 仅停止画面；连接仍承担资源保护，用户锁和页面执行均保持原状态。
+    client.setFrameDeliveryPaused(!enabled);
+    const execution = this.streamTransition.then(async () => {
+      this.assertTransport(client);
+      if (!this.hasFrameConsumers()) {
+        if (this.streaming) await this.stopScreencast();
+      } else if (!this.streaming) {
+        await this.startScreencast("interactive");
+      }
+      if (enabled && !client.frameDeliveryPaused) {
+        this.assertTransport(client);
+        const entry = this.pageEntries.get(this.activePageId);
+        if (entry) await this.captureCurrentPageFrame(entry, client);
+      }
+    });
+    this.streamTransition = execution.then(() => undefined, () => undefined);
+    return await execution;
+  }
+
   async startScreencast(profile = "interactive") {
     this.assertRunning();
     const settings = STREAM_PROFILES[profile];
     if (!settings) throw new Error(`未知浏览器流配置: ${profile}`);
+    if (!this.hasFrameConsumers()) return;
     await this.sendResourceCommand({ pageId: this.activePageId, cdpSession: this.cdpSession }, "Page.startScreencast", {
       format: "jpeg",
       quality: settings.quality,
@@ -1975,6 +1999,8 @@ export class BrowserSession extends EventEmitter {
     if (entry) {
       entry.streaming = true;
     }
+    // 启动回执前可能已隐藏；保持最后一次订阅意图，不留下无人消费的流。
+    if (!this.hasFrameConsumers()) await this.stopScreencast();
   }
 
   async stopScreencast() {
@@ -2036,7 +2062,7 @@ export class BrowserSession extends EventEmitter {
   }
 
   async captureCurrentPageFrame(entry, client = null) {
-    if (!entry || entry.page.isClosed() || entry.pageId !== this.activePageId) {
+    if (!this.hasFrameConsumers() || !entry || entry.page.isClosed() || entry.pageId !== this.activePageId) {
       return;
     }
     const screenshot = await this.captureFrameScreenshot(entry, 80);
@@ -2403,7 +2429,7 @@ export class BrowserSession extends EventEmitter {
           : {}),
       },
     );
-    const shouldStream = this.streaming || this.clients.size > 0;
+    const shouldStream = this.hasFrameConsumers();
     const previousStreamProfile = this.streamProfile || "interactive";
     try {
       if (this.streaming) {
@@ -2440,7 +2466,7 @@ export class BrowserSession extends EventEmitter {
           rollbackErrors.push(rollbackError);
         }
       }
-      if (shouldStream && this.clients.size > 0) {
+      if (shouldStream) {
         try {
           await this.startScreencast(previousStreamProfile);
         } catch (rollbackError) {

@@ -124,6 +124,8 @@ let reconnectTimer = null;
 let reconnectAttempt = 0;
 let currentStatus = null;
 let statusPollTimer = null;
+let visible = false;
+let resumeLoading = false;
 // 当前 attach 页面的解码序号；切页也递增以废弃旧结果，不是后端 frameId。
 let frameDecodeSequence = 0;
 let pendingFrame = null;
@@ -1004,7 +1006,7 @@ async function loadSnapshot() {
 }
 
 async function syncBrowserState() {
-  if (!browserId || deleted) {
+  if (!browserId || deleted || !visible) {
     return;
   }
   const snapshot = await loadSnapshot();
@@ -1020,14 +1022,22 @@ async function syncBrowserState() {
 }
 
 function startStatusPolling() {
-  if (statusPollTimer !== null) {
+  if (statusPollTimer !== null || !visible || deleted) {
     return;
   }
-  statusPollTimer = window.setInterval(() => {
-    void syncBrowserState().catch((error) => {
+  const timer = window.setTimeout(async () => {
+    try {
+      await syncBrowserState();
+    } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error), true);
-    });
+    } finally {
+      if (statusPollTimer === timer) {
+        statusPollTimer = null;
+        startStatusPolling();
+      }
+    }
   }, 2000);
+  statusPollTimer = timer;
 }
 
 function cancelReconnect() {
@@ -1038,7 +1048,7 @@ function cancelReconnect() {
 }
 
 function scheduleReconnect(reason) {
-  if (manualDetach || deleted || currentStatus !== "running" || reconnectTimer !== null) {
+  if (!visible || manualDetach || deleted || currentStatus !== "running" || reconnectTimer !== null) {
     return;
   }
   const delay = Math.min(250 * (2 ** reconnectAttempt), 3000);
@@ -1074,7 +1084,7 @@ function detach() {
 }
 
 function drawFrame(message) {
-  if (message.pageId && currentActivePageId && message.pageId !== currentActivePageId) {
+  if (!visible || (message.pageId && currentActivePageId && message.pageId !== currentActivePageId)) {
     acknowledgeFrame(message);
     return;
   }
@@ -1171,6 +1181,7 @@ async function attach() {
   }
   manualDetach = false;
   cancelReconnect();
+  if (!visible) return;
   if (socket && socket.readyState !== WebSocket.CLOSED) {
     setStatus("正在连接浏览器...");
     return;
@@ -1190,7 +1201,7 @@ async function attach() {
     setAttachButtonMode("detached");
     return;
   } finally { grantLoading = false; }
-  if (manualDetach) return;
+  if (manualDetach || !visible) return;
   const currentSocket = new WebSocket(backendWsUrl(grant.service));
   socket = currentSocket;
   socket.binaryType = "arraybuffer";
@@ -1229,6 +1240,7 @@ async function attach() {
     const message = JSON.parse(event.data);
     if (message.type === "attached") {
       attached = true;
+      if (!visible) send({ type: "frameSubscription", browserId, enabled: false });
       setAttachButtonMode("attached");
       applyState(message.state);
       if (pendingNavigationUrl) {
@@ -1762,7 +1774,7 @@ window.addEventListener("beforeunload", () => {
   manualDetach = true;
   cancelReconnect();
   if (statusPollTimer !== null) {
-    window.clearInterval(statusPollTimer);
+    window.clearTimeout(statusPollTimer);
   }
   if (agentLockHeartbeatTimer !== null) {
     window.clearInterval(agentLockHeartbeatTimer);
@@ -1772,16 +1784,50 @@ window.addEventListener("beforeunload", () => {
   }
 });
 
+async function resumeVisibleBrowser() {
+  if (!gatewayToken || !visible || resumeLoading) return;
+  resumeLoading = true;
+  try {
+    await syncBrowserState();
+    if (visible && !manualDetach && !deleted && currentStatus === "running") await attach();
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    resumeLoading = false;
+    startStatusPolling();
+  }
+}
+
+function updateVisibility(intersects) {
+  const next = intersects && !document.hidden;
+  if (visible === next) return;
+  visible = next;
+  if (attached && socket?.readyState === WebSocket.OPEN) {
+    send({ type: "frameSubscription", browserId, enabled: visible });
+  }
+  if (visible) {
+    void resumeVisibleBrowser();
+  } else {
+    cancelReconnect();
+    if (statusPollTimer !== null) window.clearTimeout(statusPollTimer);
+    statusPollTimer = null;
+    pendingFrame = null;
+    frameDecodeSequence += 1;
+  }
+}
+
+let intersects = false;
+const visibilityObserver = new IntersectionObserver(([entry]) => {
+  intersects = entry.isIntersecting;
+  updateVisibility(intersects);
+});
+visibilityObserver.observe(document.documentElement);
+document.addEventListener("visibilitychange", () => updateVisibility(intersects));
+
 setAttachButtonMode("attaching");
 setAgentAccessLocked(false);
 void initializeGatewayAuth()
-  .then(() => loadSnapshot())
-  .then((snapshot) => {
-    if (snapshot?.status === "running") {
-      attach();
-    }
-    startStatusPolling();
-  })
+  .then(() => resumeVisibleBrowser())
   .catch((error) => {
     setStatus(error instanceof Error ? error.message : String(error), true);
     updateControls();

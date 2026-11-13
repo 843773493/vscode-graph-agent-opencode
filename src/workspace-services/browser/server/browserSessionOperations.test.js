@@ -1073,10 +1073,40 @@ describe("浏览器统一操作队列", () => {
 
   test.each(["interactive", "relaxed"])("%s 画面档位不丢弃静态页面的唯一重绘", async (profile) => {
     const { browser, cdpCalls } = liveSession();
+    browser.clients.add({});
     await browser.startScreencast(profile);
     const started = cdpCalls.find(({ method }) => method === "Page.startScreencast");
     expect(started.params.everyNthFrame ?? 1).toBe(1);
     expect(started.params.quality).toBe(profile === "interactive" ? 65 : 50);
+  });
+
+  test("最后一个画面消费者隐藏时停流，恢复新画面并保留连接保护与用户锁", async () => {
+    const { browser } = liveSession();
+    const clients = [0, 1].map(() => ({
+      frameDeliveryPaused: false,
+      setFrameDeliveryPaused(paused) { this.frameDeliveryPaused = paused; },
+    }));
+    for (const client of clients) {
+      browser.clients.add(client);
+      browser.transports.set(client, { transportOwnerRevision: 1 });
+    }
+    const refreshed = [];
+    browser.captureCurrentPageFrame = async (_entry, client) => { refreshed.push(client); };
+    await browser.setAgentAccessLocked(true, "user_visibility_test");
+    await browser.startScreencast();
+    await browser.setClientFrameDelivery(clients[0], false);
+    expect(browser.streaming).toBe(true);
+    await browser.setClientFrameDelivery(clients[1], false);
+    expect(browser.streaming).toBe(false);
+    expect(browser.snapshot().resource_hard_protection_reasons).toContain("user_attached");
+    expect(browser.snapshot().agent_access_locked).toBe(true);
+    expect(browser.clients.size).toBe(2);
+    await browser.setClientFrameDelivery(clients[0], true);
+    expect(browser.streaming).toBe(true);
+    expect(refreshed).toEqual([clients[0]]);
+    await browser.detachClient(clients[0]);
+    expect(browser.streaming).toBe(false);
+    expect(browser.clients.has(clients[1])).toBe(true);
   });
 
   test("降档切换尚未完成时的用户输入最终保留交互档", async () => {

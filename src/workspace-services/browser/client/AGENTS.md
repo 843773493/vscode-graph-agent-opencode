@@ -21,6 +21,8 @@ client/
 
 `main.js` 持有页面运行态并连接协议与控制器；新增功能优先放入对应的同级职责模块，避免主入口继续膨胀。
 
+attach 页通过 IntersectionObserver 和 Page Visibility 暂停隐藏 iframe 的状态轮询及画面订阅；保持 WebSocket、页面执行与用户 AI 锁续租。显示后沿原连接订阅新画面，断线则按原授权链重连；用户主动断开不会因显示而自动连接。轮询串行结算，隐藏前已派发的请求允许完成，不重复排队。
+
 HTML 的早期地址提交处理在样式与模块加载前安装到 document；初始化期间回车只保存待导航地址，不能触发表单原生跳转而清空 Gateway／工作区／Browser 参数。完整模块装配后仍由原工具栏与同一 navigate 链路接手。
 `browserDebugElementTree.js` 以迭代顺序构建 DOM 检查树，并限制单次可见行数为 2,000；超出时显示明确的截断提示，避免把宽 DOM 快照全部铺成大型页面节点树。
 

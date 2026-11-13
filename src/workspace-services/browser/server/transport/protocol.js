@@ -37,6 +37,7 @@ export const CLIENT_MESSAGE_TYPES = new Set([
   "selectFiles",
   "readClipboard",
   "frameAck",
+  "frameSubscription",
 ]);
 
 export const SERVER_MESSAGE_TYPES = new Set([
@@ -236,6 +237,9 @@ export function parseClientMessage(raw) {
   }
   if (message.type !== "detach") {
     assertBrowserId(message);
+  }
+  if (message.type === "frameSubscription" && typeof message.enabled !== "boolean") {
+    throw new Error("frameSubscription.enabled 必须是 boolean");
   }
   if (message.type === "attach" && (typeof message.grantToken !== "string" || !message.grantToken)) {
     throw new Error("Browser attach 缺少一次传输授权");

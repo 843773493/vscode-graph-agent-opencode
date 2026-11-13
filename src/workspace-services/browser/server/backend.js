@@ -191,13 +191,18 @@ function wsClient(socket) {
     participantId: `user_${randomUUID().replaceAll("-", "")}`,
     kind: "user",
     connectedAt: new Date().toISOString(),
+    frameDeliveryPaused: false,
     sendJson(message) {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(encodeServerMessage(message));
       }
     },
     sendFrame(frame) {
-      return frameFlow.offer(frame);
+      return !this.frameDeliveryPaused && frameFlow.offer(frame);
+    },
+    setFrameDeliveryPaused(paused) {
+      this.frameDeliveryPaused = paused;
+      frameFlow.discardPending();
     },
     acknowledgeFrame(frameId, metrics) {
       return frameFlow.acknowledge(frameId, metrics);
@@ -939,6 +944,16 @@ async function main() {
           decodeMs: message.decodeMs,
           drawMs: message.drawMs,
         });
+        return;
+      }
+      // 画面订阅与ACK一样不排在导航等业务操作之后，隐藏时立即停止该连接交付。
+      if (message.type === "frameSubscription") {
+        if (!attachedBrowser || attachedBrowser.id !== message.browserId) {
+          reportMessageError(message, new Error("尚未授权此 Browser"));
+          return;
+        }
+        void attachedBrowser.setClientFrameDelivery(client, message.enabled)
+          .catch((error) => reportMessageError(message, error));
         return;
       }
       if (message.type === "pointer"
