@@ -1015,6 +1015,7 @@ class MessageStreamStore:
         return threads
 
     async def _load_state(self, session_id: str, turn_stream_id: str) -> dict[str, Any]:
+        """内部加载只读版本；已发布状态由提交整体替换。"""
         async with self._lock_for(turn_stream_id):
             cached = self._states.get(turn_stream_id)
             if cached is None:
@@ -1022,7 +1023,7 @@ class MessageStreamStore:
                 cached = self._states[turn_stream_id]
             else:
                 self._touch_cached_state(turn_stream_id, cached)
-            return copy.deepcopy(cached)
+            return cached
 
     async def _load_state_from_disk(self, session_id: str, turn_stream_id: str) -> None:
         # 调用方持有原 Turn 锁；worker 完整校验后，缓存只在事件循环中统一发布。
@@ -1263,7 +1264,7 @@ class MessageStreamStore:
     async def get_event(self, turn_stream_id: str, event_id: str) -> dict[str, Any] | None:
         """沿原消息流幂等事实查已提交事件，不产生新的事件或副作用。"""
         async with self._lock_for(turn_stream_id):
-            state = await self.get_state(turn_stream_id)
+            state = self._cached_state(turn_stream_id)
             self._load_event_ids_from_disk(
                 str(state["session_id"]), turn_stream_id,
                 thread_id=str(state["thread_id"]), turn_id=str(state["turn_id"]),
@@ -1590,7 +1591,7 @@ class MessageStreamStore:
             "event_seq": snapshot_seq,
             "emitted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "type": "stream.snapshot",
-            "payload": copy.deepcopy(state),
+            "payload": state,
             **(
                 {"workspace_id": state["workspace_id"]}
                 if state.get("workspace_id")
@@ -1674,7 +1675,8 @@ class MessageStreamStore:
         return cached
 
     async def get_state(self, turn_stream_id: str) -> dict[str, Any]:
-        return copy.deepcopy(self._cached_state(turn_stream_id))
+        # 提交整体替换缓存状态；线程复制捕获的版本，不阻塞事件循环或重复复制控制帧。
+        return await asyncio.to_thread(copy.deepcopy, self._cached_state(turn_stream_id))
 
     async def reconcile_job_tools(
         self, *, session_id: str, thread_id: str, job_id: str,
