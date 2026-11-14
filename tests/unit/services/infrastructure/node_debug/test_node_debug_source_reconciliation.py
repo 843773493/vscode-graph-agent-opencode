@@ -7,8 +7,11 @@ relocation 兜底文案，不依赖真实 Inspector 进程。
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
+import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -539,3 +542,45 @@ async def test_source_digests_cover_script_and_breakpoints(
         "helper.mjs": other_digest,
         "gone.mjs": None,
     }
+
+
+@pytest.mark.parametrize("live", [False, True])
+async def test_source_observation_yields_and_settles_before_unlock(
+    workspace_root: Path, entry_source: Path,
+    reconciler: NodeDebugSourceReconciliation,
+    session_state: RecordingSessionState,
+    monkeypatch: pytest.MonkeyPatch, live: bool,
+) -> None:
+    """慢读源码不占用事件循环；取消后须结算读取才能释放状态锁。"""
+    started, release = threading.Event(), threading.Event()
+    observe = reconciler._observe_sources
+
+    def slow_observe(
+        breakpoints: list[NodeDebugBreakpointDTO], loaded_paths: Iterable[str],
+    ) -> tuple[list[NodeDebugBreakpointDTO], dict[str, str | None]]:
+        started.set()
+        assert release.wait(2)
+        return observe(breakpoints, loaded_paths)
+
+    monkeypatch.setattr(reconciler, "_observe_sources", slow_observe)
+    breakpoint = _breakpoint(path="entry.mjs", source_digest="stale")
+    runtime = _runtime(workspace_root, breakpoints=[breakpoint]) if live else None
+    if runtime is None:
+        session_state.set_pending_breakpoints((_SESSION_ID, _THREAD_ID), [breakpoint])
+    reading = asyncio.create_task(reconciler.reconcile(_SESSION_ID, _THREAD_ID, runtime))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        reading.cancel()
+        await asyncio.sleep(0)
+        assert not reading.done()
+        if runtime is not None:
+            assert runtime.state_lock.locked()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await reading
+    assert session_state.persist_calls == []
+    if runtime is not None:
+        assert not runtime.state_lock.locked()
+    assert (list(runtime.breakpoints.values()) if runtime is not None else
+            session_state.pending_breakpoints((_SESSION_ID, _THREAD_ID))) == [breakpoint]

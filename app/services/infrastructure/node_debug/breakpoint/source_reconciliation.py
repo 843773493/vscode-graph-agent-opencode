@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+from contextlib import nullcontext
+
 from app.core.failures import failure_detail
+from app.core.shielded_cleanup import run_sync_shielded
+from app.schemas.internal_v2.node_debug import NodeDebugBreakpointDTO
 from app.services.infrastructure.node_debug.breakpoint.breakpoints import (
     BreakpointSource,
 )
@@ -34,32 +39,23 @@ class NodeDebugSourceReconciliation:
 
     def source_digests(self, runtime: NodeDebugRuntime) -> dict[str, str | None]:
         """读取该运行时脚本及全部断点源码的当前摘要。"""
-        paths = {
+        _, digests = self._observe_sources([], {
             runtime.relative_script_path,
             *(breakpoint.path for breakpoint in runtime.breakpoints.values()),
-        }
-        digests = {}
-        for path in paths:
-            source, uri = self._file_paths.resolve(path, allow_external=False)
-            digests[path] = BreakpointSource(source, uri=uri).digest
+        })
         return digests
 
-    async def reconcile(
+    def _observe_sources(
         self,
-        session_id: str,
-        thread_id: str,
-        runtime: NodeDebugRuntime | None,
-    ) -> None:
-        """把断点锚点、源码变更标记和待安装断点与磁盘源码对齐。"""
-        breakpoints = (
-            list(runtime.breakpoints.values())
-            if runtime is not None
-            else self._session_state.pending_breakpoints((session_id, thread_id))
-        )
+        breakpoints: list[NodeDebugBreakpointDTO],
+        loaded_paths: Iterable[str],
+    ) -> tuple[list[NodeDebugBreakpointDTO], dict[str, str | None]]:
         # 同文件一次读盘、一次摘要；按文件处理，正文不跨文件或跨请求驻留。
         indices_by_path: dict[str, list[int]] = {}
         for index, breakpoint in enumerate(breakpoints):
             indices_by_path.setdefault(breakpoint.path, []).append(index)
+        for path in loaded_paths:
+            indices_by_path.setdefault(path, [])
         reconciled = list(breakpoints)
         digests: dict[str, str | None] = {}
         for path, indices in indices_by_path.items():
@@ -69,6 +65,27 @@ class NodeDebugSourceReconciliation:
             for index in indices:
                 reconciled[index] = observed.reconcile(breakpoints[index])
             del observed
+        return reconciled, digests
+
+    async def reconcile(
+        self,
+        session_id: str,
+        thread_id: str,
+        runtime: NodeDebugRuntime | None,
+    ) -> None:
+        """调用方持有 Session 准入；源码 I/O 结算后再发布断点状态。"""
+        # Session 独占准入串行化用户操作；运行态锁同时阻止 Inspector 改写断点。
+        # 取消须等 worker 结束，才能释放两层保护。
+        async with runtime.state_lock if runtime is not None else nullcontext():
+            breakpoints = (
+                list(runtime.breakpoints.values())
+                if runtime is not None
+                else self._session_state.pending_breakpoints((session_id, thread_id))
+            )
+            reconciled, digests = await run_sync_shielded(
+                self._observe_sources, breakpoints,
+                tuple(runtime.loaded_source_digests) if runtime is not None else (),
+            )
         changed = False
         should_persist = False
         relocation_messages: list[str] = []
@@ -94,9 +111,6 @@ class NodeDebugSourceReconciliation:
             active = runtime.status in LIVE_NODE_DEBUG_RUNTIME_STATUSES
             changed_paths = set()
             for path, loaded_digest in runtime.loaded_source_digests.items():
-                if path not in digests:
-                    source, uri = self._file_paths.resolve(path, allow_external=False)
-                    digests[path] = BreakpointSource(source, uri=uri).digest
                 if digests[path] != loaded_digest:
                     changed_paths.add(path)
             if active and changed_paths:
