@@ -33,7 +33,6 @@ class JobRuntimeStateProtocol(Protocol):
     progress: int
     current_step: str | None
     error_message: str | None
-    result: str | None
     created_at: datetime
     updated_at: datetime
     ended_at: datetime | None

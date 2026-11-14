@@ -553,11 +553,7 @@ async def test_two_short_messages_start_and_converge_after_previous_turn(job_ser
         await job.task
 
     assert executor.calls == 2
-    assert [job.status for job in jobs] == [JobStatus.completed, JobStatus.completed]
-    assert [job.result for job in jobs] == [
-        "short-message-ok-1",
-        "short-message-ok-2",
-    ]
+    assert [(await service.get(job.job_id)).status for job in jobs] == [JobStatus.completed, JobStatus.completed]
     assert service._thread_current_job.get((session_id, job_fixture_thread_id(session_id))) is None
 
 
@@ -688,8 +684,7 @@ async def test_model_finalization_grace_preserves_response_after_total_budget(jo
     assert job.task is not None
     await job.task
 
-    assert job.status == JobStatus.completed
-    assert job.result == "final-response-after-grace"
+    assert (await service.get(job.job_id)).status == JobStatus.completed
     assert not [
         event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     ]
@@ -731,8 +726,7 @@ async def test_tool_finalization_grace_preserves_result_after_total_budget(job_s
     assert job.task is not None
     await job.task
 
-    assert job.status == JobStatus.completed
-    assert job.result == "browser-result-and-final-response"
+    assert (await service.get(job.job_id)).status == JobStatus.completed
     assert job.current_step is None
     assert not [
         event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
@@ -775,8 +769,7 @@ async def test_finalization_grace_does_not_require_fresh_step_projection(job_ser
     assert job.task is not None
     await job.task
 
-    assert job.status == JobStatus.completed
-    assert job.result == "final-response-after-stale-step"
+    assert (await service.get(job.job_id)).status == JobStatus.completed
     assert not [
         event for event in bus.events if event.get("event_type") == EventType.JOB_FAILED
     ]

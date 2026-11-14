@@ -121,7 +121,6 @@ class JobState:
     progress: int = 0
     current_step: str | None = None
     error_message: str | None = None
-    result: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     ended_at: datetime | None = None
@@ -1336,7 +1335,6 @@ class JobService:
                 progress=job.progress,
                 current_step=job.current_step,
                 error_message=job.error_message,
-                result=job.result,
                 created_at=job.created_at,
                 updated_at=job.updated_at,
                 ended_at=job.ended_at,
@@ -1391,7 +1389,7 @@ class JobService:
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if execution_task in done:
-                    result = execution_task.result()
+                    execution_task.result()
                 elif startup_timeout_task in done:
                     await self._cancel_execution_task(
                         execution_task,
@@ -1412,9 +1410,9 @@ class JobService:
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     if execution_task in done:
-                        result = execution_task.result()
+                        execution_task.result()
                     else:
-                        result = await self._await_finalizing_execution(
+                        await self._await_finalizing_execution(
                             execution_task,
                             job,
                             job_timeout_seconds=job_timeout_seconds,
@@ -1452,7 +1450,6 @@ class JobService:
                     startup_ready_task,
                     return_exceptions=True,
                 )
-            job.result = result
             transition_job_status(job, JobStatus.completed)
             job.progress = 100
             job.current_step = None

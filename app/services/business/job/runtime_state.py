@@ -39,7 +39,6 @@ class JobRuntimeState:
     progress: int = 0
     current_step: str | None = None
     error_message: str | None = None
-    result: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     ended_at: datetime | None = None

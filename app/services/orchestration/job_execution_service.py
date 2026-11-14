@@ -100,7 +100,6 @@ class JobExecutionService:
 
         result_text = result if isinstance(result, str) else str(result)
 
-        job.result = result_text
         transition_job_status(job, JobStatus.completed)
         job.progress = 100
 

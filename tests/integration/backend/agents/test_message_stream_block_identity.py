@@ -55,6 +55,11 @@ async def test_product_snapshots_keep_original_block_model_calls_after_restart(
         assert {block["block_id"]: block["model_call_id"] for block in snapshot["blocks"]} == block_owners
         assert snapshot["current_model_call_id"] == calls[-1]
         assert {block["text"] for block in snapshot["blocks"]} == {"identity-before-tool", "identity-after-tool"}
+        traces = await case.client.get(f"/api/v1/sessions/{session}/traces")
+        assert traces.status_code == 200, traces.text
+        completed, = [event for event in traces.json()["data"]["items"] if event["type"] == "job_completed"]
+        assert completed["job_id"] == result["job_id"]
+        assert completed["raw"]["payload"]["result"] == "identity-after-tool"
         # 已收到全部事件的客户端以高水位重连，服务端返回终态快照控制帧。
         stream = await case.client.get(base, params={"after_seq": snapshot["snapshot_seq"]})
         assert stream.status_code == 200, stream.text
