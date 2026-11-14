@@ -6,9 +6,8 @@ import time
 from collections.abc import Callable
 from typing import Literal
 
-from cdifflib import CSequenceMatcher
-
 from app.abstractions.session_changes import AggregatedFileChange, StoredFileEdit
+from app.core.text_diff import iter_unified_diff
 from app.schemas.internal_v2.session_changes import (
     SessionChangesetKind,
     SessionChangesSummaryDTO,
@@ -52,28 +51,9 @@ def build_unified_diff(
     before_content: str,
     after_content: str,
 ) -> str:
-    before = before_content.splitlines(keepends=True)
-    after = after_content.splitlines(keepends=True)
-    lines: list[str] = []
-    # 沿用 difflib 的匹配、autojunk 和三行上下文语义，仅将匹配循环交给 C。
-    for group in CSequenceMatcher(None, before, after).get_grouped_opcodes(3):
-        if not lines:
-            lines.extend((f"--- a{file_path}\n", f"+++ b{file_path}\n"))
-        first, last = group[0], group[-1]
-        ranges = []
-        for start, end in ((first[1], last[2]), (first[3], last[4])):
-            length = end - start
-            beginning = start + 1 if length else start
-            ranges.append(str(beginning) if length == 1 else f"{beginning},{length}")
-        lines.append(f"@@ -{ranges[0]} +{ranges[1]} @@\n")
-        for tag, i1, i2, j1, j2 in group:
-            if tag == "equal":
-                lines.extend(" " + line for line in before[i1:i2])
-            if tag in {"replace", "delete"}:
-                lines.extend("-" + line for line in before[i1:i2])
-            if tag in {"replace", "insert"}:
-                lines.extend("+" + line for line in after[j1:j2])
-    return "".join(lines)
+    return "".join(iter_unified_diff(
+        before_content, after_content, fromfile=f"a{file_path}", tofile=f"b{file_path}",
+    ))
 
 
 def count_diff_lines(diff_text: str) -> tuple[int, int]:

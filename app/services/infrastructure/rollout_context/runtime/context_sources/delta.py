@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import difflib
 import hashlib
 from typing import Literal
 
+from app.core.text_diff import iter_unified_diff
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (
         ContextSourceDelta,
 )
@@ -42,11 +42,11 @@ class SourceDeltaMixin:
             )
             if kind not in {"activation", "rebuild"} and previous_content is not None:
                 diff = "".join(
-                    # difflib 不为缺少行尾的内容补分隔；用标准标记避免 -旧+新粘连。
+                    # diff 不为缺少行尾的内容补分隔；用标准标记避免 -旧+新粘连。
                     line if line.endswith(("\n", "\r")) else line + "\n\\ No newline at end of file\n"
-                    for line in difflib.unified_diff(
-                        previous_content.splitlines(keepends=True),
-                        state.latest_content.splitlines(keepends=True),
+                    for line in iter_unified_diff(
+                        previous_content,
+                        state.latest_content,
                         fromfile=f"{state.name}@{state.latest_visible_committed_revision}",
                         tofile=f"{state.name}@{state.latest_revision}",
                     )
