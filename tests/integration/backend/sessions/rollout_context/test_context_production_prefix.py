@@ -1275,6 +1275,7 @@ def test_sealed_retry_does_not_read_live_desired(production_context, monkeypatch
     first = prepare("retry")
     manager.observe("instruction:R01", "尚未发送的新 desired", revision="instructions:2")
     pending = manager.prepare_pending()
+    read_sources = manager.prepare_sources
 
     def refuse_desired():
         raise AssertionError("sealed retry 不得重新读取 desired")
@@ -1284,7 +1285,7 @@ def test_sealed_retry_does_not_read_live_desired(production_context, monkeypatch
     assert retry["assembly_id"] == first["assembly_id"]
     assert retry["messages"] == first["messages"]
     assert pending is not None
-    assert tuple(manager._pending.values()) == pending.deltas
+    assert read_sources().deltas == pending.deltas
     restored = saver._storage.assemblies.get_context_assembly(session, thread, assembly_id=retry["assembly_id"])
     assert restored.seal_binding.source_revisions[0].revision == "instructions:1"
 

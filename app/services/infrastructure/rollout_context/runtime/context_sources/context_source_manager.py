@@ -80,7 +80,7 @@ class ContextSourceManager(
         self._last_model_call_receipt: CommittedContextSourceBatch | None = None
         self._sources: dict[str, SourceState] = {}
         self._source_ids_by_kind_and_name: dict[tuple[str, str], str] = {}
-        self._pending: dict[str, ContextSourceDelta] = {}
+        self._pending: dict[str, None] = {}
         self._skill_activation_snapshot: SkillCatalogActivationSnapshot | None = None
         self._pending_observations: dict[str, PendingSourceObservation] = {}
         self._rebuild_transition_id: str | None = None

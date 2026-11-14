@@ -2696,8 +2696,8 @@ async def test_real_bridge_waits_for_paired_terminal_result_before_sources_or_se
     assert case.controller.transport.call_count == 1
     assert _sealed_contract_rows(case) == before
     assert _latest_contract_assembly(case).seal_binding == first.seal_binding
-    # 只读 pending 容器，避免测试自身调用 prepare_sources 污染边界计数。
-    assert tuple(case.manager._pending.values()) == pending.deltas
+    # 被测调用结束后从原只读入口核对候选，不计入其准备边界调用数。
+    assert originals["sources"]().deltas == pending.deltas
     with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
         assert snapshot.connection.execute(
             "SELECT status, result_message_sequence FROM tool_calls WHERE tool_call_id = 'toolset-call'"
@@ -2852,7 +2852,8 @@ async def test_real_prepare_rejects_noncompleted_unknown_canonical_tool_result(
         "instruction:native-contract", "工具终态闭合后才应用",
         revision="native-contract:noncompleted-unknown",
     )
-    pending = tuple(case.manager._pending.values())
+    read_sources = case.manager.prepare_sources
+    pending = read_sources().deltas
     model_call_id = f"terminal-scope-{canonical_status}"
     scoped_call_id = f"{model_call_id}:tool-call:unknown-result-call"
     with dispatch_execution_scope(case.saver, case.session, case.turn):
@@ -2940,7 +2941,7 @@ async def test_real_prepare_rejects_noncompleted_unknown_canonical_tool_result(
     assert _sealed_contract_rows(case) == before
     assert _latest_contract_assembly(case).seal_binding == first.seal_binding
     assert _latest_contract_assembly(case).seal_binding.prefix == first.seal_binding.prefix
-    assert tuple(case.manager._pending.values()) == pending
+    assert read_sources().deltas == pending
     with case.saver._context_reader.open_snapshot(case.session, case.thread) as snapshot:
         assert case.saver._context_reader.read_canonical_items(
             snapshot, item_ids=(committed_result.item_id,),

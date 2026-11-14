@@ -66,8 +66,7 @@ class SourceRegistryMixin:
                         state.observed_revisions = list(old.observed_revisions)
                     if old.latest_visible_committed_revision == state.latest_visible_committed_revision:
                         state.latest_visible_committed_content = old.latest_visible_committed_content
-                    pending = self._pending.get(stored.source_id)
-                    if pending is not None and pending.revision == state.latest_revision and (
+                    if stored.source_id in self._pending and old.latest_revision == state.latest_revision and (
                         state.latest_revision != state.latest_visible_committed_revision
                         or state.selection_sequence != state.latest_visible_selection_sequence
                     ):
