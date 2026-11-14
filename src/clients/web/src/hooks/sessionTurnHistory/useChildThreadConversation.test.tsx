@@ -199,47 +199,48 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
   expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });
 });
 
-test("静默轮询遇到相同历史版本不触发重渲染，版本变化时刷新历史", async () => {
+test("静默轮询只读版本，变化才补正文；失败恢复和手动刷新仍读完整历史", async () => {
   jest.useFakeTimers();
   let historyRevision = 7;
-  let requests = 0;
-  let completePoll: ((reply: Response) => void) | null = null;
-  let completeManualRefresh: ((reply: Response) => void) | null = null;
-  installSessionApiFetchMock(({ path }) => {
-    requests += 1;
-    const threadId = path.split("/").slice(-2)[0]!;
-    const page = response({
-      ...history(threadId),
-      source_view_id: `view-${threadId}`,
-      source_view_revision: historyRevision,
-    });
-    if (requests === 2) return new Promise<Response>((resolve) => { completePoll = resolve; });
-    if (requests === 4) return Response.json({ detail: "轮询读取失败" }, { status: 503 });
-    if (requests === 6) return new Promise<Response>((resolve) => { completeManualRefresh = resolve; });
-    return page;
+  let pauseNext = false;
+  let failNext = false;
+  let completeRead!: (reply: Response) => void;
+  const requests: { include: string[]; turns: number }[] = [];
+  const page = () => response({
+    ...history(CHILDREN[0]!.thread_id), source_view_revision: historyRevision,
+  });
+  installSessionApiFetchMock(({ init }) => {
+    requests.push(JSON.parse(String(init?.body)));
+    if (pauseNext) {
+      pauseNext = false;
+      return new Promise<Response>((resolve) => { completeRead = resolve; });
+    }
+    if (failNext) {
+      failNext = false;
+      return Response.json({ detail: "轮询读取失败" }, { status: 503 });
+    }
+    return page();
   });
 
   act(() => { renderer = create(<Harness />); });
   act(() => current.selectThread(CHILDREN[0]!.thread_id));
   await act(async () => { await drainMicrotasks(); });
   expect(current.snapshot.history?.source_view_revision).toBe(7);
-
+  const fullRead = requests[0]!;
+  expect(fullRead.include).toContain("tool_result");
+  const initialHistory = current.snapshot.history;
   const renderedAfterInitialRead = renderCount;
-  const requestsAfterInitialRead = requests;
+
+  pauseNext = true;
   await act(async () => {
     jest.advanceTimersByTime(2_500);
     await drainMicrotasks();
   });
-  expect(requests).toBe(requestsAfterInitialRead + 1);
+  expect(requests.at(-1)).toMatchObject({ include: ["metadata"], turns: 1 });
   expect(renderCount).toBe(renderedAfterInitialRead);
-  await act(async () => {
-    completePoll!(response({
-      ...history(CHILDREN[0]!.thread_id),
-      source_view_id: `view-${CHILDREN[0]!.thread_id}`,
-      source_view_revision: historyRevision,
-    }));
-    await drainMicrotasks();
-  });
+  await act(async () => { completeRead(page()); await drainMicrotasks(); });
+  expect(current.snapshot.history).toBe(initialHistory);
+  expect(requests.at(-1)!.include).toEqual(["metadata"]);
   expect(renderCount).toBe(renderedAfterInitialRead);
 
   historyRevision = 8;
@@ -247,41 +248,32 @@ test("静默轮询遇到相同历史版本不触发重渲染，版本变化时�
     jest.advanceTimersByTime(2_500);
     await drainMicrotasks();
   });
+  expect(requests.slice(-2)).toMatchObject([
+    { include: ["metadata"], turns: 1 }, fullRead,
+  ]);
   expect(current.snapshot.history?.source_view_revision).toBe(8);
   expect(renderCount).toBeGreaterThan(renderedAfterInitialRead);
 
+  failNext = true;
   await act(async () => {
     jest.advanceTimersByTime(2_500);
     await drainMicrotasks();
   });
-  expect(requests).toBe(4);
   expect(current.snapshot.error).toContain("轮询读取失败");
-
   await act(async () => {
     jest.advanceTimersByTime(2_500);
     await drainMicrotasks();
   });
-  expect(requests).toBe(5);
+  expect(requests.at(-1)).toEqual(fullRead);
   expect(current.snapshot.error).toBeNull();
   expect(current.snapshot.history?.source_view_revision).toBe(8);
 
+  pauseNext = true;
   let manualRefresh!: Promise<void>;
-  const requestsBeforeManualRefresh = requests;
-  await act(async () => {
-    manualRefresh = current.refresh();
-    await drainMicrotasks();
-  });
-  expect(requests).toBe(requestsBeforeManualRefresh + 1);
+  await act(async () => { manualRefresh = current.refresh(); await drainMicrotasks(); });
+  expect(requests.at(-1)).toEqual(fullRead);
   expect(current.snapshot.loading).toBe(true);
-  await act(async () => {
-    completeManualRefresh!(response({
-      ...history(CHILDREN[0]!.thread_id),
-      source_view_id: `view-${CHILDREN[0]!.thread_id}`,
-      source_view_revision: historyRevision,
-    }));
-    await manualRefresh;
-    await drainMicrotasks();
-  });
+  await act(async () => { completeRead(page()); await manualRefresh; await drainMicrotasks(); });
   expect(current.snapshot.loading).toBe(false);
   expect(current.snapshot.history?.source_view_revision).toBe(8);
 });

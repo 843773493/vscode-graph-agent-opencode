@@ -449,6 +449,20 @@ try {
   await reportsPanel.locator(`.child-thread-item[data-thread-id="${childThreadId}"] .child-thread-report-link`).click();
   const report = reportsPanel.locator(`.child-thread-conversation[data-thread-id="${childThreadId}"] .child-thread-report`);
   await expect(report.getByText(childFinalText, { exact: true })).toBeVisible();
+  const conversation = reportsPanel.locator(`.child-thread-conversation[data-thread-id="${childThreadId}"]`);
+  const isChildHistory = (response) => new URL(response.url()).pathname ===
+    `/api/v1/sessions/${result.sessionId}/threads/${childThreadId}/history`;
+  const fullHistory = page.waitForResponse(response => isChildHistory(response)
+    && response.request().postDataJSON().include.includes("tool_result"));
+  await conversation.getByRole("button", { name: "最新对话", exact: true }).click();
+  assert.equal((await fullHistory).status(), 200);
+  const revisionRead = await page.waitForResponse(response => isChildHistory(response)
+    && response.request().postDataJSON().include.join(",") === "metadata");
+  assert.equal(revisionRead.status(), 200);
+  const revisionPage = await revisionRead.json();
+  assert.equal(revisionPage.data.thread_id, childThreadId);
+  assert.equal(revisionPage.request_id, revisionRead.headers()["x-request-id"]);
+  await expect(conversation.locator(".child-thread-conversation-history")).toContainText(childFinalText);
   const rolesOf = (item) => {
     const attempt = item?.upstream?.attempts?.[0];
     return (attempt?.request?.messages ?? []).map((message) => message.role);

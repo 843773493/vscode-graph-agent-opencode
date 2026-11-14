@@ -32,13 +32,7 @@ function sameHistoryRevision(previous: TurnHistoryPage | null, next: TurnHistory
     && typeof previous.source_view_revision === "number"
     && previous.source_view_revision === next.source_view_revision
     && previous.thread_id === next.thread_id
-    && previous.projection_epoch === next.projection_epoch
-    && previous.next_cursor === next.next_cursor
-    && previous.before_cursor === next.before_cursor
-    && previous.after_cursor === next.after_cursor
-    && previous.has_more === next.has_more
-    && previous.has_before === next.has_before
-    && previous.has_after === next.has_after;
+    && previous.projection_epoch === next.projection_epoch;
 }
 
 export interface ChildThreadSelectionIntent {
@@ -125,16 +119,26 @@ export function useChildThreadConversation({
       update(key, (prior) => ({ ...prior, view, loading: !silent, error: null }));
     }
     try {
-      const page = await loadSessionHistory(apiPort, sessionId, {
+      const checkRevision = silent && view === "history" && previous.history !== null && previous.error === null;
+      let page = await loadSessionHistory(apiPort, sessionId, {
         direction: older ? "before" : "tail",
         cursor: cursor ?? undefined,
-        ...(view === "report" ? { execution_id: reportExecutionId } : { turns: 10 }),
-        include: [...INCLUDE],
+        ...(view === "report" ? { execution_id: reportExecutionId } : { turns: checkRevision ? 1 : 10 }),
+        include: checkRevision ? ["metadata"] : [...INCLUDE],
       }, workspaceId, controller.signal, threadId);
       if (controller.signal.aborted || readRef.current !== controller || selectionTokenRef.current !== selectionToken) return;
       // page 属于请求的真实容器；继承的历史成员保留其原 Session/Thread scope。
       if (page.thread_id !== threadId) {
         throw new Error(t("child.historyOwnerMismatch"));
+      }
+      if (checkRevision) {
+        // revision 绑定整个 Thread 的历史快照；轮询不重读尚未变化的正文。
+        if (sameHistoryRevision(previous.history, page)) return;
+        page = await loadSessionHistory(apiPort, sessionId, {
+          direction: "tail", turns: 10, include: [...INCLUDE],
+        }, workspaceId, controller.signal, threadId);
+        if (controller.signal.aborted || readRef.current !== controller || selectionTokenRef.current !== selectionToken) return;
+        if (page.thread_id !== threadId) throw new Error(t("child.historyOwnerMismatch"));
       }
       if (view === "report" && !(page.internal_executions ?? []).some((execution) => execution.execution_id === reportExecutionId)) {
         throw new Error(t("child.reportMissing"));
