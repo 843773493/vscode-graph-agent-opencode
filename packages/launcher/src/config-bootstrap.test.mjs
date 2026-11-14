@@ -70,6 +70,7 @@ describe("config bootstrap", () => {
       runtime,
       environment: {
         BOXTEAM_HOME: fixtureBoxteamHome,
+        PYTHONIOENCODING: "ascii",
         BOXTEAM_INSTALL_DEVELOPMENT_ASSETS: "1",
         BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE: "1",
       },
@@ -87,6 +88,7 @@ describe("config bootstrap", () => {
     expect(calls[0].args).toEqual(["-m", "configs.boxteam"]);
     expect(calls[0].options.cwd).toBe(fixtureApplicationRoot);
     expect(calls[0].options.env.BOXTEAM_HOME).toBe(fixtureBoxteamHome);
+    expect(calls[0].options.env.PYTHONIOENCODING).toBe("utf-8");
     expect(calls[0].options.env.BOXTEAM_INSTALL_DEVELOPMENT_ASSETS).toBe("1");
     expect(calls[0].options.env.BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE).toBe("1");
     expect(result.output).toContain('"created":true');

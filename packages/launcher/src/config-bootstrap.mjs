@@ -35,6 +35,8 @@ export function initializeUserConfiguration({
   const childEnvironment = {
     ...environment,
     BOXTEAM_HOME: boxteamHome,
+    // stdout JSON 与下方解码共用UTF-8，不依赖目标终端的默认代码页。
+    PYTHONIOENCODING: "utf-8",
     PYTHONPATH: [
       runtime.applicationRoot,
       environment.PYTHONPATH,
