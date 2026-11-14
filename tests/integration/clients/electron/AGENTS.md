@@ -18,6 +18,8 @@
 
 `test_native_quick_access.py` 经真实 Ctrl+P、文件正文模式、明确 A+B 范围和 Command Center 操作原 Quick Input；从搜索视图转交原 Search Editor，正常保存、关窗重启后再次查询，核持久范围仍只含原 A+B。两次启动使用同来源／profile，观察实际搜索 owner 和 request_id；不手动写范围配置、缓存或提前 flush，也不把复用 ASAR 算作最新全部源码的发行验收。
 
+`test_native_management_closure.py` 经原 Provider 表单编辑来源、显式保存及实际物理配置核验，正常关窗后以同 ASAR／profile 重启并从原入口读回，核固定 owner、request_id、dirty 与零自动保存／重放。复用 `launch.mjs` 管理窗口及日志；Workspace observation 的订阅变化可主动取消旧流，插件 SSE 仅允许关窗取消，其余页面／网络错误仍失败。
+
 # 可修改内容
 
 - Linux 原生 Electron 的产物构建、窗口操作、独立 profile、固定页面来源和缓存恢复验收。
