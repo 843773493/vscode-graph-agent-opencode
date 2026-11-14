@@ -381,11 +381,11 @@ async def test_live_projection_bounds_large_text_until_canonical_history_is_read
 
 
 @pytest.mark.asyncio
-async def test_fanout_does_not_wait_for_slow_state_snapshot(
+async def test_slow_state_snapshot_keeps_fanout_live_and_coalesces_pending_versions(
     message_stream_store: MessageStreamStoreCase,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store, _, session_id = message_stream_store
+    store, resolver, session_id = message_stream_store
     writer = await store.open(thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id, turn_id="job_snapshot_fanout")
     subscription = await store.subscribe(writer.turn_stream_id)
     monkeypatch.setattr(
@@ -404,13 +404,11 @@ async def test_fanout_does_not_wait_for_slow_state_snapshot(
         state: dict[str, object],
     ) -> None:
         snapshot_started.set()
-        if not release_snapshot.wait(timeout=2):
+        if not release_snapshot.wait(timeout=10):
             raise TimeoutError("模拟状态快照阻塞")
         original_write_snapshot(snapshot_session_id, turn_stream_id, state)
 
     monkeypatch.setattr(store, "_write_state_snapshot", slow_write_snapshot)
-    release_timer = threading.Timer(0.5, release_snapshot.set)
-    release_timer.start()
     commit_task = asyncio.create_task(
         writer.commit(
             "block.delta",
@@ -430,11 +428,28 @@ async def test_fanout_does_not_wait_for_slow_state_snapshot(
         assert not release_snapshot.is_set()
         assert commit_task.done()
         await commit_task
+        for _ in range(64):
+            await writer.commit("block.delta", {
+                "block_id": "block_1", "operation": "append", "text": "后续",
+            }, block_id="block_1")
+        await writer.close_completed()
+        # 慢盘期间仍继续提交，但不能每触发一次快照就多保留一棵历史状态。
+        pending = [task for task in asyncio.all_tasks()
+                   if task.get_coro().cr_code is store._persist_state_snapshot.__func__.__code__]
+        assert len(pending) == 1
     finally:
         release_snapshot.set()
-        release_timer.cancel()
         if not commit_task.done():
             await commit_task
+        await asyncio.gather(*store._snapshot_tasks.values())
+        await store.unsubscribe(subscription)
+    state = await store.get_state(writer.turn_stream_id)
+    assert state["stream_status"] == "completed"
+    assert state["blocks"][0]["text"] == "即时" + "后续" * 64
+    assert json.loads(store._state_path(session_id, writer.turn_stream_id).read_text()) == state
+    cold = MessageStreamStore(path_resolver=resolver)
+    await cold.open_existing(session_id=session_id, thread_id=resolver.main_thread_id(session_id), turn_id=writer.turn_id)
+    assert await cold.get_state(writer.turn_stream_id) == state
 
 
 @pytest.mark.asyncio
@@ -2340,7 +2355,6 @@ async def test_evicted_terminal_streams_release_serial_locks(
 
     cache_limit = message_stream_store_module.MESSAGE_STREAM_TERMINAL_CACHE_MAX_ENTRIES
     assert len(store._locks) <= cache_limit
-    assert len(store._snapshot_locks) <= cache_limit
     # 会话级索引锁同样必须收敛：分片锁池长度恒为分片数，不随会话数量增长。
     assert len(store._index_locks) == message_stream_store_module.MESSAGE_STREAM_INDEX_LOCK_SHARDS
 

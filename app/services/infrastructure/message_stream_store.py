@@ -244,7 +244,7 @@ class MessageStreamStore:
         self._index_locks: tuple[asyncio.Lock, ...] = tuple(
             asyncio.Lock() for _ in range(MESSAGE_STREAM_INDEX_LOCK_SHARDS)
         )
-        self._snapshot_locks: dict[str, asyncio.Lock] = {}
+        self._pending_snapshots: dict[str, Mapping[str, Any]] = {}
         self._snapshot_tasks: dict[str, asyncio.Task[None]] = {}
         self._snapshot_file_lock = threading.Lock()
         self._states: dict[str, dict[str, Any]] = {}
@@ -273,13 +273,12 @@ class MessageStreamStore:
         self._event_ids_loaded.discard(turn_stream_id)
         self._replay_events.pop(turn_stream_id, None)
         # 被淘汰的流不再需要串行锁；锁字典必须随缓存一起收敛，否则每处理一个
-        # 历史 Turn 都会永久留下两个 asyncio.Lock，进程内存随会话总量无界增长。
+        # 历史 Turn 都会永久留下 asyncio.Lock，进程内存随会话总量无界增长。
         # 锁被持有时说明仍有协程在提交或等待同一 Turn，此时绝不能移除，否则
         # 等待者与新锁会并行进入同一临界区，重新破坏 event_seq 串行性。
-        for locks in (self._locks, self._snapshot_locks):
-            lock = locks.get(turn_stream_id)
-            if lock is not None and not lock.locked():
-                locks.pop(turn_stream_id, None)
+        lock = self._locks.get(turn_stream_id)
+        if lock is not None and not lock.locked():
+            self._locks.pop(turn_stream_id, None)
 
     def _touch_cached_state(
         self,
@@ -344,22 +343,15 @@ class MessageStreamStore:
         shard = zlib.crc32(session_id.encode("utf-8")) % len(self._index_locks)
         return self._index_locks[shard]
 
-    def _snapshot_lock_for(self, turn_stream_id: str) -> asyncio.Lock:
-        return self._snapshot_locks.setdefault(turn_stream_id, asyncio.Lock())
-
     async def _persist_state_snapshot(
         self,
         session_id: str,
         turn_stream_id: str,
-        state: Mapping[str, Any],
     ) -> None:
-        # 同一 Turn 的快照必须按提交顺序写入，避免较旧快照覆盖较新快照。
-        async with self._snapshot_lock_for(turn_stream_id):
-            await asyncio.to_thread(
-                self._write_state_snapshot,
-                session_id,
-                turn_stream_id,
-                state,
+        # 每条流只有一个 writer；写入期间仅保留最新待写版本，不积压历史快照。
+        while (state := self._pending_snapshots.pop(turn_stream_id, None)) is not None:
+            await run_sync_shielded(
+                self._write_state_snapshot, session_id, turn_stream_id, state,
             )
 
     def _on_snapshot_task_done(
@@ -369,6 +361,7 @@ class MessageStreamStore:
     ) -> None:
         if self._snapshot_tasks.get(turn_stream_id) is task:
             self._snapshot_tasks.pop(turn_stream_id, None)
+            self._pending_snapshots.pop(turn_stream_id, None)
         try:
             task.result()
         except asyncio.CancelledError:
@@ -387,13 +380,15 @@ class MessageStreamStore:
         turn_stream_id: str,
         state: Mapping[str, Any],
     ) -> None:
+        # 已提交状态只被整体替换；合并派生快照不改变事件日志的恢复边界。
+        self._pending_snapshots[turn_stream_id] = state
+        running = self._snapshot_tasks.get(turn_stream_id)
+        if running is not None and not running.done():
+            return
         task = asyncio.create_task(
             self._persist_state_snapshot(
                 session_id,
                 turn_stream_id,
-                # next_state 后续只会被整体替换，不会原地修改，可以避免在事件
-                # 循环中再次复制完整的 blocks/tool_executions。
-                state,
             )
         )
         self._snapshot_tasks[turn_stream_id] = task
