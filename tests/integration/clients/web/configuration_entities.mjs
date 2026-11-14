@@ -233,15 +233,6 @@ try {
   await save('agents');
   const removed = (await api(sourceUrl, fixture)).data;
   assert.equal(removed.source_effective.agents['entities-agent'], undefined);
-  result.phase = 'provider-remove';
-  await page.locator('.settings-context-label').getByRole('link', { name: '模型与 Provider', exact: true }).click();
-  await form('providers').getByRole('button').filter({ hasText: 'entities-provider' }).click();
-  await form('providers').getByRole('button', { name: '移除本层定义', exact: true }).click();
-  await expect(modal).toContainText('entities-provider');
-  await modal.getByRole('button', { name: '移除本层定义', exact: true }).click();
-  await save('providers');
-  const providerRemoved = (await api(sourceUrl, fixture)).data;
-  assert(!providerRemoved.source_effective.llm.providers.some(provider => provider.id === 'entities-provider'));
   result.phase = 'session-selection-links';
   const session = (await api('/api/v1/sessions', fixture, { method: 'POST', body: JSON.stringify({ title: '定义管理返回会话', agent_id: 'default' }) })).data;
   const mainThread = (await api(`/api/v1/sessions/${session.session_id}/main-thread`, fixture)).data;
@@ -354,6 +345,76 @@ try {
     p50: warm[Math.ceil(warm.length * .50) - 1], p95: warm[Math.ceil(warm.length * .95) - 1], max: warm.at(-1) };
   assert(result.defaultsMeasurements.p95 <= 500, 'Agent列表暖p95超过500ms');
   assert(result.defaultsMeasurements.max <= 1500, 'Agent列表暖最大值超过1500ms');
+
+  result.phase = 'seed-lower-layer';
+  const lowerKey = 'workspace_mutable_override';
+  const lowerUrl = '/api/v1/config/sources/' + lowerKey;
+  const lowerBefore = (await api(lowerUrl, fixture)).data;
+  const lowerJsonc = parse(lowerBefore.jsonc);
+  const lowerProvider = { id: 'mcp-plugin-replay', model: 'inherited-model', endpoint: 'https://inherited.example/v1',
+    api_key: '${INHERITED_MISSING_KEY}', custom_llm_provider: 'openai',
+    api_mode: { protocol: 'chat_completions', model_info: { supports_function_calling: true, supports_reasoning: false },
+      supports_reasoning: { reasoning_content: false } } };
+  lowerJsonc.llm ??= {};
+  lowerJsonc.llm.providers = [...(lowerJsonc.llm.providers ?? []).filter(provider => provider.id !== lowerProvider.id), lowerProvider];
+  lowerJsonc.agents ??= {};
+  lowerJsonc.agents['inherited-agent'] = { name: '下层 Agent', instructions: { system_prompt: '提示词来自下层来源' },
+    model: { primary_provider: lowerProvider.id } };
+  const lowerIntent = { gateway_id: fixture.gatewayId, workspace_id: fixture.workspaceId, source_key: lowerKey,
+    jsonc: JSON.stringify(lowerJsonc, null, 2), base_file_digest: lowerBefore.file_digest,
+    base_layer_revision: lowerBefore.layer_revision, base_layer_digest: lowerBefore.layer_digest,
+    expected_active_revision: lowerBefore.active_revision, expected_active_digest: lowerBefore.active_digest, idempotency_key: randomUUID() };
+  await api(lowerUrl + '/preflight', fixture, { method: 'POST', body: JSON.stringify(lowerIntent) });
+  await api(lowerUrl, fixture, { method: 'PUT', body: JSON.stringify(lowerIntent) });
+  const writesBeforeInheritance = result.writes.length;
+  result.seededSourceWrite = true;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
+  await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
+  await command('boxteam.settings.agents', location, 'inherited-agent');
+  await expect(form('agents').getByLabel('显示名', { exact: true })).toHaveValue('下层 Agent');
+  await form('agents').getByRole('button', { name: '新增 Agent', exact: true }).click();
+  await input('inherited-agent');
+  await input('本层覆盖 Agent');
+  await input('提示词来自本层覆盖');
+  await expect(quick).toBeVisible();
+  await quick.locator('.monaco-list-row').filter({ hasText: lowerProvider.id }).click();
+  await expect(modal).toContainText('覆盖继承的 Agent inherited-agent');
+  await modal.getByRole('button', { name: '新增 Agent', exact: true }).click();
+  await expect(form('agents').locator('[data-definition-id="inherited-agent"]')).toBeVisible();
+  await save('agents');
+  const agentOverride = (await api(sourceUrl, fixture)).data;
+  assert.equal(parse(agentOverride.jsonc).agents['inherited-agent'].name, '本层覆盖 Agent');
+  assert.equal(agentOverride.source_effective.agents['inherited-agent'].instructions.system_prompt, '提示词来自本层覆盖');
+  await form('agents').getByRole('button', { name: '移除本层定义', exact: true }).click();
+  await expect(modal).toContainText('inherited-agent');
+  await modal.getByRole('button', { name: '移除本层定义', exact: true }).click();
+  await save('agents');
+  const agentRestored = (await api(sourceUrl, fixture)).data;
+  assert.equal(parse(agentRestored.jsonc).agents?.['inherited-agent'], undefined);
+  assert.equal(agentRestored.source_effective.agents['inherited-agent'].name, '下层 Agent');
+  assert.equal(agentRestored.source_effective.agents['inherited-agent'].instructions.system_prompt, '提示词来自下层来源');
+
+  result.phase = 'provider-remove-and-restore-inheritance';
+  await page.locator('.settings-context-label').getByRole('link', { name: '模型与 Provider', exact: true }).click();
+  await form('providers').getByRole('button').filter({ hasText: 'entities-provider' }).click();
+  await form('providers').getByRole('button', { name: '移除本层定义', exact: true }).click();
+  await expect(modal).toContainText('entities-provider');
+  await modal.getByRole('button', { name: '移除本层定义', exact: true }).click();
+  await save('providers');
+  const providerRemoved = (await api(sourceUrl, fixture)).data;
+  assert(!providerRemoved.source_effective.llm.providers.some(provider => provider.id === 'entities-provider'));
+  await form('providers').getByRole('button', { name: '恢复整组 Provider 继承', exact: true }).click();
+  await expect(modal).toContainText('恢复整组 Provider 继承');
+  await modal.getByRole('button', { name: '恢复整组 Provider 继承', exact: true }).click();
+  await save('providers');
+  const providerRestored = (await api(sourceUrl, fixture)).data;
+  const lowerAfterRestore = (await api(lowerUrl, fixture)).data;
+  assert.equal(parse(providerRestored.jsonc).llm?.providers, undefined, '当前层 Provider 数组覆盖必须整体移除');
+  assert.deepEqual(providerRestored.source_effective.llm.providers, lowerAfterRestore.source_effective.llm.providers);
+  assert.equal(providerRestored.source_effective.llm.providers.find(provider => provider.id === lowerProvider.id)?.model, lowerProvider.model);
+  assert.equal(result.writes.length, writesBeforeInheritance + 4, '仅Agent覆盖/删除及Provider删除/整组恢复写入本层');
+  result.inheritance = { agentId: 'inherited-agent', providerId: lowerProvider.id, lowerSource: lowerKey };
   assert.equal(result.modelRequests.length, 0);
   assert(result.writes.every(write => write.gateway_id === fixture.gatewayId && write.workspace_id === fixture.workspaceId));
   assert.deepEqual(result.pageErrors, []);
