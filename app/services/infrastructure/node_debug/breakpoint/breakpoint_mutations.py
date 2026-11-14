@@ -59,20 +59,9 @@ class NodeDebugBreakpointMutations:
         tool_name: str | None,
         tool_call_id: str | None,
     ) -> None:
-        raw_path = params.path
         line = params.line
         column = params.column
-        condition = params.condition
-        hit_condition = params.hit_condition
-        log_message = params.log_message
-        breakpoint = self._configuration_factory.create_breakpoint(
-            path=raw_path,
-            line=line,
-            column=column,
-            condition=condition,
-            hit_condition=hit_condition,
-            log_message=log_message,
-        )
+        breakpoint = self._configuration_factory.create_breakpoints([params])[0]
         script_path = safe_join(self._workspace_root, breakpoint.path)
         if runtime is None:
             session_id, thread_id = owner
@@ -156,14 +145,14 @@ class NodeDebugBreakpointMutations:
         )
         if raw_path is None or line is None or column is None:
             raise ValueError("编辑源码断点的 path、line、column 不能为 null")
-        updated = self._configuration_factory.create_breakpoint(
+        updated = self._configuration_factory.create_breakpoints([NodeDebugSetBreakpointParams(
             path=raw_path,
             line=line,
             column=column,
             condition=condition,
             hit_condition=hit_condition,
             log_message=log_message,
-        ).model_copy(
+        )])[0].model_copy(
             update={
                 "breakpoint_id": current.breakpoint_id,
                 "created_at": current.created_at,
