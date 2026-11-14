@@ -3,9 +3,7 @@
 为软件内部与模型可见载荷中的资源引用建立**唯一**的寻址抽象与词汇：严格区分资源身份（ResourceIdentity）、资源 URI与真实路径（real path），把 `workspace`、`user`、`gateway`、`inline` 等作用域与其它工作区、其它 gateway 收敛到同一套寻址，并以顶层 gateway 之间的**星型解析**完成跨边界定位。本 capability 是这套抽象、scope 闭集、scope_id 语义表、URI 语法、kind 闭集与拒绝码登记处的唯一 owner。
 
 **契约版本**：本 capability 采用**契约修正 v2**（保留既有段序，`resources` 为保留固定段，`scope_id` 对**所有** scope 都必填），并已依据**仓库内受版本控制的事实源**（`app/core/resource_uri.py` 与 `app/services/infrastructure/resource_platform/virtual_resources/` 下的 `resolver.py`、`values.py` 三处逐字取值，关键取值已内联在本 spec 各处；不引用任何 `out/tests/temp/**` 临时产物）**定稿** scope 闭集、scope_id 语义、kind 闭集与拒绝码登记。`memory` 已确证**不是 URI scope**，MUST NOT 出现在闭集内。
-
 ## Requirements
-
 ### Requirement: 术语必须区分机制、地址、身份与真实路径
 
 系统 MUST 使用以下唯一术语表；其它 change、文档和实现说明 MUST 引用本表，不得另定义同义名称。
@@ -471,7 +469,7 @@ boxteam://{gateway_authority?}/{scope}/{scope_id}/resources/{kind}/{...canonical
 
 ### Requirement: kind 闭集定稿且描述符闭集独立不可混用
 
-URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files` | `attachments` | `workspace` | `folder`。`attachments` 只允许 workspace scope，目录根为 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/attachments/{attachment_id}`，其后按同一文件路径段规则访问 child；原件与预览只读，派生区复用原文件 owner 的写入能力。`files` 用于 `workspace` scope 的文件树根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`，以及 requirement「原生目录根绑定必须由目标 Gateway 唯一持有」登记的 `gateway` scope 原生目录根；`workspace`/`folder` 沿用现行领域导航模板。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
+URI kind 闭集 MUST 为 `agent-spec` | `skills` | `config` | `session` | `files` | `attachments` | `workspace` | `folder` | `changes`。`attachments` 只允许 workspace scope，目录根为 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/attachments/{attachment_id}`，其后按同一文件路径段规则访问 child；原件与预览只读，派生区复用原文件 owner 的写入能力。`files` 用于 `workspace` scope 的文件树根 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/files/root`，以及 requirement「原生目录根绑定必须由目标 Gateway 唯一持有」登记的 `gateway` scope 原生目录根；`workspace`/`folder` 沿用现行领域导航模板。config 定位配置逻辑来源，session 定位领域对象或由原 owner 公布的产物引用，二者不得被文件工具自行解释成私有目录。
 
 语法 kind 与语义来源描述符 kind MUST 分开：描述符仍只有 `agent-spec`/`skills`，普通 files 导航不会创建来源描述符。后续扩展必须先在本 owner 更新模板和能力，不存在通用未知 kind fallback；旧 memory 两点式仍拒绝。
 
@@ -891,3 +889,22 @@ URI的位置、revision/view/anchor的并列字段及ResourceIdentity职责 MUST
 
 - **WHEN** thread范围资源或未知状态资源被请求复用到另一个thread
 - **THEN** 通用入口不能自动提升scope、伪造可用状态或绕过lease；实际owner拒绝或按已授权的操作完成后返回权威结果
+
+### Requirement: Session 文件更改使用原 owner 的当前 Diff 地址
+
+中央寻址 owner SHALL 登记 `boxteam://{gateway_authority?}/workspace/{workspace_id}/resources/changes/{session_id}/{selection}/{source_gateway?}/{source_scope}/{source_scope_id}/resources/{source_kind}/{root}/{child...}`。`changes` 只属于 workspace scope；Session ID 沿既有 profile，selection 只接受 `all`、`turn_[0-9a-f]{32}` 或 replay owner 的 `turn-replay-[0-9a-f]{32}`，分别映射原变更 API 的 `all` 或 `turn:{turn_id}`，身份段不得百分号编码。
+
+selection 后的层级 SHALL 是完整规范源文件 URI 去掉 `boxteam://` 的地址，由同一 grammar 解析为明确 `files` 或 `attachments` child；不能是目录根、其它 kind 或嵌套 changes。源文件名沿原文件段编码，只解码一次，不继续解释字面百分号。不得把完整源 URI 百分号编码进单段，避免通用 URI 对象将编码斜杠展开后改变结构。嵌入引用补齐明确 Gateway，交原 owner 读取时归一为目标 Gateway 的规范本地形式；复制的完整外层 URI 同样携带明确 Gateway，解析不在中继机器解释路径。
+
+地址仅表达 Session、变更范围及源文件，不带 edit_id、revision、query、fragment 或正文。认证 Gateway 地址构造／解析不读取业务存储或授予权限。实际打开 SHALL 由原 SessionChanges owner 读取当前聚合 Diff，并由原只读编辑器展示；已打开版本与恢复仍归原变更 owner，不增加普通文件快照、通用版本字段、第二份历史或持久账本。未接通通用正文读取 owner 时，只提供复制／打开和实际正文粘贴，不将其伪装成可供 Composer 读取的文件引用。
+
+#### Scenario: 中文文件及 replay Turn 通过同一 grammar 往返
+
+- **WHEN** 普通执行或 replay Turn 修改包含中文、空格、百分号等文件名的资源并复制 Diff 地址
+- **THEN** 构造和解析保留原 Session、Turn 及源文件归属，文件名只按原文件段规则解码一次；零正文读取，内部编辑器投影不被公开
+
+#### Scenario: 引用重开读取当前变更而不制造快照
+
+- **WHEN** 用户关闭 Diff 后用公开 URI 重新打开
+- **THEN** 原 owner 核验访问并返回当前聚合 Diff，前后文本共用一次响应；源文件不在变更集中时明确失败，不改投同名文件，不以历史版本或当前文件猜测内容
+

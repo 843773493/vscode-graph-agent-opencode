@@ -732,9 +732,9 @@ Quick Access 不拥有索引，也不要求跨 owner 原始数据汇入全局搜
 
 新版场景索引 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/scenario-evidence-6.json` 保留旧版及失败原件，补齐MCP，并把原已附证据的Session定位与符号Provider故障同步到具体场景：205场景为139 observed、62 contract_verified、4 conditional，40行功能矩阵为30 observed、2 contract_verified、8 conditional。条件模式继续按实际服务／宿主说明缺失；具名Linux Web和Electron原件不合称最新共享树全场景、Windows或真实跨机SSH验收。本轮仅更新既有规划证据，不新增存储、兼容、自动重试或清缓存迁移。
 
-性能验收同时遵守[交互总延迟预算](../archive/2026-11-13-enforce-interactive-latency-budgets/design.md)：普通导航、查询和打开必须统计真实入口到完整结果／可用UI的总耗时，不以Provider局部耗时、loading出现或进程timeout替代。权限、归属和版本检查保留；不在暖查询无条件重复全历史／全库审计，不增加另一套性能监控。
+性能验收同时遵守[交互总延迟预算](../2026-11-13-enforce-interactive-latency-budgets/design.md)：普通导航、查询和打开必须统计真实入口到完整结果／可用UI的总耗时，不以Provider局部耗时、loading出现或进程timeout替代。权限、归属和版本检查保留；不在暖查询无条件重复全历史／全库审计，不增加另一套性能监控。
 
-自有插件的声明式贡献、运行期 Provider、受管服务及配置编辑归属由独立变更 [add-target-aware-extension-management](../add-target-aware-extension-management/design.md) 定义，D12–D15 明确原注册接缝、首批开放集合与未开放 Provider。插件命令进入原 `>`，沿该变更的稳定命令 ID／明确插件目标／插件开关驱动启停／释放合同调用；当前自有搜索与 Quick Access 查询仍由本稿原业务 owner 提供，不因插件可贡献命令就开放任意查询 Provider。它已取消 VSIX、VS Code 用户扩展 API／宿主和第三方市场；Registry／Command／Opener 继续复用，不增加旧格式适配或扩展宿主依赖。原用户扩展的历史测试只说明旧合同，相关入口须随该变更迁齐；完整安装、贡献注册、生命周期与设置验收归该变更，当前入口的条件复用不作为完成证据。两个变更均保持 Electron 仅承担窗口、生命周期与固定 profile 的边界。
+自有插件的声明式贡献、运行期 Provider、受管服务及配置编辑归属由独立变更 [add-target-aware-extension-management](../../add-target-aware-extension-management/design.md) 定义，D12–D15 明确原注册接缝、首批开放集合与未开放 Provider。插件命令进入原 `>`，沿该变更的稳定命令 ID／明确插件目标／插件开关驱动启停／释放合同调用；当前自有搜索与 Quick Access 查询仍由本稿原业务 owner 提供，不因插件可贡献命令就开放任意查询 Provider。它已取消 VSIX、VS Code 用户扩展 API／宿主和第三方市场；Registry／Command／Opener 继续复用，不增加旧格式适配或扩展宿主依赖。原用户扩展的历史测试只说明旧合同，相关入口须随该变更迁齐；完整安装、贡献注册、生命周期与设置验收归该变更，当前入口的条件复用不作为完成证据。两个变更均保持 Electron 仅承担窗口、生命周期与固定 profile 的边界。
 
 ## 后续细化边界（不表示实施顺序）
 
