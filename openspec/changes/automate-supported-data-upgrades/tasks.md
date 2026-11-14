@@ -11,6 +11,7 @@
   - 最终身份预检回归126项通过，涵盖未结算运行代／活动引用及远端凭据缺失在配置与布局首写前拒绝；原输出：同目录 `identity-preflight-final-01.log`。
 - [x] 2.2 冻结候选后在 hyf_win 隔离执行同一升级链，保留命令、版本、原输出及未完成范围。
   - Windows 候选 `dc38827e8b716e454e66f646d9aa205f6e2fac33`：配置／SQL启动预检66项通过，原SQLite基础14项通过；按新锁完成bootstrap后，真实Gateway／Workspace自动升级和两次启动1 passed／49.55秒。原输出：`out/tests/temp/2026/11/14/windows_distribution_closure/artifacts/windows-upgrade-{unit-final,integration-after-bootstrap}.log`；前轮GBK测试fixture和未同步依赖的失败原件保留，未降低保护或放宽断言。
+  - 目标快照 `9419e52bf2b4c45d81bfc1805e36fd6f8419723f` 与候选树一致；原命令、实际锁元数据及退出核对见同目录 `final-receipt.json`。Windows未另跑精确空资源账本单文件，保留Linux验证范围；全量产物收集因内存压力中止，仅清理本次collector及临时ZIP，原测试日志已在宿主保存，未以归档完成替代验收。
 - [x] 2.3 完成最小充分实现复审、静态分析和精确本地提交；不自动同步 dev/release/main。
   - 候选 `20c86faf4ee33041cfff826eb4ff436950609c25` 已本地提交；Ruff、Node语法、差异与OpenSpec严格校验通过，复用Sol只读复审确认首写顺序已闭合。未push或同步固定dev/release/main。
   - Windows编码收口另提交 `bddf1713b`、`353a4b9ef`、`dc38827e8`；Launcher子进程输出明确UTF-8，测试静态资产及journal显式UTF-8，不改变目标全局locale或静态文件的读取合同。
