@@ -19,6 +19,7 @@ from app.api.sse_heartbeat import (
     stream_sse_with_heartbeat,
 )
 from app.core.exceptions import NotFoundError
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.generator_import import SessionGeneratorImportRequest
 from app.schemas.internal_v2.persistent_task import (
@@ -60,7 +61,7 @@ async def _apply(operation: Callable[[], Awaitable[Result]]) -> Result:
 
 
 @router.get("", response_model=APIResponse[PersistentTaskListDTO])
-async def list_tasks(request_id: RequestId, service: TaskService, session_id: str | None = None):
+def list_tasks(request_id: RequestId, service: TaskService, session_id: str | None = None):
     return APIResponse(data=service.snapshot(session_id), request_id=request_id)
 
 
@@ -80,14 +81,17 @@ async def task_events(service: TaskService, session_id: str | None = None):
     async def stream():
         subscription = channel.subscribe(label="persistent-task-management")
         try:
-            yield "event: snapshot\ndata: " + service.snapshot(session_id).model_dump_json() + "\n\n"
+            snapshot = await run_sync_shielded(service.snapshot, session_id)
+            yield "event: snapshot\ndata: " + snapshot.model_dump_json() + "\n\n"
             while True:
                 delivery = await subscription.next()
                 event = delivery.event
                 if delivery.gap or event.task_id is None:
-                    yield "event: snapshot\ndata: " + service.snapshot(session_id).model_dump_json() + "\n\n"
+                    snapshot = await run_sync_shielded(service.snapshot, session_id)
+                    yield "event: snapshot\ndata: " + snapshot.model_dump_json() + "\n\n"
                 else:
-                    yield "event: changed\ndata: " + service.changed(event.task_id, event.run_id, session_id).model_dump_json() + "\n\n"
+                    changed = await run_sync_shielded(service.changed, event.task_id, event.run_id, session_id)
+                    yield "event: changed\ndata: " + changed.model_dump_json() + "\n\n"
         finally:
             channel.unsubscribe(subscription)
 
@@ -102,8 +106,8 @@ async def import_session_generator(payload: SessionGeneratorImportRequest, reque
 
 
 @router.get("/{task_id}", response_model=APIResponse[PersistentTaskDTO])
-async def get_task(task_id: str, request_id: RequestId,
-                   service: TaskService):
+def get_task(task_id: str, request_id: RequestId,
+             service: TaskService):
     try:
         return APIResponse(data=service.get(task_id), request_id=request_id)
     except KeyError as error:

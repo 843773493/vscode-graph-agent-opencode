@@ -114,7 +114,7 @@ class PersistentTaskService:
             # 通知排队期间任务可能已被所属会话退休，明确发布移除。
             return PersistentTaskChangedDTO(task_id=task_id)
         if (session_id is not None and not self._references_session(task, session_id)
-                and task_id not in self._store.generated_for_session(session_id)):
+                and task_id not in self._store.generated_for_session(session_id, task_id=task_id)):
             return PersistentTaskChangedDTO(task_id=task_id)
         return PersistentTaskChangedDTO(task_id=task_id, task=task,
                                         run=self._store.run_summary(task_id, run_id) if run_id else None)
