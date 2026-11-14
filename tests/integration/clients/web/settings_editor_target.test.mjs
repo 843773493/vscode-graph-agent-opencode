@@ -1,4 +1,5 @@
 import { t } from '../../../../src/clients/shared/core/i18n/index.js';
+import { requireGatewayWorkspaceRequestTarget } from '../../../../src/clients/web/src/api/workspaceIdentity.js';
 import { afterAll, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -79,6 +80,10 @@ const Registry = { as: () => configurationRegistry };
 const ITargetSettingsContext = evaluate(await source('src/settings/scope.ts', true), ['ITargetSettingsContext'], {
   createDecorator: serviceIdentifier, registerSingleton() {}, InstantiationType: { Delayed: 0 },
 }).ITargetSettingsContext;
+const settingsHeaderRequests = [], settingsHeaderDirectory = {
+  sources: [{ source_key: 'workspace_user', uri: 'boxteam-source://gateway/workspace/source.jsonc' }],
+  schema_uri: 'boxteam-schema://gateway/workspace/schema.json',
+};
 const { configSourceEditorUri } = evaluate(await source('src/settings/sourceEditor.ts', true),
   ['configSourceScheme', 'configSourceEditorUri'], { URI });
 const modelParsed = await source('workbench/services/preferences/common/preferencesModels.ts');
@@ -97,14 +102,30 @@ const { settingsEditorIdentity, settingsHistoryLocation, parseSettingsLocation, 
 class HeaderElement {
   style = {};
   children = [];
+  listeners = new Map();
   text = '';
   append(...children) { this.children.push(...children); }
-  addEventListener() {}
+  addEventListener(name, listener) { this.listeners.set(name, listener); }
+  dispatch(name) { this.listeners.get(name)?.({ preventDefault() {} }); }
   set textContent(value) { this.text = value; this.children = []; }
   get textContent() { return this.text + this.children.map(child => child.textContent).join(''); }
 }
 const { SettingsContextHeader } = evaluate(await source('src/settings/header.ts', true), ['SettingsContextHeader'], {
-  Disposable, ITargetSettingsContext, ICommandService: serviceIdentifier(), INotificationService: serviceIdentifier(), sourceStatus: () => '来源状态',
+  Disposable, ITargetSettingsContext, ICommandService: serviceIdentifier(), INotificationService: serviceIdentifier(),
+  IContextViewService: serviceIdentifier(), IInstantiationService: serviceIdentifier(), IEditorService: serviceIdentifier(),
+  IEditorGroupsService: serviceIdentifier(), IQuickInputService: serviceIdentifier(),
+  SelectBox: class {
+    constructor() { this.options = []; }
+    render() {} onDidSelect() { return { dispose() {} }; }
+    setOptions(options) { this.options = options; } setEnabled() {} layout() {} dispose() {}
+  }, defaultSelectBoxStyles: {}, sourceStatus: () => '来源状态',
+  ConfigurationSourceOwner: class { async list(signal) { settingsHeaderRequests.push(signal); return settingsHeaderDirectory; } },
+  workspaceContext: { getSnapshot: () => ({ gatewayId: 'gateway-entry', workspaces: [], loading: false, error: null }),
+    subscribe: () => () => {}, async ensureReady() {} },
+  createManagementTargetLifecycle: () => ({ signal: new AbortController().signal, token: CancellationToken.None, check() {}, dispose() {} }),
+  listManagementTargets: async () => [{ gateway_id: 'gateway-entry', name: '本地', connection_kind: 'local' }],
+  managementGateway: () => ({ gateway_id: 'gateway-entry', name: '本地', connection_kind: 'local' }),
+  managementWorkspace: () => ({}), selectManagementTarget() {},
   document: { createElement: () => new HeaderElement() }, clearNode: element => { element.textContent = ''; },
 });
 const { definitionObject, definitionValue } = evaluate(await source('../web/src/components/settings/ConfigurationEntities.tsx', true),
@@ -198,6 +219,7 @@ function sourceSelectionFixture() {
   }
   const capture = evaluate(sources.get('local:src/settings/editor.ts'), ['captureSettingsLocation'], {
     CancellationTokenSource, CancellationError, IQuickInputService: {}, ConfigurationSourceOwner: SourceOwnerBoundary,
+    requireGatewayWorkspaceRequestTarget,
     managementGateway: () => target,
     workspaceContext: { getSnapshot: () => snapshot, subscribe: listener => {
       const subscription = context.event(listener); return () => subscription.dispose();
@@ -214,6 +236,7 @@ function sourceSelectionFixture() {
   return { target, quick, requests, picks, document, auth, context, refreshes,
     capture: token => capture({ invokeFunction: callback => callback({ get: () => quick }) }, token ?? CancellationToken.None),
     changeEntry() { snapshot = { ...snapshot, gatewayId: 'entry-C' }; context.fire(); },
+    setWorkspaceStatus(status) { snapshot = { ...snapshot, workspaces: snapshot.workspaces.map(workspace => workspace.workspace_id === 'workspace-B' ? { ...workspace, status } : workspace) }; },
     dispose() { auth.dispose(); context.dispose(); },
   };
 }
@@ -237,6 +260,17 @@ scenario('两种设置入口共用来源选择，目标冻结且不重复读取�
     expect(f.picks[0].items.map(item => item.label)).toEqual(['Gateway 配置', 'B']);
     expect(f.refreshes).toEqual(['entry-A']);
     expect(f.requests.every(item => item.signal.aborted)).toBe(true);
+  } finally { f.dispose(); }
+});
+
+scenario('Backend 未就绪时设置来源入口显错且不读取或打开虚假空配置', async () => {
+  const f = sourceSelectionFixture();
+  try {
+    f.setWorkspaceStatus('starting');
+    await expect(f.capture()).rejects.toThrow('尚未就绪（starting）');
+    expect(f.refreshes).toEqual(['entry-A']);
+    expect(f.requests).toEqual([]);
+    expect(f.picks).toHaveLength(1);
   } finally { f.dispose(); }
 });
 
@@ -393,23 +427,41 @@ function makeSource(locationValue) {
   return { source, model, document, provider, files, textFileModels, owner, notifications, schemaRequests, errors };
 }
 
-function settingsHeaderText(target) {
+async function settingsHeader(target) {
   const element = new HeaderElement();
-  const header = new SettingsContextHeader(element, () => {}, () => {}, { target });
-  const text = element.textContent;
-  header.dispose();
-  return text;
+  const quickCalls = [];
+  const header = new SettingsContextHeader(element, () => {}, () => {}, 1, () => ({}), { target }, {}, { error() {} },
+    { async pick(items, options) { quickCalls.push({ items, options }); } }, {}, {}, {}, { getGroup: () => ({}) });
+  await Promise.resolve(); await Promise.resolve();
+  return { element, header, quickCalls, text: element.textContent };
 }
 
-scenario('Gateway 来源标题不把工作区定义入口投向首个工作区，窗口和工作区入口仍可用', () => {
+scenario('Gateway 来源标题不把工作区定义入口投向首个工作区，窗口和工作区入口仍可用', async () => {
   const fixture = makeSource(location({ workspace_id: undefined }));
   try {
-    expect(settingsHeaderText(fixture.source)).not.toContain(t('workbench.settings.modelsProviders'));
-    expect(settingsHeaderText(fixture.source)).not.toContain(t('configuration.entities.agentsTitle'));
-    expect(settingsHeaderText(undefined)).toContain(t('workbench.settings.modelsProviders'));
+    const gateway = await settingsHeader(fixture.source);
+    expect(gateway.text).not.toContain(t('workbench.settings.modelsProviders'));
+    expect(gateway.text).not.toContain(t('configuration.entities.agentsTitle'));
+    gateway.header.dispose();
+    const window = await settingsHeader(undefined);
+    expect(window.text).toContain(t('workbench.settings.modelsProviders'));
+    window.header.dispose();
     const workspace = makeSource(location());
-    try { expect(settingsHeaderText(workspace.source)).toContain(t('configuration.entities.agentsTitle')); }
-    finally { workspace.source.dispose(); }
+    try {
+      const header = await settingsHeader(workspace.source);
+      expect(header.text).toContain(t('configuration.entities.agentsTitle'));
+      const locationButton = header.element.children.at(-1).children.find(element => element.textContent === t('settings.editor.sourceLocations'));
+      expect(locationButton).toBeDefined();
+      locationButton.dispatch('click');
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(settingsHeaderRequests).toHaveLength(1);
+      expect(header.quickCalls).toHaveLength(1);
+      expect(header.quickCalls[0].options.title).toBe(t('settings.editor.sourceLocations'));
+      expect(header.quickCalls[0].items.map(item => item.detail)).toEqual([
+        'boxteam-source://gateway/workspace/source.jsonc', 'boxteam-schema://gateway/workspace/schema.json',
+      ]);
+      header.header.dispose();
+    } finally { workspace.source.dispose(); }
   } finally { fixture.source.dispose(); }
 });
 
@@ -499,7 +551,7 @@ scenario('来源 schema 只构造当前 Settings2EditorModel，JSONC 表单编�
   } finally { targetSettings.dispose(); }
 });
 
-scenario('来源标题仅提示本目标非空未绑定参数，保留 JSONC 入口并区分安装态', () => {
+scenario('来源标题仅提示本目标非空未绑定参数，保留 JSONC 入口并区分安装态', async () => {
   const packageId = 'schema.probe', pluginId = 'preference', version = '1.0.0';
   const declaration = { package_id: packageId, plugin_id: pluginId, package_version: version, name: '参数插件',
     configuration_schema: { type: 'object', properties: { mode: { type: 'string' } } } };
@@ -511,7 +563,7 @@ scenario('来源标题仅提示本目标非空未绑定参数，保留 JSONC 入
   try {
     setValues(a, { [packageId]: { [pluginId]: { mode: 'kept' } } });
     a.source.replaceSchemas({ plugins: [declaration] });
-    const installedWarning = settingsHeaderText(a.source);
+    const installedWarning = (await settingsHeader(a.source)).text;
     expect(installedWarning).toContain('参数未生效');
     expect(installedWarning).toContain('已安装但未绑定');
     expect(installedWarning).toContain('来源 JSONC 编辑或删除');
@@ -520,19 +572,19 @@ scenario('来源标题仅提示本目标非空未绑定参数，保留 JSONC 入
     setValues(b, { [packageId]: { [pluginId]: { mode: 'bound' } } });
     setBinding(b, [{ package_id: packageId, plugin_id: pluginId, package_version: version, enabled: false }]);
     b.source.replaceSchemas({ plugins: [declaration] });
-    expect(settingsHeaderText(b.source)).not.toContain('参数未生效');
+    expect((await settingsHeader(b.source)).text).not.toContain('参数未生效');
     expect(b.source.groups.filter(group => group.extensionInfo)).toHaveLength(1);
-    expect(settingsHeaderText(a.source)).toContain('已安装但未绑定');
+    expect((await settingsHeader(a.source)).text).toContain('已安装但未绑定');
 
     setValues(a, { [packageId]: { [pluginId]: {} } });
-    expect(settingsHeaderText(a.source)).not.toContain('参数未生效');
+    expect((await settingsHeader(a.source)).text).not.toContain('参数未生效');
     setValues(a, { [packageId]: { [pluginId]: { mode: 'kept' } } });
     a.source.replaceSchemas({ plugins: [] });
-    expect(settingsHeaderText(a.source)).toContain('schema.probe/preference 当前目标未见配置声明（可能已卸载），参数未生效');
+    expect((await settingsHeader(a.source)).text).toContain('schema.probe/preference 当前目标未见配置声明（可能已卸载），参数未生效');
     a.source.replaceSchemas(undefined);
-    expect(settingsHeaderText(a.source)).toContain('schema.probe/preference 未绑定，安装声明不可用，参数未生效');
+    expect((await settingsHeader(a.source)).text).toContain('schema.probe/preference 未绑定，安装声明不可用，参数未生效');
     a.model.textEditorModel.pushEditOperations(null, [{ text: '{' }]);
-    expect(settingsHeaderText(a.source)).toContain('当前来源 JSONC 无效，无法判定未绑定参数');
+    expect((await settingsHeader(a.source)).text).toContain('当前来源 JSONC 无效，无法判定未绑定参数');
   } finally { a.source.dispose(); b.source.dispose(); }
 });
 
@@ -625,6 +677,33 @@ scenario('安装事件替换声明后按当前绑定展示，保存不补读，�
     setBinding('1.0.0'); await f.model.revert(); expect(fields()[0].type).toBe('string');
     f.source.replaceSchemas(undefined); expect(fields()).toEqual([]);
   } finally { f.source.dispose(); }
+});
+
+scenario('管理入口默认本地且与导航活动工作区独立，失效会捕获离开再返回', async () => {
+  const parsed = await source('src/managementTarget.ts', true);
+  const auth = new Emitter(), context = new Emitter(), selections = new Map();
+  let gatewayId = 'gateway-local';
+  const snapshot = { get gatewayId() { return gatewayId; }, activeId: 'workspace-other' };
+  const flow = evaluate(parsed, ['managementGateway', 'selectManagementTarget', 'createManagementTargetLifecycle'], {
+    selections, workspaceContext: { getSnapshot: () => snapshot, subscribe: listener => {
+      const subscription = context.event(listener); return () => subscription.dispose();
+    } }, onGatewayTokenInvalidated: (_port, listener) => {
+      const subscription = auth.event(listener); return () => subscription.dispose();
+    }, CancellationTokenSource, t: key => key === 'workbench.managementTarget.local' ? '本地' : key,
+  });
+  const remote = { gateway_id: 'gateway-remote', name: '远端', connection_kind: 'remote_gateway', gateway_connection_id: 'route-remote' };
+  try {
+    expect(flow.managementGateway('settings')).toEqual({ gateway_id: 'gateway-local', name: '本地', connection_kind: 'local' });
+    flow.selectManagementTarget('settings', remote);
+    expect(flow.managementGateway('settings')).toEqual(remote);
+    expect(snapshot.activeId).toBe('workspace-other');
+
+    const lifecycle = flow.createManagementTargetLifecycle('目标已失效');
+    gatewayId = 'gateway-temporary'; context.fire();
+    gatewayId = 'gateway-local'; context.fire();
+    expect(() => lifecycle.check()).toThrow('目标已失效');
+    lifecycle.dispose();
+  } finally { auth.dispose(); context.dispose(); }
 });
 
 scenario('各管理入口按Gateway与入口分别记住远端目标及工作区，不影响活动工作区', async () => {

@@ -43,10 +43,62 @@ _PLUGIN_ID = "echo"
 
 
 @pytest.fixture(autouse=True)
-def target_management_workbench_environment(
-    monkeypatch: pytest.MonkeyPatch, web_workbench_assets: Path,
+def target_management_workbench_environment(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    prepared = os.getenv("BOXTEAM_TARGET_GATEWAY_UI_ASSETS")
+    assets = Path(prepared).resolve(strict=True) if prepared else request.getfixturevalue("web_workbench_assets")
+    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
+
+
+def test_workbench_settings_selects_remote_gateway_and_returns_to_local(
+    target_gateway_network: TargetGatewayNetwork,
 ) -> None:
-    monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(web_workbench_assets))
+    network = target_gateway_network
+    context = network.context
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "设置目标验收需要真实 Chromium"
+    client_a = network.clients[0]
+    gateway_a, gateway_b = network.gateway_ids
+    topology = json.loads((context.artifacts_dir / "topology.json").read_text(encoding="utf-8"))
+    remote = client_a.post("/api/gateway/remote-gateways", json={
+        "name": "设置目标 Gateway B", "host": "127.0.0.1", "port": 22, "username": "target-ui",
+        "private_key_path": topology["private_key"], "remote_gateway_port": topology["ports"][3],
+    })
+    assert remote.status_code == 200, remote.text
+    remote_target, = [item for item in remote.json()["data"]["items"] if item["gateway_id"] == gateway_b]
+    connection, = remote_target["remote_gateways"]
+    settings_build = Path(os.environ["BOXTEAM_WEB_ASSETS"])
+    assert settings_build.is_dir(), "必须显式复用已验收的完整 Workbench 构建"
+    result_path = context.artifacts_dir / "settings-target-gateway-result.json"
+    supervisor = context.project_root / "app/runtime" / ("windows_job.py" if os.name == "nt" else "posix_job.py")
+    command = [sys.executable, str(supervisor), "--memory-limit-kb", "4194304", "--timeout-seconds", "180",
+        "--", "bun", "tests/integration/clients/web/settings_target_gateway_ui.mjs"]
+    environment = os.environ | {
+        "BOXTEAM_SETTINGS_TARGET_UI_FIXTURE": json.dumps({"baseUrl": str(client_a.base_url), "gatewayA": gateway_a,
+            "gatewayB": gateway_b, "remoteName": "设置目标 Gateway B", "workspaceId": network.workspace_id}),
+        "BOXTEAM_BROWSER_ARTIFACTS": str(context.artifacts_dir),
+        "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
+    }
+    (context.artifacts_dir / "settings-target-workbench-assets.json").write_text(json.dumps({
+        "path": str(settings_build.resolve()), "main_sha256": hashlib.sha256((settings_build / "out/main.js").read_bytes()).hexdigest(),
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with chromium_temporary_environment(context.runtime_root_for_node("settings-browser") / "chromium-tmp") as temporary:
+        run = subprocess.run(command, cwd=context.project_root, env=environment | temporary,
+            capture_output=True, text=True, timeout=195, check=False)
+    (context.artifacts_dir / "settings-target-browser.stdout.raw").write_text(run.stdout, encoding="utf-8")
+    (context.artifacts_dir / "settings-target-browser.stderr.raw").write_text(run.stderr, encoding="utf-8")
+    (context.artifacts_dir / "settings-target-browser-process.json").write_text(json.dumps({
+        "command": command, "exit_code": run.returncode, "gateway_ids": [gateway_a, gateway_b],
+        "connection_id": connection["gateway_connection_id"],
+        "assets_sha256": hashlib.sha256((settings_build / "out/main.js").read_bytes()).hexdigest(),
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    assert run.returncode == 0, f"Settings 双 Gateway 目标验收失败：\n{run.stdout}\n{run.stderr}\n{context.artifacts_dir}"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["phase"] == "complete" and result["pageErrors"] == [] and result["externalRequests"] == []
+    assert result["settingsTargetRoundTrip"] == {
+        "startupDefault": gateway_a, "selectedRemote": gateway_b, "switchedBack": gateway_a,
+        "rememberedAgentEntry": gateway_a, "activeWorkspaceUnchanged": True, "sourceReads": result["sourceReads"],
+    }
+    assert any(read["gateway_id"] == gateway_b and read["workspace_id"] == network.workspace_id for read in result["sourceReads"])
 
 
 def _save_gateway_config(
@@ -184,7 +236,6 @@ def plugin_source_server(request: pytest.FixtureRequest):
 
 def test_workbench_extension_title_target_keeps_remote_plugin_state_on_original_gateway(
     target_gateway_network: TargetGatewayNetwork,
-    web_workbench_assets: Path,
     plugin_source_server: str,
 ) -> None:
     network = target_gateway_network
