@@ -192,7 +192,7 @@
     },
     "agents": {
       "type": "object",
-      "description": "Workspace agent registry, keyed by agent name. 支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。",
+      "description": "按 Agent 名称索引的工作区 Agent 注册表。支持热重载，从下一轮 Job 开始生效；运行中的 Job 保持原配置快照。timezone、persona、safety、env、tools.tool_choice、tools.timeout_ms、execution.stream、execution.max_turns、execution.max_history_messages 和 execution.max_context_tokens 当前未接入，保存这些字段不会改变运行行为。",
       "minProperties": 1,
       "additionalProperties": {
         "$ref": "#/$defs/agentConfig"
