@@ -13,6 +13,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import BinaryIO, Final, Self
 from urllib.parse import quote
+from uuid import uuid4
 
 import portalocker
 
@@ -26,6 +27,18 @@ SQLITE_BUSY_TIMEOUT_MS: Final = 5000
 def load_sql(package: str, resource: str) -> str:
     """读取随 owner 分发的 SQL；资产缺失或不可读时直接报错。"""
     return files(package).joinpath(resource).read_text(encoding="utf-8")
+
+
+def _execute_migration_sql(connection: sqlite3.Connection, script: str) -> None:
+    # executescript 会隐式提交；使用 SQLite 自身的语句边界识别保留外层事务。
+    pending: list[str] = []
+    for character in script:
+        pending.append(character)
+        if character == ";" and sqlite3.complete_statement("".join(pending)):
+            connection.execute("".join(pending))
+            pending.clear()
+    if remainder := "".join(pending).strip():
+        connection.execute(remainder)
 
 
 class _SQLiteVFSHeader(ctypes.Structure):
@@ -383,6 +396,7 @@ class SQLiteStateDatabase:
         connection = self._connect()
         try:
             with _sqlite_access(self.path, "initialize"):
+                connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     load_sql(__package__, "sqlite_state.sql")
                 )
@@ -422,30 +436,43 @@ class SQLiteStateDatabase:
                     )) from error
                 if current:
                     self._require_migrated_tables(connection, current)
-                for version, migration in enumerate(self._migrations, start=1):
-                    if version <= current:
-                        continue
-                    try:
+                if current == self._schema_version:
+                    connection.commit()
+                    return
+                if current and self._allow_shared_processes:
+                    raise RuntimeError("SQLite 旧结构不能在新旧服务共享运行时升级；请沿 Launcher 正常停止并重启服务")
+                try:
+                    backup = None
+                    if current:
+                        backup = self.path.with_name(f"{self.path.name}.v{current}-{uuid4().hex}.bak")
+                        native_io_path(backup).touch(mode=0o600, exist_ok=False)
+                        # 独立只读连接取得已提交 WAL；当前写事务阻止备份后出现新写入。
+                        with (closing(sqlite3.connect(sqlite_file_uri(self.path) + "?mode=ro", uri=True)) as source,
+                              closing(sqlite3.connect(sqlite_file_uri(backup), uri=True)) as target):
+                            source.backup(target)
+                    for version, migration in enumerate(self._migrations, start=1):
+                        if version <= current:
+                            continue
                         if isinstance(migration, str):
-                            connection.executescript(
-                                "BEGIN IMMEDIATE;\n"
-                                f"{migration}\n"
-                                "INSERT INTO schema_migrations(version, applied_at) "
-                                f"VALUES ({version}, '{utc_now_text()}');\n"
-                                "COMMIT;"
-                            )
+                            _execute_migration_sql(connection, migration)
                         else:
-                            connection.execute("BEGIN IMMEDIATE")
                             migration(connection)
-                            connection.execute(
-                                "INSERT INTO schema_migrations(version, applied_at) "
-                                "VALUES (?, ?)",
-                                (version, utc_now_text()),
+                        connection.execute(
+                            "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                            (version, utc_now_text()),
+                        )
+                    if backup is not None:
+                        integrity = tuple(row[0] for row in connection.execute("PRAGMA integrity_check"))
+                        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+                        if integrity != ("ok",) or foreign_keys:
+                            raise RuntimeError(
+                                f"SQLite 升级校验失败，服务不开放写入；原件: {backup}; "
+                                f"integrity={integrity}, foreign_keys={foreign_keys}"
                             )
-                            connection.execute("COMMIT")
-                    except Exception:
-                        connection.rollback()
-                        raise
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
         finally:
             self._close_connection(connection)
 

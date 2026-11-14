@@ -316,7 +316,7 @@ def test_cli_migrate_splits_legacy_user_configuration(
     assert not (config_root / "boxteam.jsonc").exists()
 
 
-def test_cli_initialize_rejects_implicit_legacy_layout_migration(
+def test_cli_initialize_automatically_migrates_supported_legacy_layout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -324,7 +324,11 @@ def test_cli_initialize_rejects_implicit_legacy_layout_migration(
     config_root = boxteam_home / "config"
     config_root.mkdir(parents=True)
     legacy_path = config_root / "boxteam.jsonc"
-    legacy_path.write_text('{"config_version": 4}\n', encoding="utf-8")
+    legacy = _load_jsonc_object(Path("configs/workspace_inline.jsonc"))
+    legacy["config_version"] = 4
+    legacy["gateway"] = {"workspaces": []}
+    original = json.dumps(legacy).encode()
+    legacy_path.write_bytes(original)
     monkeypatch.setenv("BOXTEAM_HOME", str(boxteam_home))
     monkeypatch.setattr(
         "sys.argv",
@@ -340,12 +344,12 @@ def test_cli_initialize_rejects_implicit_legacy_layout_migration(
 
     from configs.boxteam import main
 
-    with pytest.raises(RuntimeError, match="普通初始化不会自动迁移"):
-        main()
+    main()
 
-    assert legacy_path.is_file()
-    assert not (config_root / "gateway.jsonc").exists()
-    assert not (config_root / "workspace.jsonc").exists()
+    assert not legacy_path.exists()
+    assert (config_root / "boxteam.jsonc.migrated.bak").read_bytes() == original
+    assert _load_jsonc_object(config_root / "gateway.jsonc")["config_version"] == 5
+    assert _load_jsonc_object(config_root / "workspace.jsonc")["config_version"] == 2
 
 
 def test_cli_initialize_rejects_old_home_layout_without_moving_any_files(
@@ -380,7 +384,7 @@ def test_cli_initialize_rejects_old_home_layout_without_moving_any_files(
 
     from configs.boxteam import main
 
-    with pytest.raises(RuntimeError, match="普通初始化不会自动迁移"):
+    with pytest.raises(ValueError, match="旧配置拆分后的候选无效"):
         main()
 
     assert {path: path.read_bytes() for path in original_files} == original_files

@@ -125,3 +125,38 @@ def test_workspace_layout_migration_rejects_gateway_field(tmp_path: Path) -> Non
             workspace_root=tmp_path,
             workspace_schema_path=Path("configs/workspace_schema.jsonc"),
         )
+
+
+@pytest.mark.parametrize("preview", [True, False])
+@pytest.mark.parametrize("fault", ["backup", "resumed_target"])
+def test_layout_checks_all_conflicts_before_writing_backup_or_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preview: bool, fault: str,
+) -> None:
+    legacy_path = tmp_path / "boxteam.jsonc"
+    legacy_path.write_text(json.dumps(_legacy_user_config_payload()), encoding="utf-8")
+    gateway_schema, workspace_schema = _gateway_and_workspace_schema_paths()
+    if fault == "backup":
+        legacy_path.with_name("boxteam.jsonc.migrated.bak").write_bytes(b"different original")
+        reason = "备份已存在不同内容"
+    else:
+        def interrupt(path: Path, content: bytes, mode: int) -> None:
+            if path.name == "workspace.jsonc":
+                raise OSError("目标发布中断")
+            atomic_write(path, content, mode)
+
+        with monkeypatch.context() as patch:
+            patch.setattr("configs.maintenance.layout.atomic_write", interrupt)
+            with pytest.raises(OSError, match="目标发布中断"):
+                migrate_legacy_user_configuration(
+                    config_root=tmp_path, gateway_schema_path=gateway_schema,
+                    workspace_schema_path=workspace_schema,
+                )
+        (tmp_path / "gateway.jsonc").write_text('{"externally_modified":true}', encoding="utf-8")
+        reason = "迁移目标被修改"
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in tmp_path.iterdir()}
+    with pytest.raises(RuntimeError, match=reason):
+        migrate_legacy_user_configuration(
+            config_root=tmp_path, gateway_schema_path=gateway_schema,
+            workspace_schema_path=workspace_schema, preview=preview,
+        )
+    assert {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in tmp_path.iterdir()} == before

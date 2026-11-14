@@ -28,6 +28,7 @@ from configs.maintenance.runtime_logging_migration import (
 from configs.maintenance.runtime_logging_storage import (
     configuration_rows,
     migrate_database,
+    migrated_active_payload,
     migrated_payload,
     replace_configuration_rows,
 )
@@ -102,14 +103,21 @@ def _backup_database(path: Path, destination: Path) -> None:
     destination.chmod(0o600)
 
 
-def _validate_outputs(
-    plan: RuntimeLoggingMigrationPlan, files: dict[Path, dict[str, object]],
-    databases: dict[Path, tuple[ConfigDomain, Path]], project_root: Path | None,
+def validate_runtime_logging_plan(
+    plan: RuntimeLoggingMigrationPlan, *, project_root: Path | None = None,
 ) -> None:
-    effective = {
+    """预检和发布共用正文转换，在停旧或创建备份前校验全部候选。"""
+    inline = {
         domain: read_jsonc_object(resolve_config_resource_source(f"{domain}_inline.jsonc", project_root=project_root))
         for domain in ("gateway", "workspace")
     }
+    connection_entries = list(next((cast(list[dict[str, object]], item.payload["entries"])
+                                    for item in plan.inputs if item.kind == "connection_identity" and item.payload), []))
+    files = {item.path: migrated_payload(item.payload or {}, item.domain, plan, connection_entries)
+             for item in plan.inputs if item.kind == "file" and (
+                 item.payload is not None or item.domain == "gateway" and item.key == "gateway.jsonc" and plan.settings is not None
+             )}
+    effective = dict(inline)
     for item in plan.inputs:
         if item.kind == "file" and item.path in files and item.path.parent.name != ".boxteam":
             effective[item.domain] = merge_json_objects(effective[item.domain], files[item.path])
@@ -118,20 +126,20 @@ def _validate_outputs(
     for path, payload in files.items():
         if path.name == "workspace.jsonc" and path.parent.name == ".boxteam":
             validate_config(merge_json_objects(effective["workspace"], payload), schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
-    for domain, path in databases.values():
-        with closing(_connection(path)) as connection:
-            for row in connection.execute("SELECT payload_json FROM config_active_snapshot WHERE config_domain=?", (domain,)):
-                validate_config(json.loads(row[0]), schema_path=resolve_config_resource_source(f"{domain}_schema.jsonc", project_root=project_root))
+    for item in plan.inputs:
+        if item.kind == "active" and item.payload is not None:
+            candidate = migrated_active_payload(item.payload, item.domain, plan, inline[item.domain], connection_entries)
+            validate_config(candidate, schema_path=resolve_config_resource_source(f"{item.domain}_schema.jsonc", project_root=project_root))
 
 
 def _prepare(
     *, home: Path, plan: RuntimeLoggingMigrationPlan, workspaces: tuple[Path, ...],
     connections: dict[Path, sqlite3.Connection], project_root: Path | None,
 ) -> MigrationJournal:
+    validate_runtime_logging_plan(plan, project_root=project_root)
     migration_root = home / "config/runtime-logging-migrations" / uuid4().hex
     migration_root.mkdir(parents=True, mode=0o700)
     assets: list[MigrationAsset] = []
-    files: dict[Path, dict[str, object]] = {}
     digests: dict[str, tuple[str | None, str | None]] = {}
     connection_entries: list[dict[str, object]] = []
     for domain, path in plan.databases:
@@ -146,7 +154,6 @@ def _prepare(
         payload = migrated_payload(item.payload or {}, item.domain, plan, connection_entries)
         if item.payload is None and not (item.domain == "gateway" and item.key == "gateway.jsonc" and plan.settings is not None):
             continue
-        files[item.path] = payload
         content = _json_bytes(payload) if payload != item.payload else original.raw_bytes
         assert content is not None
         before = migration_root / f"file-{index}.before"
@@ -157,7 +164,6 @@ def _prepare(
         digests[str(item.path)] = (original.digest, _digest(after))
         assets.append({"kind": "file", "path": str(item.path), "before": str(before), "after": str(after),
                        "before_digest": original.digest, "after_digest": _digest(after)})
-    databases: dict[Path, tuple[ConfigDomain, Path]] = {}
     for index, (path, connection) in enumerate(connections.items()):
         domain: ConfigDomain = next(domain for domain, database in plan.databases if database == path)
         before, after = migration_root / f"db-{index}.before.sqlite", migration_root / f"db-{index}.after.sqlite"
@@ -172,10 +178,8 @@ def _prepare(
             )
             target.commit()
             after_digest = _database_digest(target)
-        databases[path] = (domain, after)
         assets.append({"kind": "database", "path": str(path), "before": str(before), "after": str(after),
                        "before_digest": _database_digest(connection), "after_digest": after_digest})
-    _validate_outputs(plan, files, databases, project_root)
     for domain in ("gateway", "workspace"):
         path = home / f"config/{domain}_schema.jsonc"
         before, after = migration_root / f"{domain}-schema.before", migration_root / f"{domain}-schema.after"

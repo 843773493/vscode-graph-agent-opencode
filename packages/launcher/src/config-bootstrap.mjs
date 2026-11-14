@@ -1,6 +1,20 @@
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { stopLauncher } from "./stop.mjs";
+
+export async function stopLauncherForSupportedUpgrade({
+  runtime, environment, targetLock, spawnSyncImpl = spawnSync, stopLauncherImpl = stopLauncher,
+}) {
+  const preview = initializeUserConfiguration({
+    runtime, environment, args: ["initialize", "--preview"], spawnSyncImpl,
+  });
+  const inspection = JSON.parse(preview.output);
+  if (inspection.upgrade_required) {
+    return stopLauncherImpl({ boxteamHome: preview.boxteamHome, expectedToken: targetLock.value.token });
+  }
+  return null;
+}
 
 export function defaultBoxteamHome(distribution, homeDirectory = os.homedir()) {
   return path.join(

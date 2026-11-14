@@ -146,7 +146,6 @@ if __name__ == "__main__":
         parser.error(f"Trace SQLite 不存在: {args.database}")
     with SQLiteStateDatabase(
         path=args.database, schema_version=_SCHEMA_VERSION, migrations=_migrations(),
-        allow_shared_processes=True,
     ):
         pass
     print(f"Trace SQLite 已升级: {args.database}")

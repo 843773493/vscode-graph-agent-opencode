@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from copy import deepcopy
 from pathlib import Path
 from typing import cast
 
@@ -22,6 +21,7 @@ from configs.maintenance.runtime_logging_migration import (
     ConfigDomain,
     RuntimeLoggingMigrationPlan,
     read_connection_identity,
+    without_retired_defaults,
 )
 from configs.runtime import merge_json_objects
 
@@ -32,7 +32,7 @@ def migrated_payload(
     payload: dict[str, object], domain: ConfigDomain, plan: RuntimeLoggingMigrationPlan,
     connection_entries: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    result = deepcopy(payload)
+    result = without_retired_defaults(payload, domain, source=f"{domain} configuration")
     if domain == "workspace":
         result.pop("logger", None)
     else:
@@ -55,6 +55,24 @@ def migrated_payload(
                 runtime["level"] = runtime["level"].strip().lower()
     result["config_version"] = TARGET_CONFIG_VERSIONS[domain]
     return result
+
+
+def migrated_active_payload(
+    payload: dict[str, object], domain: ConfigDomain, plan: RuntimeLoggingMigrationPlan,
+    inline_config: dict[str, object], connection_entries: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    changed = migrated_payload(payload, domain, plan, connection_entries)
+    if domain == "workspace":
+        return merge_json_objects(inline_config, changed)
+    logging = changed.setdefault("logging", {})
+    if not isinstance(logging, dict):
+        raise TypeError("Gateway logging 必须是对象")
+    runtime = logging.setdefault("runtime", {})
+    if not isinstance(runtime, dict):
+        raise TypeError("Gateway logging.runtime 必须是对象")
+    runtime.setdefault("level", plan.contract.default_level)
+    runtime.setdefault("pretty", plan.contract.default_pretty)
+    return changed
 
 
 def configuration_rows(connection: sqlite3.Connection) -> dict[str, list[dict[str, object]]]:
@@ -126,19 +144,7 @@ def migrate_database(
         return
     old = dict(row)
     payload = json.loads(str(old["payload_json"]))
-    changed = migrated_payload(payload, domain, plan, connection_entries)
-    if domain == "workspace":
-        # 显式离线升级补齐旧 active 缺失的新字段，保留已有取值；来源层仍是局部覆盖。
-        changed = merge_json_objects(inline_config, changed)
-    if domain == "gateway":
-        logging = changed.setdefault("logging", {})
-        if not isinstance(logging, dict):
-            raise TypeError("Gateway logging 必须是对象")
-        runtime = logging.setdefault("runtime", {})
-        if not isinstance(runtime, dict):
-            raise TypeError("Gateway logging.runtime 必须是对象")
-        runtime.setdefault("level", plan.contract.default_level)
-        runtime.setdefault("pretty", plan.contract.default_pretty)
+    changed = migrated_active_payload(payload, domain, plan, inline_config, connection_entries)
     # Workspace 启动按还原后的用户配置校验摘要，不能对 env:NAME 存储格式记账。
     effective = restore_environment_secret_references(changed) if domain == "workspace" else changed
     effective_digest = config_revision(cast(dict[str, object], effective))

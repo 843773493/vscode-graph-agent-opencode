@@ -106,3 +106,4 @@ out/tests/packages/launcher/src/instance-lock-errors/
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
 
 - Launcher停止默认等待160秒，比Gateway的150秒结清／释放期限多10秒；时间替身测试须核实际升级时刻，不能真等或只检查常量定义。
+- 正常start遇到同Home存活Launcher时，先调用配置初始化的只读升级预检；只有已识别的受支持旧数据才沿stopLauncher核实停旧，再取得原实例锁执行初始化与启动。未知版本保留旧实例，同版本重复start仍明确冲突。预检不生成备份或写配置，实际迁移只由原configs/SQLite owner执行；不另建安装恢复框架。

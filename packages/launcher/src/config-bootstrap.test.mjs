@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   defaultBoxteamHome,
   initializeUserConfiguration,
+  stopLauncherForSupportedUpgrade,
 } from "./config-bootstrap.mjs";
 
 const fixtureRoot = path.resolve(
@@ -17,6 +18,38 @@ const fixtureSourceRoot = path.join(fixtureRoot, "source");
 const fixtureSourcePython = path.join(fixtureSourceRoot, ".venv", "bin", "python");
 
 describe("config bootstrap", () => {
+  for (const required of [false, true]) {
+    test(`升级预检${required ? "停旧实例" : "保留同版本实例"}`, async () => {
+      const stopped = [];
+      const runtime = { distribution: "npm", pythonExecutable: fixturePythonExecutable,
+        applicationRoot: fixtureApplicationRoot };
+      const result = await stopLauncherForSupportedUpgrade({
+        runtime, environment: { BOXTEAM_HOME: fixtureBoxteamHome },
+        targetLock: { value: { token: "original-instance" } },
+        spawnSyncImpl(_command, args) {
+          expect(args).toEqual(["-m", "configs.boxteam", "initialize", "--preview"]);
+          return { status: 0, stdout: JSON.stringify({ upgrade_required: required }), stderr: "" };
+        },
+        async stopLauncherImpl({ boxteamHome, expectedToken }) {
+          stopped.push({ boxteamHome, expectedToken });
+          return { status: "stopped", pid: 123 };
+        },
+      });
+      expect(stopped).toEqual(required ? [{ boxteamHome: fixtureBoxteamHome, expectedToken: "original-instance" }] : []);
+      expect(result).toEqual(required ? { status: "stopped", pid: 123 } : null);
+    });
+  }
+  test("未知版本预检失败不停止原服务", async () => {
+    let stopped = false;
+    await expect(stopLauncherForSupportedUpgrade({
+      runtime: { distribution: "npm", pythonExecutable: fixturePythonExecutable,
+        applicationRoot: fixtureApplicationRoot }, environment: { BOXTEAM_HOME: fixtureBoxteamHome },
+      targetLock: { value: { token: "original-instance" } },
+      spawnSyncImpl() { return { status: 1, stderr: "unknown version" }; },
+      async stopLauncherImpl() { stopped = true; },
+    })).rejects.toThrow("unknown version");
+    expect(stopped).toBe(false);
+  });
   test("开发与正式发行使用隔离 home", () => {
     expect(defaultBoxteamHome("source-development", fixtureUserHome)).toBe(
       path.join(fixtureUserHome, ".boxteams-dev"),

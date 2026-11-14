@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from contextlib import closing
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -15,7 +17,7 @@ from app.gateway.config.connection_ids import _CONNECTION_ID_RECORD_VERSION
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
 
 ConfigDomain = Literal["gateway", "workspace"]
-TARGET_CONFIG_VERSIONS = {"gateway": 4, "workspace": 2}
+TARGET_CONFIG_VERSIONS = {"gateway": 5, "workspace": 2}
 _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
     "gateway": ("gateway_mutable_override", "gateway_local_mutable_override"),
     "workspace": (
@@ -46,8 +48,13 @@ class LoggingMigrationInput:
             return self.source_config_version
         return self.payload.get("config_version", 1) if self.payload is not None else None
 
+    @property
+    def target_version(self) -> int:
+        return _CONNECTION_ID_RECORD_VERSION if self.kind == "connection_identity" else TARGET_CONFIG_VERSIONS[self.domain]
+
     def settings(self, contract: RuntimeLogContract) -> dict[str, str | bool]:
         payload = self.payload or {}
+        validate_retired_defaults(payload, self.domain, source=self.identity)
         if self.domain == "workspace":
             if "logging" in payload:
                 raise ValueError(f"Workspace 不能包含 Gateway logging 配置: {self.identity}")
@@ -60,6 +67,32 @@ class LoggingMigrationInput:
         if not isinstance(value, dict) or set(value) - {"level", "pretty"}:
             raise ValueError(f"日志设置必须是仅含 level/pretty 的对象: {self.identity}")
         return _validated_settings(value, contract=contract, source=self.identity)
+
+
+def validate_retired_defaults(payload: dict[str, object], domain: ConfigDomain, *, source: str) -> None:
+    if domain == "gateway" and "ui" in payload:
+        if payload.get("config_version", 1) == TARGET_CONFIG_VERSIONS["gateway"]:
+            raise ValueError(f"当前 Gateway 配置不支持 ui；保留原件: {source}")
+        if payload["ui"] != {"theme": {"default_theme_id": "warm", "custom_themes": []}}:
+            raise ValueError(f"旧 Gateway 外观包含自定义值，需要用户决定；保留原件: {source}")
+    runtime = payload.get("runtime")
+    if (domain == "workspace" and isinstance(runtime, dict) and "auxiliary_services" in runtime
+            and runtime["auxiliary_services"] != {
+            "terminal_backend": {"url": "http://127.0.0.1:8012"},
+            "browser_backend": {"url": "http://127.0.0.1:8015"},
+            }):
+        raise ValueError(f"已退役的辅助服务地址包含自定义值，需要用户决定；保留原件: {source}")
+
+
+def without_retired_defaults(payload: dict[str, object], domain: ConfigDomain, *, source: str) -> dict[str, object]:
+    """布局候选和最终发布共用退役规则，自定义值不能按默认值丢弃。"""
+    validate_retired_defaults(payload, domain, source=source)
+    result = deepcopy(payload)
+    if domain == "gateway":
+        result.pop("ui", None)
+    elif isinstance(runtime := result.get("runtime"), dict):
+        runtime.pop("auxiliary_services", None)
+    return result
 
 
 def _validated_settings(
@@ -93,7 +126,7 @@ class RuntimeLoggingMigrationPlan:
         return {
             "validation_stage": "logging_preflight",
             "target_config_versions": dict(TARGET_CONFIG_VERSIONS),
-            "retired_gateway_fields": ["/features/session_generators"],
+            "retired_gateway_fields": ["/features/session_generators", "/ui/theme"],
             "settings": self.settings,
             "preserve_gateway_layers": self.settings is None,
             "explicit_choices": self.choices,
@@ -239,6 +272,7 @@ def preview_runtime_logging_migration(
     *, boxteam_home: Path, workspaces: tuple[Path, ...] = (),
     level: str | None = None, pretty: bool | None = None,
     project_root: Path | None = None, gateway_sqlite_path: Path | None = None,
+    planned_files: Mapping[Path, bytes] | None = None,
 ) -> RuntimeLoggingMigrationPlan:
     """读取显式输入；不扫描工作区、不打开可写 store、不改变 active/pending。"""
     contract = load_runtime_log_contract(project_root)
@@ -266,12 +300,14 @@ def preview_runtime_logging_migration(
     inputs: list[LoggingMigrationInput] = []
     unsettled: list[dict[str, str]] = []
     for path in legacy_files:
-        if path.exists():
+        if path.exists() and (planned_files is None or path.with_name("workspace.jsonc") not in planned_files):
             unsettled.append({"source": str(path), "kind": "legacy_layout", "id": path.name, "state": "migration_required"})
     for domain, path in files:
         snapshot = read_stable_config_file(path)
+        payload = (_json_payload(planned_files[path].decode("utf-8"), source=str(path))
+                   if planned_files is not None and path in planned_files else parse_stable_config_file(snapshot))
         inputs.append(LoggingMigrationInput(
-            domain, path, "file", path.name, parse_stable_config_file(snapshot), snapshot.digest,
+            domain, path, "file", path.name, payload, snapshot.digest,
         ))
     for domain, path in databases:
         stored, pending = _read_database(path, domain)
@@ -284,7 +320,7 @@ def preview_runtime_logging_migration(
         if item.payload is not None and "config_version" in item.payload:
             versions.append(item.payload["config_version"])
         for version in versions:
-            if type(version) is not int or not 1 <= version <= TARGET_CONFIG_VERSIONS[item.domain]:
+            if type(version) is not int or not 1 <= version <= item.target_version:
                 raise ValueError(f"配置版本不在日志迁移支持范围: {item.identity}")
         for field, value in item.settings(contract).items():
             observed[field].append((item.identity, value))

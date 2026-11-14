@@ -20,6 +20,7 @@ def migrate_user_storage_layout(
     home: Path,
     boxteam_home: Path,
     default_workspace_root: Path,
+    preview: bool = False,
 ) -> None:
     """把旧用户级安装数据迁入统一全局目录。
 
@@ -27,19 +28,15 @@ def migrate_user_storage_layout(
     """
     config_root = boxteam_home / "config"
     legacy_config_root = home / ".boxteam"
-    _move_legacy_path(
-        legacy_config_root / "boxteam.jsonc",
-        config_root / "boxteam.jsonc",
+    moves = (
+        (legacy_config_root / "boxteam.jsonc", config_root / "boxteam.jsonc"),
+        (legacy_config_root / "config.schema.jsonc", boxteam_home / "state/migrated/legacy_config.schema.jsonc"),
+        (default_workspace_root / ".boxteam/gateway", boxteam_home / "state/gateway"),
+        (legacy_config_root / "web_ui_settings.json", boxteam_home / "state/migrated/legacy_web_ui_settings.json"),
     )
-    _move_legacy_path(
-        legacy_config_root / "config.schema.jsonc",
-        boxteam_home / "state" / "migrated" / "legacy_config.schema.jsonc",
-    )
-    _move_legacy_path(
-        default_workspace_root / ".boxteam" / "gateway",
-        boxteam_home / "state" / "gateway",
-    )
-    _move_legacy_path(
-        legacy_config_root / "web_ui_settings.json",
-        boxteam_home / "state" / "migrated" / "legacy_web_ui_settings.json",
-    )
+    for source, target in moves:
+        if source.exists() and target.exists():
+            raise FileExistsError(f"迁移目标已存在，拒绝覆盖: source={source} target={target}")
+    if not preview:
+        for source, target in moves:
+            _move_legacy_path(source, target)

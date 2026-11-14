@@ -81,6 +81,84 @@ def _cli(monkeypatch: pytest.MonkeyPatch, *args: str) -> None:
     main()
 
 
+def test_default_legacy_appearance_is_retired_from_files_and_active_with_original_backup(
+    migration_home: Path, gateway_store: GatewayStateStore,
+) -> None:
+    path = migration_home / "config/gateway.jsonc"
+    legacy = read_jsonc_object(Path.cwd() / "configs/gateway_inline.jsonc")
+    legacy["config_version"] = 4
+    legacy["ui"] = {"theme": {"default_theme_id": "warm", "custom_themes": []}}
+    _write(path, legacy)
+    original = path.read_bytes()
+    _active(gateway_store, "gateway", legacy)
+    before_database = _database_dump(gateway_store.path)
+    gateway_store.close()
+    result = commit_runtime_logging_migration(boxteam_home=migration_home)
+    assert "ui" not in read_jsonc_object(path)
+    assert read_jsonc_object(path)["config_version"] == 5
+    backup = Path(result["backup_root"])
+    assert original in [file.read_bytes() for file in backup.glob("file-*.before")]
+    assert before_database in [_database_dump(file) for file in backup.glob("db-*.before.sqlite")]
+    with GatewayStateStore(path=gateway_store.path) as store:
+        active = store.get_active_config_snapshot("gateway")
+        assert active is not None and "ui" not in active.payload
+        assert active.payload["config_version"] == 5
+
+
+@pytest.mark.parametrize("theme", [
+    {"default_theme_id": "dark", "custom_themes": []},
+    {"default_theme_id": "warm", "custom_themes": [{"id": "my-theme"}]},
+])
+def test_custom_legacy_appearance_requires_choice_without_writing(
+    migration_home: Path, monkeypatch: pytest.MonkeyPatch, theme: dict[str, object],
+) -> None:
+    path = migration_home / "config/gateway.jsonc"
+    _write(path, {"config_version": 4, "ui": {"theme": theme}})
+    before = {file: file.read_bytes() for file in migration_home.rglob("*") if file.is_file()}
+    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
+    with pytest.raises(ValueError, match="自定义值，需要用户决定"):
+        main()
+    assert {file: file.read_bytes() for file in migration_home.rglob("*") if file.is_file()} == before
+
+
+def test_startup_preflight_rejects_invalid_target_before_stop_or_backup(
+    migration_home: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = migration_home / "config/gateway.jsonc"
+    _write(path, {"config_version": 4, "unknown_business_option": True})
+    before = {file: file.read_bytes() for file in migration_home.rglob("*") if file.is_file()}
+    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
+    with pytest.raises(ValueError, match="配置验证失败"):
+        main()
+    assert {file: file.read_bytes() for file in migration_home.rglob("*") if file.is_file()} == before
+
+
+@pytest.mark.parametrize("custom", [False, True])
+def test_retired_auxiliary_defaults_upgrade_but_custom_addresses_require_choice(
+    migration_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], custom: bool,
+) -> None:
+    path = migration_home / "config/workspace.jsonc"
+    _write(path, {"config_version": 2, "runtime": {"auxiliary_services": {
+        "terminal_backend": {"url": "http://127.0.0.1:9800" if custom else "http://127.0.0.1:8012"},
+        "browser_backend": {"url": "http://127.0.0.1:8015"},
+    }}})
+    original = path.read_bytes()
+    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
+    if custom:
+        with pytest.raises(ValueError, match="辅助服务地址包含自定义值，需要用户决定"):
+            main()
+    else:
+        main()
+        assert json.loads(capsys.readouterr().out)["upgrade_required"] is True
+    assert list(path.parent.iterdir()) == [path] and path.read_bytes() == original
+    if not custom:
+        monkeypatch.setattr("sys.argv", ["boxteam", "initialize"])
+        main()
+        assert "auxiliary_services" not in read_jsonc_object(path).get("runtime", {})
+        report = json.loads(capsys.readouterr().out)["upgrades"]["configuration"]
+        assert original in [file.read_bytes() for file in Path(report["backup_root"]).glob("file-*.before")]
+
+
 def test_cli_preview_empty_home_does_not_install_or_create_databases(
     migration_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -95,7 +173,7 @@ def test_cli_preview_empty_home_does_not_install_or_create_databases(
     report = json.loads(capsys.readouterr().out)
     assert report["action"] == "migrate-runtime-config"
     assert report["validation_stage"] == "logging_preflight"
-    assert report["target_config_versions"] == {"gateway": 4, "workspace": 2}
+    assert report["target_config_versions"] == {"gateway": 5, "workspace": 2}
     assert report["settings"] is None
     assert report["conflicts"] == report["unsettled"] == []
     assert all(source["presence"] == "absent" for source in report["sources"])
@@ -178,7 +256,7 @@ def test_invalid_workspace_logging_is_rejected_even_with_explicit_choices(
     {"logging": None}, {"logging": {"runtime": []}},
     {"logging": {"runtime": {"level": "trace"}}},
     {"logging": {"runtime": {"pretty": 1}}},
-    {"logging": {"runtime": {"format": "json"}}}, {"config_version": 5},
+    {"logging": {"runtime": {"format": "json"}}}, {"config_version": 6},
 ])
 def test_invalid_gateway_logging_is_rejected(migration_home: Path, payload: dict[str, object]) -> None:
     _write(migration_home / "config/gateway.jsonc", payload)
@@ -353,7 +431,7 @@ def test_missing_explicit_workspace_fails_without_creating_it(migration_home: Pa
 def test_migration_flags_are_not_silently_accepted_by_other_actions(
     migration_home: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
+    monkeypatch.setattr("sys.argv", ["boxteam", "doctor", "--preview"])
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 2
@@ -546,7 +624,7 @@ def test_gateway_connection_ids_are_frozen_once_and_reuse_existing_identity(
     assert identity
     if registered:
         assert identity == "connection_original"
-    assert migrated["config_version"] == 4
+    assert migrated["config_version"] == 5
     assert commit_runtime_logging_migration(boxteam_home=migration_home)["state"] == "unchanged"
     assert json.loads(path.read_text())["workspaces"][0]["connection_id"] == identity
 
@@ -598,7 +676,7 @@ def test_cli_upgrades_v3_connection_ledger_and_restores_exact_original(
         assert ledger is not None and ledger.config_version == 4 and ledger.payload == {"entries": entries}
         assert store.get_config("unrelated_setting").payload == {"preserve": True}
         active = store.get_active_config_snapshot("gateway")
-        assert active is not None and active.schema_version == 4
+        assert active is not None and active.schema_version == 5
         assert active.payload["workspaces"] == json.loads(path.read_text())["workspaces"]
         if registered:
             assert active.payload["workspaces"][0]["connection_id"] == "connection_original"
@@ -704,11 +782,11 @@ def test_gateway_v3_migration_retires_generator_config_with_backup(migration_hom
                   "logging": {"runtime": {"level": "debug", "pretty": False}}})
     original = path.read_bytes()
     preview = preview_runtime_logging_migration(boxteam_home=migration_home).report()
-    assert preview["target_config_versions"]["gateway"] == 4
+    assert preview["target_config_versions"]["gateway"] == 5
     assert path.read_bytes() == original
     result = commit_runtime_logging_migration(boxteam_home=migration_home)
     migrated = json.loads(path.read_text())
-    assert migrated["config_version"] == 4 and "session_generators" not in migrated["features"]
+    assert migrated["config_version"] == 5 and "session_generators" not in migrated["features"]
     assert migrated["logging"]["runtime"] == {"level": "debug", "pretty": False}
     assert result["state"] == "completed"
     assert commit_runtime_logging_migration(boxteam_home=migration_home)["state"] == "unchanged"

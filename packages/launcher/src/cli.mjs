@@ -150,7 +150,7 @@ export async function main(args) {
     throw new Error(`未知 start 参数: ${unknownArgs.join(", ")}`);
   }
   const [
-    { acquireLauncherLock },
+    { acquireLauncherLock, readLauncherLock, processIsAlive },
     { openServiceLog, resolveServiceLogPath },
     { superviseGateway },
     { loadRuntimeLogContract, createRuntimeLogger, registerRuntimeLogSink },
@@ -163,6 +163,15 @@ export async function main(args) {
     import(pathToFileURL(path.join(runtime.applicationRoot, "src/shared/serverRuntimeControl.mjs")).href),
   ]);
   const logContract = loadRuntimeLogContract(runtime.applicationRoot);
+  const current = readLauncherLock(boxteamHome);
+  if (current && processIsAlive(current.value.pid)) {
+    // 只为已识别的升级自动停止原实例；同版本重复 start 仍沿原实例冲突合同。
+    const { stopLauncherForSupportedUpgrade } = await import("./config-bootstrap.mjs");
+    const stopped = await stopLauncherForSupportedUpgrade({
+      runtime, environment: { ...environment, BOXTEAM_HOME: boxteamHome }, targetLock: current,
+    });
+    if (stopped) process.stdout.write(`BoxTeam 升级前已停止旧实例: pid=${String(stopped.pid)}\n`);
+  }
   const lock = acquireLauncherLock({
     boxteamHome,
     runtime,

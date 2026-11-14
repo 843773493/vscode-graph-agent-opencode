@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import runpy
+import sqlite3
+import sys
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,6 +22,49 @@ from app.services.infrastructure.trace_event_store import (
 from app.services.infrastructure.turn_history.trace_page import (
     TracePageBudgetExceededError,
 )
+
+
+def test_offline_trace_upgrade_preserves_events_and_builds_thread_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.sqlite_state import SQLiteStateDatabase
+    from app.services.infrastructure.turn_history.trace_database import (
+        TraceDatabase,
+        _migrations,
+    )
+
+    path = tmp_path / "trace.sqlite"
+    session_id = "ses_019c5c7e3adc77a3b10ccaa504be3e74"
+    raw = JobCreatedEvent(
+        event_id="evt_trace_upgrade", job_id="job_trace_upgrade", timestamp=datetime.now(UTC),
+        payload=JobCreatedPayload(session_id=session_id, thread_id="thread_trace_upgrade", message="保留", agent_id="default"),
+    ).model_dump_json() + "\n"
+    with (SQLiteStateDatabase(path=path, schema_version=1, migrations=_migrations()[:1]) as old,
+          closing(old.connection()) as connection):
+        connection.execute("INSERT INTO trace_events(start, raw) VALUES (?, ?)", (0, raw))
+
+    with pytest.raises(RuntimeError, match="请停写后显式执行"), TraceDatabase(path).connection():
+        pass
+    monkeypatch.setattr("sys.argv", ["trace_database", str(path)])
+    entry = "app.services.infrastructure.turn_history.trace_database"
+    monkeypatch.delitem(sys.modules, entry)
+    runpy.run_module(entry, run_name="__main__")
+
+    with TraceDatabase(path).connection() as connection:
+        assert connection is not None
+        assert tuple(connection.execute("SELECT start, raw, thread_id FROM trace_events").fetchone()) == (
+            0, raw, "thread_trace_upgrade",
+        )
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 2
+    backups = list(tmp_path.glob("trace.sqlite.v1-*.bak"))
+    assert len(backups) == 1
+    with closing(sqlite3.connect(backups[0])) as connection:
+        assert connection.execute("SELECT start, raw FROM trace_events").fetchall() == [(0, raw)]
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 1
+        assert "thread_id" not in {row[1] for row in connection.execute("PRAGMA table_info(trace_events)")}
+
+    runpy.run_module(entry, run_name="__main__")
+    assert list(tmp_path.glob("trace.sqlite.v1-*.bak")) == backups
 
 
 @pytest.mark.asyncio
