@@ -41,7 +41,7 @@ async function collectSourceFiles(folder) {
 }
 
 /** 用一次 esbuild split build 固定上游模块身份，项目模块仍由 Vite 提供。 */
-export async function buildWorkbenchDependencies(root, transformSource, outdir) {
+export async function buildWorkbenchDependencies(root, transformSource, outdir, productIdentity) {
   const upstreamSource = join(root, 'upstream/src');
   const appSource = join(root, 'src');
   const entries = new Set([join(upstreamSource, 'vs/workbench/workbench.web.main.internal.ts')]);
@@ -67,6 +67,7 @@ export async function buildWorkbenchDependencies(root, transformSource, outdir) 
     format: 'esm',
     platform: 'browser',
     target: 'es2024',
+    define: { __BOXTEAM_PRODUCT__: JSON.stringify(productIdentity) },
     outdir,
     entryNames: 'dev-upstream/[dir]/[name]',
     chunkNames: 'dev-upstream/chunks/[name]-[hash]',

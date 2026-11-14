@@ -38,7 +38,7 @@ export default async function () {
   const extensions = await loadJSON(join(assetsStage, 'builtin-extensions.json'));
   const localizationAssets = await loadJSON(join(assetsStage, 'localization-assets.json'));
   const transformSource = sourceTransform(root, { ...product, ...version, quality: 'stable' }, extensions, new Map(), localizationAssets);
-  const dependencies = await buildWorkbenchDependencies(root, transformSource, join(assetsStage, 'out'));
+  const dependencies = await buildWorkbenchDependencies(root, transformSource, join(assetsStage, 'out'), version.product);
   const webPackages = ['react-markdown', 'react-virtuoso', 'rehype-sanitize', 'remark-gfm'];
   let assets;
   const { promise: ready, resolve: markReady, reject: markFailed } = Promise.withResolvers();
