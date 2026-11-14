@@ -10,7 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from configs.maintenance.workspace_identity_migration import preview_workspace_identity_migration
+from configs.maintenance.workspace_identity_migration import (
+    preview_workspace_identity_migration,
+)
 
 
 @dataclass
@@ -41,9 +43,9 @@ def legacy_gateway(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: 
     root = directory / "gateway"
     root.mkdir(parents=True)
     source = Path.cwd() / "tests/fixtures/workspace_identity"
-    metadata = json.loads((source / "registry_v13.json").read_text())
+    metadata = json.loads((source / "registry_v13.json").read_text(encoding="utf-8"))
     escaped_root = json.dumps(str(directory))[1:-1].replace("'", "''")
-    script = (source / "registry_v13.sql").read_text().replace("__TEST_ROOT__", escaped_root)
+    script = (source / "registry_v13.sql").read_text(encoding="utf-8").replace("__TEST_ROOT__", escaped_root)
     with closing(sqlite3.connect(root / "gateway.sqlite")) as connection:
         connection.executescript(script)
         # 默认场景仅保留本地来源；远端用例消费同一完整冻结快照中的两条连接。
@@ -54,14 +56,16 @@ def legacy_gateway(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: 
             registry_metadata["remote_gateway_connections"] = []
             connection.execute("UPDATE gateway_config SET payload_json=? WHERE config_key='workspace_registry_meta'", (json.dumps(registry_metadata),))
         connection.commit()
-    (root / "identity.json").write_text(json.dumps(metadata["gateway_identity"]))
+    (root / "identity.json").write_text(json.dumps(metadata["gateway_identity"]), encoding="utf-8")
     navigation = root / "navigation/workspace-tree.json"
     navigation.parent.mkdir()
-    navigation.write_text(json.dumps(metadata["navigation"]))
+    navigation.write_text(json.dumps(metadata["navigation"]), encoding="utf-8")
     for alias, value in metadata["workspaces"].items():
         native = directory / alias.replace("gw_local_", "workspace-")
         (native / ".boxteam").mkdir(parents=True)
-        (native / ".boxteam/workspace-identity.json").write_text(json.dumps(value["identity"]))
+        (native / ".boxteam/workspace-identity.json").write_text(
+            json.dumps(value["identity"]), encoding="utf-8"
+        )
     monkeypatch.setenv("BOXTEAM_HOME", str(directory / "home"))
     monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(root))
     return LegacyGateway(directory, root, metadata)

@@ -47,6 +47,7 @@ def _initialize_configuration(context: TestRunContext, home: Path, workspace: Pa
         **os.environ, "BOXTEAM_HOME": str(home),
         "BOXTEAM_GATEWAY_ROOT": str(home / "state/gateway"),
         "BOXTEAM_DEFAULT_USER_WORKSPACE_ROOT": str(workspace),
+        "PYTHONIOENCODING": "utf-8",
     }
     command = [str(resolve_workspace_python_executable(context.project_root)), "-m", "configs.boxteam",
                "initialize", "--project-root", str(context.project_root), "--workspace", str(workspace)]
