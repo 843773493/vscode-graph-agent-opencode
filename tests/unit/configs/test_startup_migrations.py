@@ -115,16 +115,16 @@ def test_initialize_preserves_explicit_restore_direction(
     original = case.dump()
     commit_workspace_identity_migration(gateway_root=case.root, project_root=Path.cwd())
     journal_path = case.root / ".workspace-identity-migration.json"
-    journal = json.loads(journal_path.read_text())
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
     journal["state"] = "restoring"
-    journal_path.write_text(json.dumps(journal))
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
     if state == "restored":
         commit_workspace_identity_migration(gateway_root=case.root, project_root=Path.cwd(), restore=True)
     monkeypatch.setattr("sys.argv", ["boxteam", "initialize", "--project-root", str(Path.cwd())])
     with pytest.raises(RuntimeError, match="回退"):
         main()
     assert case.dump() == original
-    assert json.loads(journal_path.read_text())["state"] == "restored"
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["state"] == "restored"
 
 
 def test_running_owner_blocks_layout_before_any_file_changes(
@@ -194,9 +194,9 @@ def test_registered_legacy_layout_checks_all_sources_before_any_write(
         (workspace / ".boxteam/resources.json").write_text('{"records":[{}],"leases":[]}', encoding="utf-8")
     elif fault == "identity_conflict":
         identity_path = workspace / ".boxteam/workspace-identity.json"
-        identity = json.loads(identity_path.read_text())
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
         identity["workspace_id"] = case.metadata["workspaces"]["gw_local_1"]["workspace_id"]
-        identity_path.write_text(json.dumps(identity))
+        identity_path.write_text(json.dumps(identity), encoding="utf-8")
     else:
         payloads = {
             "config_version": {"config_version": 999},
@@ -374,14 +374,14 @@ def test_initialize_resumes_original_identity_plan_after_publish_interruption(
         patch.setattr(publisher, "atomic_write", interrupt)
         with pytest.raises(OSError, match="身份发布中断"):
             main()
-    frozen = json.loads(journal_path.read_text())
+    frozen = json.loads(journal_path.read_text(encoding="utf-8"))
     assert frozen["state"] == state
     backups = {path: path.read_bytes() for path in Path(frozen["backup_root"]).rglob("*") if path.is_file()}
     with monkeypatch.context() as patch:
         patch.setattr("sys.argv", ["boxteam", "initialize", "--preview"])
         main()
     assert json.loads(capsys.readouterr().out)["upgrades"] == {"recovery": {"state": "migration_required"}}
-    assert json.loads(journal_path.read_text()) == frozen
+    assert json.loads(journal_path.read_text(encoding="utf-8")) == frozen
     main()
     result = json.loads(capsys.readouterr().out)["upgrades"]["workspace_identity"]
     assert result["state"] == "completed"
