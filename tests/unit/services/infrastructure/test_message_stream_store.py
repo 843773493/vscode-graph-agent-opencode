@@ -771,7 +771,7 @@ async def test_terminal_stream_cache_respects_byte_budget(
     monkeypatch.setattr(
         message_stream_store_module,
         "MESSAGE_STREAM_TERMINAL_CACHE_MAX_BYTES",
-        1,
+        96 * 1024,
     )
     stream_ids: list[str] = []
     for index in range(3):
@@ -780,6 +780,12 @@ async def test_terminal_stream_cache_respects_byte_budget(
             session_id=session_id,
             turn_id=f"job_terminal_cache_bytes_{index}",
         )
+        # 快照始终很小，事件正文足以触发同一缓存字节预算。
+        for event_index in range(4):
+            await writer.commit("block.delta", {
+                "block_id": "reply", "operation": "item_upsert",
+                "item": {"id": "current", "text": f"{index}:{event_index}:" + "x" * 16_384},
+            }, event_id=f"cache-{index}-{event_index}")
         await writer.close_completed()
         stream_ids.append(writer.turn_stream_id)
 
@@ -790,6 +796,17 @@ async def test_terminal_stream_cache_respects_byte_budget(
     ]
     assert terminal_ids == [stream_ids[-1]]
     assert set(store._terminal_state_sizes) == set(terminal_ids)
+    reopened = await store.open_existing(
+        thread_id=store._path_resolver.main_thread_id(session_id), session_id=session_id,
+        turn_id="job_terminal_cache_bytes_0",
+    )
+    original = await reopened.get_event("cache-0-0")
+    assert original is not None and original["payload"]["item"]["text"] == "0:0:" + "x" * 16_384
+    page = await store.list_events(session_id=session_id, turn_stream_id=reopened.turn_stream_id,
+                                   after_seq=0, limit=2)
+    assert [event["event_seq"] for event in page] == [1, 2]
+    assert page[1] == original
+    assert (await reopened.snapshot())["payload"]["stream_status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -2357,40 +2374,6 @@ async def test_evicted_terminal_streams_release_serial_locks(
     assert len(store._locks) <= cache_limit
     # 会话级索引锁同样必须收敛：分片锁池长度恒为分片数，不随会话数量增长。
     assert len(store._index_locks) == message_stream_store_module.MESSAGE_STREAM_INDEX_LOCK_SHARDS
-
-
-@pytest.mark.asyncio
-async def test_terminal_cache_reuses_size_for_unchanged_state(
-    message_stream_store: MessageStreamStoreCase,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store, _, session_id = message_stream_store
-    writer = await store.open(
-        thread_id=store._path_resolver.main_thread_id(session_id),
-        session_id=session_id,
-        turn_id="job_terminal_cache_size",
-    )
-    await writer.close_completed()
-
-    size_measurements = 0
-    measure_size = store._cached_state_size_bytes
-
-    def count_size_measurements(state: Mapping[str, Any]) -> int:
-        nonlocal size_measurements
-        size_measurements += 1
-        return measure_size(state)
-
-    monkeypatch.setattr(store, "_cached_state_size_bytes", count_size_measurements)
-
-    for _ in range(5):
-        await store.get_state(writer.turn_stream_id)
-
-    assert size_measurements == 0
-
-    replacement_state = {**store._states[writer.turn_stream_id]}
-    store._touch_cached_state(writer.turn_stream_id, replacement_state)
-    store._touch_cached_state(writer.turn_stream_id, replacement_state)
-    assert size_measurements == 1
 
 
 @pytest.mark.asyncio

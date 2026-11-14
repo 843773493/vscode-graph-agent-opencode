@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import os
+import sys
 import threading
 import zlib
 from collections import deque
@@ -248,7 +249,7 @@ class MessageStreamStore:
         self._snapshot_tasks: dict[str, asyncio.Task[None]] = {}
         self._snapshot_file_lock = threading.Lock()
         self._states: dict[str, dict[str, Any]] = {}
-        # 缓存状态按对象整体替换；记录对象身份后，终态大小只需在状态替换时序列化一次。
+        # 终态统一核算快照与幂等/重放共用的事件正文，只在发布新版本时计费。
         self._terminal_state_sizes: dict[str, tuple[dict[str, Any], int]] = {}
         self._subscriptions: dict[str, set[MessageStreamSubscription]] = {}
         self._event_ids: dict[str, dict[str, dict[str, Any]]] = {}
@@ -257,14 +258,26 @@ class MessageStreamStore:
         self._replay_events: dict[str, dict[int, dict[str, Any]]] = {}
 
     @staticmethod
-    def _cached_state_size_bytes(state: Mapping[str, Any]) -> int:
-        return len(
-            json.dumps(
-                state,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
+    def _cached_stream_size_bytes(
+        state: Mapping[str, Any], event_ids: Mapping[str, Mapping[str, Any]],
+    ) -> int:
+        # 核算共享 JSON 对象，不为计算预算再编码出一份完整历史正文。
+        pending: list[object] = [state, event_ids]
+        seen: set[int] = set()
+        size = 0
+        while pending:
+            value = pending.pop()
+            identity = id(value)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            size += sys.getsizeof(value)
+            if isinstance(value, Mapping):
+                pending.extend(value.keys())
+                pending.extend(value.values())
+            elif isinstance(value, (list, tuple)):
+                pending.extend(value)
+        return size
 
     def _evict_stream_cache(self, turn_stream_id: str) -> None:
         self._states.pop(turn_stream_id, None)
@@ -284,19 +297,16 @@ class MessageStreamStore:
         self,
         turn_stream_id: str,
         state: dict[str, Any],
+        *,
+        size_bytes: int | None = None,
     ) -> None:
         # dict 的插入顺序就是进程内 LRU。业务事实始终在 JSONL/state snapshot，
         # 这里的终态状态只用于加速最近访问，不能随着历史会话无限增长。
         self._states.pop(turn_stream_id, None)
         self._states[turn_stream_id] = state
-        if str(state.get("stream_status")) in TERMINAL_STREAM_STATUSES:
-            cached_size = self._terminal_state_sizes.get(turn_stream_id)
-            if cached_size is None or cached_size[0] is not state:
-                self._terminal_state_sizes[turn_stream_id] = (
-                    state,
-                    self._cached_state_size_bytes(state),
-                )
-        else:
+        if size_bytes is not None:
+            self._terminal_state_sizes[turn_stream_id] = (state, size_bytes)
+        elif str(state.get("stream_status")) not in TERMINAL_STREAM_STATUSES:
             self._terminal_state_sizes.pop(turn_stream_id, None)
         self._prune_terminal_cache(protected_stream_id=turn_stream_id)
 
@@ -1023,10 +1033,14 @@ class MessageStreamStore:
     async def _load_state_from_disk(self, session_id: str, turn_stream_id: str) -> None:
         # 调用方持有原 Turn 锁；worker 完整校验后，缓存只在事件循环中统一发布。
         state, event_ids, replay_events = await run_sync_shielded(self._read_state_from_disk, session_id, turn_stream_id)
-        self._touch_cached_state(turn_stream_id, state)
+        size_bytes = (
+            await run_sync_shielded(self._cached_stream_size_bytes, state, event_ids)
+            if state["stream_status"] in TERMINAL_STREAM_STATUSES else None
+        )
         self._event_ids[turn_stream_id] = event_ids
         self._event_ids_loaded.add(turn_stream_id)
         self._replay_events[turn_stream_id] = replay_events
+        self._touch_cached_state(turn_stream_id, state, size_bytes=size_bytes)
 
     def _read_state_from_disk(
         self,
@@ -1491,6 +1505,11 @@ class MessageStreamStore:
             ))
             try:
                 await asyncio.shield(append_task)
+                size_bytes = (
+                    await run_sync_shielded(self._cached_stream_size_bytes, next_state, {
+                        **self._event_ids.get(turn_stream_id, {}), event["event_id"]: event,
+                    }) if next_state["stream_status"] in TERMINAL_STREAM_STATUSES else None
+                )
             finally:
                 # 取消不能停止线程中的 append；持有 Turn 锁直到真实 worker
                 # 结算，重复取消也不能让下一提交复用旧 checkpoint 的序号。
@@ -1506,10 +1525,10 @@ class MessageStreamStore:
             self._replay_events.pop(turn_stream_id, None)
             await run_cleanup_shielded(lambda: self._load_state_from_disk(session_id, turn_stream_id))
             raise
-        self._touch_cached_state(turn_stream_id, next_state)
         self._event_ids.setdefault(turn_stream_id, {})[event["event_id"]] = event
         self._event_ids_loaded.add(turn_stream_id)
         self._replay_events.setdefault(turn_stream_id, {})[next_seq] = event
+        self._touch_cached_state(turn_stream_id, next_state, size_bytes=size_bytes)
         subscribers = self._subscriptions.get(turn_stream_id, set())
         overflowed: list[MessageStreamSubscription] = []
         for subscription in tuple(subscribers):
