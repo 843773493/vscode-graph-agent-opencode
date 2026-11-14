@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -104,6 +104,13 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_node_debug_service(self) -> NodeDebugService: ...
 
 
+def load_session_agent_factory() -> Callable[..., Any]:
+    """加载内置执行依赖，不构建模型、Thread 或配置中的自定义工具。"""
+    from app.agents.agent_factory import create_runtime_deep_agent_for_session
+
+    return create_runtime_deep_agent_for_session
+
+
 def build_session_agent_runtime(
     *,
     session_id: str,
@@ -135,10 +142,7 @@ def build_session_agent_runtime(
     include_team_tools: bool = False,
     owns_thread: bool = True,
 ) -> Any:
-    from app.agents.agent_factory import (
-        create_runtime_deep_agent_for_session,
-    )
-
+    create_runtime_deep_agent_for_session = load_session_agent_factory()
     resolved_agent_id = config_service.resolve_agent_id(agent_id)
     checkpointer = dependency_provider.get_checkpointer()
     if checkpointer is None:

@@ -34,6 +34,10 @@ try {
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
   for (const url of ['/api/gateway/health', '/api/gateway/workspaces', '/api/v1/workspace']) await api(url);
   result.phase = 'no-session-workspace-tools';
+  const firstOpenStarted = performance.now();
+  const firstCatalog = page.waitForResponse(response => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/v1/tools'
+    && response.request().headers()['x-boxteam-workspace-id'] === fixture.workspaceId);
   await command('boxteam.tools.focus');
   const panel = page.locator('[data-panel-kind="tools"]');
   const content = panel.locator('.native-workspace-panel-content:not([hidden])');
@@ -41,6 +45,16 @@ try {
   await expect(panel).toHaveAttribute('data-workspace-id', fixture.workspaceId);
   const workspaceSelect = panel.getByLabel('工具管理工作区', { exact: true });
   await expect(workspaceSelect).toHaveValue(fixture.workspaceId);
+  const firstCatalogResponse = await firstCatalog;
+  assert.equal(firstCatalogResponse.status(), 200);
+  const firstCatalogBody = await firstCatalogResponse.json();
+  assert.equal(firstCatalogBody.request_id, firstCatalogResponse.headers()['x-request-id']);
+  await expect(content.getByLabel('Agent', { exact: true })).toBeEnabled();
+  await expect(content.locator('.composer-tool-item').first()).toContainText('参数 schema');
+  await expect(content.locator('.composer-tool-menu-header')).not.toContainText('加载');
+  result.uiAvailability = { firstOpenMs: performance.now() - firstOpenStarted,
+    gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId,
+    firstRequestId: firstCatalogBody.request_id, toolCount: firstCatalogBody.data.length };
   await workspaceSelect.selectOption(fixture.activeWorkspaceId);
   await expect(panel).toHaveAttribute('data-workspace-id', fixture.activeWorkspaceId);
   await expect(content.getByLabel('Agent', { exact: true })).toBeVisible();
@@ -124,6 +138,29 @@ try {
     assert.equal(finalTool.model_visible, mutable.model_visible);
   }
   assert.equal(result.pageErrors.length, 0, JSON.stringify(result.pageErrors));
+  // 关闭再打开同一管理页，计时到正确 owner 的真实目录回读及控件可用。
+  await command('workbench.action.closePanel');
+  await expect(panel).toBeHidden();
+  const warmOpenStarted = performance.now();
+  const warmCatalog = page.waitForResponse(response => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/v1/tools'
+    && response.request().headers()['x-boxteam-workspace-id'] === fixture.workspaceId);
+  await command('boxteam.tools.focus');
+  const warmCatalogResponse = await warmCatalog;
+  assert.equal(warmCatalogResponse.status(), 200);
+  const warmCatalogBody = await warmCatalogResponse.json();
+  assert.equal(warmCatalogBody.request_id, warmCatalogResponse.headers()['x-request-id']);
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-workspace-id', fixture.workspaceId);
+  await expect(content.getByLabel('Agent', { exact: true })).toHaveValue(agentId);
+  await expect(content.getByLabel('Agent', { exact: true })).toBeEnabled();
+  await expect(rows.first()).toContainText('参数 schema');
+  await expect(content.locator('.composer-tool-menu-header')).not.toContainText('加载');
+  result.uiAvailability = { ...result.uiAvailability, warmOpenMs: performance.now() - warmOpenStarted,
+    agentId, warmRequestId: warmCatalogBody.request_id, warmToolCount: warmCatalogBody.data.length };
+  assert.equal(warmCatalogBody.data.length, catalog.data.length);
+  assert(result.uiAvailability.firstOpenMs <= 3000, `工具管理首开 ${result.uiAvailability.firstOpenMs}ms`);
+  assert(result.uiAvailability.warmOpenMs <= 3000, `工具管理暖开 ${result.uiAvailability.warmOpenMs}ms`);
   const directory = await api('/api/gateway/workspaces');
   assert.equal(directory.data.active_workspace.workspace_id, fixture.activeWorkspaceId);
   assert.deepEqual(activationRequests, []);
