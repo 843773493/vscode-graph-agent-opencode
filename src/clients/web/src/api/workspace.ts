@@ -14,12 +14,13 @@ const agentHeaders = (target?: AgentWorkspaceTarget | null) => typeof target ===
 export async function getWorkspace(
   port: number,
   workspaceId?: string | null,
+  signal?: AbortSignal,
 ): Promise<WorkspaceInfo> {
   return unwrapApiData(
     await requestJson<APIResponse<WorkspaceInfo>>(
       port,
       "/api/v1/workspace",
-      { headers: workspaceHeader(workspaceId) },
+      { headers: workspaceHeader(workspaceId), signal },
     ),
   );
 }

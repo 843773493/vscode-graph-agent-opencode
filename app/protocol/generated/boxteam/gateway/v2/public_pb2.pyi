@@ -740,7 +740,7 @@ class PluginRuntimeObservationDTO(_message.Message):
     def __init__(self, instance: _Optional[_Union[_service_plugin_pb2.PluginInstanceView, _Mapping]] = ..., observation: _Optional[_Union[RuntimeObservationStatus, _Mapping]] = ..., error: _Optional[str] = ...) -> None: ...
 
 class GatewayDiagnosticsDTO(_message.Message):
-    __slots__ = ("gateway_id", "gateway_name", "gateway_connection_id", "connection_kind", "status", "checked_at", "selected_workspace_id", "selected_log_id", "workspaces", "logs", "processes", "observation", "plugin_observations")
+    __slots__ = ("gateway_id", "gateway_name", "gateway_connection_id", "connection_kind", "status", "checked_at", "selected_workspace_id", "selected_log_id", "workspaces", "logs", "processes", "observation", "plugin_observations", "control_directory", "log_directory")
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_NAME_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -754,6 +754,8 @@ class GatewayDiagnosticsDTO(_message.Message):
     PROCESSES_FIELD_NUMBER: _ClassVar[int]
     OBSERVATION_FIELD_NUMBER: _ClassVar[int]
     PLUGIN_OBSERVATIONS_FIELD_NUMBER: _ClassVar[int]
+    CONTROL_DIRECTORY_FIELD_NUMBER: _ClassVar[int]
+    LOG_DIRECTORY_FIELD_NUMBER: _ClassVar[int]
     gateway_id: str
     gateway_name: str
     gateway_connection_id: str
@@ -767,7 +769,9 @@ class GatewayDiagnosticsDTO(_message.Message):
     processes: _containers.RepeatedCompositeFieldContainer[GatewayDiagnosticProcessDTO]
     observation: RuntimeObservationStatus
     plugin_observations: _containers.RepeatedCompositeFieldContainer[PluginRuntimeObservationDTO]
-    def __init__(self, gateway_id: _Optional[str] = ..., gateway_name: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., checked_at: _Optional[str] = ..., selected_workspace_id: _Optional[str] = ..., selected_log_id: _Optional[str] = ..., workspaces: _Optional[_Iterable[_Union[GatewayDiagnosticWorkspaceDTO, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[GatewayDiagnosticLogDTO, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[GatewayDiagnosticProcessDTO, _Mapping]]] = ..., observation: _Optional[_Union[RuntimeObservationStatus, _Mapping]] = ..., plugin_observations: _Optional[_Iterable[_Union[PluginRuntimeObservationDTO, _Mapping]]] = ...) -> None: ...
+    control_directory: str
+    log_directory: str
+    def __init__(self, gateway_id: _Optional[str] = ..., gateway_name: _Optional[str] = ..., gateway_connection_id: _Optional[str] = ..., connection_kind: _Optional[str] = ..., status: _Optional[str] = ..., checked_at: _Optional[str] = ..., selected_workspace_id: _Optional[str] = ..., selected_log_id: _Optional[str] = ..., workspaces: _Optional[_Iterable[_Union[GatewayDiagnosticWorkspaceDTO, _Mapping]]] = ..., logs: _Optional[_Iterable[_Union[GatewayDiagnosticLogDTO, _Mapping]]] = ..., processes: _Optional[_Iterable[_Union[GatewayDiagnosticProcessDTO, _Mapping]]] = ..., observation: _Optional[_Union[RuntimeObservationStatus, _Mapping]] = ..., plugin_observations: _Optional[_Iterable[_Union[PluginRuntimeObservationDTO, _Mapping]]] = ..., control_directory: _Optional[str] = ..., log_directory: _Optional[str] = ...) -> None: ...
 
 class GatewayDiagnosticLogQueryScopeDTO(_message.Message):
     __slots__ = ("source", "workspace_ids")

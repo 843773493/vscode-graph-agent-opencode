@@ -9,6 +9,7 @@ import {
 } from "../../../tests/fixtures/session/gatewayEnvironment";
 import GatewayDiagnosticsPanel from "./GatewayDiagnosticsPanel";
 import type { GatewayDiagnosticLog } from "../../../types/backend";
+import { HttpRequestError } from "../../../api/http";
 
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -194,6 +195,8 @@ test("诊断摘要不复制日志、错误正文或未知扩展字段", async ()
   const snapshot = diagnostics();
   snapshot.logs[0].tail = "model-body-secret";
   snapshot.logs[0].error = "error-with-api-key";
+  snapshot.control_directory = "/target/control-directory";
+  snapshot.log_directory = "/target/log-directory";
   const response = { ...snapshot, api_key: "must-not-copy" };
   installGatewayFetch(({ path }) => path === "/api/gateway/diagnostics"
     ? Response.json({ data: response, request_id: "req_safe_copy" }) : undefined, { token: "diag-token" });
@@ -208,7 +211,27 @@ test("诊断摘要不复制日志、错误正文或未知扩展字段", async ()
   const summary = JSON.parse(copied);
   expect(summary.gateway_id).toBe(snapshot.gateway_id);
   expect(summary.logs[0]).toMatchObject({ log_id: "log_gateway", has_error: true });
-  for (const secret of ["model-body-secret", "error-with-api-key", "must-not-copy", "diag-token"]) expect(copied).not.toContain(secret);
+  for (const secret of ["model-body-secret", "error-with-api-key", "must-not-copy", "diag-token", "/target/control-directory", "/target/log-directory"]) expect(copied).not.toContain(secret);
+  renderer.unmount();
+});
+
+test("存储位置只展示原诊断归属，保留设置失败携带原 request_id", async () => {
+  const snapshot = { ...diagnostics(), control_directory: String.raw`C:\BoxTeam\control`, log_directory: String.raw`C:\BoxTeam\logs` };
+  const targets: Array<[string, string | null]> = [];
+  installGatewayFetch(({ path }) => path === "/api/gateway/diagnostics"
+    ? Response.json({ data: snapshot, request_id: "req_storage" }) : undefined, { token: "diag-token" });
+  let renderer!: ReactTestRenderer;
+  act(() => { renderer = create(<GatewayDiagnosticsPanel apiPort={8035} workspaces={[workspace]}
+    onOpenRetention={async (gatewayId, connectionId) => {
+      targets.push([gatewayId, connectionId]);
+      throw new HttpRequestError(403, "Forbidden", "configuration_read", "/api/gateway/config/sources", "req_retention_denied");
+    }} />); });
+  await flush();
+  expect(JSON.stringify(renderer.toJSON())).toContain(JSON.stringify(snapshot.control_directory).slice(1, -1));
+  const open = renderer.root.findAllByType("button").find(button => button.children.includes("打开 Gateway 日志保留设置"));
+  await act(async () => { open!.props.onClick(); await Promise.resolve(); });
+  expect(targets).toEqual([[snapshot.gateway_id, null]]);
+  expect(JSON.stringify(renderer.toJSON())).toContain("request_id=req_retention_denied");
   renderer.unmount();
 });
 

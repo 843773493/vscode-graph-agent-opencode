@@ -5094,18 +5094,20 @@ class WorkspaceContextDTO(_message.Message):
     def __init__(self, workspace_id: _Optional[str] = ..., project_type: _Optional[str] = ..., languages: _Optional[_Iterable[str]] = ..., git: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., index_status: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., config: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
 
 class WorkspaceDTO(_message.Message):
-    __slots__ = ("workspace_id", "name", "project_type", "git", "runtime")
+    __slots__ = ("workspace_id", "name", "project_type", "git", "runtime", "data_directory")
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     PROJECT_TYPE_FIELD_NUMBER: _ClassVar[int]
     GIT_FIELD_NUMBER: _ClassVar[int]
     RUNTIME_FIELD_NUMBER: _ClassVar[int]
+    DATA_DIRECTORY_FIELD_NUMBER: _ClassVar[int]
     workspace_id: str
     name: str
     project_type: str
     git: _struct_pb2.Struct
     runtime: _struct_pb2.Struct
-    def __init__(self, workspace_id: _Optional[str] = ..., name: _Optional[str] = ..., project_type: _Optional[str] = ..., git: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., runtime: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+    data_directory: str
+    def __init__(self, workspace_id: _Optional[str] = ..., name: _Optional[str] = ..., project_type: _Optional[str] = ..., git: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., runtime: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., data_directory: _Optional[str] = ...) -> None: ...
 
 class WorkspaceDefaultAgentUpdateRequest(_message.Message):
     __slots__ = ("agent_id",)

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.logging_contract import load_runtime_log_contract
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
@@ -36,13 +37,14 @@ async def test_gateway_runtime_settings_and_diagnostic_summary(
     request: pytest.FixtureRequest,
     metadata_case: tuple[object, TestRunContext, Path, object],
 ) -> None:
-    client, context, _workspace, _provider = metadata_case
+    client, context, workspace, _provider = metadata_case
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert chromium, "Gateway 诊断验收需要真实 Chromium"
     gateway_id = (await client.get("/api/gateway/health")).json()["data"]["gateway_id"]
     workspace_id = (await client.get("/api/v1/workspace")).json()["data"]["workspace_id"]
     assets = Path(os.environ["BOXTEAM_WEB_ASSETS"])
     product = json.loads((assets / "version.json").read_text())["product"]
+    home = context.boxteam_home_for_node(request.node.nodeid)
     (context.artifacts_dir / "assets.json").write_text(json.dumps({
         "path": str(assets), "main_sha256": hashlib.sha256((assets / "out/main.js").read_bytes()).hexdigest(),
     }) + "\n")
@@ -55,6 +57,8 @@ async def test_gateway_runtime_settings_and_diagnostic_summary(
             env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
                 "BOXTEAM_BROWSER_ARTIFACTS": str(context.artifacts_dir), "BOXTEAM_GATEWAY_OBSERVATION_FIXTURE": json.dumps({
                     "baseUrl": str(client.base_url).rstrip("/"), "gatewayId": gateway_id, "workspaceId": workspace_id,
+                    "workspaceData": str(workspace / ".boxteam"), "gatewayControl": str(home / "state/gateway"),
+                    "gatewayLogs": str(load_runtime_log_contract().root_for(home)),
                     "product": product})})
     (context.artifacts_dir / "browser-process.json").write_text(json.dumps({"command": command, "exit_code": completed.returncode}) + "\n")
     (context.artifacts_dir / "browser.stdout.raw").write_text(completed.stdout, encoding="utf-8")
@@ -64,3 +68,4 @@ async def test_gateway_runtime_settings_and_diagnostic_summary(
     assert result["phase"] == "completed" and result["pageErrors"] == []
     assert result["unexpectedCalls"] == []
     assert result["summarySafe"] and result["appliedSettings"]
+    assert result["storageLocations"] and result["retentionOwner"] == gateway_id

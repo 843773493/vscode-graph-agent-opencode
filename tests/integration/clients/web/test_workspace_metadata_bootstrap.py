@@ -218,7 +218,10 @@ async def test_workspace_metadata_without_root_initializes_real_web(
         data = await metadata_data(client, endpoint)
         assert data["workspace_id"] == active["workspace_id"]
         assert "root_path" not in data and "root" not in data["git"]
-        assert str(workspace) not in json.dumps(data, ensure_ascii=False)
+        locations_removed = dict(data)
+        if endpoint == "/api/v1/workspace":
+            assert locations_removed.pop("data_directory") == str(workspace / ".boxteam")
+        assert str(workspace) not in json.dumps(locations_removed, ensure_ascii=False)
         responses[endpoint] = data
     (context.artifacts_dir / "metadata-http.json").write_text(json.dumps(responses, ensure_ascii=False, indent=2) + "\n")
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium") or shutil.which("chromium-browser")

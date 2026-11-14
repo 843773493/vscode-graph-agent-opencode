@@ -4065,5 +4065,17 @@
   "chat.actions.usageScope": "Last model request in this reply; not a Thread total",
   "chat.actions.usageUnknown": "Usage not reported",
   "chat.actions.costUnknown": "Cost unknown: no verified pricing",
-  "goal.manager.usageScope": "Only usage recorded by this Goal; cost is unknown because verified pricing is unavailable."
+  "goal.manager.usageScope": "Only usage recorded by this Goal; cost is unknown because verified pricing is unavailable.",
+  "gateway.workspaceDetails.dataDirectory": "Workspace business data directory",
+  "gateway.workspaceDetails.ownerChanged": "The workspace details no longer belong to the selected owner.",
+  "gateway.storage.title": "Storage locations and retention",
+  "gateway.storage.controlDirectory": "Gateway control plane directory",
+  "gateway.storage.logDirectory": "Product log directory",
+  "gateway.storage.unreported": "Not reported by this owner",
+  "gateway.storage.pathBoundary": "Native paths describe locations on the selected target machine. File operations use resource URIs. This view does not delete, back up, or repair business data.",
+  "gateway.storage.retentionBoundary": "Product log retention is controlled by logging.retention on this Gateway. It does not set a retention period for workspace sessions or execution history.",
+  "gateway.storage.retentionSettings": "Open Gateway Log Retention Settings",
+  "gateway.storage.sourceBoundary": "Gateway {0} · scope {1}. These are resource URIs published by the configuration owner. No file content is loaded.",
+  "settings.editor.sourceLocations": "Inspect Configuration Source Locations",
+  "settings.editor.sourceSchema": "Configuration schema"
 }

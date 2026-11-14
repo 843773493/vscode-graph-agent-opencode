@@ -3115,7 +3115,11 @@ export interface WorkspaceDTO {
   name: string;
   project_type?: string | undefined;
   git?: { [key: string]: any } | undefined;
-  runtime?: { [key: string]: any } | undefined;
+  runtime?:
+    | { [key: string]: any }
+    | undefined;
+  /** 由工作区 owner 提供的目标机器展示位置，不承担资源寻址职责。 */
+  data_directory?: string | undefined;
 }
 
 export interface WorkspaceDefaultAgentUpdateRequest {
@@ -23134,7 +23138,14 @@ export const WorkspaceContextDTO: MessageFns<WorkspaceContextDTO> = {
 };
 
 function createBaseWorkspaceDTO(): WorkspaceDTO {
-  return { workspace_id: "", name: "", project_type: undefined, git: undefined, runtime: undefined };
+  return {
+    workspace_id: "",
+    name: "",
+    project_type: undefined,
+    git: undefined,
+    runtime: undefined,
+    data_directory: undefined,
+  };
 }
 
 export const WorkspaceDTO: MessageFns<WorkspaceDTO> = {
@@ -23145,6 +23156,7 @@ export const WorkspaceDTO: MessageFns<WorkspaceDTO> = {
       project_type: isSet(object.project_type) ? globalThis.String(object.project_type) : undefined,
       git: isObject(object.git) ? object.git : undefined,
       runtime: isObject(object.runtime) ? object.runtime : undefined,
+      data_directory: isSet(object.data_directory) ? globalThis.String(object.data_directory) : undefined,
     };
   },
 
@@ -23165,6 +23177,9 @@ export const WorkspaceDTO: MessageFns<WorkspaceDTO> = {
     if (message.runtime !== undefined) {
       obj.runtime = message.runtime;
     }
+    if (message.data_directory !== undefined) {
+      obj.data_directory = message.data_directory;
+    }
     return obj;
   },
 
@@ -23178,6 +23193,7 @@ export const WorkspaceDTO: MessageFns<WorkspaceDTO> = {
     message.project_type = object.project_type ?? undefined;
     message.git = object.git ?? undefined;
     message.runtime = object.runtime ?? undefined;
+    message.data_directory = object.data_directory ?? undefined;
     return message;
   },
 };

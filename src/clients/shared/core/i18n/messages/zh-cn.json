@@ -4065,5 +4065,17 @@
   "chat.actions.usageScope": "本次回复的最后一次模型请求，非整个 Thread 总计",
   "chat.actions.usageUnknown": "用量未报告",
   "chat.actions.costUnknown": "成本未知：没有已确认价格",
-  "goal.manager.usageScope": "仅含本 Goal 已记录的用量；没有已确认价格，成本未知。"
+  "goal.manager.usageScope": "仅含本 Goal 已记录的用量；没有已确认价格，成本未知。",
+  "gateway.workspaceDetails.dataDirectory": "工作区业务数据目录",
+  "gateway.workspaceDetails.ownerChanged": "工作区详情已不属于所选 owner。",
+  "gateway.storage.title": "存储位置与保留",
+  "gateway.storage.controlDirectory": "Gateway 控制面数据目录",
+  "gateway.storage.logDirectory": "产品日志目录",
+  "gateway.storage.unreported": "原 owner 未提供",
+  "gateway.storage.pathBoundary": "原生路径仅展示所选目标机器上的位置；文件操作使用资源 URI。此处不提供业务数据目录删除、备份或修复。",
+  "gateway.storage.retentionBoundary": "产品日志保留由此 Gateway 的 logging.retention 配置管理，不决定工作区会话或执行历史的保留期限。",
+  "gateway.storage.retentionSettings": "打开 Gateway 日志保留设置",
+  "gateway.storage.sourceBoundary": "Gateway {0} · 范围 {1}。这些位置由配置 owner 发布为资源 URI，不读取文件正文。",
+  "settings.editor.sourceLocations": "查看配置来源位置",
+  "settings.editor.sourceSchema": "配置 schema"
 }

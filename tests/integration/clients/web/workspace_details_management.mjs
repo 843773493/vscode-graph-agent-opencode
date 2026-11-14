@@ -24,7 +24,7 @@ try {
     const request = response.request(), url = new URL(response.url());
     const mutation = request.method() !== 'GET' && (url.pathname === '/api/gateway/managed-workspaces'
       || /^\/api\/gateway\/workspaces\/[^/]+(?:\/activate)?$/.test(url.pathname));
-    if (!mutation && !['/api/gateway/local-directories', '/api/gateway/diagnostics'].includes(url.pathname)) return;
+    if (!mutation && !['/api/gateway/local-directories', '/api/gateway/diagnostics', '/api/v1/workspace'].includes(url.pathname)) return;
     const operation = (async () => {
       const payload = await response.json(), requestId = response.headers()['x-request-id'];
       assert(requestId);
@@ -97,6 +97,8 @@ try {
   await expect(details).toContainText(fixture.gatewayA);
   await expect(details).toContainText(remote.backend_id ?? '未分配');
   await expect(details).toContainText(fixture.connectionId);
+  await expect(details).toContainText(path.join(fixture.remoteRoot, '.boxteam'));
+  result.remoteDataDirectory = path.join(fixture.remoteRoot, '.boxteam');
   await expect(details).toContainText('移除只注销登记');
   assert.deepEqual((await api('/api/gateway/workspaces')).active_workspace, { gateway_id: fixture.gatewayA, workspace_id: fixture.workspaceId });
   await details.getByRole('button', { name: '工作区设置', exact: true }).click();
@@ -152,6 +154,8 @@ try {
   await expect(rename).toBeHidden();
   await showDetails(fixture.gatewayA, registered.workspace_id);
   await expect(details).toContainText('详情注册工作区');
+  await expect(details).toContainText(path.join(fixture.workspaceRoot, '.boxteam'));
+  result.localDataDirectory = path.join(fixture.workspaceRoot, '.boxteam');
 
   result.phase = 'frozen-local-settings';
   await details.getByRole('button', { name: '工作区设置', exact: true }).click();

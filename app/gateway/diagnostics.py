@@ -448,4 +448,6 @@ async def collect_gateway_diagnostics(
         processes=processes,
         observation=observed,
         plugin_observations=plugin_observations,
+        control_directory=str(get_gateway_root()),
+        log_directory=str(get_runtime_log_root()),
     )

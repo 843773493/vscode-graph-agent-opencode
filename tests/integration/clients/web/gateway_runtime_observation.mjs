@@ -103,13 +103,21 @@ try {
     for (const [key, child] of Object.entries(value)) { assert(!forbidden.has(key), `诊断复制包含正文/秘密字段 ${key}`); inspect(child); }
   };
   inspect(summary);
+  assert(!('control_directory' in summary) && !('log_directory' in summary));
   result.summarySafe = true;
   result.summary = summary;
+  const storage = panel.locator('details').filter({ has: page.locator('summary', { hasText: '存储位置与保留' }) });
+  await storage.locator('summary').click();
+  await expect(storage).toContainText(fixture.gatewayControl);
+  await expect(storage).toContainText(fixture.gatewayLogs);
+  await expect(storage).toContainText('目标机器');
   result.phase = 'warm-diagnostics-and-release';
   // 本切片只改变已有诊断详情展示，选该唯一详情 API；不重复采样其它列表。
   for (let index = 0; index < 21; index++) {
     const sample = await api('/api/gateway/diagnostics');
     assert.equal(sample.data.gateway_id, fixture.gatewayId);
+    assert.equal(sample.data.control_directory, fixture.gatewayControl);
+    assert.equal(sample.data.log_directory, fixture.gatewayLogs);
     assert(sample.data.observation.telemetry.enabled && sample.data.observation.statistics.enabled);
     const { data: _body, ...measurement } = sample;
     result.apiSamples.push(measurement);
@@ -122,6 +130,32 @@ try {
   const reads = result.diagnosticsReads;
   await page.waitForTimeout(600);
   assert.equal(result.diagnosticsReads, reads, '关闭后不得继续读诊断');
+  result.phase = 'original-owner-storage-and-retention';
+  await command('boxteam.workspace.details', { gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId });
+  const details = page.getByRole('dialog', { name: '工作区详情', exact: true });
+  await expect(details).toContainText(fixture.workspaceData);
+  assert.equal(result.initialization[2].data.data_directory, fixture.workspaceData);
+  await details.getByRole('button', { name: '关闭工作区详情', exact: true }).first().click();
+  await openDiagnostics();
+  await storage.locator('summary').click();
+  const retained = panel.getByRole('button', { name: '打开 Gateway 日志保留设置', exact: true }).click();
+  await expect(quick).toBeVisible();
+  await quick.locator('.monaco-list-row').filter({ hasText: sourceKey }).click();
+  await retained;
+  await expect(control).toBeHidden();
+  const header = page.locator('.settings-context-label:visible');
+  await expect(header.getByRole('combobox', { name: '设置所属 Gateway', exact: true }).locator('option:checked')).toContainText(fixture.gatewayId);
+  await expect(header.getByRole('combobox', { name: '设置范围／工作区', exact: true }).locator('option:checked')).toHaveText('Gateway 配置');
+  const sources = (await api('/api/gateway/config/sources')).data;
+  const selectedSource = sources.sources.find(item => item.source_key === sourceKey);
+  assert(selectedSource && sources.schema_uri);
+  await header.getByRole('button', { name: '查看配置来源位置', exact: true }).click();
+  await expect(quick).toContainText(selectedSource.uri ?? '原 owner 未提供');
+  await expect(quick).toContainText(sources.schema_uri);
+  await page.keyboard.press('Escape');
+  result.storageLocations = { workspace: fixture.workspaceData, control: fixture.gatewayControl, logs: fixture.gatewayLogs,
+    source: selectedSource.uri, schema: sources.schema_uri };
+  result.retentionOwner = fixture.gatewayId;
   result.phase = 'original-product-about';
   const about = command('workbench.action.showAboutDialog');
   await expect(modal).toContainText(fixture.product.nameLong);

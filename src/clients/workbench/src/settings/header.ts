@@ -9,10 +9,11 @@ import { SettingsEditor2Input } from '../../upstream/src/vs/workbench/services/p
 import type { ISettingsEditorOptions } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
+import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { t } from '../../../shared/core/i18n/index.js';
 import { Disposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ITargetSettingsContext } from './scope.js';
-import { sourceStatus } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceStatus } from './sourceOwner.js';
 import { captureSettingsLocation } from './editor.js';
 import type { DefinitionEditorOptions } from './entities.js';
 import { workspaceContext } from '../workspaceContext.js';
@@ -36,6 +37,7 @@ export class SettingsContextHeader extends Disposable {
     @ITargetSettingsContext private readonly context: ITargetSettingsContext,
     @ICommandService private readonly commands: ICommandService,
     @INotificationService private readonly notifications: INotificationService,
+    @IQuickInputService private readonly quick: IQuickInputService,
     @IContextViewService contextView: IContextViewService,
     @IInstantiationService private readonly parent: IInstantiationService,
     @IEditorService private readonly editors: IEditorService,
@@ -150,6 +152,24 @@ export class SettingsContextHeader extends Disposable {
     clearNode(this.content);
     const status = document.createElement('div'); this.content.append(status);
     status.textContent = source ? t('settings.editor.header', source.location.gateway_id, source.location.workspace_id ?? 'Gateway', sourceStatus(source.document), source.document.writable ? '' : t('settings.editor.readOnlySuffix'), warning) : t('settings.editor.windowProfile');
+    if (source) {
+      const location = { ...source.location };
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = t('settings.editor.sourceLocations');
+      button.addEventListener('click', () => this.run(async () => {
+        const lifetime = this.lifetime;
+        if (!lifetime) throw new Error(t('workbench.settings.gatewayPending'));
+        const listed = await new ConfigurationSourceOwner(location).list(lifetime.signal);
+        lifetime.check();
+        if (this._store.isDisposed) return;
+        await this.quick.pick([
+          { label: location.source_key, detail: listed.sources.find(item => item.source_key === location.source_key)?.uri ?? t('gateway.storage.unreported') },
+          { label: t('settings.editor.sourceSchema'), detail: listed.schema_uri ?? t('gateway.storage.unreported') },
+        ], { title: t('settings.editor.sourceLocations'), prompt: t('gateway.storage.sourceBoundary', location.gateway_id,
+          location.workspace_id ?? 'Gateway') }, lifetime.token);
+      }));
+      this.content.append(button);
+    }
     for (const kind of ['providers', 'agents', undefined] as const) {
       if (kind && source && !source.location.workspace_id) continue;
       if (!kind && !source?.location.workspace_id) continue;

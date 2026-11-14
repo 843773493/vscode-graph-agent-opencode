@@ -1939,6 +1939,18 @@ export declare type GatewayDiagnosticsDTO = Message<"boxteam.gateway.v2.GatewayD
    * @generated from field: repeated boxteam.gateway.v2.PluginRuntimeObservationDTO plugin_observations = 13;
    */
   pluginObservations: PluginRuntimeObservationDTO[];
+
+  /**
+   * 目标机器上的原生展示位置；不能作为资源 URI 或当前机器上的操作目标。
+   *
+   * @generated from field: optional string control_directory = 14;
+   */
+  controlDirectory?: string | undefined;
+
+  /**
+   * @generated from field: optional string log_directory = 15;
+   */
+  logDirectory?: string | undefined;
 };
 
 /**

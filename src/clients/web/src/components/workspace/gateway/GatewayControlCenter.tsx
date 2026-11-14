@@ -37,7 +37,7 @@ interface GatewayControlCenterProps extends GatewayBackendRuntimeActions {
   onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
   onRefresh: () => Promise<void>;
   onRemoteGatewayReconnected: (connectionId: string) => void;
-  onOpenConfiguration: () => Promise<void>;
+  onOpenConfiguration: (gatewayId?: string, connectionId?: string | null) => Promise<void>;
   background: AppearanceBackground;
   onUpdateBackground: (value: AppearanceBackground) => Promise<void>;
   onSelectColorTheme: () => Promise<void>;
@@ -228,7 +228,7 @@ export default function GatewayControlCenter({
               diagnosticLocation ? <GatewayDiagnosticLogLocation apiPort={apiPort} request={diagnosticLocation} workspaces={workspaces}
                 onClose={() => onCloseDiagnosticLocation?.()} /> : <GatewayDiagnosticsPanel key={JSON.stringify(diagnosticsTarget)}
                   apiPort={apiPort} workspaces={workspaces} initialConnectionId={diagnosticsTarget.connectionId}
-                  initialWorkspaceId={diagnosticsTarget.workspaceKey} />
+                  initialWorkspaceId={diagnosticsTarget.workspaceKey} onOpenRetention={onOpenConfiguration} />
             ) : activePage === "credentials" ? (
               <GatewayInboundAccessPanel apiPort={apiPort} revision={deviceRevision}
                 onAddDevice={() => setConnectionDialogMode("external-device")} />

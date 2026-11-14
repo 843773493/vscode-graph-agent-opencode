@@ -108,6 +108,8 @@ class GatewayDiagnosticsDTO(BaseModel):
     processes: list[GatewayDiagnosticProcessDTO] = Field(default_factory=list)
     observation: RuntimeObservationStatus | None = None
     plugin_observations: list[PluginRuntimeObservationDTO] = Field(default_factory=list)
+    control_directory: str | None = Field(default=None, description="目标机器的控制面数据展示位置，不作资源定位")
+    log_directory: str | None = Field(default=None, description="目标机器的产品日志展示位置，不作资源定位")
 
 
 class GatewayDiagnosticLogQueryScopeDTO(BaseModel):

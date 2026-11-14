@@ -458,6 +458,9 @@ export interface GatewayDiagnosticsDTO {
   processes: GatewayDiagnosticProcessDTO[];
   observation?: RuntimeObservationStatus | undefined;
   plugin_observations: PluginRuntimeObservationDTO[];
+  /** 目标机器上的原生展示位置；不能作为资源 URI 或当前机器上的操作目标。 */
+  control_directory?: string | undefined;
+  log_directory?: string | undefined;
 }
 
 export interface GatewayDiagnosticLogQueryScopeDTO {
@@ -3832,6 +3835,8 @@ function createBaseGatewayDiagnosticsDTO(): GatewayDiagnosticsDTO {
     processes: [],
     observation: undefined,
     plugin_observations: [],
+    control_directory: undefined,
+    log_directory: undefined,
   };
 }
 
@@ -3863,6 +3868,8 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
       plugin_observations: globalThis.Array.isArray(object?.plugin_observations)
         ? object.plugin_observations.map((e: any) => PluginRuntimeObservationDTO.fromJSON(e))
         : [],
+      control_directory: isSet(object.control_directory) ? globalThis.String(object.control_directory) : undefined,
+      log_directory: isSet(object.log_directory) ? globalThis.String(object.log_directory) : undefined,
     };
   },
 
@@ -3907,6 +3914,12 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
     if (message.plugin_observations?.length) {
       obj.plugin_observations = message.plugin_observations.map((e) => PluginRuntimeObservationDTO.toJSON(e));
     }
+    if (message.control_directory !== undefined) {
+      obj.control_directory = message.control_directory;
+    }
+    if (message.log_directory !== undefined) {
+      obj.log_directory = message.log_directory;
+    }
     return obj;
   },
 
@@ -3931,6 +3944,8 @@ export const GatewayDiagnosticsDTO: MessageFns<GatewayDiagnosticsDTO> = {
       : undefined;
     message.plugin_observations = object.plugin_observations?.map((e) => PluginRuntimeObservationDTO.fromPartial(e)) ||
       [];
+    message.control_directory = object.control_directory ?? undefined;
+    message.log_directory = object.log_directory ?? undefined;
     return message;
   },
 };

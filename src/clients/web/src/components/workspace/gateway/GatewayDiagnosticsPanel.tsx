@@ -22,6 +22,7 @@ interface GatewayDiagnosticsPanelProps {
   workspaces: GatewayWorkspace[];
   initialConnectionId?: string | null;
   initialWorkspaceId?: string;
+  onOpenRetention?: (gatewayId: string, connectionId: string | null) => Promise<void>;
 }
 
 function formatTime(value: string | null): string {
@@ -41,6 +42,7 @@ export default function GatewayDiagnosticsPanel({
   workspaces,
   initialConnectionId = null,
   initialWorkspaceId = "",
+  onOpenRetention,
 }: GatewayDiagnosticsPanelProps) {
   const groups = useMemo(() => groupGatewayWorkspaces(workspaces), [workspaces]);
   const [gatewayConnectionId, setGatewayConnectionId] = useState<string | null>(initialConnectionId);
@@ -278,6 +280,20 @@ export default function GatewayDiagnosticsPanel({
               {selectedGroup?.workspaces.length === 0 ? <span className="gateway-diagnostics-muted">{t("gateway.diagnostics.noWorkspaces")}</span> : null}
             </div>
           </section>
+
+          <details className="gateway-diagnostics-runtime">
+            <summary>{t("gateway.storage.title")}</summary>
+            <p>{t("gateway.storage.controlDirectory")} <code>{diagnostics.control_directory ?? t("gateway.storage.unreported")}</code></p>
+            <p>{t("gateway.storage.logDirectory")} <code>{diagnostics.log_directory ?? t("gateway.storage.unreported")}</code></p>
+            <p>{t("gateway.storage.pathBoundary")}</p>
+            <p>{t("gateway.storage.retentionBoundary")}</p>
+            {onOpenRetention ? <button type="button" className="gateway-compact-button" onClick={() => {
+              void onOpenRetention(diagnostics.gateway_id, diagnostics.gateway_connection_id ?? null).catch(cause => setError(
+                cause instanceof HttpRequestError && cause.requestId
+                  ? `${errorMessage(cause)} · request_id=${cause.requestId}` : errorMessage(cause),
+              ));
+            }}>{t("gateway.storage.retentionSettings")}</button> : null}
+          </details>
 
           <details className="gateway-diagnostics-runtime" open>
             <summary>{t("gateway.diagnostics.processLogSettings")}</summary>

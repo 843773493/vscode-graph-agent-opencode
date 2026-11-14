@@ -1,8 +1,9 @@
-import { useContext, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../../../../shared/core/i18n/index.js";
 import { gatewayWorkspaceKey, workspaceOwnerFromKey } from "../../api/workspaceIdentity";
 import { HttpRequestError } from "../../api/http";
+import { getWorkspace } from "../../api/workspace";
 import type { GatewayWorkspace } from "../../types/backend";
 import { errorMessage } from "../../utils/errorMessage";
 import { OverlayRootContext } from "../overlays/OverlayRootContext";
@@ -28,6 +29,19 @@ export default function WorkspaceDetailsDialog({ target, workspaces, onClose, on
   const [error, setError] = useState<string>();
   const owner = workspaceOwnerFromKey(target.workspaceKey);
   const workspace = workspaces.find(item => gatewayWorkspaceKey(item) === target.workspaceKey);
+  const [storage, setStorage] = useState<{ workspaceKey: string; directory?: string; error?: string }>();
+  useEffect(() => {
+    if (workspace?.status !== "ready") return;
+    const controller = new AbortController(), workspaceKey = target.workspaceKey;
+    void getWorkspace(0, workspaceKey, controller.signal).then(info => {
+      if (info.workspace_id !== workspaceOwnerFromKey(workspaceKey).workspaceId) throw new Error(t("gateway.workspaceDetails.ownerChanged"));
+      if (!controller.signal.aborted) setStorage({ workspaceKey, directory: info.data_directory ?? undefined });
+    }).catch(cause => {
+      if (!controller.signal.aborted) setStorage({ workspaceKey, error: cause instanceof HttpRequestError && cause.requestId
+        ? `${errorMessage(cause)} · request_id=${cause.requestId}` : errorMessage(cause) });
+    });
+    return () => controller.abort();
+  }, [target.workspaceKey, workspace?.status]);
   const run = async (operation: () => Promise<void>) => {
     setBusy(true); setError(undefined);
     try { await operation(); onClose(); }
@@ -53,6 +67,10 @@ export default function WorkspaceDetailsDialog({ target, workspaces, onClose, on
           <div><dt>{t("gateway.workspaceDetails.backend")}</dt><dd><code>{workspace.backend_id ?? t("gateway.workspaceDetails.unassigned")}</code></dd></div>
           <div className="workspace-dialog-wide"><dt>{t("gateway.workspaceDetails.generation")}</dt><dd><code>{workspace.backend_generation ?? t("gateway.workspaceDetails.unassigned")}</code></dd></div>
           <div className="workspace-dialog-wide"><dt>{t("gateway.workspaceDetails.endpoint")}</dt><dd><code>{workspace.backend_url}</code></dd></div>
+          <div className="workspace-dialog-wide"><dt>{t("gateway.workspaceDetails.dataDirectory")}</dt><dd>
+            {storage?.workspaceKey === target.workspaceKey ? storage.error ? <span role="alert">{storage.error}</span>
+              : <code>{storage.directory ?? t("gateway.storage.unreported")}</code> : t(workspace.status === "ready" ? "gateway.diagnostics.loading" : "gateway.storage.unreported")}
+          </dd></div>
           <div className="workspace-dialog-wide"><dt>{t("gateway.workspaceDetails.members")}</dt><dd><ul>{workspace.affected_workspace_ids.map(id => {
             const member = workspaces.find(item => item.gateway_id === owner.gatewayId && item.workspace_id === id);
             return <li key={id}>{member?.name} <code>{id}</code></li>;
@@ -71,6 +89,7 @@ export default function WorkspaceDetailsDialog({ target, workspaces, onClose, on
       {error ? <p className="workspace-dialog-error" role="alert">{error}</p> : null}
       <p className="workspace-action-dialog-description">{t("gateway.workspaceDetails.rootBinding")}</p>
       <p className="workspace-action-dialog-description">{t("gateway.workspaceDetails.removeBoundary")}</p>
+      <p className="workspace-action-dialog-description">{t("gateway.storage.pathBoundary")}</p>
       <footer className="workspace-dialog-actions">
         {workspace ? <>
           <button type="button" disabled={busy || workspace.status !== "ready"} onClick={() => void run(() => onOpen(target.workspaceKey))}>{t("gateway.workspaceDetails.open")}</button>

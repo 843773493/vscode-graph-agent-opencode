@@ -13330,6 +13330,13 @@ export declare type WorkspaceDTO = Message<"boxteam.workspace.v2.WorkspaceDTO"> 
    * @generated from field: optional google.protobuf.Struct runtime = 6;
    */
   runtime?: JsonObject | undefined;
+
+  /**
+   * 由工作区 owner 提供的目标机器展示位置，不承担资源寻址职责。
+   *
+   * @generated from field: optional string data_directory = 7;
+   */
+  dataDirectory?: string | undefined;
 };
 
 /**

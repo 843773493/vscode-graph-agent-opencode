@@ -69,10 +69,12 @@ def test_empty_workspace_scope_keeps_all_log_sources() -> None:
     assert scoped == [*gateway_candidates, *workspace_candidates]
 
 
-def test_diagnostics_finds_role_logs_and_launcher_override(
+async def test_diagnostics_finds_role_logs_and_launcher_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path))
+    control_root = tmp_path / "原控制面覆盖"
+    monkeypatch.setenv("BOXTEAM_GATEWAY_ROOT", str(control_root))
     override = tmp_path / "显式路径/launcher.log"
     monkeypatch.setenv("BOXTEAM_SERVICE_LOG_PATH", str(override))
     contract = load_runtime_log_contract()
@@ -85,6 +87,10 @@ def test_diagnostics_finds_role_logs_and_launcher_override(
     assert _launcher_log_path() == override
     candidates = _candidate_gateway_logs({paths[1].name})
     assert {candidate.log_path for candidate in candidates} == {override, paths[0], paths[2]}
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    payload = (await collect_gateway_diagnostics(registry, gateway_id="gateway_diagnostic_paths")).model_dump(mode="json")
+    assert payload["control_directory"] == str(control_root)
+    assert payload["log_directory"] == str(root)
 
 
 def test_explicit_instance_log_stays_readable_outside_recent_log_limit(
@@ -195,6 +201,7 @@ async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary
     diagnostics = {
         "gateway_id": "gateway_peer", "gateway_name": "来源", "connection_kind": "local",
         "status": "ready", "checked_at": "2026-10-29T00:00:00Z",
+        "control_directory": r"C:\BoxTeam\state\gateway", "log_directory": r"C:\BoxTeam\state\logs",
         "logs": [{"log_id": "gateway-stderr", "source": "gateway", "service": "gateway",
                   "label": "原始日志", "status": "available", "tail": native_path}],
     }
@@ -246,6 +253,8 @@ async def test_remote_diagnostics_failure_keeps_raw_logs_in_their_named_boundary
     assert recovered.data.logs[0].tail == native_path
     assert recovered.data.gateway_name == "原远端"
     assert recovered.data.gateway_connection_id == "rgw_diagnostics"
+    assert recovered.data.control_directory == diagnostics["control_directory"]
+    assert recovered.data.log_directory == diagnostics["log_directory"]
     assert [request.headers["X-Request-ID"] for request in requests] == ["req_diagnostics_boundary"] * 2
     assert all(request.headers["X-BoxTeam-Federation-Token"] == "private-test-token" for request in requests)
     assert not responses
