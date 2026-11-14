@@ -195,7 +195,11 @@ export async function readBrowserSummary(page, refSelectors, documentRevision = 
     }
 
     const bodyText = (document.body?.innerText || "")
-      .replace(/\s+\n/g, "\n")
+      .replace(/\s+/g, (whitespace) => {
+        // 整段空白只扫描一次；寻找结尾换行的正则会在长空白上反复回溯。
+        const newline = whitespace.lastIndexOf("\n");
+        return newline < 0 ? whitespace : `\n${whitespace.slice(newline + 1)}`;
+      })
       .replace(/\n{3,}/g, "\n\n")
       .trim()
       .slice(0, 6000);
