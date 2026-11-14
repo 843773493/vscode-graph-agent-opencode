@@ -621,4 +621,3 @@ Turn summary/detail MUST 投影必填非负 `root_logical_item_ordinal`，从选
 
 - **WHEN** 用户使用先前目录的续点查询，而原历史视图或 revision 已改变
 - **THEN** owner 返回明确的失效历史游标，不静默从新视图继续或漏过结果
-

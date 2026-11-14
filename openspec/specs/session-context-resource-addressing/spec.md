@@ -302,4 +302,3 @@ Gateway 搜索的 `max_chars` SHALL 表示每个 owner 原上下文页的字符�
 
 - **WHEN** 一个 owner 返回非法资源 URI 或无效页，而其它 owner 正常，随后该分支恢复
 - **THEN** 无效分支返回可判别错误，健康 owner 的页及版本保留；完整异常进入原诊断日志，日志写入失败也不能把查询改成空成功或阻止资源释放；恢复不改变健康 owner 的独立 revision
-

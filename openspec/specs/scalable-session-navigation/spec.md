@@ -1,82 +1,78 @@
 # scalable-session-navigation Specification
 
 ## Purpose
-TBD - created by archiving change add-scalable-session-resource-generators. Update Purpose after archive.
+
+规定会话目录的分页、搜索、逻辑组织及跨 Gateway 镜像。导航关系、Session／Thread 物理定位和生命周期统一服从原 catalog owner，不从文件系统重建第二套关系。
+
 ## Requirements
-### Requirement: 物理目录树是会话位置的唯一权威来源
-工作区后端 SHALL 将会话本体保存在 `.boxteam/sessions/` 下的真实层级目录中；每个文件夹和会话节点 MUST 通过 manifest 保留稳定 ID，运行时 MUST NOT 再以独立 JSON 关系树作为第二权威来源。
+
+### Requirement: 会话导航与物理定位必须使用唯一 catalog
+
+工作区后端 SHALL 复用 [itemized-rollout-context](../itemized-rollout-context/spec.md)「产品 Session、durable Thread 与 LangGraph namespace 必须严格分层」规定的唯一 workspace navigation SQLite、稳定 locator、不可变创建 metadata 及 Session／Thread resolver。Folder 是逻辑导航节点，显示名、导航父链和物理目录分别履行原 owner 的职责；本 capability MUST NOT 另建物理 Folder／children 树、manifest 父链或可重建的第二 catalog。
 
 #### Scenario: 在嵌套文件夹创建会话
 - **WHEN** 用户在两级会话文件夹下创建会话
-- **THEN** 会话的 session manifest、checkpoint、日志、Trace、后台任务、上下文历史、变更和工具结果全部聚合在该物理层级中的同一个会话目录
+- **THEN** catalog 保存逻辑父链，Session 及其 Thread 数据仍由已冻结 locator 解析；文件夹名称和层级不参与物理路径命名
 
-#### Scenario: 删除日期目录中的会话
-- **WHEN** 用户删除某个日期文件夹下的一个会话
-- **THEN** 系统只删除该真实会话目录并使派生索引失效，不需要同步维护虚拟文件夹关系
+#### Scenario: 删除逻辑文件夹中的会话
+- **WHEN** 用户删除某个导航文件夹下的会话
+- **THEN** 原删除 owner 协调 catalog 和该 Session 的物理数据，不把导航文件夹解释为可直接删除的磁盘目录
 
-### Requirement: 稳定 ID 解析与手工目录变更可恢复
-所有会话业务访问 MUST 通过稳定 ID 解析当前物理路径；扫描 SHALL 从 folder manifest 和 session manifest 重建路径与 breadcrumb，并 MUST 对手工重命名或移动后的合法节点恢复定位。
+### Requirement: 稳定 ID 解析不得通过扫描吸收手工目录变化
+
+所有会话业务访问 MUST 通过权威 catalog 与统一 resolver 定位。手工移动、重命名、缺失或未知目录 SHALL 沿原 owner 报告明确错误；MUST NOT 扫盘重建父链、吸收未登记 Session 或静默改写 locator。
 
 #### Scenario: 用户手工移动会话目录
-- **WHEN** 用户在本地文件管理器中把含合法 session manifest 的会话目录移动到另一合法会话文件夹
-- **THEN** 下一次显式刷新或启动扫描保留原 session ID、更新 breadcrumb，并让搜索结果指向新物理路径
+- **WHEN** 用户在文件管理器中移动 catalog 已登记的 Session 目录
+- **THEN** 后续访问按原 locator 明确失败并保留数据供人工处理，不自动把新路径登记为合法位置
 
-#### Scenario: 扫描发现重复稳定 ID
-- **WHEN** 两个物理目录声明同一 folder ID 或 session ID
-- **THEN** 目录 API 返回包含全部冲突路径的 unhealthy 错误并阻止不确定的写操作
+#### Scenario: 发现目录与登记不一致
+- **WHEN** 登记 locator 不存在，或维护检查发现未登记／冲突目录
+- **THEN** 系统报告具体不一致，不伪造空目录、不覆盖 catalog 或默认吸收磁盘内容
 
-### Requirement: 会话父子关系使用物理子树
-物理会话目录 SHALL 通过保留的 `children/` 边界包含子会话和用于组织子会话的真实文件夹；`parent_session_id` MUST 与最近的物理祖先会话一致，目录树是该关系的唯一权威来源。上下文来源 MUST 由独立 `context_source` 表达。
+### Requirement: 会话父子关系必须使用逻辑导航父链
+
+会话绑定、解绑与移动 SHALL 使用原 catalog mutation owner；`parent_session_id` 仅按 catalog 最近祖先 Session 派生，不写入 manifest 成为第二事实。导航关系 MUST 与 fork、delegation、上下文来源及运行身份分离；逻辑组织操作不得搬迁 Session／Thread 物理数据。
 
 #### Scenario: 绑定为子会话
-- **WHEN** 用户把同一工作区中的会话 B 绑定为会话 A 的子会话
-- **THEN** 系统把 B 的完整物理子树原子移动到 `A/children/` 下、把 B 的 `parent_session_id` 设为 A，并保留 B 及其后代的稳定 ID
+- **WHEN** 用户把同一工作区中的会话 B 绑定为会话 A 的导航子会话
+- **THEN** 原 owner 提交 B 的逻辑父节点变化，派生父会话为 A；B 及后代的稳定身份、locator 和运行保持
 
 #### Scenario: 解除父会话绑定
-- **WHEN** 用户解除 B 与父会话 A 的绑定
-- **THEN** 系统把 B 的完整物理子树移动到 A 所在的会话文件夹并清空 B 的 `parent_session_id`
+- **WHEN** 用户解除 B 与导航父会话 A 的绑定
+- **THEN** 原 owner 将 B 移到 A 的逻辑父目录，并重新派生父会话，不移动物理目录或修改上下文来源
 
 #### Scenario: 移动父会话
-- **WHEN** 用户把包含后代的父会话移动到其它会话文件夹
-- **THEN** 系统移动父会话目录一次，全部后代随物理子树一起移动且父子稳定 ID 不变
+- **WHEN** 用户把包含后代的会话移动到另一导航文件夹
+- **THEN** catalog 事务更新相应父链，后代稳定身份与物理 locator 不变
 
-#### Scenario: 删除或导出父会话
-- **WHEN** 用户确认删除或导出包含后代的父会话
-- **THEN** 删除操作在取得全部后代会话的删除准入后级联删除完整子树，导出操作包含完整子树；未明确确认的级联删除 MUST 被拒绝
+#### Scenario: 删除父会话及其后代
+- **WHEN** 用户明确确认删除包含后代的会话
+- **THEN** 原删除 owner 按 catalog 冻结的逻辑子树及各 Session 准入处理；未明确确认的级联删除被拒绝，不以磁盘 children 目录猜测范围
 
 #### Scenario: 拒绝跨工作区绑定
 - **WHEN** 用户尝试把另一工作区的会话绑定为当前会话的子会话
-- **THEN** 后端返回明确错误且两个工作区的物理目录均不改变
+- **THEN** 后端明确拒绝，两个工作区的 catalog 与物理数据均不改变
 
-#### Scenario: 手工目录变更与 manifest 不一致
-- **WHEN** 扫描发现会话的 `parent_session_id` 与最近物理祖先会话不一致
-- **THEN** 目录 API 返回包含会话 ID、声明父节点和实际父节点的 unhealthy 错误，不得静默选择其中一个
+### Requirement: 会话附属数据必须沿原 owner 定位
 
-### Requirement: 会话附属数据使用稳定物理定位
-checkpoint、消息历史、附件、Trace、后台任务、上下文历史、变更、工具结果和生成消息意图 MUST 通过稳定 session ID 解析到当前真实会话目录；运行期 MUST NOT 接受 `inline:` 或 data URL 作为持久附件定位器。历史 inline 附件 SHALL 在正常运行前由带锁、带账本的一次性迁移物化进对应会话包并重写引用。
-
-#### Scenario: 迁移历史内联附件
-- **WHEN** 旧工作区的消息历史或 checkpoint 引用仅存在于历史 LLM 请求日志中的 inline 媒体
-- **THEN** 启动迁移把媒体写入该稳定会话的附件目录、重写引用并记录完成账本，之后运行时只读取稳定附件 locator
+checkpoint、消息历史、Trace、后台任务、上下文历史、变更、工具结果和生成意图 SHALL 通过稳定 Session／Thread 身份及统一 resolver 访问。附件 SHALL 使用原附件 owner 的资源引用及既有保留／释放合同，不把 Session 路径或临时 inline／data URL 作为另一持久定位关系。
 
 #### Scenario: 会话删除与生成意图清理并发
-- **WHEN** 子 Job 已到达终态，同时完整会话目录被物理删除
-- **THEN** 生成意图视为随会话包清除，已确认的生成终态不得因清理路径消失而翻转为失败；权限等其它 I/O 错误仍必须透明报告
+- **WHEN** 子 Job 已到达终态，同时所属 Session 按原删除协议清理
+- **THEN** 已确认生成终态不因其会话包消失而翻转为失败；权限等其它 I/O 错误仍透明报告
 
-### Requirement: 旧扁平布局一次性可恢复迁移
-工作区后端 SHALL 把旧 `.boxteam/sessions/{session_id}/` 与旧逻辑目录关系迁移到物理层级树，并 MUST 使用迁移锁、可恢复账本和迁移后全量校验；迁移成功后旧关系文件 MUST NOT 继续参与运行时读写。
+### Requirement: 旧布局只能作为显式迁移输入
 
-#### Scenario: 迁移已有逻辑文件夹
-- **WHEN** 工作区包含旧扁平会话目录和嵌套 `session-folders.json`
-- **THEN** 迁移器创建带稳定 ID 的物理文件夹、原子移动对应会话本体、验证全部 ID 后归档旧关系文件
+旧 JSON 导航索引及旧目录布局 SHALL 仅由原 owner 的显式离线迁移处理；支持范围、备份、可恢复提交及校验沿其既有合同。本 capability MUST NOT 恢复启动时的物理树迁移、自动扫盘修复、运行期双读双写或为开发中间态新增兼容链。
 
-#### Scenario: 迁移已有会话父子关系
-- **WHEN** 旧导航或 session manifest 声明同一工作区中的会话 B 以会话 A 为父节点
-- **THEN** 迁移器把 B 的完整目录移动到 `A/children/` 下并校验无循环、无缺失父节点和无跨工作区引用
+#### Scenario: 旧 JSON catalog 尚未迁移
+- **WHEN** 工作区只有旧索引而缺少当前 SQLite catalog
+- **THEN** 启动明确报告需显式迁移并保留原件，不建立空 catalog 或从磁盘推测父子关系
 
-#### Scenario: 迁移中途失败
-- **WHEN** 一个目录移动成功后后续移动失败
-- **THEN** 下次启动依据迁移账本继续或明确恢复，不得同时把旧 JSON 和部分物理树作为有效权威来源
+#### Scenario: 显式迁移中途失败
+- **WHEN** 原迁移流程在发布前后失败
+- **THEN** 按该 owner 的原提交记录恢复或明确停止，旧输入与未完成目标不会同时成为生产权威
 
 ### Requirement: 会话目录按需分页
 工作区后端 SHALL 提供根节点和直接子节点分页接口，并 MUST NOT 要求 Web 在启动时加载该工作区全部会话。
@@ -124,12 +120,13 @@ Gateway 跨工作区目录搜索 SHALL 接入统一联邦查询合同，支持�
 - **WHEN** 工具按工作区名称或导航归属发现相关项目，尚未提交领域查询
 - **THEN** Gateway 只查询原控制面信息，返回稳定工作区 ID 和 breadcrumb，不导出会话树、扫描正文或启动后端
 
-### Requirement: 目录索引可重建且错误透明
-工作区目录索引 MUST 能从物理 folder manifest 和 session manifest 重建；损坏、重复 ID 或非法层级 MUST 使目录报告明确 unhealthy 错误，而不是返回伪造空列表。
+### Requirement: catalog 错误必须透明且不由派生镜像替代权威
 
-#### Scenario: 检测重复会话 ID
-- **WHEN** 扫描发现两个目录声明相同 session ID
-- **THEN** 目录 API 返回包含冲突路径的错误并阻止不确定操作
+权威 catalog 损坏、重复身份、非法层级及 locator 不一致 SHALL 沿原 owner 明确失败，维护与备份恢复服从其既有合同。Gateway 镜像和前端范围缓存是派生展示，MUST NOT 用于重建或覆盖权威 catalog。
+
+#### Scenario: catalog 完整性检查失败
+- **WHEN** 原 owner 检测到关系或 locator 不一致
+- **THEN** 目录 API 保留明确错误并阻止不确定操作，不从磁盘、Gateway 镜像或客户端缓存生成看似成功的空 catalog
 
 ### Requirement: Gateway 提供跨工作区轻量搜索
 Gateway SHALL 聚合工作区组织、生成器和工作区目录轻量快照，且 MUST 将离线工作区结果标记为 stale/offline。
@@ -147,26 +144,26 @@ Web SHALL 使用懒加载、分页和虚拟化展示目录，并 SHALL 在加载
 
 #### Scenario: 使用右键菜单组织会话
 - **WHEN** 用户复制会话文件夹信息后在会话上选择移动，或复制会话信息后在另一会话上选择绑定为子会话
-- **THEN** Web 从剪贴板解析稳定 ID、调用后端物理移动 API，并在成功时以返回结果和最新目录 revision 刷新树；失败时重新拉取权威状态并显示错误
+- **THEN** Web 从剪贴板解析稳定 ID、调用原 catalog 移动 API，并在成功时以返回结果和最新目录 revision 刷新树；失败时重新拉取权威状态并显示错误
 
 ### Requirement: Web 树支持受约束的直接拖放组织
-Web SHALL 允许拖放工作区、工作区文件夹、会话文件夹和会话，并 MUST 按来源与目标类型映射为单一明确操作。会话和会话文件夹 MUST 仅能在来源工作区内移动；后端仍须独立校验工作区边界、循环关系和物理目标类型。
+Web SHALL 允许拖放工作区、工作区文件夹、会话文件夹和会话，并 MUST 按来源与目标类型映射为单一明确操作。会话和会话文件夹 MUST 仅能在来源工作区内移动；后端仍须独立校验工作区边界、循环关系和逻辑目标类型。
 
 #### Scenario: 拖动会话到文件夹或会话
 - **WHEN** 用户把会话拖到同一工作区的会话文件夹或另一会话
-- **THEN** 前者把完整会话物理子树移动到目标文件夹，后者把它移动到目标会话 `children/` 下并建立物理父子会话关系
+- **THEN** 前者将会话逻辑父节点设为目标文件夹，后者设为目标会话；两者均保持 Session／Thread locator 不变
 
 #### Scenario: 拖动会话文件夹到文件夹或会话
 - **WHEN** 用户把会话文件夹拖到同一工作区的另一文件夹或会话
-- **THEN** 前者形成物理子文件夹，后者把文件夹移动到目标会话的 `children/` 边界下，文件夹内全部节点随目录移动
+- **THEN** 原 catalog 提交文件夹的逻辑父节点，文件夹内节点保留原关系及各自物理 locator，不搬迁目录
 
 #### Scenario: 拖到工作区会话根
 - **WHEN** 用户把该工作区内的会话或会话文件夹拖到工作区行
-- **THEN** 系统把节点移动到该工作区 `.boxteam/sessions/` 根并刷新权威目录树
+- **THEN** 系统把节点的逻辑父节点改为工作区根并确认最新 catalog 版本，不搬迁物理目录
 
 #### Scenario: 拒绝跨工作区拖放
 - **WHEN** 用户把会话或会话文件夹拖到另一工作区中的任意节点
-- **THEN** Web 显示不可放置状态，若仍收到请求则后端明确拒绝，来源与目标物理目录均不改变
+- **THEN** Web 显示不可放置状态，若仍收到请求则后端明确拒绝，来源与目标 catalog 及物理数据均不改变
 
 #### Scenario: 组织变更保留用户展开状态
 - **WHEN** 用户折叠工作区后移动或绑定工作区文件夹
@@ -174,10 +171,10 @@ Web SHALL 允许拖放工作区、工作区文件夹、会话文件夹和会话�
 
 #### Scenario: 叶子会话不显示文件夹空态
 - **WHEN** 已展开会话的最后一个子节点被移动出去
-- **THEN** Web 将该会话恢复为不可展开的叶子节点，不在会话下显示“空文件夹”；真实空会话文件夹仍显示该空态
+- **THEN** Web 将该会话恢复为不可展开的叶子节点，不在会话下显示“空文件夹”；真实空的逻辑文件夹仍显示该空态
 
 #### Scenario: 文件夹创建入口进入节点右键菜单
-- **WHEN** 用户要在工作区根或会话的 `children/` 边界创建会话文件夹
+- **WHEN** 用户要在工作区根或会话的逻辑子节点范围创建会话文件夹
 - **THEN** Web 在对应工作区或会话右键菜单提供入口，树行右侧不重复显示新建按钮
 
 #### Scenario: 会话资源子窗口统一视觉

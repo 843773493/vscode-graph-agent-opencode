@@ -18,6 +18,8 @@ Goal 的业务控制 owner 是 `SessionGoalService`，由会话 API 在 `session
 
 目录的权威版本、节点与导航操作分别由 `SessionCatalogStore`、`SessionCatalogReadService` 和原 navigation queue owner 持有；配置投影版本取 `ConfigService` 已发布 revision，并与 Provider 投影使用同一 publication lock。`GatewayCatalogSearchService` 继续持有派生镜像，普通 children／breadcrumb／指定 ID 读取沿原代理返回适用镜像或有界权威范围。前端 `useSessionResourceExplorer` 只保留已加载分支，原 navigation outbox 负责命令依赖与确认，不新建完整目录库。
 
+主规格历史冲突的归并来源是已归档 `itemized-rollout-context` 的「产品 Session、durable Thread 与 LangGraph namespace 必须严格分层」：SQLite 是导航及 locator 唯一权威。归档复核据此移除 `scalable-session-navigation` 中相反的物理 Folder／children 树、扫盘吸收及启动迁移要求；保留其现行分页、搜索、逻辑组织与同步合同，不新增运行实现或迁移机制。
+
 共享 proto/generated 由同一写入者生成，Goal、消息和目录各自迁齐生产者及消费者。已归档的 `refine-workbench-layered-caches` 提供浏览器原存储 owner；Quick Access 继续消费原资源与导航入口，本变更不另造搜索或历史链路。
 
 ## Goals / Non-Goals
