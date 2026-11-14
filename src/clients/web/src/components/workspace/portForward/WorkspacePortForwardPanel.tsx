@@ -158,8 +158,8 @@ export default function WorkspacePortForwardPanel({
   }, [active, api, apiPort, isRemoteWorkspace, workspaceId]);
 
   useEffect(() => {
-    requestRevisionRef.current += 1;
     setForwards(null);
+    setLoading(false);
     setError(null);
     setSubmitting(false);
     setStoppingId(null);
@@ -182,17 +182,16 @@ export default function WorkspacePortForwardPanel({
     setFilterText("");
     setIsFilterOpen(false);
     setIsTableMenuOpen(false);
-    if (active && isRemoteWorkspace) void refresh();
+  }, [apiPort, workspaceId]);
+
+  useEffect(() => {
+    requestRevisionRef.current += 1;
+    void refresh();
   }, [
-    active,
-    isRemoteWorkspace,
     refresh,
     workspace?.connection_error,
-    workspace?.gateway_id,
-    workspace?.workspace_id,
     workspace?.remote_gateways,
     workspace?.status,
-    workspaceId,
   ]);
 
   const recoverAfterFailure = async (workspaceId: string, message: string) => {

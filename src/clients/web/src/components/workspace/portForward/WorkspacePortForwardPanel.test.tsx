@@ -475,6 +475,9 @@ describe("工作区端口转发面板", () => {
     });
     const renderer = renderPortForwardPanel(api);
     await flushReactUpdates();
+    act(() => renderer.root.findByProps({ role: "table" }).props.onContextMenu({ preventDefault() {} }));
+    act(() => renderer.root.findByProps({ "aria-controls": "workspace-port-forward-form" }).props.onClick());
+    act(() => renderer.root.findByProps({ placeholder: "例如 5173" }).props.onChange({ target: { value: "9000" } }));
     const secondWorkspace: GatewayWorkspace = {
       ...remoteGatewayWorkspace,
       workspace_id: "gw_remote_api",
@@ -498,6 +501,46 @@ describe("工作区端口转发面板", () => {
     expect(requestedWorkspaceIds).toEqual([gatewayWorkspaceKey(remoteGatewayWorkspace), gatewayWorkspaceKey({ ...remoteGatewayWorkspace, workspace_id: "gw_remote_api" })]);
     expect(renderedText(renderer)).toContain("gw_remote_api");
     expect(renderedText(renderer)).not.toContain("pf_gw_remote_project");
+    expect(renderer.root.findAllByType("form")).toHaveLength(0);
+    renderer.unmount();
+  });
+
+  test("同一 owner 刷新和面板重新激活保留未提交的端口草稿", async () => {
+    const payloads: CreateGatewayPortForwardRequest[] = [];
+    const api = createPortForwardApiFixture({
+      list: async () => createPortForwardList([]),
+      create: async (_port, _workspaceId, payload) => {
+        payloads.push(payload);
+        return createPortForwardList([createPortForward({ remote_port: payload.remote_port })]);
+      },
+    });
+    const renderer = renderPortForwardPanel(api);
+    await flushReactUpdates();
+    act(() => renderer.root.findByProps({ "aria-controls": "workspace-port-forward-form" }).props.onClick());
+    act(() => renderer.root.findByProps({ placeholder: "例如 5173" }).props.onChange({ target: { value: "9000" } }));
+    act(() => renderer.root.findByProps({ placeholder: "自动分配" }).props.onChange({ target: { value: "41009" } }));
+    const labelInput = renderer.root.findByProps({ maxLength: 120 });
+    act(() => labelInput.props.onChange({ target: { value: "未提交的服务" } }));
+    const refreshedWorkspace = {
+      ...remoteGatewayWorkspace,
+      checked_at: "2026-08-02T00:00:01Z",
+      remote_gateways: remoteGatewayWorkspace.remote_gateways.map(connection => ({ ...connection })),
+    };
+    for (const active of [true, false, true]) {
+      await act(async () => {
+        renderer.update(<WarmConfirmProvider><WorkspacePortForwardPanel
+          apiPort={8014} workspace={refreshedWorkspace} active={active} api={api}
+        /></WarmConfirmProvider>);
+      });
+      await flushReactUpdates();
+      expect(renderer.root.findAllByType("form")).toHaveLength(1);
+      expect(renderer.root.findByProps({ placeholder: "例如 5173" }).props.value).toBe("9000");
+      expect(renderer.root.findByProps({ placeholder: "自动分配" }).props.value).toBe("41009");
+      expect(renderer.root.findByProps({ maxLength: 120 }).props.value).toBe("未提交的服务");
+    }
+    await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    await flushReactUpdates();
+    expect(payloads).toEqual([{ remote_port: 9000, local_port: 41009, protocol: "http", label: "未提交的服务" }]);
     renderer.unmount();
   });
 

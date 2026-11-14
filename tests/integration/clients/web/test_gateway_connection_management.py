@@ -1,7 +1,8 @@
-"""完整 Workbench 验收连接管理；SSH 执行与隧道明确复用 loopback 替身。"""
+"""连接管理沿 loopback 配对装具；Ports 场景使用真实 localhost SSH。"""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -10,16 +11,26 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import closing
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import commentjson
 import pytest
 
+from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
+from tests.integration.backend.sessions.test_session_communication_pipeline import (
+    _prepare_workspace,
+)
 from tests.integration.gateway.test_target_gateway_routing import TargetGatewayNetwork
+from tests.support.communication.federation import open_communication_triad
+from tests.support.e2e_control.harness import E2EProcessLease
+from tests.support.http_server import running_http_server
 from tests.support.paths import chromium_temporary_environment
+from tests.support.ports import integration_port_block_for_file
 
 pytest_plugins = ["tests.integration.gateway.test_target_gateway_routing"]
 
@@ -115,3 +126,62 @@ def test_connections_keep_original_source_and_remote_data(
     assert remote.get(f"/api/v1/sessions/{created['session_id']}").raise_for_status().json()["data"]["session_id"] == created["session_id"]
     remaining = local.get("/api/gateway/management/gateways").raise_for_status().json()["data"]["items"]
     assert [item["gateway_connection_id"] for item in remaining if item["connection_kind"] == "remote_gateway"] == [connection_id]
+
+
+@pytest.mark.asyncio
+async def test_ports_create_open_and_stop_real_ssh_forward(
+    request: pytest.FixtureRequest,
+) -> None:
+    assets = Path(os.environ["BOXTEAM_WEB_ASSETS"])
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    ports = integration_port_block_for_file(Path(request.node.path))
+    chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
+    assert chromium, "Ports 产品验收需要真实 Chromium"
+    landing = context.workspace_root / "port-landing"
+    landing.mkdir(parents=True, exist_ok=True)
+    marker = "Ports 管理入口真实 SSH 转发"
+    (landing / "index.html").write_text(
+        f'<!doctype html><meta charset="utf-8"><title>Ports Ready</title><h1>{marker}</h1>', encoding="utf-8",
+    )
+    lease = E2EProcessLease(context.runtime_root_for_node(request.node.nodeid) / "landing-ports.json",
+                            (ports.port(61), ports.port(62)))
+    lease.acquire()
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", ports.port(61)), partial(SimpleHTTPRequestHandler, directory=str(landing)))
+        with running_http_server(server):
+            async with open_communication_triad(
+                context, _prepare_workspace, same_backend_routes=True, ports=ports,
+                gateway_environment={"BOXTEAM_WEB_ASSETS": str(assets)},
+            ) as nodes:
+                source, target = nodes["a"], nodes["b"]
+                assert source.gateway is not None
+                command = [sys.executable, str(context.project_root / "app/runtime/posix_job.py"),
+                           "--memory-limit-kb", "4194304", "--timeout-seconds", "120", "--",
+                           "bun", "tests/integration/clients/web/port_management.mjs"]
+                with chromium_temporary_environment(context.runtime_root_for_node(request.node.nodeid) / "chromium") as temporary:
+                    completed = await asyncio.to_thread(
+                        subprocess.run, command, cwd=context.project_root, capture_output=True,
+                        text=True, check=False, timeout=135, env={**os.environ, **temporary,
+                            "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,
+                            "BOXTEAM_PORT_MANAGEMENT_ARTIFACTS": str(context.artifacts_dir),
+                            "BOXTEAM_PORT_MANAGEMENT_FIXTURE": json.dumps({
+                                "baseUrl": f"http://127.0.0.1:{source.gateway.port}",
+                                "gatewayId": target.gateway_id, "workspaceId": target.workspace_id,
+                                "remotePort": ports.port(61), "localPort": ports.port(62), "marker": marker,
+                            })},
+                    )
+                (context.artifacts_dir / "browser.stdout.raw").write_text(completed.stdout, encoding="utf-8")
+                (context.artifacts_dir / "browser.stderr.raw").write_text(completed.stderr, encoding="utf-8")
+                (context.artifacts_dir / "browser-process.json").write_text(json.dumps({
+                    "command": command, "exit_code": completed.returncode,
+                    "assets": str(assets),
+                    "main_sha256": hashlib.sha256((assets / "out/main.js").read_bytes()).hexdigest(),
+                    "boundary": "真实 Workbench／双 Gateway／Backend／localhost SSH 与 HTTP 服务，无业务响应替身",
+                }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{context.artifacts_dir}"
+                observed = json.loads((context.artifacts_dir / "result.json").read_text(encoding="utf-8"))
+                assert observed["phase"] == "completed" and observed["pageErrors"] == []
+                assert observed["draftPreservedAfterOwnerRefresh"] is True
+                assert observed["openedThroughSsh"] and observed["stoppedForwardOnly"]
+    finally:
+        lease.release()
