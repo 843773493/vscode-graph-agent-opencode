@@ -1,6 +1,7 @@
 import '../../../../harness/js/workbench-locale.ts';
 import '../../../../../src/clients/workbench/src/composerActions.js';
 import { Event } from '../../../../../src/clients/workbench/upstream/src/vs/base/common/event.js';
+import { EditorType } from '../../../../../src/clients/workbench/upstream/src/vs/editor/common/editorCommon.js';
 import { CommandsRegistry } from '../../../../../src/clients/workbench/upstream/src/vs/platform/commands/common/commands.js';
 import { IQuickInputService } from '../../../../../src/clients/workbench/upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { IEditorService } from '../../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
@@ -8,7 +9,7 @@ import { ThreadPane } from '../../../../../src/clients/workbench/src/threadPane.
 import { ThreadInput } from '../../../../../src/clients/workbench/src/threadInput.js';
 import { workspaceFileUri } from '../../../../../src/clients/workbench/src/workspaceFiles.js';
 import { workspaceContext } from '../../../../../src/clients/workbench/src/workspaceContext.js';
-import { ATTACH_RESOURCE_URI } from '../../../../../src/clients/workbench/src/resourceActions.js';
+import { ATTACH_RESOURCE_URI, PASTE_SELECTED_CONTENT } from '../../../../../src/clients/workbench/src/resourceActions.js';
 
 /** 实际 Composer 命令与 URI 客户端；HTTP 回执、宿主 Pane 和 writer 为具名服务装具。 */
 export async function composerResourceSelectionContract(mode) {
@@ -17,7 +18,8 @@ export async function composerResourceSelectionContract(mode) {
   const root = `boxteam://workspace/${owner.workspaceId}/resources/files/root`;
   const files = ['alpha.txt', 'beta.txt'].map(name => ({ label: name, resource: workspaceFileUri(owner, `${root}/${name}`, root) }));
   const requests = [], writes = [[], []], events = [], second = Promise.withResolvers(), ready = Promise.withResolvers();
-  let options;
+  const recipient = mode.startsWith('recipient-'), paste = mode.startsWith('recipient-paste-');
+  let options, selectedText = '发起时选定的正文';
   class Pane extends ThreadPane {
     constructor(index) {
       super({ id: index + 1 }, {}, { getColorTheme: () => ({}), onDidColorThemeChange: Event.None }, { onWillSaveState: Event.None });
@@ -31,8 +33,15 @@ export async function composerResourceSelectionContract(mode) {
   }
   const panes = [new Pane(0), new Pane(1)];
   const editors = { activeEditor: panes[0].threadTarget.input, activeEditorPane: panes[0], visibleEditorPanes: panes };
-  const quick = { quickAccess: { async pick(_value, supplied) {
+  if (recipient) { editors.activeEditor = undefined; editors.activeEditorPane = undefined; }
+  editors.activeTextEditorControl = { getEditorType: () => EditorType.ICodeEditor,
+    getModel: () => ({ uri: files[0].resource, getValueInRange: () => selectedText }), getSelection: () => ({ isEmpty: () => false }) };
+  const quick = { async pick(items) {
+    events.push('recipient'); ready.resolve(); await second.promise;
+    return mode.endsWith('cancel') ? undefined : items[0];
+  }, quickAccess: { async pick(_value, supplied) {
     options = supplied; events.push('pick');
+    if (mode === 'files-gateway-returned') { ready.resolve(); await second.promise; }
     return mode === 'cancel' ? [] : mode === 'unsupported' ? [files[0], { label: '不支持的来源' }] : files;
   } } };
   const accessor = { get(service) {
@@ -52,16 +61,27 @@ export async function composerResourceSelectionContract(mode) {
       reference_uri: `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/files/root/${requests.length === 1 ? 'alpha' : 'beta'}.txt` } });
   };
   try {
-    const pending = CommandsRegistry.getCommand(ATTACH_RESOURCE_URI).handler(accessor).then(() => ({}), error => ({ failure: String(error) }));
+    const pending = CommandsRegistry.getCommand(paste ? PASTE_SELECTED_CONTENT : ATTACH_RESOURCE_URI)
+      .handler(accessor, ...(recipient && !paste ? [files[0].resource] : [])).then(() => ({}), error => ({ failure: String(error) }));
     let beforeSecondWrites;
-    if (mode === 'success' || mode === 'failure') {
+    if (recipient || mode === 'files-gateway-returned') {
+      await Promise.race([ready.promise, pending.then(outcome => { throw new Error(`命令在选择屏障前结束：${JSON.stringify({ outcome, requests, events })}`); })]);
+      beforeSecondWrites = structuredClone(writes);
+      selectedText = '等待期间来源已改变';
+      if (mode.endsWith('gateway-returned')) {
+        const initial = workspaceContext.getSnapshot();
+        workspaceContext.publish({ ...initial, gatewayId: 'gateway_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' });
+        workspaceContext.publish(initial);
+      }
+      second.resolve();
+    } else if (mode === 'success' || mode === 'failure') {
       await Promise.race([ready.promise, pending.then(outcome => { throw new Error(`命令在第二项屏障前结束：${JSON.stringify({ outcome, requests, events })}`); })]);
       beforeSecondWrites = structuredClone(writes);
       editors.activeEditor = panes[1].threadTarget.input; editors.activeEditorPane = panes[1];
       second.resolve();
     }
     const outcome = await pending;
-    return { requests, writes, beforeSecondWrites, events, outcome, canPickMany: options.canPickMany };
+    return { requests, writes, beforeSecondWrites, events, outcome, canPickMany: options?.canPickMany };
   } finally {
     second.resolve(); globalThis.fetch = originalFetch; workspaceContext.publish(before);
     for (const pane of panes) { pane.threadTarget.input.dispose(); pane.dispose(); }

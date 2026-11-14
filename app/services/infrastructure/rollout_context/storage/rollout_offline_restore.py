@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory, fsync_file
 from app.core.file_permissions import restrict_private_path_access
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import sqlite_file_uri
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
@@ -248,7 +249,7 @@ class RolloutOfflineRestoreMixin:
         )
         target_root = target_path.parent
         candidate_path = target_root / f".index.sqlite.{uuid4().hex}.offline-restore"
-        operation_id = uuid4().hex
+        operation_id = create_uuid_hex()
         quarantine_root = target_root / "recovery-quarantine"
         quarantine_path = quarantine_root / operation_id
 

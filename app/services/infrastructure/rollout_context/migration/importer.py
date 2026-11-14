@@ -9,10 +9,10 @@ import sqlite3
 from collections.abc import Mapping
 from contextlib import closing
 from pathlib import Path
-from uuid import uuid4
 
 from app.core.atomic_fs import fsync_directory
 from app.core.failures import failure_detail
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import sqlite_file_uri, utc_now_text
 from app.services.infrastructure.rollout_context.migration.artifacts import (
     artifact_manifest,
@@ -121,7 +121,7 @@ class LegacyRolloutImporter:
             )
             original_target = empty_target_identity(target)
             audit_root.mkdir(mode=0o700, exist_ok=True)
-            migration_id = uuid4().hex
+            migration_id = create_uuid_hex()
             audit = audit_root / migration_id
             audit.mkdir(mode=0o700)
             fsync_directory(audit_root)

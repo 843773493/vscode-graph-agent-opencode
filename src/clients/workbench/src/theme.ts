@@ -10,6 +10,9 @@ import { IConfigurationService } from '../upstream/src/vs/platform/configuration
 import { INotificationService } from '../upstream/src/vs/platform/notification/common/notification.js';
 import { IWorkbenchLayoutService } from '../upstream/src/vs/workbench/services/layout/browser/layoutService.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
+import { Action2, MenuId, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
+import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
+import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { BACKGROUND_SETTING, DEFAULT_BACKGROUND, readAppearanceBackground, loadAndApplyBackground, applyBackground } from '../../web/src/theme/theme.js';
 import { errorMessage } from '../../web/src/utils/errorMessage.js';
 
@@ -38,6 +41,19 @@ Registry.as<IConfigurationRegistry>(Extensions.Configuration).registerConfigurat
       },
     },
   },
+});
+
+registerAction2(class extends Action2 {
+  constructor() {
+    super({ id: 'boxteam.appearance.open', title: { value: t('appearance.title'), original: 'BoxTeam Appearance' }, f1: true,
+      menu: [
+        { id: MenuId.GlobalActivity, group: '2_configuration', order: 8 },
+        { id: MenuId.MenubarPreferencesMenu, group: '2_configuration', order: 8 },
+      ] });
+  }
+  run(accessor: ServicesAccessor): Promise<void> {
+    return accessor.get(ICommandService).executeCommand('workbench.action.openSettings', '@id:boxteam.appearance.background');
+  }
 });
 
 /** 原生 JSON 编辑与设置页共用的配置值校验。 */

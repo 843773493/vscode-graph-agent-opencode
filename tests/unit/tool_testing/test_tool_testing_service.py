@@ -254,6 +254,77 @@ async def test_cold_model_construction_does_not_block_workspace_event_loop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+@pytest.mark.parametrize("build_fails", [False, True])
+async def test_shutdown_keeps_provider_lock_until_model_construction_finishes(
+    tmp_path: Path, repeat_cancel: bool, build_fails: bool,
+) -> None:
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release, finished = threading.Event(), threading.Event()
+    model = RuntimeInjectedArgumentModel()
+    builds: list[int] = []
+
+    def build_model(**_: object) -> RuntimeInjectedArgumentModel:
+        builds.append(threading.get_ident())
+        loop.call_soon_threadsafe(entered.set)
+        try:
+            if not release.wait(timeout=3):
+                raise TimeoutError("模型构造屏障未释放")
+            if build_fails:
+                raise RuntimeError("模型构造失败")
+            return model
+        finally:
+            finished.set()
+
+    case = RuntimeInjectedArgumentCase()
+    service = ToolTestService(
+        config_service=SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
+        registry=ToolTestRegistry(cases=[case]),
+        store=ToolTestStore(root=tmp_path / ".boxteam" / "tool_tests"),
+        workspace_root=tmp_path,
+        asset_root=tmp_path / "assets",
+        model_builder=build_model,
+    )
+    started = await service.start(tool_name=case.tool_name, request=ToolTestStartRequest(repetitions=2))
+    closing: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        closing = asyncio.create_task(service.shutdown())
+        done, _ = await asyncio.wait({closing}, timeout=0.02)
+        assert not done, "构造线程尚未退出，关闭就提前完成"
+        assert not finished.is_set()
+        assert service._provider_locks["provider_only"].locked()
+        if repeat_cancel:
+            closing.cancel("重复取消关闭等待")
+            done, _ = await asyncio.wait({closing}, timeout=0.02)
+            assert not done, "重复取消遗弃了仍在运行的构造线程"
+            assert service._provider_locks["provider_only"].locked()
+
+        release.set()
+        async with asyncio.timeout(1):
+            if repeat_cancel:
+                with pytest.raises(asyncio.CancelledError):
+                    await closing
+            else:
+                await closing
+        assert finished.is_set()
+        assert not service._provider_locks["provider_only"].locked()
+        assert not service._tasks
+        assert len(builds) == 1, "取消后不应因构造失败而继续下一次尝试"
+        assert model.bound_parameters is None, "关闭后不应继续发起模型调用"
+        result = service.get(started.run_id)
+        assert len(result.attempts) == int(build_fails)
+        if build_fails:
+            assert result.attempts[0].error == "工具测试失败: stage=model_build, type=RuntimeError"
+    finally:
+        release.set()
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
+        await service.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_tool_tests_run_models_concurrently_and_each_model_serially(
     apply_patch_test_roots: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,

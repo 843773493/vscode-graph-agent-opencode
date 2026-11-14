@@ -11,12 +11,12 @@ from contextlib import (
 )
 from datetime import UTC, datetime
 from typing import ClassVar
-from uuid import uuid4
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.core.exceptions import NotFoundError
 from app.core.failures import failure_detail
+from app.core.identifier import create_uuid_hex
 from app.core.phase_observer import observe_phase
 from app.core.session_catalog_resolver import (
     SessionCatalogNodeProjection,
@@ -670,7 +670,7 @@ class SessionService:
                 result = await self._creation_service.publish_prepared(existing)
                 return await self.get(result.session_id)
         else:
-            idempotency_key = f"session-{uuid4().hex}"
+            idempotency_key = f"session-{create_uuid_hex()}"
         record = await self._prepare_creation(
             idempotency_key=idempotency_key,
             title=title,

@@ -15,6 +15,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -292,6 +293,8 @@ def test_initialize_reenters_owner_lock_across_checkpoint_namespaces(
         )
 
     assert namespace_manifest.checkpoint_ns == "branch:parallel"
+    branch_payload = namespace_manifest.active_branch_id.removeprefix("branch-")
+    assert len(branch_payload) == 32 and UUID(hex=branch_payload).version == 7
 
 
 def test_child_thread_resolves_to_own_thread_node_rollout(

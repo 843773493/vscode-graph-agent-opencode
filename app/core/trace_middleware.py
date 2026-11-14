@@ -1,8 +1,8 @@
 import logging
 import time
-import uuid
 from collections.abc import Callable
 from contextvars import ContextVar, Token
+from uuid import UUID
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -10,7 +10,7 @@ from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.failures import failure_detail, public_failure_message
-from app.core.identifier import validate_gateway_id
+from app.core.identifier import create_uuid_hex, validate_gateway_id
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +162,7 @@ class TraceMiddleware:
 
         request = Request(scope, receive=receive) if scope["type"] == "http" else HTTPConnection(scope)
         incoming_request_id = request.headers.get("X-Request-ID", "").strip()
-        request_id = incoming_request_id or str(uuid.uuid4())
+        request_id = incoming_request_id or str(UUID(create_uuid_hex(namespace="req")))
         start_time = time.perf_counter()
 
         incoming_gateway_id = request.headers.get(GATEWAY_ID_HEADER, "").strip()

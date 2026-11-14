@@ -463,6 +463,10 @@ export class WebLanguagePacksService extends LanguagePackBaseService {
 \t\tawait this.handleExpectedShutdown(ShutdownReason.RELOAD);`);
     }
     if (path === join(upstream, 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts')) {
+      contents = replaceOnce(contents, "import { CodexStatusBarEntry } from './chatStatus/codexStatusEntry.js';\n", '');
+      contents = replaceOnce(contents, 'registerWorkbenchContribution2(CodexStatusBarEntry.ID, CodexStatusBarEntry, WorkbenchPhase.BlockRestore);\n', '');
+      contents = replaceOnce(contents, "import { EditorChatUsageContribution } from './editorChatUsage.contribution.js';\n", '');
+      contents = replaceOnce(contents, 'registerWorkbenchContribution2(EditorChatUsageContribution.ID, EditorChatUsageContribution, WorkbenchPhase.BlockRestore);\n', '');
       contents = replaceOnce(contents,
         "import { AgentPluginDiscoveryPriority, IAgentPluginService, agentPluginDiscoveryRegistry } from '../common/plugins/agentPluginService.js';",
         "import { IAgentPluginService } from '../common/plugins/agentPluginService.js';");

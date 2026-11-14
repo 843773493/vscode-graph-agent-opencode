@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -148,6 +149,7 @@ async def test_create_binds_forward_to_workspace_and_reuses_ssh_alias(
         ),
     )
 
+    assert UUID(hex=created.forward_id.removeprefix("pf_")).version == 7
     assert created.workspace_id == _WORKSPACE_ID
     assert created.gateway_id == _REMOTE_GATEWAY_ID
     assert created.connection_id == "rgw_server"

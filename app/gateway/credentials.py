@@ -15,7 +15,7 @@ from app.core.file_permissions import (
     require_private_file_access,
     restrict_private_path_access,
 )
-from app.core.identifier import validate_gateway_id
+from app.core.identifier import create_prefixed_id, validate_gateway_id
 from app.core.trace_middleware import get_current_request_id
 
 logger = logging.getLogger(__name__)
@@ -261,7 +261,7 @@ def load_or_create_gateway_id(storage_path: Path, *, read_only: bool = False) ->
             return validate_gateway_id(gateway_id)
         stage = "prepare"
         storage_path.parent.mkdir(parents=True, exist_ok=True)
-        gateway_id = f"gateway_{secrets.token_hex(16)}"
+        gateway_id = create_prefixed_id("gateway")
         stage = "create"
         descriptor = os.open(storage_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         stage = "open_stream"

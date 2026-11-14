@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
@@ -459,7 +459,7 @@ class RolloutTurnsMixin:
                 is not None
             ):
                 raise ValueError("turn_id 已存在但 acceptance identity 不存在")
-            execution_id = initial_execution_id or "execution-" + uuid4().hex
+            execution_id = initial_execution_id or "execution-" + create_uuid_hex()
             execution_id = strict_text(
                 execution_id,
                 field="initial_execution_id",
@@ -500,7 +500,7 @@ class RolloutTurnsMixin:
                 )
                 + 1
             )
-            root_item_value = root_item_id or "item-root-" + uuid4().hex
+            root_item_value = root_item_id or "item-root-" + create_uuid_hex()
             root = CanonicalItemRecord.create(
                 item_sequence=item_sequence,
                 item_id=root_item_value,

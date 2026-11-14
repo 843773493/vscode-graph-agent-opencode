@@ -8,11 +8,11 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
-from uuid import uuid4
 
 import httpx
 
 from app.core.failures import failure_detail
+from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.trace_middleware import get_current_request_id
 from app.core.workspace_identity import read_workspace_id
@@ -503,7 +503,7 @@ class ConfigReloadMixin:
         workspace_id = bindings[0].workspace_id
         if not workspace_id or any(binding.workspace_id != workspace_id for binding in bindings):
             raise ConfigConflictError("插件参数声明缺少唯一工作区归属")
-        request_id = get_current_request_id() or f"plugin-schemas-{uuid4().hex}"
+        request_id = get_current_request_id() or f"plugin-schemas-{create_uuid_hex()}"
         async with httpx.AsyncClient(timeout=service.get_gateway_connection_timeout_seconds(), trust_env=False) as client:
             response = await client.post(
                 service.get_gateway_connection_url().rstrip("/")

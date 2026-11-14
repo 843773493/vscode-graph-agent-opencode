@@ -6,11 +6,11 @@ import zlib
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Literal
-from uuid import uuid4
 
 import httpx
 
 from app.core.failures import failure_detail
+from app.core.identifier import create_uuid_hex
 from app.gateway.auth import LOCAL_TOKEN
 from app.gateway.registry import (
     GatewayWorkspaceRegistry,
@@ -675,7 +675,7 @@ async def reconnect_gateway_workspace(
             expected_backend_generation=owner.contract.generation,
             expected_workspace_ids=list(owner.contract.workspace_ids),
         ) if owner is not None else None
-        await controller.start_managed_backend(target.key, request_id=f"reconnect_{uuid4().hex}", group_request=request)
+        await controller.start_managed_backend(target.key, request_id=f"reconnect_{create_uuid_hex()}", group_request=request)
         return
     actual_workspace_id = await asyncio.to_thread(
         resolve_backend_workspace_id,

@@ -3,6 +3,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event
 from unittest.mock import Mock
+from uuid import UUID
 
 import httpx
 import pytest
@@ -646,6 +647,7 @@ async def test_creation_keeps_frozen_template_after_failed_start_and_cold_reload
     target, = creation_registry.targets()
     frozen = target.plugin_creation
     assert frozen is not None and frozen["revision"] == "revision-v1"
+    assert UUID(hex=frozen["intent_id"].removeprefix("workspace-create-")).version == 7
     assert frozen["bindings"] == [{**binding, "workspace_id": None}]
     config.config = GatewayConfig(revision="revision-v2", payload={})
     cold = GatewayWorkspaceRegistry(gateway_id=GATEWAY_ID, storage_path=tmp_path / "workspaces.json",

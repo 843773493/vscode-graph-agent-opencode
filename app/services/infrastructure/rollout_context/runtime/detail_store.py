@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_catalog_store import SessionCreationRecord
 from app.domain.itemized.hashing import canonical_json_bytes_and_hash
@@ -70,7 +70,7 @@ class ContextPlanDetailStore:
     ) -> PreparedDetail:
         """冻结唯一精确正文与完整 manifest；sensitive 只控制访问，不改变持久化。"""
         ref = DetailRef(
-            session_id, thread_id, assembly_id, "detail-" + secrets.token_hex(16)
+            session_id, thread_id, assembly_id, "detail-" + create_uuid_hex()
         )
         _manifest_bool(required, field="required")
         _manifest_bool(sensitive, field="sensitive")

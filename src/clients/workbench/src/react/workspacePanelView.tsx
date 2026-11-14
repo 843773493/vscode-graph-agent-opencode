@@ -1,6 +1,6 @@
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "../../../web/src/api/workspaceIdentity.js";
 import { t } from '../../../shared/core/i18n/index.js';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { getWorkspace, listAgents } from '../../../web/src/api/workspace.js';
 import type { GatewayWorkspace } from '../../../web/src/types/backend.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
@@ -14,6 +14,10 @@ import WarmConfirmProvider from '../../../web/src/components/shell/WarmConfirmPr
 import { useWorkspaceResources } from '../../../web/src/hooks/workspace/useWorkspaceResources.js';
 import type { DispatchWorkspaceResourceAction } from '../../../web/src/hooks/workspace/resourceActions.js';
 import type { WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
+import { watchPluginRuntimeStatus } from '../../../web/src/api/pluginRuntimeStatus.js';
+import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
+import type { PluginRuntimeStatusDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import { pluginStateLabel } from '../extensions/pluginScope.js';
 import { resourceActionCommand } from '../resources/runtimeActions.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { managementGateway, managementWorkspace, managementTargetDisplayName, onDidChangeToolManagementTarget,
@@ -49,10 +53,45 @@ function WorkspaceConnections({ workspace, input, active, kind, commands, notifi
   workspace: GatewayWorkspace; input: ThreadInput | null; active: boolean; kind: 'terminal' | 'browser';
   commands: ICommandService; notifications: INotificationService; reveal?: ResourceReveal;
 }) {
+  const scope = useMemo(() => ({ workspace, kind, active }), [workspace, kind, active]);
+  const [status, setStatus] = useState<{ scope: typeof scope; snapshot?: PluginRuntimeStatusDTO; error?: string }>();
+  useEffect(() => {
+    if (!active) return;
+    const abort = new AbortController();
+    const timer = window.setTimeout(() => {
+      setStatus({ scope, error: t('plugins.runtimeSnapshotTimeout') });
+      abort.abort();
+    }, DEFAULT_API_REQUEST_TIMEOUT_MS);
+    const connections = workspace.remote_gateways.filter(item => item.gateway_id === workspace.gateway_id);
+    if (workspace.connection_kind === 'remote_gateway' && connections.length !== 1) {
+      window.clearTimeout(timer);
+      setStatus({ scope, error: t('workbench.resource.gatewayNotLoaded') });
+      return () => abort.abort();
+    }
+    void watchPluginRuntimeStatus({ gateway_id: workspace.gateway_id,
+      gateway_connection_id: workspace.connection_kind === 'remote_gateway' && connections.length === 1 ? connections[0].gateway_connection_id : undefined,
+    }, abort.signal, snapshot => {
+      window.clearTimeout(timer);
+      if (!abort.signal.aborted) setStatus({ scope, snapshot });
+    }).catch((cause: unknown) => {
+      window.clearTimeout(timer);
+      if (!abort.signal.aborted) setStatus({ scope, error: cause instanceof Error ? cause.message : String(cause) });
+    });
+    return () => { window.clearTimeout(timer); abort.abort(); };
+  }, [scope]);
+  const currentStatus = status?.scope === scope ? status : undefined;
+  const slot = currentStatus?.snapshot?.plugins.find(item => item.binding?.package_id === 'boxteam.developer-tools'
+    && item.binding.plugin_id === kind && item.binding.workspace_id === workspace.workspace_id);
+  const binding = currentStatus?.snapshot?.configured_bindings.find(item => item.package_id === 'boxteam.developer-tools'
+    && item.plugin_id === kind && item.workspace_id === workspace.workspace_id);
+  const configuration = currentStatus?.snapshot?.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
+  const pluginError = currentStatus?.error ?? configuration?.error ?? slot?.error;
+  const ready = !pluginError && configuration?.state === 'ready' && binding?.enabled === true
+    && slot?.binding?.enabled === true && slot.binding.package_version === binding.package_version && slot.state === 'ready';
   const dispatch = useCallback<DispatchWorkspaceResourceAction>((action, source, thread) => commands.executeCommand<WorkspaceResourceDTO | undefined>(
     resourceActionCommand(action), { owner: { gatewayId: workspace.gateway_id, workspaceId: workspace.workspace_id }, resource: source.resource, source, thread },
   ).catch((cause: unknown) => { notifications.error(cause instanceof Error ? cause : String(cause)); throw cause; }), [commands, notifications, workspace.gateway_id, workspace.workspace_id]);
-  const controller = useWorkspaceResources(0, gatewayWorkspaceKey(workspace), kind, active, dispatch);
+  const controller = useWorkspaceResources(0, gatewayWorkspaceKey(workspace), kind, active && ready, dispatch);
   const [selection, setSelection] = useState<{ reveal?: ResourceReveal; id: string | null }>({ reveal, id: reveal?.resourceId ?? null });
   // 新的显式定位在本次 render 即生效，不能先短暂连接上次选中或清单首项。
   const selected = reveal && selection.reveal !== reveal ? reveal.resourceId : selection.id;
@@ -65,6 +104,15 @@ function WorkspaceConnections({ workspace, input, active, kind, commands, notifi
     }
   }, [active, reveal, selected, found]);
   const currentThread = input ? { session_id: input.owner.sessionId, thread_id: input.owner.threadId } : null;
+  if (!ready) return <div className="native-workspace-panel-product">
+    <p role={pluginError ? 'alert' : 'status'}>
+      {pluginError ?? (currentStatus?.snapshot
+        ? `${t(kind === 'terminal' ? 'resources.kind.terminal' : 'resources.kind.browser')} · ${!binding ? t('plugins.unbound')
+          : !binding.enabled ? t('plugins.disabled') : pluginStateLabel(slot?.state ?? 'waiting')}`
+        : t('plugins.loading'))}
+    </p>
+    <button onClick={() => void commands.executeCommand('workbench.view.extensions').catch((cause: unknown) => notifications.error(String(cause)))}>{t('workbench.plugins.managePluginPackages')}</button>
+  </div>;
   return <div ref={container} className="native-workspace-panel-product">
     {kind === 'browser' ? <WarmConfirmProvider><BrowserContent controller={controller} workspaceId={gatewayWorkspaceKey(workspace)}
       currentThread={currentThread} selectedId={selected} onSelect={setSelected} renderToolbar={toolbar} /></WarmConfirmProvider>

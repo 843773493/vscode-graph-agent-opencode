@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.enums import (
     CommitKind,
@@ -62,7 +61,7 @@ class RolloutExecutionRecoveryMixin:
                     validate_turn_transition(current_status, TurnStatus.ACTIVE.value, explicit_resume=True, execution_lost=execution_lost)
                 except ItemSchemaError as error:
                     raise ValueError('turn_not_resumable') from error
-                execution_id = 'execution-' + uuid4().hex
+                execution_id = 'execution-' + create_uuid_hex()
                 attempt = strict_non_negative_int(connection.execute('SELECT COALESCE(MAX(attempt), 0) + 1 FROM executions WHERE session_id = ? AND thread_id = ? AND turn_id = ?', (session_id, owner_thread_id, turn_id)).fetchone()[0], field='executions.attempt')
                 previous = connection.execute('SELECT execution_id, job_id FROM executions WHERE session_id = ? AND thread_id = ? AND turn_id = ? ORDER BY attempt DESC LIMIT 1', (session_id, owner_thread_id, turn_id)).fetchone()
                 if previous is None:

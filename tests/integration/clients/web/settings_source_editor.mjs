@@ -56,6 +56,7 @@ try {
   const text = page.locator('.editor-instance:visible .monaco-editor .view-lines').last();
   const tab = page.locator('.tabs-container .tab.active:visible').last();
   const pick = async label => {
+    await page.mouse.move(5, 5);
     await expect(quick).toBeVisible();
     await quick.locator('.monaco-list-row').filter({ hasText: label }).first().click();
   };
@@ -261,6 +262,16 @@ try {
   await expect(settings).toBeVisible();
   assert.equal(result.writes.length, beforeFormWrite);
   result.form_and_json_share_draft = true;
+  const groupsBeforeGrid = await page.locator('.editor-group-container').count();
+  await command('workbench.action.splitEditorRight');
+  await expect(page.locator('.editor-group-container')).toHaveCount(groupsBeforeGrid + 1);
+  await expect(page.locator('.settings-editor:visible')).toHaveCount(2);
+  const dirtySettingsGroups = await page.locator('.settings-editor:visible').evaluateAll(editors => editors.map(editor => {
+    const group = editor.closest('.editor-group-container');
+    return group ? [...group.querySelectorAll('.tabs-container .tab.dirty')].length : 0;
+  }));
+  assert(dirtySettingsGroups.every(count => count > 0), JSON.stringify(dirtySettingsGroups));
+  result.grid_kept_shared_dirty_source = true;
   const formSaved = command('workbench.action.files.save');
   await expect(modal).toContainText('保存目标配置来源');
   await modal.getByRole('button', { name: '保存来源', exact: true }).click();

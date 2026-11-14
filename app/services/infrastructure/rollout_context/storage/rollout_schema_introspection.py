@@ -6,8 +6,8 @@ import sqlite3
 from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
@@ -176,7 +176,7 @@ class RolloutSchemaIntrospectionMixin:
                     )
                 branch_id = strict_text(meta[0], field="database_meta.active_branch_id")
             else:
-                branch_id = "branch-" + uuid4().hex[:12]
+                branch_id = "branch-" + create_uuid_hex()
                 branch_result = connection.execute(
                     "INSERT INTO branches(branch_id, branch_kind, status, head_view_id, head_checkpoint_id, created_at, updated_at) VALUES (?, 'root', 'active', NULL, NULL, ?, ?)",
                     (branch_id, timestamp, timestamp),

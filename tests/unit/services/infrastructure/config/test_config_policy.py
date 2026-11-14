@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -11,8 +12,14 @@ from app.services.infrastructure.config.policy import (
     validate_policy_manifest,
     workspace_config_policy,
 )
-from app.services.infrastructure.config.state import changed_json_paths
+from app.services.infrastructure.config.state import changed_json_paths, new_config_id
 from configs.runtime import read_jsonc_object
+
+
+def test_config_record_id_preserves_prefix_and_uses_uuidv7():
+    prefix, payload = new_config_id("gateway_generation").rsplit("_", 1)
+    assert prefix == "gateway_generation"
+    assert len(payload) == 32 and UUID(hex=payload).version == 7
 
 
 def test_config_policy_prefers_longest_explicit_path_and_marks_missing_defaults():

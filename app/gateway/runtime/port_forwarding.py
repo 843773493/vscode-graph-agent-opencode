@@ -5,10 +5,9 @@ import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from uuid import uuid4
 
 from app.core.failures import report_failure
-from app.core.identifier import validate_gateway_id
+from app.core.identifier import create_prefixed_id, validate_gateway_id
 from app.core.workspace_identity import validate_workspace_id
 from app.gateway.control.storage import atomic_write_json, read_json_object
 from app.gateway.federation import RemoteGatewayConnection
@@ -256,7 +255,7 @@ class SshPortForwardManager:
             if local_port is None:
                 local_port = self._allocate_unclaimed_local_port()
             self._assert_local_port_available(local_port)
-            forward_id = f"pf_{uuid4().hex}"
+            forward_id = create_prefixed_id("pf")
             definition = _PortForwardDefinition(
                 forward_id=forward_id,
                 gateway_id=self._registry.workspace_key(workspace_id)[0],

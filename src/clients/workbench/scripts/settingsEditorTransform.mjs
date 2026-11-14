@@ -5,6 +5,7 @@ export const settingsEditorSourcePaths = [
   'src/vs/workbench/contrib/preferences/browser/preferences.contribution.ts',
   'src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts',
   'src/vs/workbench/services/preferences/browser/preferencesService.ts',
+  'src/vs/workbench/contrib/preferences/browser/settingsLayout.ts',
 ];
 function section(source, start, end, replacement, replaceOnce) {
   const from = source.indexOf(start), to = source.indexOf(end, from + start.length);
@@ -17,6 +18,12 @@ export function transformSettingsEditor(root, path, contents, replaceOnce) {
   const paths = settingsEditorSourcePaths.map(value => join(root, 'upstream', value));
   const editor = JSON.stringify(resolve(root, 'src/settings/editor.js'));
   const scope = JSON.stringify(resolve(root, 'src/settings/scope.js'));
+  if (path === paths[4]) {
+    // 先由原细分类消费，再把同一类别的新设置放入父类；未知类别仍报告遗漏。
+    contents = replaceOnce(contents, "settings: ['workbench.*'],", "settings: ['workbench.*', 'onboarding.*', 'boxteam.*'],");
+    contents = replaceOnce(contents, "label: localize('chat', \"Chat\"),", "label: localize('chat', \"Chat\"),\n\t\t\tsettings: ['chat.*', 'sessions.chat*', 'agents.voice.*', 'dictation.*', 'github.copilot.chat.*', 'imageCarousel.chat.*'],");
+    return replaceOnce(contents, "settings: ['explorer.*', 'outline.*']", "settings: ['explorer.*', 'outline.*', 'imageCarousel.explorer*', 'mediaPreview.*']");
+  }
   if (path === paths[0]) {
     const i18n = JSON.stringify(resolve(root, '../shared/core/i18n/index.js'));
     contents = `import { CancellationToken } from '../../../../base/common/cancellation.js';

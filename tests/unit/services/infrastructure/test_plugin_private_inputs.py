@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import pytest
 from pydantic import JsonValue, Secret
@@ -59,6 +60,7 @@ def test_nested_private_json_roundtrip_and_immutable_versions(private_inputs):
             },
         },
     }
+    assert UUID(hex=reference.version).version == 7
     assert "private-sentinel" not in json.dumps(source)
     assert store.resolve(source, package_id="probe.tools", plugin_id="probe", schema=schema) == {
         "nested": [{"a/b": secret}],

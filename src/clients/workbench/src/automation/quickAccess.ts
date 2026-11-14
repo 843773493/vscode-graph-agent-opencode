@@ -64,6 +64,9 @@ export class AutomationQuickAccess extends PickerQuickAccessProvider<TaskPick> {
       this.report((async () => {
         let invalidated = false;
         const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+        const releaseGateway = workspaceContext.subscribe(() => {
+          if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) run.invalidated = true;
+        });
         try {
           picker.hide();
           const owners = await chooseSearchOwners(this.quick, run.owners);
@@ -71,7 +74,7 @@ export class AutomationQuickAccess extends PickerQuickAccessProvider<TaskPick> {
           this.assertAccess(run);
           const providerOptions: SearchInvocationOptions = { ...options, searchOwners: owners ?? run.owners };
           this.quick.quickAccess.show(value, { providerOptions });
-        } finally { release(); }
+        } finally { release(); releaseGateway(); }
       })());
     }));
     // 先取消父 token，再释放原 Provider；倒序会让子查询先解绑，迟到读取仍可发布。
@@ -126,6 +129,9 @@ export class AutomationQuickAccess extends PickerQuickAccessProvider<TaskPick> {
     const value = run.picker.value;
     let invalidated = false;
     const release = onGatewayTokenInvalidated(0, () => { invalidated = true; });
+    const releaseGateway = workspaceContext.subscribe(() => {
+      if (workspaceContext.getSnapshot().gatewayId !== run.gatewayId) run.invalidated = true;
+    });
     try {
       this.assertAccess(run);
       const selected = await this.quick.pick(automationActions(task).map(action => ({ action, label: taskActionLabels[action],
@@ -139,7 +145,7 @@ export class AutomationQuickAccess extends PickerQuickAccessProvider<TaskPick> {
         return;
       }
       await this.commands.executeCommand(taskActionCommand(selected.action), { owner, task });
-    } finally { release(); }
+    } finally { release(); releaseGateway(); }
   }
   private report(operation: Promise<unknown>): void { void operation.catch(cause => this.notifications.error(cause)); }
 }

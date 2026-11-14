@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Iterator
+from uuid import UUID
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
@@ -72,7 +73,7 @@ def test_generated_request_id_is_identical_in_header_and_body(
 
     assert response.status_code == 200
     request_id = response.headers["X-Request-ID"]
-    assert request_id
+    assert UUID(request_id).version == 7
     assert response.json()["request_id"] == request_id
     assert response.json()["data"]["request_id"] == request_id
 

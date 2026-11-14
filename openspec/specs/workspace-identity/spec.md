@@ -5,7 +5,7 @@
 ## Requirements
 ### Requirement: 工作区自身 UUID 是唯一 workspace_id
 
-系统 SHALL 使用工作区 `.boxteam/workspace-identity.json` 中既有的标准 UUID 作为唯一 `workspace_id`。Gateway 登记、Backend mount、公开协议、HTTP 请求与响应、资源 URI、持久引用和客户端恢复 MUST 使用同一值。有效既有 UUID MUST 保留；只允许既有身份初始化入口为尚无身份的新工作区创建一次 UUID，不得根据路径、连接、端口、Backend 进程或 Gateway 登记重新分配身份。
+系统 SHALL 使用工作区 `.boxteam/workspace-identity.json` 中既有的标准 UUID 作为唯一 `workspace_id`。Gateway 登记、Backend mount、公开协议、HTTP 请求与响应、资源 URI、持久引用和客户端恢复 MUST 使用同一值。有效既有 UUID MUST 保留；只允许既有身份初始化入口通过统一 ID 工厂为尚无身份的新工作区创建一次 UUIDv7，不得根据路径、连接、端口、Backend 进程或 Gateway 登记重新分配身份。
 
 系统 MUST 移除 `gw_...` 工作区别名、`backend_workspace_id`、重复的 `remote_workspace_id` 及其运行时换算链，不得通过改名为 `target_id` 等字段继续保留第二个工作区身份。连接、进程和导航文件夹的独立标识不受该删除要求影响。注册尚未完成时 MUST 使用明确的连接或注册操作状态，不得生成临时 `workspace_id` 冒充已登记工作区。
 

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import ts from 'typescript';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pinnedUpstreamCommit, sourceTransform, transformedSourcePaths } from './sourceTransform.mjs';
@@ -163,4 +164,112 @@ test('上游 NLS formatter 支持稳定模块 key 并保留英文 fallback', asy
   expect(output).toContain('lookupMessage(key, message)');
   expect(output).toContain('messageMap?.[index.slice(0, separator)]?.[index.slice(separator + 1)]');
   expect(output).toContain('const message = lookupMessage(key, originalMessage);');
+});
+
+
+test('内置扩展的启动激活不扫描窗口容器，真实工作区仍按原事件激活', async () => {
+  const root = resolve('src/clients/workbench');
+  const path = join(root, 'upstream/src/vs/workbench/services/extensions/common/workspaceContains.ts');
+  const output = await sourceTransform(root, { commit: pinnedUpstreamCommit }, [])(path, await readFile(path, 'utf8'));
+  const method = output.slice(output.indexOf('export function checkActivateWorkspaceContainsExtension'), output.indexOf('async function _activateIfFileName'));
+  const calls = [];
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(method).replace('export ', '');
+  const activate = new Function('_activateIfFileName', '_activateIfGlobPatterns', 'promiseWithResolvers',
+    javascript + '\nreturn checkActivateWorkspaceContainsExtension;')(
+      async (host, _name, accept) => { calls.push(host.folders); accept('workspaceContains:package.json'); },
+      async () => {}, () => Promise.withResolvers(),
+    );
+  const description = { activationEvents: ['workspaceContains:package.json'], identifier: { value: 'builtin.test' } };
+  expect(await activate({ folders: [{ scheme: 'workbench' }] }, description)).toBeUndefined();
+  expect(calls).toEqual([]);
+  const resource = { scheme: 'boxteam-file', authority: 'gateway', path: '/project' };
+  expect(await activate({ folders: [{ scheme: 'workbench' }, resource] }, description)).toEqual({ activationEvent: 'workspaceContains:package.json' });
+  expect(calls).toEqual([[resource]]);
+});
+
+
+test('未配置原版远端连接是正常本地模式，显式远端缺连接仍报告警告', async () => {
+  const root = resolve('src/clients/workbench');
+  const path = join(root, 'upstream/src/vs/workbench/services/agentHost/browser/editorRemoteAgentHostServiceClient.ts');
+  const output = await sourceTransform(root, { commit: pinnedUpstreamCommit }, [])(path, await readFile(path, 'utf8'));
+  const parsed = ts.createSourceFile(path, output, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'EditorRemoteAgentHostServiceClient');
+  const constructor = owner.members.find(ts.isConstructorDeclaration);
+  const branch = constructor.body.statements.find(node => ts.isIfStatement(node) && node.expression.getText(parsed) === '!connection');
+  const run = new Function('connection', 'environmentService', 'LOG_PREFIX', branch.getText(parsed));
+  for (const remoteAuthority of [undefined, 'configured-remote']) {
+    const warnings = [], pending = [];
+    run.call({ _logService: { warn: message => warnings.push(message) }, setAuthenticationPending: value => pending.push(value) },
+      null, { remoteAuthority }, '[AgentHost:remote]');
+    expect(pending).toEqual([false]);
+    expect(warnings).toEqual(remoteAuthority ? ['[AgentHost:remote] No remote agent connection available. Not connecting.'] : []);
+  }
+});
+
+test('浏览器退出同步释放原内置宿主，非 Web 继续保留原异步退出合同', async () => {
+  const root = resolve('src/clients/workbench');
+  const path = join(root, 'upstream/src/vs/workbench/services/extensions/common/abstractExtensionService.ts');
+  const output = await sourceTransform(root, { commit: pinnedUpstreamCommit }, [])(path, await readFile(path, 'utf8'));
+  const parsed = ts.createSourceFile(path, output, ts.ScriptTarget.Latest, true);
+  let callback;
+  const visit = node => {
+    if (ts.isCallExpression(node) && node.expression.getText(parsed) === 'this._lifecycleService.onWillShutdown') callback = node.arguments[0];
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  for (const isWeb of [true, false]) {
+    const calls = [];
+    const handler = new Function('isWeb', 'nls', `return ${callback.getText(parsed)};`).call({
+      _extensionHostManagers: { dispose: () => calls.push('dispose') },
+      _remoteAgentService: { getConnection: () => null },
+      _doStopExtensionHosts: () => { calls.push('stop'); return Promise.resolve(); },
+    }, isWeb, { localize: (_key, text) => text });
+    handler({ join: () => calls.push('join') });
+    expect(calls).toEqual(isWeb ? ['dispose'] : ['stop', 'join']);
+  }
+});
+
+test('没有原版 Chat 会话时不排队保存，真实会话仍保存正文和元数据', async () => {
+  const root = resolve('src/clients/workbench');
+  const path = join(root, 'upstream/src/vs/workbench/contrib/chat/common/chatService/chatServiceImpl.ts');
+  const output = await sourceTransform(root, { commit: pinnedUpstreamCommit }, [])(path, await readFile(path, 'utf8'));
+  const parsed = ts.createSourceFile(path, output, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'ChatService');
+  const method = owner.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(parsed) === 'saveState');
+  const run = new Function(new Bun.Transpiler({ loader: 'ts' }).transformSync(`function saveState() ${method.body.getText(parsed)}`) + '\nreturn saveState;')();
+  for (const models of [[], [{ local: true }, { local: false }]]) {
+    const calls = [];
+    run.call({ _saveModelsEnabled: true, _sessionModels: new Map(models.map((model, index) => [index, model])),
+      shouldStoreSession: model => model.local, shouldStoreExternalSession: model => !model.local,
+      _chatSessionStore: { updateAndFlushIndexSync: () => calls.push('index'),
+        storeSessions: sessions => calls.push(['local', sessions]), storeSessionsMetadataOnly: sessions => calls.push(['external', sessions]) } });
+    expect(calls).toEqual(models.length ? ['index', ['local', [models[0]]], ['external', [models[1]]]] : ['index']);
+  }
+});
+
+test('没有原版编辑会话时不创建 shutdown join，真实编辑仍保存并等待', async () => {
+  const root = resolve('src/clients/workbench');
+  const path = join(root, 'upstream/src/vs/workbench/contrib/chat/browser/chatEditing/chatEditingServiceImpl.ts');
+  const output = await sourceTransform(root, { commit: pinnedUpstreamCommit }, [])(path, await readFile(path, 'utf8'));
+  const start = output.indexOf('let storageTask:');
+  const end = output.indexOf('\n\t}\n', start);
+  const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`function registerStorage() { ${output.slice(start, end)} }`);
+  for (const hasSession of [false, true]) {
+    const calls = [], callbacks = {};
+    class ChatEditingSession {
+      isGlobalEditingSession = { get: () => true };
+      storeState() { calls.push('store'); return Promise.resolve(); }
+    }
+    const register = new Function('storageService', 'ChatEditingSession', 'localize', javascript + '\nreturn registerStorage;')(
+      { onWillSaveState: callback => { callbacks.save = callback; } }, ChatEditingSession, (_key, text) => text);
+    register.call({
+      _register: value => value,
+      _editingSessions: new Map(hasSession ? [['one', new ChatEditingSession()]] : []),
+      lifecycleService: { onWillShutdown: callback => { callbacks.shutdown = callback; } },
+    });
+    callbacks.save();
+    callbacks.shutdown({ join: () => calls.push('join') });
+    await Promise.resolve();
+    expect(calls).toEqual(hasSession ? ['store', 'join'] : []);
+  }
 });

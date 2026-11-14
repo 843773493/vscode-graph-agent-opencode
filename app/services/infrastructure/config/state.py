@@ -7,7 +7,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
-from uuid import uuid4
+
+from app.core.identifier import create_uuid_hex
 
 ConfigLifecycleState = Literal[
     "none",
@@ -220,7 +221,7 @@ def _index_json_array(value: list[object], identity_key: str) -> dict[str, objec
 def new_config_id(prefix: str) -> str:
     if not prefix or not prefix.replace("_", "").isalnum():
         raise ValueError("配置 ID 前缀必须是非空字母数字字符串")
-    return f"{prefix}_{uuid4().hex}"
+    return f"{prefix}_{create_uuid_hex(namespace=prefix)}"
 
 
 _SECRET_FIELD_NAMES = frozenset(

@@ -139,6 +139,13 @@ class RegistryDtosMixin:
                             workspace_service_error = (
                                 f"健康检查返回 HTTP {response.status_code}"
                             )
+                    except httpx.TimeoutException as error:
+                        # 单次探针超时不能撤销已发布的路由或写成进程生命周期故障。
+                        workspace_service_status = "unavailable"
+                        workspace_service_error = failure_detail(
+                            error, stage="workspace_health",
+                            label=f"工作区健康检查超时，未确认当前健康状态: workspace_id={target.workspace_id}",
+                        )
                     except Exception as error:  # noqa: BLE001 — 列表逐项收集真实故障并返回明确错误状态。
                         status = "offline"
                         workspace_service_status = "offline"
@@ -147,7 +154,7 @@ class RegistryDtosMixin:
                             label=f"工作区健康检查失败: workspace_id={target.workspace_id}",
                         )
                 config_reload = GatewayConfigReloadStatusDTO()
-                if check_health and status == "ready":
+                if check_health and workspace_service_status == "ready":
                     if backend_url is None:
                         raise RuntimeError(
                             f"工作区健康检查已通过但缺少后端地址: {target.workspace_id}"
@@ -265,8 +272,7 @@ class RegistryDtosMixin:
             for owner, contract in backend_owners:
                 failed = [
                     by_id[(contract.gateway_id, workspace_id)] for workspace_id in contract.workspace_ids
-                    if by_id[(contract.gateway_id, workspace_id)].status != "ready"
-                    or any(service.status == "offline" for service in by_id[(contract.gateway_id, workspace_id)].services.values())
+                    if any(service.status == "offline" for service in by_id[(contract.gateway_id, workspace_id)].services.values())
                 ]
                 if failed:
                     error = owner.error or "; ".join(

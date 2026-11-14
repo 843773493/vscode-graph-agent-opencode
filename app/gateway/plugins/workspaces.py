@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from uuid import uuid4
 
 import httpx
 from pydantic import JsonValue
 
+from app.core.identifier import create_uuid_hex
 from app.core.trace_middleware import get_current_request_id
 from app.gateway.auth import get_gateway_local_token
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
@@ -283,7 +283,7 @@ class WorkspacePluginBindings:
     async def read(self, target: WorkspaceTarget, *, startup_generation: str | None = None) -> WorkspacePluginSnapshot:
         if target.connection_kind != "local" or target.gateway_id != self.registry.gateway_id:
             raise ValueError("工作区插件配置只能从原生 owner 交接")
-        request_id = get_current_request_id() or f"workspace-plugin-handoff-{uuid4().hex}"
+        request_id = get_current_request_id() or f"workspace-plugin-handoff-{create_uuid_hex()}"
         with self.registry.backend_management_routes(workspace_ids=(target.workspace_id,),
                 allow_starting=startup_generation is not None) as routes:
             if len(routes) != 1:
@@ -308,7 +308,7 @@ class WorkspacePluginBindings:
     async def deliver_parameters(self, binding: PluginBinding, revision: str) -> dict[str, JsonValue]:
         """只在新实例启动时读取原 owner；不缓存或写入接管材料。"""
         assert binding.workspace_id is not None
-        request_id = get_current_request_id() or f"plugin-parameters-{uuid4().hex}"
+        request_id = get_current_request_id() or f"plugin-parameters-{create_uuid_hex()}"
         with self.registry.backend_management_routes(workspace_ids=(binding.workspace_id,), allow_starting=True) as routes:
             route, = routes
             response = await self.runtime.client.post(route.base_url + "/api/internal/service-plugins/parameters",

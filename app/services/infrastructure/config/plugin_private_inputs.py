@@ -9,7 +9,6 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import cast
-from uuid import uuid4
 
 from jsonschema import Draft202012Validator, validators
 from jsonschema.exceptions import ValidationError
@@ -22,6 +21,7 @@ from app.core.file_permissions import (
     require_private_file_access,
     restrict_private_path_access,
 )
+from app.core.identifier import create_uuid_hex
 from configs.plugin_parameters import PluginPrivateInputReference
 
 _ENV_REFERENCE = re.compile(r"^(?:\$\{([A-Za-z_][A-Za-z0-9_]*)\}|env:([A-Za-z_][A-Za-z0-9_]*))$")
@@ -212,7 +212,7 @@ class PluginPrivateInputStore:
     def write(self, *, package_id: str, plugin_id: str, parameter_pointer: str,
               value: Secret[JsonValue]) -> PluginPrivateInputReference:
         reference = PluginPrivateInputReference(gateway_id=self.gateway_id, workspace_id=self.workspace_id,
-            package_id=package_id, plugin_id=plugin_id, parameter_pointer=parameter_pointer, version=uuid4().hex)
+            package_id=package_id, plugin_id=plugin_id, parameter_pointer=parameter_pointer, version=create_uuid_hex())
         self.directory.mkdir(parents=True, exist_ok=True)
         restrict_private_path_access(self.directory, is_directory=True)
         path = self.directory / f"{reference.version}.json"

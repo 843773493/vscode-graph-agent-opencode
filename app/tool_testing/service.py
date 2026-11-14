@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.core.failures import report_failure
 from app.core.identifier import create_prefixed_id
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_request_id
 from app.runtime.provider_model import build_model_from_provider
 from app.schemas.internal_v2.tool_test import (
@@ -259,6 +260,10 @@ class ToolTestService:
                         run_id,
                         lambda run, item=attempt: self._append_attempt(run, item),
                     )
+                    # 原 worker 报错时先保留失败回执，再传播已接受的取消，不能继续重试。
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise asyncio.CancelledError
             await self._mutate_run(
                 run_id,
                 lambda run: self._set_provider_status(run, provider_id, "completed"),
@@ -324,8 +329,8 @@ class ToolTestService:
             )
             if model is None:
                 stage = "model_build"
-                # 模型 SDK 的冷加载和同步初始化不能阻塞工作区的健康检查与其它请求。
-                model = await asyncio.to_thread(
+                # 冷加载不阻塞事件循环；取消也须等构造结束，才能释放 provider 准入。
+                model = await run_sync_shielded(
                     self._model_builder,
                     provider=provider,
                     runtime_config=runtime_config,

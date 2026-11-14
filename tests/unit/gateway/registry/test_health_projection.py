@@ -292,6 +292,105 @@ def health_list_http() -> Callable[..., Awaitable[httpx.Response]]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_type", [httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout])
+async def test_health_timeout_keeps_published_routes_and_recovers_on_next_check(
+    backend_dto_case: tuple[GatewayWorkspaceRegistry, ManagedBackendGraph], health_registry_state: GatewayStateStore,
+    health_list_http: Callable[..., Awaitable[httpx.Response]], monkeypatch: pytest.MonkeyPatch,
+    timeout_type: type[httpx.TimeoutException],
+) -> None:
+    registry, graph = backend_dto_case
+    client_type = httpx.AsyncClient
+    target = graph.targets[0]
+    timed_out = True
+    requests: list[httpx.Request] = []
+    before = health_registry_state.load_workspace_registry()
+    revision = registry.registry_revision
+    leases = [registry.route_lease(member.key) for member in graph.targets]
+
+    def response(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        workspace_id = request.headers["X-BoxTeam-Workspace-Id"]
+        if request.url.path == "/api/v1/health":
+            if timed_out and workspace_id == target.workspace_id:
+                raise timeout_type("probe deadline exceeded", request=request)
+            return httpx.Response(200, json={
+                "status": "ok", "workspace_id": workspace_id,
+                "backend_generation": graph.owner.contract.generation,
+                "mount_manifest_digest": mounted_workspace_manifest_digest(registry.resolve_backend_mounts(graph.owner.contract)),
+            })
+        return httpx.Response(200, json={"data": {"healthy": True}})
+
+    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
+        **options, transport=httpx.MockTransport(response),
+    ))
+    listed = (await health_list_http(registry)).json()["data"]["items"]
+    by_id = {item["workspace_id"]: item for item in listed}
+    uncertain = by_id[target.workspace_id]
+    assert uncertain["status"] == "ready", "探针超时不能撤销已发布的存活进程与路由"
+    assert uncertain["connection_error"] is None
+    service = uncertain["services"]["workspace_api"]
+    assert service["status"] == "unavailable"
+    assert "未确认当前健康状态" in service["error"] and timeout_type.__name__ in service["error"]
+    assert not uncertain["config_reload"]["available"]
+    assert not any(request.url.path == "/api/v1/config/reload-status"
+        and request.headers["X-BoxTeam-Workspace-Id"] == target.workspace_id for request in requests)
+    assert by_id[graph.targets[1].workspace_id]["services"]["workspace_api"]["status"] == "ready"
+    assert graph.owner.error is None
+    assert all(registry.resolve(member.key).connection_error is None for member in graph.targets)
+    assert health_registry_state.load_workspace_registry() == before
+    assert registry.registry_revision == revision
+    for lease in leases:
+        assert not lease.invalidated.is_set()
+        assert registry.route_lease((lease.gateway_id, lease.workspace_id)) == lease
+        assert registry.resolve_service_url((lease.gateway_id, lease.workspace_id), "workspace_api") == graph.owner.contract.backend_url
+    assert graph.owner.process is not None and graph.owner.process.is_alive()
+
+    # 后端下一次恢复响应即可确认健康，不需要重启、重新发布或清除持久错误。
+    timed_out = False
+    recovered = (await health_list_http(registry)).json()["data"]["items"]
+    assert all(item["status"] == "ready" and item["connection_error"] is None for item in recovered)
+    assert all(item["services"]["workspace_api"]["status"] == "ready"
+        and item["services"]["workspace_api"]["error"] is None and item["config_reload"]["available"] for item in recovered)
+    assert graph.owner.error is None
+    assert health_registry_state.load_workspace_registry() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["process-exit", "connection-refused"])
+async def test_confirmed_backend_failure_still_invalidates_group_routes(
+    backend_dto_case: tuple[GatewayWorkspaceRegistry, ManagedBackendGraph],
+    health_list_http: Callable[..., Awaitable[httpx.Response]], monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+) -> None:
+    registry, graph = backend_dto_case
+    client_type = httpx.AsyncClient
+    leases = [registry.route_lease(member.key) for member in graph.targets]
+    requests: list[httpx.Request] = []
+    if fault == "process-exit":
+        process = graph.owner.process
+        assert isinstance(process, ProcessProbe)
+        process.alive = False
+
+    def response(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ConnectError("connection refused", request=request)
+
+    monkeypatch.setattr("app.gateway.registry.httpx.AsyncClient", lambda **options: client_type(
+        **options, transport=httpx.MockTransport(response),
+    ))
+    items = (await health_list_http(registry)).json()["data"]["items"]
+    assert graph.owner.error is not None
+    assert all(item["status"] == "offline" and item["services"]["workspace_api"]["status"] == "offline"
+        and item["connection_error"] == graph.owner.error for item in items)
+    assert all(registry.resolve(member.key).connection_error == graph.owner.error for member in graph.targets)
+    assert all(lease.invalidated.is_set() for lease in leases)
+    for member in graph.targets:
+        with pytest.raises(RuntimeError):
+            registry.resolve_service_url(member.key, "workspace_api")
+    assert bool(requests) == (fault == "connection-refused")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("fault", "stage"), [
     ("backend", "backend_runtime_health"), ("workspace", "workspace_health"),
     ("config", "config_status"),

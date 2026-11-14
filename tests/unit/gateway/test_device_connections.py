@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Self
+from uuid import UUID
 
 import pytest
 from starlette.requests import Request
@@ -35,6 +36,7 @@ async def test_device_connection_can_be_created_listed_and_revoked(
     )
     created = created_response.data
 
+    assert UUID(hex=created.connection.connection_id.removeprefix("device_")).version == 7
     assert created.connection.device_name == "测试手机"
     assert created.connection.status == "authorized"
     assert created.connection_info.manifest_url == (

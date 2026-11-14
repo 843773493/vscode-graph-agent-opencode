@@ -27,8 +27,8 @@ import {
 
 import { waitForDetachedReady, waitForHttpOk } from "./dev-readiness.mjs";
 
-// /health 还要等待 Workbench 资源构建和 Vite 入口预热，不能只按 HTTP 服务启动计时。
-const FRONTEND_START_TIMEOUT_MS = 180_000;
+// 冷启动包含完整 Workbench 资源构建和 Vite 源码预热；此期限不用于普通 API。
+const FRONTEND_START_TIMEOUT_MS = 300_000;
 
 const cliArguments = process.argv.slice(2);
 const developmentLayout = resolveDevelopmentLayout({ args: cliArguments });

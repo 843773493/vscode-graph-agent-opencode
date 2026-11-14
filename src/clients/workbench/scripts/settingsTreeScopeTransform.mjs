@@ -53,6 +53,9 @@ export function transformSettingsTreeScope(root, path, contents, replaceOnce) {
       'configurationService.inspect(key, { ...inspectOverrides, overrideIdentifier })');
   }
   if (path === join(upstream, settingsTreeScopeSourcePaths[2])) {
+    // 被显示过滤器排除或有意出现在多组中的设置，不是缺少布局的设置。
+    contents = replaceOnce(contents, 'leftoverSettings: allSettings',
+      'leftoverSettings: new Set((filter ? getMatchingSettings(allSettings, filter) : [...allSettings]).filter(setting => !multiGroupTocSettings.has(setting.key)))');
     contents = contents.replaceAll('dataElement.hasPolicyValue || dataElement.isAgentsWindowReadOnly', 'dataElement.hasPolicyValue || dataElement.isAgentsWindowReadOnly || dataElement.isSourceReadOnly');
     contents = contents.replaceAll('!dataElement.hasPolicyValue && !dataElement.isAgentsWindowReadOnly', '!dataElement.hasPolicyValue && !dataElement.isAgentsWindowReadOnly && !dataElement.isSourceReadOnly');
   }

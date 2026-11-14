@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping
-from uuid import uuid4
 
 from app.core.hashing import sha256_hex as _hash_bytes
+from app.core.identifier import create_uuid_hex
 from app.services.infrastructure.rollout_context.storage.checkpoint_state_values import (
     persist_state_value,
 )
@@ -179,7 +179,7 @@ class RolloutTransactionProjectionMixin:
         cursor = connection.execute(
             "INSERT INTO control_events(control_id, control_kind, entity_type, entity_id, branch_id, view_id, checkpoint_id, payload_json, transaction_id, previous_event_hash, event_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                uuid4().hex,
+                create_uuid_hex(),
                 kind,
                 entity_type,
                 entity_id,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -115,6 +116,8 @@ def test_shared_source_owner_distinguishes_a_b_a_and_deduplicates_adjacent_obser
         2,
         3,
     )
+    assert UUID(hex=first.source_event_id.rsplit(":", 1)[1]).version == 7
+    assert UUID(hex=first.fanout_id.rsplit(":", 1)[1]).version == 7
     assert first.fanout_id != third.fanout_id
     assert first.source_event_id != third.source_event_id
     assert first_owner.high_water_mark() == 3

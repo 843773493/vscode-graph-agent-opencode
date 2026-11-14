@@ -7,6 +7,7 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import Mock
+from uuid import UUID
 
 import httpx
 import pytest
@@ -51,6 +52,7 @@ def _config(reference: McpPrivateHeaderRefDTO, **changes: object) -> dict[str, o
 
 def test_private_header_recovers_exact_version_and_rotates_without_overwriting(private_header):
     root, store, reference = private_header
+    assert UUID(hex=reference.version).version == 7
     second = store.write(server_id="secure", header_name=HEADER, endpoint=ENDPOINT, value=SecretStr("Bearer rotated"))
     assert second.version != reference.version
     restarted = McpPrivateInputStore(workspace_root=root)

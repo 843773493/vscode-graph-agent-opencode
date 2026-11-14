@@ -89,6 +89,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
         assert result["readonly"] and result["frozen_owner"]
         assert result["original_settings_form_saved"] and result["draft_restored_after_reload"]
         assert result["plugin_schema_saved_without_runtime"] and result["form_and_json_share_draft"]
+        assert result["grid_kept_shared_dirty_source"]
         assert result["resource_browse_only"] and result["resource_open_and_save"] and result["resource_readonly"]
         assert result["configuration_uri_opened"]
         assert len(result["configurationReferences"]) == 2

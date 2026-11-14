@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.config import GatewayConfigReloadService
 from app.gateway.registry import (
@@ -76,7 +76,7 @@ async def create_direct_managed_workspace(
         if new_directory:
             entries = workspace_default_bindings(config.config.payload)
             plugins.validate_defaults(config.config.payload)
-            frozen = WorkspacePluginCreation(intent_id=f"workspace-create-{uuid4().hex}",
+            frozen = WorkspacePluginCreation(intent_id=f"workspace-create-{create_uuid_hex()}",
                 revision=config.config.revision, bindings=entries)
 
         async def register() -> WorkspaceTarget:

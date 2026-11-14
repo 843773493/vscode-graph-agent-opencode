@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from app.core.failures import failure_detail
 from app.core.hashing import sha256_hex as _hash_bytes
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import load_sql
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.errors import FormatDispatchError
@@ -226,7 +227,7 @@ class RolloutMaintenanceOwner(
                 session_id=session_id,
                 destination=backup_path,
             )
-            transaction_id = uuid4().hex
+            transaction_id = create_uuid_hex()
             timestamp = _now()
             try:
                 with self._host._connect(

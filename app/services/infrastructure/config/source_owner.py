@@ -4,9 +4,9 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 from app.core.atomic_fs import native_io_path
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import (
     load_sql,
     sqlite_file_uri,
@@ -169,8 +169,8 @@ class WorkspaceSourceOwner:
                 int(owner[1]) if owner is not None else 1
             )
             previous_digest = latest_digest
-            event_id = f"source-event:{source_key}:{uuid4().hex}"
-            fanout_id = f"fanout:{source_key}:generation:{generation}:{uuid4().hex}"
+            event_id = f"source-event:{source_key}:{create_uuid_hex()}"
+            fanout_id = f"fanout:{source_key}:generation:{generation}:{create_uuid_hex()}"
             now = utc_now_text()
             connection.execute(
                 """

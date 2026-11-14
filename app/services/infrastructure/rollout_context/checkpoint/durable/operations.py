@@ -9,8 +9,8 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from typing import TYPE_CHECKING
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.mutation_intents import (
     MutationIntentOwner,
@@ -169,7 +169,7 @@ class RolloutCheckpointOperationsMixin:
                 connection, checkpoint_ns
             )
             history_only = boundary == "history_replay"
-            branch_id = old_active_branch if history_only else "branch-" + uuid4().hex[:12]
+            branch_id = old_active_branch if history_only else "branch-" + create_uuid_hex()
             view_id = self._storage._create_view(
                 connection,
                 branch_id,
@@ -228,7 +228,7 @@ class RolloutCheckpointOperationsMixin:
                 view_id,
                 source_checkpoint_value,
                 control_payload,
-                uuid4().hex,
+                create_uuid_hex(),
                 timestamp,
             )
             cursor = connection.execute(

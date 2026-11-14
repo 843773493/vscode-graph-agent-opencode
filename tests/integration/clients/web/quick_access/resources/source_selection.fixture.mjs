@@ -19,7 +19,9 @@ export async function sourceReferenceSelectionContract(mode) {
   const before = workspaceContext.getSnapshot(), requests = [], drafts = [[], []], events = [], errors = [], selectedItems = [];
   const owners = ['a', 'b'].map(letter => ({ gatewayId: `gateway_${letter.repeat(32)}`, workspaceId: '019a0000-0000-7000-8000-000000000001' }));
   const targets = owners.map((owner, index) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: `来源 ${index}`, status: 'ready' }));
-  workspaceContext.publish({ ...before, gatewayId: owners[0].gatewayId, loading: false, error: null, workspaces: targets, activeId: gatewayWorkspaceKey(owners[0]) });
+  const initial = { ...before, gatewayId: owners[0].gatewayId, loading: false, error: null, workspaces: targets, activeId: gatewayWorkspaceKey(owners[0]) };
+  workspaceContext.publish(initial);
+  const returnGateway = () => { workspaceContext.publish({ ...initial, gatewayId: owners[1].gatewayId }); workspaceContext.publish(initial); };
   const ok = data => Response.json({ code: 0, data, request_id: 'source-selection-contract' }, { headers: { 'X-Request-ID': 'source-selection-contract' } });
   const uri = (owner, tail) => `boxteam://${owner.gatewayId}/workspace/${owner.workspaceId}/resources/${tail}`;
   const attachment = { file_id: uri(owners[0], `attachments/att_${'c'.repeat(32)}/original/content`), name: '附件.pdf', content_type: 'application/pdf', availability: 'available' };
@@ -75,9 +77,10 @@ export async function sourceReferenceSelectionContract(mode) {
     async pick(items, options) {
       scopeOptions = { title: options.title, canPickMany: options.canPickMany, owners: items.map(item => item.owner) };
       events.push('scope');
-      if (mode === 'back-cancel' && sourceVisits) return;
+      if ((mode === 'back-cancel' || mode === 'back-gateway-returned') && sourceVisits) return;
       if (mode === 'scope-cancel') return;
       if (mode === 'scope-identity') invalidateGatewayToken(0);
+      if (mode === 'scope-gateway-returned') returnGateway();
       return mode === 'only-b' ? [items[1]] : items;
     },
     quickAccess: { async pick(value, options) {
@@ -87,7 +90,11 @@ export async function sourceReferenceSelectionContract(mode) {
       lifetime?.dispose();
       lifetime = provider.provide(picker, cancellation.token, options.providerOptions);
       await until(() => !picker.busy && picker.items.length);
-      if (mode === 'back-cancel') { buttons.fire(quick.backButton); return []; }
+      if (mode === 'back-cancel' || mode === 'back-gateway-returned') {
+        buttons.fire(quick.backButton);
+        if (mode === 'back-gateway-returned') { lifetime.dispose(); returnGateway(); }
+        return [];
+      }
       editors.activeEditor = panes[1].target.input; editors.activeEditorPane = panes[1];
       if (mode === 'source-cancel') return [];
       if (mode === 'source-closed') panes[0].target = undefined;
@@ -98,6 +105,7 @@ export async function sourceReferenceSelectionContract(mode) {
       else if (mode !== 'only-b') chosen.push(picker.items.find(item => item.label === attachment.name));
       if (chosen.some(item => !item)) throw new Error('来源选择缺少预期的原 Provider 候选');
       selectedItems.push(...chosen.map(item => ({ label: item.label, disabled: item.disabled, buttons: item.buttons?.length, owner: item.resourceOwner })));
+      if (mode === 'source-gateway-returned') { lifetime.dispose(); returnGateway(); }
       return chosen;
     } },
   };

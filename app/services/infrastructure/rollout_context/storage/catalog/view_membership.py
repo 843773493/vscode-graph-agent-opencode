@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Literal
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import utc_now_text
 from app.services.infrastructure.rollout_context.storage.catalog.view_ancestry import (
     insert_view_jumps,
@@ -305,7 +305,7 @@ class RolloutViewMembershipMixin:
         )
         timestamp = strict_text(timestamp, field="context_views.created_at")
         view_kind = strict_text(view_kind, field="context_views.view_kind")
-        view_id = "view-" + uuid4().hex
+        view_id = "view-" + create_uuid_hex()
         sequence_values = tuple(
             dict.fromkeys(
                 strict_non_negative_int(value, field="messages.message_sequence")

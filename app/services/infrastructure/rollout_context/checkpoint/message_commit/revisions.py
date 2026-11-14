@@ -5,8 +5,8 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from uuid import uuid4
 
+from app.core.identifier import create_uuid_hex
 from app.domain.itemized.identity.item_projection import ItemProvenanceRelation
 from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
@@ -125,7 +125,7 @@ def resolve_message_group(
                 target_session_id=source_owner[0], target_thread_id=source_owner[1],
                 target_turn_id=source.turn_id, target_model_call_id=source_call,
             )
-            identity = uuid4().hex
+            identity = create_uuid_hex()
             group = tuple(replace(
                 item, item_sequence=next_item_sequence + ordinal,
                 item_id=f"item-{identity}" if ordinal == len(group) - 1 else f"item-{identity}-member-{ordinal}",

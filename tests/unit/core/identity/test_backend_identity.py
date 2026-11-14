@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -30,3 +31,6 @@ def test_read_does_not_initialize_missing_installation_domain(tmp_path: Path) ->
     with pytest.raises(FileNotFoundError):
         read_backend_id(home)
     assert not home.exists()
+    backend_id = load_or_create_backend_id(home)
+    assert UUID(backend_id).version == 7
+    assert read_backend_id(home) == load_or_create_backend_id(home) == backend_id

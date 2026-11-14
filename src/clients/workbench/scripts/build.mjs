@@ -249,6 +249,15 @@ await copyResources(join(upstream, 'src/vs'));
 for (const name of Object.keys(JSON.parse(await readFile(join(upstream, 'remote/web/package.json'), 'utf8')).dependencies)) {
   await cp(join(root, 'node_modules', name), join(dist, 'node_modules', name), { recursive: true, dereference: true });
 }
+// 此发行版将 CPU 后端拆成 Node require chunk；静态合并唯一分块，保留原 AMD 与模型加载合同。
+const detectionLibrary = join(dist, 'node_modules/@vscode/vscode-languagedetection/dist/lib');
+const detectionIndex = await readFile(join(detectionLibrary, 'index.js'), 'utf8');
+const cpuBackend = await readFile(join(detectionLibrary, '979.js'), 'utf8');
+const cpuChunkImport = 'require("./"+r.u(e))';
+if (detectionIndex.split(cpuChunkImport).length !== 2) throw new Error('语言检测 CPU 分块与固定依赖不匹配');
+await writeFile(join(detectionLibrary, 'index.js'), detectionIndex.replace(cpuChunkImport,
+  () => `(()=>{const exports={};${cpuBackend}\nreturn exports;})()`));
+await rm(join(detectionLibrary, '979.js'));
 await cp(join(root, 'index.html'), join(dist, 'index.html'));
 // 私有回调与 Web 共用唯一源文件，不加载 Workbench 或第三方资源。
 await cp(join(root, '../web/mcp-oauth-callback.html'), join(dist, 'mcp-oauth-callback.html'));
