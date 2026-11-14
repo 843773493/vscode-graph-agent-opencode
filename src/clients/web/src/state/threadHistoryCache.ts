@@ -37,6 +37,20 @@ export class ThreadHistoryCache {
   private readonly pending = new Map<string, { snapshot: HistorySnapshot; timer: ReturnType<typeof setTimeout>; onError: (error: unknown) => void }>();
   private readonly writes = new Set<Promise<CacheWriteFailure | undefined>>();
 
+  /** 只读原有界索引和当前内存元数据，不为查看用量加载历史正文。 */
+  async inspect(owner: ThreadHistoryOwner) {
+    const key = snapshotKey(owner);
+    const index = await readBrowserView<Record<string, { bytes: number; savedAt: number }>>(indexKey(owner));
+    const memory = this.memory.get(key);
+    return {
+      persisted: index?.[key] ?? null,
+      memory: memory ? { bytes: memory.bytes, savedAt: memory.savedAt } : null,
+      pending: this.pending.has(key),
+      maximumEntries: MAX_ENTRIES,
+      maximumBytes: MAX_BYTES,
+    };
+  }
+
   async read(owner: ThreadHistoryOwner, scopeKey: string): Promise<SessionTurnTimeline | null> {
     const key = snapshotKey(owner);
     let cached = this.memory.get(key);

@@ -14,6 +14,32 @@ function history(scopeKey = 'scope-a') {
 }
 
 describe('独立于 Tab 的会话历史镜像', () => {
+  test('查看固定 Thread 的用量只读取原索引，不加载正文、不提交待写镜像', async () => {
+    const target = owner('history-inspect'), other = { ...target, threadId: 'other-thread' };
+    const cache = new ThreadHistoryCache();
+    cache.remember(target, history(), failure);
+    cache.remember(other, { ...history(), threadId: other.threadId }, failure);
+    await cache.flush(other);
+    const get = spyOn(IDBObjectStore.prototype, 'get');
+    try {
+      const pending = await cache.inspect(target);
+      expect(pending.persisted).toBeNull();
+      expect(pending.memory?.bytes).toBeGreaterThan(0);
+      expect(pending.pending).toBe(true);
+      expect(get.mock.calls.map(([key]) => key)).toEqual([browserViewKey(target.gatewayId, 'thread-history-v1')]);
+      get.mockClear();
+      await cache.flush(target);
+      const saved = await new ThreadHistoryCache().inspect(target);
+      expect(saved.persisted?.bytes).toBe(pending.memory?.bytes);
+      expect(saved.memory).toBeNull();
+      expect(saved.pending).toBe(false);
+      await cache.remove(target);
+      expect((await cache.inspect(target)).persisted).toBeNull();
+      expect((await cache.inspect(other)).persisted?.bytes).toBeGreaterThan(0);
+      expect(await cache.read(other, 'unchanged')).not.toBeNull();
+    } finally { get.mockRestore(); }
+  });
+
   test('释放后可从数据库恢复正文、详情与真实分页窗口，但不能复活实时游标和活动 Job', async () => {
     const target = owner('history-reopen');
     const cache = new ThreadHistoryCache();

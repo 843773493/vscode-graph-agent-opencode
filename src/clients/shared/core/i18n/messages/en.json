@@ -4055,5 +4055,11 @@
   "gateway.observation.unsupported": "Unavailable metrics: {0}",
   "settings.editor.groupLogging": "Product logs and retention",
   "settings.editor.groupStatistics": "Gateway runtime statistics",
-  "settings.editor.groupTelemetry": "Gateway telemetry"
+  "settings.editor.groupTelemetry": "Gateway telemetry",
+  "workbench.thread.inspectHistoryCache": "Inspect Thread History Cache",
+  "thread.cache.snapshot": "{0} · saved {1}",
+  "thread.cache.absent": "No snapshot",
+  "thread.cache.pending": "A snapshot is waiting to be saved",
+  "thread.cache.noPending": "No snapshot waiting to be saved",
+  "thread.cache.information": "Gateway: {0}\nWorkspace: {1}\nSession: {2}\nThread: {3}\n\nSaved display snapshot: {4}\nIn-memory display snapshot: {5}\n{6}\n\nStored in this client’s IndexedDB. Each Gateway retains at most {7} snapshots / {8}; the in-memory cache has the same limit across Gateways. This is a rebuildable display window, not the complete backend history. Clearing it keeps messages, drafts, settings and editor recovery data. The platform does not provide backend backup, repair or directory deletion here."
 }

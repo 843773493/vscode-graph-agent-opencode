@@ -4055,5 +4055,11 @@
   "gateway.observation.unsupported": "未提供的指标：{0}",
   "settings.editor.groupLogging": "产品日志与保留",
   "settings.editor.groupStatistics": "Gateway 运行统计",
-  "settings.editor.groupTelemetry": "Gateway 遥测"
+  "settings.editor.groupTelemetry": "Gateway 遥测",
+  "workbench.thread.inspectHistoryCache": "查看 Thread 历史展示缓存",
+  "thread.cache.snapshot": "{0} · 保存于 {1}",
+  "thread.cache.absent": "没有镜像",
+  "thread.cache.pending": "有镜像等待保存",
+  "thread.cache.noPending": "没有等待保存的镜像",
+  "thread.cache.information": "Gateway：{0}\n工作区：{1}\nSession：{2}\nThread：{3}\n\n已保存的展示镜像：{4}\n内存中的展示镜像：{5}\n{6}\n\n保存在当前客户端的 IndexedDB。每个 Gateway 最多保留 {7} 项／{8}；内存缓存跨 Gateway 共用同一上限。这是可重建的展示窗口，不是后端完整历史。清除后保留消息、草稿、设置和编辑器恢复数据。此处不提供后端备份、修复或目录删除。"
 }
