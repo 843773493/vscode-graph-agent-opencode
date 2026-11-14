@@ -137,7 +137,7 @@ this.searchModel.cancelSearch(true);`);
       'const labelFormatter = (uri: URI): string => uri.toString();');
     contents = replaceOnce(contents, '@ILabelService private readonly labelService: ILabelService,', '@ILabelService _labelService: ILabelService,');
     contents = replaceOnce(contents, 'const { resultsModel } = await input.resolveModels();\n\t\tthis.updatingModelForSearch = true;',
-      'const { resultsModel } = await input.resolveModels();\nif (generation !== this.searchGeneration || this.input !== startInput) return;\n\t\tthis.updatingModelForSearch = true;');
+      'const { resultsModel } = await input.resolveModels();\nif (generation !== this.searchGeneration || this.input !== startInput) return;\n// 结果编辑器只保留已序列化的快照，释放源模型监听及后台重算。\nthis.searchModel.searchResult.clear();\n\t\tthis.updatingModelForSearch = true;');
     contents = replaceOnce(contents, 'this.priorConfig = config;', 'this.priorConfig = config;\nthis.getInput()?.updateSearchConfig(config);');
     contents = replaceOnce(contents, 'await super.setInput(newInput, options, context, token);',
       'this.cancelInputSearch();\nconst generation = this.searchGeneration;\nawait super.setInput(newInput, options, context, token);');
