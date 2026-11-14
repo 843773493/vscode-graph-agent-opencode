@@ -25,6 +25,7 @@ from app.api.sse_heartbeat import (
     stream_sse_with_heartbeat,
 )
 from app.api.workspace import open_workspace_file_sse
+from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.internal_v2.sse import sse_responses
 from app.schemas.internal_v2.workspace import WorkspaceFileWatchRequest
 from app.schemas.internal_v2.workspace_observation import (
@@ -84,7 +85,7 @@ async def stream_workspace_observation(
                 return OpenedWorkspaceObservation(_stream_navigation_changes(catalog_service))
             cursor = subscription.files_after
             if cursor is None:
-                cursor = workspace_service.file_operations.store.latest_event_id()
+                cursor = await run_sync_shielded(workspace_service.file_operations.store.latest_event_id)
             return OpenedWorkspaceObservation(
                 await asyncio.to_thread(open_workspace_file_sse,
                     WorkspaceFileWatchRequest(paths=subscription.paths, after_event_id=cursor),

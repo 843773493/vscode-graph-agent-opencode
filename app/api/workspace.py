@@ -26,6 +26,7 @@ from app.api.workspace_file_response import WorkspaceFileResponse
 from app.core.exceptions import ForbiddenError
 from app.core.failures import failure_detail, report_failure
 from app.core.resource_uri import parse_resource_uri
+from app.core.shielded_cleanup import run_sync_shielded
 from app.protocol.codecs.workspace_events import (
     file_change_batch_to_json,
     file_change_batch_to_proto,
@@ -62,6 +63,7 @@ from app.services.business.session_navigation.operations_service import (
     local_navigation_scope,
 )
 from app.services.infrastructure.workspace_file_watch_service import (
+    WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
 from app.services.infrastructure.workspace_files.events import file_events
@@ -178,6 +180,28 @@ def open_workspace_file_sse(
     except (NotADirectoryError, ValueError) as error:
         raise HTTPException(status_code=400, detail=file_access_error_detail(error)) from error
 
+    def encode_changes(batch: WorkspaceFileChangeBatch) -> str:
+        data = json.dumps(
+            file_change_batch_to_json(
+                file_change_batch_to_proto(
+                    {
+                        "overflow": batch.overflow,
+                        "directories": [item.model_dump() for item in batch.directories],
+                        "event_id": batch.event_id,
+                        "invalidated_roots": list(batch.invalidated_roots),
+                        "snapshots": [item.model_dump() for item in batch.snapshots],
+                        "changes": [
+                            {"kind": change.kind, "path": change.path}
+                            for change in batch.changes
+                        ],
+                    }
+                )
+            ),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return f"event: changes\ndata: {data}\n\n"
+
     async def generate():
         async with aclosing(
             stream_sse_with_heartbeat(
@@ -198,26 +222,7 @@ def open_workspace_file_sse(
                     )
                     yield f"event: error\ndata: {data}\n\n"
                     return
-                data = json.dumps(
-                    file_change_batch_to_json(
-                        file_change_batch_to_proto(
-                            {
-                                "overflow": batch.overflow,
-                                "directories": [item.model_dump() for item in batch.directories],
-                                "event_id": batch.event_id,
-                                "invalidated_roots": list(batch.invalidated_roots),
-                                "snapshots": [item.model_dump() for item in batch.snapshots],
-                                "changes": [
-                                    {"kind": change.kind, "path": change.path}
-                                    for change in batch.changes
-                                ],
-                            }
-                        )
-                    ),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
-                yield f"event: changes\ndata: {data}\n\n"
+                yield await run_sync_shielded(encode_changes, batch)
 
     return generate()
 

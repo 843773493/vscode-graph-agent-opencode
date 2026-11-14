@@ -19,6 +19,7 @@ from app.api import workspace as workspace_api
 from app.api import workspace_observation as observation_api
 from app.api.deps import (
     get_config_service,
+    get_session_catalog_service,
     get_session_service,
     get_workspace_activity_service,
     get_workspace_file_watch_service,
@@ -243,6 +244,7 @@ async def file_observation_client(workspace_service: WorkspaceService):
     app.dependency_overrides[get_workspace_file_watch_service] = lambda: watcher
     app.dependency_overrides[get_config_service] = lambda: object()
     app.dependency_overrides[get_session_service] = lambda: object()
+    app.dependency_overrides[get_session_catalog_service] = lambda: object()
     app.dependency_overrides[get_workspace_activity_service] = lambda: object()
     app.dependency_overrides[verify_local_token] = lambda: "local-test"
     try:
