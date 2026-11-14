@@ -5,6 +5,7 @@ export const findSourcePaths = [
   'src/vs/editor/contrib/find/browser/findController.ts',
   'src/vs/editor/contrib/find/browser/findWidget.ts',
   'src/vs/editor/browser/editorExtensions.ts',
+  'src/vs/editor/contrib/multicursor/browser/multicursor.ts',
 ];
 
 /** 沿原查找模型异步结算；查找、导航、捕获组替换不再同步执行正则。 */
@@ -35,13 +36,13 @@ private invalidateSearch(): void {
   this.activeSearch?.cancel();
 }
 
-private runOperation(run: () => Promise<void>): Promise<void> {
+private runOperation<T>(run: () => Promise<T>): Promise<T> {
   const generation = this.generation;
   return this.operations.queue(async () => {
     if (this._isDisposed || generation !== this.generation) throw new CancellationError();
     const source = this.activeSearch = new CancellationTokenSource();
     this._state.change({ isSearching: true }, false);
-    try { await run(); }
+    try { return await run(); }
     finally {
       source.dispose(true);
       this.activeSearch = undefined;
@@ -113,6 +114,11 @@ private async do${method}(${replacing ? 'replacement: string, preserveCase: bool
     contents = replaceOnce(contents, 'const nextMatch = this._getNextMatch(selection.getStartPosition(), true, false);', 'const nextMatch = await this._getNextMatch(selection.getStartPosition(), true, false);');
     contents = replaceOnce(contents, 'this.research(true);', 'await this.doResearch(true);');
     contents = replaceOnce(contents, 'private _findMatches(findScopes: Range[] | null, captureMatches: boolean, limitResultCount: number): FindMatch[]', 'private async _findMatches(findScopes: Range[] | null, captureMatches: boolean, limitResultCount: number): Promise<FindMatch[]>');
+    contents = replaceOnce(contents, 'private async _findMatches(', `public findAllMatches(findScopes: Range[] | null): Promise<FindMatch[]> {
+  return this.runOperation(() => this._findMatches(findScopes, false, Constants.MAX_SAFE_SMALL_INTEGER));
+}
+
+private async _findMatches(`);
     contents = replaceOnce(contents, 'return this._editor.getModel().findMatches(this._state.searchString, searchRanges,', `if (this._state.isRegex) return this.withSearch((search, text, pattern) => search.findEditorMatches(text, pattern,
   searchRanges.map(range => this._editor.getModel().validateRange(range)), captureMatches, limitResultCount));
 return this._editor.getModel().findMatches(this._state.searchString, searchRanges,`);
@@ -140,6 +146,14 @@ return this._editor.getModel().findMatches(this._state.searchString, searchRange
     contents = replaceOnce(contents, '@IAccessibilityService private readonly _accessibilityService: IAccessibilityService,', '@IAccessibilityService private readonly _accessibilityService: IAccessibilityService,\n@IWebWorkerService workers: IWebWorkerService,');
     contents = replaceOnce(contents, 'super(editor, _contextKeyService, _storageService, clipboardService, notificationService, hoverService);', 'super(editor, _contextKeyService, _storageService, clipboardService, notificationService, hoverService, workers);');
     contents = replaceOnce(contents, 'new FindModelBoundToEditorModel(this._editor, this._state)', 'new FindModelBoundToEditorModel(this._editor, this._state, this.workers)');
+    contents = replaceOnce(contents, 'public selectAllMatches(): boolean', `public async findAllMatches(findScopes: Range[] | null): Promise<FindMatch[]> {
+  if (!this._model) throw new Error('查找模型尚未初始化');
+  return this._model.findAllMatches(findScopes);
+}
+
+public selectAllMatches(): boolean`);
+    contents = "import type { Range } from '../../../common/core/range.js';\n" + contents;
+    contents = replaceOnce(contents, 'import { OverviewRulerLane }', 'import { OverviewRulerLane, type FindMatch }');
     for (const method of ['moveToNextMatch', 'moveToPrevMatch', 'replace', 'replaceAll', 'selectAllMatches']) {
       contents = replaceOnce(contents, `public ${method}(): boolean`, `public async ${method}(): Promise<boolean>`);
       contents = replaceOnce(contents, `this._model.${method}();`, `await this._model.${method}();`);
@@ -169,6 +183,23 @@ return this._editor.getModel().findMatches(this._state.searchString, searchRange
     contents = replaceOnce(contents, 'public runEditorCommand(accessor: ServicesAccessor, editor: ICodeEditor, args: unknown): void {',
       'public async runEditorCommand(accessor: ServicesAccessor, editor: ICodeEditor, args: unknown): Promise<void> {');
     contents = replaceOnce(contents, 'this._callback(controller, args);', 'await this._callback(controller, args);');
+  }
+  if (index === 4) {
+    contents = replaceOnce(contents, 'public selectAll(findController: CommonFindController): void', 'public async selectAll(findController: CommonFindController): Promise<void>');
+    const start = contents.indexOf('\t\t\tconst editorModel = this._editor.getModel();', contents.indexOf('const allowFindRegex ='));
+    const end = contents.indexOf('\n\t\t} else {', start);
+    if (start < 0 || end < 0) throw new Error('原多光标正则查找锚点不匹配');
+    contents = replaceOnce(contents, contents.slice(start, end), '\t\t\tmatches = await findController.findAllMatches(findState.searchScope);');
+    const actionStart = contents.indexOf('export abstract class MultiCursorSelectionControllerAction');
+    const actionEnd = contents.indexOf('export class AddSelectionToNextFindMatchAction', actionStart);
+    const action = contents.slice(actionStart, actionEnd);
+    contents = replaceOnce(contents, action, action
+      .replace('public run(accessor: ServicesAccessor, editor: ICodeEditor): void', 'public async run(accessor: ServicesAccessor, editor: ICodeEditor): Promise<void>')
+      .replace('this._run(multiCursorController, findController);', 'await this._run(multiCursorController, findController);')
+      .replace('this._run(multiCursorController, newFindController);\n\t\t\t\tnewFindController.dispose();', 'try { await this._run(multiCursorController, newFindController); }\nfinally { newFindController.dispose(); }')
+      .replace('findController: CommonFindController): void;', 'findController: CommonFindController): void | Promise<void>;'));
+    every('protected _run(multiCursorController: MultiCursorSelectionController, findController: CommonFindController): void {\n\t\tmultiCursorController.selectAll(findController);',
+      'protected _run(multiCursorController: MultiCursorSelectionController, findController: CommonFindController): Promise<void> {\nreturn multiCursorController.selectAll(findController);', 2);
   }
   return contents;
 }
