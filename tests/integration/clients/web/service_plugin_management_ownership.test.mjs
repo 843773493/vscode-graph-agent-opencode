@@ -936,3 +936,24 @@ test('MCP 配置和插件私有参数交给各自原命令，Gateway 插件不�
   await expect(run(accessor, server, true)).rejects.toThrow('原工作区已移除');
   expect(commands).toHaveLength(3);
 });
+
+test('Quick Access 打开工作区插件详情时没有工作区明确报错', async () => {
+  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const owner = parsed.statements.find(statement => statement.name?.text === 'ServicePluginPackagesView');
+  const method = owner?.members.find(member => ts.isMethodDeclaration(member) && member.name?.getText(parsed) === 'openPlugin');
+  if (!method) throw new Error(`实际源码缺少 ${sourcePath}#ServicePluginPackagesView.openPlugin`);
+  const compiled = ts.transpile(`class View { ${ts.createPrinter().printNode(ts.EmitHint.Unspecified, method, parsed)} }`,
+    { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None });
+  class PluginInput { constructor(...args) { this.args = args; } }
+  const target = { gateway_id: 'gateway-original', gateway_connection_id: 'route-original' };
+  const View = localizedFunction('managementGateway', 'PluginEditorInput', `${compiled}\nreturn View;`)(() => target, PluginInput);
+  const view = new View(), opened = [], searched = [];
+  view.search = value => searched.push(value);
+  view.refresh = async () => { view.workspaceTarget = undefined; };
+  view.editors = { async openEditor(input) { opened.push(input); } };
+  await expect(view.openPlugin(target, 'sample', '1.0.0', 'probe', 'workspace')).rejects.toThrow(t('plugins.noWorkspaces'));
+  expect(searched).toEqual(['']);
+  expect(opened).toEqual([]);
+  await view.openPlugin(target, 'sample', '1.0.0', 'probe', 'gateway');
+  expect(opened[0].args).toEqual([target, undefined, 'gateway', 'sample', '1.0.0', 'probe', 'probe']);
+});

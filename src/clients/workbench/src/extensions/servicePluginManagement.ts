@@ -175,7 +175,7 @@ export class ServicePluginPackagesView extends ViewPane {
     this.search('');
     await this.refresh();
     checkTarget();
-    if (scope === 'workspace' && !this.workspaceTarget) return;
+    if (scope === 'workspace' && !this.workspaceTarget) throw new Error(t('plugins.noWorkspaces'));
     await this.editors.openEditor(new PluginEditorInput(target, this.workspaceTarget, scope, packageId, version, pluginId, pluginId));
   }
 
