@@ -77,6 +77,9 @@ export default function ComposerToolControl({
   const [testCostAcknowledged, setTestCostAcknowledged] = useState(false);
   const controlRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const mountedRef = useRef(false);
+  const runsRef = useRef(runs);
+  runsRef.current = runs;
   // 加载归属代次：agentId/workspaceId 变化会重新加载，旧请求晚到时必须被丢弃，
   // 否则界面会稳定显示上一个 Agent 的工具开关。
   const loadGenerationRef = useRef(0);
@@ -88,10 +91,15 @@ export default function ComposerToolControl({
   const observeRunsRef = useRef(observationActive);
   observeRunsRef.current = observationActive;
   useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  useEffect(() => {
     if (!observationActive) setTestingTools((current) => current.size ? new Set() : current);
   }, [observationActive]);
 
   const load = useCallback(async () => {
+    const requestScopeKey = pollScopeKey;
     const generation = ++loadGenerationRef.current;
     setLoading(true);
     setError(null);
@@ -100,26 +108,37 @@ export default function ComposerToolControl({
         getToolCatalog(apiPort, agentId, workspaceId),
         listToolTestRuns(apiPort, workspaceId),
       ]);
-      if (loadGenerationRef.current !== generation) return;
+      if (loadGenerationRef.current !== generation || pollScopeKeyRef.current !== requestScopeKey
+        || !observeRunsRef.current || !mountedRef.current) return;
       setTools(catalog);
-      setRuns(latestRunsByTool(history));
+      const latestRuns = latestRunsByTool(history);
+      runsRef.current = latestRuns;
+      setRuns(latestRuns);
+      setTestingTools(new Set([...latestRuns.values()]
+        .filter((run) => run.status === "queued" || run.status === "running")
+        .map((run) => run.tool_name)));
     } catch (loadError) {
       // 失败始终向上抛出，不静默吞掉；只有当前代次才写本地错误态。
-      if (loadGenerationRef.current === generation) {
+      if (loadGenerationRef.current === generation && pollScopeKeyRef.current === requestScopeKey
+        && observeRunsRef.current && mountedRef.current) {
         setError(errorMessage(loadError));
       }
       throw loadError;
     } finally {
-      if (loadGenerationRef.current === generation) setLoading(false);
+      if (loadGenerationRef.current === generation && pollScopeKeyRef.current === requestScopeKey
+        && mountedRef.current) setLoading(false);
     }
-  }, [agentId, apiPort, workspaceId]);
+  }, [agentId, apiPort, pollScopeKey, workspaceId]);
 
   useEffect(() => {
     if (!observationActive) {
       return;
     }
+    const requestScopeKey = pollScopeKey;
     void load().catch(() => {
-      onStatus(t("composer.tools.loadFailed"));
+      if (mountedRef.current && observeRunsRef.current && pollScopeKeyRef.current === requestScopeKey) {
+        onStatus(t("composer.tools.loadFailed"));
+      }
     });
   }, [load, onStatus, observationActive]);
 
@@ -136,8 +155,11 @@ export default function ComposerToolControl({
         }
         void getToolTestRun(apiPort, run.run_id, workspaceId)
           .then((nextRun) => {
-            if (!observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey) return;
-            setRuns((current) => new Map(current).set(toolName, nextRun));
+            if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey
+              || runsRef.current.get(toolName)?.run_id !== run.run_id) return;
+            const nextRuns = new Map(runsRef.current).set(toolName, nextRun);
+            runsRef.current = nextRuns;
+            setRuns(nextRuns);
             if (nextRun.status === "completed" || nextRun.status === "failed") {
               setTestingTools((current) => {
                 const next = new Set(current);
@@ -147,7 +169,8 @@ export default function ComposerToolControl({
             }
           })
           .catch((pollError: unknown) => {
-            if (!observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey) return;
+            if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey
+              || runsRef.current.get(toolName)?.run_id !== run.run_id) return;
             setError(t("composer.tools.progressFailed", errorMessage(pollError)));
           });
       }
@@ -158,6 +181,14 @@ export default function ComposerToolControl({
   useEffect(() => {
     // owner 变化后旧的进行中测试不再属于当前上下文：清空以免用新 owner 复查旧 run。
     setTestingTools((current) => (current.size === 0 ? current : new Set()));
+    setTools([]);
+    const nextRuns = new Map<string, ToolTestRun>();
+    runsRef.current = nextRuns;
+    setRuns(nextRuns);
+    setTestDialog(null);
+    setSavingToolIds((current) => current.size === 0 ? current : new Set());
+    setError(null);
+    if (!observationActive) setLoading(false);
   }, [pollScopeKey]);
 
   const groups = useMemo<ToolGroup[]>(() => {
@@ -189,6 +220,8 @@ export default function ComposerToolControl({
     changes: ToolSelectionChange[],
     successMessage: string,
   ) => {
+    const requestScopeKey = pollScopeKey;
+    const isCurrentOwner = () => mountedRef.current && pollScopeKeyRef.current === requestScopeKey;
     const previousTools = tools;
     const changedIds = new Set(changes.map((change) => change.tool_id));
     setSavingToolIds((current) => new Set([...current, ...changedIds]));
@@ -201,31 +234,37 @@ export default function ComposerToolControl({
         changes,
         workspaceId,
       );
+      if (!isCurrentOwner()) return;
       const updatedById = new Map(
         updatedTools.map((tool) => [tool.tool_id, tool]),
       );
-      setTools((current) => current.map((tool) => updatedById.get(tool.tool_id) ?? tool));
+      setTools((current) => isCurrentOwner() ? current.map((tool) => updatedById.get(tool.tool_id) ?? tool) : current);
       onStatus(successMessage);
     } catch (saveError) {
+      if (!isCurrentOwner()) throw saveError;
       const message = errorMessage(saveError);
       setError(t("composer.tools.saveFailedDetail", message));
       try {
         const refreshedTools = await getToolCatalog(apiPort, agentId, workspaceId);
-        setTools(restoreToolSelectionAfterSaveFailure(previousTools, refreshedTools));
+        if (isCurrentOwner()) setTools(restoreToolSelectionAfterSaveFailure(previousTools, refreshedTools));
       } catch (refreshError) {
-        setTools(restoreToolSelectionAfterSaveFailure(previousTools, null));
-        const refreshMessage = errorMessage(refreshError);
-        setError(t("composer.tools.saveAndRefreshFailed", message, refreshMessage));
+        if (isCurrentOwner()) {
+          setTools(restoreToolSelectionAfterSaveFailure(previousTools, null));
+          const refreshMessage = errorMessage(refreshError);
+          setError(t("composer.tools.saveAndRefreshFailed", message, refreshMessage));
+        }
       }
       throw saveError;
     } finally {
-      setSavingToolIds((current) => {
-        const next = new Set(current);
-        for (const toolId of changedIds) {
-          next.delete(toolId);
-        }
-        return next;
-      });
+      if (isCurrentOwner()) {
+        setSavingToolIds((current) => {
+          const next = new Set(current);
+          for (const toolId of changedIds) {
+            next.delete(toolId);
+          }
+          return next;
+        });
+      }
     }
   };
 
@@ -234,6 +273,7 @@ export default function ComposerToolControl({
     if (!tool || savingToolIds.has(toolId) || tool.execution_locked) {
       return;
     }
+    const requestScopeKey = pollScopeKey;
     void saveChanges(
       [{
         tool_id: toolId,
@@ -242,7 +282,7 @@ export default function ComposerToolControl({
       }],
       t("composer.tools.saved", tool.name),
     ).catch(() => {
-      onStatus(t("composer.tools.saveFailed"));
+      if (mountedRef.current && pollScopeKeyRef.current === requestScopeKey) onStatus(t("composer.tools.saveFailed"));
     });
   };
 
@@ -251,6 +291,7 @@ export default function ComposerToolControl({
     if (!tool || savingToolIds.has(toolId) || tool.model_visibility_locked || !tool.execution_enabled) {
       return;
     }
+    const requestScopeKey = pollScopeKey;
     void saveChanges(
       [{
         tool_id: toolId,
@@ -259,7 +300,7 @@ export default function ComposerToolControl({
       }],
       t("composer.tools.visibilitySaved", tool.name),
     ).catch(() => {
-      onStatus(t("composer.tools.saveFailed"));
+      if (mountedRef.current && pollScopeKeyRef.current === requestScopeKey) onStatus(t("composer.tools.saveFailed"));
     });
   };
 
@@ -286,8 +327,9 @@ export default function ComposerToolControl({
         ? (enableGroup ? tool.model_visible : false)
         : (tool.execution_enabled && enableGroup),
     }));
+    const requestScopeKey = pollScopeKey;
     void saveChanges(changes, t("composer.tools.groupSaved", group.name)).catch(() => {
-      onStatus(t("composer.tools.groupSaveFailed"));
+      if (mountedRef.current && pollScopeKeyRef.current === requestScopeKey) onStatus(t("composer.tools.groupSaveFailed"));
     });
   };
 
@@ -301,15 +343,27 @@ export default function ComposerToolControl({
   const confirmTest = () => {
     const tool = testDialog;
     if (!tool || selectedProviders.length === 0 || repetitions < 1 || !testCostAcknowledged) return;
+    const requestScopeKey = pollScopeKey;
     setError(null);
     setTestingTools((current) => new Set(current).add(tool.tool_id));
     setTestDialog(null);
     void startToolTest(apiPort, tool.tool_id, agentId, workspaceId, selectedProviders, repetitions)
       .then((run) => {
-        setRuns((current) => new Map(current).set(tool.tool_id, run));
+        if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey) return;
+        const nextRuns = new Map(runsRef.current).set(tool.tool_id, run);
+        runsRef.current = nextRuns;
+        setRuns(nextRuns);
+        if (run.status === "completed" || run.status === "failed") {
+          setTestingTools((current) => {
+            const next = new Set(current);
+            next.delete(tool.tool_id);
+            return next;
+          });
+        }
         onStatus(t("composer.tools.testStarted", tool.name));
       })
       .catch((testError: unknown) => {
+        if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey) return;
         const message = errorMessage(testError);
         setError(t("composer.tools.testStartFailed", message));
         setTestingTools((current) => {

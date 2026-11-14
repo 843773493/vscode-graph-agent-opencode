@@ -123,6 +123,33 @@ function toolCatalogPayload(toolId: string) {
   }];
 }
 
+function toolTestRunPayload(runId: string, status: "queued" | "running" | "completed", progress = 0) {
+  const completed = status === "completed" ? 1 : 0;
+  return {
+    run_id: runId,
+    tool_name: "shared_tool",
+    status,
+    progress,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    repetitions: 1,
+    providers: [{
+      provider_id: "test-provider",
+      model: "test-model",
+      status,
+      total: 1,
+      completed,
+      passed: completed,
+      failed: 0,
+      model_calls: 0,
+      reasoning_only_calls: 0,
+      transient_retries: 0,
+      success_rate: completed * 100,
+    }],
+    attempts: [],
+  };
+}
+
 function findButton(renderer: ReactTestRenderer, className: string) {
   return renderer.root.find(
     (node) => node.type === "button"
@@ -139,7 +166,7 @@ async function flush(): Promise<void> {
 async function renderAndOpen(props: {
   agentId: string;
   workspaceId: string;
-}): Promise<ReactTestRenderer> {
+}, options: { onStatus?: (text: string) => void; active?: boolean } = {}): Promise<ReactTestRenderer> {
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(
@@ -147,8 +174,9 @@ async function renderAndOpen(props: {
         apiPort={49_501}
         agentId={props.agentId}
         workspaceId={props.workspaceId}
-        onStatus={() => undefined}
+        onStatus={options.onStatus ?? (() => undefined)}
         providers={[{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }]}
+        active={options.active ?? true}
       />,
     );
   });
@@ -157,6 +185,20 @@ async function renderAndOpen(props: {
   });
   await flush();
   return renderer;
+}
+
+async function confirmToolTest(renderer: ReactTestRenderer): Promise<void> {
+  await act(async () => { findButton(renderer, "composer-tool-test-button").props.onClick(); });
+  const testInputs = renderer.root.findAll((node) => node.type === "input");
+  await act(async () => {
+    testInputs[0]?.props.onChange({ target: { checked: true } });
+    testInputs[1]?.props.onChange({ target: { value: "1" } });
+    testInputs[2]?.props.onChange({ target: { checked: true } });
+  });
+  const confirm = renderer.root.find((node) => node.type === "button"
+    && node.children.join("").includes("开始测试"));
+  await act(async () => { confirm.props.onClick(); });
+  await flush();
 }
 
 describe("工具目录加载的 owner 归属", () => {
@@ -323,5 +365,93 @@ describe("工具测试进度轮询的 owner 归属", () => {
     expect(html).not.toContain("测试进度读取失败");
     act(() => renderer.unmount());
     restoreComposerTestEnvironment();
+  });
+
+  test("Agent和工作区切换后，旧测试启动回执不得进入当前控制面", async () => {
+    installComposerTestEnvironment();
+    let resolveStart!: (value: Response) => void;
+    let startRequest: GatewayFetchRequest | undefined;
+    let renderer!: ReactTestRenderer;
+    const statuses: string[] = [];
+    installGatewayFetch((request) => {
+      const headers = new Headers(request.init?.headers);
+      if (request.path === "/api/v1/tools") return apiSuccessResponse(toolCatalogPayload("shared_tool"));
+      if (request.path === "/api/v1/tools/tests") {
+        return apiSuccessResponse({ items: [], next_cursor: null, has_more: false });
+      }
+      if (request.path === "/api/v1/tools/shared_tool/tests" && request.method === "POST") {
+        startRequest = request;
+        return new Promise<Response>((resolve) => { resolveStart = resolve; });
+      }
+      return undefined;
+    }, { token: "tool-start-owner-token" });
+
+    renderer = await renderAndOpen({ agentId: "agent_a", workspaceId: WORKSPACE_KEYS[0] }, {
+      onStatus: (text) => statuses.push(text),
+    });
+    await confirmToolTest(renderer);
+    expect(startRequest).toBeDefined();
+    const originalHeaders = new Headers(startRequest?.init?.headers);
+    expect(originalHeaders.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNERS[0].gatewayId);
+    expect(originalHeaders.get("X-BoxTeam-Workspace-Id")).toBe(OWNERS[0].workspaceId);
+    expect(JSON.parse(String(startRequest?.init?.body)).agent_id).toBe("agent_a");
+
+    await act(async () => {
+      renderer.update(
+        <ComposerToolControl
+          apiPort={49_501}
+          agentId="agent_b"
+          workspaceId={WORKSPACE_KEYS[1]}
+          onStatus={(text) => statuses.push(text)}
+          providers={[{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }]}
+        />,
+      );
+    });
+    await flush();
+    expect(JSON.stringify(renderer.toJSON())).toContain("shared_tool");
+
+    await act(async () => { resolveStart(apiSuccessResponse(toolTestRunPayload("tooltest_old_owner", "queued"))); });
+    await flush();
+    const html = JSON.stringify(renderer.toJSON());
+    expect(html).not.toContain("等待测试");
+    expect(html).not.toContain("进度 0%");
+    expect(statuses.some((status) => status.includes("已启动"))).toBe(false);
+    act(() => renderer.unmount());
+  });
+
+  test("关闭观察会释放轮询，同一 Agent 的新页面从历史继续观察活动测试", async () => {
+    installComposerTestEnvironment();
+    let pollRequests = 0;
+    const running = toolTestRunPayload("tooltest_same_agent", "running", 25);
+    installGatewayFetch((request) => {
+      const headers = new Headers(request.init?.headers);
+      expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNERS[0].gatewayId);
+      expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNERS[0].workspaceId);
+      if (request.path === "/api/v1/tools") return apiSuccessResponse(toolCatalogPayload("shared_tool"));
+      if (request.path === "/api/v1/tools/tests") {
+        return apiSuccessResponse({ items: [running], next_cursor: null, has_more: false });
+      }
+      if (request.path === "/api/v1/tools/tests/tooltest_same_agent") {
+        pollRequests += 1;
+        return apiSuccessResponse(toolTestRunPayload("tooltest_same_agent", "completed", 100));
+      }
+      return undefined;
+    }, { token: "tool-resume-owner-token" });
+
+    const firstPage = await renderAndOpen({ agentId: "agent_a", workspaceId: WORKSPACE_KEYS[0] });
+    expect(intervalCallbacks.size).toBeGreaterThan(0);
+    await act(async () => { findButton(firstPage, "composer-tool-close").props.onClick(); });
+    await flush();
+    expect(intervalCallbacks.size).toBe(0);
+    act(() => firstPage.unmount());
+
+    const newPage = await renderAndOpen({ agentId: "agent_a", workspaceId: WORKSPACE_KEYS[0] });
+    expect(intervalCallbacks.size).toBeGreaterThan(0);
+    await act(async () => { tickIntervals(); });
+    await flush();
+    expect(pollRequests).toBeGreaterThan(0);
+    expect(JSON.stringify(newPage.toJSON())).toContain("100%");
+    act(() => newPage.unmount());
+    expect(intervalCallbacks.size).toBe(0);
   });
 });

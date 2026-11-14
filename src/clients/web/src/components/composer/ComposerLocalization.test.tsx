@@ -31,7 +31,7 @@ const { parsePortLiteral } = await import(${JSON.stringify(new URL('../workspace
 const { default: Bootstrap } = await import(${JSON.stringify(new URL('../shell/BootstrapState.tsx', import.meta.url).href)});
 const noop = () => {};
 const tool = {tool_id:'read_file', name:'用户工具', description:'原始工具说明', execution_enabled:true,
-  model_visible:false, test_supported:false};
+  model_visible:false, test_supported:false, execution_locked:false, model_visibility_locked:false};
 const actions = renderToStaticMarkup(React.createElement(Actions, {hasContent:true, showInterrupt:true,
   defaultDeliveryPolicy:'after_turn', onClear:noop, onInterrupt:noop, onSend:noop, onAlternate:noop, onToggleDefault:noop}));
 const model = renderToStaticMarkup(React.createElement(Model, {controlRef:React.createRef(),
@@ -40,6 +40,7 @@ const model = renderToStaticMarkup(React.createElement(Model, {controlRef:React.
   open:false, disabled:false, onToggle:noop, onClose:noop, onSelect:noop, onSetWorkspaceDefault:noop, onKeyDown:noop}));
 const tools = renderToStaticMarkup(React.createElement(Tools, {groups:[{id:'default', name:'用户工具组', kind:'default', items:[tool]}],
   loading:false, savingToolIds:new Set(), runs:new Map(), testingTools:new Set(), collapsedGroups:new Set(),
+  canRunTests:true,
   onToggleCollapsed:noop, onToggleGroupCapability:noop, onToggleToolExecution:noop, onToggleToolModelVisibility:noop, onRunTest:noop}));
 const goal = renderToStaticMarkup(React.createElement(WarmConfirm, null, React.createElement(Goal, {
   sessionId:'session-raw', goal:{objective:'用户目标 {0}', status:'active', tokens_used:12345,
