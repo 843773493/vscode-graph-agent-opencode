@@ -490,7 +490,7 @@ export async function planGoldenLoop(sessionId, threadId) {
 }
 
 /** Web 只声明响应内容；原始 stream 资产由 Python model_stream 统一生成。 */
-export async function planChatCalls(sessionId, threadId, responses) {
+export async function planChatCalls(sessionId, threadId, responses, model = 'big-pickle') {
   const planned = responses.map(({ label, reasoning = "", text = "", calls = [], usage }) => ({
     response_id: label,
     deltas: [
@@ -503,7 +503,7 @@ export async function planChatCalls(sessionId, threadId, responses) {
     ...(usage ? { usage: { prompt_tokens: usage.input, completion_tokens: usage.output,
       total_tokens: usage.input + usage.output } } : {}),
   }));
-  return testControl({ action: "plan_chat", session_id: sessionId, thread_id: threadId, responses: planned });
+  return testControl({ action: "plan_chat", session_id: sessionId, thread_id: threadId, model, responses: planned });
 }
 
 export function uuidText(hex) {
