@@ -51,6 +51,7 @@ dependencies = [
     "wcmatch>=10.1",
     "orjson>=3.11,<4",
     "jsonyx>=2.5,<3",
+    "cdifflib>=1.2.9,<2",
 ]
 
 [project.optional-dependencies]
