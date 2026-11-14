@@ -54,3 +54,5 @@ Webview 允许根中的 HTTP 扩展资源沿原 `asWebviewUri`／隔离 Worker�
 原用户 Node／Web Extension Host、VSIX／Gallery 安装与专用构建脚本已退役。浏览器 scanner 只保留产品内置贡献和派生缓存，原 Worker 与 Registry 继续运行；自有包管理沿原配置及 Gateway 插件 owner。
 
 `build.mjs` 不导出无消费者的 esbuild metafile；`immutable-assets.json` 只列实际存在内容地址名称的 chunks、media 与本地化资源。固定名 manifest 保持 revalidation 缓存，不假装 immutable。
+
+内容地址文本资源的 gzip 表示在构建时生成，并与原件一起登记在同一 immutable 清单。Gateway 与本地静态宿主按 Accept-Encoding 选择已有表示，保留原 MIME、独立 ETag、HEAD／304 和 Vary；普通请求不压缩正文，也不建立第二份缓存清单。

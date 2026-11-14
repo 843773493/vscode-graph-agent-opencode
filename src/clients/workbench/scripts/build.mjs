@@ -7,6 +7,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve, join, relative, dirname, basename, extname, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
+import { gzipSync } from 'node:zlib';
 
 const root = resolve(import.meta.dirname, '..');
 await writeActionTitleProjection(root, actionTitleKeys);
@@ -268,5 +269,15 @@ await writeFile(join(dist, 'version.json'), JSON.stringify({
     nlsAssets: languageAssets,
   },
 }));
+// 内容地址资源在构建时压缩；请求只选择已有表示，不重复压缩大型模块。
+for (const asset of [...immutableAssets]) {
+  if (!/\.(js|css|json|svg)$/.test(asset)) continue;
+  const source = await readFile(join(dist, asset));
+  if (source.length < 1024) continue;
+  const compressed = gzipSync(source);
+  if (compressed.length >= source.length) continue;
+  await writeFile(join(dist, `${asset}.gz`), compressed);
+  immutableAssets.add(`${asset}.gz`);
+}
 await writeFile(join(dist, 'immutable-assets.json'), JSON.stringify([...immutableAssets].sort()));
 console.log(`${values['assets-only'] ? 'Workbench 开发资源' : '完整 Workbench'}构建完成：${commit}，${extensions.length} 个内置 Web 扩展`);

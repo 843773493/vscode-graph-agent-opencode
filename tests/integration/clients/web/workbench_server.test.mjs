@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { TestRunContext } from '../../../harness/js/run-context.mjs';
 
 // 使用与 Electron 相同的 Node HTTP 实现；Gateway 是随机本地端口上的显式替身。
@@ -140,6 +141,10 @@ try {
     observed.missing = await read('/worker.js', { 'If-None-Match': observed.updated.headers.etag });
     observed.oauth = await read('/%6dcp-oauth-callback.html?code=private-code');
     observed.multi = await read('/main.js', { 'If-None-Match': '"different", ' + observed.reads['/main.js'].cold.headers.etag.slice(2) });
+    observed.gzip = await read('/chunk-ABC12345.js', { 'Accept-Encoding': 'gzip, deflate, br' });
+    observed.identity = await read('/chunk-ABC12345.js', { 'Accept-Encoding': 'gzip;q=0, *;q=1', 'If-None-Match': observed.gzip.headers.etag });
+    observed.gzipWarm = await read('/chunk-ABC12345.js', { 'Accept-Encoding': 'gzip', 'If-None-Match': observed.gzip.headers.etag });
+    observed.gzipHead = await read('/chunk-ABC12345.js', { 'Accept-Encoding': 'gzip' }, 'HEAD');
   } else throw new Error('未知场景: ' + input.scenario);
   observed.requests = upstreams.map(({ response, ...entry }) => entry);
   // 在 fixture 强制清理之前取证，不能把兜底清理误当成代理释放。
@@ -166,7 +171,9 @@ for (const scenario of ['streams', 'pending', 'json', 'static', 'file-cache']) {
       for (const name of ['index.html', 'main.js', 'worker.js', 'font-ABC12345.ttf', 'unlisted-ABC12345.js', 'mcp-oauth-callback.html']) {
         await writeFile(join(root, name), name + '-v1');
       }
-      await writeFile(join(root, 'immutable-assets.json'), JSON.stringify(['font-ABC12345.ttf']));
+      await writeFile(join(root, 'chunk-ABC12345.js'), 'compressed-module-v1'.repeat(100));
+      await writeFile(join(root, 'chunk-ABC12345.js.gz'), gzipSync('compressed-module-v1'.repeat(100)));
+      await writeFile(join(root, 'immutable-assets.json'), JSON.stringify(['font-ABC12345.ttf', 'chunk-ABC12345.js', 'chunk-ABC12345.js.gz']));
     }
     const input = {
       module: pathToFileURL(resolve('src/clients/workbench/scripts/server.mjs')).href,
@@ -247,6 +254,20 @@ for (const scenario of ['streams', 'pending', 'json', 'static', 'file-cache']) {
       expect(observed.oauth.headers['referrer-policy']).toBe('no-referrer');
       expect(observed.oauth.headers.etag).toBeUndefined();
       expect(observed.multi.status).toBe(304); expect(observed.requests).toEqual([]);
+      expect(observed.gzip.status).toBe(200);
+      expect(observed.gzip.body).toBe('compressed-module-v1'.repeat(100));
+      expect(observed.gzip.headers['content-encoding']).toBe('gzip');
+      expect(observed.gzip.headers['content-type']).toBe('text/javascript');
+      expect(observed.gzip.headers.vary).toBe('Accept-Encoding');
+      expect(Number(observed.gzip.headers['content-length'])).toBeLessThan(observed.identity.body.length);
+      expect(observed.identity.status).toBe(200);
+      expect(observed.identity.body).toBe(observed.gzip.body);
+      expect(observed.identity.headers['content-encoding']).toBeUndefined();
+      expect(observed.identity.headers.etag).not.toBe(observed.gzip.headers.etag);
+      expect(observed.gzipWarm.status).toBe(304);
+      expect(observed.gzipWarm.headers.vary).toBe('Accept-Encoding');
+      expect(observed.gzipHead.body).toBe('');
+      expect(observed.gzipHead.headers['content-length']).toBe(observed.gzip.headers['content-length']);
     }
   });
 }
