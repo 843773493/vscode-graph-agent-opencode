@@ -60,6 +60,7 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.schemas.internal_v2.turn_search import TurnMessageSearchRequest
 from app.services.business.message_service import MessageService
 from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protocol_boundary import (
     CONFLICT_CODE,
@@ -217,19 +218,19 @@ def _view_member_ids(storage: RolloutContextStore) -> set[str]:
         }
 
 
-def test_request_carrier_not_reused_into_live_item(storage: RolloutContextStore):
+@pytest.mark.parametrize("live_first", [True, False])
+def test_request_carrier_not_reused_into_live_item(storage: RolloutContextStore, carrier_saver, live_first):
     """带投影身份的 request carrier 不得被等价 live item 吞掉。"""
-    live = _live_tool_result(sequence=1)
-    carrier = _request_carrier(sequence=2, message_id="1b56a352-tool-msg")
-    live_commits = storage.executions.append_items(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), (live,), execution_id=MODEL_CALL_ID)
-    carrier_commits = storage.executions.append_items(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), (carrier,), execution_id=MODEL_CALL_ID)
+    live = _live_tool_result(sequence=1 if live_first else 2)
+    carrier = _request_carrier(sequence=2 if live_first else 1, message_id="1b56a352-tool-msg")
+    first, second = (live, carrier) if live_first else (carrier, live)
+    first_commits = storage.executions.append_items(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), (first,), execution_id=MODEL_CALL_ID)
+    second_commits = storage.executions.append_items(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), (second,), execution_id=MODEL_CALL_ID)
     # 两个 item 都在 catalog：carrier 没有被“等价复用”成 live item。
-    assert _catalog_tool_result_ids(storage) == [
-        live.item_id,
-        carrier.item_id,
-    ]
+    ordered = [live.item_id, carrier.item_id] if live_first else [carrier.item_id, live.item_id]
+    assert _catalog_tool_result_ids(storage) == ordered
     # carrier 产生独立的新 commit（旧缺陷路径不会产生新 commit）。
-    assert carrier_commits and not set(carrier_commits) & set(live_commits)
+    assert second_commits and not set(second_commits) & set(first_commits)
     # carrier 立即进入 active view，下一次装配才能读到它。
     members = _view_member_ids(storage)
     assert live.item_id in members
@@ -245,6 +246,15 @@ def test_request_carrier_not_reused_into_live_item(storage: RolloutContextStore)
         "1b56a352-tool-msg"
     )
     assert stored[live.item_id].projection_identity.projection_message_id is None
+    # 搜索只展示最早的原详情身份；续页不能把另一份等价载体重新当成结果。
+    request = TurnMessageSearchRequest(query=RESULT_CONTENT, category="tool_result", limit=1)
+    page = carrier_saver.search_history_messages(SESSION_ID, storage.storage.main_thread_id(SESSION_ID), request)
+    assert [hit.reference.item_id for hit in page.items] == ordered[:1]
+    assert page.cursor is not None
+    following = carrier_saver.search_history_messages(
+        SESSION_ID, storage.storage.main_thread_id(SESSION_ID), request.model_copy(update={"cursor": page.cursor}),
+    )
+    assert following.complete and following.items == []
 
 
 @pytest.mark.parametrize("changed", ["media", "artifact"])
