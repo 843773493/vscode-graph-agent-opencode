@@ -20,13 +20,13 @@ F5 复验使用 `run-b89a840e80ce`，原扩展 72px 列表行、128px 图标、2
 
 ## 1. 确认权威接口和接入边界
 
-- [ ] 1.1 逐项核对 C／T／S／A／P／R／O 矩阵的实际注册、消费者、owner 和相关测试；在本 design 原矩阵更新接线证据，不另建生产 capability registry。
-- [ ] 1.2 核对关联活跃变更已落地的接口与职责，给需要补齐的 Provider／Agent／Skill 操作标出原 owner；不重复实现插件、搜索、缓存或同步。
-- [ ] 1.3 对本切片必要协议变化先迁齐 proto、生成 DTO、writer、直接及间接消费者；不预建尚无消费者的接口、适配层或兼容分支。
+- [x] 1.1 逐项核对 C／T／S／A／P／R／O 矩阵的实际注册、消费者、owner 和相关测试；在本 design 原矩阵更新接线证据，不另建生产 capability registry。
+- [x] 1.2 核对关联活跃变更已落地的接口与职责，给需要补齐的 Provider／Agent／Skill 操作标出原 owner；不重复实现插件、搜索、缓存或同步。
+- [x] 1.3 对本切片必要协议变化先迁齐 proto、生成 DTO、writer、直接及间接消费者；不预建尚无消费者的接口、适配层或兼容分支。
 
 ## 2. 默认本地目标与统一可发现入口
 
-- [ ] 2.1 扩展现有管理目标的入口 scope，初次／新启动默认本地、显式远端选择互不干扰；Provider／Agent／工具等全局入口在所选 Gateway 下首次默认首个工作区，切回恢复本入口上次选择，直接下拉切换；不借焦点／activeId，不自动激活或创建；SSH转发不改“本地”归属，覆盖V1（T01、S01–S03）。已验证入口级默认、本地与导航活动目标分离、工具入口真实工作区切换及配置实体入口工作区记忆；真实的新启动状态下 Provider／Agent 设置从本地切至显式远端 Gateway 再切回，并验证每入口选择记忆的产品场景仍缺。
+- [x] 2.1 扩展现有管理目标的入口 scope，初次／新启动默认本地、显式远端选择互不干扰；Provider／Agent／工具等全局入口在所选 Gateway 下首次默认首个工作区，切回恢复本入口上次选择，直接下拉切换；不借焦点／activeId，不自动激活或创建；SSH转发不改“本地”归属，覆盖V1（T01、S01–S03）。真实新启动 Gateway A 的 Agent Settings 经原来源读取，显式切换远端 Gateway B 并核真实请求 owner，切回 Gateway A 后重新打开同入口仍读 A，活动工作区不变；已通过 `test_service_plugin_target_gateway_ui.py::test_workbench_settings_selects_remote_gateway_and_returns_to_local`。
 - [x] 2.2 把 Gateway、共享 Workspace 用户来源、工作区和上下文对象的范围说明接入原选择与详情；fan-out 标明仅覆盖原 owner 已观察消费者，停机／未知不伪报已应用；不新增 Backend 配置层（T01、S02–S03）。
 - [x] 2.3 为新增管理详情接入原编辑器身份、标题、dirty、分屏、恢复和失效处理；覆盖双目标同名对象、B 草稿保存不投 A；共享源按工作区保留基线／回执，一个保存后另一个冲突保留草稿；沿原配置能力准入，冻结在途路由，失效不回退或重放 V2。
 - [x] 2.4 在原 SessionNavigation 节点接入原管理命令、菜单和欢迎直达，复用导航／Quick Access；对象入口显式传owner并在首个await前捕获，ContextKey只负责作用域内显隐／可用性，直接命令仍核参数及准入，不逐字段建命令。打开详情不激活工作区；无Session可见入口，Backend未就绪显示原错误与显式操作，不造空列表、第二导航或activeWorkspace（C01、T01、A01、A03、A05–A07）。
@@ -48,7 +48,7 @@ F5 复验使用 `run-b89a840e80ce`，原扩展 72px 列表行、128px 图标、2
 - [x] 4.4 接入 Provider 非持久化密码输入：结清原脏来源，沿同一 source writer 预检／CAS 写 api_key；保存前取消零提交，发出后结果未知沿原键及 edit 回执查询，不比较明文与脱敏 JSONC、不重发或另存秘密摘要；恢复只保留非秘密查询身份。核同绑定占位、换身份／地址拒借及已有登录／显式诊断，不建秘密 owner 或新增 OAuth Provider（A02）。
 - [x] 4.5 在原 Agent／配置 owner 完成定义创建／编辑／移除本层定义，明确下层同 ID 恢复，无 tombstone／跨层删除／ID 重命名；Provider／Agent 引用只查完整 candidate 当前引用与该工作区默认值，不扫描历史或全 catalog、不建跨 owner 事务，历史缺失显式报错而不改绑；保留 Job 快照（A03）。
 - [x] 4.6 接入 Agent 列表／详情、提示词／Provider 引用、默认值说明：定义及 default_agent 走原 source writer，工作区会话默认走 SessionDefaults，当前选择走 Session owner；与 Composer 共用各自原操作，不迁移、双写或统一成新 writer（A03–A04）。
-- [ ] 4.7 完成 V3：两工作区共享来源已观察结果＋私有覆盖、未知不伪报完成；同模型保存重读、整组覆盖／继承、Agent 下层恢复；primary／fallback／默认值冲突与无历史扫描，配置默认不重绑运行会话；重排密钥归属、换 endpoint／跨来源占位拒借，核原 writer 与真实序列化，不以 helper metadata 代替真实入口。
+- [x] 4.7 完成 V3：两工作区共享来源已观察结果＋私有覆盖、未知不伪报完成；同模型保存重读、整组覆盖／继承、Agent 下层恢复；primary／fallback／默认值冲突与无历史扫描，配置默认不重绑运行会话；重排密钥归属、换 endpoint／跨来源占位拒借，核原 writer 与真实序列化，不以 helper metadata 代替真实入口。
 
 ## 5. 工具、Skill 与指令管理切片
 
@@ -79,7 +79,7 @@ F5 复验使用 `run-b89a840e80ce`，原扩展 72px 列表行、128px 图标、2
 
 ## 8. 诊断、用量和维护切片
 
-缓存复验（`run-72f8a8b0ff83`）验证了真实 UI 展示 Gateway／workspace／session／thread owner、IndexedDB 索引与快照 owner 一致，以及清理仅作用于确认时捕获的 Thread；其他 Thread 缓存、后端历史和 Composer 保持可用。该证据覆盖 8.4 的客户端缓存与精准清理部分，不代表存储位置／保留配置入口及其余维护项已完成。
+缓存复验使用 Quick索引6的 `ui:protected_recovery`：正式 Web `quick_access/test_recent_history/run-133b7b960fa4` 与 Linux development ASAR 验证精确 Thread 清理、其他 Thread 缓存及后端历史／草稿保留。旧 `run-72f8a8b0ff83` 原件无法定位，不作为完成证据。该复验覆盖客户端缓存与精准清理部分；存储位置／保留入口及其余维护项沿 design.md 各自记录。
 
 - [x] 8.1 复用产品日志 owner 与现有诊断组件，提供进程／实例选择、有限尾读、错误定位和安全诊断复制；展示版本／构建／目标（C08、O01、O05）。
 - [x] 8.2 为 Gateway 遥测／统计原配置和已有状态补原 Settings 分类及详情入口，不新增 daemon／每请求自检（O02）。
@@ -93,7 +93,7 @@ V6／9.2 收口证据：`run-325671635b33` 的完整真实 Workbench run 验证 
 
 - [x] 9.1 每批代码按实际变更做静态分析；前端完成真实类型检查及 `bun run --cwd src/clients/web build`，按注册／构建变化补 Workbench 构建。跨层先核真实序列化与完整消费者，不默认全仓测试。
 - [x] 9.2 完成 V6 六组真实 Thread 同屏、管理页面加载／关闭及请求观察，核多 owner 不串用、无新增审批／全目标轮询、无模型／工具自动探测；管理页面只释放本页引用，共享观察者由实际 owner 管理，脏工作副本及已提交业务沿原生命周期，原 Composer 持续可操作。
-- [ ] 9.3 每个纵向切片仅选择实际新增／改变的最多一个代表列表 API＋一个详情 API各取≥20个暖样本，记录选择依据、一条真实 UI 路径及首开／暖开；按 D8 核 p95／max、request_id、字节和规模，远端功能不硬套回环预算。纯接线复用依赖源码未变的领域证据，不全页面／平台排列，不筛慢样本或无变化重跑。
-- [ ] 9.4 完成 V8 键盘／命令、Grid、脏草稿／恢复和中英文检查；浏览器侧由上述 `run-325671635b33`、`appearance-product-05` 及 `settings-grid-appearance-05` 覆盖。仍需用独立干净产物进行 Electron 原生启动、同目标管理保存及重启恢复，记录未验平台，不以 parity 浏览器替代。
-- [ ] 9.5 全仓检索本次替换入口和消费者后删除旧 demo、死组件、失效测试及兼容开关；从改前代码重推最小实现，删除多余包装、重复状态／校验、轮询、fallback 和持久化机制。
+- [x] 9.3 每个纵向切片仅选择实际新增／改变的最多一个代表列表 API＋一个详情 API各取≥20个暖样本，记录选择依据、一条真实 UI 路径及首开／暖开；按 D8 核 p95／max、request_id、字节和规模，远端功能不硬套回环预算。纯接线复用依赖源码未变的领域证据，不全页面／平台排列，不筛慢样本或无变化重跑。
+- [x] 9.4 完成 V8 键盘／命令、Grid、脏草稿／恢复和中英文检查；浏览器侧由上述 `run-325671635b33`、`appearance-product-05` 及 `settings-grid-appearance-05` 覆盖。Linux 已用独立 development ASAR 和正式 `test_native_management_closure` 完成原生启动、同目标管理保存及重启恢复（run-b2933a974c08），准确产物与未验平台见 design；不以 parity 浏览器替代。
+- [x] 9.5 全仓检索本次替换入口和消费者后删除旧 demo、死组件、失效测试及兼容开关；从改前代码重推最小实现，删除多余包装、重复状态／校验、轮询、fallback 和持久化机制。
 - [ ] 9.6 核对全部矩阵行的实现／受限说明与证据，记录准确命令、源码指纹、原始输出、实际退出码及未验证范围；所有测试使用进程外超时／内存保护，遵守正式／临时产物目录，不抢占现有实例。
