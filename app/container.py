@@ -93,7 +93,6 @@ from app.services.business.session_turn_history import (
 from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
-from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceLock,
@@ -365,7 +364,6 @@ class AppContainer:
     workspace_source_owner: WorkspaceSourceOwner
     agent_service: AgentService
     artifact_service: ArtifactService
-    event_service: EventService
     job_service: JobServiceProtocol
     message_service: MessageService
     attachment_blob_store: AttachmentBlobStore
@@ -1021,7 +1019,6 @@ def _build_app_container(
 
     agent_service = AgentService(config_service=config_service)
     artifact_service = ArtifactService()
-    event_service = EventService(bus=job_event_bus)
     runtime_service = RuntimeService(
         workspace_id=workspace_service.workspace_id,
         workspace_root=resolved_workspace_root,
@@ -1157,7 +1154,6 @@ def _build_app_container(
         workspace_source_owner=workspace_source_owner,
         agent_service=agent_service,
         artifact_service=artifact_service,
-        event_service=event_service,
         job_service=job_service,
         message_service=message_service,
         attachment_blob_store=attachment_blob_store,

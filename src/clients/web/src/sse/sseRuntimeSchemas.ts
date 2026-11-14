@@ -4,12 +4,10 @@ import {
   parseWorkspaceFileChangeBatch,
 } from "../protocol";
 import type {
-  SessionExecutionSseDTO,
   SseErrorDTO,
   TraceEventDTO,
   WorkspaceFileChangeBatchDTO,
 } from "../protocol/jsonTypes";
-import { parseSessionExecutionSse } from "../protocol/sessionSse";
 import { validateWorkspaceObservationFrameDTO } from "../../../../shared/sseRuntimeValidators.js";
 import type { WorkspaceObservationFrameDTO } from "../types/backend";
 import { validateFederatedSearchEvent as validateSearchEvent } from "../../../../shared/sseRuntime.js";
@@ -37,13 +35,6 @@ export function validateWorkspaceObservationFrame(value: unknown): WorkspaceObse
 export function validateTraceEvent(value: unknown): TraceEventDTO {
   parseTraceEvent(value);
   return value as TraceEventDTO;
-}
-
-export function validateSessionExecutionSse(
-  value: unknown,
-): SessionExecutionSseDTO {
-  parseSessionExecutionSse(value);
-  return value as SessionExecutionSseDTO;
 }
 
 export function validateWorkspaceFileChangeBatch(

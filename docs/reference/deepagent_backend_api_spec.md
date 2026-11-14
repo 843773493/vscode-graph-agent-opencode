@@ -480,43 +480,16 @@ pending -> running -> completed
 
 **GET** `/jobs/{job_id}/steps`
 
-## 13.3 获取任务事件
+## 13.3 读取任务执行轨迹
 
-**GET** `/jobs/{job_id}/events?after=evt_100&limit=100`
+任务历史和实时流统一使用 Session Trace SQLite：
 
-## 13.4 订阅任务事件流
+- **GET** `/sessions/{session_id}/traces?limit=100`：按 `next_cursor` 分页，事件携带 `job_id` 和原始事件 `raw`。
+- **GET** `/sessions/{session_id}/traces/stream`：SSE `trace` 事件，按返回的流游标恢复；可用 `thread_id` 限定线程。
 
-**GET** `/jobs/{job_id}/events/stream`
+Job 事件总线只向在途订阅者投递，不在内存保留历史；无人订阅时释放该 Job 通道。
 
-事件示例：
-
-```text
-event: job.status
-data: {"job_id":"job_001","status":"running"}
-
-event: agent.thought
-data: {"agent_id":"planner","text":"开始分析工作区入口文件"}
-
-event: tool.start
-data: {"tool":"workspace_search","input":{"query":"asyncio.create_task"}}
-
-event: tool.end
-data: {"tool":"workspace_search","ok":true}
-
-event: token
-data: {"agent_id":"summarizer","text":"当前任务链路分为三段"}
-
-event: job.paused
-data: {"job_id":"job_001"}
-
-event: job.interrupted
-data: {"job_id":"job_001","action":"replace_instruction"}
-
-event: job.completed
-data: {"job_id":"job_001","status":"succeeded"}
-```
-
-## 13.5 获取任务产物列表
+## 13.4 获取任务产物列表
 
 **GET** `/jobs/{job_id}/artifacts`
 
@@ -1247,11 +1220,9 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_request_id, verify_local_token
 from app.schemas.internal_v2.artifact import ArtifactDTO
-from app.schemas.event import Event as SSEEvent
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.job import JobControlRequest, JobControlResponseDTO, JobDTO, StepDTO
 from app.services.artifact_service import ArtifactService
-from app.services.event_service import EventService
 from app.services.job_service import JobService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -1275,30 +1246,6 @@ async def list_job_steps(
 ):
     result = await JobService().list_steps(job_id)
     return APIResponse(data=result, request_id=request_id)
-
-
-@router.get("/{job_id}/events", response_model=APIResponse[list[SSEEvent]], summary="获取任务事件")
-async def list_job_events(
-    job_id: str,
-    after: str | None = None,
-    limit: int = 100,
-    _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
-):
-    result = await EventService().list(job_id=job_id, after=after, limit=limit)
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get("/{job_id}/events/stream", summary="订阅任务事件流")
-async def stream_job_events(
-    job_id: str,
-    _: str = Depends(verify_local_token),
-):
-    async def event_generator():
-        async for chunk in EventService().stream_sse(job_id):
-            yield chunk
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/{job_id}/control", response_model=APIResponse[JobControlResponseDTO], summary="控制任务")
@@ -1461,7 +1408,6 @@ async def update_config(
 - `ToolService`
 - `ArtifactService`
 - `ConfigService`
-- `EventService`
 
 多智能体编排作为 `JobService / Runtime` 内部能力实现。
 
@@ -1558,8 +1504,8 @@ app.include_router(config_router, prefix="/api/v1")
 - `GET /sessions/{session_id}/messages/{message_id}`
 - `GET /jobs/{job_id}`
 - `GET /jobs/{job_id}/steps`
-- `GET /jobs/{job_id}/events`
-- `GET /jobs/{job_id}/events/stream`
+- `GET /sessions/{session_id}/traces`
+- `GET /sessions/{session_id}/traces/stream`
 - `POST /jobs/{job_id}/control`
 - `GET /jobs/{job_id}/artifacts`
 - `GET /agents`

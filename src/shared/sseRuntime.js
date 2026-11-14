@@ -1,6 +1,5 @@
 import {
   validateFederatedSearchEventDTO,
-  validateSessionExecutionSseDTO,
   validateSseErrorDTO,
   validateTraceEventDTO,
   validateWorkspaceFileChangeBatchDTO,
@@ -46,20 +45,6 @@ export function validateTraceEvent(value) {
     throw new Error('TraceEventDTO 校验失败: /timestamp 不是有效日期时间');
   }
   return event;
-}
-
-export function validateSessionExecutionSse(value) {
-  const envelope = validateGenerated(
-    'SessionExecutionSseDTO',
-    validateSessionExecutionSseDTO,
-    value,
-  );
-  if (Number.isNaN(Date.parse(envelope.event.time))) {
-    throw new Error(
-      'SessionExecutionSseDTO 校验失败: /event/time 不是有效日期时间',
-    );
-  }
-  return envelope;
 }
 
 export function validateWorkspaceFileChangeBatch(value) {

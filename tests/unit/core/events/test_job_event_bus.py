@@ -57,7 +57,6 @@ async def test_tool_output_rejects_non_result_uri_before_delivery(
         )
     assert failure.value.errors(include_input=False)[0]["loc"] == ("tool_output", field)
     assert received == []
-    assert await bus.list_events("job_invalid_output") == []
     assert queue.empty()
 
 
@@ -81,7 +80,6 @@ async def test_tool_output_uri_round_trips_without_resolving_target(
     expected = {"type": "tool_output", "truncated": True, **tool_output_payload}
     assert event.payload.tool_output.model_dump() == expected
     assert received == [event]
-    assert (await bus.list_events("job_output"))[0].payload.tool_output.model_dump() == expected
     assert (await queue.get()).model_dump(mode="json")["payload"]["tool_output"] == expected
 
 
@@ -108,7 +106,7 @@ async def test_job_created_rejects_missing_thread_before_delivery(
         )
 
     assert received == []
-    assert await bus.list_events("job_missing_thread") == []
+    assert bus.event_channel_service.channel_names == ()
 
 
 @pytest.mark.asyncio
@@ -135,12 +133,21 @@ async def test_durable_listener_receives_event_before_publish_returns():
     )
     await asyncio.wait_for(listener_started.wait(), timeout=1.0)
     assert not publish_task.done()
+    # 持久化等待期间，旧订阅退出后重新订阅，提交事件只能投递到当前通道。
+    previous = await bus.subscribe("job_1", subscriber_kind="previous")
+    await bus.unsubscribe("job_1", previous, reason="reconnect")
+    current = await bus.subscribe("job_1", subscriber_kind="current")
+    assert current.empty()
 
     allow_persist.set()
     event = await asyncio.wait_for(publish_task, timeout=1.0)
 
     assert [item.event_id for item in received] == [event.event_id]
     assert received[0].type == "job_created"
+    assert previous.empty()
+    assert await current.get() is event
+    await bus.unsubscribe("job_1", current, reason="done")
+    assert bus.event_channel_service.channel_names == ()
 
 
 @pytest.mark.asyncio
@@ -162,23 +169,6 @@ async def test_unregister_durable_listener_stops_receiving():
     )
 
     assert received == []
-
-
-@pytest.mark.asyncio
-async def test_get_event_finds_published_event():
-    bus = JobEventBus()
-    event = await bus.publish(
-        job_id="job_1",
-        event_type=EventType.JOB_COMPLETED,
-        payload={"result": "ok"},
-        agent_id="test",
-    )
-
-    found = await bus.get_event(event.event_id)
-
-    assert found is not None
-    assert found.event_id == event.event_id
-    assert found.type == "job_completed"
 
 
 @pytest.mark.asyncio
@@ -204,7 +194,7 @@ async def test_slow_transient_subscriber_is_closed_without_failing_publish(caplo
     assert exc_info.value.subscription_id == queue.subscription_id
     assert exc_info.value.job_id == "job_full"
     assert queue.metadata == {"client_id": "client-42"}
-    assert len(await bus.list_events("job_full", limit=queue.maxsize + 1)) == queue.maxsize + 1
+    assert bus.event_channel_service.channel_names == ()
     await bus.unsubscribe(
         "job_full",
         queue,
@@ -245,7 +235,7 @@ async def test_filtered_subscription_only_receives_selected_event_types():
 
 
 @pytest.mark.asyncio
-async def test_durable_listener_failure_prevents_history_and_transient_delivery():
+async def test_durable_listener_failure_prevents_transient_delivery():
     bus = JobEventBus()
     queue = await bus.subscribe(
         "job_durable_failure",
@@ -265,7 +255,6 @@ async def test_durable_listener_failure_prevents_history_and_transient_delivery(
             agent_id="test",
         )
 
-    assert await bus.list_events("job_durable_failure") == []
     assert queue.empty()
 
 
@@ -347,31 +336,6 @@ async def test_concurrent_events_for_same_job_keep_publish_order():
 
 
 @pytest.mark.asyncio
-async def test_list_events_rejects_non_positive_limit():
-    """``limit<=0`` 必须显式失败，不得静默返回全量或错误子集。
-
-    ``events[-limit:]`` 在 ``limit=0`` 时退化为 ``events[0:]``（返回全部
-    历史），``limit<0`` 时退化为 ``events[abs(limit):]``（丢掉最旧的若干条）。
-    两者都是静默的错误结果；HTTP 路由 ``GET /jobs/{id}/events`` 的
-    ``limit`` 没有下限约束，调用方传入 0 会拿到整段历史。
-    """
-    bus = JobEventBus()
-    for index in range(5):
-        await bus.publish(
-            job_id="job_limit",
-            event_type=EventType.JOB_COMPLETED,
-            payload={"result": str(index)},
-            agent_id="test",
-        )
-
-    assert len(await bus.list_events("job_limit", limit=2)) == 2
-    with pytest.raises(ValueError, match="limit"):
-        await bus.list_events("job_limit", limit=0)
-    with pytest.raises(ValueError, match="limit"):
-        await bus.list_events("job_limit", limit=-1)
-
-
-@pytest.mark.asyncio
 async def test_publish_lock_table_stays_bounded_across_many_jobs():
     """per-job publish 锁表对 job 数量必须有固定上界。
 
@@ -390,6 +354,7 @@ async def test_publish_lock_table_stays_bounded_across_many_jobs():
 
     # 固定上界（分片数量级），不依赖内部常量即可断言有界性。
     assert len(bus._job_publish_locks) <= 64
+    assert bus.event_channel_service.channel_names == ()
 
 
 @pytest.mark.asyncio

@@ -87,6 +87,7 @@ async def test_existing_child_message_keeps_persisted_owner_through_acceptance_j
     prepared_child_dispatch_context,
 ):
     context = prepared_child_dispatch_context
+    queue = await context.job_event_bus.subscribe("job_prepared_child", subscriber_kind="test_owner")
     prepared = await context.session_orchestrator.prepare_user_message(
         "ses_prepared_child", "只发送给 child", thread_id="thr_prepared_child"
     )
@@ -98,7 +99,7 @@ async def test_existing_child_message_keeps_persisted_owner_through_acceptance_j
     assert context.message_service.accepted_messages[0][0].thread_id == "thr_prepared_child"
     assert context.job_service.started[0][1]["thread_id"] == "thr_prepared_child"
     assert result.thread_id == "thr_prepared_child"
-    event = (await context.job_event_bus.list_events(result.job_id, limit=10))[0]
+    event = queue.get_nowait()
     assert event.payload.thread_id == "thr_prepared_child"
     context.session_service.path_resolver.resolve_thread_node.assert_called_with(
         "ses_prepared_child", "thr_prepared_child"
@@ -173,6 +174,7 @@ async def test_prepared_message_owner_conflict_rejects_before_acceptance_job_or_
         thread_id="thr_persisted_child", role=MessageRole.user,
         content="必须拒绝", metadata={}, created_at=now, updated_at=now,
     )
+    queue = await context.job_event_bus.subscribe("job_prepared_child", subscriber_kind="test_rejection")
     with pytest.raises(ValueError, match="与持久 owner 不一致"):
         await context.session_orchestrator.dispatch_prepared_message(
             "ses_foreign" if conflict == "session" else prepared.session_id,
@@ -183,7 +185,7 @@ async def test_prepared_message_owner_conflict_rejects_before_acceptance_job_or_
     assert context.message_service.created_messages == []
     assert context.message_service.accepted_messages == []
     assert context.job_service.started == []
-    assert await context.job_event_bus.list_events("job_prepared_child", limit=10) == []
+    assert queue.empty()
 
 
 def _running_dispatch(session_id: str, job_id: str) -> JobDispatchSnapshotDTO:

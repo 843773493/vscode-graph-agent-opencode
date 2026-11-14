@@ -541,12 +541,13 @@ async def test_native_attachment_ingress_freezes_one_uri_for_dispatch_and_cold_h
         )
         expected = AttachmentRef(file_id=expected_uri, name=asset.name, content_type="application/pdf")
         assert prepared.attachments == [expected]
+        queue = await case.orchestrator._job_event_bus.subscribe(case.identity.job_id, subscriber_kind="test_attachments")
         accepted = await case.orchestrator.dispatch_prepared_message(
             case.owner.session_id, prepared, requested_agent_id="default", execution_binding=case.identity,
         )
         assert case.started_jobs == [prepared.message_id]
-        events = await case.orchestrator._job_event_bus.list_events(accepted.job_id)
-        event = next(event for event in events if event.type == "message_created")
+        event = queue.get_nowait()
+        assert event.type == "message_created"
         event_attachments = event.model_dump(mode="json")["payload"]["attachments"]
         assert event_attachments == [expected.model_dump(exclude={"data_url"})]
         assert str(root) not in json.dumps(event_attachments, ensure_ascii=False)

@@ -8,7 +8,6 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 
 from app.gateway.protocol.proxy import proxy_target_to_proto
 from app.protocol.codecs.browser import browser_page_to_json, browser_page_to_proto
-from app.protocol.codecs.session_sse import session_sse_to_json, session_sse_to_proto
 from app.protocol.codecs.terminal import (
     terminal_session_to_json,
     terminal_session_to_proto,
@@ -24,7 +23,6 @@ from app.protocol.generated.boxteam.workspace.v2 import (
     file_events_pb2,
     message_pb2,
     public_pb2,
-    session_stream_pb2,
 )
 from app.schemas.internal_v2.attachment import AttachmentRef
 from app.schemas.internal_v2.resource_navigation import (
@@ -32,7 +30,6 @@ from app.schemas.internal_v2.resource_navigation import (
     ResourceNavigationResultDTO,
 )
 from app.schemas.internal_v2.session_changes import SessionFileChangeDTO
-from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
 from app.schemas.internal_v2.text_mutation import CreateText, TextMutationRequest
 from app.schemas.internal_v2.turn import TurnAttachmentDTO
 from app.schemas.internal_v2.workspace_file_operations import (
@@ -128,12 +125,6 @@ def _baseline() -> dict[str, object]:
 
 def test_representative_boundaries_round_trip_through_protobuf_wire() -> None:
     baseline = _baseline()
-
-    sse = cast(dict[str, object], cast(dict[str, object], baseline["sse"])["job_updated"])["data"]
-    sse_value = SessionExecutionSseDTO.model_validate(cast(dict[str, object], sse))
-    sse_wire = session_sse_to_proto(sse_value).SerializeToString()
-    decoded_sse = session_stream_pb2.SessionExecutionSse.FromString(sse_wire)
-    assert cast(dict[str, object], session_sse_to_json(decoded_sse)["event"])["type"] == "job.updated"
 
     terminal = cast(dict[str, object], cast(dict[str, object], baseline["http_json"])["response"])["json"]
     terminal_value = cast(dict[str, object], cast(dict[str, object], terminal)["data"])

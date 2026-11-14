@@ -921,78 +921,6 @@ class JobDispatchSnapshotDTO(_message.Message):
     thread_id: str
     def __init__(self, session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., job_status: _Optional[str] = ..., active_job_id: _Optional[str] = ..., blocked_by_job_id: _Optional[str] = ..., queued_jobs_ahead: _Optional[int] = ..., queued_job_count: _Optional[int] = ..., pending_job_count: _Optional[int] = ..., delivery_policy: _Optional[str] = ..., enqueue_sequence: _Optional[int] = ..., queue_snapshot_version: _Optional[int] = ..., thread_id: _Optional[str] = ...) -> None: ...
 
-class JobProgressDTO(_message.Message):
-    __slots__ = ("job_id", "status", "current_step_id", "progress", "message")
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    STATUS_FIELD_NUMBER: _ClassVar[int]
-    CURRENT_STEP_ID_FIELD_NUMBER: _ClassVar[int]
-    PROGRESS_FIELD_NUMBER: _ClassVar[int]
-    MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    job_id: str
-    status: str
-    current_step_id: str
-    progress: int
-    message: str
-    def __init__(self, job_id: _Optional[str] = ..., status: _Optional[str] = ..., current_step_id: _Optional[str] = ..., progress: _Optional[int] = ..., message: _Optional[str] = ...) -> None: ...
-
-class JobStatusChangedExecutionEventDTO(_message.Message):
-    __slots__ = ("event_id", "session_id", "job_id", "time", "type", "payload")
-    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    TIME_FIELD_NUMBER: _ClassVar[int]
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
-    event_id: str
-    session_id: str
-    job_id: str
-    time: _timestamp_pb2.Timestamp
-    type: str
-    payload: JobProgressDTO
-    def __init__(self, event_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., payload: _Optional[_Union[JobProgressDTO, _Mapping]] = ...) -> None: ...
-
-class JobStepProgressDTO(_message.Message):
-    __slots__ = ("agent_id", "message", "phase")
-    AGENT_ID_FIELD_NUMBER: _ClassVar[int]
-    MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    PHASE_FIELD_NUMBER: _ClassVar[int]
-    agent_id: str
-    message: str
-    phase: str
-    def __init__(self, agent_id: _Optional[str] = ..., message: _Optional[str] = ..., phase: _Optional[str] = ...) -> None: ...
-
-class JobStepUpdatedExecutionEventDTO(_message.Message):
-    __slots__ = ("event_id", "session_id", "job_id", "time", "type", "payload")
-    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    TIME_FIELD_NUMBER: _ClassVar[int]
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
-    event_id: str
-    session_id: str
-    job_id: str
-    time: _timestamp_pb2.Timestamp
-    type: str
-    payload: JobStepProgressDTO
-    def __init__(self, event_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., payload: _Optional[_Union[JobStepProgressDTO, _Mapping]] = ...) -> None: ...
-
-class JobUpdatedExecutionEventDTO(_message.Message):
-    __slots__ = ("event_id", "session_id", "job_id", "time", "type", "payload")
-    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    TIME_FIELD_NUMBER: _ClassVar[int]
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
-    event_id: str
-    session_id: str
-    job_id: str
-    time: _timestamp_pb2.Timestamp
-    type: str
-    payload: JobProgressDTO
-    def __init__(self, event_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., payload: _Optional[_Union[JobProgressDTO, _Mapping]] = ...) -> None: ...
-
 class LLMRequestLogRecordDTO(_message.Message):
     __slots__ = ("session_id", "job_id", "timestamp", "file_name", "request", "response", "upstream")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -2425,22 +2353,6 @@ class SessionCompactResultDTO(_message.Message):
     compacted_at: _timestamp_pb2.Timestamp
     def __init__(self, session_id: _Optional[str] = ..., status: _Optional[str] = ..., message: _Optional[str] = ..., before_message_count: _Optional[int] = ..., effective_message_count_before: _Optional[int] = ..., effective_message_count_after: _Optional[int] = ..., summarized_message_count: _Optional[int] = ..., retained_message_count: _Optional[int] = ..., summary: _Optional[str] = ..., strategy: _Optional[str] = ..., compacted_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
-class SessionCompletedExecutionEventDTO(_message.Message):
-    __slots__ = ("event_id", "session_id", "job_id", "time", "type", "payload")
-    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    TIME_FIELD_NUMBER: _ClassVar[int]
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
-    event_id: str
-    session_id: str
-    job_id: str
-    time: _timestamp_pb2.Timestamp
-    type: str
-    payload: JobProgressDTO
-    def __init__(self, event_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., payload: _Optional[_Union[JobProgressDTO, _Mapping]] = ...) -> None: ...
-
 class SessionContextProvenanceRefDTO(_message.Message):
     __slots__ = ("kind", "token")
     KIND_FIELD_NUMBER: _ClassVar[int]
@@ -2717,40 +2629,6 @@ class SessionDTO(_message.Message):
     thread_id: str
     def __init__(self, created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., session_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., title: _Optional[str] = ..., title_source: _Optional[str] = ..., current_agent_id: _Optional[str] = ..., current_provider_id: _Optional[str] = ..., parent_session_id: _Optional[str] = ..., context_source_session_id: _Optional[str] = ..., kind: _Optional[str] = ..., generation_origin: _Optional[_Union[SessionGenerationOriginDTO, _Mapping]] = ..., resource_identity: _Optional[str] = ..., uri: _Optional[str] = ..., scope: _Optional[str] = ..., thread_id: _Optional[str] = ...) -> None: ...
 
-class SessionErrorExecutionEventDTO(_message.Message):
-    __slots__ = ("event_id", "session_id", "job_id", "time", "type", "payload")
-    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    TIME_FIELD_NUMBER: _ClassVar[int]
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
-    event_id: str
-    session_id: str
-    job_id: str
-    time: _timestamp_pb2.Timestamp
-    type: str
-    payload: SessionErrorPayloadDTO
-    def __init__(self, event_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., payload: _Optional[_Union[SessionErrorPayloadDTO, _Mapping]] = ...) -> None: ...
-
-class SessionErrorPayloadDTO(_message.Message):
-    __slots__ = ("error",)
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    error: str
-    def __init__(self, error: _Optional[str] = ...) -> None: ...
-
-class SessionExecutionEventBaseDTO(_message.Message):
-    __slots__ = ("event_id", "session_id", "job_id", "time")
-    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    TIME_FIELD_NUMBER: _ClassVar[int]
-    event_id: str
-    session_id: str
-    job_id: str
-    time: _timestamp_pb2.Timestamp
-    def __init__(self, event_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
-
 class SessionExecutionSnapshotDTO(_message.Message):
     __slots__ = ("created_at", "updated_at", "session", "message", "job", "steps", "status", "active_step_status", "last_event_id")
     CREATED_AT_FIELD_NUMBER: _ClassVar[int]
@@ -2772,16 +2650,6 @@ class SessionExecutionSnapshotDTO(_message.Message):
     active_step_status: str
     last_event_id: str
     def __init__(self, created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., session: _Optional[_Union[SessionDTO, _Mapping]] = ..., message: _Optional[_Union[MessageDTO, _Mapping]] = ..., job: _Optional[_Union[JobDTO, _Mapping]] = ..., steps: _Optional[_Iterable[_Union[StepDTO, _Mapping]]] = ..., status: _Optional[str] = ..., active_step_status: _Optional[str] = ..., last_event_id: _Optional[str] = ...) -> None: ...
-
-class SessionExecutionSseDTO(_message.Message):
-    __slots__ = ("event", "raw_type", "raw_payload")
-    EVENT_FIELD_NUMBER: _ClassVar[int]
-    RAW_TYPE_FIELD_NUMBER: _ClassVar[int]
-    RAW_PAYLOAD_FIELD_NUMBER: _ClassVar[int]
-    event: _struct_pb2.Struct
-    raw_type: str
-    raw_payload: _struct_pb2.Struct
-    def __init__(self, event: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., raw_type: _Optional[str] = ..., raw_payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
 
 class SessionFileChangeDTO(_message.Message):
     __slots__ = ("file_path", "kind", "additions", "deletions", "reviewed", "latest_edit_id", "tool_call_ids", "execution_ids", "turn_ids", "diff_text", "before_preview", "after_preview")
@@ -3601,18 +3469,6 @@ class SessionNetworkWaitDTO(_message.Message):
     restored_at: _timestamp_pb2.Timestamp
     def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., message: _Optional[str] = ..., restored: _Optional[bool] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., restored_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
-class SessionObservationStateDTO(_message.Message):
-    __slots__ = ("session_id", "active_job_id", "is_streaming", "is_idle")
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    ACTIVE_JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    IS_STREAMING_FIELD_NUMBER: _ClassVar[int]
-    IS_IDLE_FIELD_NUMBER: _ClassVar[int]
-    session_id: str
-    active_job_id: str
-    is_streaming: bool
-    is_idle: bool
-    def __init__(self, session_id: _Optional[str] = ..., active_job_id: _Optional[str] = ..., is_streaming: _Optional[bool] = ..., is_idle: _Optional[bool] = ...) -> None: ...
-
 class SessionResourceControlRequest(_message.Message):
     __slots__ = ("action", "params")
     ACTION_FIELD_NUMBER: _ClassVar[int]
@@ -3958,22 +3814,6 @@ class BrowserResourceOperationRequest(_message.Message):
     action: str
     payload: _struct_pb2.Struct
     def __init__(self, expected_revision: _Optional[int] = ..., thread: _Optional[_Union[ResourceThreadRef, _Mapping]] = ..., action: _Optional[str] = ..., payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
-
-class SessionStatusChangedExecutionEventDTO(_message.Message):
-    __slots__ = ("event_id", "session_id", "job_id", "time", "type", "payload")
-    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    TIME_FIELD_NUMBER: _ClassVar[int]
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
-    event_id: str
-    session_id: str
-    job_id: str
-    time: _timestamp_pb2.Timestamp
-    type: str
-    payload: _struct_pb2.Struct
-    def __init__(self, event_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
 
 class SessionStatusDTO(_message.Message):
     __slots__ = ("session_id", "status", "message", "active_job_id", "waiting")
@@ -4396,28 +4236,6 @@ class TraceEventDTO(_message.Message):
     raw: _struct_pb2.Struct
     thread_id: str
     def __init__(self, event_id: _Optional[str] = ..., part_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., type: _Optional[str] = ..., phase: _Optional[str] = ..., title: _Optional[str] = ..., content: _Optional[str] = ..., status: _Optional[str] = ..., tool_name: _Optional[str] = ..., skill_names: _Optional[_Iterable[str]] = ..., step_id: _Optional[str] = ..., timestamp: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., raw: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., thread_id: _Optional[str] = ...) -> None: ...
-
-class TraceObservedExecutionEventDTO(_message.Message):
-    __slots__ = ("event_id", "session_id", "job_id", "time", "type", "payload")
-    EVENT_ID_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    TIME_FIELD_NUMBER: _ClassVar[int]
-    TYPE_FIELD_NUMBER: _ClassVar[int]
-    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
-    event_id: str
-    session_id: str
-    job_id: str
-    time: _timestamp_pb2.Timestamp
-    type: str
-    payload: TraceObservedPayloadDTO
-    def __init__(self, event_id: _Optional[str] = ..., session_id: _Optional[str] = ..., job_id: _Optional[str] = ..., time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., payload: _Optional[_Union[TraceObservedPayloadDTO, _Mapping]] = ...) -> None: ...
-
-class TraceObservedPayloadDTO(_message.Message):
-    __slots__ = ("raw_type",)
-    RAW_TYPE_FIELD_NUMBER: _ClassVar[int]
-    raw_type: str
-    def __init__(self, raw_type: _Optional[str] = ...) -> None: ...
 
 class TurnActivityStatsDTO(_message.Message):
     __slots__ = ("duration_ms", "item_count", "first_item_sequence", "last_item_sequence")

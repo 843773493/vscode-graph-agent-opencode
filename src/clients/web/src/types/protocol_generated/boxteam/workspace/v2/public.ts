@@ -535,47 +535,6 @@ export interface JobDispatchSnapshotDTO {
   thread_id: string;
 }
 
-export interface JobProgressDTO {
-  job_id: string;
-  status: string;
-  current_step_id?: string | undefined;
-  progress?: number | undefined;
-  message?: string | undefined;
-}
-
-export interface JobStatusChangedExecutionEventDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-  type: string;
-  payload: JobProgressDTO | undefined;
-}
-
-export interface JobStepProgressDTO {
-  agent_id?: string | undefined;
-  message?: string | undefined;
-  phase?: string | undefined;
-}
-
-export interface JobStepUpdatedExecutionEventDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-  type: string;
-  payload: JobStepProgressDTO | undefined;
-}
-
-export interface JobUpdatedExecutionEventDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-  type: string;
-  payload: JobProgressDTO | undefined;
-}
-
 export interface LLMRequestLogRecordDTO {
   session_id: string;
   job_id?:
@@ -1402,15 +1361,6 @@ export interface SessionCompactResultDTO {
   compacted_at?: string | undefined;
 }
 
-export interface SessionCompletedExecutionEventDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-  type: string;
-  payload: JobProgressDTO | undefined;
-}
-
 /** 仅标识封存来源，不是当前资源定位器或访问凭据。 */
 export interface SessionContextProvenanceRefDTO {
   kind: string;
@@ -1576,26 +1526,6 @@ export interface SessionDTO {
   thread_id?: string | undefined;
 }
 
-export interface SessionErrorExecutionEventDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-  type: string;
-  payload: SessionErrorPayloadDTO | undefined;
-}
-
-export interface SessionErrorPayloadDTO {
-  error: string;
-}
-
-export interface SessionExecutionEventBaseDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-}
-
 export interface SessionExecutionSnapshotDTO {
   created_at: string | undefined;
   updated_at: string | undefined;
@@ -1606,12 +1536,6 @@ export interface SessionExecutionSnapshotDTO {
   status?: string | undefined;
   active_step_status?: string | undefined;
   last_event_id?: string | undefined;
-}
-
-export interface SessionExecutionSseDTO {
-  event: { [key: string]: any } | undefined;
-  raw_type: string;
-  raw_payload?: { [key: string]: any } | undefined;
 }
 
 export interface SessionFileChangeDTO {
@@ -2155,13 +2079,6 @@ export interface SessionNetworkWaitDTO {
   restored_at?: string | undefined;
 }
 
-export interface SessionObservationStateDTO {
-  session_id: string;
-  active_job_id?: string | undefined;
-  is_streaming?: boolean | undefined;
-  is_idle?: boolean | undefined;
-}
-
 export interface SessionResourceControlRequest {
   action: string;
   params?: { [key: string]: any } | undefined;
@@ -2388,15 +2305,6 @@ export interface BrowserResourceOperationRequest {
   expected_revision: number;
   thread?: ResourceThreadRef | undefined;
   action: string;
-  payload: { [key: string]: any } | undefined;
-}
-
-export interface SessionStatusChangedExecutionEventDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-  type: string;
   payload: { [key: string]: any } | undefined;
 }
 
@@ -2648,19 +2556,6 @@ export interface TraceEventDTO {
     | undefined;
   /** 事件实际所属的 Thread；物理日志仍由 Session 持有。 */
   thread_id: string;
-}
-
-export interface TraceObservedExecutionEventDTO {
-  event_id: string;
-  session_id: string;
-  job_id?: string | undefined;
-  time: string | undefined;
-  type: string;
-  payload: TraceObservedPayloadDTO | undefined;
-}
-
-export interface TraceObservedPayloadDTO {
-  raw_type: string;
 }
 
 export interface TurnActivityStatsDTO {
@@ -7256,268 +7151,6 @@ export const JobDispatchSnapshotDTO: MessageFns<JobDispatchSnapshotDTO> = {
     message.enqueue_sequence = object.enqueue_sequence ?? undefined;
     message.queue_snapshot_version = object.queue_snapshot_version ?? undefined;
     message.thread_id = object.thread_id ?? "";
-    return message;
-  },
-};
-
-function createBaseJobProgressDTO(): JobProgressDTO {
-  return { job_id: "", status: "", current_step_id: undefined, progress: undefined, message: undefined };
-}
-
-export const JobProgressDTO: MessageFns<JobProgressDTO> = {
-  fromJSON(object: any): JobProgressDTO {
-    return {
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : "",
-      status: isSet(object.status) ? globalThis.String(object.status) : "",
-      current_step_id: isSet(object.current_step_id) ? globalThis.String(object.current_step_id) : undefined,
-      progress: isSet(object.progress) ? globalThis.Number(object.progress) : undefined,
-      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
-    };
-  },
-
-  toJSON(message: JobProgressDTO): unknown {
-    const obj: any = {};
-    if (message.job_id !== "") {
-      obj.job_id = message.job_id;
-    }
-    if (message.status !== "") {
-      obj.status = message.status;
-    }
-    if (message.current_step_id !== undefined) {
-      obj.current_step_id = message.current_step_id;
-    }
-    if (message.progress !== undefined) {
-      obj.progress = Math.round(message.progress);
-    }
-    if (message.message !== undefined) {
-      obj.message = message.message;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<JobProgressDTO>, I>>(base?: I): JobProgressDTO {
-    return JobProgressDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<JobProgressDTO>, I>>(object: I): JobProgressDTO {
-    const message = createBaseJobProgressDTO();
-    message.job_id = object.job_id ?? "";
-    message.status = object.status ?? "";
-    message.current_step_id = object.current_step_id ?? undefined;
-    message.progress = object.progress ?? undefined;
-    message.message = object.message ?? undefined;
-    return message;
-  },
-};
-
-function createBaseJobStatusChangedExecutionEventDTO(): JobStatusChangedExecutionEventDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
-}
-
-export const JobStatusChangedExecutionEventDTO: MessageFns<JobStatusChangedExecutionEventDTO> = {
-  fromJSON(object: any): JobStatusChangedExecutionEventDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      payload: isSet(object.payload) ? JobProgressDTO.fromJSON(object.payload) : undefined,
-    };
-  },
-
-  toJSON(message: JobStatusChangedExecutionEventDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.payload !== undefined) {
-      obj.payload = JobProgressDTO.toJSON(message.payload);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<JobStatusChangedExecutionEventDTO>, I>>(
-    base?: I,
-  ): JobStatusChangedExecutionEventDTO {
-    return JobStatusChangedExecutionEventDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<JobStatusChangedExecutionEventDTO>, I>>(
-    object: I,
-  ): JobStatusChangedExecutionEventDTO {
-    const message = createBaseJobStatusChangedExecutionEventDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    message.type = object.type ?? "";
-    message.payload = (object.payload !== undefined && object.payload !== null)
-      ? JobProgressDTO.fromPartial(object.payload)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseJobStepProgressDTO(): JobStepProgressDTO {
-  return { agent_id: undefined, message: undefined, phase: undefined };
-}
-
-export const JobStepProgressDTO: MessageFns<JobStepProgressDTO> = {
-  fromJSON(object: any): JobStepProgressDTO {
-    return {
-      agent_id: isSet(object.agent_id) ? globalThis.String(object.agent_id) : undefined,
-      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
-      phase: isSet(object.phase) ? globalThis.String(object.phase) : undefined,
-    };
-  },
-
-  toJSON(message: JobStepProgressDTO): unknown {
-    const obj: any = {};
-    if (message.agent_id !== undefined) {
-      obj.agent_id = message.agent_id;
-    }
-    if (message.message !== undefined) {
-      obj.message = message.message;
-    }
-    if (message.phase !== undefined) {
-      obj.phase = message.phase;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<JobStepProgressDTO>, I>>(base?: I): JobStepProgressDTO {
-    return JobStepProgressDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<JobStepProgressDTO>, I>>(object: I): JobStepProgressDTO {
-    const message = createBaseJobStepProgressDTO();
-    message.agent_id = object.agent_id ?? undefined;
-    message.message = object.message ?? undefined;
-    message.phase = object.phase ?? undefined;
-    return message;
-  },
-};
-
-function createBaseJobStepUpdatedExecutionEventDTO(): JobStepUpdatedExecutionEventDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
-}
-
-export const JobStepUpdatedExecutionEventDTO: MessageFns<JobStepUpdatedExecutionEventDTO> = {
-  fromJSON(object: any): JobStepUpdatedExecutionEventDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      payload: isSet(object.payload) ? JobStepProgressDTO.fromJSON(object.payload) : undefined,
-    };
-  },
-
-  toJSON(message: JobStepUpdatedExecutionEventDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.payload !== undefined) {
-      obj.payload = JobStepProgressDTO.toJSON(message.payload);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<JobStepUpdatedExecutionEventDTO>, I>>(base?: I): JobStepUpdatedExecutionEventDTO {
-    return JobStepUpdatedExecutionEventDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<JobStepUpdatedExecutionEventDTO>, I>>(
-    object: I,
-  ): JobStepUpdatedExecutionEventDTO {
-    const message = createBaseJobStepUpdatedExecutionEventDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    message.type = object.type ?? "";
-    message.payload = (object.payload !== undefined && object.payload !== null)
-      ? JobStepProgressDTO.fromPartial(object.payload)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseJobUpdatedExecutionEventDTO(): JobUpdatedExecutionEventDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
-}
-
-export const JobUpdatedExecutionEventDTO: MessageFns<JobUpdatedExecutionEventDTO> = {
-  fromJSON(object: any): JobUpdatedExecutionEventDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      payload: isSet(object.payload) ? JobProgressDTO.fromJSON(object.payload) : undefined,
-    };
-  },
-
-  toJSON(message: JobUpdatedExecutionEventDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.payload !== undefined) {
-      obj.payload = JobProgressDTO.toJSON(message.payload);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<JobUpdatedExecutionEventDTO>, I>>(base?: I): JobUpdatedExecutionEventDTO {
-    return JobUpdatedExecutionEventDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<JobUpdatedExecutionEventDTO>, I>>(object: I): JobUpdatedExecutionEventDTO {
-    const message = createBaseJobUpdatedExecutionEventDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    message.type = object.type ?? "";
-    message.payload = (object.payload !== undefined && object.payload !== null)
-      ? JobProgressDTO.fromPartial(object.payload)
-      : undefined;
     return message;
   },
 };
@@ -13022,66 +12655,6 @@ export const SessionCompactResultDTO: MessageFns<SessionCompactResultDTO> = {
   },
 };
 
-function createBaseSessionCompletedExecutionEventDTO(): SessionCompletedExecutionEventDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
-}
-
-export const SessionCompletedExecutionEventDTO: MessageFns<SessionCompletedExecutionEventDTO> = {
-  fromJSON(object: any): SessionCompletedExecutionEventDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      payload: isSet(object.payload) ? JobProgressDTO.fromJSON(object.payload) : undefined,
-    };
-  },
-
-  toJSON(message: SessionCompletedExecutionEventDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.payload !== undefined) {
-      obj.payload = JobProgressDTO.toJSON(message.payload);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<SessionCompletedExecutionEventDTO>, I>>(
-    base?: I,
-  ): SessionCompletedExecutionEventDTO {
-    return SessionCompletedExecutionEventDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SessionCompletedExecutionEventDTO>, I>>(
-    object: I,
-  ): SessionCompletedExecutionEventDTO {
-    const message = createBaseSessionCompletedExecutionEventDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    message.type = object.type ?? "";
-    message.payload = (object.payload !== undefined && object.payload !== null)
-      ? JobProgressDTO.fromPartial(object.payload)
-      : undefined;
-    return message;
-  },
-};
-
 function createBaseSessionContextProvenanceRefDTO(): SessionContextProvenanceRefDTO {
   return { kind: "", token: "" };
 }
@@ -14094,135 +13667,6 @@ export const SessionDTO: MessageFns<SessionDTO> = {
   },
 };
 
-function createBaseSessionErrorExecutionEventDTO(): SessionErrorExecutionEventDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
-}
-
-export const SessionErrorExecutionEventDTO: MessageFns<SessionErrorExecutionEventDTO> = {
-  fromJSON(object: any): SessionErrorExecutionEventDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      payload: isSet(object.payload) ? SessionErrorPayloadDTO.fromJSON(object.payload) : undefined,
-    };
-  },
-
-  toJSON(message: SessionErrorExecutionEventDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.payload !== undefined) {
-      obj.payload = SessionErrorPayloadDTO.toJSON(message.payload);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<SessionErrorExecutionEventDTO>, I>>(base?: I): SessionErrorExecutionEventDTO {
-    return SessionErrorExecutionEventDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SessionErrorExecutionEventDTO>, I>>(
-    object: I,
-  ): SessionErrorExecutionEventDTO {
-    const message = createBaseSessionErrorExecutionEventDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    message.type = object.type ?? "";
-    message.payload = (object.payload !== undefined && object.payload !== null)
-      ? SessionErrorPayloadDTO.fromPartial(object.payload)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseSessionErrorPayloadDTO(): SessionErrorPayloadDTO {
-  return { error: "" };
-}
-
-export const SessionErrorPayloadDTO: MessageFns<SessionErrorPayloadDTO> = {
-  fromJSON(object: any): SessionErrorPayloadDTO {
-    return { error: isSet(object.error) ? globalThis.String(object.error) : "" };
-  },
-
-  toJSON(message: SessionErrorPayloadDTO): unknown {
-    const obj: any = {};
-    if (message.error !== "") {
-      obj.error = message.error;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<SessionErrorPayloadDTO>, I>>(base?: I): SessionErrorPayloadDTO {
-    return SessionErrorPayloadDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SessionErrorPayloadDTO>, I>>(object: I): SessionErrorPayloadDTO {
-    const message = createBaseSessionErrorPayloadDTO();
-    message.error = object.error ?? "";
-    return message;
-  },
-};
-
-function createBaseSessionExecutionEventBaseDTO(): SessionExecutionEventBaseDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined };
-}
-
-export const SessionExecutionEventBaseDTO: MessageFns<SessionExecutionEventBaseDTO> = {
-  fromJSON(object: any): SessionExecutionEventBaseDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-    };
-  },
-
-  toJSON(message: SessionExecutionEventBaseDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<SessionExecutionEventBaseDTO>, I>>(base?: I): SessionExecutionEventBaseDTO {
-    return SessionExecutionEventBaseDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SessionExecutionEventBaseDTO>, I>>(object: I): SessionExecutionEventBaseDTO {
-    const message = createBaseSessionExecutionEventBaseDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    return message;
-  },
-};
-
 function createBaseSessionExecutionSnapshotDTO(): SessionExecutionSnapshotDTO {
   return {
     created_at: undefined,
@@ -14304,45 +13748,6 @@ export const SessionExecutionSnapshotDTO: MessageFns<SessionExecutionSnapshotDTO
     message.status = object.status ?? undefined;
     message.active_step_status = object.active_step_status ?? undefined;
     message.last_event_id = object.last_event_id ?? undefined;
-    return message;
-  },
-};
-
-function createBaseSessionExecutionSseDTO(): SessionExecutionSseDTO {
-  return { event: undefined, raw_type: "", raw_payload: undefined };
-}
-
-export const SessionExecutionSseDTO: MessageFns<SessionExecutionSseDTO> = {
-  fromJSON(object: any): SessionExecutionSseDTO {
-    return {
-      event: isObject(object.event) ? object.event : undefined,
-      raw_type: isSet(object.raw_type) ? globalThis.String(object.raw_type) : "",
-      raw_payload: isObject(object.raw_payload) ? object.raw_payload : undefined,
-    };
-  },
-
-  toJSON(message: SessionExecutionSseDTO): unknown {
-    const obj: any = {};
-    if (message.event !== undefined) {
-      obj.event = message.event;
-    }
-    if (message.raw_type !== "") {
-      obj.raw_type = message.raw_type;
-    }
-    if (message.raw_payload !== undefined) {
-      obj.raw_payload = message.raw_payload;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<SessionExecutionSseDTO>, I>>(base?: I): SessionExecutionSseDTO {
-    return SessionExecutionSseDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SessionExecutionSseDTO>, I>>(object: I): SessionExecutionSseDTO {
-    const message = createBaseSessionExecutionSseDTO();
-    message.event = object.event ?? undefined;
-    message.raw_type = object.raw_type ?? "";
-    message.raw_payload = object.raw_payload ?? undefined;
     return message;
   },
 };
@@ -17546,50 +16951,6 @@ export const SessionNetworkWaitDTO: MessageFns<SessionNetworkWaitDTO> = {
   },
 };
 
-function createBaseSessionObservationStateDTO(): SessionObservationStateDTO {
-  return { session_id: "", active_job_id: undefined, is_streaming: undefined, is_idle: undefined };
-}
-
-export const SessionObservationStateDTO: MessageFns<SessionObservationStateDTO> = {
-  fromJSON(object: any): SessionObservationStateDTO {
-    return {
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      active_job_id: isSet(object.active_job_id) ? globalThis.String(object.active_job_id) : undefined,
-      is_streaming: isSet(object.is_streaming) ? globalThis.Boolean(object.is_streaming) : undefined,
-      is_idle: isSet(object.is_idle) ? globalThis.Boolean(object.is_idle) : undefined,
-    };
-  },
-
-  toJSON(message: SessionObservationStateDTO): unknown {
-    const obj: any = {};
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.active_job_id !== undefined) {
-      obj.active_job_id = message.active_job_id;
-    }
-    if (message.is_streaming !== undefined) {
-      obj.is_streaming = message.is_streaming;
-    }
-    if (message.is_idle !== undefined) {
-      obj.is_idle = message.is_idle;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<SessionObservationStateDTO>, I>>(base?: I): SessionObservationStateDTO {
-    return SessionObservationStateDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SessionObservationStateDTO>, I>>(object: I): SessionObservationStateDTO {
-    const message = createBaseSessionObservationStateDTO();
-    message.session_id = object.session_id ?? "";
-    message.active_job_id = object.active_job_id ?? undefined;
-    message.is_streaming = object.is_streaming ?? undefined;
-    message.is_idle = object.is_idle ?? undefined;
-    return message;
-  },
-};
-
 function createBaseSessionResourceControlRequest(): SessionResourceControlRequest {
   return { action: "", params: undefined };
 }
@@ -18894,64 +18255,6 @@ export const BrowserResourceOperationRequest: MessageFns<BrowserResourceOperatio
       ? ResourceThreadRef.fromPartial(object.thread)
       : undefined;
     message.action = object.action ?? "";
-    message.payload = object.payload ?? undefined;
-    return message;
-  },
-};
-
-function createBaseSessionStatusChangedExecutionEventDTO(): SessionStatusChangedExecutionEventDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
-}
-
-export const SessionStatusChangedExecutionEventDTO: MessageFns<SessionStatusChangedExecutionEventDTO> = {
-  fromJSON(object: any): SessionStatusChangedExecutionEventDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      payload: isObject(object.payload) ? object.payload : undefined,
-    };
-  },
-
-  toJSON(message: SessionStatusChangedExecutionEventDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.payload !== undefined) {
-      obj.payload = message.payload;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<SessionStatusChangedExecutionEventDTO>, I>>(
-    base?: I,
-  ): SessionStatusChangedExecutionEventDTO {
-    return SessionStatusChangedExecutionEventDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<SessionStatusChangedExecutionEventDTO>, I>>(
-    object: I,
-  ): SessionStatusChangedExecutionEventDTO {
-    const message = createBaseSessionStatusChangedExecutionEventDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    message.type = object.type ?? "";
     message.payload = object.payload ?? undefined;
     return message;
   },
@@ -20524,91 +19827,6 @@ export const TraceEventDTO: MessageFns<TraceEventDTO> = {
     message.timestamp = object.timestamp ?? undefined;
     message.raw = object.raw ?? undefined;
     message.thread_id = object.thread_id ?? "";
-    return message;
-  },
-};
-
-function createBaseTraceObservedExecutionEventDTO(): TraceObservedExecutionEventDTO {
-  return { event_id: "", session_id: "", job_id: undefined, time: undefined, type: "", payload: undefined };
-}
-
-export const TraceObservedExecutionEventDTO: MessageFns<TraceObservedExecutionEventDTO> = {
-  fromJSON(object: any): TraceObservedExecutionEventDTO {
-    return {
-      event_id: isSet(object.event_id) ? globalThis.String(object.event_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
-      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
-      time: isSet(object.time) ? globalThis.String(object.time) : undefined,
-      type: isSet(object.type) ? globalThis.String(object.type) : "",
-      payload: isSet(object.payload) ? TraceObservedPayloadDTO.fromJSON(object.payload) : undefined,
-    };
-  },
-
-  toJSON(message: TraceObservedExecutionEventDTO): unknown {
-    const obj: any = {};
-    if (message.event_id !== "") {
-      obj.event_id = message.event_id;
-    }
-    if (message.session_id !== "") {
-      obj.session_id = message.session_id;
-    }
-    if (message.job_id !== undefined) {
-      obj.job_id = message.job_id;
-    }
-    if (message.time !== undefined) {
-      obj.time = message.time;
-    }
-    if (message.type !== "") {
-      obj.type = message.type;
-    }
-    if (message.payload !== undefined) {
-      obj.payload = TraceObservedPayloadDTO.toJSON(message.payload);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<TraceObservedExecutionEventDTO>, I>>(base?: I): TraceObservedExecutionEventDTO {
-    return TraceObservedExecutionEventDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<TraceObservedExecutionEventDTO>, I>>(
-    object: I,
-  ): TraceObservedExecutionEventDTO {
-    const message = createBaseTraceObservedExecutionEventDTO();
-    message.event_id = object.event_id ?? "";
-    message.session_id = object.session_id ?? "";
-    message.job_id = object.job_id ?? undefined;
-    message.time = object.time ?? undefined;
-    message.type = object.type ?? "";
-    message.payload = (object.payload !== undefined && object.payload !== null)
-      ? TraceObservedPayloadDTO.fromPartial(object.payload)
-      : undefined;
-    return message;
-  },
-};
-
-function createBaseTraceObservedPayloadDTO(): TraceObservedPayloadDTO {
-  return { raw_type: "" };
-}
-
-export const TraceObservedPayloadDTO: MessageFns<TraceObservedPayloadDTO> = {
-  fromJSON(object: any): TraceObservedPayloadDTO {
-    return { raw_type: isSet(object.raw_type) ? globalThis.String(object.raw_type) : "" };
-  },
-
-  toJSON(message: TraceObservedPayloadDTO): unknown {
-    const obj: any = {};
-    if (message.raw_type !== "") {
-      obj.raw_type = message.raw_type;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<TraceObservedPayloadDTO>, I>>(base?: I): TraceObservedPayloadDTO {
-    return TraceObservedPayloadDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<TraceObservedPayloadDTO>, I>>(object: I): TraceObservedPayloadDTO {
-    const message = createBaseTraceObservedPayloadDTO();
-    message.raw_type = object.raw_type ?? "";
     return message;
   },
 };

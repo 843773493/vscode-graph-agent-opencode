@@ -279,7 +279,7 @@ async def test_goal_publish_failure_leaves_sse_open_and_second_observer_reads_co
                         return line
                 raise AssertionError("Goal SSE 提前关闭")
 
-            stream = observer.stream("GET", f"/api/v1/jobs/goal:{session_id}/events/stream")
+            stream = observer.stream("GET", f"/api/v1/sessions/{session_id}/traces/stream")
             async with stream as events:
                 assert events.status_code == 200
                 lines = events.aiter_lines()

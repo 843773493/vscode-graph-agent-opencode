@@ -96,7 +96,11 @@ from tests.integration.backend.sessions.test_session_generation_strategies impor
     _create_generation,
     _generation_configuration,
 )
-from tests.support.api_helpers import create_session, with_message_run_operation_id
+from tests.support.api_helpers import (
+    create_session,
+    read_job_trace,
+    with_message_run_operation_id,
+)
 from tests.support.e2e_control.harness import E2ETestControlHarness, control_request
 from tests.support.e2e_control.runtime_ports import (
     ControlledIdentifiers,
@@ -562,13 +566,12 @@ async def test_provider_build_failure_is_publicly_safe_and_same_session_recovers
         # Job先提交终态再发布事件，等原事件链完成，不把状态可见误当作事件已发布。
         async with asyncio.timeout(10):
             while True:
-                events = await case.client.get(f"/api/v1/jobs/{job_id}/events")
-                assert events.status_code == 200, events.text
-                if terminal := [event for event in events.json()["data"] if event["type"] == "job_failed"]:
+                events = await read_job_trace(case.client, session_id, job_id)
+                if terminal := [event for event in events if event["type"] == "job_failed"]:
                     break
                 await asyncio.sleep(0.05)
         assert len(terminal) == 1 and terminal[0]["payload"]["error"] == message
-        assert str(missing) not in provider_response.text + json.dumps(failed) + events.text
+        assert str(missing) not in provider_response.text + json.dumps(failed) + json.dumps(events)
         assert case.requests() == []
         assert case.sql(session_id, thread_id, "SELECT outcome FROM executions") == [("failed",)]
         assert all(error.filename == str(missing) for error in errors)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -12,19 +12,12 @@ class SessionNetworkWaitDTO(BaseModel):
     message: str
     restored: bool
     created_at: datetime
-    restored_at: Optional[datetime] = None
+    restored_at: datetime | None = None
 
 
 class SessionStatusDTO(BaseModel):
     session_id: str
     status: Literal["idle", "busy", "question", "permission", "retry", "offline"]
-    message: Optional[str] = None
-    active_job_id: Optional[str] = None
-    waiting: Optional[SessionNetworkWaitDTO] = None
-
-
-class SessionObservationStateDTO(BaseModel):
-    session_id: str
-    active_job_id: Optional[str] = None
-    is_streaming: bool = False
-    is_idle: bool = True
+    message: str | None = None
+    active_job_id: str | None = None
+    waiting: SessionNetworkWaitDTO | None = None

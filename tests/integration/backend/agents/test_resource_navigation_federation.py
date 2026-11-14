@@ -28,7 +28,11 @@ from tests.integration.backend.sessions.test_session_communication_pipeline impo
 from tests.integration.backend.sessions.test_session_communication_pipeline import (
     communication_triad as communication_triad,  # noqa: PLC0414 - 正式 fixture 按当前测试文件隔离
 )
-from tests.support.api_helpers import create_session, with_message_run_operation_id
+from tests.support.api_helpers import (
+    create_session,
+    read_job_trace,
+    with_message_run_operation_id,
+)
 from tests.support.e2e_control.harness import control_request
 
 
@@ -325,9 +329,8 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     refreshed = await source.client.get(f"/api/v1/sessions/{session}/changesets/all")
     reviewed = next(item for item in refreshed.json()["data"]["files"] if item["file_path"] == file_uri)
     assert reviewed["reviewed"] is True and "+edited" in reviewed["diff_text"]
-    events = await source.client.get(f"/api/v1/jobs/{accepted.json()['data']['job_id']}/events")
-    assert events.status_code == 200, events.text
-    edits = [edit for event in events.json()["data"] for edit in event["payload"].get("file_edits", [])]
+    events = await read_job_trace(source.client, session, accepted.json()["data"]["job_id"])
+    edits = [edit for event in events for edit in event["payload"].get("file_edits", [])]
     assert {edit["file_path"] for edit in edits} == expected_paths
     assert all(not {"before_file", "after_file", "diff_file"} & edit.keys() for edit in edits)
     original_index = (session_path / "changes/index.jsonl").read_bytes()

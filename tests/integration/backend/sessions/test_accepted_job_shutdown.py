@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -25,6 +26,7 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - 沿当前文件隔离产品工作区。
 )
+from tests.support.trace_storage import trace_bytes
 
 
 @pytest.mark.parametrize("operation", ["cancel", "shutdown", "shutdown-write-failure", "retry"])
@@ -66,6 +68,7 @@ async def test_accepted_job_survives_projection_failure(
             assert len(await jobs.drain_blockers()) == 1
         assert case.call_count(session_id, thread_id) == 0
 
+        trace_path = case.container.session_service.path_resolver.resolve_session_node(session_id) / "logs/traces/trace.sqlite"
         if operation.startswith("shutdown"):
             if operation == "shutdown-write-failure":
                 write_error = OSError("注入原 Job 的取消终态写入失败")
@@ -102,9 +105,10 @@ async def test_accepted_job_survives_projection_failure(
             assert jobs._pending_queue.snapshot_version(session_id) > 0
             assert case.call_count(session_id, thread_id) == 0 and case.requests() == []
             if operation.startswith("shutdown"):
-                events = await jobs._bus.list_events(wakeup.job_id)
-                assert [event.type for event in events].count("job_cancelled") == 1
-                assert all(event.type != "session_interrupted" for event in events)
+                events = [json.loads(line) for line in trace_bytes(trace_path).splitlines()]
+                job_events = [event for event in events if event["job_id"] == wakeup.job_id]
+                assert [event["type"] for event in job_events].count("job_cancelled") == 1
+                assert all(event["type"] != "session_interrupted" for event in job_events)
             with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as cold:
                 assert cold.execute("SELECT execution_id,job_id,admission_idempotency_key,admission_payload_hash,outcome FROM executions").fetchall() == [(*identity[0], "cancelled")]
             if operation == "cancel":

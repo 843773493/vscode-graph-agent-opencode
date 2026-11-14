@@ -21,8 +21,7 @@ from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     compute_capability_profile_hash,
 )
-from app.api.deps import get_config_service, get_event_service, get_session_service
-from app.api.jobs import router as jobs_router
+from app.api.deps import get_config_service, get_session_service
 from app.api.sessions import router as sessions_router
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType, JobEventBus
@@ -34,7 +33,6 @@ from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
-from app.services.event_service import EventService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -149,15 +147,12 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
 
 
 @pytest.fixture
-async def job_events_client(
+async def trace_client(
     producer_case: TraceProducerCase,
 ) -> AsyncIterator[httpx.AsyncClient]:
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
-    application.include_router(jobs_router, prefix="/api/v1")
     application.include_router(sessions_router, prefix="/api/v1")
-    event_service = EventService(bus=producer_case.bus)
-    application.dependency_overrides[get_event_service] = lambda: event_service
     application.dependency_overrides[get_session_service] = lambda: producer_case.sessions
     application.dependency_overrides[get_config_service] = lambda: ConfigService()
     async with httpx.AsyncClient(
@@ -170,7 +165,7 @@ async def job_events_client(
 @pytest.mark.asyncio
 async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace(
     producer_case: TraceProducerCase,
-    job_events_client: httpx.AsyncClient,
+    trace_client: httpx.AsyncClient,
 ) -> None:
     case = producer_case
     expected: dict[str, str] = {}
@@ -215,16 +210,17 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
     } == expected
     for job_id, thread_id in expected.items():
         request_id = f"req_created_{job_id}"
-        response = await job_events_client.get(
-            f"/api/v1/jobs/{job_id}/events", headers={"X-Request-ID": request_id},
+        response = await trace_client.get(
+            f"/api/v1/sessions/{case.session_id}/traces",
+            params={"thread_id": thread_id}, headers={"X-Request-ID": request_id},
         )
         (case.artifacts_dir / f"{job_id}-http.json").write_bytes(response.content)
         assert response.status_code == 200
         assert response.headers["X-Request-ID"] == request_id
         assert response.json()["request_id"] == request_id
         published = [
-            event for event in response.json()["data"]
-            if event["type"] == EventType.JOB_CREATED
+            item["raw"] for item in response.json()["data"]["items"]
+            if item["type"] == EventType.JOB_CREATED and item["job_id"] == job_id
         ]
         assert len(published) == 1
         assert published[0]["job_id"] == job_id
@@ -237,7 +233,7 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
     cold_store = TraceEventStore(sessions_dir=case.sessions.path_resolver.sessions_root)
     case.sessions._trace_event_store = cold_store
     base = f"/api/v1/sessions/{case.session_id}/traces"
-    aggregate = await job_events_client.get(base)
+    aggregate = await trace_client.get(base)
     assert aggregate.status_code == 200, aggregate.text
     all_items = aggregate.json()["data"]["items"]
     assert {item["thread_id"] for item in all_items} == set(case.thread_ids)
@@ -251,7 +247,7 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
         collected = []
         first_cursor = None
         while True:
-            response = await job_events_client.get(base, params=params)
+            response = await trace_client.get(base, params=params)
             assert response.status_code == 200, response.text
             page = response.json()["data"]
             collected.extend(page["items"])
@@ -266,9 +262,9 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
         assert all(item["thread_id"] == thread_id for item in collected)
         assert len({item["event_id"] for item in collected}) == len(collected)
         other = next(value for value in case.thread_ids if value != thread_id)
-        rejected = await job_events_client.get(base, params={"thread_id": other, "cursor": first_cursor})
+        rejected = await trace_client.get(base, params={"thread_id": other, "cursor": first_cursor})
         assert rejected.status_code == 410, rejected.text
-        aggregate_rejected = await job_events_client.get(base, params={"cursor": first_cursor})
+        aggregate_rejected = await trace_client.get(base, params={"cursor": first_cursor})
         assert aggregate_rejected.status_code == 410
 
         stream = case.sessions.stream_trace_events(case.session_id, thread_id=thread_id)
@@ -281,11 +277,11 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
         assert second.event_id != first.event_id
         assert second.thread_id == thread_id
         await resumed.aclose()
-        wrong_stream = await job_events_client.get(
+        wrong_stream = await trace_client.get(
             base + "/stream", params={"thread_id": other, "after_event_id": stream_cursor},
         )
         assert wrong_stream.status_code == 410, wrong_stream.text
-        page_as_stream = await job_events_client.get(
+        page_as_stream = await trace_client.get(
             base + "/stream", params={"thread_id": thread_id, "after_event_id": first_cursor},
         )
         assert page_as_stream.status_code == 410
@@ -302,6 +298,5 @@ async def test_job_created_missing_thread_is_rejected_before_durable_write(
             payload={"session_id": case.session_id, "message": "无 owner", "agent_id": "default"},
         )
 
-    assert await case.bus.list_events("job_missing_thread") == []
     assert case.store.read_events(case.session_id) == []
     assert not case.trace_dir.exists()

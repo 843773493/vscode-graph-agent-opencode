@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
-from tests.support.api_helpers import with_message_run_operation_id
+from tests.support.api_helpers import read_job_trace, with_message_run_operation_id
 from tests.support.http_server import running_http_server
 from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
@@ -352,11 +352,7 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
         job = await _wait_for_failed_job(client, job_id, workspace_headers)
         assert PROVIDER_ERROR_MARKER in job["error_message"]
 
-        job_events = _assert_request_envelope(
-            await client.get(
-                f"/api/v1/jobs/{job_id}/events", headers=workspace_headers
-            )
-        )["data"]
+        job_events = await read_job_trace(client, session_id, job_id, headers=workspace_headers)
         model_failures = [event for event in job_events if event["type"] == "model_failed"]
         assert len(model_failures) == 1
         assert model_failures[0]["payload"]["provider_id"] == "primary"

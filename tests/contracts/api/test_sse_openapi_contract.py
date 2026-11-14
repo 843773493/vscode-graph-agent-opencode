@@ -12,6 +12,8 @@ def test_sse_endpoints_publish_event_contracts() -> None:
 
     task_response = paths["/api/v1/workspaces/{workspace_id}/persistent-tasks/events"]["get"]["responses"]["200"]
     assert task_response["x-sse-events"] == {
+        "changed": {"$ref": "#/components/schemas/PersistentTaskChangedDTO",
+                    "x-protobuf-message": "boxteam.workspace.v2.PersistentTaskChangedDTO"},
         "snapshot": {"$ref": "#/components/schemas/PersistentTaskListDTO",
                      "x-protobuf-message": "boxteam.workspace.v2.PersistentTaskListDTO"},
     }
@@ -53,23 +55,14 @@ def test_sse_endpoints_publish_event_contracts() -> None:
     }
     assert set(observation_response["content"]) == {"text/event-stream"}
 
-    job_response = paths["/api/v1/workspaces/{workspace_id}/jobs/{job_id}/events/stream"]["get"]["responses"][
-        "200"
-    ]
-    assert job_response["x-sse-events"] == {
-        "*": {
-            "$ref": "#/components/schemas/SessionExecutionSseDTO",
-            "x-protobuf-message": "boxteam.workspace.v2.SessionExecutionSse",
-        }
-    }
-    assert set(job_response["content"]) == {"text/event-stream"}
+    assert "/api/v1/workspaces/{workspace_id}/jobs/{job_id}/events" not in paths
+    assert "/api/v1/workspaces/{workspace_id}/jobs/{job_id}/events/stream" not in paths
 
 
 def test_every_sse_event_model_is_resolvable_and_generated() -> None:
     openapi = app.openapi()
     components = openapi["components"]["schemas"]
     declared_models: set[str] = set()
-    stream_operation_count = 0
     for path_item in openapi["paths"].values():
         for operation in path_item.values():
             if not isinstance(operation, dict):
@@ -77,7 +70,6 @@ def test_every_sse_event_model_is_resolvable_and_generated() -> None:
             response = operation.get("responses", {}).get("200", {})
             if "text/event-stream" not in response.get("content", {}):
                 continue
-            stream_operation_count += 1
             events = response.get("x-sse-events")
             assert isinstance(events, dict) and events
             for event_schema in events.values():
@@ -88,8 +80,10 @@ def test_every_sse_event_model_is_resolvable_and_generated() -> None:
                 assert model_name in components
                 declared_models.add(model_name)
 
-    assert stream_operation_count == 5
-    assert declared_models == set(SSE_EVENT_MODELS)
+    assert declared_models == {
+        "TraceEventDTO", "PersistentTaskListDTO", "PersistentTaskChangedDTO",
+        "WorkspaceFileChangeBatchDTO", "SseErrorDTO", "WorkspaceObservationFrameDTO", "ConfigEventDTO",
+    }
 
     runtime_schema_path = (
         Path.cwd()
@@ -105,18 +99,3 @@ def test_every_sse_event_model_is_resolvable_and_generated() -> None:
         "schemas"
     ]
     assert set(runtime_schemas) == set(SSE_EVENT_MODELS)
-
-    generated_types = (
-        runtime_schema_path.parent
-        / "boxteam"
-        / "workspace"
-        / "v2"
-        / "session_stream.ts"
-    ).read_text(
-        encoding="utf-8"
-    )
-    assert (
-        'import { SessionExecutionEvent } from "./session_interaction.js";'
-        in generated_types
-    )
-    assert "event: SessionExecutionEvent | undefined;" in generated_types

@@ -93,42 +93,6 @@ export declare type Job = Message<"boxteam.workspace.v2.Job"> & {
 export declare const JobSchema: GenMessage<Job>;
 
 /**
- * @generated from message boxteam.workspace.v2.JobProgress
- */
-export declare type JobProgress = Message<"boxteam.workspace.v2.JobProgress"> & {
-  /**
-   * @generated from field: string job_id = 1;
-   */
-  jobId: string;
-
-  /**
-   * @generated from field: boxteam.workspace.v2.JobStatus status = 2;
-   */
-  status: JobStatus;
-
-  /**
-   * @generated from field: optional string current_step_id = 3;
-   */
-  currentStepId?: string | undefined;
-
-  /**
-   * @generated from field: uint32 progress = 4;
-   */
-  progress: number;
-
-  /**
-   * @generated from field: optional string message = 5;
-   */
-  message?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.JobProgress.
- * Use `create(JobProgressSchema)` to create a new message.
- */
-export declare const JobProgressSchema: GenMessage<JobProgress>;
-
-/**
  * @generated from message boxteam.workspace.v2.ToolApprovalAction
  */
 export declare type ToolApprovalAction = Message<"boxteam.workspace.v2.ToolApprovalAction"> & {

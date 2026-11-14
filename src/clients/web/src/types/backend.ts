@@ -260,7 +260,6 @@ import type {
 } from "./gatewayProtocol";
 export type { TraceEventDTO as SessionStreamEvent } from "../protocol/jsonTypes";
 // Session SSE 已切换到 Protobuf adapter；旧 JSON DTO 仅作为业务兼容返回类型保留。
-export type { SessionExecutionSse } from "./protocol_buf_generated/boxteam/workspace/v2/session_stream_pb";
 
 export type LLMRequestLogRecord = Omit<
   LLMRequestLogRecordDTO,

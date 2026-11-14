@@ -13,7 +13,6 @@ mapping tests/
 │   ├── test_user_message_content_projection.py
 │   └── test_turn_response_parts.py
 ├── 运行事件
-│   ├── test_observation_event_mapper.py
 │   └── test_trace_event_mapper.py
 └── itemized投影
     ├── itemized/test_selection_role_projection.py

@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from app.core.workspace_identity import read_workspace_id
-from tests.support.api_helpers import with_message_run_operation_id
+from tests.support.api_helpers import read_job_trace, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
 from tests.support.messages import last_assistant_message
 from tests.support.ports import e2e_port_block_for_file
@@ -208,9 +208,7 @@ async def test_frontend_response_diagnostic_flow(client: httpx.AsyncClient):
     assert job_data["session_id"] == session_id
     assert job_data["status"] in {"completed", "succeeded"}
 
-    events_response = await client.get(f"/api/v1/jobs/{job_id}/events")
-    assert events_response.status_code == 200
-    events = events_response.json()["data"]
+    events = await read_job_trace(client, session_id, job_id)
     assert events, "job 事件为空，说明后端没有完整发布执行轨迹"
 
     agent_end_events = [event for event in events if event["type"] == "agent_end"]

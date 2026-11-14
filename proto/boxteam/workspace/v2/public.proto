@@ -530,47 +530,6 @@ message JobDispatchSnapshotDTO {
   string thread_id = 12;
 }
 
-message JobProgressDTO {
-  string job_id = 1;
-  string status = 2;
-  optional string current_step_id = 3;
-  optional int64 progress = 4;
-  optional string message = 5;
-}
-
-message JobStatusChangedExecutionEventDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-  string type = 5;
-  JobProgressDTO payload = 6;
-}
-
-message JobStepProgressDTO {
-  optional string agent_id = 1;
-  optional string message = 2;
-  optional string phase = 3;
-}
-
-message JobStepUpdatedExecutionEventDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-  string type = 5;
-  JobStepProgressDTO payload = 6;
-}
-
-message JobUpdatedExecutionEventDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-  string type = 5;
-  JobProgressDTO payload = 6;
-}
-
 message LLMRequestLogRecordDTO {
   reserved 5;
   reserved "file_path";
@@ -1401,15 +1360,6 @@ message SessionCompactResultDTO {
   optional google.protobuf.Timestamp compacted_at = 12;
 }
 
-message SessionCompletedExecutionEventDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-  string type = 5;
-  JobProgressDTO payload = 6;
-}
-
 // 仅标识封存来源，不是当前资源定位器或访问凭据。
 message SessionContextProvenanceRefDTO {
   string kind = 1;
@@ -1586,26 +1536,6 @@ message SessionDTO {
   optional string thread_id = 17;
 }
 
-message SessionErrorExecutionEventDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-  string type = 5;
-  SessionErrorPayloadDTO payload = 6;
-}
-
-message SessionErrorPayloadDTO {
-  string error = 1;
-}
-
-message SessionExecutionEventBaseDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-}
-
 message SessionExecutionSnapshotDTO {
   google.protobuf.Timestamp created_at = 1;
   google.protobuf.Timestamp updated_at = 2;
@@ -1616,12 +1546,6 @@ message SessionExecutionSnapshotDTO {
   optional string status = 7;
   optional string active_step_status = 8;
   optional string last_event_id = 9;
-}
-
-message SessionExecutionSseDTO {
-  google.protobuf.Struct event = 1;
-  string raw_type = 2;
-  optional google.protobuf.Struct raw_payload = 3;
 }
 
 message SessionFileChangeDTO {
@@ -2137,13 +2061,6 @@ message SessionNetworkWaitDTO {
   optional google.protobuf.Timestamp restored_at = 6;
 }
 
-message SessionObservationStateDTO {
-  string session_id = 1;
-  optional string active_job_id = 2;
-  optional bool is_streaming = 3;
-  optional bool is_idle = 4;
-}
-
 message SessionResourceControlRequest {
   string action = 1;
   optional google.protobuf.Struct params = 2;
@@ -2355,15 +2272,6 @@ message BrowserResourceOperationRequest {
   optional ResourceThreadRef thread = 2;
   string action = 3;
   google.protobuf.Struct payload = 4;
-}
-
-message SessionStatusChangedExecutionEventDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-  string type = 5;
-  google.protobuf.Struct payload = 6;
 }
 
 message SessionStatusDTO {
@@ -2613,19 +2521,6 @@ message TraceEventDTO {
   optional google.protobuf.Struct raw = 14;
   // 事件实际所属的 Thread；物理日志仍由 Session 持有。
   string thread_id = 15;
-}
-
-message TraceObservedExecutionEventDTO {
-  string event_id = 1;
-  string session_id = 2;
-  optional string job_id = 3;
-  google.protobuf.Timestamp time = 4;
-  string type = 5;
-  TraceObservedPayloadDTO payload = 6;
-}
-
-message TraceObservedPayloadDTO {
-  string raw_type = 1;
 }
 
 message TurnActivityStatsDTO {

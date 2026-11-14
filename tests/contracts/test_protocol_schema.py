@@ -11,88 +11,19 @@ import pytest
 from google.protobuf.descriptor import FileDescriptor
 from google.protobuf.descriptor_pb2 import FieldDescriptorProto, FileDescriptorSet
 from jsonschema import ValidationError, validate
-from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.workspace.v2 import (
     public_pb2,
-    session_interaction_pb2,
-    session_stream_pb2,
 )
 from app.protocol.openapi import SSE_JSON_DESCRIPTORS
 from app.protocol.schema import assert_public_schema
 from app.schemas.internal_v2.persistent_task import TaskConditionDTO
 from app.schemas.internal_v2.sse import SSE_EVENT_MODELS
-from scripts import export_sse_runtime_schemas as exporter
-
-
-@pytest.fixture
-def session_sse_schema() -> JsonSchemaValue:
-    return SSE_EVENT_MODELS["SessionExecutionSseDTO"].model_json_schema(mode="serialization")
-
-
-def test_session_sse_checks_actual_envelope_and_flattened_header_without_rewriting_schema(
-    session_sse_schema: JsonSchemaValue,
-) -> None:
-    original = deepcopy(session_sse_schema)
-    exporter.assert_session_sse_schema(session_sse_schema, session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"])
-    assert session_sse_schema == original
-
-
-@pytest.mark.parametrize("mutation", ["missing", "extra", "type", "raw_payload"])
-def test_session_sse_rejects_envelope_drift(session_sse_schema: JsonSchemaValue, mutation: str) -> None:
-    properties = session_sse_schema["properties"]
-    if mutation == "missing":
-        del properties["raw_type"]
-    elif mutation == "extra":
-        properties["unexpected"] = {"type": "string"}
-    elif mutation == "type":
-        properties["raw_type"] = {"type": "integer"}
-    else:
-        properties["raw_payload"] = {"type": "array", "items": {"type": "string"}}
-    with pytest.raises(ValueError, match="公开结构与 proto"):
-        exporter.assert_session_sse_schema(session_sse_schema, session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"])
-
-
-@pytest.mark.parametrize("mutation", ["missing", "extra", "event_id", "job_id", "time"])
-@pytest.mark.parametrize("tag", ["message.updated", "session.status.changed"])
-def test_session_sse_rejects_header_drift_in_every_business_branch(session_sse_schema: JsonSchemaValue, mutation: str, tag: str) -> None:
-    reference = session_sse_schema["properties"]["event"]["discriminator"]["mapping"][tag]
-    properties = session_sse_schema["$defs"][reference.rsplit("/", 1)[1]]["properties"]
-    if mutation == "missing":
-        del properties["job_id"]
-    elif mutation == "extra":
-        properties["unexpected"] = {"type": "string"}
-    else:
-        properties[mutation] = {"type": "integer"}
-    with pytest.raises(ValueError, match="公开结构与 proto"):
-        exporter.assert_session_sse_schema(session_sse_schema, session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"])
-
-
-@pytest.mark.parametrize("mutation", ["property", "label", "branch", "mapping"])
-def test_session_sse_rejects_discriminator_and_union_disagreement(session_sse_schema: JsonSchemaValue, mutation: str) -> None:
-    event = session_sse_schema["properties"]["event"]
-    discriminator = event["discriminator"]
-    mapping = discriminator["mapping"]
-    if mutation == "property":
-        discriminator["propertyName"] = "raw_type"
-    elif mutation == "branch":
-        event["oneOf"].pop()
-    elif mutation == "mapping":
-        mapping["session.error"], mapping["message.updated"] = mapping["message.updated"], mapping["session.error"]
-    else:
-        properties = session_sse_schema["$defs"][mapping["trace.observed"].rsplit("/", 1)[1]]["properties"]
-        properties["type"] = {"type": "string", "const": "session.error"}
-    with pytest.raises(ValueError, match="公开 SSE 事件"):
-        exporter.assert_session_sse_schema(session_sse_schema, session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"])
 
 
 @pytest.mark.parametrize("name", SSE_JSON_DESCRIPTORS)
 def test_same_shape_public_schema_matches_descriptor_and_keeps_business_constraints(name: str) -> None:
-    if name in SSE_EVENT_MODELS:
-        schema = SSE_EVENT_MODELS[name].model_json_schema(mode="serialization")
-    else:
-        root = SSE_EVENT_MODELS["SessionExecutionSseDTO"].model_json_schema(mode="serialization")
-        schema = {**root["$defs"][name], "$defs": root["$defs"]}
+    schema = SSE_EVENT_MODELS[name].model_json_schema(mode="serialization")
     original = deepcopy(schema)
     assert_public_schema(schema, SSE_JSON_DESCRIPTORS[name])
     assert schema == original
@@ -153,67 +84,9 @@ def test_business_union_still_rejects_public_field_drift(mutation: str) -> None:
         assert_public_schema(schema, public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"])
 
 
-@pytest.mark.parametrize("mutation", ["unbounded", "unknown", "const_unknown", "union_unknown"])
-def test_public_enum_rejects_values_the_codec_cannot_encode(mutation: str) -> None:
-    root = SSE_EVENT_MODELS["SessionExecutionSseDTO"].model_json_schema(mode="serialization")
-    schema = {**root["$defs"]["JobProgressDTO"], "$defs": root["$defs"]}
-    status: dict[str, object] = {"type": "string"}
-    if mutation == "unknown":
-        status["enum"] = ["completed", "invented"]
-    elif mutation == "const_unknown":
-        status["const"] = "invented"
-    elif mutation == "union_unknown":
-        status = {"anyOf": [{"type": "string", "const": "completed"},
-                            {"type": "string", "const": "invented"}]}
-    schema["properties"]["status"] = status
-    with pytest.raises(ValueError, match=r"公开结构与 proto 枚举不一致: .*/status"):
-        assert_public_schema(schema, SSE_JSON_DESCRIPTORS["JobProgressDTO"])
-
-
-@pytest.mark.parametrize("status", [
-    {"type": "string", "enum": ["completed", "failed"]},
-    {"type": "string", "const": "completed"},
-    {"anyOf": [{"type": "string", "const": "completed"}, {"type": "string", "const": "failed"}]},
-])
-def test_public_enum_keeps_narrower_business_constraints(status: dict[str, object]) -> None:
-    root = SSE_EVENT_MODELS["SessionExecutionSseDTO"].model_json_schema(mode="serialization")
-    schema = {**root["$defs"]["JobProgressDTO"], "$defs": root["$defs"]}
-    schema["properties"]["status"] = status
-    original = deepcopy(schema)
-    assert_public_schema(schema, SSE_JSON_DESCRIPTORS["JobProgressDTO"])
-    assert schema == original
-
-
-@pytest.mark.parametrize("mutation", ["renamed", "removed"])
-def test_export_rejects_fresh_proto_enum_drift_before_publishing(
-    tmp_path: Path, protocol_descriptor_bundle: FileDescriptorSet, mutation: str,
-) -> None:
-    enum = next(enum for file in protocol_descriptor_bundle.file for enum in file.enum_type
-                if enum.name == "JobStatus")
-    completed = next(value for value in enum.value if value.name == "JOB_STATUS_COMPLETED")
-    if mutation == "renamed":
-        completed.name = "JOB_STATUS_FINISHED"
-    else:
-        enum.value.remove(completed)
-    descriptor_set = tmp_path / "fresh.binpb"
-    descriptor_set.write_bytes(protocol_descriptor_bundle.SerializeToString())
-    output = tmp_path / "generated"
-    result = subprocess.run(
-        [sys.executable, "-m", "scripts.export_sse_runtime_schemas", "--output-root", str(output),
-         "--descriptor-set", str(descriptor_set)],
-        capture_output=True, text=True, timeout=15, check=False,
-    )
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert "公开结构与 proto 枚举不一致" in result.stderr
-    assert "completed" in result.stderr and "/status" in result.stderr
-    assert not output.exists()
-
-
 @pytest.mark.parametrize("message_name", [
-    "TraceEvent", "WorkspaceObservationFrameDTO", "TaskActionDTO", "JobProgress",
-    "JobStepProgress", "MessageObservation", "SessionError", "TraceObserved",
+    "TraceEvent", "WorkspaceObservationFrameDTO", "TaskActionDTO",
     "WorkspaceFileChangeBatch", "WorkspaceDirectoryKeyDTO", "WorkspaceFileNodeDTO",
-    "SessionExecutionSse", "SessionExecutionEventHeader", "SessionExecutionEvent",
 ])
 def test_export_checks_fresh_proto_descriptor_before_publishing(
     tmp_path: Path, message_name: str, protocol_descriptor_bundle: FileDescriptorSet,
@@ -250,68 +123,4 @@ def protocol_descriptor_bundle() -> FileDescriptorSet:
 
     for descriptor in SSE_JSON_DESCRIPTORS.values():
         collect(descriptor.file)
-    collect(session_interaction_pb2.DESCRIPTOR)
-    collect(session_stream_pb2.DESCRIPTOR)
     return bundle
-
-
-@pytest.mark.parametrize(("mutation", "error"), [
-    ("added", "new.event"), ("removed", "trace.observed"), ("renamed", "trace.changed"),
-    ("detached", "trace.observed"), ("wrong_message", "boxteam.workspace.v2.SessionError"),
-    ("scalar", "trace.observed"), ("status_wrong_message", "session.status.changed"),
-])
-def test_export_rejects_event_union_drift_before_publishing(
-    tmp_path: Path, protocol_descriptor_bundle: FileDescriptorSet, mutation: str, error: str,
-) -> None:
-    bundle = protocol_descriptor_bundle
-    message = next(message for file in bundle.file for message in file.message_type
-                   if message.name == "SessionExecutionEvent")
-    field = next(field for field in message.field if field.name == "trace_observed")
-    if mutation == "added":
-        message.field.add(name="new_event", number=100, type=FieldDescriptorProto.TYPE_MESSAGE,
-                          type_name=".boxteam.workspace.v2.JobProgress", oneof_index=0)
-    elif mutation == "removed":
-        message.field.remove(field)
-    elif mutation == "renamed":
-        field.name = "trace_changed"
-    elif mutation == "detached":
-        field.ClearField("oneof_index")
-    elif mutation == "wrong_message":
-        field.type_name = ".boxteam.workspace.v2.SessionError"
-    elif mutation == "status_wrong_message":
-        field = next(field for field in message.field if field.name == "session_status_changed")
-        field.type_name = ".boxteam.workspace.v2.JobProgress"
-    else:
-        field.type = FieldDescriptorProto.TYPE_STRING
-        field.ClearField("type_name")
-    descriptor_set = tmp_path / "fresh.binpb"
-    descriptor_set.write_bytes(bundle.SerializeToString())
-    output = tmp_path / "generated"
-    result = subprocess.run(
-        [sys.executable, "-m", "scripts.export_sse_runtime_schemas", "--output-root", str(output),
-         "--descriptor-set", str(descriptor_set)],
-        capture_output=True, text=True, timeout=15, check=False,
-    )
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert error in result.stderr
-    assert not output.exists()
-
-
-@pytest.mark.parametrize("replacement", ["google.protobuf.Struct", "boxteam.workspace.v2.TraceObserved"])
-def test_export_rejects_untyped_or_wrong_sse_envelope_event(
-    tmp_path: Path, protocol_descriptor_bundle: FileDescriptorSet, replacement: str,
-) -> None:
-    message = next(message for file in protocol_descriptor_bundle.file for message in file.message_type
-                   if message.name == "SessionExecutionSse")
-    next(field for field in message.field if field.name == "event").type_name = "." + replacement
-    descriptor_set = tmp_path / "fresh.binpb"
-    descriptor_set.write_bytes(protocol_descriptor_bundle.SerializeToString())
-    output = tmp_path / "generated"
-    result = subprocess.run(
-        [sys.executable, "-m", "scripts.export_sse_runtime_schemas", "--output-root", str(output),
-         "--descriptor-set", str(descriptor_set)],
-        capture_output=True, text=True, timeout=15, check=False,
-    )
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert "公开 SSE 信封 event 必须对应 SessionExecutionEvent" in result.stderr
-    assert not output.exists()

@@ -40,7 +40,6 @@ from app.services.business.session_turn_replay_service import SessionTurnReplayS
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
-from app.services.event_service import EventService
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
@@ -95,7 +94,6 @@ class _AppContainerProtocol(Protocol):
     config_service: ConfigService
     agent_service: AgentService
     artifact_service: ArtifactService
-    event_service: EventService
     job_service: JobServiceProtocol
     agent_execution_service: AgentExecutionService
     message_service: MessageService
@@ -261,10 +259,6 @@ def get_agent_service(request: Request) -> AgentService:
 
 def get_artifact_service(request: Request) -> ArtifactService:
     return _require_service(request, "artifact_service", ArtifactService, "ArtifactService 尚未在应用启动阶段初始化")
-
-
-def get_event_service(request: Request) -> EventService:
-    return _require_service(request, "event_service", EventService, "EventService 尚未在应用启动阶段初始化")
 
 
 def get_job_service(request: Request) -> JobServiceProtocol:

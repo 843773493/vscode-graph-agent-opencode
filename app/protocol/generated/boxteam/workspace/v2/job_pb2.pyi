@@ -83,20 +83,6 @@ class Job(_message.Message):
     thread_id: str
     def __init__(self, job_id: _Optional[str] = ..., message_id: _Optional[str] = ..., session_id: _Optional[str] = ..., mode: _Optional[_Union[RunMode, str]] = ..., status: _Optional[_Union[JobStatus, str]] = ..., entry_agent: _Optional[str] = ..., progress: _Optional[int] = ..., current_step: _Optional[str] = ..., error_message: _Optional[str] = ..., metadata: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ..., created_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., updated_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., ended_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., thread_id: _Optional[str] = ...) -> None: ...
 
-class JobProgress(_message.Message):
-    __slots__ = ("job_id", "status", "current_step_id", "progress", "message")
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    STATUS_FIELD_NUMBER: _ClassVar[int]
-    CURRENT_STEP_ID_FIELD_NUMBER: _ClassVar[int]
-    PROGRESS_FIELD_NUMBER: _ClassVar[int]
-    MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    job_id: str
-    status: JobStatus
-    current_step_id: str
-    progress: int
-    message: str
-    def __init__(self, job_id: _Optional[str] = ..., status: _Optional[_Union[JobStatus, str]] = ..., current_step_id: _Optional[str] = ..., progress: _Optional[int] = ..., message: _Optional[str] = ...) -> None: ...
-
 class ToolApprovalAction(_message.Message):
     __slots__ = ("tool_call_id", "name", "args", "description", "allowed_decisions")
     TOOL_CALL_ID_FIELD_NUMBER: _ClassVar[int]

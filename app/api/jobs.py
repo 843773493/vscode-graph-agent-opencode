@@ -1,29 +1,20 @@
 from __future__ import annotations
 
-from contextlib import aclosing
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import ValidationError
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.api.deps import (
     get_artifact_service,
-    get_event_service,
     get_job_service,
     get_request_id,
     get_tool_approval_service,
     verify_local_token,
 )
 from app.api.errors import state_conflict_http_error, unimplemented_http_error
-from app.api.sse_heartbeat import (
-    SSE_HEARTBEAT_INTERVAL_SECONDS,
-    SSE_NO_CACHE_HEADERS,
-    stream_sse_with_heartbeat,
-)
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
-from app.schemas.event import Event
 from app.schemas.internal_v2.artifact import ArtifactDTO
 from app.schemas.internal_v2.common import APIResponse, ControlAction
 from app.schemas.internal_v2.job import (
@@ -32,15 +23,12 @@ from app.schemas.internal_v2.job import (
     JobDTO,
     StepDTO,
 )
-from app.schemas.internal_v2.session_interaction import SessionExecutionSseDTO
-from app.schemas.internal_v2.sse import sse_responses
 from app.schemas.internal_v2.tool_approval import (
     ToolApprovalCommandDTO,
     ToolApprovalDTO,
     ToolApprovalSubmitRequest,
 )
 from app.services.business.job.control_service import JobControlRuntimeError
-from app.services.event_service import EventService, JobEventCursorGoneError
 from app.services.infrastructure.artifact_service import ArtifactService
 from app.services.orchestration.execution_step.approval import ToolApprovalService
 
@@ -101,9 +89,9 @@ async def list_thread_tool_approvals(
 @router.get("/{job_id}", response_model=APIResponse[JobDTO], summary="获取任务详情")
 async def get_job(
     job_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
 ):
     try:
         result = await job_service.get(job_id)
@@ -119,9 +107,9 @@ async def get_job(
 )
 async def list_job_steps(
     job_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
 ):
     try:
         result = await job_service.list_steps(job_id)
@@ -179,87 +167,6 @@ async def submit_tool_approvals(
     return APIResponse(data=result, request_id=request_id)
 
 
-@router.get(
-    "/{job_id}/events", response_model=APIResponse[list[Event]], summary="获取任务事件"
-)
-async def list_job_events(
-    job_id: str,
-    after: str | None = None,
-    limit: int = Query(default=100, ge=1, le=1000),
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    event_service: EventService = Depends(get_event_service),
-):
-    result = await event_service.list(job_id=job_id, after=after, limit=limit)
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get(
-    "/{job_id}/events/stream",
-    response_class=StreamingResponse,
-    summary="订阅任务事件流",
-    responses=sse_responses(
-        "SSE Job 观察事件流",
-        {"*": SessionExecutionSseDTO},
-    ),
-)
-async def stream_job_events(
-    job_id: str,
-    request: Request,
-    after_event_id: str | None = Query(default=None),
-    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    event_service: EventService = Depends(get_event_service),
-):
-    if after_event_id and last_event_id and after_event_id != last_event_id:
-        raise HTTPException(
-            status_code=409,
-            detail="after_event_id 与 Last-Event-ID 不一致",
-        )
-    cursor = last_event_id or after_event_id
-    try:
-        await event_service.ensure_cursor(job_id, cursor)
-    except JobEventCursorGoneError as error:
-        raise HTTPException(
-            status_code=410,
-            detail={
-                "code": "job_event_cursor_gone",
-                "message": str(error),
-                "job_id": job_id,
-                "event_id": error.event_id,
-            },
-        ) from error
-    subscriber_metadata = {
-        "request_id": request_id,
-        "client_host": request.client.host if request.client else "",
-        "user_agent": request.headers.get("user-agent", ""),
-    }
-
-    async def event_generator():
-        # 与 trace/workspace/message 三条流同口径：aclosing 包裹心跳包装，空闲发
-        # SSE 注释心跳，退出时一并 aclose 底层源以解除 job 事件订阅。
-        async with aclosing(
-            stream_sse_with_heartbeat(
-                event_service.stream_sse(
-                    job_id,
-                    after_event_id=cursor,
-                    subscriber_metadata=subscriber_metadata,
-                ),
-                heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
-                close_source_on_exit=True,
-            )
-        ) as stream:
-            async for chunk in stream:
-                yield chunk
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers=SSE_NO_CACHE_HEADERS,
-    )
-
-
 @router.post(
     "/{job_id}/control",
     response_model=APIResponse[JobControlResponseDTO],
@@ -268,9 +175,9 @@ async def stream_job_events(
 async def control_job(
     job_id: str,
     payload: JobControlRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
 ):
     try:
         result = await job_service.control(job_id, payload)
@@ -288,9 +195,9 @@ async def control_job(
 )
 async def list_job_artifacts(
     job_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    artifact_service: ArtifactService = Depends(get_artifact_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    artifact_service: Annotated[ArtifactService, Depends(get_artifact_service)],
 ):
     try:
         result = await artifact_service.list_by_job(job_id)

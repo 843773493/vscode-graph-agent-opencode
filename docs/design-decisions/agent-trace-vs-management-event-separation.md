@@ -337,24 +337,14 @@ error
 
 ---
 
-## 8. 兼容策略
+## 8. 唯一历史与实时订阅
 
-### 8.1 不破坏现有管理接口
+消息提交继续使用 `POST /sessions/{session_id}/messages`。
+Job 历史和恢复统一通过 Session Trace SQLite 的列表与流读取，使用 `job_id` 区分执行。
+旧 `GET /jobs/{job_id}/events` 和 `GET /jobs/{job_id}/events/stream` 已物理下线。
 
-以下接口保持现状：
-
-- `POST /sessions/{session_id}/messages`
-- `GET /jobs/{job_id}/events`
-- `GET /jobs/{job_id}/events/stream`
-
-原因：
-
-- 这些接口对 job 状态机和内部调度仍然有用
-- 不应为了前端展示直接删除
-
-### 8.2 仅新增轨迹接口和轨迹 DTO
-
-前端只需要换消费对象，不需要重构整个消息提交流程。
+Job 进程内通道只负责实时订阅，不保存历史；最后一个订阅者退出或溢出后回收通道。
+持久化监听器仍先于实时广播完成，写入失败直接报告，不广播未提交的事件。
 
 ---
 

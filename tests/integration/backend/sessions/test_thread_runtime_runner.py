@@ -207,6 +207,16 @@ class RuntimeCase:
 
 
 @pytest.fixture
+async def recording_runtime_case(runtime_case: RuntimeCase):
+    recorder = runtime_case.runner.container.trace_event_recorder
+    await recorder.start()
+    try:
+        yield runtime_case
+    finally:
+        await recorder.stop()
+
+
+@pytest.fixture
 async def runtime_case(
     runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest,
 ):

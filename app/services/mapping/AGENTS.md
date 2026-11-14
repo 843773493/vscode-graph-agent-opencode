@@ -15,7 +15,6 @@ mapping/
 │   ├── session_resource_mapper.py           会话资源记录 → 资源DTO
 │   └── session_catalog_search.py             公开 catalog 节点 → 后端与 Gateway 共用搜索键
 ├── 运行事件
-│   ├── observation_event_mapper.py          业务事件 → SSE与Proto观测
 │   └── trace_event_mapper.py                Trace事件 → Trace DTO
 └── itemized/                                selection、provider与canonical history投影
     └── history_turns/                       已提交历史消息 → Turn content/tool/detail DTO

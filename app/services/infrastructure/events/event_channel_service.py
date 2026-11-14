@@ -622,6 +622,14 @@ class EventChannelService:
         parse_channel_name(name)
         return self._channels.get(name)
 
+    def remove_channel_if_unused(self, name: str) -> bool:
+        """由通道 owner 显式释放无人订阅的通道；其它通道不自动回收。"""
+        channel = self.find_channel(name)
+        if channel is None or channel.subscriber_ids:
+            return False
+        del self._channels[name]
+        return True
+
 
 __all__ = [
     "CHANNEL_KINDS",

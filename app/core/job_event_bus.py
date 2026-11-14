@@ -75,9 +75,8 @@ from app.services.infrastructure.events.event_channel_service import (
 
 logger = logging.getLogger(__name__)
 
-# 临时订阅队列上限与短期历史长度保持既有行为不变。
+# 临时订阅只承载实时事件；完整历史由 Session Trace 保存。
 JOB_EVENT_QUEUE_SIZE: Final[int] = 100
-JOB_EVENT_HISTORY_SIZE: Final[int] = 1000
 
 # per-job publish 锁按 job_id 哈希分片到固定数量的锁对象：锁数量有界（不随
 # 历史 Job 总数增长），且同一 job_id 恒映射到同一把锁，串行语义不变。用
@@ -260,9 +259,9 @@ class _EventSubscriptionSink:
 class JobEventBus:
     """`job.events/{job_id}` channel 的 typed adapter（OpenSpec 3.8-B）。
 
-    订阅者队列、溢出移除与短期历史由通用 :class:`EventChannelService` 承载；
+    订阅者队列与溢出移除由通用 :class:`EventChannelService` 承载；
     本类只保留 Job 域职责：事件工厂（``EVENT_FACTORY_REGISTRY``）、durable
-    listener 发布事务顺序（先持久化监听器，后内存历史与临时订阅者广播）和
+    listener 发布事务顺序（先持久化监听器，后临时订阅者广播）和
     per-job publish 锁串行化。durable listener 属于 Job 事件的持久化适配，
     不是通用 channel 合同的一部分；资源事件不得进入本总线。
     """
@@ -286,7 +285,7 @@ class JobEventBus:
         return self._event_service
 
     def _channel_for(self, job_id: str) -> EventChannel[Event]:
-        """取得或创建 `job.events/{job_id}` channel（fail_closed + 短期历史）。"""
+        """为实时订阅取得或创建无历史的 `job.events/{job_id}` channel。"""
         if not isinstance(job_id, str) or not job_id:
             raise ValueError("job_id 必须是非空字符串")
         return self._event_service.ensure_channel(
@@ -294,7 +293,7 @@ class JobEventBus:
                 name=channel_name(JOB_EVENTS_CHANNEL_KIND, job_id),
                 overflow_policy="fail_closed",
                 max_queue_size=JOB_EVENT_QUEUE_SIZE,
-                history_size=JOB_EVENT_HISTORY_SIZE,
+                history_size=0,
             )
         )
 
@@ -315,7 +314,7 @@ class JobEventBus:
 
         # 根据 event_type 构建具体的事件对象
         event = self._build_event(job_id, event_type, payload, step_id, agent_id)
-        channel = self._channel_for(job_id)
+        name = channel_name(JOB_EVENTS_CHANNEL_KIND, job_id)
         publish_lock = self._publish_lock_for(job_id)
 
         async with publish_lock:
@@ -327,10 +326,11 @@ class JobEventBus:
             for listener in durable_listeners:
                 await listener(event)
 
-            # 持久化成功后写短期历史并广播给临时订阅者；「先历史、后订阅者」
-            # 的顺序由 channel.publish 保证。channel 操作是同步的，不会与其它
-            # 协程交错；溢出的临时订阅者由 channel 按 fail_closed 移除。
-            channel.publish(event)
+            # 等待持久化时订阅可能已更换，必须取得当前通道；无人订阅不建通道。
+            channel = self._event_service.find_channel(name)
+            if channel is not None:
+                channel.publish(event)
+                self._event_service.remove_channel_if_unused(name)
 
         return event
 
@@ -403,6 +403,7 @@ class JobEventBus:
         removed = False
         if channel is not None:
             removed = channel.unsubscribe(subscription.subscription_id)
+            self._event_service.remove_channel_if_unused(channel.name)
         logger.info(
             "事件订阅已解除: subscription_id=%s subscriber_kind=%s job_id=%s "
             "reason=%s removed=%s metadata=%s",
@@ -421,28 +422,3 @@ class JobEventBus:
     async def unregister_durable_listener(self, listener: DurableEventListener) -> None:
         async with self._lock:
             self._durable_listeners.discard(listener)
-
-    async def list_events(self, job_id: str, after: str | None = None, limit: int = 20) -> list[Event]:
-        """获取事件列表（返回 discriminated union 类型）"""
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
-            raise ValueError(f"list_events limit 必须是正整数: {limit!r}")
-        channel = self._event_service.find_channel(
-            channel_name(JOB_EVENTS_CHANNEL_KIND, job_id)
-        )
-        events = list(channel.history) if channel is not None else []
-
-        if after:
-            for index, event in enumerate(events):
-                if event.event_id == after:
-                    events = events[index + 1 :]
-                    break
-
-        return events[-limit:]
-
-    async def get_event(self, event_id: str) -> Event | None:
-        """按事件 ID 查询单个事件。"""
-        for channel in self._event_service.channels:
-            for event in channel.history:
-                if event.event_id == event_id:
-                    return event
-        return None

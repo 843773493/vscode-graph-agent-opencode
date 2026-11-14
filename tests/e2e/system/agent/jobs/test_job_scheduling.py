@@ -1,10 +1,12 @@
 """Job 调度端到端测试。"""
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
-from tests.support.api_helpers import with_message_run_operation_id
+from tests.support.api_helpers import read_job_trace, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done, wait_for_jobs_done_concurrently
 
 
@@ -164,30 +166,18 @@ async def test_job_event_history_is_available(client: httpx.AsyncClient):
     received_live_event = False
     async with client.stream(
         "GET",
-        f"/api/v1/jobs/{job_id}/events/stream",
+        f"/api/v1/sessions/{session_id}/traces/stream",
         timeout=30,
     ) as stream_response:
         assert stream_response.status_code == 200
         async for line in stream_response.aiter_lines():
-            if line.startswith("data: "):
+            if line.startswith("data: ") and json.loads(line[6:])["job_id"] == job_id:
                 received_live_event = True
                 break
-    assert received_live_event, "Job SSE 未收到实时事件"
+    assert received_live_event, "Trace SSE 未收到目标 Job 事件"
 
     job_status = await wait_for_job_done(client, job_id, max_attempts=30)
     assert job_status["status"] in {"completed", "succeeded"}
 
-    events_response = await client.get(f"/api/v1/jobs/{job_id}/events")
-    assert events_response.status_code == 200
-    events = events_response.json()["data"]
-    assert len(events) > 0, "No events received from job event history"
-    traces_response = await client.get(f"/api/v1/sessions/{session_id}/traces")
-    assert traces_response.status_code == 200
-    trace_page = traces_response.json()["data"]
-    traces = trace_page["items"]
-    trace_event_ids = [trace["event_id"] for trace in traces]
-    assert {event["event_id"] for event in events}.issubset(set(trace_event_ids))
-
-    assert trace_page["has_more"] is False
-    assert trace_page["next_cursor"] is None
-    print(f"Received {len(events)} events successfully")
+    events = await read_job_trace(client, session_id, job_id)
+    assert len(events) > 0, "Trace 中缺少目标 Job 历史"

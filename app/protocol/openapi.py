@@ -18,10 +18,7 @@ from app.protocol.generated.boxteam.search.v1 import public_pb2 as search_public
 from app.protocol.generated.boxteam.workspace.message.v1 import message_stream_pb2
 from app.protocol.generated.boxteam.workspace.v2 import (
     file_events_pb2,
-    job_pb2,
     public_pb2,
-    session_interaction_pb2,
-    session_stream_pb2,
     skill_sources_pb2,
     trace_pb2,
 )
@@ -237,19 +234,11 @@ SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
     "WorkspaceObservationFrameDTO": public_pb2.DESCRIPTOR.message_types_by_name["WorkspaceObservationFrameDTO"],
     "PersistentTaskListDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskListDTO"],
     "PersistentTaskChangedDTO": public_pb2.DESCRIPTOR.message_types_by_name["PersistentTaskChangedDTO"],
-    # Session SSE 的信封经具名 adapter 转换，以下 payload 本身仍与 proto 同形。
-    "JobProgressDTO": job_pb2.DESCRIPTOR.message_types_by_name["JobProgress"],
-    "JobStepProgressDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["JobStepProgress"],
-    "MessageObservationDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["MessageObservation"],
-    "SessionErrorPayloadDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["SessionError"],
-    "TraceObservedPayloadDTO": session_interaction_pb2.DESCRIPTOR.message_types_by_name["TraceObserved"],
 }
 
 _SSE_DESCRIPTORS: Mapping[str, Descriptor] = {
     **SSE_JSON_DESCRIPTORS,
     "PluginCommandEventDTO": plugin_commands_pb2.DESCRIPTOR.message_types_by_name["PluginCommandEventDTO"],
-    # 此 DTO 展平 header 并改变 payload 外形，由 SSE 导出入口的具名投影核对。
-    "SessionExecutionSseDTO": session_stream_pb2.DESCRIPTOR.message_types_by_name["SessionExecutionSse"],
 }
 
 

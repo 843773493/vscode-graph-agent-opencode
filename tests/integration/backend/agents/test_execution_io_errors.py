@@ -38,6 +38,9 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     cold_message_stream_client as cold_message_stream_client,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
+    recording_runtime_case as recording_runtime_case,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runner_case as runner_case,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
@@ -49,12 +52,12 @@ from tests.support.sealed_request_audit import audit_sealed_requests
 
 @pytest.mark.parametrize("text_only", [False, True], ids=["native", "text_only"])
 async def test_native_io_failure_converges_with_known_file_diagnostics(
-    runtime_case: RuntimeCase,
+    recording_runtime_case: RuntimeCase,
     cold_message_stream_client: httpx.AsyncClient,
     caplog: pytest.LogCaptureFixture,
     text_only: bool,
 ) -> None:
-    case = runtime_case
+    case = recording_runtime_case
     container = case.runner.container
     location = case.runner.workspace / "private-native-io-location"
     location.mkdir()
@@ -90,7 +93,7 @@ async def test_native_io_failure_converges_with_known_file_diagnostics(
     else:
         assert isinstance(error, IsADirectoryError)
         assert error.filename == str(location)
-    events = await container.job_event_bus.list_events(job.job_id, limit=1000)
+    events = container.trace_event_store.read_events(session.session_id)
     failures = [event.payload.model_dump(mode="json") for event in events
                 if event.type in {EventType.ERROR, EventType.JOB_FAILED}]
     assert failures
@@ -136,7 +139,9 @@ async def test_native_io_failure_converges_with_known_file_diagnostics(
 
     # 同一 thread 经产品入口继续，旧失败及 canonical 前缀仍可冷读且不被改写。
     case.response_chunks = None
-    successor = await container.session_orchestrator.create_message(session.session_id, request)
+    successor = await container.session_orchestrator.create_message(
+        session.session_id, request.model_copy(update={"operation_id": new_message_operation_id()}),
+    )
     next_job = container.job_service._jobs[successor.job_id]
     await asyncio.wait_for(asyncio.shield(next_job.task), 20)
     assert next_job.status == JobStatus.completed, next_job.error_message
@@ -188,7 +193,7 @@ async def test_internal_validation_failure_keeps_job_and_cold_history_free_of_re
     assert error.errors(include_url=False) == rejected
     assert any(record.exc_info and record.exc_info[1] is error for record in caplog.records)
     assert all(location in caplog.text for location in locations)
-    events = await case.container.job_event_bus.list_events(job_id, limit=1000)
+    events = case.container.trace_event_store.read_events(session_id)
     failures = [event.payload.model_dump(mode="json") for event in events
                 if event.type in {EventType.ERROR, EventType.JOB_FAILED}]
     assert failures and {failure["error"] for failure in failures} == {expected}

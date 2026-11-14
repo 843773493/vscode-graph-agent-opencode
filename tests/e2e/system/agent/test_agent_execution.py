@@ -13,6 +13,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from tests.support.api_helpers import (
+    read_job_trace,
     read_llm_request_logs,
     with_message_run_operation_id,
 )
@@ -160,11 +161,10 @@ async def test_reply_token_usage_is_persisted_in_trace_and_message(
     job_id = message_response.json()["data"]["job_id"]
     await wait_for_job_done(client, job_id, max_attempts=90)
 
-    events_response = await client.get(f"/api/v1/jobs/{job_id}/events")
-    assert events_response.status_code == 200
+    events = await read_job_trace(client, session_id, job_id)
     agent_end = next(
         event
-        for event in events_response.json()["data"]
+        for event in events
         if event["type"] == "agent_end"
     )
     token_usage = agent_end["payload"]["token_usage"]

@@ -19,6 +19,7 @@ from app.schemas.event import (
 from app.services.infrastructure.trace_event_recorder import TraceEventRecorder
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.execution_step.stream_bindings import StepEventPublisher
+from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.job_thread_fixture import job_fixture_thread_id
 
 
@@ -91,7 +92,8 @@ async def test_recorder_persists_job_events(tmp_path: Path, trace_event_store_fa
         await bus.publish(
             job_id="job_1",
             event_type=EventType.JOB_STARTED,
-            payload={"session_id": session_id, "thread_id": main_thread_id},
+            payload={"session_id": session_id, "thread_id": main_thread_id,
+                     "dispatch": running_job_dispatch_snapshot(session_id, main_thread_id, "job_1", queued_job_count=0, queue_snapshot_version=1)},
             agent_id="job_service",
         )
         await bus.publish(
@@ -128,7 +130,8 @@ async def test_recorder_resolves_lifecycle_event_without_job_created_mapping(
         await bus.publish(
             job_id="job_direct",
             event_type=EventType.JOB_STARTED,
-            payload={"session_id": session_id, "thread_id": main_thread_id},
+            payload={"session_id": session_id, "thread_id": main_thread_id,
+                     "dispatch": running_job_dispatch_snapshot(session_id, main_thread_id, "job_direct", queued_job_count=0, queue_snapshot_version=1)},
             agent_id="job_service",
         )
         publisher = StepEventPublisher(bus, job_id="job_direct", agent_id="default")
@@ -161,6 +164,7 @@ async def test_recorder_rejects_event_without_resolvable_session_id(tmp_path: Pa
     recorder = TraceEventRecorder(bus=bus, store=TraceEventStore(sessions_dir=tmp_path))
     await recorder.start()
 
+    queue = await bus.subscribe("job_without_session", subscriber_kind="test_rejection")
     try:
         with pytest.raises(RuntimeError, match="缺少 session_id"):
             await bus.publish(
@@ -169,7 +173,7 @@ async def test_recorder_rejects_event_without_resolvable_session_id(tmp_path: Pa
                 payload={"message": "start", "agent_id": "default"},
                 agent_id="default",
             )
-        assert await bus.list_events("job_without_session") == []
+        assert queue.empty()
     finally:
         await recorder.stop()
 
@@ -209,7 +213,8 @@ async def test_failed_lifecycle_write_does_not_commit_job_session_mapping(event_
             await bus.publish(
                 job_id="job_failed_mapping",
                 event_type=event_type,
-                payload={"session_id": "ses_failed", "thread_id": "thr_failed", "message": "hi", "agent_id": "default"},
+                payload={"session_id": "ses_failed", "thread_id": "thr_failed", "message": "hi", "agent_id": "default",
+                         **({"dispatch": running_job_dispatch_snapshot("ses_failed", "thr_failed", "job_failed_mapping", queued_job_count=0, queue_snapshot_version=1)} if event_type == EventType.JOB_STARTED else {})},
                 agent_id="test",
             )
         with pytest.raises(RuntimeError, match="缺少 session_id"):

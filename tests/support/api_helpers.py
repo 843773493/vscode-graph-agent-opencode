@@ -62,6 +62,23 @@ async def create_session(client: httpx.AsyncClient, title: str) -> str:
     return session_id
 
 
+async def read_job_trace(
+    client: httpx.AsyncClient, session_id: str, job_id: str,
+    *, headers: dict[str, str] | None = None,
+) -> list[dict]:
+    """经唯一 Trace HTTP 入口分页读取指定 Job 的原始事件。"""
+    events = []
+    params: dict[str, str | int] = {"limit": 200}
+    while True:
+        response = await client.get(f"/api/v1/sessions/{session_id}/traces", params=params, headers=headers)
+        assert response.status_code == 200, response.text
+        page = response.json()["data"]
+        events.extend(item["raw"] for item in page["items"] if item["job_id"] == job_id)
+        if page["next_cursor"] is None:
+            return events
+        params["cursor"] = page["next_cursor"]
+
+
 def checkpoint_fixture(
     checkpoint_id: str,
     messages: list[object],
