@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config_sources import read_stable_config_file
+from app.core.path_utils import get_workspace_config_path
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.schemas.internal_v2.config import ConfigSourceEditRequest
 from app.services.infrastructure.config import WorkspaceSourceOwner
@@ -169,6 +170,143 @@ async def test_user_source_writer_previews_saves_and_queries_original_generation
             assert queried.fanout is not None and queried.fanout.source_generation == 2
             assert queried.fanout.fanout_id == saved.fanout.fanout_id
             assert owner.high_water_mark() == 3
+        finally:
+            await service.close()
+
+
+async def test_saved_restart_source_is_not_rematerialized_or_replayed_by_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_workspace_roots: tuple[Path, Path],
+) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "test-key")
+    workspace = config_workspace_roots[0]
+    workspace_id = load_or_create_workspace_id(workspace)
+    config_path = tmp_path / "workspace.jsonc"
+    _write_config(config_path, model_name="model-a")
+    owner = WorkspaceSourceOwner(path=tmp_path / "source-owner.sqlite")
+    with WorkspaceStateStore(workspace_root=workspace) as store:
+        service = ConfigService(
+            config_dir=Path.cwd() / "configs",
+            config_path=config_path,
+            workspace_root=workspace,
+            workspace_state_store=store,
+            source_owner=owner,
+            source_owner_workspace_id=workspace_id,
+        )
+        apply_calls = 0
+
+        async def require_restart(_previous, _candidate, _scope, _record_side_effect) -> ConfigPublication:
+            nonlocal apply_calls
+            apply_calls += 1
+            raise ConfigRestartRequiredError("runtime requires restart", changed_sections=("agents",))
+
+        service._candidate_applier = require_restart
+        try:
+            service.validate_workspace_config()
+            document = service.get_source_document(
+                source_key="workspace_mutable_override", gateway_id="gateway-test",
+            )
+            payload = json.loads(document.jsonc)
+            payload["agents"]["default"]["name"] = "Restart Required Agent"
+            request = ConfigSourceEditRequest(
+                gateway_id=document.gateway_id,
+                workspace_id=workspace_id,
+                source_key=document.source_key,
+                jsonc=json.dumps(payload, ensure_ascii=False),
+                base_file_digest=document.file_digest,
+                base_layer_revision=document.layer_revision,
+                base_layer_digest=document.layer_digest,
+                expected_active_revision=document.active_revision,
+                expected_active_digest=document.active_digest,
+                idempotency_key="restart-source-save",
+            )
+
+            saved = await service.save_source_edit(
+                source_key=document.source_key,
+                gateway_id=document.gateway_id,
+                request=request,
+            )
+            assert saved.edit is not None and saved.edit.state == "pending_restart"
+            pending = store.get_pending_config_candidate(
+                config_domain="workspace", idempotency_key=request.idempotency_key,
+            )
+            assert pending is not None and pending.state == "pending_restart" and pending.candidate_ref is not None
+            original_candidate = (
+                pending.candidate_id,
+                pending.candidate_ref,
+                pending.state,
+                pending.last_attempt_id,
+                pending.last_apply_id,
+                pending.last_error,
+                pending.source_edit,
+            )
+            original_fanout = owner.get_fanout(
+                source_key="workspace:user", source_generation=2, workspace_id=workspace_id,
+            )
+            assert original_fanout.status == "applying" and original_fanout.result == "restart_required"
+            assert apply_calls == 1
+            original_journals = store.list_config_apply_journals(config_domain="workspace")
+            assert len(original_journals) == 1 and original_journals[0].side_effects == ()
+
+            service._build_candidate_snapshot()
+            repeated_fanout = owner.get_fanout(
+                source_key="workspace:user", source_generation=2, workspace_id=workspace_id,
+            )
+            assert repeated_fanout.status == "applying" and repeated_fanout.result == "restart_required"
+            assert repeated_fanout.updated_at == original_fanout.updated_at
+
+            await service._reload_from_watcher(candidate_applier=require_restart)
+            unchanged = store.get_pending_config_candidate(
+                config_domain="workspace", idempotency_key=request.idempotency_key,
+            )
+            assert unchanged is not None
+            assert (
+                unchanged.candidate_id,
+                unchanged.candidate_ref,
+                unchanged.state,
+                unchanged.last_attempt_id,
+                unchanged.last_apply_id,
+                unchanged.last_error,
+                unchanged.source_edit,
+            ) == original_candidate
+            assert apply_calls == 1
+            assert store.list_config_apply_journals(config_domain="workspace") == original_journals
+
+            root_config_path = get_workspace_config_path(workspace)
+            root_config_path.parent.mkdir(parents=True, exist_ok=True)
+            root_config_path.write_text(json.dumps({
+                "agents": {"default": {"instructions": {"system_prompt": "workspace-root update"}}},
+            }), encoding="utf-8")
+            root_file = read_stable_config_file(root_config_path)
+
+            await service._reload_from_watcher(candidate_applier=require_restart)
+
+            root_source = store.get_source_layer("workspace_root_mutable_override")
+            assert root_source is not None
+            assert root_source.presence == "present" and root_source.layer_digest == root_file.digest
+            assert root_source.payload == {"agents": {"default": {"instructions": {"system_prompt": "workspace-root update"}}}}
+            assert apply_calls == 2
+            unchanged = store.get_pending_config_candidate(
+                config_domain="workspace", idempotency_key=request.idempotency_key,
+            )
+            assert unchanged is not None
+            assert (
+                unchanged.candidate_id,
+                unchanged.candidate_ref,
+                unchanged.state,
+                unchanged.last_attempt_id,
+                unchanged.last_apply_id,
+                unchanged.last_error,
+                unchanged.source_edit,
+            ) == original_candidate
+            final_fanout = owner.get_fanout(
+                source_key="workspace:user", source_generation=2, workspace_id=workspace_id,
+            )
+            assert (final_fanout.status, final_fanout.result, final_fanout.updated_at) == (
+                original_fanout.status, original_fanout.result, original_fanout.updated_at,
+            )
+            assert store.get_config_apply_journal(apply_id=original_journals[0].apply_id) == original_journals[0]
         finally:
             await service.close()
 

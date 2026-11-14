@@ -611,15 +611,22 @@ class ConfigSourceLayersMixin:
                     result="materialized" if is_current else "superseded",
                 )
             if owner_record.source_generation <= previous_source_generation:
-                source_owner.record_fanout(
-                    source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
-                    source_generation=owner_record.source_generation,
-                    workspace_id=workspace_id,
-                    status="applying",
-                    layer_revision=materialized.layer_revision,
-                    layer_digest=materialized.layer_digest,
-                    result="materialized",
+                observed = next(
+                    (item for item in source_owner.list_fanout(
+                        source_generation=owner_record.source_generation,
+                    ) if item.workspace_id == workspace_id),
+                    None,
                 )
+                if observed is None or observed.status in {"pending", "unobserved"}:
+                    source_owner.record_fanout(
+                        source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
+                        source_generation=owner_record.source_generation,
+                        workspace_id=workspace_id,
+                        status="applying",
+                        layer_revision=materialized.layer_revision,
+                        layer_digest=materialized.layer_digest,
+                        result="materialized",
+                    )
             return
         self._workspace_state_store.append_config_source_journal(
             source_key=source_key,
@@ -660,6 +667,8 @@ class ConfigSourceLayersMixin:
         record = owner.get_fanout(source_key=SHARED_USER_WORKSPACE_SOURCE_KEY,
             source_generation=source.source_generation, workspace_id=workspace_id)
         if record.status not in {"pending", "applying"}:
+            return
+        if record.result == "restart_required" and result == "restart_required":
             return
         status = {"applied": "applied", "unchanged": "applied", "restart_required": "applying",
                   "conflict": "conflict", "failed": "failed"}[result]

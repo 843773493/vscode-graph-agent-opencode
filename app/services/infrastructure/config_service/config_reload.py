@@ -190,6 +190,9 @@ class ConfigReloadMixin:
         before_build: Callable[[], bool] | None = None,
         source_edit: dict[str, object] | None = None,
     ) -> bool:
+        if source_edit is None and cast("ConfigService", self)._source_edit_waiting_for_explicit_action():
+            return False
+
         async def apply_through_shadow(
             previous: ConfigSnapshot,
             candidate: ConfigSnapshot,
@@ -200,7 +203,7 @@ class ConfigReloadMixin:
             if (
                 source_edit is None
                 and (saved := cast("ConfigService", self)._saved_source_edit_candidate(candidate)) is not None
-                and (saved.state == "candidate_validated" or candidate.revision != previous.revision)
+                and saved.state == "candidate_validated"
             ):
                 source_edit, idempotency_key = saved.source_edit, saved.idempotency_key
             if self._shadow_lifecycle.readiness == "cold":

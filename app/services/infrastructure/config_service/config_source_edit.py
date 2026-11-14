@@ -65,6 +65,34 @@ _WRITABLE_SOURCES = frozenset({_WORKSPACE_SOURCE, _USER_SOURCE})
 
 
 class ConfigSourceEditMixin:
+    def _source_edit_waiting_for_explicit_action(self) -> bool:
+        service = cast("ConfigService", self)
+        store = service._workspace_state_store
+        if store is None:
+            return False
+        candidate = store.get_pending_config_candidate(config_domain=service._CONFIG_DOMAIN)
+        if (candidate is None or candidate.source_edit is None
+                or candidate.state in {"candidate_validated", "active", "discarded"}):
+            return False
+        source_key = candidate.source_edit.get("source_key")
+        if not isinstance(source_key, str) or source_key not in _WRITABLE_SOURCES:
+            return False
+        for key, (layer, _) in _SOURCE_LAYER_AUTHORITY.items():
+            if layer == "inline":
+                continue
+            detail = candidate.source_baseline.get(key)
+            if not isinstance(detail, dict):
+                return False
+            path, _, _ = self._source_target(key)
+            if path is None:
+                continue
+            file = read_stable_config_file(path)
+            if (file.presence, file.digest) != (detail.get("presence"), detail.get("layer_digest")):
+                return False
+            if key == source_key and file.digest != candidate.source_edit.get("file_digest"):
+                return False
+        return True
+
     def _source_fanout(self, source_key: str, generation: int | None = None) -> ConfigSourceFanoutDTO | None:
         service = cast("ConfigService", self)
         owner = service._source_owner
