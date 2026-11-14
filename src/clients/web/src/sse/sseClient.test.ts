@@ -69,6 +69,8 @@ describe("通用 SSE 传输层", () => {
         ": heart",
         "beat\r\n\r\nevent: changes\r\ndata: {\"value\":1}\r",
         "\n\r\n",
+        "event: changes\ndata: {\"value\":2}\n",
+        "\nevent: changes\ndata: {\"value\":\"尾帧\"}",
       ]),
       {
         events: {
@@ -79,7 +81,27 @@ describe("通用 SSE 传输层", () => {
         },
       },
     );
-    expect(received).toEqual([{ value: 1 }]);
+    expect(received).toEqual([{ value: 1 }, { value: 2 }, { value: "尾帧" }]);
+  });
+
+  test("大快照按小块输入后完整交付一次", async () => {
+    const text = "快照🙂".repeat(1024 * 1024);
+    const bytes = new TextEncoder().encode(`data: ${JSON.stringify({ text })}\n\n`);
+    let offset = 0, received = 0;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset === bytes.length) return controller.close();
+        controller.enqueue(bytes.subarray(offset, offset + 4096));
+        offset = Math.min(bytes.length, offset + 4096);
+      },
+    }), { headers: { "content-type": "text/event-stream" } });
+    await consumeSseResponse(response, {
+      events: { message: defineSseEvent(decodeJsonSseData, (value) => {
+        expect(value).toEqual({ text });
+        received++;
+      }) },
+    });
+    expect(received).toBe(1);
   });
 
   test("未知事件立即失败而不是静默忽略", async () => {

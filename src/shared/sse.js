@@ -119,7 +119,8 @@ export async function consumeSseResponse(response, options) {
   assertEventStreamResponse(response);
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8');
-  let buffer = '';
+  const frameParts = [];
+  let pendingLineFeed = false;
   let pendingCarriageReturn = false;
   let reachedEnd = false;
   let readFailed = false;
@@ -164,29 +165,35 @@ export async function consumeSseResponse(response, options) {
         decoded += '\r';
         pendingCarriageReturn = false;
       }
-      const normalizedChunk = decoded.includes('\r')
+      let chunk = decoded.includes('\r')
         ? decoded.replace(/\r\n|\r/g, '\n')
         : decoded;
-      buffer += normalizedChunk;
+      // 只扫描新片段；跨片段仅携带末尾换行，完整帧交付时再合并正文。
+      if (pendingLineFeed) {
+        chunk = `\n${chunk}`;
+      }
 
       let frameStart = 0;
-      let boundaryIndex = buffer.indexOf('\n\n');
+      let boundaryIndex = chunk.indexOf('\n\n');
       while (boundaryIndex !== -1) {
-        dispatchBlock(buffer.slice(frameStart, boundaryIndex));
+        frameParts.push(chunk.slice(frameStart, boundaryIndex));
+        dispatchBlock(frameParts.join(''));
+        frameParts.length = 0;
         frameStart = boundaryIndex + 2;
-        boundaryIndex = buffer.indexOf('\n\n', frameStart);
+        boundaryIndex = chunk.indexOf('\n\n', frameStart);
         if (boundaryIndex !== -1 && options.yieldBetweenEvents) {
-          buffer = buffer.slice(frameStart);
-          boundaryIndex -= frameStart;
-          frameStart = 0;
           await yieldBetweenEvents();
         }
       }
-      if (frameStart > 0) {
-        buffer = buffer.slice(frameStart);
+      pendingLineFeed = frameStart < chunk.length && chunk.endsWith('\n');
+      const remainder = chunk.slice(frameStart, pendingLineFeed ? -1 : undefined);
+      if (remainder) {
+        frameParts.push(remainder);
       }
       if (done) {
         reachedEnd = true;
+        if (pendingLineFeed) frameParts.push('\n');
+        const buffer = frameParts.join('');
         if (buffer.trim()) {
           dispatchBlock(buffer);
         }
