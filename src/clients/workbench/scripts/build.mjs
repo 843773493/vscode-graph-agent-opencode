@@ -173,6 +173,8 @@ for (const entry of workers) {
   await build({ ...options, entryPoints: [join(upstream, 'src', `${entry}.ts`)], outfile: join(dist, 'out', `${entry}.js`) });
   await recordAssets();
 }
+await build({ ...options, entryPoints: [join(root, 'src/search/openModelSearchWorker.ts')],
+  outfile: join(dist, 'out/boxteam/openModelSearchWorker.js') });
 const translationFile = parseUniqueJson(translationPath, translationSource.toString('utf8'));
 const extensionTranslations = {};
 for (const id of extensionIds) {
