@@ -74,7 +74,12 @@ export default function ResponseActionToolbar({
   const modelUsageTitle = modelUsage
     ? t("chat.actions.model", modelUsage.finalModelId)
     : "";
-  const usageTitle = [modelUsageTitle, tokenUsageTitle].filter(Boolean).join(t("chat.listSeparator"));
+  const usageTitle = [
+    t("chat.actions.usageScope"),
+    modelUsageTitle,
+    tokenUsageTitle || t("chat.actions.usageUnknown"),
+    t("chat.actions.costUnknown"),
+  ].filter(Boolean).join(t("chat.listSeparator"));
 
   return (
     <div className="chat-response-actions" role="toolbar" aria-label={t("chat.actions.toolbar")}>
@@ -117,31 +122,29 @@ export default function ResponseActionToolbar({
       <span className="chat-response-action-status" aria-live="polite">
         {copyState === "idle" ? "" : copyLabel}
       </span>
-      {tokenUsage || modelUsage ? (
-        <span
-          className="chat-response-token-usage"
-          title={usageTitle}
-          aria-label={usageTitle}
-        >
-          {modelUsage ? (
-            <span className="chat-response-model-id">
-              {t("chat.actions.modelBadge", modelUsage.finalModelId)}
+      <span
+        className="chat-response-token-usage"
+        title={usageTitle}
+        aria-label={usageTitle}
+      >
+        {modelUsage ? (
+          <span className="chat-response-model-id">
+            {t("chat.actions.modelBadge", modelUsage.finalModelId)}
+          </span>
+        ) : null}
+        {modelUsage && tokenUsage ? <span aria-hidden="true">·</span> : null}
+        {tokenUsage ? (
+          <>
+            <span>{t("chat.actions.tokensBadge", formatNumber(tokenUsage.totalTokens))}</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {t("chat.actions.cacheBadge", tokenUsage.cacheReadInputTokens === null
+                ? "—"
+                : formatNumber(tokenUsage.cacheReadInputTokens))}
             </span>
-          ) : null}
-          {modelUsage && tokenUsage ? <span aria-hidden="true">·</span> : null}
-          {tokenUsage ? (
-            <>
-              <span>{t("chat.actions.tokensBadge", formatNumber(tokenUsage.totalTokens))}</span>
-              <span aria-hidden="true">·</span>
-              <span>
-                {t("chat.actions.cacheBadge", tokenUsage.cacheReadInputTokens === null
-                  ? "—"
-                  : formatNumber(tokenUsage.cacheReadInputTokens))}
-              </span>
-            </>
-          ) : null}
-        </span>
-      ) : null}
+          </>
+        ) : <span>{t("chat.actions.usageUnknown")}</span>}
+      </span>
     </div>
   );
 }

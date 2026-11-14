@@ -16,6 +16,7 @@ const { default: Tools } = await import(${JSON.stringify(new URL('./ComposerTool
 const { COMPOSER_SLASH_COMMANDS } = await import(${JSON.stringify(new URL('../../state/slashCommands.ts', import.meta.url).href)});
 const { GOAL_STATUS_LABELS } = await import(${JSON.stringify(new URL('../../state/sessionGoal.ts', import.meta.url).href)});
 const { default: Goal } = await import(${JSON.stringify(new URL('../cards/GoalManagerCard.tsx', import.meta.url).href)});
+const { default: Usage } = await import(${JSON.stringify(new URL('../chat/ResponseActionToolbar.tsx', import.meta.url).href)});
 const { default: WarmConfirm } = await import(${JSON.stringify(new URL('../shell/WarmConfirmProvider.tsx', import.meta.url).href)});
 const { default: TaskEditor } = await import(${JSON.stringify(new URL('../workspace/persistentTasks/TaskEditor.tsx', import.meta.url).href)});
 const { default: TaskHistory } = await import(${JSON.stringify(new URL('../workspace/persistentTasks/TaskRunHistory.tsx', import.meta.url).href)});
@@ -72,7 +73,10 @@ const ports = renderToStaticMarkup(React.createElement(WarmConfirm, null, React.
 const bootstrap = renderToStaticMarkup(React.createElement(Bootstrap, {onRetry:async () => {}}));
 let portError;
 try { parsePortLiteral('1e3', '目标端口 {0}'); } catch (error) { portError = error.message; }
-process.stdout.write(JSON.stringify({actions, model, tools, goal, editor, history, schedule:taskSchedule(task),
+const usageUnknown = renderToStaticMarkup(React.createElement(Usage, {responseText:'模型原文', tokenUsage:null, modelUsage:null}));
+const usageKnown = renderToStaticMarkup(React.createElement(Usage, {responseText:'模型原文', modelUsage:{finalModelId:'模型原名'},
+  tokenUsage:{totalTokens:0,inputTokens:0,outputTokens:0,cacheReadInputTokens:null,modelCalls:1,reportedModelCalls:1}}));
+process.stdout.write(JSON.stringify({actions, model, tools, goal, usageUnknown, usageKnown, editor, history, schedule:taskSchedule(task),
   debug, request, changes, child, ports, bootstrap, portError, resourceStatus:resourceDisplay.statusLabel('lost'),
   resourceGroup:resourceDisplay.resourceAttentionGroup(resource,null), unknownResourceStatus:resourceDisplay.statusLabel('原始未知状态'),
   unknownTaskLabel:taskLabel('未识别的原始状态'), commands:COMPOSER_SLASH_COMMANDS, activeGoal:GOAL_STATUS_LABELS.active}));
@@ -92,6 +96,15 @@ process.stdout.write(JSON.stringify({actions, model, tools, goal, editor, histor
     expect(output.activeGoal).toBe(locale === 'en' ? 'In progress' : '进行中');
     expect(output.goal).toContain(locale === 'en' ? '>Pause</button>' : '>暂停</button>');
     expect(output.goal).toContain('12,345');
+    expect(output.goal).toContain(locale === 'en' ? 'Only usage recorded by this Goal' : '仅含本 Goal 已记录的用量');
+    expect(output.usageUnknown).toContain(locale === 'en' ? 'Usage not reported' : '用量未报告');
+    for (const usage of [output.usageUnknown, output.usageKnown]) {
+      expect(usage).toContain(locale === 'en' ? 'not a Thread total' : '非整个 Thread 总计');
+      expect(usage).toContain(locale === 'en' ? 'Cost unknown' : '成本未知');
+    }
+    expect(output.usageKnown).toContain('模型原名');
+    expect(output.usageKnown).toContain('0');
+    expect(output.usageKnown).not.toContain(locale === 'en' ? 'Usage not reported' : '用量未报告');
     expect(output.goal).toContain('用户目标 {0}');
     expect(output.editor).toContain(locale === 'en' ? 'Edit persistent task' : '编辑持久任务');
     expect(output.editor).toContain(locale === 'en' ? 'Execution timeout (seconds)' : '执行期限（秒）');

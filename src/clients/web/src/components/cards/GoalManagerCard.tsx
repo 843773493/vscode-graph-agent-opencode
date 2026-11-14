@@ -131,6 +131,7 @@ export default function GoalManagerCard({
                 : ` / ${formatNumber(goal.token_budget)}`}
             </span>
           </div>
+          <p>{t("goal.manager.usageScope")}</p>
           <div className="goal-manager-actions">
             {goal.status === "active" ? (
               <button

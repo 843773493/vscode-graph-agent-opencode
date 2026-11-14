@@ -4061,5 +4061,9 @@
   "thread.cache.absent": "没有镜像",
   "thread.cache.pending": "有镜像等待保存",
   "thread.cache.noPending": "没有等待保存的镜像",
-  "thread.cache.information": "Gateway：{0}\n工作区：{1}\nSession：{2}\nThread：{3}\n\n已保存的展示镜像：{4}\n内存中的展示镜像：{5}\n{6}\n\n保存在当前客户端的 IndexedDB。每个 Gateway 最多保留 {7} 项／{8}；内存缓存跨 Gateway 共用同一上限。这是可重建的展示窗口，不是后端完整历史。清除后保留消息、草稿、设置和编辑器恢复数据。此处不提供后端备份、修复或目录删除。"
+  "thread.cache.information": "Gateway：{0}\n工作区：{1}\nSession：{2}\nThread：{3}\n\n已保存的展示镜像：{4}\n内存中的展示镜像：{5}\n{6}\n\n保存在当前客户端的 IndexedDB。每个 Gateway 最多保留 {7} 项／{8}；内存缓存跨 Gateway 共用同一上限。这是可重建的展示窗口，不是后端完整历史。清除后保留消息、草稿、设置和编辑器恢复数据。此处不提供后端备份、修复或目录删除。",
+  "chat.actions.usageScope": "本次回复的最后一次模型请求，非整个 Thread 总计",
+  "chat.actions.usageUnknown": "用量未报告",
+  "chat.actions.costUnknown": "成本未知：没有已确认价格",
+  "goal.manager.usageScope": "仅含本 Goal 已记录的用量；没有已确认价格，成本未知。"
 }
