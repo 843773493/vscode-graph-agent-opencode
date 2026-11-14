@@ -3,6 +3,7 @@ import {
   closeSync,
   lstatSync,
   openSync,
+  readFileSync,
   readSync,
   readdirSync,
   readlinkSync,
@@ -35,6 +36,11 @@ const GENERATED_DIRECTORY_NAMES = new Set([
   "node_modules",
   "out",
   "__pycache__",
+]);
+// 这些构建生成的 JSON 会在 Linux/Windows 构建时只改变 CRLF，字段正文保持相同。
+const GENERATED_JSON_EOL_VARIANT_INPUTS = new Set([
+  "src/clients/shared/core/i18n/actionTitles.en.json",
+  "src/clients/shared/core/i18n/bootstrapMessages.json",
 ]);
 
 // 只忽略构建工具及Launcher中不进入发行包的普通说明和测试文件。
@@ -111,6 +117,9 @@ export function computeBuildInputFingerprint({
     if (input.linkTarget !== undefined) {
       fingerprint.update("symlink\0");
       fingerprint.update(input.linkTarget);
+    } else if (GENERATED_JSON_EOL_VARIANT_INPUTS.has(input.path)) {
+      const bytes = readFileSync(path.join(root, input.path));
+      fingerprint.update(Buffer.from(bytes.toString("latin1").replace(/\r\n/g, "\n"), "latin1"));
     } else {
       const descriptor = openSync(path.join(root, input.path), "r");
       try {
