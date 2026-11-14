@@ -611,7 +611,7 @@ describe('唯一 SearchService 文件联邦合同（网络页为显式资产）'
         await started.promise;
         if (mode === 'cancel') token.cancel(); else local.setValue('changed');
         expect(await result).toBeInstanceOf(Error); expect(disposed).toBe(true);
-        pending.resolve([{ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 7 }]);
+        pending.resolve({ count: 1, results: [] });
         await Promise.resolve(); expect(progress).toEqual([]);
       } finally { token.dispose(); f.instantiation.dispose(); local.dispose(); }
     }

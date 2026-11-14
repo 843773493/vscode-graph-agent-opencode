@@ -3,12 +3,10 @@ import { raceCancellationError } from '../../upstream/src/vs/base/common/async.j
 import { CancellationToken, CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { CancellationError } from '../../upstream/src/vs/base/common/errors.js';
 import { DisposableStore, toDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
-import { FileAccess } from '../../upstream/src/vs/base/common/network.js';
 import { ResourceSet } from '../../upstream/src/vs/base/common/map.js';
 import type { URI } from '../../upstream/src/vs/base/common/uri.js';
 import { IModelService } from '../../upstream/src/vs/editor/common/services/model.js';
-import { FindMatch, type ITextModel } from '../../upstream/src/vs/editor/common/model.js';
-import { Range } from '../../upstream/src/vs/editor/common/core/range.js';
+import type { ITextModel } from '../../upstream/src/vs/editor/common/model.js';
 import { IFileService } from '../../upstream/src/vs/platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../upstream/src/vs/platform/instantiation/common/extensions.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
@@ -16,7 +14,6 @@ import { ILogService } from '../../upstream/src/vs/platform/log/common/log.js';
 import { ITelemetryService } from '../../upstream/src/vs/platform/telemetry/common/telemetry.js';
 import { IUriIdentityService } from '../../upstream/src/vs/platform/uriIdentity/common/uriIdentity.js';
 import { IWebWorkerService } from '../../upstream/src/vs/platform/webWorker/browser/webWorkerService.js';
-import { WebWorkerDescriptor } from '../../upstream/src/vs/platform/webWorker/browser/webWorkerDescriptor.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IExtensionService } from '../../upstream/src/vs/workbench/services/extensions/common/extensions.js';
 // 基类模块先完成原 singleton 登记，再登记唯一项目实现，发生于 Workbench create 之前。
@@ -25,7 +22,8 @@ import { DEFAULT_MAX_SEARCH_RESULTS, FileMatch, IAITextQuery, IFileQuery, ISearc
 import { editorMatchesToTextSearchResults, getTextSearchMatchWithModelContext } from '../../upstream/src/vs/workbench/services/search/common/searchHelpers.js';
 import { WorkspaceSearchProvider } from './fileProvider.js';
 import { businessQuery, canonicalFileQuery, fileScheme, openResources, requiresCanonicalFileQuery, resourceInQuery, validateTextQuery } from './query.js';
-import type { OpenModelSearchWorker } from './openModelSearchWorker.js';
+import { OpenModelSearch } from './openModelSearch.js';
+import type { ITextSearchResult } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 
 export class WorkspaceSearchService extends RemoteSearchService {
   private readonly businessProvider: WorkspaceSearchProvider;
@@ -124,14 +122,13 @@ export class WorkspaceSearchService extends RemoteSearchService {
       }
       return { dispose: () => watch.dispose(), validate: validateModels };
     };
-    const acceptMatches = (model: ITextModel, matches: FindMatch[]) => {
+    const acceptResults = (model: ITextModel, matchCount: number, matchResults: ITextSearchResult[]) => {
       if (token.isCancellationRequested) throw new CancellationError();
-      if (matches.length > maximum - count) limitHit = true;
-      const accepted = matches.slice(0, maximum - count);
-      count += accepted.length;
-      if (accepted.length) {
+      if (matchCount > maximum - count) limitHit = true;
+      count += Math.min(matchCount, maximum - count);
+      if (matchResults.length) {
         const match = new FileMatch(model.uri);
-        match.results = getTextSearchMatchWithModelContext(editorMatchesToTextSearchResults(accepted, model, query.previewOptions), model, query);
+        match.results = matchResults;
         results.push(match);
         onProgress?.(match);
       }
@@ -150,24 +147,23 @@ export class WorkspaceSearchService extends RemoteSearchService {
         lifetime.add(model.onWillDispose(() => source.cancel()));
         if (query.contentPattern.isRegExp) selectedModels.push(model);
         else {
-          acceptMatches(model, model.findMatches(query.contentPattern.pattern, false, false,
-            !!query.contentPattern.isCaseSensitive, separators, false, maximum - count + 1));
+          const matches = model.findMatches(query.contentPattern.pattern, false, false,
+            !!query.contentPattern.isCaseSensitive, separators, false, maximum - count + 1);
+          acceptResults(model, matches.length, getTextSearchMatchWithModelContext(
+            editorMatchesToTextSearchResults(matches.slice(0, maximum - count), model, query.previewOptions), model, query));
           if (limitHit) break;
         }
       }
       let pendingModels: Promise<void> | undefined;
       if (query.contentPattern.isRegExp && selectedModels.length) {
-        const worker = lifetime.add(this.businessWorkers.createWorkerClient<OpenModelSearchWorker>(new WebWorkerDescriptor({
-          esmModuleLocation: () => FileAccess.asBrowserUri('boxteam/openModelSearchWorker.js'), label: 'open-model-search',
-        })));
-        lifetime.add(token.onCancellationRequested(() => worker.dispose()));
+        const worker = lifetime.add(new OpenModelSearch(this.businessWorkers, token));
         pendingModels = (async () => {
           for (const model of selectedModels) {
             if (token.isCancellationRequested) throw new CancellationError();
-            const ranges = await raceCancellationError(worker.proxy.$findMatches(model.getValue(), query.contentPattern.pattern,
-              !!query.contentPattern.isCaseSensitive, separators, maximum - count + 1), token);
+            const found = await worker.findMatches(model.getValue(), { pattern: query.contentPattern,
+              maxResults: maximum - count, previewOptions: query.previewOptions, surroundingContext: query.surroundingContext });
             validateModels();
-            acceptMatches(model, ranges.map(range => new FindMatch(Range.lift(range), null)));
+            acceptResults(model, found.count, found.results);
             if (limitHit) break;
           }
         })();
