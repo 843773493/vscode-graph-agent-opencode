@@ -156,7 +156,7 @@ export default async function () {
         { find: './codicon.ttf', replacement: join(root, 'node_modules/@vscode/codicons/dist/codicon.ttf') },
       ],
     },
-    define: { __BOXTEAM_NLS_MANIFEST__: JSON.stringify(version.localization.nlsManifest) },
+    define: { __BOXTEAM_NLS_MANIFEST__: JSON.stringify(version.localization.nlsManifest), __BOXTEAM_PRODUCT__: JSON.stringify(version.product) },
     // 上游模块在同次 esbuild split build 中共享身份，React 继续由 Vite 预构建。
     optimizeDeps: {
       include: [

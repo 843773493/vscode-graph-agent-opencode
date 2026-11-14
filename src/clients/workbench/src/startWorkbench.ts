@@ -17,6 +17,8 @@ import './debug/contribution.js';
 import './managementTarget.js';
 import './theme.js';
 
+declare const __BOXTEAM_PRODUCT__: { nameShort: string; nameLong: string; version: string; commit: string; date: string };
+
 installReadonlyDocumentSerialization();
 
 export async function startWorkbench(): Promise<void> {
@@ -29,6 +31,7 @@ export async function startWorkbench(): Promise<void> {
   const container = document.getElementById('workbench');
   if (!container) throw new Error('缺少 Workbench 容器');
   create(container, {
+    productConfiguration: { nameShort: __BOXTEAM_PRODUCT__.nameShort, nameLong: __BOXTEAM_PRODUCT__.nameLong },
     // 避开底部 Composer，防止错误通知在消失前阻挡输入和发送。
     configurationDefaults: { 'workbench.notifications.position': 'top-right' },
     // TODO：辅助侧边栏的 Agent 内容待后续设计；会话资源只放入对应 Thread 编辑器。

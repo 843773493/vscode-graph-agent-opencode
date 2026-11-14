@@ -74,6 +74,7 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/services/localization/browser/localeService.ts',
   'src/vs/workbench/services/host/browser/browserHostService.ts',
   'src/vs/platform/product/common/product.ts',
+  'src/vs/workbench/browser/parts/dialogs/dialog.ts',
   'src/vs/workbench/contrib/webview/common/webview.ts',
   'src/vs/workbench/api/common/extHostWebview.ts',
   'src/vs/workbench/contrib/webview/browser/resourceLoading.ts',
@@ -127,6 +128,12 @@ export function sourceTransform(root, productConfiguration, extensions, nlsMessa
     // 严格文本锚点使用统一行尾，不改写固定上游的检出原件。
     let contents = source.replace(/\r\n/g, '\n');
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
+    if (path === join(upstream, 'src/vs/workbench/browser/parts/dialogs/dialog.ts')) {
+      // 只将本产品身份交给原 About；内置扩展宿主仍使用固定上游的 API 版本。
+      const entry = 'export function createBrowserAboutDialogDetails(productService: IProductService): { title: string; details: string; detailsToCopy: string } {';
+      contents = replaceOnce(contents, entry,
+        `declare const __BOXTEAM_PRODUCT__: Pick<IProductService, 'nameLong' | 'version' | 'commit' | 'date'>;\n${entry}\nproductService = { ...productService, ...__BOXTEAM_PRODUCT__ };`);
+    }
     contents = transformExtensionBrowser(root, path, contents, replaceOnce);
     contents = transformExtensionManagement(root, path, contents, replaceOnce);
     contents = transformExtensionDocuments(root, path, contents, replaceOnce);

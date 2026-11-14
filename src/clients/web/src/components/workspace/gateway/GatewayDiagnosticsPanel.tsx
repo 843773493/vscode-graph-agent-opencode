@@ -2,6 +2,7 @@ import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { t } from "../../../../../shared/core/i18n/index.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayDiagnostics } from "../../../gatewayApi";
+import { HttpRequestError } from "../../../api/http";
 import type {
   GatewayDiagnostics,
   GatewayWorkspace,
@@ -14,6 +15,7 @@ import {
 } from "../../panels/gatewayLogPresentation";
 import { errorMessage } from "../../../utils/errorMessage";
 import { copyTextToClipboard } from "../../../utils/clipboard";
+import GatewayRuntimeObservation from "./GatewayRuntimeObservation";
 
 interface GatewayDiagnosticsPanelProps {
   apiPort: number;
@@ -50,15 +52,15 @@ export default function GatewayDiagnosticsPanel({
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   // 诊断范围可被连续切换；只有最后一次发起的响应才允许写入展示态，否则先发后到的
   // 旧范围响应会覆盖新范围，用户看到与当前选择不符的工作区/日志。
-  const requestRevisionRef = useRef(0);
-  // 上一次渲染的诊断范围。范围一变化必须在同一提交内作废旧快照：仅靠 revision
-  // 只能丢弃先发后到的旧响应，但「新范围选择 + 旧 diagnostics」仍会让 selectedLog
+  const requestRef = useRef<AbortController | null>(null);
+  // 上一次渲染的诊断范围。范围一变化必须在同一提交内作废旧快照：仅取消请求
+  // 只能阻止旧响应发布，但「新范围选择 + 旧 diagnostics」仍会让 selectedLog
   // 回退到 diagnostics.logs[0]，在新响应到达前继续渲染旧工作区/旧日志入口的 tail。
   const lastScopeRef = useRef(`${gatewayConnectionId ?? ""}:${workspaceId}`);
   const scopeKey = `${gatewayConnectionId ?? ""}:${workspaceId}`;
   if (lastScopeRef.current !== scopeKey) {
     lastScopeRef.current = scopeKey;
-    requestRevisionRef.current += 1;
+    requestRef.current?.abort();
     setDiagnostics(null);
     setSelectedLogId(null);
     setError(null);
@@ -77,8 +79,9 @@ export default function GatewayDiagnosticsPanel({
 
   const loadDiagnostics = useCallback(
     async (logId?: string | null) => {
-      const revision = requestRevisionRef.current + 1;
-      requestRevisionRef.current = revision;
+      requestRef.current?.abort();
+      const controller = new AbortController();
+      requestRef.current = controller;
       setLoading(true);
       setError(null);
       try {
@@ -87,30 +90,25 @@ export default function GatewayDiagnosticsPanel({
           workspaceId: workspaceId || null,
           logId: logId ?? null,
           tailLines: 300,
+          signal: controller.signal,
         });
-        if (requestRevisionRef.current !== revision) return;
+        if (controller.signal.aborted) return;
         setDiagnostics(next);
         setSelectedLogId(next.selected_log_id);
       } catch (loadError) {
-        if (requestRevisionRef.current !== revision) return;
-        setError(errorMessage(loadError));
+        if (controller.signal.aborted) return;
+        setError(loadError instanceof HttpRequestError && loadError.requestId
+          ? `${errorMessage(loadError)}\nrequest_id=${loadError.requestId}` : errorMessage(loadError));
       } finally {
-        if (requestRevisionRef.current === revision) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }, [apiPort, gatewayConnectionId, workspaceId],
   );
 
   useEffect(() => {
     void loadDiagnostics();
+    return () => requestRef.current?.abort();
   }, [loadDiagnostics]);
-
-  useEffect(() => {
-    if (!selectedGroup) return;
-    const stillExists = selectedGroup.workspaces.some(
-      (workspace) => gatewayWorkspaceKey(workspace) === workspaceId,
-    );
-    if (workspaceId && !stillExists) setWorkspaceId("");
-  }, [selectedGroup, workspaceId]);
 
   const selectedLog = useMemo(() => {
     if (!diagnostics) return null;
@@ -160,6 +158,25 @@ export default function GatewayDiagnosticsPanel({
     }
   };
 
+  const copyDiagnosticSummary = async () => {
+    if (!diagnostics) return;
+    // 默认复制只选身份与状态；原始日志仍由用户在单独的“复制”操作中明确取得。
+    const summary = {
+      gateway_id: diagnostics.gateway_id, gateway_connection_id: diagnostics.gateway_connection_id,
+      selected_workspace_id: diagnostics.selected_workspace_id, checked_at: diagnostics.checked_at, status: diagnostics.status,
+      processes: diagnostics.processes.map(process => ({ service: process.service, workspace_ids: process.workspace_ids,
+        output_mode: process.output_mode, has_error: Boolean(process.error),
+        state: process.state ? { pid: process.state.pid, runtime_instance_id: process.state.runtime_instance_id,
+          applied_revision: process.state.applied_revision, level: process.state.level, pretty: process.state.pretty } : undefined })),
+      logs: diagnostics.logs.map(log => ({ log_id: log.log_id, workspace_id: log.workspace_id, service: log.service,
+        status: log.status, truncated: log.truncated, line_count: log.line_count, size_bytes: log.size_bytes, has_error: Boolean(log.error) })),
+    };
+    try {
+      await copyTextToClipboard(JSON.stringify(summary, null, 2));
+      setCopyNotice(t("gateway.diagnostics.summaryCopied"));
+    } catch (copyError) { setCopyNotice(errorMessage(copyError)); }
+  };
+
   return (
     <div className="gateway-diagnostics-panel" data-testid="gateway-diagnostics-panel">
       <section className="gateway-diagnostics-toolbar" aria-label={t("gateway.diagnostics.scope")}>
@@ -186,10 +203,16 @@ export default function GatewayDiagnosticsPanel({
                 {workspace.name}{workspace.managed ? t("gateway.diagnostics.managed") : t("gateway.diagnostics.external")}
               </option>
             ))}
+            {workspaceId && !selectedGroup?.workspaces.some(workspace => gatewayWorkspaceKey(workspace) === workspaceId)
+              ? <option value={workspaceId}>{workspaceId}</option> : null}
           </select>
         </label>
         <div className="gateway-diagnostics-toolbar-actions">
           <span className="gateway-diagnostics-readonly"><span className="codicon codicon-lock" aria-hidden="true" />{t("gateway.diagnostics.readOnly")}</span>
+          <button type="button" className="gateway-compact-button" disabled={!diagnostics || loading}
+            title={t("gateway.diagnostics.copySummaryHint")} onClick={() => void copyDiagnosticSummary()}>
+            {t("gateway.diagnostics.copySummary")}
+          </button>
           <button type="button" className="gateway-compact-button" disabled={loading} onClick={() => void loadDiagnostics(selectedLogId)}>
             <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
             {loading ? t("gateway.diagnostics.loading") : t("gateway.diagnostics.refreshLogs")}
@@ -273,6 +296,19 @@ export default function GatewayDiagnosticsPanel({
                 {process.workspace_ids.length ? <p>{t("gateway.diagnostics.mountedWorkspaces")}{process.workspace_ids.join(", ")}</p> : null}
               </div>
             ))}
+          </details>
+
+          <details className="gateway-diagnostics-runtime">
+            <summary>{t("gateway.observation.title")}</summary>
+            <p>{t("gateway.observation.scope", diagnostics.gateway_id)}</p>
+            {diagnostics.observation ? <GatewayRuntimeObservation observation={diagnostics.observation} />
+              : <p>{t("gateway.observation.unavailable")}</p>}
+            {diagnostics.plugin_observations.map((plugin, index) => <div key={plugin.instance?.instance_id ?? index}>
+              {plugin.instance ? <h4>{plugin.instance.package_id}/{plugin.instance.plugin_id}@{plugin.instance.package_version}
+                {` · ${plugin.instance.gateway_id} · ${plugin.instance.workspace_id ?? plugin.instance.instance_scope}`}</h4> : null}
+              {plugin.observation ? <GatewayRuntimeObservation observation={plugin.observation} /> : null}
+              {plugin.error ? <p role="alert">{plugin.error}</p> : null}
+            </div>)}
           </details>
 
           <section className="gateway-diagnostics-log-layout" aria-label={t("gateway.diagnostics.logViewer")}>

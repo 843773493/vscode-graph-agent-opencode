@@ -21,6 +21,16 @@ const pinned = 'fc8954c90fe6dea1f4c411dd73fdfe5f1913b5ca';
 if (commit !== pinned) throw new Error(`上游版本不匹配：${commit}，要求 ${pinned}`);
 const product = JSON.parse(await readFile(join(upstream, 'product.json'), 'utf8'));
 const upstreamPackage = JSON.parse(await readFile(join(upstream, 'package.json'), 'utf8'));
+const repository = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8' }).trim();
+const softwarePackage = JSON.parse(await readFile(join(repository, 'package.json'), 'utf8'));
+// 原上游版本继续用于构建核验；嵌入宿主通过原 productConfiguration 提供本产品身份。
+const productIdentity = {
+  nameShort: softwarePackage.displayName,
+  nameLong: softwarePackage.displayName,
+  version: softwarePackage.version,
+  commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
+  date: execFileSync('git', ['show', '-s', '--format=%cI', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
+};
 const englishPath = join(root, '../shared/core/i18n/messages/en.json');
 const chinesePath = join(root, '../shared/core/i18n/messages/zh-cn.json');
 const englishCatalog = await readFile(englishPath);
@@ -136,7 +146,7 @@ const options = {
   alias: { react: join(root, 'node_modules/react'), 'react-dom': join(root, 'node_modules/react-dom') },
   loader: { '.ttf': 'file', '.svg': 'file', '.png': 'file', '.sh': 'file', '.wasm': 'file' },
   assetNames: 'media/[name]-[hash]', plugins: [inject], logLevel: 'info',
-  define: { __BOXTEAM_NLS_MANIFEST__: JSON.stringify(nlsManifestPath) },
+  define: { __BOXTEAM_NLS_MANIFEST__: JSON.stringify(nlsManifestPath), __BOXTEAM_PRODUCT__: JSON.stringify(productIdentity) },
 };
 async function recordAssets() {
   // esbuild 生成的内容地址资源仅落在这两个目录；NLS manifest 等固定名字资源不缓存为 immutable。
@@ -246,6 +256,7 @@ const upstreamLocalization = await readFile(join(root, 'resources/localization/z
 await writeFile(join(dist, 'version.json'), JSON.stringify({
   commit,
   version: upstreamPackage.version,
+  product: productIdentity,
   extensions: extensions.length,
   localization: {
     source: 'microsoft/vscode-loc',

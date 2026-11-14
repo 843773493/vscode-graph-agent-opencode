@@ -71,6 +71,7 @@ export async function getGatewayDiagnostics(
     workspaceId?: string | null;
     logId?: string | null;
     tailLines?: number;
+    signal?: AbortSignal;
   } = {},
 ): Promise<GatewayDiagnostics> {
   const params = new URLSearchParams();
@@ -85,7 +86,7 @@ export async function getGatewayDiagnostics(
     await requestJson<APIResponse<GatewayDiagnostics>>(
       port,
       `/api/gateway/diagnostics${query ? `?${query}` : ""}`,
-      { headers: workspaceHeader(options.workspaceId), timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS },
+      { headers: workspaceHeader(options.workspaceId), timeoutMs: DEFAULT_API_REQUEST_TIMEOUT_MS, signal: options.signal },
     ),
   );
 }

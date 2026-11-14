@@ -154,7 +154,7 @@ for (const operation of ['sourceStatus', 'rebaseSource'] as const) registerActio
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.settings.openTarget', title: commandTitle('workbench.settings.openTarget'),
     category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true }); }
-  async run(accessor: ServicesAccessor, target?: ManagementTarget, scope?: { workspace_id: string }): Promise<void> {
+  async run(accessor: ServicesAccessor, target?: ManagementTarget, scope?: { workspace_id?: string }): Promise<void> {
     const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
     const frozen = { ...(target ?? managementGateway('settings')) };
     const explicit = scope ? { ...scope } : undefined;

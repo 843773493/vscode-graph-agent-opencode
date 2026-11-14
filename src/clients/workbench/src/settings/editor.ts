@@ -240,10 +240,17 @@ export class SourceSettings extends Disposable {
         arrayItemType: typeof object(schema.items).type === 'string' ? object(schema.items).type as string : undefined };
       this.fields.set(key, { path, schema }); fields.push(setting);
     };
+    const gatewayGroups: Record<string, string> = {
+      logging: 'settings.editor.groupLogging',
+      telemetry: 'settings.editor.groupTelemetry',
+      statistics: 'settings.editor.groupStatistics',
+    };
     for (const [name, candidate] of Object.entries(object(root.properties))) {
       if (['$schema', 'config_version'].includes(name)) continue;
       const settings: ISetting[] = []; visit(object(candidate), [name], settings, root);
-      if (settings.length) this.groups.push({ id: name, title: name, sections: [{ settings }], range: nullRange, titleRange: nullRange });
+      if (settings.length) this.groups.push({ id: name,
+        title: !this.location.workspace_id && gatewayGroups[name] ? t(gatewayGroups[name]) : name,
+        sections: [{ settings }], range: nullRange, titleRange: nullRange });
     }
     const bindings = at(this.document.source_effective, ['plugins', 'runtime', 'entries']);
     for (const plugin of this.schemas?.plugins ?? []) {
