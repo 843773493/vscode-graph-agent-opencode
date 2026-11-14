@@ -1,4 +1,4 @@
-import { gatewayWorkspaceKey, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "../../../web/src/api/workspaceIdentity.js";
+import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "../../../web/src/api/workspaceIdentity.js";
 import { t } from '../../../shared/core/i18n/index.js';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { getWorkspace, listAgents } from '../../../web/src/api/workspace.js';
@@ -16,6 +16,9 @@ import type { DispatchWorkspaceResourceAction } from '../../../web/src/hooks/wor
 import type { WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
 import { resourceActionCommand } from '../resources/runtimeActions.js';
 import { workspaceContext } from '../workspaceContext.js';
+import { managementGateway, managementWorkspace, managementTargetDisplayName, onDidChangeToolManagementTarget,
+  selectManagementTarget, selectToolManagementTargetCommand, type ManagementTarget } from '../managementTarget.js';
+import type { IDisposable } from '../../upstream/src/vs/base/common/lifecycle.js';
 import { ThreadInput } from '../threadInput.js';
 import ComposerToolControl from '../../../web/src/components/composer/ComposerToolControl.js';
 import type { Agent } from '../../../web/src/types/backend.js';
@@ -146,27 +149,60 @@ function WorkspacePanelView({ editors, kind, visible, commands, notifications, r
     return () => listener.dispose();
   }, [editors]);
   useEffect(() => { if (visible) void workspaceContext.refresh(); }, [visible]);
-  const current = !snapshot.loading && !snapshot.error ? snapshot.workspaces.find(item => gatewayWorkspaceKey(item) === snapshot.activeId) : undefined;
+  let current = kind !== 'tools' && !snapshot.loading && !snapshot.error
+    ? snapshot.workspaces.find(item => gatewayWorkspaceKey(item) === snapshot.activeId) : undefined;
+  let toolTarget: ManagementTarget | undefined, toolError: string | undefined;
+  if (kind === 'tools' && !snapshot.loading && !snapshot.error) {
+    try {
+      const explicit = reveal && 'target' in reveal ? reveal.target : undefined;
+      toolTarget = managementGateway('tools', explicit?.gateway_id);
+      if (explicit) toolTarget = { ...toolTarget, gateway_connection_id: explicit.gateway_connection_id };
+      current = explicit ? requireGatewayWorkspaceRequestTarget(snapshot.workspaces,
+        { gatewayId: explicit.gateway_id, workspaceId: explicit.workspace_id }) : managementWorkspace('tools', toolTarget);
+      const gatewayId = current.gateway_id;
+      const connections = current.remote_gateways.filter(item => item.gateway_id === gatewayId);
+      const expectedConnection = explicit ? explicit.gateway_connection_id : toolTarget.gateway_connection_id;
+      if (current.connection_kind === 'remote_gateway'
+        && (connections.length !== 1 || connections[0].gateway_connection_id !== expectedConnection)) {
+        throw new Error(t('workbench.resource.gatewayNotLoaded'));
+      }
+      if (current.status !== 'ready') toolError = t('workbench.panel.toolsWorkspaceNotReady', current.status);
+    } catch (cause) { toolError = cause instanceof Error ? cause.message : String(cause); current = undefined; }
+  }
   useEffect(() => {
-    if (current) setVisited(previous => new Map(previous).set(gatewayWorkspaceKey(current), current));
-    if (reveal && 'target' in reveal) {
-      const target = snapshot.workspaces.find(item => item.gateway_id === reveal.target.gateway_id && item.workspace_id === reveal.target.workspace_id);
-      if (target) setVisited(previous => new Map(previous).set(gatewayWorkspaceKey(target), target));
-    }
+    if (current && !toolError) setVisited(previous => new Map(previous).set(gatewayWorkspaceKey(current), current));
     // 已移除的工作区不再保留观察者或未保存表单。
     if (!snapshot.loading && !snapshot.error) setVisited(previous => new Map([...previous].filter(([id]) => snapshot.workspaces.some(item => gatewayWorkspaceKey(item) === id))));
-  }, [current, snapshot.workspaces, snapshot.loading, snapshot.error, reveal]);
-  const selectedWorkspace = reveal && 'target' in reveal
-    ? snapshot.workspaces.find(item => item.gateway_id === reveal.target.gateway_id && item.workspace_id === reveal.target.workspace_id)
-    : current;
+  }, [current, toolError, snapshot.workspaces, snapshot.loading, snapshot.error]);
+  const selectedWorkspace = current;
   return <div className={`native-workspace-panel${kind === 'automation' ? ' native-workspace-automation' : ''}`} data-workspace-id={selectedWorkspace?.workspace_id ?? ''} data-panel-kind={kind}>
-    <header className="native-workspace-context"><span>{selectedWorkspace?.name ?? t('workbench.panel.workspace')}</span>
+    <header className="native-workspace-context">{kind === 'tools' ? <>
+      <button type="button" aria-label={t('workbench.managementTarget.selectTools')} disabled={snapshot.loading || !snapshot.gatewayId}
+        onClick={() => void commands.executeCommand(selectToolManagementTargetCommand).catch((cause: unknown) => notifications.error(String(cause)))}>
+        {t('workbench.managementTarget.title', managementTargetDisplayName(toolTarget))} <span className="codicon codicon-chevron-down" />
+      </button>
+      <label>{t('workbench.panel.workspace')} <select aria-label={t('workbench.panel.toolsWorkspace')}
+        disabled={!toolTarget || snapshot.loading || !!snapshot.error} value={selectedWorkspace?.workspace_id ?? ''}
+        onChange={event => {
+          if (!toolTarget) return;
+          managementWorkspace('tools', toolTarget, event.target.value);
+          selectManagementTarget('tools', toolTarget);
+        }}>
+        {!selectedWorkspace ? <option value="">{t('plugins.noWorkspaces')}</option> : null}
+        {snapshot.workspaces.filter(item => item.gateway_id === toolTarget?.gateway_id).map(item =>
+          <option key={item.workspace_id} value={item.workspace_id}>{item.name} · {item.status}</option>)}
+      </select></label>
+    </> : <span>{selectedWorkspace?.name ?? t('workbench.panel.workspace')}</span>}
       <button className="sidebar-icon-button" aria-label={t('workbench.panel.refresh')} title={t('workbench.panel.refresh')} onClick={() => void workspaceContext.refresh()}><span className="codicon codicon-refresh" /></button>
     </header>
     {snapshot.error ? <p role="alert">{t('workbench.panel.readFailed', snapshot.error)}</p> : snapshot.loading ? <p role="status">{t('workbench.panel.switching')}</p>
+      : toolError ? <p role="alert">{toolError}{selectedWorkspace ? <button type="button"
+        onClick={() => void commands.executeCommand('boxteam.workspace.details', {
+          gatewayId: selectedWorkspace.gateway_id, workspaceId: selectedWorkspace.workspace_id,
+        }).catch((cause: unknown) => notifications.error(String(cause)))}>{t('workbench.workspaceAction.details')}</button> : null}</p>
       : !selectedWorkspace ? <p>{t('workbench.panel.chooseWorkspace')}</p> : null}
     {[...visited.values()].map(workspace => {
-      const selected = selectedWorkspace?.gateway_id === workspace.gateway_id && selectedWorkspace.workspace_id === workspace.workspace_id;
+      const selected = !toolError && selectedWorkspace?.gateway_id === workspace.gateway_id && selectedWorkspace.workspace_id === workspace.workspace_id;
       const input = activeEditor instanceof ThreadInput && activeEditor.owner.workspaceKey === gatewayWorkspaceKey(workspace) ? activeEditor : null;
       return <section key={gatewayWorkspaceKey(workspace)} className="native-workspace-panel-content" hidden={!selected} aria-label={t('workbench.panel.label', t(panelLabelKeys[kind]), workspace.name)}>
         <WorkspaceProduct kind={kind} workspace={workspace} editors={editors} active={visible && selected} input={input} commands={commands} notifications={notifications}
@@ -183,21 +219,16 @@ export class WorkspacePanelSurface {
   private readonly kind: PanelKind;
   private visible: boolean;
   private reveal?: ResourceReveal | AgentToolReveal;
-  private revealOriginActiveId: string | null = null;
-  private readonly unsubscribeWorkspace: () => void;
+  private readonly toolSelectionListener?: IDisposable;
   constructor(container: HTMLElement, private readonly editors: IEditorService, id: string, visible: boolean,
     private readonly notifications: INotificationService, private readonly commands: ICommandService) {
     const kind = panelKinds[id];
     if (!kind) throw new Error(t('workbench.panel.unregistered', id));
     this.kind = kind;
     this.surface = new ReactSurface(container, [...productStyles, panelStyle, portStyle, style]);
-    this.unsubscribeWorkspace = workspaceContext.subscribe(() => {
-      const activeId = workspaceContext.getSnapshot().activeId;
-      if (this.reveal && 'target' in this.reveal && activeId !== this.revealOriginActiveId) {
+    if (kind === 'tools') this.toolSelectionListener = onDidChangeToolManagementTarget(() => {
         this.reveal = undefined;
-        this.revealOriginActiveId = null;
         this.render();
-      }
     });
     this.visible = visible; this.render();
   }
@@ -208,10 +239,9 @@ export class WorkspacePanelSurface {
   }
   revealAgentTools(target: GatewayWorkspaceRequestTarget, agentId: string): void {
     this.reveal = { target: { ...target }, agentId };
-    this.revealOriginActiveId = workspaceContext.getSnapshot().activeId;
     this.render();
   }
   focus(): void { this.surface.focus('.native-workspace-panel-content:not([hidden]) :is(button,input,select)'); }
-  dispose(): void { this.unsubscribeWorkspace(); this.surface.dispose(); }
+  dispose(): void { this.toolSelectionListener?.dispose(); this.surface.dispose(); }
   private render(): void { this.surface.render(<WorkspacePanelView editors={this.editors} kind={this.kind} visible={this.visible} commands={this.commands} notifications={this.notifications} reveal={this.reveal} />); }
 }

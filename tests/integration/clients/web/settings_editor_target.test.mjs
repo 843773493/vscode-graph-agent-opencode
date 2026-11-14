@@ -627,6 +627,44 @@ scenario('安装事件替换声明后按当前绑定展示，保存不补读，�
   } finally { f.source.dispose(); }
 });
 
+scenario('各管理入口按Gateway与入口分别记住远端目标及工作区，不影响活动工作区', async () => {
+  const parsed = await source('src/managementTarget.ts', true);
+  const workspaces = [
+    { gateway_id: 'entry-A', workspace_id: 'local-1', name: '本地一', status: 'ready' },
+    { gateway_id: 'entry-A', workspace_id: 'local-2', name: '本地二', status: 'ready' },
+    { gateway_id: 'gateway-B', workspace_id: 'remote-1', name: '远端一', status: 'ready' },
+    { gateway_id: 'gateway-B', workspace_id: 'remote-2', name: '远端二', status: 'ready' },
+  ];
+  const snapshot = { gatewayId: 'entry-A', workspaces, activeId: 'navigation-workspace' };
+  const flow = evaluate(parsed, ['selections', 'workspaceSelections', 'managementGateway', 'selectManagementTarget', 'managementWorkspace'], {
+    workspaceContext: { getSnapshot: () => snapshot },
+    toolManagementChanged: { fire() {} },
+    t: key => key === 'workbench.managementTarget.local' ? '本地' : key,
+  });
+  const local = { gateway_id: 'entry-A', name: '本地', connection_kind: 'local' };
+  const remote = { gateway_id: 'gateway-B', name: '远端 B', connection_kind: 'remote_gateway', gateway_connection_id: 'route-B' };
+  expect(flow.managementWorkspace('settings', local).workspace_id).toBe('local-1');
+  expect(flow.managementWorkspace('settings', local, 'local-2').workspace_id).toBe('local-2');
+  expect(flow.managementWorkspace('settings', remote).workspace_id).toBe('remote-1');
+  expect(flow.managementWorkspace('settings', remote, 'remote-2').workspace_id).toBe('remote-2');
+  expect(flow.managementWorkspace('settings', local).workspace_id).toBe('local-2');
+  expect(flow.managementWorkspace('settings', remote).workspace_id).toBe('remote-2');
+  expect(flow.managementWorkspace('mcp', local).workspace_id).toBe('local-1');
+  expect(flow.managementGateway('tools')).toEqual(local);
+  expect(flow.managementWorkspace('tools', local).workspace_id).toBe('local-1');
+  expect(flow.managementWorkspace('tools', local, 'local-2').workspace_id).toBe('local-2');
+  flow.selectManagementTarget('tools', remote);
+  expect(flow.managementGateway('tools')).toEqual(remote);
+  expect(flow.managementWorkspace('tools', remote).workspace_id).toBe('remote-1');
+  expect(flow.managementWorkspace('tools', remote, 'remote-2').workspace_id).toBe('remote-2');
+  expect(flow.managementWorkspace('tools', local).workspace_id).toBe('local-2');
+  expect(flow.managementWorkspace('tools', remote).workspace_id).toBe('remote-2');
+  flow.selectManagementTarget('settings', remote);
+  expect(flow.managementGateway('settings')).toEqual(remote);
+  expect(flow.managementGateway('extensions')).toEqual(local);
+  expect(snapshot.activeId).toBe('navigation-workspace');
+});
+
 scenario('凭据失效保留各管理目标并取消在途选择，页面 Gateway 改变才清除选择', async () => {
   const parsed = await source('src/managementTarget.ts', true);
   const code = parsed.statements.filter(node => !ts.isImportDeclaration(node))
@@ -654,11 +692,11 @@ scenario('凭据失效保留各管理目标并取消在途选择，页面 Gatewa
   const accessor = { get: () => quick };
   try {
     for (const action of actions) await action.run(accessor);
-    for (const scope of ['extensions', 'settings', 'mcp']) expect(flow.managementGateway(scope)).toEqual(remote);
+    for (const scope of ['extensions', 'settings', 'mcp', 'tools']) expect(flow.managementGateway(scope)).toEqual(remote);
     changes.length = 0;
     auth.fire();
     expect(changes).toEqual([]);
-    for (const scope of ['extensions', 'settings', 'mcp']) expect(flow.managementGateway(scope)).toEqual(remote);
+    for (const scope of ['extensions', 'settings', 'mcp', 'tools']) expect(flow.managementGateway(scope)).toEqual(remote);
 
     const entered = Promise.withResolvers(), picked = Promise.withResolvers();
     delayedPick = (items, token) => { entered.resolve({ item: items[0], token }); return picked.promise; };
@@ -674,7 +712,7 @@ scenario('凭据失效保留各管理目标并取消在途选择，页面 Gatewa
 
     entry = 'gateway-c'; context.fire();
     expect(changes).toEqual(['extensions', 'mcp']);
-    for (const scope of ['extensions', 'settings', 'mcp']) {
+    for (const scope of ['extensions', 'settings', 'mcp', 'tools']) {
       expect(flow.managementGateway(scope)).toEqual({ gateway_id: entry, name: '本地', connection_kind: 'local' });
     }
   } finally { for (const subscription of subscriptions) subscription.dispose(); auth.dispose(); context.dispose(); }

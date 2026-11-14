@@ -27,6 +27,7 @@ export const actionTitleKeys = [
   'workbench.skills.openGatewaySources', 'workbench.skills.openWorkspaceSources',
   'workbench.skills.refreshGatewaySources', 'workbench.skills.refreshWorkspaceSources',
   'workbench.managementTarget.selectExtensions', 'workbench.managementTarget.selectMcp', 'workbench.managementTarget.selectSettings',
+  'workbench.managementTarget.selectTools',
   'tasks.action.details', 'tasks.action.history', 'tasks.action.edit', 'tasks.action.pause',
   'tasks.action.resume', 'tasks.action.check', 'tasks.action.checkOnly', 'tasks.action.terminate',
   'tasks.action.update',

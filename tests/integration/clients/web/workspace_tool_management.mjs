@@ -8,6 +8,7 @@ const fixture = JSON.parse(process.env.BOXTEAM_TOOLS_FIXTURE);
 const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
 assert(artifacts, '必须设置正式测试产物目录');
 const result = { phase: 'initialization', pageErrors: [], requests: [], changes: [] };
+const activationRequests = [];
 let browser, page;
 try {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH, headless: true });
@@ -16,6 +17,7 @@ try {
   page.on('pageerror', error => result.pageErrors.push(error.message));
   page.on('request', request => {
     if (request.url().includes('/api/v1/tools')) result.requests.push({ method: request.method(), url: request.url(), body: request.postData() });
+    if (request.method() === 'POST' && /\/api\/gateway\/workspaces\/[^/]+\/activate$/.test(new URL(request.url()).pathname)) activationRequests.push(request.url());
   });
   const api = (url, body) => page.evaluate(async ({ url, body, owner }) => {
     const credential = (await (await fetch('/api/gateway/auth/local-credential')).json()).data;
@@ -34,12 +36,21 @@ try {
   result.phase = 'no-session-workspace-tools';
   await command('boxteam.tools.focus');
   const panel = page.locator('[data-panel-kind="tools"]');
+  const content = panel.locator('.native-workspace-panel-content:not([hidden])');
   await expect(panel).toBeVisible();
-  await expect(panel.getByLabel('Agent', { exact: true })).toBeVisible();
+  await expect(panel).toHaveAttribute('data-workspace-id', fixture.workspaceId);
+  const workspaceSelect = panel.getByLabel('工具管理工作区', { exact: true });
+  await expect(workspaceSelect).toHaveValue(fixture.workspaceId);
+  await workspaceSelect.selectOption(fixture.activeWorkspaceId);
+  await expect(panel).toHaveAttribute('data-workspace-id', fixture.activeWorkspaceId);
+  await expect(content.getByLabel('Agent', { exact: true })).toBeVisible();
+  await workspaceSelect.selectOption(fixture.workspaceId);
+  await expect(panel).toHaveAttribute('data-workspace-id', fixture.workspaceId);
+  await expect(content.getByLabel('Agent', { exact: true })).toBeVisible();
   const owner = { gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId };
   const toolOwner = await api(`/api/v1/workspace`);
   assert.equal(toolOwner.data.workspace_id, fixture.workspaceId);
-  const agentId = await panel.getByLabel('Agent', { exact: true }).inputValue();
+  const agentId = await content.getByLabel('Agent', { exact: true }).inputValue();
   assert(agentId);
   const catalog = await api(`/api/v1/tools?agent_id=${encodeURIComponent(agentId)}`);
   result.owner = { ...owner, agentId, requestId: catalog.requestId };
@@ -51,10 +62,10 @@ try {
   const manageAgentTools = page.getByRole('button', { name: '管理此 Agent 的工具', exact: true });
   await expect(manageAgentTools).toBeVisible();
   await manageAgentTools.click();
-  await expect(panel.locator(`[data-agent-id="${agentId}"]`)).toBeVisible();
+  await expect(content.locator(`[data-agent-id="${agentId}"]`)).toBeVisible();
   result.agentDefinitionReveal = { sourceKey: source.data.source_key, agentId };
-  await expect(panel.locator('.composer-tool-menu')).toBeVisible();
-  const rows = panel.locator('.composer-tool-item');
+  await expect(content.locator('.composer-tool-menu')).toBeVisible();
+  const rows = content.locator('.composer-tool-item');
   await expect(rows.first()).toBeVisible();
   await expect(rows.first()).toContainText('参数 schema');
 
@@ -113,6 +124,11 @@ try {
     assert.equal(finalTool.model_visible, mutable.model_visible);
   }
   assert.equal(result.pageErrors.length, 0, JSON.stringify(result.pageErrors));
+  const directory = await api('/api/gateway/workspaces');
+  assert.equal(directory.data.active_workspace.workspace_id, fixture.activeWorkspaceId);
+  assert.deepEqual(activationRequests, []);
+  result.managementTarget = { firstWorkspaceId: fixture.workspaceId, activeWorkspaceId: fixture.activeWorkspaceId,
+    selectedWorkspaceId: await workspaceSelect.inputValue(), activationRequests };
   await page.screenshot({ path: path.join(artifacts, 'workspace-tools.png') });
   result.phase = 'completed';
 } catch (error) {

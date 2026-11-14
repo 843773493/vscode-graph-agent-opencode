@@ -34,7 +34,7 @@ registerAction2(class RevealAgentTools extends Action2 {
       if (target.connection_kind === 'remote_gateway' && connections.length !== 1) throw new Error('目标 Gateway 连接未唯一登记');
       const connectionId = target.connection_kind === 'remote_gateway' ? connections[0].gateway_connection_id : undefined;
       if (connectionId !== request.gateway_connection_id) throw new Error('目标 Gateway 连接已变化');
-      return target;
+      return { ...target, gateway_connection_id: connectionId };
     };
     try {
       lifecycle.check();

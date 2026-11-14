@@ -14,7 +14,7 @@ import { gateway } from './agentApi.js';
 import { workspaceContext } from './workspaceContext.js';
 import type { GatewayWorkspace } from '../../web/src/types/backend.js';
 
-type ManagementScope = 'extensions' | 'settings' | 'mcp';
+type ManagementScope = 'extensions' | 'settings' | 'mcp' | 'tools';
 export type ManagementTarget = GatewayManagementTargetDTO;
 const selections = new Map<ManagementScope, { entryGatewayId: string; target: ManagementTarget }>();
 const selecting = new Map<ManagementScope, AbortController>();
@@ -22,6 +22,7 @@ const workspaceSelections = new Map<string, string>();
 export const selectExtensionManagementTargetCommand = 'boxteam.extensions.selectTarget';
 export const selectSettingsManagementTargetCommand = 'boxteam.settings.selectTarget';
 export const selectMcpManagementTargetCommand = 'boxteam.mcp.selectTarget';
+export const selectToolManagementTargetCommand = 'boxteam.tools.selectTarget';
 const extensionTitle = new MutableDisposable();
 const mcpTitle = new MutableDisposable();
 const extensionManagementChanged = new Emitter<void>();
@@ -29,6 +30,8 @@ export const onDidChangeExtensionManagementTarget = extensionManagementChanged.e
 
 const mcpManagementChanged = new Emitter<void>();
 export const onDidChangeMcpManagementTarget = mcpManagementChanged.event;
+const toolManagementChanged = new Emitter<void>();
+export const onDidChangeToolManagementTarget = toolManagementChanged.event;
 
 /** 管理操作绑定页面 Gateway 和凭据；管理选择改变不会改变操作 owner。 */
 export function createManagementTargetLifecycle(message: string, expectedEntryGatewayId?: string) {
@@ -76,16 +79,18 @@ function updateMcpTitle(): void {
 updateExtensionTitle();
 updateMcpTitle();
 workspaceContext.subscribe(() => {
-  let extensionChanged = false, mcpChanged = false;
+  let extensionChanged = false, mcpChanged = false, toolsChanged = false;
   for (const [scope, selection] of selections) {
     if (selection.entryGatewayId !== workspaceContext.getSnapshot().gatewayId) {
       selections.delete(scope);
       if (scope === 'extensions') extensionChanged = true;
       if (scope === 'mcp') mcpChanged = true;
+      if (scope === 'tools') toolsChanged = true;
     }
   }
   if (extensionChanged) { updateExtensionTitle(); extensionManagementChanged.fire(); }
   if (mcpChanged) { updateMcpTitle(); mcpManagementChanged.fire(); }
+  if (toolsChanged) toolManagementChanged.fire();
 });
 
 /** 各管理视图只保存自己的展示选择；原 Gateway 仍持有路由和安装事实。 */
@@ -118,6 +123,7 @@ export function selectManagementTarget(scope: ManagementScope, target: Managemen
   selections.set(scope, { entryGatewayId, target: { ...target } });
   if (scope === 'extensions') { updateExtensionTitle(); extensionManagementChanged.fire(); }
   if (scope === 'mcp') { updateMcpTitle(); mcpManagementChanged.fire(); }
+  if (scope === 'tools') toolManagementChanged.fire();
 }
 export async function listManagementTargets(signal?: AbortSignal): Promise<ManagementTarget[]> {
   const entry = workspaceContext.getSnapshot().gatewayId;
@@ -134,9 +140,10 @@ export function managementTargetDisplayName(target: ManagementTarget | undefined
   return target.name;
 }
 
-for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(class extends Action2 {
+for (const scope of ['extensions', 'settings', 'mcp', 'tools'] as const) registerAction2(class extends Action2 {
   constructor() {
-    super({ id: scope === 'extensions' ? selectExtensionManagementTargetCommand : scope === 'mcp' ? selectMcpManagementTargetCommand : selectSettingsManagementTargetCommand,
+    super({ id: scope === 'extensions' ? selectExtensionManagementTargetCommand : scope === 'mcp' ? selectMcpManagementTargetCommand
+      : scope === 'tools' ? selectToolManagementTargetCommand : selectSettingsManagementTargetCommand,
       title: managementTargetActionTitle(scope), f1: true });
   }
   async run(accessor: ServicesAccessor): Promise<ManagementTarget | undefined> {
@@ -170,9 +177,10 @@ for (const scope of ['extensions', 'settings', 'mcp'] as const) registerAction2(
   }
 });
 
-function managementTargetActionKey(scope: ManagementScope): 'workbench.managementTarget.selectExtensions' | 'workbench.managementTarget.selectMcp' | 'workbench.managementTarget.selectSettings' {
+function managementTargetActionKey(scope: ManagementScope): 'workbench.managementTarget.selectExtensions' | 'workbench.managementTarget.selectMcp' | 'workbench.managementTarget.selectSettings' | 'workbench.managementTarget.selectTools' {
   return scope === 'extensions' ? 'workbench.managementTarget.selectExtensions'
-    : scope === 'mcp' ? 'workbench.managementTarget.selectMcp' : 'workbench.managementTarget.selectSettings';
+    : scope === 'mcp' ? 'workbench.managementTarget.selectMcp'
+    : scope === 'tools' ? 'workbench.managementTarget.selectTools' : 'workbench.managementTarget.selectSettings';
 }
 
 function managementTargetActionTitle(scope: ManagementScope): { value: string; original: string } {
