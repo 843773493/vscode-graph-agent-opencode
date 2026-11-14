@@ -99,9 +99,12 @@ def tool_result_metadata(
         rows = connection.execute(
             "SELECT item.item_id,item.turn_id,item.tool_call_id,"
             "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id'),"
-            "item.status,COALESCE((SELECT call.tool_name FROM tool_calls call "
-            "JOIN messages assistant ON assistant.message_sequence=call.assistant_message_sequence "
-            "JOIN item_catalog source ON source.jsonl_offset=assistant.jsonl_offset AND source.jsonl_length=assistant.jsonl_length "
+            # 先按模型调用定位声明；从 Turn 消息起扫会对本页每条结果重扫全部调用历史。
+            "item.status,COALESCE((SELECT call.tool_name "
+            "FROM item_catalog source INDEXED BY item_catalog_model_tool_index "
+            "CROSS JOIN messages assistant ON assistant.jsonl_offset=source.jsonl_offset "
+            "AND assistant.jsonl_length=source.jsonl_length "
+            "CROSS JOIN tool_calls call ON call.assistant_message_sequence=assistant.message_sequence "
             "WHERE assistant.turn_id=item.turn_id AND "
             "json_extract(source.projection_manifest_json,'$.projection_identity.model_call_id') IS "
             "json_extract(item.projection_manifest_json,'$.projection_identity.model_call_id') "
