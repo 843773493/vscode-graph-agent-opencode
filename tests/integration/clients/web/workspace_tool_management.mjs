@@ -43,6 +43,16 @@ try {
   assert(agentId);
   const catalog = await api(`/api/v1/tools?agent_id=${encodeURIComponent(agentId)}`);
   result.owner = { ...owner, agentId, requestId: catalog.requestId };
+  const source = await api('/api/v1/config/sources/workspace_root_mutable_override');
+  await command('boxteam.settings.agents', {
+    version: 2, gateway_id: fixture.gatewayId, workspace_id: fixture.workspaceId,
+    source_key: 'workspace_root_mutable_override', name: source.data.workspace_name ?? fixture.workspaceId,
+  }, agentId);
+  const manageAgentTools = page.getByRole('button', { name: '管理此 Agent 的工具', exact: true });
+  await expect(manageAgentTools).toBeVisible();
+  await manageAgentTools.click();
+  await expect(panel.locator(`[data-agent-id="${agentId}"]`)).toBeVisible();
+  result.agentDefinitionReveal = { sourceKey: source.data.source_key, agentId };
   await expect(panel.locator('.composer-tool-menu')).toBeVisible();
   const rows = panel.locator('.composer-tool-item');
   await expect(rows.first()).toBeVisible();

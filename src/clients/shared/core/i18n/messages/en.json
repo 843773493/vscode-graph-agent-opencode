@@ -4042,5 +4042,6 @@
   "settings.editor.sourceLocations": "Inspect Configuration Source Locations",
   "settings.editor.sourceSchema": "Configuration schema",
   "configuration.entities.inspectDefaultAgent": "Inspect default Agent source and pending changes",
-  "configuration.entities.restoreDefaultAgent": "Restore the inherited default Agent"
+  "configuration.entities.restoreDefaultAgent": "Restore the inherited default Agent",
+  "configuration.entities.manageAgentTools": "Manage tools for this Agent"
 }

@@ -64,6 +64,10 @@ export class ConfigurationEntityView extends Disposable {
       onRestoreDefaultAgent={() => this.run(() => this.source.editPath(['default_agent'], undefined))}
       onInspectDefaultAgent={() => this.run(() => this.commands.executeCommand(defaultAgentSourceCommand, this.source.location))}
       onManageSessionDefaults={() => this.run(() => this.manageSessionDefaults())}
+      onManageAgentTools={id => this.run(() => this.commands.executeCommand('boxteam.tools.revealAgent', {
+        gateway_id: this.source.location.gateway_id, workspace_id: this.source.location.workspace_id,
+        gateway_connection_id: this.source.location.gateway_connection_id, agent_id: id,
+      }))}
       onOpenSessionSelection={() => this.run(() => this.openSessionSelection())}
       onOpenSource={sourceKey => this.run(async () => {
         await this.commands.executeCommand('boxteam.settings.openSource', {

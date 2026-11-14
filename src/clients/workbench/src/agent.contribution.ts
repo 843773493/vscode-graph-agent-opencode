@@ -8,6 +8,46 @@ import { SessionNavigation } from './sessionNavigation.js';
 import { ViewPaneContainer } from '../upstream/src/vs/workbench/browser/parts/views/viewPaneContainer.js';
 import { Codicon } from '../upstream/src/vs/base/common/codicons.js';
 import { WorkspacePanel } from './workspacePanel.js';
+import { registerAction2, Action2 } from '../upstream/src/vs/platform/actions/common/actions.js';
+import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
+import { IViewsService } from '../upstream/src/vs/workbench/services/views/common/viewsService.js';
+import { workspaceContext } from './workspaceContext.js';
+import { requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
+import { createManagementTargetLifecycle } from './managementTarget.js';
+
+registerAction2(class RevealAgentTools extends Action2 {
+  constructor() { super({ id: 'boxteam.tools.revealAgent', title: { value: 'Reveal Agent Tools', original: 'Reveal Agent Tools' }, f1: false }); }
+  async run(accessor: ServicesAccessor, payload: { gateway_id: string; workspace_id: string; gateway_connection_id?: string; agent_id: string }): Promise<void> {
+    const views = accessor.get(IViewsService);
+    if (!payload?.gateway_id || !payload.workspace_id || !payload.agent_id?.trim()) throw new Error('Agent 工具定位缺少目标工作区或 Agent ID');
+    const request = { ...payload };
+    const lifecycle = createManagementTargetLifecycle('Gateway 身份已变化，无法打开 Agent 工具');
+    const owner: WorkspaceOwner = { gatewayId: request.gateway_id, workspaceId: request.workspace_id };
+    const resolveTarget = () => {
+      lifecycle.check();
+      const current = workspaceContext.getSnapshot();
+      if (current.loading) throw new Error('Gateway 工作区列表尚未就绪');
+      if (current.error) throw new Error(current.error);
+      const target = requireGatewayWorkspaceRequestTarget(current.workspaces, owner);
+      if (target.status !== 'ready') throw new Error(`目标工作区不可用：${target.status}`);
+      const connections = target.remote_gateways.filter(connection => connection.gateway_id === target.gateway_id);
+      if (target.connection_kind === 'remote_gateway' && connections.length !== 1) throw new Error('目标 Gateway 连接未唯一登记');
+      const connectionId = target.connection_kind === 'remote_gateway' ? connections[0].gateway_connection_id : undefined;
+      if (connectionId !== request.gateway_connection_id) throw new Error('目标 Gateway 连接已变化');
+      return target;
+    };
+    try {
+      lifecycle.check();
+      await workspaceContext.ensureReady();
+      resolveTarget();
+      const view = await views.openView<WorkspacePanel>('boxteam.tools.view', true);
+      if (!view) throw new Error('工作区工具面板不可用');
+      view.revealAgentTools(resolveTarget(), request.agent_id);
+    } finally {
+      lifecycle.dispose();
+    }
+  }
+});
 import { McpServersListView } from '../upstream/src/vs/workbench/contrib/mcp/browser/mcpServersView.js';
 import './workspacePanelState.js';
 import './workspaceIdentityRecovery.js';

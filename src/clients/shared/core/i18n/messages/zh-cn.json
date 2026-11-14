@@ -4042,5 +4042,6 @@
   "settings.editor.sourceLocations": "查看配置来源位置",
   "settings.editor.sourceSchema": "配置 schema",
   "configuration.entities.inspectDefaultAgent": "查看默认 Agent 来源与待应用状态",
-  "configuration.entities.restoreDefaultAgent": "恢复默认 Agent 继承"
+  "configuration.entities.restoreDefaultAgent": "恢复默认 Agent 继承",
+  "configuration.entities.manageAgentTools": "管理此 Agent 的工具"
 }

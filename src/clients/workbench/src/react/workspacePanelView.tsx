@@ -1,4 +1,4 @@
-import { gatewayWorkspaceKey, type WorkspaceOwner } from "../../../web/src/api/workspaceIdentity.js";
+import { gatewayWorkspaceKey, type GatewayWorkspaceRequestTarget, type WorkspaceOwner } from "../../../web/src/api/workspaceIdentity.js";
 import { t } from '../../../shared/core/i18n/index.js';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { getWorkspace, listAgents } from '../../../web/src/api/workspace.js';
@@ -40,6 +40,7 @@ const panelLabelKeys: Record<PanelKind, string> = {
 };
 const toolbar = (tools: ReactNode) => <div className="native-workspace-panel-toolbar">{tools}</div>;
 interface ResourceReveal { owner: WorkspaceOwner; resourceId: string }
+export interface AgentToolReveal { target: GatewayWorkspaceRequestTarget; agentId: string }
 
 function WorkspaceConnections({ workspace, input, active, kind, commands, notifications, reveal }: {
   workspace: GatewayWorkspace; input: ThreadInput | null; active: boolean; kind: 'terminal' | 'browser';
@@ -74,7 +75,7 @@ function WorkspaceConnections({ workspace, input, active, kind, commands, notifi
 
 function WorkspaceProduct({ kind, workspace, editors, active, input, commands, notifications, reveal }: {
   kind: PanelKind; workspace: GatewayWorkspace; editors: IEditorService; active: boolean; input: ThreadInput | null;
-  commands: ICommandService; notifications: INotificationService; reveal?: ResourceReveal;
+  commands: ICommandService; notifications: INotificationService; reveal?: ResourceReveal | AgentToolReveal;
 }) {
   const [owner, setOwner] = useState<{ workspaceKey: string; workspaceId: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,16 +93,16 @@ function WorkspaceProduct({ kind, workspace, editors, active, input, commands, n
   if (!owner) return <p role="status">{t('workbench.panel.confirmingWorkspace')}</p>;
   switch (kind) {
     case 'automation': return <TaskView owner={owner} editors={editors} active={active} goalSessionId={input?.owner.sessionId ?? null} />;
-    case 'terminal': case 'browser': return <WorkspaceConnections workspace={workspace} input={input} active={active} kind={kind} commands={commands} notifications={notifications} reveal={reveal} />;
+    case 'terminal': case 'browser': return <WorkspaceConnections workspace={workspace} input={input} active={active} kind={kind} commands={commands} notifications={notifications} reveal={reveal && 'owner' in reveal ? reveal : undefined} />;
     case 'output': return <section className="gateway-log-panel native-workspace-panel-product" data-testid="gateway-log-panel">
       <GatewayLogContent apiPort={0} workspaceId={gatewayWorkspaceKey(workspace)} active={active} renderToolbar={toolbar} />
     </section>;
-    case 'tools': return <WorkspaceToolManager workspace={workspace} active={active} />;
+    case 'tools': return <WorkspaceToolManager workspace={workspace} active={active} reveal={reveal && 'target' in reveal ? reveal : undefined} />;
     case 'ports': return <WarmConfirmProvider><WorkspacePortForwardPanel apiPort={0} workspace={workspace} active={active} /></WarmConfirmProvider>;
   }
 }
 
-function WorkspaceToolManager({ workspace, active }: { workspace: GatewayWorkspace; active: boolean }) {
+function WorkspaceToolManager({ workspace, active, reveal }: { workspace: GatewayWorkspace; active: boolean; reveal?: AgentToolReveal }) {
   const [agents, setAgents] = useState<Agent[] | null>(null);
   const [selected, setSelected] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -112,14 +113,15 @@ function WorkspaceToolManager({ workspace, active }: { workspace: GatewayWorkspa
     void listAgents(0, gatewayWorkspaceKey(workspace)).then(value => {
       if (disposed) return;
       setAgents(value);
-      setSelected(value.find(agent => agent.workspace_default)?.agent_id ?? value[0]?.agent_id ?? '');
+      setSelected(reveal?.agentId ?? value.find(agent => agent.workspace_default)?.agent_id ?? value[0]?.agent_id ?? '');
     }).catch(cause => { if (!disposed) setError(String(cause)); });
     return () => { disposed = true; };
-  }, [workspace.gateway_id, workspace.workspace_id]);
+  }, [workspace.gateway_id, workspace.workspace_id, reveal?.agentId]);
   if (error) return <p role="alert">{error}</p>;
   if (!agents) return <p role="status">{t('composer.tools.loading')}</p>;
   if (!agents.length) return <p role="status">{t('composer.tools.noAgents')}</p>;
   const agent = agents.find(item => item.agent_id === selected);
+  if (reveal && !agent) return <p role="alert">找不到指定工作区中的 Agent：{reveal.agentId}</p>;
   return <section className="native-workspace-panel-product native-workspace-tools" data-agent-id={selected}>
     <header><label>{t('composer.tools.agentOwner')}
       <select value={selected} onChange={event => setSelected(event.target.value)} aria-label={t('composer.tools.agentOwner')}>
@@ -134,7 +136,7 @@ function WorkspaceToolManager({ workspace, active }: { workspace: GatewayWorkspa
 
 function WorkspacePanelView({ editors, kind, visible, commands, notifications, reveal }: {
   editors: IEditorService; kind: PanelKind; visible: boolean;
-  commands: ICommandService; notifications: INotificationService; reveal?: ResourceReveal;
+  commands: ICommandService; notifications: INotificationService; reveal?: ResourceReveal | AgentToolReveal;
 }) {
   const snapshot = useSyncExternalStore(workspaceContext.subscribe, workspaceContext.getSnapshot);
   const [visited, setVisited] = useState(new Map<string, GatewayWorkspace>());
@@ -147,21 +149,29 @@ function WorkspacePanelView({ editors, kind, visible, commands, notifications, r
   const current = !snapshot.loading && !snapshot.error ? snapshot.workspaces.find(item => gatewayWorkspaceKey(item) === snapshot.activeId) : undefined;
   useEffect(() => {
     if (current) setVisited(previous => new Map(previous).set(gatewayWorkspaceKey(current), current));
+    if (reveal && 'target' in reveal) {
+      const target = snapshot.workspaces.find(item => item.gateway_id === reveal.target.gateway_id && item.workspace_id === reveal.target.workspace_id);
+      if (target) setVisited(previous => new Map(previous).set(gatewayWorkspaceKey(target), target));
+    }
     // 已移除的工作区不再保留观察者或未保存表单。
     if (!snapshot.loading && !snapshot.error) setVisited(previous => new Map([...previous].filter(([id]) => snapshot.workspaces.some(item => gatewayWorkspaceKey(item) === id))));
-  }, [current, snapshot.workspaces, snapshot.loading, snapshot.error]);
-  return <div className={`native-workspace-panel${kind === 'automation' ? ' native-workspace-automation' : ''}`} data-workspace-id={current?.workspace_id ?? ''} data-panel-kind={kind}>
-    <header className="native-workspace-context"><span>{current?.name ?? t('workbench.panel.workspace')}</span>
+  }, [current, snapshot.workspaces, snapshot.loading, snapshot.error, reveal]);
+  const selectedWorkspace = reveal && 'target' in reveal
+    ? snapshot.workspaces.find(item => item.gateway_id === reveal.target.gateway_id && item.workspace_id === reveal.target.workspace_id)
+    : current;
+  return <div className={`native-workspace-panel${kind === 'automation' ? ' native-workspace-automation' : ''}`} data-workspace-id={selectedWorkspace?.workspace_id ?? ''} data-panel-kind={kind}>
+    <header className="native-workspace-context"><span>{selectedWorkspace?.name ?? t('workbench.panel.workspace')}</span>
       <button className="sidebar-icon-button" aria-label={t('workbench.panel.refresh')} title={t('workbench.panel.refresh')} onClick={() => void workspaceContext.refresh()}><span className="codicon codicon-refresh" /></button>
     </header>
     {snapshot.error ? <p role="alert">{t('workbench.panel.readFailed', snapshot.error)}</p> : snapshot.loading ? <p role="status">{t('workbench.panel.switching')}</p>
-      : !current ? <p>{t('workbench.panel.chooseWorkspace')}</p> : null}
+      : !selectedWorkspace ? <p>{t('workbench.panel.chooseWorkspace')}</p> : null}
     {[...visited.values()].map(workspace => {
-      const selected = current?.gateway_id === workspace.gateway_id && current.workspace_id === workspace.workspace_id;
+      const selected = selectedWorkspace?.gateway_id === workspace.gateway_id && selectedWorkspace.workspace_id === workspace.workspace_id;
       const input = activeEditor instanceof ThreadInput && activeEditor.owner.workspaceKey === gatewayWorkspaceKey(workspace) ? activeEditor : null;
       return <section key={gatewayWorkspaceKey(workspace)} className="native-workspace-panel-content" hidden={!selected} aria-label={t('workbench.panel.label', t(panelLabelKeys[kind]), workspace.name)}>
         <WorkspaceProduct kind={kind} workspace={workspace} editors={editors} active={visible && selected} input={input} commands={commands} notifications={notifications}
-          reveal={reveal?.owner.gatewayId === workspace.gateway_id && reveal.owner.workspaceId === workspace.workspace_id ? reveal : undefined} />
+          reveal={reveal && 'target' in reveal ? reveal.target.gateway_id === workspace.gateway_id && reveal.target.workspace_id === workspace.workspace_id ? reveal : undefined
+            : reveal?.owner.gatewayId === workspace.gateway_id && reveal.owner.workspaceId === workspace.workspace_id ? reveal : undefined} />
       </section>;
     })}
   </div>;
@@ -172,13 +182,23 @@ export class WorkspacePanelSurface {
   private readonly surface: ReactSurface;
   private readonly kind: PanelKind;
   private visible: boolean;
-  private reveal?: ResourceReveal;
+  private reveal?: ResourceReveal | AgentToolReveal;
+  private revealOriginActiveId: string | null = null;
+  private readonly unsubscribeWorkspace: () => void;
   constructor(container: HTMLElement, private readonly editors: IEditorService, id: string, visible: boolean,
     private readonly notifications: INotificationService, private readonly commands: ICommandService) {
     const kind = panelKinds[id];
     if (!kind) throw new Error(t('workbench.panel.unregistered', id));
     this.kind = kind;
     this.surface = new ReactSurface(container, [...productStyles, panelStyle, portStyle, style]);
+    this.unsubscribeWorkspace = workspaceContext.subscribe(() => {
+      const activeId = workspaceContext.getSnapshot().activeId;
+      if (this.reveal && 'target' in this.reveal && activeId !== this.revealOriginActiveId) {
+        this.reveal = undefined;
+        this.revealOriginActiveId = null;
+        this.render();
+      }
+    });
     this.visible = visible; this.render();
   }
   setVisible(visible: boolean): void { this.visible = visible; this.render(); }
@@ -186,7 +206,12 @@ export class WorkspacePanelSurface {
     this.reveal = { owner: { ...owner }, resourceId };
     this.render();
   }
+  revealAgentTools(target: GatewayWorkspaceRequestTarget, agentId: string): void {
+    this.reveal = { target: { ...target }, agentId };
+    this.revealOriginActiveId = workspaceContext.getSnapshot().activeId;
+    this.render();
+  }
   focus(): void { this.surface.focus('.native-workspace-panel-content:not([hidden]) :is(button,input,select)'); }
-  dispose(): void { this.surface.dispose(); }
+  dispose(): void { this.unsubscribeWorkspace(); this.surface.dispose(); }
   private render(): void { this.surface.render(<WorkspacePanelView editors={this.editors} kind={this.kind} visible={this.visible} commands={this.commands} notifications={this.notifications} reveal={this.reveal} />); }
 }
