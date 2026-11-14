@@ -9,6 +9,7 @@ verification/
 ├── verification-readiness.test.mjs     就绪HTTP与进程状态场景
 ├── verification-shutdown.test.mjs      Windows Gateway停止观察
 ├── verification-process-cleanup.test.mjs taskkill本地化输出与进程存在性
+├── verification-product-errors.test.mjs 安装验收与清理同时失败的错误保留
 └── verification-shutdown-timers.test.mjs  两验证器的进程终态与关闭等待
 ```
 
@@ -31,6 +32,7 @@ verification/
 
 - 发布包装器负责按平台先构建、再调用本目录对应的 verifier；跨平台 Windows 验证入口也调用 `verify-windows-x64.mjs`。
 - 两个平台共用 Gateway 就绪探针，平台特有的安装、Launcher 关闭和产品验收仍归各自 verifier。
+- Windows npm／便携版共用原安装验收步骤；业务和 Launcher 清理同时失败时按顺序保留两个原始错误，不能由清理异常覆盖业务失败。
 - 测试运行文件写入 `out/tests/packaging/runtime/verification/<测试名>/workspace/` 镜像目录。
 - 就绪和停止观察测试按 `workspace/<run_id>/<scenario>/` 保留每次独立运行的fixture，并在同镜像根 `artifacts/<run_id>/<scenario>/` 独占保存原始 `stdout.raw`、`stderr.raw` 和精简 `result.json`；不得清理或覆盖这些结果。观察函数仍须清理本次HTTP连接、socket和timer。
 - JavaScript 使用 ESM。生产文件纳入 runtime 构建输入指纹；本目录的 `AGENTS.md` 与 `*.test.mjs` 按父目录规则排除。

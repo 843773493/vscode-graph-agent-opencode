@@ -352,6 +352,27 @@ async function verifyRunningProduct(
   }
 }
 
+async function verifyInstalledProduct(child, readLauncherOutput, options) {
+  const failures = [];
+  try {
+    await waitForInstalledGateway({
+      child, url: `${gatewayUrl}/api/gateway/health`, headers, timeoutMs: gatewayReadyTimeoutMs,
+    });
+    await verifyRunningProduct(child, readLauncherOutput, options);
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await stopLauncher(child);
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Windows 安装验收及 Launcher 清理均失败");
+  }
+}
+
 async function main() {
   if (process.platform !== "win32" || process.arch !== "x64") {
     throw new Error(
@@ -431,18 +452,11 @@ async function main() {
       process.stdout.write(text);
     });
   }
-  try {
-    await waitForInstalledGateway({
-      child: child, url: `${gatewayUrl}/api/gateway/health`, headers, timeoutMs: gatewayReadyTimeoutMs,
-    });
-    await verifyRunningProduct(child, () => launcherOutput, {
-      pluginArchive: path.join(relocatedRoot,
-        "node_modules/@boxteam/runtime-windows-x64/application/resources/plugins/developer-tools.zip"),
-      nodeExecutable,
-    });
-  } finally {
-    await stopLauncher(child);
-  }
+  await verifyInstalledProduct(child, () => launcherOutput, {
+    pluginArchive: path.join(relocatedRoot,
+      "node_modules/@boxteam/runtime-windows-x64/application/resources/plugins/developer-tools.zip"),
+    nodeExecutable,
+  });
 
   for (const name of [
     "gateway.jsonc",
@@ -565,20 +579,13 @@ async function main() {
       process.stdout.write(text);
     });
   }
-  try {
-    await waitForInstalledGateway({
-      child: standaloneChild, url: `${gatewayUrl}/api/gateway/health`, headers, timeoutMs: gatewayReadyTimeoutMs,
-    });
-    await verifyRunningProduct(
-      standaloneChild,
-      () => standaloneOutput,
-      { forceWindowsTreeShutdown: true, pluginArchive: path.join(
-        standalonePackageRoot, "runtime/application/resources/plugins/developer-tools.zip",
-      ), nodeExecutable: standaloneNode },
-    );
-  } finally {
-    await stopLauncher(standaloneChild);
-  }
+  await verifyInstalledProduct(
+    standaloneChild,
+    () => standaloneOutput,
+    { forceWindowsTreeShutdown: true, pluginArchive: path.join(
+      standalonePackageRoot, "runtime/application/resources/plugins/developer-tools.zip",
+    ), nodeExecutable: standaloneNode },
+  );
   for (const name of [
     "gateway.jsonc",
     "gateway_schema.jsonc",
