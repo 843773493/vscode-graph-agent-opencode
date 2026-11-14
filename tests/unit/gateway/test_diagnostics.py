@@ -15,10 +15,12 @@ from app.core.logging_contract import load_runtime_log_contract
 from app.gateway.control import router as control_router
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.gateway.diagnostics import (
+    _MAX_READ_BYTES,
     _candidate_gateway_logs,
     _launcher_log_path,
     _LogCandidate,
     _process_log_path,
+    _read_log,
     _scope_log_candidates,
     collect_gateway_diagnostics,
 )
@@ -67,6 +69,64 @@ def test_empty_workspace_scope_keeps_all_log_sources() -> None:
     scoped = _scope_log_candidates(gateway_candidates, workspace_candidates, None)
 
     assert scoped == [*gateway_candidates, *workspace_candidates]
+
+
+def test_large_process_log_reads_only_bounded_suffix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "large-backend.log"
+    with log_path.open("wb") as stream:
+        stream.write(b"old-process-output\n")
+        stream.write(b"ordinary record\n" * 200_000)
+        stream.write(b"tail-one\ntail-two\ntail-three\n")
+    file_size = log_path.stat().st_size
+    assert file_size > _MAX_READ_BYTES * 4
+
+    read_sizes: list[int] = []
+    seek_offsets: list[int] = []
+    original_open = Path.open
+
+    class ReadTracker:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def seek(self, offset: int, *args):
+            seek_offsets.append(offset)
+            return self.stream.seek(offset, *args)
+
+        def read(self, size: int = -1):
+            read_sizes.append(size)
+            return self.stream.read(size)
+
+    def tracked_open(path: Path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        return ReadTracker(stream) if path == log_path else stream
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    candidate = _LogCandidate(
+        log_id="gateway:large-process",
+        source="gateway",
+        service="workspace_api",
+        label="Backend 日志",
+        log_path=log_path,
+    )
+
+    result = _read_log(candidate, 3, include_tail=True)
+
+    assert read_sizes == [_MAX_READ_BYTES]
+    assert seek_offsets == [file_size - _MAX_READ_BYTES]
+    assert result.tail == "tail-one\ntail-two\ntail-three"
+    assert result.line_count == 3
+    assert result.size_bytes == file_size
+    assert result.truncated is True
 
 
 async def test_diagnostics_finds_role_logs_and_launcher_override(
