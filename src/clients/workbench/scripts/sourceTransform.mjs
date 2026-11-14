@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { transformNlsCalls } from './nlsTransform.mjs';
 import { searchEditorSourcePaths, transformSearchEditor } from './searchEditorTransform.mjs';
 import { searchModelSourcePaths, transformSearchModel } from './searchModelTransform.mjs';
+import { findSourcePaths, transformFind } from './findTransform.mjs';
 import { outlineSourcePaths, transformOutline } from './outlineTransform.mjs';
 import { fileDialogSourcePaths, transformFileDialog } from './fileDialogTransform.mjs';
 import { mcpSourcePaths, transformMcp } from './mcpTransform.mjs';
@@ -84,6 +85,7 @@ export const transformedSourcePaths = [...new Set([
   'extensions/markdown-language-features/src/preview/preview.ts',
   ...searchEditorSourcePaths,
   ...searchModelSourcePaths,
+  ...findSourcePaths,
   ...outlineSourcePaths,
   ...fileDialogSourcePaths,
   ...mcpSourcePaths,
@@ -950,6 +952,7 @@ try {
     contents = transformMcp(root, path, contents, replaceOnce);
     contents = transformSearchEditor(root, path, contents, replaceOnce);
     contents = transformSearchModel(root, path, contents, replaceOnce);
+    contents = transformFind(root, path, contents, replaceOnce);
     return transformNlsCalls(upstream, path, contents, nlsMessages);
   };
 }

@@ -6,6 +6,10 @@ import { FileAccess } from '../../upstream/src/vs/base/common/network.js';
 import { WebWorkerDescriptor } from '../../upstream/src/vs/platform/webWorker/browser/webWorkerDescriptor.js';
 import type { IWebWorkerService } from '../../upstream/src/vs/platform/webWorker/browser/webWorkerService.js';
 import type { OpenModelSearchRequest, OpenModelSearchWorker } from './openModelSearchWorker.js';
+import { Range, type IRange } from '../../upstream/src/vs/editor/common/core/range.js';
+import type { IPosition } from '../../upstream/src/vs/editor/common/core/position.js';
+import { FindMatch } from '../../upstream/src/vs/editor/common/model.js';
+import type { IPatternInfo } from '../../upstream/src/vs/workbench/services/search/common/search.js';
 
 /** 查询持有唯一 worker；结束或取消即释放，不在主线程重做匹配。 */
 export class OpenModelSearch extends Disposable {
@@ -28,8 +32,26 @@ export class OpenModelSearch extends Disposable {
   }
 
   async findMatches(text: string, request: OpenModelSearchRequest) {
+    return this.request(this.worker.proxy.$findMatches(text, request));
+  }
+
+  async findEditorMatches(text: string, pattern: IPatternInfo, ranges: IRange[], captureMatches: boolean, limit: number) {
+    const matches = await this.request(this.worker.proxy.$findEditorMatches(text, pattern, ranges, captureMatches, limit));
+    return matches.map(match => new FindMatch(Range.lift(match.range), match.matches));
+  }
+
+  async findEditorMatch(text: string, pattern: IPatternInfo, position: IPosition, previous: boolean, captureMatches: boolean) {
+    const match = await this.request(this.worker.proxy.$findEditorMatch(text, pattern, position, previous, captureMatches));
+    return match ? new FindMatch(Range.lift(match.range), match.matches) : null;
+  }
+
+  async replaceAll(text: string, pattern: IPatternInfo, replacement: string, preserveCase: boolean) {
+    return this.request(this.worker.proxy.$replaceAll(text, pattern, replacement, preserveCase));
+  }
+
+  private async request<T>(result: Promise<T>): Promise<T> {
     try {
-      return await raceCancellationError(this.worker.proxy.$findMatches(text, request), this.source.token);
+      return await raceCancellationError(result, this.source.token);
     } catch (error) {
       if (this.timedOut) throw new Error(t('quickAccess.files.deadlineExceeded'), { cause: error });
       throw error;

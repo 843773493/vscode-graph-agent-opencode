@@ -1,5 +1,8 @@
 {
   "contents": {
+    "vs/editor/contrib/find/browser/findWidget": {
+      "findSearching": "正在搜索…"
+    },
     "vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent": {
       "boxteam.manageProviders.title": "管理模型与 Provider",
       "boxteam.manageProviders.description": "配置 BoxTeam 的模型 Provider。",
