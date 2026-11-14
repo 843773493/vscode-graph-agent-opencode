@@ -19,7 +19,6 @@ from app.schemas.internal_v2.session_changes import (
     SessionFileReviewResultDTO,
 )
 from app.services.business.session_changes_logic import (
-    aggregate_records,
     build_edit_id,
     build_unified_diff,
     changeset_kind_and_turn,
@@ -27,6 +26,7 @@ from app.services.business.session_changes_logic import (
     count_diff_lines,
     detect_change_kind,
     group_turn_records,
+    iter_file_changes,
     preview_session_file_content,
     summarize_file_records,
     summarize_records,
@@ -210,12 +210,11 @@ class SessionChangesService:
         records: list[StoredFileEdit],
         reviewed_map: dict[str, bool],
     ) -> SessionChangesetDTO:
-        changes = aggregate_records(
+        files: list[SessionFileChangeDTO] = []
+        for change in iter_file_changes(
             records,
             read_edit_text=self._store.edit_text_reader(session_id),
-        )
-        files: list[SessionFileChangeDTO] = []
-        for change in changes:
+        ):
             diff_text = change.diff_text
             additions, deletions = count_diff_lines(diff_text)
             if additions == 0 and deletions == 0:

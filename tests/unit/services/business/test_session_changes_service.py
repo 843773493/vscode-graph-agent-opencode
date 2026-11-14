@@ -280,6 +280,17 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     second_file = workspace_root / "src" / "second.txt"
     first_file.parent.mkdir(parents=True)
 
+    before_second_create = FileEditSnapshot(_uri(workspace_id, "src/second.txt"), False, "", True, "second\n")
+    second_file.write_text("second\n", encoding="utf-8")
+    await service.record_tool_file_edit(
+        session_id=session.session_id,
+        turn_id="job_1",
+        tool_call_id="call_write_second",
+        execution_id="run_write_second",
+        tool_name="write_file",
+        before=before_second_create,
+    )
+
     before_first_create = FileEditSnapshot(_uri(workspace_id, "src/first.txt"), False, "", True, "one\n")
     first_file.write_text("one\n", encoding="utf-8")
     await service.record_tool_file_edit(
@@ -300,17 +311,6 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         execution_id="run_edit_first",
         tool_name="edit_file",
         before=before_first_edit,
-    )
-
-    before_second_create = FileEditSnapshot(_uri(workspace_id, "src/second.txt"), False, "", True, "second\n")
-    second_file.write_text("second\n", encoding="utf-8")
-    await service.record_tool_file_edit(
-        session_id=session.session_id,
-        turn_id="job_1",
-        tool_call_id="call_write_second",
-        execution_id="run_write_second",
-        tool_name="write_file",
-        before=before_second_create,
     )
 
     before_second_turn = FileEditSnapshot(_uri(workspace_id, "src/first.txt"), True, "one\ntwo\n", True, "one\ntwo\nthree\n")

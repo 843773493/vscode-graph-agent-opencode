@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Literal
 
 from app.abstractions.session_changes import AggregatedFileChange, StoredFileEdit
@@ -88,17 +88,18 @@ def detect_change_kind(*, before_exists: bool, after_exists: bool) -> SessionFil
     return "edit"
 
 
-def aggregate_records(
+def iter_file_changes(
     records: list[StoredFileEdit],
     *,
     read_edit_text: Callable[[str, Literal["before", "after", "diff"]], str],
-) -> list[AggregatedFileChange]:
+) -> Iterator[AggregatedFileChange]:
+    """按文件路径逐个聚合，避免同时保留全部文件的首尾正文。"""
     grouped: dict[str, list[StoredFileEdit]] = {}
     for record in records:
         grouped.setdefault(record.file_path, []).append(record)
 
-    changes: list[AggregatedFileChange] = []
-    for file_path, file_records in grouped.items():
+    for file_path in sorted(grouped):
+        file_records = grouped[file_path]
         ordered = sorted(file_records, key=lambda item: item.created_at)
         first = ordered[0]
         last = ordered[-1]
@@ -120,33 +121,30 @@ def aggregate_records(
                 before_content=before_content or "",
                 after_content=after_content or "",
             )
-        changes.append(
-            AggregatedFileChange(
-                file_path=file_path,
-                kind=detect_change_kind(
-                    before_exists=before_content is not None,
-                    after_exists=after_content is not None,
-                ),
-                latest_edit_id=last.edit_id,
-                tool_call_ids=tuple(
-                    dict.fromkeys(record.tool_call_id for record in ordered)
-                ),
-                execution_ids=tuple(
-                    dict.fromkeys(record.execution_id for record in ordered)
-                ),
-                turn_ids=tuple(
-                    dict.fromkeys(
-                        record.turn_id
-                        for record in ordered
-                        if record.turn_id is not None
-                    )
-                ),
-                before_content=before_content,
-                after_content=after_content,
-                diff_text=diff_text,
-            )
+        yield AggregatedFileChange(
+            file_path=file_path,
+            kind=detect_change_kind(
+                before_exists=before_content is not None,
+                after_exists=after_content is not None,
+            ),
+            latest_edit_id=last.edit_id,
+            tool_call_ids=tuple(
+                dict.fromkeys(record.tool_call_id for record in ordered)
+            ),
+            execution_ids=tuple(
+                dict.fromkeys(record.execution_id for record in ordered)
+            ),
+            turn_ids=tuple(
+                dict.fromkeys(
+                    record.turn_id
+                    for record in ordered
+                    if record.turn_id is not None
+                )
+            ),
+            before_content=before_content,
+            after_content=after_content,
+            diff_text=diff_text,
         )
-    return sorted(changes, key=lambda item: item.file_path)
 
 
 def summarize_file_records(
@@ -159,7 +157,7 @@ def summarize_file_records(
         diff_text = read_edit_text(records[0].edit_id, "diff")
         if "\r" not in diff_text:
             return count_diff_lines(diff_text)
-    change, = aggregate_records(list(records), read_edit_text=read_edit_text)
+    change, = iter_file_changes(list(records), read_edit_text=read_edit_text)
     return count_diff_lines(change.diff_text)
 
 
