@@ -348,11 +348,11 @@ class WorkspaceFileOperations:
                 error = NotADirectoryError(f"目标路径不是目录: {key.path or '.'}")
                 raise mark_public_failure(error, str(error))
         entries = []
-        preconditions = []
+        preconditions = {}
         if native_io_path(target).is_dir():
             observation = self.observe_directories([(key, target)])[0]
-            preconditions.append({"key": key.model_dump(), "path": key.path,
-                                  "revision": intent.expected_directory_revision or observation.directory_revision})
+            preconditions[target] = {"key": key.model_dump(), "path": key.path,
+                                     "revision": intent.expected_directory_revision or observation.directory_revision}
         if kind == "create":
             name = self._validate_name(data["name"])
             if data["kind"] not in ("file", "directory"):
@@ -392,11 +392,11 @@ class WorkspaceFileOperations:
                 entries.append({"relative_path": relative, "kind": proof["manifest"]["kind"],
                                 "source": {"upload": relative}, "source_proof": proof})
                 parent = (target / relative).parent
-                if parent != target and native_io_path(parent).is_dir():
+                if parent not in preconditions and native_io_path(parent).is_dir():
                     parent_uri = file_uri_child(key.path, *parent.relative_to(target).parts)
                     parent_key, _ = self.directory_key(parent_uri, key.scope)
                     version = self.observe_directories([(parent_key, parent)])[0]
-                    preconditions.append({"key": parent_key.model_dump(), "path": parent_key.path, "revision": version.directory_revision})
+                    preconditions[parent] = {"key": parent_key.model_dump(), "path": parent_key.path, "revision": version.directory_revision}
         destinations = set()
         for entry in entries:
             destination = safe_join(target, entry["relative_path"])
@@ -411,7 +411,7 @@ class WorkspaceFileOperations:
             destinations.add(destination)
         payload = {"workspace_id": self.workspace_id, "actor": actor, "directory_key": key.model_dump(),
                    "target": key.path, "intent": intent.model_dump(), "entries": entries,
-                   "preconditions": preconditions, "request_hash": request_hash,
+                   "preconditions": list(preconditions.values()), "request_hash": request_hash,
                    "incoming": None if incoming is None else incoming.name}
         if kind == "create":
             payload["created_path"] = file_uri_child(key.path, entries[0]["relative_path"])
