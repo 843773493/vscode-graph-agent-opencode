@@ -74,9 +74,10 @@ def initialize_rollout_schema(
     *,
     initialize_activation: Callable[[sqlite3.Connection], None],
 ) -> None:
-    """创建 v2 schema；不执行数据迁移或业务查询。"""
+    """开启新库初始化事务；由调用方连同 owner metadata 一起提交。"""
     connection.executescript(
-        PLAN_REGISTRY_SCHEMA_SQL
+        "BEGIN IMMEDIATE;\n"
+        + PLAN_REGISTRY_SCHEMA_SQL
         + TOOL_SET_SNAPSHOT_SCHEMA_SQL
         + CONTEXT_SOURCE_CONTROL_STATE_SCHEMA_SQL
         + CONTEXT_SOURCE_VERSION_SCHEMA_SQL

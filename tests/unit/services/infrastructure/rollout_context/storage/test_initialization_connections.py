@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,23 @@ def test_initialization_is_idempotent_and_closes_connections(
     for connection in connections:
         with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
             connection.execute("SELECT 1")
+
+
+def test_fresh_initialization_rolls_back_schema_when_activation_fails(
+    rollout: tuple[RolloutContextStore, str, str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, session_id, thread_id = rollout
+    initialize_activation = store.storage._initialize_activation
+
+    def reject_activation(connection: sqlite3.Connection) -> None:
+        initialize_activation(connection)
+        raise RuntimeError("activation bootstrap failed")
+
+    monkeypatch.setattr(store.storage, "_initialize_activation", reject_activation)
+    with pytest.raises(RuntimeError, match="activation bootstrap failed"):
+        store.storage.initialize(session_id, thread_id=thread_id)
+    with closing(sqlite3.connect(store.storage.index_path(session_id, thread_id=thread_id))) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master").fetchall() == []
 
 
 @pytest.mark.parametrize("operation", ["initialize", "read_snapshot"])
