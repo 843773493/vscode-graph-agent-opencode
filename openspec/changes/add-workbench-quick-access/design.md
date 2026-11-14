@@ -728,6 +728,10 @@ Quick Access 不拥有索引，也不要求跨 owner 原始数据汇入全局搜
 
 ## 扩展、MCP 安装与设置管理的关联边界
 
+2026-11-14 第11组及15.3／15.6按具名原件完成收口：Session／fork、工作区、自动化、终端／Browser、复制／Composer 与 MCP 的菜单、React、picker 复用各原领域 Command 和 writer，明确目标及原回执不移交给第二事实源。MCP 最新真实双 scope 页面 `run-03f2e5eec5d1` 为2 passed／164.90秒，三初始化 API／request_id、精确来源与参数、原资源齿轮、disconnect／connect各一次、取消零写及受理后不重放均通过；未开放的 resources／templates 保持明确说明。非MCP动作、URI及引用继续按各自源码差异复用已有完整页面，不重跑未变化领域。逐任务原件、当前消费者与最小复审见 `out/tests/temp/2026/11/13/quick_access_six_closure/artifacts/`；当前911份前端／runtime输入与typecheck13／build10一致。
+
+新版场景索引 `out/tests/temp/2026/11/13/quick_access_final_audit/artifacts/scenario-evidence-6.json` 保留旧版及失败原件，补齐MCP，并把原已附证据的Session定位与符号Provider故障同步到具体场景：205场景为139 observed、62 contract_verified、4 conditional，40行功能矩阵为30 observed、2 contract_verified、8 conditional。条件模式继续按实际服务／宿主说明缺失；具名Linux Web和Electron原件不合称最新共享树全场景、Windows或真实跨机SSH验收。本轮仅更新既有规划证据，不新增存储、兼容、自动重试或清缓存迁移。
+
 性能验收同时遵守[交互总延迟预算](../archive/2026-11-13-enforce-interactive-latency-budgets/design.md)：普通导航、查询和打开必须统计真实入口到完整结果／可用UI的总耗时，不以Provider局部耗时、loading出现或进程timeout替代。权限、归属和版本检查保留；不在暖查询无条件重复全历史／全库审计，不增加另一套性能监控。
 
 自有插件的声明式贡献、运行期 Provider、受管服务及配置编辑归属由独立变更 [add-target-aware-extension-management](../add-target-aware-extension-management/design.md) 定义，D12–D15 明确原注册接缝、首批开放集合与未开放 Provider。插件命令进入原 `>`，沿该变更的稳定命令 ID／明确插件目标／插件开关驱动启停／释放合同调用；当前自有搜索与 Quick Access 查询仍由本稿原业务 owner 提供，不因插件可贡献命令就开放任意查询 Provider。它已取消 VSIX、VS Code 用户扩展 API／宿主和第三方市场；Registry／Command／Opener 继续复用，不增加旧格式适配或扩展宿主依赖。原用户扩展的历史测试只说明旧合同，相关入口须随该变更迁齐；完整安装、贡献注册、生命周期与设置验收归该变更，当前入口的条件复用不作为完成证据。两个变更均保持 Electron 仅承担窗口、生命周期与固定 profile 的边界。
