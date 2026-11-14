@@ -106,8 +106,12 @@ class AgentRuntimeDependencyProvider(Protocol):
 
 def load_session_agent_factory() -> Callable[..., Any]:
     """加载内置执行依赖，不构建模型、Thread 或配置中的自定义工具。"""
+    from importlib import import_module
+
     from app.agents.agent_factory import create_runtime_deep_agent_for_session
 
+    # SDK 首次访问 chat/responses 会同步加载整套资源模块，统一在就绪前的 worker 中完成。
+    import_module("openai.resources")
     return create_runtime_deep_agent_for_session
 
 
