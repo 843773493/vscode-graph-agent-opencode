@@ -20,7 +20,7 @@ import { ChatSurface } from './react/chatView.js';
 import { showFileOpenMenu } from './fileOpenMenu.js';
 import './thread.css';
 import type { LLMRequestLogMatchDTO, TraceMatchDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
-import type { Session } from '../../web/src/types/backend.js';
+import type { GatewayWorkspace, Session } from '../../web/src/types/backend.js';
 
 import type { TurnNavigationTarget } from "../../web/src/api/session/sessionTurnHistory.js";
 
@@ -65,7 +65,8 @@ export class ThreadPane extends EditorPane {
       id: 'boxteam.thread.removeUnavailableRecord', label: t('thread.restore.removeRecord'), run: () => this.group.closeEditor(input),
     })], { forceMessage: true });
     if (!(input instanceof ThreadInput)) throw new Error(t('thread.restore.invalidInput'));
-    try { await input.resolveOwner(); }
+    let workspaces: GatewayWorkspace[];
+    try { workspaces = (await input.resolveOwner()).workspaces; }
     catch (error) { throw createEditorOpenError(error instanceof Error ? error : String(error), [], { forceMessage: true }); }
     if (token.isCancellationRequested || this.input !== input) return;
     this.current = input;
@@ -73,7 +74,7 @@ export class ThreadPane extends EditorPane {
     this.root.dataset.threadId = input.owner.threadId; this.root.dataset.sessionId = input.owner.sessionId;
     this.root.dataset.workspaceId = input.owner.workspaceId;
     this.conversation = new ChatSurface(this.root, input, this.editors, this.isVisible(), (path, anchor) => showFileOpenMenu(path, anchor, input.owner,
-      this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications, this.commands, options?.boxteamSession);
+      this.menus, this.editors, this.groups, this.instantiation, this.group), this.notifications, this.commands, workspaces, options?.boxteamSession);
     if (options?.boxteamMessage) this.conversation.revealMessage(options.boxteamMessage);
     if (options?.boxteamRequestLog) this.conversation.revealRequestLog(options.boxteamRequestLog);
     if (options?.boxteamTrace) this.conversation.revealTrace(options.boxteamTrace);

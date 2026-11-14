@@ -15,7 +15,7 @@ import { useThreadSessionRuntime, type ThreadSessionSeed } from '../../../web/sr
 import { getSession, listAgents } from '../../../web/src/api.js';
 import { getSessionTurnBootstrap } from '../../../web/src/api/session/sessionTurnHistory.js';
 import { browserGatewayId, getBrowserUiSettings } from '../../../web/src/hooks/settings/browserUiSettings.js';
-import type { Session } from '../../../web/src/types/backend.js';
+import type { GatewayWorkspace, Session } from '../../../web/src/types/backend.js';
 import { gateway } from '../agentApi.js';
 import { ThreadInput } from '../threadInput.js';
 import type { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
@@ -187,7 +187,7 @@ function ThreadConversation({ input, seed, active, editors, commands, onUpdate, 
   </ComposerContext.Provider></WarmConfirmProvider>;
 }
 
-function ChatView({ input, initialSession, active, editors, commands, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; initialSession?: Session; active: boolean; editors: IEditorService; commands: ICommandService; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
+function ChatView({ input, initialSession, initialWorkspaces, active, editors, commands, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; initialSession?: Session; initialWorkspaces: GatewayWorkspace[]; active: boolean; editors: IEditorService; commands: ICommandService; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
   const owner = input.owner;
   const [seed, setSeed] = useState<ThreadSessionSeed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -218,12 +218,12 @@ function ChatView({ input, initialSession, active, editors, commands, onUpdate, 
       const seed = Promise.all([
         // 目录点击的权威 Session 只用于首次初始化；URI、恢复和重试仍真实读取。
         attempt === 0 && initialSession ? initialSession : getSession(0, owner.sessionId, owner.workspaceKey), listAgents(0, owner.workspaceKey),
-        // 会话只需登记归属；显式健康刷新仍由 Gateway 导航入口发起。
-        gateway.workspaces(false), getBrowserUiSettings(0), browserGatewayId(0),
+        // 首次复用所属 Pane 刚校验的真实目录；显式重试仍重读登记。
+        attempt === 0 ? initialWorkspaces : gateway.workspaces(false, controller.signal).then(result => result.items), getBrowserUiSettings(0), browserGatewayId(0),
       ]).then(async ([session, agents, workspaces, settings, browserViewScope]) => {
         if (session.session_id !== owner.sessionId || session.workspace_id !== owner.workspaceId) throw new Error(t('thread.host.initializeOwnerMismatch'));
         const history = await cacheLoad;
-        if (!disposed) setSeed({ session, bootstrap, agents, workspaces: workspaces.items, settings, browserViewScope, history });
+        if (!disposed) setSeed({ session, bootstrap, agents, workspaces, settings, browserViewScope, history });
       });
       // 首读可能先于挂载失败；原历史 owner 消费同一拒绝并保留只读缓存及重试出口。
       await Promise.all([seed, bootstrap.catch(() => undefined)]);
@@ -240,7 +240,7 @@ function ChatView({ input, initialSession, active, editors, commands, onUpdate, 
       if (!disposed) setError(cause instanceof Error ? cause.message : String(cause));
     });
     return () => { disposed = true; controller.abort(); };
-  }, [owner, initialSession, attempt]);
+  }, [owner, initialSession, initialWorkspaces, attempt]);
   const retry = () => setAttempt(value => value + 1);
   const toolbar = <header className="native-thread-toolbar" role="toolbar" aria-label={t('thread.host.toolbar')}>
     <button type="button" title={t('thread.host.toggleResources')} aria-label={t('thread.host.toggleResources')} aria-expanded={input.resourcesVisible}
@@ -265,6 +265,7 @@ export class ChatSurface {
     private readonly onFileOpenMenu: FileOpenMenuHandler,
     private readonly notifications: INotificationService,
     private readonly commands: ICommandService,
+    private readonly initialWorkspaces: GatewayWorkspace[],
     private readonly initialSession?: Session) {
     this.surface = new ReactSurface(container, [...productStyles, viewStyle]);
     this.active = visible; this.render();
@@ -312,5 +313,5 @@ export class ChatSurface {
   dispose(): void { this.viewport?.cancel(); this.viewport = undefined; this.draft = undefined; this.surface.dispose(); }
   private readonly onUpdate = () => this.render();
   private readonly onError = (message: string) => this.notifications.error(t('thread.host.ownerError', this.input.owner.title, this.input.owner.sessionId, this.input.owner.threadId, message));
-  private render(): void { this.surface.render(<ChatView input={this.input} initialSession={this.initialSession} editors={this.editors} commands={this.commands} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} />); }
+  private render(): void { this.surface.render(<ChatView input={this.input} initialSession={this.initialSession} initialWorkspaces={this.initialWorkspaces} editors={this.editors} commands={this.commands} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} />); }
 }

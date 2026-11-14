@@ -283,7 +283,7 @@ test('Thread 在途owner解析共用读取，凭据或Gateway改变后拒绝迟�
       m.workspaceContext.publish({ ...before, gatewayId: owner.gatewayId });
       const input = new m.ThreadInput({ ...owner, workspaceKey: 'old-route', threadId: 'exact-child', title: '原历史' });
       const pending = Promise.withResolvers();
-      const routes = spyOn(m.gateway, 'resolveWorkspace').mockImplementation(() => pending.promise);
+      const routes = spyOn(m.gateway, 'workspaces').mockImplementation(() => pending.promise);
       try {
         const first = input.resolveOwner(), second = input.resolveOwner();
         const settled = Promise.allSettled([first, second]);
@@ -293,7 +293,7 @@ test('Thread 在途owner解析共用读取，凭据或Gateway改变后拒绝迟�
           m.workspaceContext.publish({ ...before, gatewayId: otherGateway });
           if (kind === 'gateway-returned') m.workspaceContext.publish({ ...before, gatewayId: owner.gatewayId });
         }
-        pending.resolve('late-route');
+        pending.resolve({ items: [{ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId }] });
         const results = await settled;
         for (const result of results) {
           expect(result.status).toBe('rejected');
@@ -301,11 +301,14 @@ test('Thread 在途owner解析共用读取，凭据或Gateway改变后拒绝迟�
         }
         expect(input.owner.workspaceKey).toBe('old-route');
         expect(routes.mock.calls[0][1].aborted).toBe(true);
-        routes.mockResolvedValue('current-route');
-        expect(await input.resolveOwner()).toBe(input.owner);
-        expect(input.owner.workspaceKey).toBe('current-route');
+        const current = { items: [{ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId }] };
+        routes.mockResolvedValue(current);
+        const reopened = await input.resolveOwner();
+        expect(reopened.owner).toBe(input.owner);
+        expect(reopened.workspaces).toBe(current.items);
+        expect(input.owner.workspaceKey).toBe(JSON.stringify([owner.gatewayId, owner.workspaceId]));
         expect(routes).toHaveBeenCalledTimes(2);
-      } finally { pending.resolve('cleanup'); routes.mockRestore(); input.dispose(); }
+      } finally { pending.resolve({ items: [] }); routes.mockRestore(); input.dispose(); }
     }
   } finally { m.workspaceContext.publish(before); }
   receipt.checks.push('真实ThreadInput共用在途解析；凭据／Gateway／切回均拒绝迟到路由且不写owner；重开重新解析');
@@ -316,19 +319,22 @@ test('Thread 启动时首次Gateway发布及同身份登记更新仍沿原路由
   m.workspaceContext.publish({ ...before, gatewayId: null });
   const input = new m.ThreadInput({ ...owner, workspaceKey: '', threadId: 'exact-child', title: '恢复原记录' });
   const pending = Promise.withResolvers();
-  const routes = spyOn(m.gateway, 'resolveWorkspace').mockImplementation(() => pending.promise);
+  const routes = spyOn(m.gateway, 'workspaces').mockImplementation(() => pending.promise);
   try {
     const resolving = input.resolveOwner();
     m.workspaceContext.publish({ ...before, gatewayId: owner.gatewayId });
     m.workspaceContext.publish({ ...before, gatewayId: owner.gatewayId, activeId: 'another-workspace' });
-    pending.resolve('new-route');
-    expect(await resolving).toBe(input.owner);
-    expect(input.owner.workspaceKey).toBe('new-route');
+    const current = { items: [{ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId }] };
+    pending.resolve(current);
+    const resolved = await resolving;
+    expect(resolved.owner).toBe(input.owner);
+    expect(resolved.workspaces).toBe(current.items);
+    expect(input.owner.workspaceKey).toBe(JSON.stringify([owner.gatewayId, owner.workspaceId]));
     expect(routes).toHaveBeenCalledTimes(1);
     const serialized = new m.ThreadSerializer().serialize(input);
-    expect(serialized).not.toContain('new-route');
+    expect(JSON.parse(serialized)).not.toHaveProperty('workspaces');
     expect(JSON.parse(serialized).target).toEqual({ ...owner, threadId: 'exact-child' });
-  } finally { pending.resolve('cleanup'); routes.mockRestore(); input.dispose(); m.workspaceContext.publish(before); }
+  } finally { pending.resolve({ items: [] }); routes.mockRestore(); input.dispose(); m.workspaceContext.publish(before); }
   receipt.checks.push('初次Gateway发布和同身份登记更新不废弃恢复；实际新路由仍不进入序列化');
 });
 
