@@ -133,6 +133,8 @@ export class WorkspaceMcpServer implements IMcpServer, IWorkbenchMcpServer {
     document.appendMarkdown(t('workbench.mcp.toolsHeading'));
     for (const tool of this.data?.tools ?? []) line(tool.remote_name, tool.description);
     document.appendText(t('workbench.mcp.toolsNote'));
+    document.appendMarkdown('\n\n');
+    document.appendText(t('workbench.mcp.managementSupport'));
     return document.value;
   }
   dispose(): void { /* 对象只是后端镜像；关闭详情不关闭目标连接。 */ }

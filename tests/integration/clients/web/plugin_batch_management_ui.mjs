@@ -1,3 +1,4 @@
+import { selectPluginScope, pluginScopeAction, pluginPackageAction, selectPluginWorkspace } from './service_plugin_controls.mjs';
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
@@ -44,14 +45,15 @@ try {
     await expect(quick).toBeVisible();
     await quick.getByRole('option').filter({ hasText: label }).first().click();
   };
-  await view.getByRole('button', { name: '安装插件包', exact: true }).click();
+  await selectPluginScope(page, 'gateway');
+  await (await pluginScopeAction(page, '安装插件包')).click({ delay: 150 });
   await pick('ZIP 文件');
   await quick.locator('input').fill(input.packagePath);
   await page.keyboard.press('Enter');
   await expect(view).toContainText('ui.preference-probe@1.0.0', { timeout: 30_000 });
 
   const beginBatch = async (enabled, included, excluded) => {
-    await view.getByRole('button', { name: enabled ? '全部启用此范围' : '全部停用此范围', exact: true }).click();
+    await (await pluginPackageAction(page, view.locator('.service-plugin-package'), enabled ? '全部启用此范围' : '全部停用此范围')).click({ delay: 150 });
     await expect(dialog).toBeVisible();
     const text = await dialog.innerText();
     assert(text.includes(`纳入：${included}`), text);
@@ -90,7 +92,7 @@ try {
   assert.equal(gatewayBefore.effective.plugins.runtime.entries[0].enabled, true);
 
   result.phase = 'defaults';
-  await view.getByLabel('插件管理范围').selectOption('defaults');
+  await selectPluginScope(page, 'defaults');
   await expect(view).toContainText('workspace-required');
   const runtimeBefore = await api('/api/gateway/service-plugins/status', { method: 'POST', body: pluginTarget });
   await beginBatch(false, 'workspace-preference、workspace-required', 'gateway-preference（gateway）');
@@ -108,8 +110,8 @@ try {
   result.defaultsOnly = true;
 
   result.phase = 'workspace-partial-and-lost-response';
-  await view.getByLabel('插件管理范围').selectOption('workspace');
-  await pick(workspace.name);
+  await selectPluginScope(page, 'workspace');
+  await selectPluginWorkspace(page, workspace.name);
   await expect(view).toContainText('workspace-required');
   let submitted;
   const committed = new Promise(resolve => { submitted = resolve; });
@@ -131,7 +133,7 @@ try {
   await confirmBatch(true, 'workspace_root_mutable_override');
   await committed;
   // 仅延迟并丢弃真实提交的响应；切换列表不能改变在途批量操作的 owner。
-  await view.getByLabel('插件管理范围').selectOption('gateway');
+  await selectPluginScope(page, 'gateway');
   await expect(view).toContainText('gateway-preference');
   releaseWrite();
   const workspaceResult = await readResults('workspace', ['workspace-preference', 'workspace-required']);

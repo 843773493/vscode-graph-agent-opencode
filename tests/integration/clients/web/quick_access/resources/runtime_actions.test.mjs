@@ -29,6 +29,7 @@ async function exercise(mode) {
   } finally { await page.close(); }
 }
 const writes = result => result.requests.filter(item => item.method === 'POST');
+const ownerA = `gateway_${'a'.repeat(32)}`;
 const ownerB = `gateway_${'b'.repeat(32)}`;
 for (const mode of ['mcp-open', 'mcp-options']) test(`${mode}复用原目录和命令，保持同名服务的精确owner`, async () => {
   const result = await exercise(mode);
@@ -48,6 +49,22 @@ test('MCP目录归属错误只使该分支不可用，不能打开错误owner对
   expect(result.rows.some(row => row.label.includes('MCP 管理响应不属于请求'))).toBe(true);
   expect(result.rows.filter(row => row.id.endsWith('/mcp/Needle MCP'))).toHaveLength(1);
   expect(result.mcpOpened).toEqual([]); expect(writes(result)).toEqual([]);
+});
+test('MCP候选先于占满三槽的慢来源发布，取消后不发布迟到来源', async () => {
+  const result = await exercise('mcp-independent');
+  const mcpRows = result.rowsBeforeCancel.filter(row => row.id.endsWith('/mcp/Needle MCP'));
+  expect(result.blockedSourceReads).toEqual(['/api/v1/resources/agent-spec', '/api/v1/resources/skill-sources', '/api/v1/resources/gateway-skills']);
+  expect(result.abortedSourceReads).toHaveLength(3);
+  expect(result.busyBeforeCancel).toBe(true);
+  expect(mcpRows.map(row => row.id)).toEqual([
+    `${JSON.stringify([ownerA, '019a0000-0000-7000-8000-000000000001'])}/mcp/Needle MCP`,
+    `${JSON.stringify([ownerB, '019a0000-0000-7000-8000-000000000001'])}/mcp/Needle MCP`,
+  ]);
+  expect(result.rows).toEqual(result.rowsBeforeCancel);
+  const catalogReads = result.requests.filter(item => item.path === '/api/v1/mcp/servers');
+  expect(catalogReads.map(item => item.gateway).sort()).toEqual([ownerA, ownerB].sort());
+  expect(catalogReads.every(item => item.query === '?refresh=false')).toBe(true);
+  expect(result.errors).toEqual([]);
 });
 test('凭据失效后旧MCP候选不能打开，关闭picker取消其目录实际读取', async () => {
   const invalidated = await exercise('mcp-identity');

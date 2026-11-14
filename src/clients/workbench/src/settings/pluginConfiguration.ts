@@ -6,7 +6,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import type { PluginBinding, PluginPrivateInputReference, PluginPrivateInputWriteRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import type { PluginBinding, PluginTarget, PluginPrivateInputReference, PluginPrivateInputWriteRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
@@ -15,6 +15,12 @@ import { workspaceContext } from '../workspaceContext.js';
 import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument, type SourceTarget } from './sourceOwner.js';
 
 export type Scope = 'gateway' | 'workspace' | 'defaults';
+export interface PluginConfigurationTarget extends PluginTarget {
+  workspace_id?: string;
+  package_id: string;
+  package_version: string;
+  plugin_id: string;
+}
 type ConfigDocument = SourceDocument;
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
 type Source = { source_key?: string | null; layer: string; presence: string; uri?: string | null; writable?: boolean };
@@ -191,7 +197,7 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
   return results;
 }
 
-export async function manageConfig(scope: Scope, gatewayTarget: ReturnType<typeof managementGateway>, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
+export async function manageConfig(scope: Scope, gatewayTarget: PluginTarget, workspaceTarget: GatewayWorkspaceRequestTarget | undefined,
   quickInput: IQuickInputService, notification: INotificationService, binding: ConfigurationBinding, enabled: boolean | null | 'preserve',
   editParameters: boolean, privateParameter: PrivateParameter | undefined, check: () => void, token: CancellationToken, signal: AbortSignal): Promise<void> {
   check();
@@ -358,32 +364,41 @@ export function writeOnlyFields(schema: Record<string, unknown> | undefined, pre
 }
 
 /** 设置发现只消费安装清单和原配置 owner，不依赖插件管理权限或运行状态。 */
-export async function configureServicePlugin(accessor: ServicesAccessor): Promise<void> {
+export async function configureServicePlugin(accessor: ServicesAccessor, supplied?: PluginConfigurationTarget): Promise<void> {
   const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
   const dialogs = accessor.get(IDialogService);
+  const frozen = supplied ? { ...supplied } : undefined;
+  if (frozen && (![frozen.gateway_id, frozen.package_id, frozen.package_version, frozen.plugin_id].every(value => typeof value === 'string' && value.trim())
+    || frozen.workspace_id !== undefined && (typeof frozen.workspace_id !== 'string' || !frozen.workspace_id.trim()))) {
+    throw new Error(t('plugins.settingsTargetChanged'));
+  }
   const initial = await workspaceContext.ensureReady();
   const lifecycle = createManagementTargetLifecycle(t('plugins.settingsTargetChanged'), initial.gatewayId ?? undefined);
-  const target = managementGateway('settings');
+  const target = frozen ? { gateway_id: frozen.gateway_id, gateway_connection_id: frozen.gateway_connection_id } : managementGateway('settings');
   const { check, token, signal } = lifecycle;
   try {
-    const scope = await quickInput.pick([{ label: t('plugins.gatewayParameters'), scope: 'gateway' as const },
+    const scope = frozen ? { scope: frozen.workspace_id ? 'workspace' as const : 'gateway' as const } : await quickInput.pick([{ label: t('plugins.gatewayParameters'), scope: 'gateway' as const },
       { label: t('plugins.workspaceParameters'), scope: 'workspace' as const }],
-    { title: t('plugins.settingsTitle', managementTargetDisplayName(target), target.gateway_id), canPickMany: false }, token);
+    { title: t('plugins.settingsTitle', managementTargetDisplayName(managementGateway('settings')), target.gateway_id), canPickMany: false }, token);
     check();
     if (!scope) return;
-    const workspace = scope.scope === 'workspace' ? await choosePluginWorkspace(target, quickInput, token) : undefined;
+    const workspace = frozen?.workspace_id ? { ...target, workspace_id: frozen.workspace_id }
+      : scope.scope === 'workspace' ? await choosePluginWorkspace(target, quickInput, token) : undefined;
     check();
     if (scope.scope === 'workspace' && !workspace) return;
     check();
     const schemas = await new ConfigurationSourceOwner({ ...target, workspace_id: workspace?.workspace_id }).configurationSchemas(signal);
     check();
-    if (!schemas.plugins.length) { notifications.info(t('plugins.noConfigurationDeclarations')); return; }
-    const selected = await quickInput.pick(schemas.plugins.map(plugin => ({ label: plugin.name,
+    if (!schemas.plugins.length && !frozen) { notifications.info(t('plugins.noConfigurationDeclarations')); return; }
+    const selected = frozen ? { plugin: schemas.plugins.find(plugin => plugin.package_id === frozen.package_id
+      && plugin.package_version === frozen.package_version && plugin.plugin_id === frozen.plugin_id && plugin.instance_scope === scope.scope) }
+      : await quickInput.pick(schemas.plugins.map(plugin => ({ label: plugin.name,
       description: `${plugin.package_id}/${plugin.plugin_id}@${plugin.package_version}`,
       detail: `${schemas.gateway_id}${workspace ? ` · ${workspace.workspace_id}` : ''} · ${plugin.instance_scope}`, plugin })),
     { title: t('plugins.chooseConfigurationVersion'), canPickMany: false }, token);
     check();
     if (!selected) return;
+    if (!selected.plugin) throw new Error(t('plugins.versionUnavailable', frozen!.package_id, frozen!.plugin_id, frozen!.package_version));
     const plugin = selected.plugin;
     const selectedAction = await quickInput.pick([{ label: t('plugins.viewSchema'), action: 'schema' },
       { label: t('plugins.editParametersJson'), action: 'json' },
@@ -404,7 +419,7 @@ export async function configureServicePlugin(accessor: ServicesAccessor): Promis
   } finally { lifecycle.dispose(); }
 }
 
-export async function choosePluginWorkspace(target: ReturnType<typeof managementGateway>, quickInput: IQuickInputService,
+export async function choosePluginWorkspace(target: PluginTarget, quickInput: IQuickInputService,
   token?: CancellationToken): Promise<GatewayWorkspaceRequestTarget | undefined> {
   const workspaces = (await gateway.workspaces(false)).items.filter(item => item.gateway_id === target.gateway_id);
   const selected = await quickInput.pick(workspaces.map(workspace => ({ label: workspace.name, description: workspace.status,

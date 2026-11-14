@@ -650,6 +650,11 @@ test('原 renderer 状态刷新与成员删除使用最新目录，详情读取�
   expect(renderer).toContain('data.description.textContent = mcpServer.description;\n\t\t\t\tupdateEnablement();');
   const merge = methodBody('mcpServersView.ts', 'McpServersListView', 'mergeChangedMcpServers');
   expect(merge).not.toContain('newMcpServers.some(r => r.name === oldMcpServer.name)');
+  const editor = source('mcpServerEditor.ts').text;
+  expect(editor).toContain("import '../../extensions/browser/media/extensionEditor.css';");
+  expect(editor).toContain('@IQuickInputService private readonly quickInputService: IQuickInputService');
+  expect(methodBody('mcpServerEditor.ts', 'McpServerEditor', 'onNavbarChange'))
+    .toContain('focus && this.hasFocus() && !this.quickInputService.currentQuickInput');
   expect(methodBody('mcpServerEditor.ts', 'McpServerEditor', 'renderNavbar')).toContain('new Cache(() => extension.getReadme(token))');
   expect(methodBody('mcpServerEditor.ts', 'McpServerEditor', 'setEditorVisible')).toContain('server.observe()');
 });

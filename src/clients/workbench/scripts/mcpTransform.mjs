@@ -548,17 +548,41 @@ export function transformMcp(root, path, source, replaceOnce) {
       if (name === 'StopServerAction') action = replaceOnce(action, "this.label = localize('stop', \"Stop Server\");", "this.label = server instanceof WorkspaceMcpServer && server.isPending ? localize('workbench.mcp.cancelConnection', 'Cancel Connection Operation') : localize('stop', 'Stop Server');");
       contents = replaceOnce(contents, contents.slice(begin, end), action);
     }
-    contents = serverImport + contents;
+    contents = serverImport + `import { configureWorkspaceMcpServer } from ${JSON.stringify(join(root, 'src/mcp/commands.js'))};\n` + contents + `
+export class WorkspaceMcpConfigurationAction extends McpServerAction {
+  constructor(private readonly pluginParameters: boolean,
+    @IInstantiationService private readonly instantiationService: IInstantiationService) {
+    super(pluginParameters ? 'mcp.pluginParameters' : 'mcp.configurationSource',
+      pluginParameters ? localize('workbench.mcp.pluginParameters', 'Plugin Parameters and Private Inputs')
+        : localize('workbench.mcp.configurationSource', 'Configuration Source'), 'extension-action text', false);
+    this.update();
+  }
+  update(): void {
+    this.enabled = this.mcpServer instanceof WorkspaceMcpServer
+      && (!this.pluginParameters || Boolean(this.mcpServer.data?.service));
+  }
+  override async run(): Promise<void> {
+    if (!(this.mcpServer instanceof WorkspaceMcpServer)) throw new Error(localize('workbench.mcp.serverRemoved', 'The MCP service is no longer in the original target catalog'));
+    await this.instantiationService.invokeFunction(configureWorkspaceMcpServer, this.mcpServer, this.pluginParameters);
+  }
+}
+`;
   }
   if (relative.endsWith('/mcpServerEditor.ts')) {
+    contents = replaceOnce(contents, "import './media/mcpServerEditor.css';",
+      "import './media/mcpServerEditor.css';\nimport '../../extensions/browser/media/extensionEditor.css';\nimport { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';");
+    contents = replaceOnce(contents, '\t\t@IContextMenuService private readonly contextMenuService: IContextMenuService,\n',
+      '\t\t@IContextMenuService private readonly contextMenuService: IContextMenuService,\n\t\t@IQuickInputService private readonly quickInputService: IQuickInputService,\n');
     const actionImports = contents.split('\n').find(line => line.startsWith('import { ButtonWithDropDownExtensionAction,') && line.endsWith("from './mcpServerActions.js';"));
     if (!actionImports) throw new Error('上游 MCP 详情 action import 锚点缺失');
-    contents = replaceOnce(contents, actionImports, "import { InstallAction, StartServerAction, StopServerAction, AuthServerAction, ButtonWithDropDownExtensionAction, ButtonWithDropdownExtensionActionViewItem, DropDownAction, McpServerStatusAction } from './mcpServerActions.js';");
+    contents = replaceOnce(contents, actionImports, "import { InstallAction, StartServerAction, StopServerAction, AuthServerAction, WorkspaceMcpConfigurationAction, ButtonWithDropDownExtensionAction, ButtonWithDropdownExtensionActionViewItem, DropDownAction, McpServerStatusAction } from './mcpServerActions.js';");
     contents = replaceSection(contents, '\t\tconst actions = [', '\n\t\tconst actionsAndStatusContainer', `\t\tconst actions = [
       this.instantiationService.createInstance(InstallAction, false),
       this.instantiationService.createInstance(StartServerAction),
       this.instantiationService.createInstance(StopServerAction),
       this.instantiationService.createInstance(AuthServerAction),
+      this.instantiationService.createInstance(WorkspaceMcpConfigurationAction, false),
+      this.instantiationService.createInstance(WorkspaceMcpConfigurationAction, true),
     ];
 `, replaceOnce);
     contents = replaceOnce(contents, 'if (extension.readmeUrl || extension.gallery?.readme) {', 'if (extension instanceof WorkspaceMcpServer || extension.readmeUrl) {');
@@ -573,6 +597,7 @@ protected override setEditorVisible(visible: boolean): void {
 this.workspaceMcpObservation.value = this.isVisible() && mcpServer instanceof WorkspaceMcpServer ? mcpServer.observe() : undefined;`);
     contents = replaceOnce(contents, 'this.renderNavbar(mcpServer, template, preserveFocus);', 'this.renderNavbar(mcpServer, template, preserveFocus, token);');
     contents = replaceOnce(contents, 'private renderNavbar(extension: IWorkbenchMcpServer, template: IExtensionEditorTemplate, preserveFocus: boolean): void {', 'private renderNavbar(extension: IWorkbenchMcpServer, template: IExtensionEditorTemplate, preserveFocus: boolean, token: CancellationToken): void {');
+    contents = replaceOnce(contents, '\t\t\t\t\tif (focus) {', '\t\t\t\t\tif (focus && this.hasFocus() && !this.quickInputService.currentQuickInput) {');
     contents = replaceOnce(contents, '\toverride clearInput(): void {', '\toverride clearInput(): void {\nthis.workspaceMcpObservation.clear();');
     contents = replaceOnce(contents, 'if (e === extension) {', `if (e === extension) {
 if (extension instanceof WorkspaceMcpServer) {

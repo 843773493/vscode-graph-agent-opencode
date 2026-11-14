@@ -102,8 +102,9 @@ export async function buildWorkbenchDependencies(root, transformSource, outdir, 
       for (const { fileName } of ts.preProcessFile(source).importedFiles) {
         const path = sourceFileFor(resolve(dirname(sourceFile), fileName));
         if (!isWithin(upstreamSource, path)) continue;
-        // 业务与上游都指向同一次 split build 的 entry，共享相同模块实例。
-        const upstreamUrl = '/out/dev-upstream/' + relative(upstreamSource, path).replaceAll('\\', '/').replace(/\.tsx?$/, '.js');
+        // 样式继续由 Vite 处理；脚本指向同一次 split build 的 entry，共享模块身份。
+        const upstreamUrl = viteSourceUrl(root, path)
+          ?? '/out/dev-upstream/' + relative(upstreamSource, path).replaceAll('\\', '/').replace(/\.tsx?$/, '.js');
         source = source.replaceAll("'" + fileName + "'", JSON.stringify(upstreamUrl))
           .replaceAll(JSON.stringify(fileName), JSON.stringify(upstreamUrl));
       }

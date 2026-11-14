@@ -1,7 +1,7 @@
 import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 import { t } from '../../../shared/core/i18n/index.js';
 import { IQuickInputService, type IQuickPickItem } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
-import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
+import { IInstantiationService, type ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { IMcpService } from '../../upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
 import { WorkspaceMcpService } from './service.js';
 import { WorkspaceMcpServer } from './server.js';
@@ -17,6 +17,28 @@ import { ICommandService } from '../../upstream/src/vs/platform/commands/common/
 import type { McpWorkspaceRequestTarget } from './catalog.js';
 
 export const openWorkspaceMcpServerCommand = 'boxteam.mcp.openServer';
+
+/** 原详情和菜单共用同一精确对象；配置及插件参数继续交各自原 owner。 */
+export async function configureWorkspaceMcpServer(accessor: ServicesAccessor, server: WorkspaceMcpServer, pluginParameters = false): Promise<void> {
+  const service = accessor.get(IMcpService), commands = accessor.get(ICommandService);
+  if (!(service instanceof WorkspaceMcpService) || !service.servers.get().includes(server) || !server.data) {
+    throw new Error(t('workbench.mcp.serverRemoved'));
+  }
+  if (server.catalog.snapshot.error) throw new Error(server.catalog.snapshot.error);
+  const target = { ...server.catalog.target };
+  if (pluginParameters) {
+    const plugin = server.data.service;
+    if (!plugin) throw new Error(t('workbench.mcp.pluginParametersUnavailable'));
+    await commands.executeCommand('boxteam.settings.pluginParameters', { gateway_id: plugin.gateway_id,
+      gateway_connection_id: target.gateway_connection_id, workspace_id: plugin.workspace_id ?? undefined,
+      package_id: plugin.package_id, package_version: plugin.package_version, plugin_id: plugin.plugin_id });
+  } else {
+    await commands.executeCommand('boxteam.settings.openTarget', { gateway_id: target.gateway_id,
+      gateway_connection_id: target.gateway_connection_id, name: target.gateway_id,
+      connection_kind: target.gateway_id === workspaceContext.getSnapshot().gatewayId ? 'local' : 'remote_gateway' },
+    { workspace_id: target.workspace_id });
+  }
+}
 
 registerAction2(class extends Action2 {
   constructor() { super({ id: openWorkspaceMcpServerCommand, title: { value: t('workbench.mcp.openServer'), original: actionTitles['workbench.mcp.openServer'] }, f1: false }); }
@@ -75,7 +97,7 @@ export async function runWorkspaceMcpCommand(accessor: ServicesAccessor, id: unk
 
 /** 原 Server Options 命令只对选中对象携带的目标操作，不再进入浏览器的 OAuth／enablement owner。 */
 export async function showWorkspaceMcpOptions(accessor: ServicesAccessor, id: string): Promise<void> {
-  const service = accessor.get(IMcpService);
+  const service = accessor.get(IMcpService), instantiation = accessor.get(IInstantiationService);
   if (!(service instanceof WorkspaceMcpService)) throw new Error(t('workbench.mcp.commandOwnerMissing'));
   const server = service.servers.get().find(server => server.id === id);
   if (!(server instanceof WorkspaceMcpServer)) throw new Error(t('workbench.mcp.serverRemoved'));
@@ -84,6 +106,9 @@ export async function showWorkspaceMcpOptions(accessor: ServicesAccessor, id: st
   if (server.canAuthorize) items.push({ label: t('workbench.mcp.authorize'), run: () => server.authorize() });
   if (server.canStop) items.push({ label: server.isPending ? t('workbench.mcp.cancelConnection') : t('workbench.mcp.stopServer'), run: () => server.stop() });
   items.push({ label: t('workbench.mcp.showDetails'), run: () => service.open(server) }, { label: t('workbench.mcp.refreshStatus'), run: () => server.catalog.refresh({ refresh: true }) });
+  const configure = (pluginParameters = false) => instantiation.invokeFunction(configureWorkspaceMcpServer, server, pluginParameters);
+  items.push({ label: t('workbench.mcp.configurationSource'), run: () => configure() });
+  if (server.data?.service) items.push({ label: t('workbench.mcp.pluginParameters'), run: () => configure(true) });
   const pick = await accessor.get(IQuickInputService).pick(items, { placeHolder: `${server.label} · ${server.catalog.label} · ${server.statusLabel}` });
   await pick?.run();
 }

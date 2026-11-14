@@ -27,6 +27,7 @@ const record = (kind, index) => ({ resource_id: `${kind}_same`, workspace_id: ow
 export async function runtimeActionContract(mode) {
   const previous = workspaceContext.getSnapshot(), changes = new Emitter(), accepts = new Emitter(), buttons = new Emitter(), cancellation = new CancellationTokenSource();
   const requests = [], errors = [], shows = [], choices = [], notices = [], confirmations = [], sourceCalls = [], focuses = [], threadSelections = [];
+  const blockedSourceReads = [], abortedSourceReads = [];
   const mcpOpened = [], mcpOptions = [];
   const ownerSelection = mode.startsWith('command-owner-');
   const targets = owners.map((owner, i) => ({ gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, name: `工作区 ${i}`, status: 'ready' }));
@@ -59,9 +60,25 @@ export async function runtimeActionContract(mode) {
       if (mode === 'freeze' && releaseRoutes === undefined && requests.some(item => item.phase === 'command')) return new Promise(resolve => { releaseRoutes = () => resolve(ok({ items: targets })); });
       return ok({ items: targets });
     }
-    if (path === '/api/v1/resources/gateway-skills') return ok({ gateway_id: owners[index].gatewayId, workspace_id: owners[index].workspaceId, revision: 'fixed', available: true, entries: [] });
-    if (path === '/api/v1/resources/agent-spec') return ok({ node: { uri: 'boxteam://workspace/x/resources/agent-spec/root/AGENTS.md', resource_shape: 'file', operations: ['read'] } });
-    if (path.endsWith('skill-sources') || path.endsWith('local-skills')) return ok({ workspace_id: owners[index].workspaceId, entries: [] });
+    const deferSource = () => new Promise((_, reject) => {
+      blockedSourceReads.push(path);
+      init.signal.addEventListener('abort', () => {
+        abortedSourceReads.push(path);
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    });
+    if (path === '/api/v1/resources/agent-spec') {
+      return mode === 'mcp-independent' && index === 0 ? deferSource()
+        : ok({ node: { uri: 'boxteam://workspace/x/resources/agent-spec/root/AGENTS.md', resource_shape: 'file', operations: ['read'] } });
+    }
+    if (path.endsWith('skill-sources') || path.endsWith('local-skills')) {
+      const response = () => ok({ workspace_id: owners[index].workspaceId, entries: [] });
+      return mode === 'mcp-independent' && index === 0 && path.endsWith('skill-sources') ? deferSource() : response();
+    }
+    if (path === '/api/v1/resources/gateway-skills') {
+      return mode === 'mcp-independent' && index === 0 ? deferSource()
+        : ok({ gateway_id: owners[index].gatewayId, workspace_id: owners[index].workspaceId, revision: 'fixed', available: true, entries: [] });
+    }
     if (path === '/api/v1/mcp/servers' || path === '/api/v1/mcp/connection-operations') {
       const response = () => Response.json({ code: 0, message: 'ok', request_id: 'mcp-contract', protocol_version: 1,
         target: { kind: 'workspace', gateway_id: mode === 'mcp-mismatch' && index === 0 ? owners[1].gatewayId : owners[index].gatewayId,
@@ -189,6 +206,16 @@ export async function runtimeActionContract(mode) {
       if (mode === 'pending-close' || mode === 'mcp-pending-close') lifetime.dispose(); else invalidateGatewayToken(0);
       releaseRead(); await new Promise(resolve => setTimeout(resolve, 20));
       return { requests, aborted, rows: picker.items.map(item => ({ id: item.id, label: item.label })), rowsBeforeCancel, errors };
+    }
+    if (mode === 'mcp-independent') {
+      await until(() => blockedSourceReads.length === 3
+        && picker.items.filter(item => item.id.endsWith('/mcp/Needle MCP')).length === owners.length);
+      const rowsBeforeCancel = picker.items.map(item => ({ id: item.id, label: item.label }));
+      const busyBeforeCancel = picker.busy;
+      lifetime.dispose();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return { requests, blockedSourceReads, abortedSourceReads, busyBeforeCancel,
+        rows: picker.items.map(item => ({ id: item.id, label: item.label })), rowsBeforeCancel, errors };
     }
     await until(() => !picker.busy && picker.items.length === (mode === 'empty-title' ? 2 : mode.startsWith('mcp-') ? 6 : 4));
     const rows = picker.items.map(item => ({ id: item.id, label: item.label, detail: item.detail }));

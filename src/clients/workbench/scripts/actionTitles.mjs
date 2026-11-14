@@ -15,7 +15,7 @@ export const actionTitleKeys = [
   'workbench.settings.modelsProviders', 'workbench.settings.agents',
   'quickAccess.mode.sessions', 'quickAccess.mode.threads', 'quickAccess.mode.content',
   'quickAccess.workspace.actionTitle', 'quickAccess.sources.actionTitle', 'quickAccess.automation.actionTitle',
-  'plugins.attachWorkspaceTitle',
+  'plugins.attachWorkspaceTitle', 'plugins.manageSources',
   'workbench.view.sessions', 'workbench.view.automation', 'workbench.view.openAutomation',
   'workbench.view.workspaceTerminal', 'workbench.view.openWorkspaceTerminal',
   'workbench.view.workspaceOutput', 'workbench.view.openWorkspaceOutput', 'workbench.view.ports',

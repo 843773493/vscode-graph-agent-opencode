@@ -15,34 +15,44 @@ import { INotificationService } from '../../upstream/src/vs/platform/notificatio
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
-import { DeferredPromise, raceTimeout, timeout } from '../../upstream/src/vs/base/common/async.js';
+import { timeout } from '../../upstream/src/vs/base/common/async.js';
 import { generateUuid } from '../../upstream/src/vs/base/common/uuid.js';
-import type { InstallPluginRequest, PluginBinding, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget, PluginUninstallResultDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import type { InstallPluginRequest, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget, PluginUninstallResultDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
+import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
 import { gateway, GatewayRequestError } from '../agentApi.js';
-import { createManagementTargetLifecycle, managementGateway, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
+import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName, listManagementTargets, selectManagementTarget, onDidChangeExtensionManagementTarget } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
 import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
-import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '../../../web/src/api/http.js';
-import type { GatewayDiagnosticsDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
-import { watchPluginRuntimeStatus } from '../../../web/src/api/pluginRuntimeStatus.js';
 
-import { manageConfig, setPluginBindings, readPluginBindings, choosePluginWorkspace, writeOnlyFields, type Scope } from '../settings/pluginConfiguration.js';
+import { manageConfig, setPluginBindings, type Scope } from '../settings/pluginConfiguration.js';
 
-type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
+import { PluginScope, pluginActions, pluginStateLabel, type PackagePlugin } from './pluginScope.js';
+import { PluginEditorInput, readPluginInstanceLog } from './pluginEditor.js';
+import { IEditorService, SIDE_GROUP } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { DisposableStore } from '../../upstream/src/vs/base/common/lifecycle.js';
+import { SettingsEditor2Input } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesEditorInput.js';
+import { captureSettingsLocation } from '../settings/editor.js';
+import type { ISettingsEditorOptions } from '../../upstream/src/vs/workbench/services/preferences/common/preferences.js';
+import { IEditorGroupsService } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
+import { Action } from '../../upstream/src/vs/base/common/actions.js';
+import { ActionBar } from '../../upstream/src/vs/base/browser/ui/actionbar/actionbar.js';
+import { InputBox } from '../../upstream/src/vs/base/browser/ui/inputbox/inputBox.js';
+import { SelectActionViewItem } from '../../upstream/src/vs/base/browser/ui/actionbar/actionViewItems.js';
+import { IContextViewService } from '../../upstream/src/vs/platform/contextview/browser/contextView.js';
+import { defaultInputBoxStyles, defaultSelectBoxStyles } from '../../upstream/src/vs/platform/theme/browser/defaultStyles.js';
+import { WorkbenchList } from '../../upstream/src/vs/platform/list/browser/listService.js';
+import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extension.css';
+import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionsWidgets.css';
+import '../../upstream/src/vs/workbench/contrib/extensions/browser/media/extensionActions.css';
+import './plugins.css';
 const errorsText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const activePluginInstallations = new Map<string, Promise<void>>();
 const pluginGatewayLabel = (target: PluginTarget) => t('plugins.nativeGateway', target.gateway_id, target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : '');
 
-function pluginStateLabel(state: string): string {
-  switch (state) {
-    case 'stopped': return t('plugins.state.stopped');
-    case 'starting': return t('plugins.state.starting');
-    case 'ready': return t('plugins.state.ready');
-    case 'stopping': return t('plugins.state.stopping');
-    case 'failed': return t('plugins.state.failed');
-    case 'waiting': return t('plugins.state.waiting');
-    default: return state;
-  }
+/** 沿用原工具栏选择器；用索引保持同名目标身份，并同步范围的禁用态。 */
+class ManagementTargetSelect extends SelectActionViewItem<number> {
+  protected override getActionContext(_option: string, index: number): number { return index; }
+  setEnabled(enabled: boolean): void { this.action.enabled = enabled; this.selectBox.setEnabled(enabled); }
 }
 
 function requireInstallationOwner(target: PluginTarget, operationId: string, operation: PluginInstallOperationDTO): PluginInstallOperationDTO {
@@ -54,21 +64,25 @@ function requireInstallationOwner(target: PluginTarget, operationId: string, ope
 
 /** 原 Extensions Viewlet 中展示 Gateway 自有插件模型，不伪造 IExtension 或 Gallery 对象。 */
 export class ServicePluginPackagesView extends ViewPane {
-  private scope: Scope = 'gateway';
+  private scope: Scope = 'workspace';
   private content: HTMLElement | undefined;
-  private selected: { packageId: string; pluginId: string; version: string } | undefined;
   private workspaceTarget: GatewayWorkspaceRequestTarget | undefined;
   private refreshRevision = 0;
-  private searchInput: HTMLInputElement | undefined;
+  private searchInput: InputBox | undefined;
   private query = '';
   private controls: HTMLElement | undefined;
-  private runtimeStatusController: AbortController | undefined;
-  private runtimeStatus: PluginRuntimeStatusDTO | undefined;
-  private configuredBindings: readonly PluginBinding[] | undefined;
-  private updateDetailsStatus: (() => void) | undefined;
+  private state: PluginScope | undefined;
+  private readonly packageActions = this._register(new DisposableStore());
+  private readonly rememberedWorkspaces = new Map<string, string>();
+  private gatewaySelector: ManagementTargetSelect | undefined;
+  private workspaceSelector: ManagementTargetSelect | undefined;
+  private selectorWorkspaces: string[] = [];
+  private readonly lists: WorkbenchList<PackagePlugin>[] = [];
+  private bodyWidth = 0;
+  private get runtimeStatus(): PluginRuntimeStatusDTO | undefined { return this.state?.runtime; }
 
   constructor(options: IViewPaneOptions, @IKeybindingService keybindings: IKeybindingService,
-    @IContextMenuService contextMenu: IContextMenuService, @IConfigurationService configuration: IConfigurationService,
+    @IContextMenuService private readonly pluginMenus: IContextMenuService, @IConfigurationService configuration: IConfigurationService,
     @IContextKeyService contextKeys: IContextKeyService, @IViewDescriptorService descriptors: IViewDescriptorService,
     @IInstantiationService instantiation: IInstantiationService, @IOpenerService opener: IOpenerService,
     @IThemeService theme: IThemeService, @IHoverService hover: IHoverService,
@@ -76,13 +90,14 @@ export class ServicePluginPackagesView extends ViewPane {
     @INotificationService private readonly notifications: INotificationService,
     @ICommandService private readonly commands: ICommandService,
     @IProgressService private readonly progress: IProgressService,
-    @IDialogService private readonly dialogs: IDialogService) {
-    super(options, keybindings, contextMenu, configuration, contextKeys, descriptors, instantiation, opener, theme, hover);
+    @IDialogService private readonly dialogs: IDialogService,
+    @IEditorService private readonly editors: IEditorService,
+    @IContextViewService private readonly contextView: IContextViewService) {
+    super(options, keybindings, pluginMenus, configuration, contextKeys, descriptors, instantiation, opener, theme, hover);
     this._register(onDidChangeExtensionManagementTarget(() => {
       this.stopRuntimeStatus();
       this.refreshRevision++;
       this.workspaceTarget = undefined;
-      this.selected = undefined;
       void this.refresh();
     }));
     this._register(this.onDidChangeBodyVisibility(visible => {
@@ -94,38 +109,59 @@ export class ServicePluginPackagesView extends ViewPane {
   protected override renderBody(container: HTMLElement): void {
     super.renderBody(container);
     container.classList.add('service-plugin-packages-view');
-    this.searchInput = append(container, $('input')) as HTMLInputElement;
-    this.searchInput.type = 'search';
-    this.searchInput.setAttribute('aria-label', t('plugins.searchInstalled'));
-    this.searchInput.placeholder = t('plugins.searchInstalled');
+    this.searchInput = this._register(new InputBox(append(container, $('.service-plugin-search')), this.contextView, {
+      ariaLabel: t('plugins.searchInstalled'), placeholder: t('plugins.searchInstalled'), inputBoxStyles: defaultInputBoxStyles,
+    }));
+    this.searchInput.inputElement.type = 'search';
     this.searchInput.value = this.query;
-    this.searchInput.addEventListener('input', () => void this.commands.executeCommand('workbench.extensions.search', this.searchInput!.value)
-      .catch(error => this.notifications.error(errorsText(error))));
+    this._register(this.searchInput.onDidChange(value => void this.commands.executeCommand('workbench.extensions.search', value)
+      .catch(error => this.notifications.error(errorsText(error)))));
     this.controls = append(container, $('div'));
-    const selector = append(this.controls, $('select')) as HTMLSelectElement;
-    selector.setAttribute('aria-label', t('plugins.managementScope'));
-    for (const [value, key] of [['gateway', 'plugins.scopeGateway'], ['workspace', 'plugins.scopeWorkspace'], ['defaults', 'plugins.scopeDefaults']] as const) {
-      const option = append(selector, $('option')) as HTMLOptionElement;
-      option.value = value;
-      option.textContent = t(key);
-    }
-    append(this.controls, $('p')).textContent = t('plugins.defaultsExplanation');
-    selector.addEventListener('change', () => {
-      if (selector.value === 'gateway' || selector.value === 'workspace' || selector.value === 'defaults') this.scope = selector.value;
+    this.controls.className = 'service-plugin-scope';
+    const gatewayAction = this._register(new Action('plugins.gateway', t('plugins.managementGateway'), undefined, true, index => {
+      const target = this.gatewayTargets[index as number];
+      if (target) selectManagementTarget('extensions', target);
+    }));
+    const workspaceAction = this._register(new Action('plugins.workspace', t('plugins.managementWorkspace'), undefined, true, index => {
+      const target = managementGateway('extensions');
+      this.rememberedWorkspaces.set(this.targetKey(target), this.selectorWorkspaces[index as number]);
       this.workspaceTarget = undefined;
-      this.selected = undefined;
-      this.refreshRevision++;
+      this.scope = 'workspace';
       void this.refresh();
-    });
-    const install = append(this.controls, $('button'));
-    install.textContent = t('plugins.installPackage');
-    install.addEventListener('click', () => void this.commands.executeCommand('boxteam.plugins.installPackage')
-      .catch(error => this.notifications.error(errorsText(error))));
+    }));
+    this.gatewaySelector = new ManagementTargetSelect(undefined, gatewayAction, [], 0, this.contextView, defaultSelectBoxStyles,
+      { ariaLabel: t('plugins.managementGateway'), useCustomDrawn: true });
+    this.workspaceSelector = new ManagementTargetSelect(undefined, workspaceAction, [], 0, this.contextView, defaultSelectBoxStyles,
+      { ariaLabel: t('plugins.managementWorkspace'), useCustomDrawn: true });
+    const toolbar = this._register(new ActionBar(this.controls, { focusOnlyEnabledItems: true,
+      actionViewItemProvider: action => action === gatewayAction ? this.gatewaySelector : action === workspaceAction ? this.workspaceSelector : undefined,
+    }));
+    this._register(toolbar.onDidRun(({ error }) => { if (error) this.notifications.error(errorsText(error)); }));
+    const moreAction = this._register(new Action('plugins.scope', t('plugins.scopeMenu'), 'codicon codicon-ellipsis', true, () => {
+      const target = { ...managementGateway('extensions') };
+      const actions = (['workspace', 'gateway', 'defaults'] as const).map(scope => new Action(`plugins.scope.${scope}`,
+        t(scope === 'workspace' ? 'plugins.scopeWorkspace' : scope === 'gateway' ? 'plugins.scopeGateway' : 'plugins.scopeDefaults'), undefined, true,
+        async () => { this.scope = scope; await this.refresh(); }));
+      actions.push(new Action('plugins.install', t('plugins.installPackage'), undefined, true,
+        () => this.commands.executeCommand('boxteam.plugins.installPackage', target)));
+      actions.push(new Action('plugins.sources', t('plugins.manageSources'), undefined, true,
+        () => this.commands.executeCommand('boxteam.plugins.manageSources', target)));
+      this.pluginMenus.showContextMenu({ getAnchor: () => toolbar.domNode.querySelector<HTMLElement>('.action-item:last-child')!, getActions: () => actions,
+        onHide: () => actions.forEach(action => action.dispose()) });
+    }));
+    toolbar.push([gatewayAction, workspaceAction, moreAction], { icon: true, label: false });
     this.content = append(container, $('.service-plugin-packages-content'));
     void this.refresh();
   }
 
   get searchValue(): string { return this.query; }
+
+  protected override layoutBody(height: number, width: number): void {
+    super.layoutBody(height, width);
+    this.bodyWidth = width;
+    this.searchInput?.layout();
+    for (const list of this.lists) list.layout(list.length * 72, width);
+  }
 
   async openPlugin(target: PluginTarget, packageId: string, version: string, pluginId: string, scope: 'gateway' | 'workspace'): Promise<void> {
     const checkTarget = () => {
@@ -136,14 +172,11 @@ export class ServicePluginPackagesView extends ViewPane {
     };
     checkTarget();
     this.scope = scope;
-    const selector = this.controls?.querySelector('select');
-    if (selector) selector.value = scope;
-    this.selected = { packageId, pluginId, version };
     this.search('');
     await this.refresh();
     checkTarget();
     if (scope === 'workspace' && !this.workspaceTarget) return;
-    if (!this.content?.querySelector('.service-plugin-details')) throw new Error(t('plugins.versionUnavailable', packageId, pluginId, version));
+    await this.editors.openEditor(new PluginEditorInput(target, this.workspaceTarget, scope, packageId, version, pluginId, pluginId));
   }
 
   search(query: string): void {
@@ -162,21 +195,21 @@ export class ServicePluginPackagesView extends ViewPane {
 
   override dispose(): void {
     this.stopRuntimeStatus();
+    this.packageActions.clear();
+    this.lists.length = 0;
     this.refreshRevision++;
     this.content = undefined;
-    this.configuredBindings = undefined;
-    this.updateDetailsStatus = undefined;
     super.dispose();
   }
 
   async refresh(): Promise<void> {
     if (!this.content || !this.isBodyVisible() || this.content.hidden) return;
     this.stopRuntimeStatus();
+    this.packageActions.clear();
+    this.lists.length = 0;
     const revision = ++this.refreshRevision;
     const scope = this.scope;
     const container = this.content;
-    this.configuredBindings = undefined;
-    this.updateDetailsStatus = undefined;
     clearNode(container);
     append(container, $('p')).textContent = t('plugins.loading');
     try {
@@ -210,130 +243,56 @@ export class ServicePluginPackagesView extends ViewPane {
     });
   }
 
-  private stopRuntimeStatus(): void {
-    this.runtimeStatusController?.abort();
-    this.runtimeStatusController = undefined;
-    this.runtimeStatus = undefined;
-  }
-
-  private async observeRuntimeStatus(target: PluginTarget): Promise<PluginRuntimeStatusDTO> {
-    this.stopRuntimeStatus();
-    const controller = new AbortController();
-    const first = new DeferredPromise<PluginRuntimeStatusDTO>();
-    controller.signal.addEventListener('abort', () => void first.cancel(), { once: true });
-    this.runtimeStatusController = controller;
-    void watchPluginRuntimeStatus(target, controller.signal, snapshot => {
-      if (this.runtimeStatusController !== controller || controller.signal.aborted
-        || snapshot.plugins.some(slot => slot.gateway_id !== target.gateway_id)) return;
-      const previous = this.runtimeStatus;
-      this.runtimeStatus = snapshot;
-      void first.complete(snapshot);
-      if (previous) {
-        const workspaceId = this.scope === 'workspace' ? this.workspaceTarget?.workspace_id : undefined;
-        const bindings = (state: PluginRuntimeStatusDTO) => state.configured_bindings
-          .filter(binding => (binding.workspace_id ?? undefined) === workspaceId);
-        // 外部配置提交后重读原来源；实例进度和兄弟工作区事件不触发额外请求。
-        if (JSON.stringify(bindings(previous)) !== JSON.stringify(bindings(snapshot))) {
-          void this.refresh();
-          return;
-        }
-      }
-      this.updateRuntimeStatusPresentation();
-    }).catch(error => {
-      if (controller.signal.aborted || this.runtimeStatusController !== controller) return;
-      if (!first.isSettled) { void first.error(error); return; }
-      this.stopRuntimeStatus();
-      this.notifications.error(errorsText(error));
-    });
-    // 首个完整快照同时用于初始化和后续观察，不再并行读取另一份 /status。
-    const snapshot = await raceTimeout(first.p, DEFAULT_API_REQUEST_TIMEOUT_MS);
-    if (!snapshot) {
-      controller.abort();
-      throw new Error(t('plugins.runtimeSnapshotTimeout'));
-    }
-    return snapshot;
-  }
-
-  private runtimeSlot(packageId: string, pluginId: string, workspaceId: string | undefined): PluginRuntimeStatusDTO['plugins'][number] | undefined {
-    return this.runtimeStatus?.plugins.find(slot => slot.binding?.package_id === packageId
-      && slot.binding.plugin_id === pluginId
-      && (slot.binding.workspace_id ?? undefined) === workspaceId);
-  }
+  private stopRuntimeStatus(): void { this.state?.dispose(); this.state = undefined; }
 
   private updateRuntimeStatusPresentation(): void {
     const container = this.content;
-    if (!container || !this.runtimeStatus) return;
+    if (!container || !this.state) return;
     for (const row of container.querySelectorAll<HTMLElement>('[data-plugin-runtime-row]')) {
       const packageId = row.dataset.packageId;
       const pluginId = row.dataset.pluginId;
       if (!packageId || !pluginId) continue;
-      const workspaceId = row.dataset.workspaceId || undefined;
-      const status = this.runtimeSlot(packageId, pluginId, workspaceId);
+      const status = this.state.slot(packageId, pluginId);
       const output = row.querySelector<HTMLElement>('[data-plugin-runtime-value]');
       if (output) output.textContent = row.dataset.scope === 'defaults'
-        ? row.dataset.initialRuntimeValue ?? ''
-        : this.runtimeLabel(packageId, pluginId, workspaceId, status, row.dataset.runtime === 'true');
+        ? t('plugins.defaultRuntimeValue', this.state.binding(packageId, pluginId)?.enabled ? t('plugins.enabledOnCreate') : this.state.binding(packageId, pluginId) ? t('plugins.disabledOnCreate') : t('plugins.notInDefaults'), this.state.binding(packageId, pluginId) ? ` @${this.state.binding(packageId, pluginId)!.package_version}` : '')
+        : this.state.label(packageId, pluginId, row.dataset.runtime === 'true');
       const failure = row.querySelector<HTMLElement>('[data-plugin-runtime-error]');
       if (failure) {
-        failure.hidden = !status?.error;
-        failure.textContent = status?.error ?? '';
+        failure.hidden = !(status?.error || this.state.error);
+        failure.textContent = status?.error ?? this.state.error ?? '';
       }
     }
     const workspace = container.querySelector<HTMLElement>('[data-plugin-workspace-handoff]');
     if (workspace) {
-      const state = this.runtimeStatus.workspace_configurations.find(item => item.workspace_id === workspace.dataset.workspaceId);
-      workspace.textContent = t('plugins.workspaceHandoff', workspace.dataset.workspaceId, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
+      const state = this.runtimeStatus?.workspace_configurations.find(item => item.workspace_id === workspace.dataset.workspaceId);
+      workspace.textContent = t('plugins.workspaceHandoffSummary', state ? pluginStateLabel(state.state) : t('plugins.notReceived'));
+      workspace.title = t('plugins.workspaceHandoff', workspace.dataset.workspaceId, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
     }
-    const details = container.querySelector<HTMLElement>('.service-plugin-details');
-    const packageId = details?.dataset.packageId;
-    const pluginId = details?.dataset.pluginId;
-    if (details && packageId && pluginId) {
-      const status = this.runtimeSlot(packageId, pluginId, details.dataset.workspaceId || undefined);
-      const state = details.querySelector<HTMLElement>('[data-plugin-runtime-value]');
-      if (state) state.textContent = details.dataset.scope === 'defaults'
-        ? details.dataset.initialRuntimeValue ?? ''
-        : this.runtimeLabel(packageId, pluginId, details.dataset.workspaceId || undefined, status,
-          details.dataset.runtime === 'true');
-      const versions = details.querySelector<HTMLElement>('[data-plugin-runtime-version]');
-      if (versions && details.dataset.scope !== 'defaults') {
-        versions.textContent = t('plugins.configurationPrefix', this.runtimeConfigurationLabel(packageId, pluginId,
-          details.dataset.workspaceId || undefined))
-          + this.runtimeActualLabel(status, details.dataset.runtime === 'true');
-      }
-      const handoff = details.querySelector<HTMLElement>('[data-plugin-workspace-handoff]');
-      if (handoff) {
-        const state = this.runtimeStatus.workspace_configurations.find(item => item.workspace_id === handoff.dataset.workspaceId);
-        handoff.textContent = t('plugins.workspaceHandoff', handoff.dataset.workspaceId, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
-      }
-      const failure = details.querySelector<HTMLElement>('[data-plugin-runtime-error]');
-      if (failure) {
-        failure.hidden = !status?.error;
-        failure.textContent = status?.error ?? '';
-      }
-    }
-    this.updateDetailsStatus?.();
   }
 
-  private configuredBinding(packageId: string, pluginId: string, workspaceId: string | undefined): PluginBinding | undefined {
-    // 配置期望统一来自原来源 owner；运行状态流的 active 绑定不能覆盖 pending。
-    return this.configuredBindings?.find(item => item.package_id === packageId
-      && item.plugin_id === pluginId && (item.workspace_id ?? undefined) === workspaceId);
-  }
-
-  private runtimeConfigurationLabel(packageId: string, pluginId: string, workspaceId: string | undefined): string {
-    const binding = this.configuredBinding(packageId, pluginId, workspaceId);
-    return binding ? `${binding.enabled ? t('plugins.enabled') : t('plugins.disabled')} @${binding.package_version}` : t('plugins.unbound');
-  }
-
-  private runtimeLabel(packageId: string, pluginId: string, workspaceId: string | undefined,
-    status: PluginRuntimeStatusDTO['plugins'][number] | undefined, runtime: boolean): string {
-    return `${this.runtimeConfigurationLabel(packageId, pluginId, workspaceId)} · ${this.runtimeActualLabel(status, runtime)}`;
-  }
-
-  private runtimeActualLabel(status: PluginRuntimeStatusDTO['plugins'][number] | undefined, runtime: boolean): string {
-    return status?.instance
-      ? t('plugins.actualVersion', pluginStateLabel(status.state), status.instance.package_version)
-      : runtime ? t('plugins.actualNotReady', status ? pluginStateLabel(status.state) : t('plugins.notRunning')) : t('plugins.declarative');
+  private gatewayTargets: Awaited<ReturnType<typeof listManagementTargets>> = [];
+  private targetKey(target: PluginTarget): string { return JSON.stringify([target.gateway_id, target.gateway_connection_id]); }
+  private async renderTargetSelectors(revision: number): Promise<void> {
+    const targets = await listManagementTargets();
+    if (revision !== this.refreshRevision) return;
+    this.gatewayTargets = targets;
+    const target = managementGateway('extensions');
+    const gatewaySelect = this.gatewaySelector!, workspaceSelect = this.workspaceSelector!;
+    gatewaySelect.setOptions(targets.map(item => ({ text: managementTargetDisplayName(item) })),
+      targets.findIndex(item => item.gateway_id === target.gateway_id && item.gateway_connection_id === target.gateway_connection_id));
+    const workspaces = workspaceContext.getSnapshot().workspaces.filter(item => item.gateway_id === target.gateway_id);
+    const remembered = this.rememberedWorkspaces.get(this.targetKey(target));
+    const selected = workspaces.find(item => item.workspace_id === remembered) ?? workspaces[0];
+    if (selected) this.rememberedWorkspaces.set(this.targetKey(target), selected.workspace_id);
+    this.workspaceTarget = this.scope === 'workspace' && selected ? { gateway_id: target.gateway_id,
+      gateway_connection_id: target.gateway_connection_id, workspace_id: selected.workspace_id } : undefined;
+    this.selectorWorkspaces = workspaces.map(item => item.workspace_id);
+    const workspaceScope = this.scope === 'workspace' && workspaces.length > 0;
+    workspaceSelect.setOptions(workspaceScope ? workspaces.map(item => ({ text: item.name }))
+      : [{ text: t(this.scope === 'gateway' ? 'plugins.scopeGateway' : this.scope === 'defaults' ? 'plugins.scopeDefaults' : 'plugins.noWorkspaces') }],
+      workspaceScope ? workspaces.indexOf(selected!) : 0);
+    workspaceSelect.setEnabled(workspaceScope);
   }
 
   private async renderPackages(container: HTMLElement, revision: number, scope: Scope): Promise<void> {
@@ -341,28 +300,33 @@ export class ServicePluginPackagesView extends ViewPane {
     if (revision !== this.refreshRevision) return;
     const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
     if (!entryGatewayId) throw new Error(t('plugins.gatewayNotReady'));
+    await this.renderTargetSelectors(revision);
+    if (revision !== this.refreshRevision) return;
     const target = managementGateway('extensions');
-    const workspace = scope === 'workspace' ? (this.workspaceTarget ?? await choosePluginWorkspace(target, this.quickInput)) : undefined;
+    const workspace = scope === 'workspace' ? this.workspaceTarget : undefined;
     if (revision !== this.refreshRevision) return;
     this.workspaceTarget = workspace;
     if (scope === 'workspace' && !workspace) { clearNode(container); append(container, $('p')).textContent = t('plugins.chooseWorkspaceFirst'); return; }
     const pluginTarget: PluginTarget = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id };
-    const [inventory, runtime, scopeBindings] = await Promise.all([
+    const state = this.state = new PluginScope(scope, pluginTarget, workspace, this.notifications);
+    state.onDidChange(() => { if (state === this.state) this.updateRuntimeStatusPresentation(); });
+    const [inventory] = await Promise.all([
       gateway.request<PluginInventoryResultDTO>('/api/gateway/service-plugins/inventory', { method: 'POST', body: JSON.stringify(pluginTarget) }),
-      scope === 'defaults' ? undefined : this.observeRuntimeStatus(pluginTarget),
-      readPluginBindings(scope, workspace ?? target),
+      state.load(),
     ]);
     if (this.content !== container || revision !== this.refreshRevision) return;
-    this.configuredBindings = scopeBindings;
+    const runtime = state.runtime, scopeBindings = state.bindings;
     clearNode(container);
-    append(container, $('p')).textContent = inventory.sources?.message ?? t('plugins.sourcesNotConfigured');
+    append(container, $('p')).textContent = t(inventory.sources?.configured ? 'plugins.sourcesConfigured' : 'plugins.emptySources');
+    if (scope === 'defaults') append(container, $('p')).textContent = t('plugins.defaultsFutureOnly');
     if (workspace) {
       const handoff = runtime!.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
       const summary = append(container, $('p'));
       summary.setAttribute('aria-label', t('plugins.workspaceHandoffAria'));
       summary.dataset.pluginWorkspaceHandoff = 'true';
       summary.dataset.workspaceId = workspace.workspace_id;
-      summary.textContent = t('plugins.workspaceHandoff', workspace.workspace_id, handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'), handoff?.error ? ` · ${handoff.error}` : '');
+      summary.textContent = t('plugins.workspaceHandoffSummary', handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'));
+      summary.title = t('plugins.workspaceHandoff', workspace.workspace_id, handoff ? pluginStateLabel(handoff.state) : t('plugins.notReceived'), handoff?.error ? ` · ${handoff.error}` : '');
     }
     const pluginScope = scope === 'gateway' ? 'gateway' : 'workspace';
     const bindings = scopeBindings.filter(item => scope === 'workspace'
@@ -373,18 +337,19 @@ export class ServicePluginPackagesView extends ViewPane {
       const matching = manifest.plugins.filter(plugin => plugin.instance_scope === pluginScope);
       const packageSection = append(container, $('section.service-plugin-package'));
       packageSection.dataset.search = `${manifest.package_id} ${manifest.name} ${manifest.description ?? ''} ${manifest.plugins.map(plugin => `${plugin.id} ${plugin.name}`).join(' ')}`.toLocaleLowerCase();
-      append(packageSection, $('h3')).textContent = `${manifest.name} · ${manifest.package_id}@${manifest.version}`;
-      append(packageSection, $('p')).textContent = manifest.description ?? '';
+      const packageHeading = append(packageSection, $('h3'));
+      append(packageHeading, $('span')).textContent = `${manifest.name} · ${manifest.package_id}@${manifest.version}`;
+      packageHeading.title = `${manifest.package_id}@${manifest.version}`;
+      const packageMenu = append(packageHeading, $('div'));
+      const packageBar = this.packageActions.add(new ActionBar(packageMenu));
       if (!matching.length) append(packageSection, $('p')).textContent = t('plugins.noMatchingScope', manifest.plugins.map(plugin => t('plugins.scopeEntry', plugin.id, plugin.instance_scope)).join(t('plugins.listSeparator')));
-      const packageActions = append(packageSection, $('.service-plugin-package-actions'));
+      const packageActions: Action[] = [];
       const batchButtons = matching.length ? [true, false].map(enabled => {
-        const button = append(packageActions, $('button')) as HTMLButtonElement;
-        button.textContent = enabled ? t('plugins.enableAll') : t('plugins.disableAll');
-        button.addEventListener('click', () => void this.runTargetOperation(async lifecycle => {
-          batchButtons.forEach(item => { item.disabled = true; });
+        const button = new Action(`plugin.package.${enabled}`, enabled ? t('plugins.enableAll') : t('plugins.disableAll'), undefined, true, () => this.runTargetOperation(async lifecycle => {
+          batchButtons.forEach(item => { item.enabled = false; });
           try {
             const batchBindings = matching.map(plugin => ({ package_id: manifest.package_id, plugin_id: plugin.id,
-              package_version: this.configuredBinding(manifest.package_id, plugin.id, workspace?.workspace_id)?.package_version
+              package_version: state.binding(manifest.package_id, plugin.id)?.package_version
                 ?? manifest.version, enabled }));
             const excluded = manifest.plugins.filter(plugin => plugin.instance_scope !== pluginScope);
             const owner = `Gateway ${target.gateway_id}${target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : ''} · ${scope}${workspace ? t('plugins.workspaceSuffix', workspace.workspace_id) : ''}`;
@@ -417,50 +382,82 @@ export class ServicePluginPackagesView extends ViewPane {
               return t('plugins.batchResult', owner, item.package_id, item.plugin_id, item.package_version, configuration, state);
             });
             await this.dialogs.info(t('plugins.batchResultsTitle'), lines.join('\n\n'));
-          } finally { batchButtons.forEach(item => { item.disabled = false; }); }
+          } finally { batchButtons.forEach(item => { item.enabled = true; }); }
         }, entryGatewayId));
+        packageActions.push(button);
         return button;
       }) : [];
-      const installInput = append(packageActions, $('button'));
-      installInput.textContent = t('plugins.reinstall');
-      installInput.addEventListener('click', () => void this.runOperation(() => installPackageFromView(
-        this.quickInput, this.notifications, this.progress, pluginTarget, entryGatewayId)));
-      const uninstall = append(packageActions, $('button')) as HTMLButtonElement;
-      uninstall.textContent = t('plugins.uninstallWholePackage');
-      uninstall.title = t('plugins.uninstallReferences');
-      uninstall.addEventListener('click', () => {
-        uninstall.disabled = true;
-        void this.runTargetOperation(lifecycle => uninstallPackageFromView(this.quickInput, this.notifications,
-          pluginTarget, manifest.package_id, manifest.version, lifecycle), entryGatewayId);
+      packageActions.push(new Action('plugin.package.install', t('plugins.reinstall'), undefined, true, () => this.runOperation(() => installPackageFromView(
+        this.quickInput, this.notifications, this.progress, pluginTarget, entryGatewayId))));
+      const uninstall = new Action('plugin.package.uninstall', t('plugins.uninstallWholePackage'), undefined, true, async () => {
+        uninstall.enabled = false;
+        try {
+          await this.runTargetOperation(lifecycle => uninstallPackageFromView(
+            this.quickInput, this.notifications, pluginTarget, manifest.package_id, manifest.version, lifecycle), entryGatewayId);
+        } finally { uninstall.enabled = true; }
       });
-      for (const plugin of matching) {
-        const binding = bindings.find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id);
-        const status = runtime?.plugins.find(item => item.gateway_id === target.gateway_id
-          && item.binding?.package_id === manifest.package_id && item.binding.plugin_id === plugin.id
-          && (scope === 'workspace' ? item.binding.workspace_id === workspace?.workspace_id : item.binding.workspace_id == null));
-        const row = append(packageSection, $('article'));
-        row.dataset.pluginRuntimeRow = 'true';
-        row.dataset.packageId = manifest.package_id;
-        row.dataset.pluginId = plugin.id;
-        row.dataset.workspaceId = scope === 'workspace' ? workspace?.workspace_id ?? '' : '';
-        row.dataset.scope = scope;
-        row.dataset.runtime = String(Boolean(plugin.runtime));
-        const initialRuntimeValue = scope === 'defaults'
-          ? t('plugins.defaultRuntimeValue', binding?.enabled ? t('plugins.enabledOnCreate') : binding ? t('plugins.disabledOnCreate') : t('plugins.notInDefaults'), binding ? ` @${binding.package_version}` : '')
-          : this.runtimeLabel(manifest.package_id, plugin.id, scope === 'workspace' ? workspace?.workspace_id : undefined,
-            status, Boolean(plugin.runtime));
-        row.dataset.initialRuntimeValue = initialRuntimeValue;
-        const open = append(row, $('button'));
-        open.textContent = `${plugin.name} · ${plugin.id}`;
-        open.addEventListener('click', () => { this.selected = { packageId: manifest.package_id, pluginId: plugin.id, version: manifest.version };
-          this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status, entryGatewayId); });
-        const runtimeValue = append(row, $('span'));
-        runtimeValue.dataset.pluginRuntimeValue = 'true';
-        runtimeValue.textContent = initialRuntimeValue;
-        if (revision === this.refreshRevision && this.selected?.packageId === manifest.package_id && this.selected.pluginId === plugin.id && this.selected.version === manifest.version) {
-          this.showDetails(container, scope, target, workspace, manifest, plugin, binding, status, entryGatewayId);
-        }
-      }
+      packageActions.push(uninstall);
+      const packageAction = this.packageActions.add(new Action('plugins.package.manage', t('plugins.managePlugin', manifest.name), 'codicon codicon-ellipsis', true,
+        () => this.pluginMenus.showContextMenu({ getAnchor: () => packageMenu, getActions: () => packageActions })));
+      packageBar.push(packageAction, { icon: true, label: false });
+      for (const action of packageActions) this.packageActions.add(action);
+      const listContainer = append(packageSection, $('.service-plugin-package-list'));
+      const list = this.packageActions.add(this.instantiationService.createInstance(WorkbenchList<PackagePlugin>, 'ServicePluginPackages', listContainer,
+        { getHeight: () => 72, getTemplateId: () => 'plugin' }, [{
+          templateId: 'plugin',
+          renderTemplate: (container: HTMLElement) => ({ container, disposables: new DisposableStore() }),
+          renderElement: (plugin: PackagePlugin, _index: number, template: { container: HTMLElement; disposables: DisposableStore }) => {
+            template.disposables.clear(); clearNode(template.container);
+            const binding = bindings.find(item => item.package_id === manifest.package_id && item.plugin_id === plugin.id);
+            const row = append(template.container, $('.extension-list-item'));
+            const icon = append(append(row, $('.icon-container')), $('.extension-icon'));
+            append(icon, $('span.codicon.codicon-extensions')).setAttribute('aria-hidden', 'true');
+            const body = append(row, $('.details'));
+            row.dataset.pluginRuntimeRow = 'true';
+            row.dataset.packageId = manifest.package_id;
+            row.dataset.pluginId = plugin.id;
+            row.dataset.workspaceId = scope === 'workspace' ? workspace?.workspace_id ?? '' : '';
+            row.dataset.scope = scope;
+            row.dataset.runtime = String(Boolean(plugin.runtime));
+            const initialRuntimeValue = scope === 'defaults'
+              ? t('plugins.defaultRuntimeValue', binding?.enabled ? t('plugins.enabledOnCreate') : binding ? t('plugins.disabledOnCreate') : t('plugins.notInDefaults'), binding ? ` @${binding.package_version}` : '')
+              : state.label(manifest.package_id, plugin.id, Boolean(plugin.runtime));
+            row.dataset.initialRuntimeValue = initialRuntimeValue;
+            const header = append(append(body, $('.header-container')), $('.header'));
+            const open = append(header, $('span.name'));
+            open.textContent = plugin.name;
+            open.title = `${manifest.package_id}/${plugin.id} @${manifest.version}`;
+            append(body, $('.description.ellipsis')).textContent = manifest.description ?? plugin.id;
+            const footer = append(body, $('.footer'));
+            const publisher = append(footer, $('.publisher-container.ellipsis'));
+            const gearBar = template.disposables.add(new ActionBar(footer));
+            const gear = template.disposables.add(new Action('plugins.plugin.manage', t('plugins.managePlugin', plugin.name), 'extension-action icon codicon codicon-gear', true, () => {
+              const actions = pluginActions(state, manifest, plugin, this.quickInput, this.notifications);
+              this.pluginMenus.showContextMenu({ getAnchor: () => footer, getActions: () => actions,
+                onHide: () => actions.forEach(action => action.dispose()) });
+            }));
+            gearBar.push(gear, { icon: true, label: false });
+            const runtimeValue = append(publisher, $('span.publisher-name'));
+            runtimeValue.dataset.pluginRuntimeValue = 'true';
+            runtimeValue.textContent = initialRuntimeValue;
+            const failure = append(publisher, $('span'));
+            failure.dataset.pluginRuntimeError = 'true';
+            failure.hidden = true;
+          },
+          disposeTemplate: (template: { disposables: DisposableStore }) => template.disposables.dispose(),
+        }], { multipleSelectionSupport: false, setRowLineHeight: false, horizontalScrolling: false, openOnSingleClick: true,
+          accessibilityProvider: { getWidgetAriaLabel: () => manifest.name, getAriaLabel: (plugin: PackagePlugin) => `${plugin.name} · ${plugin.id}` },
+          keyboardNavigationLabelProvider: { getKeyboardNavigationLabel: (plugin: PackagePlugin) => plugin.name },
+        }));
+      this.packageActions.add(list.onDidOpen(event => {
+        if (!event.element) return;
+        const plugin = event.element;
+        void this.editors.openEditor(new PluginEditorInput(pluginTarget, workspace, scope, manifest.package_id, manifest.version, plugin.id, plugin.name), event.editorOptions, event.sideBySide ? SIDE_GROUP : undefined)
+          .catch(error => this.notifications.error(errorsText(error)));
+      }));
+      this.lists.push(list);
+      list.splice(0, 0, matching);
+      list.layout(matching.length * 72, this.bodyWidth || container.clientWidth);
     }
     for (const binding of bindings) {
       const installed = inventory.packages.some(pkg => pkg.manifest?.package_id === binding.package_id
@@ -482,16 +479,16 @@ export class ServicePluginPackagesView extends ViewPane {
       // 未取得原声明时不能将插件误报为纯声明插件。
       row.dataset.runtime = 'true';
       row.dataset.initialRuntimeValue = t('plugins.defaultRuntimeVersion', binding.enabled ? t('plugins.enabledOnCreate') : t('plugins.disabledOnCreate'), binding.package_version);
-      const status = this.runtimeSlot(binding.package_id, binding.plugin_id, workspace?.workspace_id);
-      const state = append(row, $('p'));
-      state.dataset.pluginRuntimeValue = 'true';
-      state.textContent = scope === 'defaults' ? row.dataset.initialRuntimeValue
-        : this.runtimeLabel(binding.package_id, binding.plugin_id, workspace?.workspace_id, status, true);
+      const status = state.slot(binding.package_id, binding.plugin_id);
+      const runtimeText = append(row, $('p'));
+      runtimeText.dataset.pluginRuntimeValue = 'true';
+      runtimeText.textContent = scope === 'defaults' ? row.dataset.initialRuntimeValue
+        : state.label(binding.package_id, binding.plugin_id, true);
       const failure = append(row, $('p'));
       failure.dataset.pluginRuntimeError = 'true';
       failure.hidden = !status?.error;
       failure.textContent = status?.error ?? '';
-      this.renderInstanceLog(row, target, status?.log_id);
+      this.renderInstanceLog(row, target, status?.log_id, state.lifecycle.signal);
       const install = append(section, $('button'));
       install.textContent = t('plugins.installMissing');
       install.addEventListener('click', () => void this.runOperation(() => installPackageFromView(
@@ -506,169 +503,25 @@ export class ServicePluginPackagesView extends ViewPane {
     }
     this.search(this.query);
     this.updateRuntimeStatusPresentation();
-    if (!inventory.packages.length && !bindings.length) append(container, $('p')).textContent = t('plugins.noPackages', inventory.sources?.message ?? '');
+    if (!inventory.packages.length && !bindings.length) append(container, $('p')).textContent = t('plugins.noPackages', '');
   }
 
-  private renderInstanceLog(container: HTMLElement, target: PluginTarget, logId: string | undefined): void {
+  private renderInstanceLog(container: HTMLElement, target: PluginTarget, logId: string | undefined, signal: AbortSignal): void {
     if (!logId) return;
     const logs = append(container, $('button')) as HTMLButtonElement;
     logs.textContent = t('plugins.viewInstanceLog');
     const output = append(container, $('pre'));
+    output.hidden = true;
     output.setAttribute('aria-label', t('plugins.instanceLogAria'));
     logs.addEventListener('click', () => {
       logs.disabled = true;
-      void readPluginInstanceLog(target, logId).then(text => { output.textContent = text; })
-        .catch(error => { output.textContent = errorsText(error); this.notifications.error(errorsText(error)); })
+      output.hidden = false;
+      void readPluginInstanceLog(target, logId, signal).then(text => { output.textContent = text; })
+        .catch(error => { if (!signal.aborted) { output.textContent = errorsText(error); this.notifications.error(errorsText(error)); } })
         .finally(() => { logs.disabled = false; });
     });
   }
 
-  private showDetails(container: HTMLElement, scope: Scope, target: ReturnType<typeof managementGateway>, workspace: GatewayWorkspaceRequestTarget | undefined,
-    manifest: NonNullable<PluginInventoryResultDTO['packages'][number]['manifest']>, plugin: NonNullable<typeof manifest.plugins[number]>,
-    binding: PluginBinding | undefined, status: PluginRuntimeStatusDTO['plugins'][number] | undefined, entryGatewayId: string): void {
-    if (scope !== 'defaults' && this.runtimeStatus) {
-      binding = this.configuredBinding(manifest.package_id, plugin.id, workspace?.workspace_id);
-      status = this.runtimeSlot(manifest.package_id, plugin.id, workspace?.workspace_id);
-    }
-    const old = container.querySelector('.service-plugin-details');
-    old?.remove();
-    const details = append(container, $('section.service-plugin-details'));
-    details.dataset.packageId = manifest.package_id;
-    details.dataset.pluginId = plugin.id;
-    details.dataset.workspaceId = scope === 'workspace' ? workspace?.workspace_id ?? '' : '';
-    details.dataset.scope = scope;
-    details.dataset.runtime = String(Boolean(plugin.runtime));
-    details.dataset.initialRuntimeValue = scope === 'defaults'
-      ? t('plugins.defaultNoGatewayRuntime', plugin.instance_scope)
-      : this.runtimeLabel(manifest.package_id, plugin.id, scope === 'workspace' ? workspace?.workspace_id : undefined,
-          status, Boolean(plugin.runtime));
-    append(details, $('h3')).textContent = `${manifest.package_id}/${plugin.id}`;
-    const detailsState = append(details, $('p'));
-    detailsState.dataset.pluginRuntimeValue = 'true';
-    detailsState.textContent = details.dataset.initialRuntimeValue;
-    const identity = append(details, $('p'));
-    const ownerLabel = `Gateway ${target.gateway_id}${target.gateway_connection_id ? t('plugins.connectionSuffix', target.gateway_connection_id) : ''}${workspace ? t('plugins.workspaceSuffix', workspace.workspace_id) : ''} · ${manifest.version}`;
-    identity.textContent = `${ownerLabel}${status?.instance ? t('plugins.instanceSuffix', status.instance.instance_id) : ''}`;
-    if (workspace) {
-      const handoff = append(details, $('p'));
-      handoff.setAttribute('aria-label', t('plugins.workspaceHandoffAria'));
-      handoff.dataset.pluginWorkspaceHandoff = 'true';
-      handoff.dataset.workspaceId = workspace.workspace_id;
-      const state = this.runtimeStatus?.workspace_configurations.find(item => item.workspace_id === workspace.workspace_id);
-      handoff.textContent = t('plugins.workspaceHandoff', workspace.workspace_id, state ? pluginStateLabel(state.state) : t('plugins.notReceived'), state?.error ? ` · ${state.error}` : '');
-    }
-    const versions = append(details, $('p'));
-    versions.setAttribute('aria-label', t('plugins.versionsAria'));
-    versions.dataset.pluginRuntimeVersion = 'true';
-    versions.textContent = t('plugins.configurationPrefix', binding ? `${binding.enabled ? t('plugins.enabled') : t('plugins.disabled')} @${binding.package_version}` : t('plugins.unbound'))
-      + (scope === 'defaults' ? t('plugins.defaultsNoRuntime')
-        : this.runtimeActualLabel(status, Boolean(plugin.runtime)));
-    const failure = append(details, $('p'));
-    failure.setAttribute('aria-label', t('plugins.runtimeFailureAria'));
-    failure.dataset.pluginRuntimeError = 'true';
-    failure.hidden = !status?.error;
-    failure.textContent = status?.error ?? '';
-    const instanceLog = append(details, $('div'));
-    this.renderInstanceLog(instanceLog, target, status?.log_id);
-    const actions = append(details, $('.service-plugin-detail-actions'));
-    const renderActions = (binding: PluginBinding | undefined, status: PluginRuntimeStatusDTO['plugins'][number] | undefined) => {
-      clearNode(actions);
-      const bindingValue: ConfigurationBinding = { package_id: manifest.package_id, plugin_id: plugin.id, package_version: manifest.version, enabled: true };
-      const otherVersion = binding && binding.package_version !== manifest.version;
-      if (otherVersion) {
-        const switchVersion = append(actions, $('button')) as HTMLButtonElement;
-        switchVersion.textContent = t('plugins.switchVersion');
-        switchVersion.addEventListener('click', () => {
-          switchVersion.disabled = true;
-          void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace, this.quickInput, this.notifications,
-            bindingValue, 'preserve', false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId);
-        });
-      } else {
-        const toggle = append(actions, $('button'));
-        toggle.textContent = scope === 'defaults'
-          ? binding?.enabled ? t('plugins.disableOnCreate') : t('plugins.enableOnCreate')
-          : binding?.enabled ? t('plugins.disableScope') : t('plugins.enableScope');
-        toggle.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
-          this.quickInput, this.notifications, bindingValue, !binding?.enabled, false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
-      }
-      if (binding && !otherVersion) {
-        const unbind = append(actions, $('button'));
-        unbind.textContent = scope === 'defaults' ? t('plugins.removeFromDefaults') : t('plugins.unbindScope');
-        unbind.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
-          this.quickInput, this.notifications, bindingValue, null, false, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
-      }
-      if (scope !== 'defaults') {
-        append(actions, $('p')).textContent = binding
-          ? t('plugins.currentBinding', manifest.package_id, plugin.id, binding.package_version)
-          : t('plugins.unboundParameters');
-        if (otherVersion) append(actions, $('p')).textContent = t('plugins.switchBeforeParameters');
-        else {
-          const parameters = append(actions, $('button'));
-          parameters.textContent = t('plugins.editParametersJson');
-          parameters.addEventListener('click', () => void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
-            this.quickInput, this.notifications, bindingValue, null, true, undefined, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId));
-        }
-        const privateFields = otherVersion ? [] : writeOnlyFields(plugin.contributes?.configuration);
-        for (const field of privateFields) {
-          const secret = append(actions, $('button')) as HTMLButtonElement;
-          secret.textContent = field.pointer ? t('plugins.manageSecret', field.pointer) : t('plugins.manageSecretLocation');
-          secret.addEventListener('click', () => {
-            secret.disabled = true;
-            void this.runTargetOperation(lifecycle => manageConfig(scope, target, workspace,
-              this.quickInput, this.notifications, bindingValue, null, false, field, lifecycle.check, lifecycle.token, lifecycle.signal), entryGatewayId);
-          });
-        }
-      }
-      if (status?.revision && plugin.runtime && binding?.enabled && !otherVersion && status.binding?.package_version === manifest.version) {
-        const restart = append(actions, $('button')) as HTMLButtonElement;
-        restart.textContent = t('plugins.restartInstance');
-        restart.addEventListener('click', () => {
-          restart.disabled = true;
-          void this.runTargetOperation(async lifecycle => {
-            lifecycle.check();
-            await gateway.request('/api/gateway/service-plugins/restart', { method: 'POST', body: JSON.stringify({ gateway_id: target.gateway_id,
-              gateway_connection_id: target.gateway_connection_id, package_id: manifest.package_id, package_version: manifest.version,
-              plugin_id: plugin.id, revision: status.revision, ...(workspace ? { workspace_id: workspace.workspace_id } : {}) }) });
-          }, entryGatewayId);
-        });
-      }
-    };
-    this.updateDetailsStatus = () => {
-      if (scope === 'defaults') return;
-      const nextBinding = this.configuredBinding(manifest.package_id, plugin.id, workspace?.workspace_id);
-      const nextStatus = this.runtimeSlot(manifest.package_id, plugin.id, workspace?.workspace_id);
-      identity.textContent = `${ownerLabel}${nextStatus?.instance ? t('plugins.instanceSuffix', nextStatus.instance.instance_id) : ''}`;
-      if (status?.log_id !== nextStatus?.log_id) {
-        clearNode(instanceLog);
-        this.renderInstanceLog(instanceLog, target, nextStatus?.log_id);
-      }
-      // 只在动作依据变化时重建；兄弟实例或进度更新不打断已开始的输入和按钮状态。
-      const actionsChanged = binding?.enabled !== nextBinding?.enabled || binding?.package_version !== nextBinding?.package_version
-        || status?.revision !== nextStatus?.revision;
-      binding = nextBinding; status = nextStatus;
-      if (actionsChanged) renderActions(binding, status);
-    };
-    renderActions(binding, status);
-    if (scope !== 'defaults' && plugin.contributes?.configuration) {
-      const schema = append(details, $('pre'));
-      schema.setAttribute('aria-label', t('plugins.parameterSchemaAria'));
-      schema.textContent = JSON.stringify(plugin.contributes.configuration, null, 2);
-    }
-  }
-}
-
-async function readPluginInstanceLog(target: PluginTarget, logId: string): Promise<string> {
-  const query = new URLSearchParams({ log_id: logId, tail_lines: '300' });
-  if (target.gateway_connection_id) query.set('gateway_connection_id', target.gateway_connection_id);
-  const diagnostics = await gateway.request<GatewayDiagnosticsDTO>(`/api/gateway/diagnostics?${query}`, {
-    headers: { 'X-BoxTeam-Target-Gateway-Id': target.gateway_id },
-  });
-  if (diagnostics.gateway_id !== target.gateway_id || diagnostics.selected_log_id !== logId) throw new Error(t('plugins.logOwnerMismatch'));
-  const log = diagnostics.logs.find(item => item.log_id === logId);
-  if (!log) throw new Error(t('plugins.logMissing'));
-  if (log.status === 'empty') return t('plugins.logEmpty');
-  if (log.status !== 'available') throw new Error(log.error ?? t('plugins.logUnreadable'));
-  return `${log.truncated ? t('plugins.logTruncated') : ''}${log.tail}`;
 }
 
 async function installPackageFromView(quickInput: IQuickInputService, notifications: INotificationService,
@@ -695,7 +548,7 @@ async function installPackageFromView(quickInput: IQuickInputService, notificati
         { method: 'POST', body: JSON.stringify(target), signal });
       check();
       const sources = inventory.sources?.entries.filter(source => source.enabled) ?? [];
-      if (!sources.length) { notifications.info(inventory.sources?.message ?? t('plugins.sourcesNotConfigured')); return; }
+      if (!sources.length) { notifications.info(t('plugins.emptySources')); return; }
       const source = await quickInput.pick(sources.map(source => ({ label: source.source_id, source })),
         { title: t('plugins.chooseSource'), canPickMany: false }, token);
       check();
@@ -851,6 +704,22 @@ export async function installServicePluginPackage(accessor: ServicesAccessor, ex
   const target = frozen ?? managementGateway('extensions');
   await installPackageFromView(quickInput, notifications, progress,
     { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id });
+}
+
+/** 下载源仍编辑 Gateway 正式来源；数组覆盖、预检和保存由原 Settings owner 负责。 */
+export async function manageServicePluginSources(accessor: ServicesAccessor, explicitTarget?: PluginTarget): Promise<void> {
+  const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
+  const groups = accessor.get(IEditorGroupsService), groupId = groups.activeGroup.id;
+  const lifecycle = createManagementTargetLifecycle(t('plugins.settingsTargetChanged'));
+  const target = explicitTarget ? { ...explicitTarget, name: explicitTarget.gateway_id,
+    connection_kind: explicitTarget.gateway_id === lifecycle.entryGatewayId ? 'local' : 'remote_gateway' } : managementGateway('extensions');
+  try {
+    const captured = await captureSettingsLocation(parent, lifecycle.token, target, {});
+    lifecycle.check();
+    if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
+    const options: ISettingsEditorOptions = { pinned: true, query: 'plugins.sources.entries' };
+    if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), options, groupId);
+  } finally { lifecycle.dispose(); }
 }
 
 async function uninstallPackageFromView(quickInput: IQuickInputService, notifications: INotificationService, target: PluginTarget,

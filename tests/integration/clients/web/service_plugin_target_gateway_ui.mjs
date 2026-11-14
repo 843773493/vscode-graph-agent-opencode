@@ -1,3 +1,4 @@
+import { selectPluginScope, pluginScopeAction, pluginPackageAction } from './service_plugin_controls.mjs';
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
@@ -98,6 +99,7 @@ try {
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
 
   const view = page.locator('.service-plugin-packages-view');
+  const details = page.locator('.service-plugin-editor:visible');
   await expect(view).toBeVisible();
   const quick = page.locator('.quick-input-widget');
   const pick = async label => {
@@ -110,27 +112,18 @@ try {
     await field.fill(value);
     await field.press('Enter');
   };
-  const titleTarget = () => page.locator(
-    '.monaco-workbench .part.sidebar .composite.title .title-actions [aria-label="选择扩展管理目标"], '
-    + '.monaco-workbench .part.sidebar .composite.title .title-actions [aria-label="' + input.gatewayA + '"], '
-    + '.monaco-workbench .part.sidebar .composite.title .title-actions [aria-label="' + input.gatewayB + '"]',
-  ).first();
   const chooseTarget = async label => {
-    const control = titleTarget();
-    await expect(control).toBeVisible();
-    await control.click();
-    await pick(label);
+    await view.getByRole('combobox', { name: '管理 Gateway', exact: true }).selectOption({ label });
   };
+  await selectPluginScope(page, 'gateway');
   const packageRow = version => view.locator('.service-plugin-package').filter({
-    has: page.getByRole('heading', {
-      name: `目标归属 UI 验收包 · ${input.packageId}@${version}`, exact: true,
-    }),
+    has: page.getByText(`目标归属 UI 验收包 · ${input.packageId}@${version}`, { exact: true }),
   });
   const openDetails = async version => {
-    await packageRow(version).getByRole('button', { name: `目标归属 Echo · ${input.pluginId}`, exact: true }).click();
-    const details = view.locator('.service-plugin-details');
-    await expect(details).toBeVisible();
-    return details;
+    await packageRow(version).getByRole('listitem', { name: `目标归属 Echo · ${input.pluginId}`, exact: true }).click();
+    const editor = page.locator('.service-plugin-editor:visible');
+    await expect(editor).toBeVisible();
+    return editor;
   };
   const waitForTargetInventory = async versions => {
     for (const version of versions) await expect(packageRow(version)).toBeVisible();
@@ -188,7 +181,7 @@ try {
   await chooseTarget(input.remoteName);
   await waitForTargetInventory([input.versionB1, input.versionB2]);
   holdNextBInstall = true;
-  await view.getByRole('button', { name: '安装插件包', exact: true }).click();
+  await (await pluginScopeAction(page, '安装插件包')).click({ delay: 150 });
   await expect(quick.getByRole('option').filter({ hasText: 'ZIP 文件' })).toHaveCount(0);
   await expect(quick.getByRole('option').filter({ hasText: '开发目录' })).toHaveCount(0);
   await pick('自有来源');
@@ -217,7 +210,7 @@ try {
   await waitForTargetInventory([input.versionB1, input.versionB2, '3.0.0']);
   const uninstallResponse = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith('/service-plugins/uninstall'));
-  await packageRow('3.0.0').getByRole('button', { name: '卸载整个包', exact: true }).click();
+  await (await pluginPackageAction(page, packageRow('3.0.0'), '卸载整个包')).click({ delay: 150 });
   await pick('卸载整包');
   const uninstalled = await uninstallResponse;
   assert.equal(uninstalled.status(), 200);
@@ -230,7 +223,7 @@ try {
   await waitForTargetInventory([input.versionB1, input.versionB2]);
   await openDetails(input.versionB1);
   holdNextBWrite = true;
-  await view.getByRole('button', { name: '编辑参数 JSON', exact: true }).click();
+  await details.getByRole('button', { name: '编辑参数 JSON', exact: true }).click();
   await pick('gateway_mutable_override');
   await pick('编辑此来源的参数');
   await inputQuick(JSON.stringify({ marker: 'B-from-Workbench' }));
@@ -278,7 +271,7 @@ try {
   await waitForTargetInventory([input.versionB1, input.versionB2]);
   const v2Details = await openDetails(input.versionB2);
   assert.match(await v2Details.locator('p').nth(1).textContent(), new RegExp(input.gatewayB));
-  await view.evaluate(root => {
+  await details.evaluate(root => {
     const history = [];
     const capture = () => {
       const value = root.querySelector('[aria-label="插件配置与运行版本"]')?.textContent;
@@ -289,7 +282,7 @@ try {
     observer.observe(root, { subtree: true, childList: true, characterData: true });
     globalThis.__targetPluginRuntimeHistory = history;
   });
-  await view.getByRole('button', { name: '切换到此版本（保留开关）', exact: true }).click();
+  await details.getByRole('button', { name: '切换到此版本（保留开关）', exact: true }).click();
   await pick('gateway_mutable_override');
   const submitted = page.waitForResponse(response => response.request().method() === 'PUT'
     && new URL(response.url()).pathname.endsWith('/config/sources/gateway_mutable_override'));
@@ -299,21 +292,21 @@ try {
   const receipt = await response.json();
   assert.equal(receipt.data.gateway_id, input.gatewayB);
   assert.equal(receipt.data.edit.state, 'active');
-  const versionLabel = view.getByLabel('插件配置与运行版本');
+  const versionLabel = details.getByLabel('插件配置与运行版本');
   await expect(versionLabel).toContainText(`配置：启用 @${input.versionB2}`);
   const seenStages = new Set();
   const stageDeadline = Date.now() + 15_000;
   while (Date.now() < stageDeadline && !seenStages.has('ready')) {
     const text = await versionLabel.textContent() ?? '';
-    if (text.includes('实际：starting')) seenStages.add('starting');
-    if (text.includes(`实际：ready @${input.versionB2}`)) seenStages.add('ready');
+    if (text.includes('实际：正在启动')) seenStages.add('starting');
+    if (text.includes(`实际：已就绪 @${input.versionB2}`)) seenStages.add('ready');
     await page.waitForTimeout(100);
   }
   result.runtimeLabelHistory = await page.evaluate(() => globalThis.__targetPluginRuntimeHistory);
   const visibleLabels = [...result.runtimeLabelHistory, await versionLabel.textContent() ?? '']
     .filter(text => text.includes(`配置：启用 @${input.versionB2}`));
-  if (visibleLabels.some(text => text.includes('实际：starting'))) result.runtimeStages.push('starting');
-  if (visibleLabels.some(text => text.includes(`实际：ready @${input.versionB2}`))) result.runtimeStages.push('ready');
+  if (visibleLabels.some(text => text.includes('实际：正在启动'))) result.runtimeStages.push('starting');
+  if (visibleLabels.some(text => text.includes(`实际：已就绪 @${input.versionB2}`))) result.runtimeStages.push('ready');
   assert(result.runtimeStages.includes('ready'), `Workbench 未显示 ready 阶段：${await versionLabel.textContent()}`);
 
   const slot = await api('/api/gateway/service-plugins/status', {

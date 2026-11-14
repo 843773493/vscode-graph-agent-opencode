@@ -1,3 +1,4 @@
+import { selectPluginScope, pluginScopeAction, selectPluginWorkspace } from './service_plugin_controls.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
@@ -57,6 +58,7 @@ try {
   result.owner = { gateway_id: health.gateway_id, workspace_id: active.workspace_id, workspace_name: activeWorkspace.name };
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
   const view = page.locator('.service-plugin-packages-view'), quick = page.locator('.quick-input-widget');
+  const details = page.locator('.service-plugin-editor:visible');
   await expect(view).toBeVisible();
   const pick = async label => {
     await expect(quick).toBeVisible();
@@ -66,26 +68,26 @@ try {
     await expect(quick).toBeVisible();
     const field = quick.locator('input').first(); await field.fill(value); await field.press('Enter');
   };
-  await view.getByRole('button', { name: '安装插件包', exact: true }).click();
+  await (await pluginScopeAction(page, '安装插件包')).click({ delay: 150 });
   await pick('ZIP 文件'); await inputQuick(input.packagePath);
   await expect(view).toContainText('product.private-inputs@1.0.0', { timeout: 30_000 });
   const selectScope = async scope => {
-    await view.getByLabel('插件管理范围').selectOption(scope);
-    if (scope === 'workspace') await pick(result.owner.workspace_name);
+    await selectPluginScope(page, scope);
+    if (scope === 'workspace') await selectPluginWorkspace(page, result.owner.workspace_name);
   };
   const openPlugin = async (scope, name) => {
-    await selectScope(scope); await expect(view).toContainText(name);
-    await view.getByRole('button', { name, exact: true }).click();
-    await expect(view.locator('.service-plugin-details')).toBeVisible();
+    await selectScope(scope); await expect(view.getByRole('listitem', { name, exact: true })).toBeVisible();
+    await view.getByRole('listitem', { name, exact: true }).click();
+    await expect(page.locator('.service-plugin-editor:visible')).toBeVisible();
   };
   const enable = async (scope, name, source, confirm) => {
     await openPlugin(scope, name);
-    await view.getByRole('button', { name: '启用此范围', exact: true }).click();
+    await details.getByRole('button', { name: '启用此范围', exact: true }).click();
     await pick(source); await pick(confirm); await expect(quick).not.toBeVisible();
   };
   const openSecret = async (scope, name, source, pointer) => {
     await openPlugin(scope, name);
-    await view.getByRole('button', { name: pointer ? '按位置管理秘密参数' : '管理秘密参数 /credential', exact: true }).click();
+    await details.getByRole('button', { name: pointer ? '按位置管理秘密参数' : '管理秘密参数 /credential', exact: true }).click();
     await pick(source);
     if (pointer) { await expect(quick).toContainText('选择秘密参数位置'); await inputQuick(pointer); }
     await pick('设置秘密参数');
@@ -152,7 +154,7 @@ try {
 
   result.phase = 'structured-secret';
   await openPlugin('workspace', '工作区私有输入探针 · workspace-probe');
-  await view.getByRole('button', { name: '编辑参数 JSON', exact: true }).click();
+  await details.getByRole('button', { name: '编辑参数 JSON', exact: true }).click();
   await pick(sourceWorkspace); await pick('编辑此来源的参数');
   const parameterInput = quick.locator('input').first();
   const localParameters = JSON.parse(await parameterInput.inputValue());
@@ -207,7 +209,7 @@ try {
     await openPlugin(scope, name);
     const completed = page.waitForResponse(response => response.request().method() === 'POST'
       && new URL(response.url()).pathname.endsWith('/service-plugins/restart'));
-    await view.getByRole('button', { name: '重启实例', exact: true }).click();
+    await details.getByRole('button', { name: '重启实例', exact: true }).click();
     const response = await completed;
     assert.equal(response.status(), 200);
     const request = JSON.parse(response.request().postData() ?? '{}');
@@ -229,7 +231,7 @@ try {
   const readInstanceLog = async (scope, name, instance, otherInstance, loggedInstance = instance.instance) => {
     await openPlugin(scope, name);
     const request = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/diagnostics');
-    await view.getByRole('button', { name: '查看实例日志', exact: true }).click();
+    await details.getByRole('button', { name: '查看实例日志', exact: true }).click();
     const response = await request;
     assert.equal(response.status(), 200);
     assert.equal(response.request().headers()['x-boxteam-target-gateway-id'], health.gateway_id);
@@ -238,7 +240,7 @@ try {
     assert.equal(receipt.data.gateway_id, health.gateway_id);
     assert.equal(new URL(response.url()).searchParams.get('log_id'), instance.log_id);
     assert.equal(receipt.data.selected_log_id, instance.log_id);
-    const output = view.getByLabel('插件实例日志');
+    const output = details.getByLabel('插件实例日志');
     await expect(output).toContainText(`plugin-instance-log ${instance.binding.plugin_id} ${loggedInstance.instance_id}`);
     assert(!(await output.textContent()).includes(otherInstance.instance.instance_id));
     assert(!secretValues.some(value => receipt.data.logs.some(log => log.tail?.includes(value))));
@@ -259,7 +261,7 @@ try {
   const localReference = localDocument.effective.plugins.configuration.values['product.private-inputs']['gateway-probe'].credential;
   assert.notEqual(localReference.version, gatewayReference.version);
   await openPlugin('gateway', 'Gateway 私有输入探针 · gateway-probe');
-  await view.getByRole('button', { name: '管理秘密参数 /credential', exact: true }).click();
+  await details.getByRole('button', { name: '管理秘密参数 /credential', exact: true }).click();
   await pick(localSource);
   await expect(quick).toContainText(`来源合并：已配置私有文件引用（来源 ${localSource}）`);
   await pick('清除此来源的秘密覆盖');
@@ -280,7 +282,7 @@ try {
   result.private_source_inheritance = true;
 
   await openPlugin('gateway', 'Gateway 私有输入探针 · gateway-probe');
-  await view.getByRole('button', { name: '停用此范围', exact: true }).click();
+  await details.getByRole('button', { name: '停用此范围', exact: true }).click();
   await pick(sourceGateway); await pick('确认保存 Gateway 插件绑定'); await expect(quick).not.toBeVisible();
   const stopped = await waitStatus('gateway-probe', undefined, item => item.state === 'stopped' && !item.binding.enabled);
   assert.equal(stopped.log_id, gatewayRestart.log_id);
@@ -288,7 +290,7 @@ try {
   await readInstanceLog('gateway', 'Gateway 私有输入探针 · gateway-probe', stopped, workspaceRestart, gatewayRestart.instance);
   result.stopped_instance_logs = true;
   await openPlugin('workspace', '工作区私有输入探针 · workspace-probe');
-  await view.getByRole('button', { name: '按位置管理秘密参数', exact: true }).click();
+  await details.getByRole('button', { name: '按位置管理秘密参数', exact: true }).click();
   await pick(sourceWorkspace); await expect(quick).toContainText('选择秘密参数位置');
   await inputQuick(structuredPointer); await pick('清除此来源的秘密覆盖');
   await pick('确认保存工作区插件秘密参数'); await expect(quick).not.toBeVisible();

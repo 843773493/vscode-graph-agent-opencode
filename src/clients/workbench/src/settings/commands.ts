@@ -9,7 +9,7 @@ import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type Works
 import { workspaceContext } from '../workspaceContext.js';
 import { createManagementTargetLifecycle, managementGateway, managementWorkspace, managementTargetDisplayName, type ManagementTarget } from '../managementTarget.js';
 import { inspectDefaultAgentSource } from './defaultAgent.js';
-import { configureServicePlugin } from './pluginConfiguration.js';
+import { configureServicePlugin, type PluginConfigurationTarget } from './pluginConfiguration.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { SettingsEditor2Input } from '../../upstream/src/vs/workbench/services/preferences/common/preferencesEditorInput.js';
@@ -55,7 +55,7 @@ registerAction2(class extends Action2 {
     super({ id: 'boxteam.settings.pluginParameters', title: commandTitle('workbench.settings.openPluginParameters'),
       category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true });
   }
-  run(accessor: ServicesAccessor): Promise<void> { return configureServicePlugin(accessor); }
+  run(accessor: ServicesAccessor, target?: PluginConfigurationTarget): Promise<void> { return configureServicePlugin(accessor, target); }
 });
 
 registerAction2(class extends Action2 {

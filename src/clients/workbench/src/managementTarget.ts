@@ -5,7 +5,6 @@ import { Action2, MenuId, MenuRegistry, registerAction2 } from '../upstream/src/
 import { ContextKeyExpr } from '../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { IQuickInputService } from '../upstream/src/vs/platform/quickinput/common/quickInput.js';
-import { VIEWLET_ID } from '../upstream/src/vs/workbench/contrib/extensions/common/extensions.js';
 import { t } from '../../shared/core/i18n/index.js';
 import actionTitles from '../../shared/core/i18n/actionTitles.en.json';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
@@ -23,7 +22,6 @@ export const selectExtensionManagementTargetCommand = 'boxteam.extensions.select
 export const selectSettingsManagementTargetCommand = 'boxteam.settings.selectTarget';
 export const selectMcpManagementTargetCommand = 'boxteam.mcp.selectTarget';
 export const selectToolManagementTargetCommand = 'boxteam.tools.selectTarget';
-const extensionTitle = new MutableDisposable();
 const mcpTitle = new MutableDisposable();
 const extensionManagementChanged = new Emitter<void>();
 export const onDidChangeExtensionManagementTarget = extensionManagementChanged.event;
@@ -60,14 +58,6 @@ export function createManagementTargetLifecycle(message: string, expectedEntryGa
   };
 }
 
-function updateExtensionTitle(): void {
-  const target = selections.get('extensions')?.target;
-  extensionTitle.value = MenuRegistry.appendMenuItem(MenuId.ViewContainerTitle, {
-    command: { id: selectExtensionManagementTargetCommand, title: t('workbench.managementTarget.title', managementTargetDisplayName(target)),
-      tooltip: target ? `${target.gateway_id}` : t('workbench.managementTarget.selectExtensions') },
-    when: ContextKeyExpr.equals('viewContainer', VIEWLET_ID), group: 'navigation', order: 0,
-  });
-}
 function updateMcpTitle(): void {
   const target = selections.get('mcp')?.target;
   mcpTitle.value = MenuRegistry.appendMenuItem(MenuId.ViewTitle, {
@@ -76,7 +66,6 @@ function updateMcpTitle(): void {
     when: ContextKeyExpr.equals('view', 'boxteam.mcp.view'), group: 'navigation', order: 0,
   });
 }
-updateExtensionTitle();
 updateMcpTitle();
 workspaceContext.subscribe(() => {
   let extensionChanged = false, mcpChanged = false, toolsChanged = false;
@@ -88,7 +77,7 @@ workspaceContext.subscribe(() => {
       if (scope === 'tools') toolsChanged = true;
     }
   }
-  if (extensionChanged) { updateExtensionTitle(); extensionManagementChanged.fire(); }
+  if (extensionChanged) { extensionManagementChanged.fire(); }
   if (mcpChanged) { updateMcpTitle(); mcpManagementChanged.fire(); }
   if (toolsChanged) toolManagementChanged.fire();
 });
@@ -121,7 +110,7 @@ export function selectManagementTarget(scope: ManagementScope, target: Managemen
   const entryGatewayId = workspaceContext.getSnapshot().gatewayId;
   if (!entryGatewayId) throw new Error(t('workbench.managementTarget.gatewayNotReady'));
   selections.set(scope, { entryGatewayId, target: { ...target } });
-  if (scope === 'extensions') { updateExtensionTitle(); extensionManagementChanged.fire(); }
+  if (scope === 'extensions') { extensionManagementChanged.fire(); }
   if (scope === 'mcp') { updateMcpTitle(); mcpManagementChanged.fire(); }
   if (scope === 'tools') toolManagementChanged.fire();
 }
