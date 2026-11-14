@@ -345,7 +345,7 @@ async def test_model_conditional_patch_preserves_file_operations_and_changesets(
     wire = json.dumps(case.requests())
     assert all(str(node.workspace) not in wire for node in nodes.values())
     (artifacts / "model-conditional-patch.json").write_text(json.dumps({"receipt": receipt,
-        "changeset": response.json(), "events": events.json(), "cold_changeset": cold.json()}, ensure_ascii=False, indent=2) + "\n")
+        "changeset": response.json(), "events": events, "cold_changeset": cold.json()}, ensure_ascii=False, indent=2) + "\n")
 
 
 async def test_model_remote_text_mutations_preserve_owner_versions_and_source_changes(communication_triad):

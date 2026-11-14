@@ -4,10 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from app.schemas.internal_v2.session_changes import (
-    SessionChangesetDTO,
-    SessionFileChangeKind,
-)
+from app.schemas.internal_v2.session_changes import SessionFileChangeKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,19 +65,6 @@ class SessionChangesStoreProtocol(Protocol):
     def save_reviewed_map(self, session_id: str, reviewed: dict[str, bool]) -> None: ...
 
     def edit_text_reader(self, session_id: str) -> Callable[[str, Literal["before", "after", "diff"]], str]: ...
-
-    def save_changeset_file(
-        self,
-        *,
-        session_id: str,
-        changeset_id: str,
-        file_path: str,
-        before_content: str | None,
-        after_content: str | None,
-        diff_text: str,
-    ) -> None: ...
-
-    def save_changeset_summary(self, changeset: SessionChangesetDTO) -> None: ...
 
 
 class SessionChangesRecorderProtocol(Protocol):

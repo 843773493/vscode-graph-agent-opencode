@@ -184,7 +184,8 @@ async def test_records_readable_changesets_for_file_tools(
     changes_dir = get_session_changes_dir(session.session_id)
     index_file = changes_dir / "index.jsonl"
     assert index_file.exists()
-    index_record = json.loads(index_file.read_text(encoding="utf-8").strip())
+    original_index = index_file.read_bytes()
+    index_record = json.loads(original_index)
     assert index_record["file_path"] == _uri(workspace_id, "src/hello.txt")
     assert (changes_dir / "edits" / record.edit_id / "diff.patch").exists()
     metadata = json.loads((changes_dir / "edits" / record.edit_id / "metadata.json").read_text())
@@ -208,11 +209,11 @@ async def test_records_readable_changesets_for_file_tools(
     assert "+hello" in file_change.diff_text
     assert file_change.after_preview == "hello\nworld\n"
     assert not {"before_file", "after_file", "diff_file"} & file_change.model_dump().keys()
-    saved_summary = json.loads((changes_dir / "changesets/all/summary.json").read_text())
-    assert saved_summary["files"][0] == file_change.model_dump()
-    after, = (changes_dir / "changesets/all").glob("*/after.txt")
-    diff, = (changes_dir / "changesets/all").glob("*/diff.patch")
-    assert after.read_text() == "hello\nworld\n" and "+hello" in diff.read_text()
+    reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
+    restored = await reopened.get_changeset(session_id=session.session_id, changeset_id="all")
+    assert restored.model_dump(exclude={"generated_at"}) == detail.model_dump(exclude={"generated_at"})
+    assert index_file.read_bytes() == original_index
+    assert not (changes_dir / "changesets").exists()
 
 
 @pytest.mark.asyncio
@@ -635,4 +636,3 @@ async def test_derived_snapshot_lookup_keeps_containment(workspace_root, session
     reopened = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     with pytest.raises(ForbiddenError):
         await reopened.get_changeset(session_id=session.session_id, changeset_id="all")
-    assert not (changes / "changesets/all/summary.json").exists()

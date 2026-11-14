@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Callable
@@ -12,10 +11,7 @@ from app.abstractions.session_changes import StoredFileEdit
 from app.core.atomic_fs import native_io_path
 from app.core.path_utils import SafePathRoot, get_session_path_resolver
 from app.core.trace_middleware import get_current_gateway_id
-from app.schemas.internal_v2.session_changes import (
-    SessionChangesetDTO,
-    validate_change_file_reference,
-)
+from app.schemas.internal_v2.session_changes import validate_change_file_reference
 
 EDIT_INDEX_FILE = "index.jsonl"
 REVIEWED_FILE = "reviewed.json"
@@ -142,39 +138,6 @@ class SessionChangesStore:
 
         return read
 
-    def save_changeset_file(
-        self,
-        *,
-        session_id: str,
-        changeset_id: str,
-        file_path: str,
-        before_content: str | None,
-        after_content: str | None,
-        diff_text: str,
-    ) -> None:
-        file_path = self.normalize_file_reference(file_path)
-        changeset_name = self._safe_name(changeset_id)
-        stem = self._file_stem(file_path)
-        file_dir = self._ensure_changes_dir(session_id) / "changesets" / changeset_name / stem
-        native_file_dir = native_io_path(file_dir)
-        native_file_dir.mkdir(parents=True, exist_ok=True)
-        (native_file_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
-        if before_content is not None:
-            (native_file_dir / "before.txt").write_text(before_content, encoding="utf-8")
-        if after_content is not None:
-            (native_file_dir / "after.txt").write_text(after_content, encoding="utf-8")
-
-    def save_changeset_summary(self, changeset: SessionChangesetDTO) -> None:
-        target = (
-            self._ensure_changes_dir(changeset.session_id)
-            / "changesets"
-            / self._safe_name(changeset.changeset_id)
-            / "summary.json"
-        )
-        native_target = native_io_path(target)
-        native_target.parent.mkdir(parents=True, exist_ok=True)
-        native_target.write_text(changeset.model_dump_json(indent=2), encoding="utf-8")
-
     def _session_changes_dir(self, session_id: str) -> Path:
         return self._path_resolver.resolve_session_node(session_id) / "changes"
 
@@ -190,14 +153,4 @@ class SessionChangesStore:
     def _ensure_changes_dir(self, session_id: str) -> Path:
         changes_dir = self._session_changes_dir(session_id)
         native_io_path(changes_dir / "edits").mkdir(parents=True, exist_ok=True)
-        native_io_path(changes_dir / "changesets").mkdir(parents=True, exist_ok=True)
         return changes_dir
-
-    @staticmethod
-    def _safe_name(value: str) -> str:
-        return "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in value)
-
-    @classmethod
-    def _file_stem(cls, file_path: str) -> str:
-        digest = hashlib.sha256(file_path.encode("utf-8")).hexdigest()[:12]
-        return f"{digest}_{cls._safe_name(Path(file_path).name or 'file')}"

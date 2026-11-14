@@ -165,7 +165,6 @@ class SessionChangesService:
                     changeset_id,
                 ),
                 reviewed_map=self._store.read_reviewed_map(session_id),
-                persist=True,
             )
 
         async with (
@@ -210,7 +209,6 @@ class SessionChangesService:
         changeset_id: str,
         records: list[StoredFileEdit],
         reviewed_map: dict[str, bool],
-        persist: bool = False,
     ) -> SessionChangesetDTO:
         changes = aggregate_records(
             records,
@@ -222,15 +220,6 @@ class SessionChangesService:
             additions, deletions = count_diff_lines(diff_text)
             if additions == 0 and deletions == 0:
                 continue
-            if persist:
-                self._store.save_changeset_file(
-                    session_id=session_id,
-                    changeset_id=changeset_id,
-                    file_path=change.file_path,
-                    before_content=change.before_content,
-                    after_content=change.after_content,
-                    diff_text=diff_text,
-                )
             files.append(
                 SessionFileChangeDTO(
                     file_path=change.file_path,
@@ -254,7 +243,7 @@ class SessionChangesService:
             deletions=sum(file.deletions for file in files),
         )
         change_kind, turn_id = changeset_kind_and_turn(changeset_id)
-        changeset = SessionChangesetDTO(
+        return SessionChangesetDTO(
             session_id=session_id,
             changeset_id=changeset_id,
             label="This Turn" if change_kind == "turn" else "All Changes",
@@ -269,6 +258,3 @@ class SessionChangesService:
             files=files,
             generated_at=datetime.now(UTC),
         )
-        if persist:
-            self._store.save_changeset_summary(changeset)
-        return changeset
