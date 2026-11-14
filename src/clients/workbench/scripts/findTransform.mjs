@@ -185,6 +185,14 @@ public selectAllMatches(): boolean`);
     contents = replaceOnce(contents, 'this._callback(controller, args);', 'await this._callback(controller, args);');
   }
   if (index === 4) {
+    contents = replaceOnce(contents, 'const cursorDiff = cursorState.filter(cs => !previousCursorState.find(pcs => pcs.equals(cs)));', `const positionKey = (state: CursorState) => state.modelState.position.lineNumber + ':' + state.modelState.position.column;
+const previousByPosition = new Map<string, CursorState[]>();
+for (const state of previousCursorState) {
+  const key = positionKey(state), states = previousByPosition.get(key);
+  if (states) states.push(state);
+  else previousByPosition.set(key, [state]);
+}
+const cursorDiff = cursorState.filter(state => !previousByPosition.get(positionKey(state))?.some(previous => previous.equals(state)));`);
     contents = replaceOnce(contents, 'public selectAll(findController: CommonFindController): void', 'public async selectAll(findController: CommonFindController): Promise<void>');
     const start = contents.indexOf('\t\t\tconst editorModel = this._editor.getModel();', contents.indexOf('const allowFindRegex ='));
     const end = contents.indexOf('\n\t\t} else {', start);
