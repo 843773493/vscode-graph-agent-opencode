@@ -10,5 +10,6 @@
   - Linux 支持链集成：`test_runtime_logging_startup.py` 2 passed；旧 Trace 快照独立 1 skipped。原输出：`out/tests/temp/2026/11/14/automatic_supported_upgrade/artifacts/supported-startup-integration-04.log`。配置／SQL 定向回归、Launcher 31项及资源账本68项另有原始证据，不与重叠分组累加。
   - 最终身份预检回归126项通过，涵盖未结算运行代／活动引用及远端凭据缺失在配置与布局首写前拒绝；原输出：同目录 `identity-preflight-final-01.log`。
 - [ ] 2.2 冻结候选后在 hyf_win 隔离执行同一升级链，保留命令、版本、原输出及未完成范围。
-- [ ] 2.3 完成最小充分实现复审、静态分析和精确本地提交；不自动同步 dev/release/main。
+- [x] 2.3 完成最小充分实现复审、静态分析和精确本地提交；不自动同步 dev/release/main。
+  - 候选 `20c86faf4ee33041cfff826eb4ff436950609c25` 已本地提交；Ruff、Node语法、差异与OpenSpec严格校验通过，复用Sol只读复审确认首写顺序已闭合。未push或同步固定dev/release/main。
 - [ ] 2.4 TODO：真实旧快照的完整历史恢复尚未验收。固定来源 bf0f2e1d9d037efcb0210c458fa157fb4d54a27a 含非空 Trace JSONL，用户已将其裁定为未知来源，本轮保留原件、不新增导入；保留原测试及强断言并明确跳过，不能以支持链局部通过替代。
