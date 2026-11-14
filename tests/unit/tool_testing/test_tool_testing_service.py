@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -213,6 +214,43 @@ async def test_tool_test_uses_public_schema_and_injects_runtime_only_at_executio
     request_payload = json.loads(request_path.read_text(encoding="utf-8"))
     assert request_payload["tool"]["parameters"]["properties"] == expected_parameters
     assert "callback" not in request_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_cold_model_construction_does_not_block_workspace_event_loop(
+    tmp_path: Path,
+) -> None:
+    entered, release = threading.Event(), threading.Event()
+    def build_model(**_: object) -> RuntimeInjectedArgumentModel:
+        entered.set()
+        if not release.wait(timeout=2):
+            raise TimeoutError("事件循环未能在模型构造期间继续处理请求")
+        return RuntimeInjectedArgumentModel()
+
+    case = RuntimeInjectedArgumentCase()
+    service = ToolTestService(
+        config_service=SingleProviderRuntimeConfig(),  # type: ignore[arg-type]
+        registry=ToolTestRegistry(cases=[case]),
+        store=ToolTestStore(root=tmp_path / ".boxteam" / "tool_tests"),
+        workspace_root=tmp_path,
+        asset_root=tmp_path / "assets",
+        model_builder=build_model,
+    )
+    started = await service.start(tool_name=case.tool_name, request=ToolTestStartRequest())
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        # 构造仍未完成时，原运行状态读取和事件循环必须保持可用。
+        assert service.get(started.run_id).status == "running"
+        release.set()
+        async with asyncio.timeout(2):
+            while service.get(started.run_id).status not in {"completed", "failed"}:
+                await asyncio.sleep(0.01)
+        result = service.get(started.run_id)
+        assert result.status == "completed"
+        assert len(result.attempts) == 1 and result.attempts[0].passed
+    finally:
+        release.set()
+        await service.shutdown()
 
 
 @pytest.mark.asyncio

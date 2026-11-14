@@ -324,7 +324,9 @@ class ToolTestService:
             )
             if model is None:
                 stage = "model_build"
-                model = self._model_builder(
+                # 模型 SDK 的冷加载和同步初始化不能阻塞工作区的健康检查与其它请求。
+                model = await asyncio.to_thread(
+                    self._model_builder,
                     provider=provider,
                     runtime_config=runtime_config,
                 )
