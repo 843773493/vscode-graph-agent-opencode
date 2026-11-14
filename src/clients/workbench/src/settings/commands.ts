@@ -1,5 +1,6 @@
 import { CancellationTokenSource } from '../../upstream/src/vs/base/common/cancellation.js';
 import { Action2, MenuId, registerAction2 } from '../../upstream/src/vs/platform/actions/common/actions.js';
+import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
@@ -7,7 +8,7 @@ import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { createManagementTargetLifecycle, managementGateway, managementWorkspace, managementTargetDisplayName, type ManagementTarget } from '../managementTarget.js';
-import { manageDefaultAgentSource } from './defaultAgent.js';
+import { inspectDefaultAgentSource } from './defaultAgent.js';
 import { configureServicePlugin } from './pluginConfiguration.js';
 import { ContextKeyExpr } from '../../upstream/src/vs/platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
@@ -62,15 +63,18 @@ registerAction2(class extends Action2 {
     super({ id: defaultAgentSourceCommand, title: commandTitle('workbench.settings.openDefaultAgentSource'),
       category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true });
   }
-  async run(accessor: ServicesAccessor, explicit?: WorkspaceOwner): Promise<void> {
+  async run(accessor: ServicesAccessor, explicit?: WorkspaceOwner | TargetSettingsLocation): Promise<void> {
     const quickInput = accessor.get(IQuickInputService), notifications = accessor.get(INotificationService);
+    const commandService = accessor.get(ICommandService);
     const initial = workspaceContext.getSnapshot();
     if (initial.loading || initial.error || !initial.gatewayId) throw new Error(initial.error ?? t('workbench.settings.gatewayPending'));
+    const explicitLocation = explicit && 'source_key' in explicit ? parseSettingsLocation(explicit) : undefined;
+    const explicitOwner = explicit && 'workspaceId' in explicit ? explicit : undefined;
     const controller = new AbortController(), cancellation = new CancellationTokenSource();
     const invalidate = () => { controller.abort(new Error(t('workbench.settings.identityChanged'))); cancellation.cancel(); };
     const release = onGatewayTokenInvalidated(0, invalidate);
     const releaseContext = workspaceContext.subscribe(() => { if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate(); });
-    let selected: WorkspaceOwner | undefined;
+    let selected: WorkspaceOwner | undefined = explicitLocation ? { gatewayId: explicitLocation.gateway_id, workspaceId: explicitLocation.workspace_id! } : undefined;
     const check = () => {
       if (workspaceContext.getSnapshot().gatewayId !== initial.gatewayId) invalidate();
       controller.signal.throwIfAborted();
@@ -79,8 +83,8 @@ registerAction2(class extends Action2 {
       }
     };
     try {
-      const target = managementGateway('settings', explicit?.gatewayId);
-      selected = explicit ? { ...explicit } : (await quickInput.pick(initial.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({
+      const target = managementGateway('settings', explicitLocation?.gateway_id ?? explicitOwner?.gatewayId);
+      selected ??= explicitOwner ? { ...explicitOwner } : (await quickInput.pick(initial.workspaces.filter(workspace => workspace.gateway_id === target.gateway_id).map(workspace => ({
         label: workspace.name, description: `${workspace.gateway_id} · ${workspace.status}`, detail: workspace.workspace_id,
         owner: gatewayWorkspaceOwner(workspace),
       })), { title: t('workbench.settings.pickTarget'), prompt: t('workbench.settings.targetPrompt', managementTargetDisplayName(target), target.gateway_id),
@@ -88,7 +92,24 @@ registerAction2(class extends Action2 {
       if (!selected) return;
       check();
       const workspace = requireGatewayWorkspaceRequestTarget(workspaceContext.getSnapshot().workspaces, selected);
-      await manageDefaultAgentSource(workspace, workspace.name, quickInput, notifications, check, controller.signal);
+      if (workspace.status !== 'ready') throw new Error(t('workbench.settings.targetOffline'));
+      if (explicitLocation) {
+        await inspectDefaultAgentSource(explicitLocation, quickInput, notifications, check, controller.signal);
+        return;
+      }
+      const owner = new ConfigurationSourceOwner({ gateway_id: target.gateway_id,
+        gateway_connection_id: target.gateway_connection_id, workspace_id: workspace.workspace_id });
+      const listed = await owner.list(controller.signal);
+      check();
+      const source = await quickInput.pick(listed.sources.filter(item => item.source_key).map(item => ({
+        label: item.source_key!, description: t('settings.editor.layerPresencePriority', item.layer, item.presence, item.precedence),
+        detail: item.uri ?? undefined, source_key: item.source_key!,
+      })), { title: t('settings.editor.chooseDefaultAgentSource'), prompt: t('settings.editor.defaultAgentOwner', workspace.name,
+        target.gateway_id, workspace.workspace_id), placeHolder: t('settings.editor.defaultAgentAccess') }, cancellation.token);
+      check();
+      if (!source) return;
+      const location: TargetSettingsLocation = { ...owner.target, version: 2, source_key: source.source_key, name: workspace.name };
+      await commandService.executeCommand('boxteam.settings.agents', location);
     } finally { release(); releaseContext(); cancellation.dispose(); controller.abort(); }
   }
 });

@@ -18,12 +18,15 @@ const text = (value: unknown): string => typeof value === 'string' ? value : '';
 
 /** 只投影当前来源草稿及下层原文，不在客户端重建一份生效配置。 */
 export function ConfigurationEntities({ kind, draft, document, selectedId, error, onSelect, onEdit,
-  onCreate, onRemove, onRestoreProviders, onSetSecret, pendingSubmission, onQuerySubmission, onSetDefaultAgent, onManageSessionDefaults, onOpenSource, onOpenSessionSelection, onSave }: {
+  onCreate, onRemove, onRestoreProviders, onSetSecret, pendingSubmission, onQuerySubmission, onSetDefaultAgent, onRestoreDefaultAgent,
+  onInspectDefaultAgent, onManageSessionDefaults, onOpenSource, onOpenSessionSelection, onSave }: {
   kind: DefinitionKind; draft?: DefinitionObject; document: ConfigSourceDocumentDTO; selectedId?: string; error?: string;
   onSelect: (id: string) => void;
   onEdit: (id: string, path: (string | number)[], value: unknown) => void;
   onCreate: () => void; onRemove: (id: string) => void; onRestoreProviders: () => void;
   onSetDefaultAgent: (id: string) => void;
+  onRestoreDefaultAgent?: () => void;
+  onInspectDefaultAgent?: () => void;
   onOpenSource: (sourceKey?: string) => void; onSave: () => void;
   onOpenSessionSelection?: () => void;
   onManageSessionDefaults?: () => void;
@@ -121,6 +124,9 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, error
           </label>
           <p>{t('configuration.entities.defaultsBoundary', text(configuredDefault))}</p>
           <button type="button" disabled={!document.writable || !draft} onClick={() => onSetDefaultAgent(selected.id)}>{t('configuration.entities.setConfiguredDefault')}</button>
+          {draft?.default_agent !== undefined && onRestoreDefaultAgent
+            ? <button type="button" disabled={!document.writable || !draft} onClick={onRestoreDefaultAgent}>{t('configuration.entities.restoreDefaultAgent')}</button> : null}
+          {onInspectDefaultAgent ? <button type="button" onClick={onInspectDefaultAgent}>{t('configuration.entities.inspectDefaultAgent')}</button> : null}
         </>}
         {selected.local ? <button type="button" disabled={!editable} onClick={() => onRemove(selected.id)}>{t('configuration.entities.removeLocal')}</button> : null}
       </article> : null}

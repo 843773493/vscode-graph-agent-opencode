@@ -68,14 +68,16 @@ async def test_default_agent_source_command_preserves_owner_and_source(
     assert completed.returncode == 0, completed.stdout + completed.stderr
     result = json.loads(result_path.read_text())
     assert result["phase"] == "complete" and result["pageErrors"] == []
-    assert result["cancelledWithoutWrite"] and result["readonlyWithoutWrite"]
-    assert result["savedToFrozenOwner"] and result["deletedSourceOverride"]
+    assert result["cancelledTargetWithoutWrite"] and result["cancelledSourceWithoutWrite"]
+    assert result["cancelledSourceSaveWithoutPut"] and result["readonlyWithoutWrite"]
+    assert result["enteredAgentFormAndEditedDraft"] and result["savedToFrozenOwner"]
+    assert result["unknownSaveResolvedByOriginalKey"]
     assert result["savedPendingShown"] and result["pendingDiscarded"]
     assert result["forbiddenWrites"] == []
     text = (workspace / ".boxteam/workspace.jsonc").read_text()
     assert text.startswith("// 原来源注释：经来源 API 保存\n")
     config = commentjson.loads(text)
-    assert "default_agent" not in config, "删除只移除本层覆盖"
+    assert config["default_agent"] == "reviewer", "Agent 表单改动经原来源保存"
     assert all(item["api_key"] == "e2e-local-model-key" for item in config["llm"]["providers"]), "脱敏投影不能覆盖原秘密"
     assert commentjson.loads((other / ".boxteam/workspace.jsonc").read_text())["default_agent"] == "default"
     with provider.control._condition:

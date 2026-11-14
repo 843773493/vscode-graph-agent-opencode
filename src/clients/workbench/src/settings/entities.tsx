@@ -13,6 +13,7 @@ import { ThreadInput } from '../threadInput.js';
 import { ThreadPane } from '../threadPane.js';
 import { ReactSurface } from '../react/surface.js';
 import { createManagementTargetLifecycle } from '../managementTarget.js';
+import { defaultAgentSourceCommand } from './commands.js';
 import { listAgents, setWorkspaceDefaultAgent, setWorkspaceDefaultProvider } from '../../../web/src/api/workspace.js';
 import type { SourceSettings } from './editor.js';
 
@@ -60,6 +61,8 @@ export class ConfigurationEntityView extends Disposable {
       onCreate={() => this.run(() => this.create())} onRemove={id => this.run(() => this.remove(id))}
       onRestoreProviders={() => this.run(() => this.restoreProviders())}
       onSetDefaultAgent={id => this.run(() => this.source.editPath(['default_agent'], id))}
+      onRestoreDefaultAgent={() => this.run(() => this.source.editPath(['default_agent'], undefined))}
+      onInspectDefaultAgent={() => this.run(() => this.commands.executeCommand(defaultAgentSourceCommand, this.source.location))}
       onManageSessionDefaults={() => this.run(() => this.manageSessionDefaults())}
       onOpenSessionSelection={() => this.run(() => this.openSessionSelection())}
       onOpenSource={sourceKey => this.run(async () => {
