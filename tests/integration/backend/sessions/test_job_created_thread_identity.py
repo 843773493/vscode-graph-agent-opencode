@@ -242,7 +242,7 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
         assert item["thread_id"] == expected[item["job_id"]]
 
     for thread_id in case.thread_ids:
-        # limit 限定物理扫描条数，稀疏页即使为空也必须按 Session 水位向前。
+        # limit 限定目标 Thread 的事件数量，无关 Thread 不占页。
         params = {"thread_id": thread_id, "limit": 1}
         collected = []
         first_cursor = None
@@ -250,6 +250,7 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
             response = await trace_client.get(base, params=params)
             assert response.status_code == 200, response.text
             page = response.json()["data"]
+            assert len(page["items"]) == 1
             collected.extend(page["items"])
             cursor = page["next_cursor"]
             if cursor is None:

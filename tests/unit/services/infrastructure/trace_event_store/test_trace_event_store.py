@@ -9,6 +9,8 @@ import pytest
 from app.schemas.event import (
     AgentStartEvent,
     AgentStartPayload,
+    JobCreatedEvent,
+    JobCreatedPayload,
 )
 from app.services.infrastructure.trace_event_store import (
     TraceCursorGoneError,
@@ -312,3 +314,70 @@ def test_store_rejects_missing_event_cursor(tmp_path: Path, trace_event_store_fa
 
     with pytest.raises(TraceCursorGoneError, match="evt_missing"):
         store.read_events(session_id, "evt_missing")
+
+
+@pytest.mark.asyncio
+async def test_live_trace_orders_external_commits_and_recovers_after_overflow(trace_event_store_factory):
+    from app.services.infrastructure.events.event_channel_service import (
+        EventChannelOverflowError,
+    )
+    from app.services.infrastructure.trace_event_store import TraceEventStore
+
+    session_id = "ses_019c5c7e3adc77a3b10ccaa504be3e74"
+    store, _ = trace_event_store_factory(session_id)
+    external = TraceEventStore(sessions_dir=store._path_resolver.sessions_root)
+    thread_id = store._path_resolver.main_thread_id(session_id)
+    for job_id, owner in [("job_live", thread_id), ("job_other", "other-thread")]:
+        await store.append(session_id, JobCreatedEvent(
+            event_id=f"owner_{job_id}", job_id=job_id, timestamp=datetime.now(UTC),
+            payload=JobCreatedPayload(session_id=session_id, thread_id=owner, message="owner", agent_id="default"),
+        ))
+    owner_cursor = store.latest_event_cursor(session_id)
+
+    def event(index):
+        return AgentStartEvent(
+            event_id=f"evt_live_{index}", job_id="job_live", timestamp=datetime.now(UTC),
+            payload=AgentStartPayload(message=str(index), agent_id="default"),
+        )
+
+    await store.append(session_id, event(0))
+    assert store._event_service.channel_names == ()
+    stream = store.stream_events(session_id, owner_cursor, thread_id=thread_id)
+    first = await anext(stream)
+    receiving = asyncio.create_task(anext(stream))
+
+    async def wait_for_subscription():
+        while not store._event_service.channel_names:
+            await asyncio.sleep(0)
+
+    try:
+        await asyncio.wait_for(wait_for_subscription(), 2)
+        # 外部实例先提交，当前实例后提交；直接交付不能跨过前一条。
+        await external.append(session_id, event(1))
+        await store.append(session_id, event(2))
+        second = await asyncio.wait_for(receiving, 2)
+        third = await asyncio.wait_for(anext(stream), 2)
+        assert [first.event.event_id, second.event.event_id, third.event.event_id] == [
+            "evt_live_0", "evt_live_1", "evt_live_2",
+        ]
+        # 其它 Thread 的输出不占目标订阅队列。
+        for index in range(65):
+            await store.append(session_id, event(f"other_{index}").model_copy(update={"job_id": "job_other"}))
+        assert store._event_service.channel_names
+        for index in range(3, 68):
+            await store.append(session_id, event(index))
+        assert store._event_service.channel_names == ()
+        with pytest.raises(EventChannelOverflowError):
+            await anext(stream)
+    finally:
+        receiving.cancel()
+        await asyncio.gather(receiving, return_exceptions=True)
+        await stream.aclose()
+
+    resumed = store.stream_events(session_id, third.cursor, thread_id=thread_id)
+    try:
+        recovered = [await asyncio.wait_for(anext(resumed), 2) for _ in range(65)]
+        assert [record.event.event_id for record in recovered] == [f"evt_live_{i}" for i in range(3, 68)]
+    finally:
+        await resumed.aclose()
+    assert store._event_service.channel_names == ()

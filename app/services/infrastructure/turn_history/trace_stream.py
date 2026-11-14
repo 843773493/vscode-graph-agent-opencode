@@ -8,6 +8,11 @@ from pydantic import ValidationError
 
 from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.event import Event
+from app.services.infrastructure.events.event_channel_service import (
+    EventChannel,
+    EventChannelService,
+    EventChannelSpec,
+)
 
 from .trace_cursor import (
     TraceCursorGoneError,
@@ -54,33 +59,36 @@ def iter_trace_event_lines(*, session_id: str, lines: Iterable[str]) -> Iterator
 
 
 def _read_trace_batch(
-    database: TraceDatabase, session_id: str, offset: int
-) -> list[tuple[int, int, bytes]]:
+    database: TraceDatabase, session_id: str, offset: int,
+    thread_id: str | None = None, before: int | None = None,
+) -> tuple[list[tuple[int, int, bytes, str | None]], int]:
     with database.connection() as connection:
         if connection is None:
             if offset:
                 raise TraceCursorGoneError(session_id, "<stream-offset>")
-            return []
-        if (
-            offset
-            and connection.execute(
-                "SELECT 1 FROM trace_events WHERE end=?", (offset,)
-            ).fetchone()
-            is None
-        ):
+            return [], 0
+        if offset and connection.execute(
+            "SELECT 1 FROM trace_events WHERE end=?", (offset,),
+        ).fetchone() is None:
             raise TraceCursorGoneError(session_id, "<stream-offset>")
-        records: list[tuple[int, int, bytes]] = []
+        tail = connection.execute(
+            "SELECT end FROM trace_events ORDER BY start DESC LIMIT 1",
+        ).fetchone()
+        boundary = min(before, tail[0]) if before is not None and tail else (tail[0] if tail else 0)
+        scope = " AND thread_id=?" if thread_id is not None else ""
+        parameters = (offset, boundary, thread_id) if thread_id is not None else (offset, boundary)
+        records: list[tuple[int, int, bytes, str | None]] = []
         size = 0
         for row in connection.execute(
-            "SELECT start,end,raw FROM trace_events WHERE start>=? ORDER BY start LIMIT 128",
-            (offset,),
+            f"SELECT start,end,raw,thread_id FROM trace_events WHERE start>=? AND start<?{scope} ORDER BY start LIMIT 128",
+            parameters,
         ):
             raw = row[2].encode("utf-8")
-            records.append((row[0], row[1], raw))
+            records.append((row[0], row[1], raw, row[3]))
             size += len(raw)
             if size >= _TRACE_STREAM_BATCH_BYTES:
                 break
-        return records
+        return records, records[-1][1] if records else boundary
 
 
 def _initial_offset(
@@ -97,29 +105,63 @@ async def stream_trace_records(
     session_id: str,
     database: TraceDatabase,
     requested_cursor: str | None,
-    condition: asyncio.Condition,
+    event_service: EventChannelService,
+    channel_spec: EventChannelSpec,
+    thread_id: str | None,
 ) -> AsyncGenerator[TraceStreamRecord, None]:
     offset = await run_sync_shielded(
-        _initial_offset, database, session_id, requested_cursor
+        _initial_offset, database, session_id, requested_cursor,
     )
-    while True:
-        # 空快照检查与注册等待共享 Condition，避免提交通知落入两者之间而多等一秒。
-        async with condition:
-            records = await run_sync_shielded(
-                _read_trace_batch, database, session_id, offset
+    channel: EventChannel[TraceStreamRecord] | None = None
+    subscription = None
+    pending: TraceStreamRecord | None = None
+    try:
+        while True:
+            if subscription is not None:
+                subscription.check_overflow()
+            # 历史、空闲时的跨实例发现及实时序列中的缺口，统一走同一有界读取。
+            records, watermark = await run_sync_shielded(
+                _read_trace_batch, database, session_id, offset, thread_id,
+                pending.start if pending is not None else None,
             )
-            if not records:
-                try:
-                    await asyncio.wait_for(condition.wait(), timeout=1.0)
-                except TimeoutError:
-                    pass
+            for start, end, raw, owner in records:
+                if subscription is not None:
+                    subscription.check_overflow()
+                record = parse_trace_record(session_id, start, end, raw)
+                yield TraceStreamRecord(
+                    event=record.event,
+                    cursor=encode_trace_cursor(
+                        event_id=record.event.event_id, start=start, end=end, line=raw,
+                    ),
+                    start=start, end=end, thread_id=owner,
+                )
+                offset = end
+            offset = watermark
+            if records:
                 continue
-        for start, end, raw in records:
-            record = parse_trace_record(session_id, start, end, raw)
-            yield TraceStreamRecord(
-                event=record.event,
-                cursor=encode_trace_cursor(
-                    event_id=record.event.event_id, start=start, end=end, line=raw
-                ),
-            )
-            offset = end
+            if subscription is None:
+                # 先补完大段历史，再订阅并重查一次，关闭查询与订阅之间的提交窗口。
+                channel = event_service.ensure_channel(channel_spec)
+                subscription = channel.subscribe(label="session-trace")
+                continue
+            while True:
+                subscription.check_overflow()
+                if pending is not None and pending.end > offset:
+                    yield pending
+                    offset = pending.end
+                pending = None
+                try:
+                    delivery = await asyncio.wait_for(subscription.next(), timeout=1.0)
+                except TimeoutError:
+                    break
+                record = delivery.event
+                if record.end <= offset:
+                    continue
+                pending = record
+                if record.start > offset:
+                    # 其它 Thread 或其它实例可能在中间提交；先按索引补齐，避免乱序和跳过事件。
+                    break
+    finally:
+        if channel is not None and subscription is not None:
+            channel.unsubscribe(subscription)
+            event_service.remove_channel_if_unused(channel_spec.name)

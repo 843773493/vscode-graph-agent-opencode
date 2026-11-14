@@ -61,6 +61,9 @@ def unbind_trace_cursor(
 class TraceStreamRecord:
     event: Event
     cursor: str
+    start: int
+    end: int
+    thread_id: str | None
 
 
 @dataclass(frozen=True, slots=True)

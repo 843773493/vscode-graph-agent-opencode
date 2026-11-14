@@ -44,6 +44,7 @@ def test_channel_name_helpers_cover_all_kinds() -> None:
     assert CHANNEL_KINDS == frozenset(
         {
             "job.events",
+            "session.trace",
             "resource.observe",
             "resource.state",
             "config.lifecycle",

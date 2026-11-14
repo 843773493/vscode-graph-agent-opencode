@@ -609,7 +609,9 @@ def _build_app_container(
     )
     background_work_store = BackgroundWorkStore(sessions_dir=resolved_sessions_root)
     background_message_bus = BackgroundMessageBus(store=background_work_store)
-    trace_event_store = TraceEventStore(sessions_dir=resolved_sessions_root)
+    trace_event_store = TraceEventStore(
+        sessions_dir=resolved_sessions_root, event_service=job_event_bus.event_channel_service,
+    )
     trace_event_recorder = TraceEventRecorder(
         bus=job_event_bus,
         store=trace_event_store,

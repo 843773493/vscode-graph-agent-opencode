@@ -102,6 +102,7 @@ def read_trace_event_page(
     limit: int,
     max_bytes: int = TRACE_PAGE_MAX_BYTES,
     before_offset: int | None = None,
+    thread_id: str | None = None,
 ) -> TraceEventPage:
     if limit < 1 or max_bytes < 1:
         raise ValueError("Trace page limit 和 max_bytes 必须大于 0")
@@ -140,10 +141,12 @@ def read_trace_event_page(
         raise TraceCursorGoneError(session_id, cursor or "") from error
     selected: list[TraceEventRecord] = []
     bytes_read = 0
+    scope = " AND thread_id=?" if thread_id is not None else ""
     if connection is not None:
+        parameters = (before, thread_id, limit) if thread_id is not None else (before, limit)
         boundaries = connection.execute(
-            "SELECT start,end FROM trace_events WHERE start<? ORDER BY start DESC LIMIT ?",
-            (before, limit),
+            f"SELECT start,end FROM trace_events WHERE start<?{scope} ORDER BY start DESC LIMIT ?",
+            parameters,
         )
         for start, end in boundaries:
             if bytes_read + end - start > max_bytes:
@@ -163,7 +166,10 @@ def read_trace_event_page(
             bytes_read += len(raw)
     selected.reverse()
     oldest = selected[0] if selected else None
-    has_more = oldest is not None and oldest.start > 0
+    has_more = bool(oldest is not None and connection is not None and connection.execute(
+        f"SELECT 1 FROM trace_events WHERE start<?{scope} LIMIT 1",
+        (oldest.start, thread_id) if thread_id is not None else (oldest.start,),
+    ).fetchone())
     return TraceEventPage(
         records=selected,
         next_cursor=(

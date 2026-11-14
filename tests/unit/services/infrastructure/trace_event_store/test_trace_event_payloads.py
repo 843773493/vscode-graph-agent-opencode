@@ -104,7 +104,7 @@ async def test_store_file_write_does_not_block_event_loop(
 
     def slow_append(session_id, event):
         release_write.wait(timeout=1.0)
-        original_append(session_id, event)
+        return original_append(session_id, event)
 
     monkeypatch.setattr(store, "_append_event", slow_append)
     event = AgentStartEvent(

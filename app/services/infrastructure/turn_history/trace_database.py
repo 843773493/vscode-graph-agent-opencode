@@ -11,7 +11,16 @@ from app.core.atomic_fs import fsync_directory, fsync_file, native_io_path
 from app.core.sqlite_state import SQLiteStateDatabase, load_sql, sqlite_file_uri
 from app.schemas.event import Event
 
+from .trace_cursor import TraceStreamRecord, encode_trace_cursor
+
 _OWNER_TYPES_SQL = "event_type IN ('job_created', 'job_started', 'message_created')"
+_SCHEMA_VERSION = 2
+
+
+def _migrations() -> tuple[str, ...]:
+    return tuple(load_sql(__package__, f"migrations/{name}") for name in (
+        "001_trace.sql", "002_thread_index.sql",
+    ))
 
 
 class TraceDatabase:
@@ -43,8 +52,8 @@ class TraceDatabase:
                 candidate = Path(staging) / self.path.name
                 with SQLiteStateDatabase(
                     path=candidate,
-                    schema_version=1,
-                    migrations=(load_sql(__package__, "migrations/001_trace.sql"),),
+                    schema_version=_SCHEMA_VERSION,
+                    migrations=_migrations(),
                     allow_shared_processes=True,
                 ):
                     pass
@@ -68,16 +77,20 @@ class TraceDatabase:
             version = connection.execute(
                 "SELECT MAX(version) FROM schema_migrations"
             ).fetchone()[0]
-            if version != 1:
+            if version != _SCHEMA_VERSION:
                 raise RuntimeError(
-                    f"Trace SQLite schema 不受支持: path={self.path}, version={version}"
+                    f"Trace SQLite schema 不受支持: path={self.path}, version={version}; "
+                    "请停写后显式执行 uv run python -m "
+                    "app.services.infrastructure.turn_history.trace_database <trace.sqlite>"
                 )
             # 所有多条读取共用一致快照；写入由 SQLite 原子提交，读取不占写锁。
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             with connection:
                 yield connection
 
-    def append(self, event: Event) -> None:
+    def append(self, event: Event) -> TraceStreamRecord:
+        # 提交与实时交付共用独立事件，后续调用方修改模型不会改变已提交事实。
+        event = event.model_copy(deep=True)
         raw = event.__pydantic_serializer__.to_json(event) + b"\n"
         with self.connection(write=True) as connection:
             assert connection is not None
@@ -89,6 +102,14 @@ class TraceDatabase:
                 "INSERT INTO trace_events(start, raw) VALUES (?, ?)",
                 (start, raw.decode("utf-8")),
             )
+            thread_id = connection.execute(
+                "SELECT thread_id FROM trace_events WHERE start=?", (start,),
+            ).fetchone()[0]
+        return TraceStreamRecord(
+            event=event,
+            cursor=encode_trace_cursor(event_id=event.event_id, start=start, end=start + len(raw), line=raw),
+            start=start, end=start + len(raw), thread_id=thread_id,
+        )
 
 
 def job_threads(
@@ -113,3 +134,19 @@ def job_threads(
             f"Trace Job 缺少持久 Thread 归属: session_id={session_id}, job_ids={sorted(missing)}"
         )
     return owners
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="停写后显式升级单个 Session Trace SQLite 索引")
+    parser.add_argument("database", type=Path)
+    args = parser.parse_args()
+    if not args.database.is_file():
+        parser.error(f"Trace SQLite 不存在: {args.database}")
+    with SQLiteStateDatabase(
+        path=args.database, schema_version=_SCHEMA_VERSION, migrations=_migrations(),
+        allow_shared_processes=True,
+    ):
+        pass
+    print(f"Trace SQLite 已升级: {args.database}")

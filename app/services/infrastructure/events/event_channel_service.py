@@ -38,6 +38,7 @@ from app.core.identifier import create_prefixed_id
 EventT = TypeVar("EventT")
 
 JOB_EVENTS_CHANNEL_KIND: Final[str] = "job.events"
+SESSION_TRACE_CHANNEL_KIND: Final[str] = "session.trace"
 RESOURCE_OBSERVE_CHANNEL_KIND: Final[str] = "resource.observe"
 RESOURCE_STATE_CHANNEL_KIND: Final[str] = "resource.state"
 CONFIG_LIFECYCLE_CHANNEL_KIND: Final[str] = "config.lifecycle"
@@ -50,6 +51,7 @@ TASK_LIFECYCLE_CHANNEL_KIND: Final[str] = "task.lifecycle"
 CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
     {
         JOB_EVENTS_CHANNEL_KIND,
+        SESSION_TRACE_CHANNEL_KIND,
         RESOURCE_OBSERVE_CHANNEL_KIND,
         RESOURCE_STATE_CHANNEL_KIND,
         CONFIG_LIFECYCLE_CHANNEL_KIND,
@@ -229,21 +231,24 @@ class EventChannelSubscription(Generic[EventT]):
     def mark_released(self) -> None:
         self._released = True
 
-    async def next(self) -> ChannelDelivery[EventT]:
-        """等待下一条投递；溢出错误优先于剩余排队投递。"""
+    def check_overflow(self) -> None:
+        """补读历史等不消费队列的阶段，也必须立即暴露订阅溢出。"""
         error = self._subscriber.overflow_error
         if error is not None:
             raise error
+
+    async def next(self) -> ChannelDelivery[EventT]:
+        """等待下一条投递；溢出错误优先于剩余排队投递。"""
+        self.check_overflow()
         assert self._subscriber.queue is not None
         delivery = await self._subscriber.queue.get()
+        self.check_overflow()
         self._after_consume(delivery)
         return delivery
 
     def pending(self) -> tuple[ChannelDelivery[EventT], ...]:
         """排空当前已排队的投递，供无 await 边界的同步消费点使用。"""
-        error = self._subscriber.overflow_error
-        if error is not None:
-            raise error
+        self.check_overflow()
         assert self._subscriber.queue is not None
         queue = self._subscriber.queue
         pending_deliveries: list[ChannelDelivery[EventT]] = []
@@ -639,6 +644,7 @@ __all__ = [
     "MCP_CATALOG_CHANNEL_KIND",
     "RESOURCE_OBSERVE_CHANNEL_KIND",
     "RESOURCE_STATE_CHANNEL_KIND",
+    "SESSION_TRACE_CHANNEL_KIND",
     "TASK_LIFECYCLE_CHANNEL_KIND",
     "ChannelDelivery",
     "ChannelEventSink",

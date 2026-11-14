@@ -4,14 +4,22 @@ import asyncio
 import sqlite3
 import zlib
 from collections.abc import Iterator
+from contextlib import aclosing
 from pathlib import Path
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.event import Event
 from app.schemas.internal_v2.trace_search import TraceLocationDTO, TraceReferenceDTO
+from app.services.infrastructure.events.event_channel_service import (
+    SESSION_TRACE_CHANNEL_KIND,
+    EventChannelService,
+    EventChannelSpec,
+    channel_name,
+)
 from app.services.infrastructure.turn_history.trace_cursor import (
     TraceCursorGoneError,
+    TraceStreamRecord,
     encode_trace_cursor,
     events_after_cursor,
     offset_after_event,
@@ -43,14 +51,12 @@ TRACE_STORE_LOCK_SHARDS = 64
 
 
 class TraceEventStore:
-    def __init__(self, sessions_dir: Path) -> None:
+    def __init__(self, sessions_dir: Path, *, event_service: EventChannelService | None = None) -> None:
         self._path_resolver = get_session_path_resolver(sessions_dir)
         self._append_locks = tuple(
             asyncio.Lock() for _ in range(TRACE_STORE_LOCK_SHARDS)
         )
-        self._conditions = tuple(
-            asyncio.Condition() for _ in range(TRACE_STORE_LOCK_SHARDS)
-        )
+        self._event_service = event_service if event_service is not None else EventChannelService()
 
     @staticmethod
     def _shard(session_id: str) -> int:
@@ -59,8 +65,12 @@ class TraceEventStore:
     def _append_lock(self, session_id: str) -> asyncio.Lock:
         return self._append_locks[self._shard(session_id)]
 
-    def _condition_for(self, session_id: str) -> asyncio.Condition:
-        return self._conditions[self._shard(session_id)]
+    @staticmethod
+    def _channel_spec(session_id: str, thread_id: str | None) -> EventChannelSpec:
+        return EventChannelSpec(
+            name=channel_name(SESSION_TRACE_CHANNEL_KIND, f"{session_id}:{thread_id or '*'}"),
+            overflow_policy="fail_closed", history_size=0,
+        )
 
     def _database_path(self, session_id: str) -> Path:
         return (
@@ -75,18 +85,18 @@ class TraceEventStore:
             node.node_id for node in self._path_resolver.list_nodes(kind="session")
         )
 
-    async def _notify(self, session_id: str) -> None:
-        condition = self._condition_for(session_id)
-        async with condition:
-            condition.notify_all()
-
-    def _append_event(self, session_id: str, event: Event) -> None:
-        TraceDatabase(self._database_path(session_id)).append(event)
+    def _append_event(self, session_id: str, event: Event) -> TraceStreamRecord:
+        return TraceDatabase(self._database_path(session_id)).append(event)
 
     async def append(self, session_id: str, event: Event) -> None:
         async with self._append_lock(session_id):
-            await run_sync_shielded(self._append_event, session_id, event)
-        await self._notify(session_id)
+            record = await run_sync_shielded(self._append_event, session_id, event)
+            # 与提交共用顺序锁；无人订阅时不创建 channel，也不保留正文副本。
+            for scope in {None, record.thread_id}:
+                channel = self._event_service.find_channel(self._channel_spec(session_id, scope).name)
+                if channel is not None:
+                    channel.publish(record)
+                    self._event_service.remove_channel_if_unused(channel.spec.name)
 
     def read_events(
         self,
@@ -159,6 +169,7 @@ class TraceEventStore:
         cursor: str | None,
         limit: int,
         max_bytes: int = TRACE_PAGE_MAX_BYTES,
+        thread_id: str | None = None,
     ) -> TraceEventPage:
         with TraceDatabase(self._database_path(session_id)).connection() as connection:
             return read_trace_event_page(
@@ -167,6 +178,7 @@ class TraceEventStore:
                 cursor=cursor,
                 limit=limit,
                 max_bytes=max_bytes,
+                thread_id=thread_id,
             )
 
     def event_threads(self, session_id: str, events: list[Event]) -> dict[str, str]:
@@ -272,11 +284,14 @@ class TraceEventStore:
             ).connection() as connection:
                 offset_after_event(session_id, connection, after_event_id)
 
-    async def stream_events(self, session_id: str, after_event_id: str | None = None):
-        async for record in stream_trace_records(
+    async def stream_events(self, session_id: str, after_event_id: str | None = None, *, thread_id: str | None = None):
+        async with aclosing(stream_trace_records(
             session_id=session_id,
             database=TraceDatabase(self._database_path(session_id)),
             requested_cursor=after_event_id,
-            condition=self._condition_for(session_id),
-        ):
-            yield record
+            event_service=self._event_service,
+            channel_spec=self._channel_spec(session_id, thread_id),
+            thread_id=thread_id,
+        )) as records:
+            async for record in records:
+                yield record
