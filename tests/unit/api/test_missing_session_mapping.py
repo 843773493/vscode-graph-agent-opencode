@@ -80,7 +80,7 @@ class _FakeTraceSessionService:
 
 
 class _FakeLlmLogService:
-    def list_session_logs(self, session_id: str):
+    def list_session_log_summaries(self, session_id: str):
         raise CATALOG_KEY_ERROR
 
 
@@ -250,7 +250,7 @@ async def test_llm_request_logs_maps_missing_session_to_404(read_session_service
             MISSING,
             _="local",
             request_id="req",
-            llm_request_log_service=_FakeLlmLogService(),
+            llm_request_log_reader=_FakeLlmLogService(),
             sessions=read_session_service,
         )
 

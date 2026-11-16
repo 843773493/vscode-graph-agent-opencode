@@ -8,7 +8,7 @@ from app.core.path_utils import workspace_context
 from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.llm_request_log import LLMRequestLogReferenceDTO
 from app.schemas.internal_v2.trace_search import TraceReferenceDTO
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.support.session_catalog_owner import fixture_catalog_scope
 
@@ -18,7 +18,7 @@ def delete_record(category: str, workspace: Path, serialized_reference: str, bac
     with fixture_catalog_scope(), workspace_context(read_workspace_id(workspace), workspace):
         if category == "request":
             request = LLMRequestLogReferenceDTO.model_validate_json(serialized_reference)
-            owner = LLMRequestLogService(sessions)
+            owner = LLMRequestLogReader(sessions)
             owner.locate(request)
             path = owner._directory(request.session_id) / request.file_name
         elif category == "trace":

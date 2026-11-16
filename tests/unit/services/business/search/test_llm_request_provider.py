@@ -11,9 +11,9 @@ from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.search.providers import register_llm_request_search
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_navigation.service import SessionCatalogService
-from app.services.infrastructure.llm_request_log_service import (
+from app.services.infrastructure.llm_request_log_reader import (
     LLMRequestLogError,
-    LLMRequestLogService,
+    LLMRequestLogReader,
 )
 from tests.unit.services.business.session_navigation.test_fuzzy_catalog_search import (
     catalog as catalog,  # noqa: PLC0414
@@ -25,7 +25,7 @@ GATEWAY = "gateway_0123456789abcdef0123456789abcdef"
 @pytest.fixture
 def provider(catalog: SessionCatalogService):
     sessions = catalog._session_service
-    logs = LLMRequestLogService(catalog._path_resolver.sessions_root, path_resolver=sessions.path_resolver)
+    logs = LLMRequestLogReader(catalog._path_resolver.sessions_root, path_resolver=sessions.path_resolver)
     service = WorkspaceSearchService(catalog.workspace_id)
     register_llm_request_search(service, catalog, sessions, logs)
     return service, logs
@@ -76,7 +76,7 @@ def request_log_http(catalog, provider):
     from fastapi import FastAPI, HTTPException
 
     from app.api.deps import (
-        get_llm_request_log_service,
+        get_llm_request_log_reader,
         get_session_service,
         get_workspace_search_service,
         verify_local_token,
@@ -92,7 +92,7 @@ def request_log_http(catalog, provider):
     app.exception_handler(HTTPException)(workspace_http_exception_handler)
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(sessions_router, prefix="/api/v1")
-    app.dependency_overrides[get_llm_request_log_service] = lambda: logs
+    app.dependency_overrides[get_llm_request_log_reader] = lambda: logs
     app.dependency_overrides[get_session_service] = lambda: catalog._session_service
     app.dependency_overrides[get_workspace_search_service] = lambda: service
     app.dependency_overrides[verify_local_token] = lambda: "test-token"

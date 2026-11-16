@@ -124,7 +124,7 @@ from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
 from app.services.infrastructure.html_snapshot_store import HtmlSnapshotStore
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
@@ -402,7 +402,7 @@ class AppContainer:
     session_subagent_service: SessionSubagentService
     team_service: TeamCoordinationService
     team_fanout_service: TeamFanoutService
-    llm_request_log_service: LLMRequestLogService
+    llm_request_log_reader: LLMRequestLogReader
     html_snapshot_store: HtmlSnapshotStore
     agent_tool_settings_service: AgentToolSettingsService
     tool_test_service: ToolTestService
@@ -1112,11 +1112,11 @@ def _build_app_container(
         session_service=session_service,
         summarization_compactor=summarization_compactor,
     )
-    llm_request_log_service = LLMRequestLogService(
+    llm_request_log_reader = LLMRequestLogReader(
         resolved_sessions_root,
         path_resolver=session_path_resolver,
     )
-    register_llm_request_search(workspace_search_service, session_catalog_service, session_service, llm_request_log_service)
+    register_llm_request_search(workspace_search_service, session_catalog_service, session_service, llm_request_log_reader)
     register_trace_search(workspace_search_service, session_catalog_service, session_service, trace_event_store)
     html_snapshot_store = HtmlSnapshotStore(workspace_root=resolved_workspace_root, path_resolver=session_path_resolver)
     tool_test_service = ToolTestService(
@@ -1183,7 +1183,7 @@ def _build_app_container(
         session_subagent_service=session_subagent_service,
         team_service=team_service,
         team_fanout_service=team_fanout_service,
-        llm_request_log_service=llm_request_log_service,
+        llm_request_log_reader=llm_request_log_reader,
         html_snapshot_store=html_snapshot_store,
         agent_tool_settings_service=agent_tool_settings_service,
         tool_test_service=tool_test_service,

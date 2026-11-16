@@ -17,7 +17,7 @@ from app.api.deps import (
     get_context_compaction_service,
     get_file_tree_settings_service,
     get_goal_service,
-    get_llm_request_log_service,
+    get_llm_request_log_reader,
     get_persistent_task_runtime,
     get_request_id,
     get_rollout_checkpoint_saver,
@@ -123,9 +123,9 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
-from app.services.infrastructure.llm_request_log_service import (
+from app.services.infrastructure.llm_request_log_reader import (
     LLMRequestLogError,
-    LLMRequestLogService,
+    LLMRequestLogReader,
 )
 from app.services.infrastructure.persistent_tasks.goals import GoalOperationReplayError
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
@@ -647,12 +647,12 @@ async def list_session_llm_request_logs(
     session_id: CanonicalSessionId,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    llm_request_log_service: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    llm_request_log_reader: Annotated[LLMRequestLogReader, Depends(get_llm_request_log_reader)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
         async with sessions.session_read_admission(session_id):
-            result = await run_sync_shielded(llm_request_log_service.list_session_logs, session_id)
+            result = await run_sync_shielded(llm_request_log_reader.list_session_log_summaries, session_id)
     except (KeyError, NotFoundError) as error:
         raise not_found_http_error(error) from error
     except SessionDeletionPendingError as error:
@@ -666,7 +666,7 @@ async def read_session_llm_request_log(
     file_name: Annotated[str, Path(pattern=r"^[0-9]+\.json$")],
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    logs: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    logs: Annotated[LLMRequestLogReader, Depends(get_llm_request_log_reader)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
 ):
     try:
@@ -685,7 +685,7 @@ async def locate_session_llm_request_log(
     reference: LLMRequestLogReferenceDTO,
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
-    logs: Annotated[LLMRequestLogService, Depends(get_llm_request_log_service)],
+    logs: Annotated[LLMRequestLogReader, Depends(get_llm_request_log_reader)],
     sessions: Annotated[SessionService, Depends(get_session_service)],
 ):
     if reference.session_id != session_id:

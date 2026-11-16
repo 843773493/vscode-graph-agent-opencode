@@ -48,7 +48,7 @@ from app.services.business.session_navigation.thread_search import (
 from app.services.business.session_turn_history.workspace_search import (
     WorkspaceMessageSearchCursorError,
 )
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogError
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogError
 from app.services.infrastructure.resource_platform.sources.resource_navigation import (
     ResourceFileOperationError,
 )

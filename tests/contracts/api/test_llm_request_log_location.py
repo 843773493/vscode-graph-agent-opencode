@@ -12,13 +12,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.deps import (
-    get_llm_request_log_service,
+    get_llm_request_log_reader,
     get_session_service,
     verify_local_token,
 )
 from app.api.sessions import router
 from app.core.trace_middleware import TraceMiddleware
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def log_endpoint(tmp_path: Path, session_bundle_factory) -> Iterator[tuple[TestC
         "response": {"result": [{"role": "assistant", "content": "审计结果"}]},
         "upstream": {"attempts": []},
     }), encoding="utf-8")
-    service = LLMRequestLogService(sessions_dir=sessions_root)
+    service = LLMRequestLogReader(sessions_dir=sessions_root)
     application = FastAPI()
     application.add_middleware(TraceMiddleware)
     application.include_router(router, prefix="/api/v1")
@@ -44,7 +44,7 @@ def log_endpoint(tmp_path: Path, session_bundle_factory) -> Iterator[tuple[TestC
             yield
 
     application.dependency_overrides[get_session_service] = SessionAdmission
-    application.dependency_overrides[get_llm_request_log_service] = lambda: service
+    application.dependency_overrides[get_llm_request_log_reader] = lambda: service
     application.dependency_overrides[verify_local_token] = lambda: "contract-token"
     with TestClient(application) as client:
         yield client, session_id, session_root

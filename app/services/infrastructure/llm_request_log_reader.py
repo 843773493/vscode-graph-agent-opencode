@@ -45,7 +45,7 @@ class LLMRequestLogError(ValueError):
         return {"owner": "llm_request_log", "code": self.code, "reason": self.reason, "message": str(self)}
 
 
-class LogSearchPosition(BaseModel):
+class LLMRequestLogSearchPosition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     directory_revision: str
@@ -55,7 +55,7 @@ class LogSearchPosition(BaseModel):
 
 
 @dataclass
-class LogSearchBudget:
+class LLMRequestLogSearchBudget:
     check: Callable[[], None]
     deadline: float = field(default_factory=lambda: monotonic() + 1.0)
     scanned_records: int = 0
@@ -71,14 +71,14 @@ class LogSearchBudget:
 
 
 @dataclass
-class LogSearchPage:
+class LLMRequestLogSearchPage:
     items: list[LLMRequestLogMatchDTO]
-    position: LogSearchPosition | None = None
+    position: LLMRequestLogSearchPosition | None = None
     complete: bool = True
     limited_reason: LLMRequestLogLimit | None = None
 
 
-class LLMRequestLogService:
+class LLMRequestLogReader:
     """读取和有界搜索同一份 Session 级 LLM 请求／响应日志。"""
 
     def __init__(
@@ -92,7 +92,8 @@ class LLMRequestLogService:
     def _directory(self, session_id: str) -> Path:
         return native_io_path(self._path_resolver.resolve_session_node_for_runtime(session_id) / "logs" / "llm_requests")
 
-    def list_session_logs(self, session_id: str) -> list[LLMRequestLogSummaryDTO]:
+    def list_session_log_summaries(self, session_id: str) -> list[LLMRequestLogSummaryDTO]:
+        """只枚举文件元数据；完整正文由 read_session_log 按需读取。"""
         directory = self._directory(session_id)
         try:
             stat = directory.stat()
@@ -115,8 +116,8 @@ class LLMRequestLogService:
 
     def search_session_logs(
         self, session_id: str, query: str, *, limit: int,
-        position: LogSearchPosition | None, budget: LogSearchBudget,
-    ) -> LogSearchPage:
+        position: LLMRequestLogSearchPosition | None, budget: LLMRequestLogSearchBudget,
+    ) -> LLMRequestLogSearchPage:
         directory = self._directory(session_id)
         metadata: list[tuple[int, str, int, int]] = []
         try:
@@ -124,16 +125,16 @@ class LLMRequestLogService:
         except FileNotFoundError:
             if position is not None:
                 raise LLMRequestLogError("stale_request_log_cursor", "directory_deleted", "请求日志目录已删除，请重新查询") from None
-            return LogSearchPage([])
+            return LLMRequestLogSearchPage([])
         with entries:
             for entry in entries:
                 reason = budget.limited_reason()
                 if reason:
-                    return LogSearchPage([], position, complete=False, limited_reason=reason)
+                    return LLMRequestLogSearchPage([], position, complete=False, limited_reason=reason)
                 if not entry.name.endswith(".json"):
                     continue
                 if len(metadata) >= MAX_DIRECTORY_FILES:
-                    return LogSearchPage([], complete=False, limited_reason="scan_limit")
+                    return LLMRequestLogSearchPage([], complete=False, limited_reason="scan_limit")
                 try:
                     stat = entry.stat()
                 except FileNotFoundError as error:
@@ -150,15 +151,15 @@ class LLMRequestLogService:
         items: list[LLMRequestLogMatchDTO] = []
         while index < len(metadata):
             reason = budget.limited_reason()
-            next_position = LogSearchPosition(directory_revision=revision, file_index=index, offset=offset,
+            next_position = LLMRequestLogSearchPosition(directory_revision=revision, file_index=index, offset=offset,
                                               content_version=position.content_version if position and offset else None)
             if reason or len(items) >= limit:
-                return LogSearchPage(items, next_position, False, reason or "result_limit")
+                return LLMRequestLogSearchPage(items, next_position, False, reason or "result_limit")
             _, name, size, _ = metadata[index]
             if size > MAX_LOG_RECORD_BYTES:
-                return LogSearchPage(items, complete=False, limited_reason="item_size_limit")
+                return LLMRequestLogSearchPage(items, complete=False, limited_reason="item_size_limit")
             if size > MAX_SEARCH_BYTES - budget.scanned_bytes:
-                return LogSearchPage(items, next_position, False, "byte_limit")
+                return LLMRequestLogSearchPage(items, next_position, False, "byte_limit")
             try:
                 raw = self._read_bytes(directory / name, min(MAX_LOG_RECORD_BYTES, MAX_SEARCH_BYTES - budget.scanned_bytes))
             except FileNotFoundError as error:
@@ -188,15 +189,15 @@ class LLMRequestLogService:
                     if text.find(query, offset) < 0:
                         index += 1
                         if index == len(metadata):
-                            return LogSearchPage(items)
-                        return LogSearchPage(items, LogSearchPosition(directory_revision=revision, file_index=index),
+                            return LLMRequestLogSearchPage(items)
+                        return LLMRequestLogSearchPage(items, LLMRequestLogSearchPosition(directory_revision=revision, file_index=index),
                                              False, "result_limit" if len(items) >= limit else reason)
-                    return LogSearchPage(items, LogSearchPosition(directory_revision=revision, file_index=index,
+                    return LLMRequestLogSearchPage(items, LLMRequestLogSearchPosition(directory_revision=revision, file_index=index,
                                                                  offset=offset, content_version=version),
                                          False, "result_limit" if len(items) >= limit else reason)
             index += 1
             offset = 0
-        return LogSearchPage(items)
+        return LLMRequestLogSearchPage(items)
 
     def locate(self, reference: LLMRequestLogReferenceDTO) -> LLMRequestLogLocationDTO:
         path = self._directory(reference.session_id) / reference.file_name

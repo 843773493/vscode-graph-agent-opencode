@@ -49,7 +49,7 @@ from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
 from app.services.infrastructure.html_snapshot_store import HtmlSnapshotStore
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
@@ -119,7 +119,7 @@ class _AppContainerProtocol(Protocol):
     terminal_resource_owner: TerminalResourceOwner
     browser_resource_owner: BrowserResourceOwner
     session_service: SessionService
-    llm_request_log_service: LLMRequestLogService
+    llm_request_log_reader: LLMRequestLogReader
     html_snapshot_store: HtmlSnapshotStore
     agent_tool_settings_service: AgentToolSettingsService
     tool_test_service: ToolTestService
@@ -349,8 +349,8 @@ def get_session_turn_history_service(request: Request) -> SessionTurnHistoryServ
     return _require_service(request, "session_turn_history_service", SessionTurnHistoryService, "SessionTurnHistoryService 尚未在应用启动阶段初始化")
 
 
-def get_llm_request_log_service(request: Request) -> LLMRequestLogService:
-    return _require_service(request, "llm_request_log_service", LLMRequestLogService, "LLMRequestLogService 尚未在应用启动阶段初始化")
+def get_llm_request_log_reader(request: Request) -> LLMRequestLogReader:
+    return _require_service(request, "llm_request_log_reader", LLMRequestLogReader, "LLMRequestLogReader 尚未在应用启动阶段初始化")
 
 
 def get_trace_event_store(request: Request) -> TraceEventStore:

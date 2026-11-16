@@ -35,7 +35,7 @@ from app.schemas.internal_v2.session_navigation import (
     SessionCatalogSearchResultsDTO,
 )
 from app.schemas.search_federation import FederatedSearchEventDTO
-from app.services.infrastructure.llm_request_log_service import LLMRequestLogError
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogError
 from app.services.infrastructure.session_trace.trace_search import TraceSearchError
 
 GATEWAY = "gateway_" + "a" * 32

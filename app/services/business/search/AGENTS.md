@@ -4,7 +4,7 @@
 
 # 可修改内容
 
-能力注册、请求准入与取消结算，以及调用既有领域查询的 Provider。`llm_requests.py` 在原 catalog／Session 读准入内限定日志来源，正文读取、版本和位置仍归原 LLMRequestLogService。
+能力注册、请求准入与取消结算，以及调用既有领域查询的 Provider。`llm_requests.py` 在原 catalog／Session 读准入内限定日志来源，正文读取、版本和位置仍归原 LLMRequestLogReader。
 
 `traces.py` 在同一 catalog／Session 准入内限定工作区 Trace 来源；调用原 TraceEventStore 的有界页和精确记录入口，不混入 Gateway 运行日志或创建正文索引。
 
