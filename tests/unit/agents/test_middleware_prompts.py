@@ -11,8 +11,8 @@ from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.agents.deep_agent_stack import build_deep_agent_middleware
 from app.agents.instruction_producers import runtime_instruction_producers
+from app.agents.middleware_assembly import build_deep_agent_middleware
 from app.agents.middleware_prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,

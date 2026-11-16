@@ -20,10 +20,6 @@ from langchain_core.runnables.config import var_child_runnable_config
 from langchain_core.tools import ToolException
 from langgraph.runtime import ExecutionInfo, Runtime
 
-from app.agents.deep_agent_stack import (
-    _build_summarization_middleware,
-    _filter_middleware_tools,
-)
 from app.agents.summarization.middleware import CachePreservingSummarizationMiddleware
 from app.agents.summarization.tool_middleware import (
     CachePreservingSummarizationToolMiddleware,
@@ -245,19 +241,6 @@ async def test_history_tool_reads_original_archive_in_bound_thread_with_line_pag
         assert f"assistant-{index}" in rest_text and "第三行" in rest_text
         assert f"user-{1-index}" not in first_text + rest_text
         assert "session-artifacts/" not in first_text + rest_text
-
-
-def test_auto_compaction_also_exposes_history_tool_when_manual_compaction_is_disabled(
-    archive_case: _HistoryArchiveCase,
-) -> None:
-    middleware = _build_summarization_middleware(
-        FakeListChatModel(responses=["unused"]), archive_case.backend,
-        compaction_preflight=_ArchivePreflight(),
-    )
-    for item in middleware:
-        _filter_middleware_tools(item, {"compact_conversation"})
-    names = {tool.name for item in middleware for tool in getattr(item, "tools", [])}
-    assert names == {"read_compaction_history"}
 
 
 @pytest.mark.asyncio

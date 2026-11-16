@@ -27,10 +27,6 @@ from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
-from app.agents.deep_agent_stack import (
-    build_deep_agent_middleware,
-    build_deep_agent_tool_middleware,
-)
 from app.agents.default_tools import build_default_tools
 from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
@@ -45,6 +41,10 @@ from app.agents.instruction_producers import (
     register_instruction_producer,
 )
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
+from app.agents.middleware_assembly import (
+    build_deep_agent_middleware,
+    build_deep_agent_tool_middleware,
+)
 from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
 from app.agents.model_call_execution import ModelCallExecution
 from app.agents.model_call_graph import create_model_call_agent
@@ -66,9 +66,6 @@ from app.agents.policy.tool_capability import (
 from app.agents.skill_catalog import (
     PublishedSkillCatalog,
     build_workspace_skill_catalog,
-)
-from app.agents.skill_runtime import (
-    append_skill_middlewares,
 )
 from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
 from app.agents.summarization.tool_middleware import (
@@ -736,12 +733,7 @@ def build_deep_agent(
         update_binding=InstructionUpdateBinding("software_release", team_policy_revision, "epoch"),
     ))
 
-    runtime_middleware: list[AgentMiddleware] = []
-    append_skill_middlewares(
-        runtime_middleware,
-        catalog=None,
-    )
-    runtime_middleware.extend(
+    runtime_middleware: list[AgentMiddleware] = (
         list(middleware) if middleware is not None else [LLMLoggingMiddleware()]
     )
     if enabled_runtime_middleware_names is not None:

@@ -1,3 +1,5 @@
+"""装配共享工具和 DeepAgent 执行中间件，统一维护顺序及指令来源。"""
+
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -35,7 +37,7 @@ from app.agents.skill_catalog import (
     PublishedSkillCatalog,
 )
 from app.agents.skill_runtime import (
-    append_skill_middlewares,
+    WorkspaceSkillsMiddleware,
 )
 from app.agents.structured_prompt_validation_middleware import (
     StructuredPromptValidationMiddleware,
@@ -113,27 +115,6 @@ def _filter_middleware_tools(middleware: Any, denylist: set[str]) -> None:
     middleware.tools = filtered_tools
 
 
-def _build_summarization_middleware(
-    model: BaseChatModel,
-    backend: BackendProtocol,
-    *,
-    compaction_preflight: CompactionPreflightPort,
-) -> list[AgentMiddleware]:
-    summarization = create_cache_preserving_summarization_middleware(
-        model,
-        backend,
-        compaction_preflight=compaction_preflight,
-    )
-    tool_middleware = CachePreservingSummarizationToolMiddleware(
-        summarization,
-        system_prompt=None,
-    )
-    return [
-        summarization,
-        tool_middleware,
-    ]
-
-
 def build_deep_agent_tool_middleware(
     *, backend: BackendProtocol, workspace_root: Path,
     resource_navigation: ResourceNavigation, text_mutations: WorkspaceTextMutationOwner,
@@ -189,7 +170,7 @@ def build_deep_agent_middleware(
     tool_output_middleware: ToolOutputMiddleware,
     custom_tool_confirmation_names: frozenset[str] = frozenset(),
 ) -> list[AgentMiddleware]:
-    deepagent_middleware: list[AgentMiddleware] = [
+    middleware_stack: list[AgentMiddleware] = [
         tool_invocation_context_middleware,
         tool_output_middleware,
     ]
@@ -200,47 +181,45 @@ def build_deep_agent_middleware(
         resolved_tool_denylist=resolved_tool_denylist,
     )
     if todo_middleware is not None:
-        deepagent_middleware.append(todo_middleware)
-    append_skill_middlewares(
-        deepagent_middleware,
-        catalog=resolved_skills,
-        system_prompt=(
-            SKILLS_SYSTEM_PROMPT if "skill_load" not in resolved_tool_denylist else None
-        ),
-        context_source_manager=context_source_manager,
-        source_registry=source_registry,
-        context_source_reactor=context_source_reactor,
-        execution_owned_catalog=execution_owned_skill_catalog,
-    )
+        middleware_stack.append(todo_middleware)
+    if (resolved_skills is not None and resolved_skills.entries) or source_registry is not None:
+        middleware_stack.append(WorkspaceSkillsMiddleware(
+            catalog=resolved_skills,
+            system_prompt=(
+                SKILLS_SYSTEM_PROMPT if "skill_load" not in resolved_tool_denylist else None
+            ),
+            context_source_manager=context_source_manager,
+            source_registry=source_registry,
+            context_source_reactor=context_source_reactor,
+            execution_owned_catalog=execution_owned_skill_catalog,
+        ))
     if filesystem_middleware.tools:
-        deepagent_middleware.append(filesystem_middleware)
+        middleware_stack.append(filesystem_middleware)
 
     # after_model 按注册顺序逆序执行；压缩 continuation 必须先跳到下一
     # model task，避免审批 hook 再次处理历史中已经执行完毕的工具调用。
     if custom_tool_confirmation_names or interrupt_on:
-        deepagent_middleware.append(
+        middleware_stack.append(
             ToolConfirmationMiddleware(custom_tool_confirmation_names, interrupt_on=interrupt_on)
         )
 
-    deepagent_middleware.extend(
-        [
-            *_build_summarization_middleware(
-                model,
-                backend,
-                compaction_preflight=compaction_preflight,
-            ),
-            StructuredToolCallMiddleware(),
-        ]
+    summarization = create_cache_preserving_summarization_middleware(
+        model, backend, compaction_preflight=compaction_preflight,
     )
+    middleware_stack.extend([
+        summarization,
+        CachePreservingSummarizationToolMiddleware(summarization, system_prompt=None),
+        StructuredToolCallMiddleware(),
+    ])
     # D3-B 起 AGENTS 来源注册由 WorkspaceSkillsMiddleware 的唯一 CSM 链承载，
     # 不再有独立的 AGENTS 注入 middleware 槽位。
 
     if runtime_middleware:
-        deepagent_middleware.extend(runtime_middleware)
+        middleware_stack.extend(runtime_middleware)
     if model_routing_middleware is not None:
-        deepagent_middleware.append(model_routing_middleware)
+        middleware_stack.append(model_routing_middleware)
 
-    for middleware_item in deepagent_middleware:
+    for middleware_item in middleware_stack:
         _filter_middleware_tools(middleware_item, resolved_tool_denylist)
 
     if context_source_manager is not None:
@@ -260,6 +239,6 @@ def build_deep_agent_middleware(
                 ))
 
     # 放在所有会改写模型请求的 middleware 之后，确保派生的压缩请求也会被验证。
-    deepagent_middleware.append(StructuredPromptValidationMiddleware())
+    middleware_stack.append(StructuredPromptValidationMiddleware())
 
-    return deepagent_middleware
+    return middleware_stack

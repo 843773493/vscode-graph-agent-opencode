@@ -9,8 +9,8 @@ from langchain.agents import create_agent
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.agents.deep_agent_stack import build_deep_agent_middleware
 from app.agents.default_tools import build_default_tools
+from app.agents.middleware_assembly import build_deep_agent_middleware
 from app.agents.policy import (
     DEFAULT_AGENT_TOOL_NAMES,
     build_agent_tool_universe,

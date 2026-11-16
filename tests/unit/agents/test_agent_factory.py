@@ -94,7 +94,6 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
     with (
         patch.object(agent_factory, "ContextSourceManager", return_value=ContextSourceManager()),
         patch.object(agent_factory, "build_workspace_backend"),
-        patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(agent_factory, "build_deep_agent_middleware", return_value=[]),
         patch.object(agent_factory, "ToolOutputMiddleware"),
         patch.object(agent_factory, "ToolInvocationContextMiddleware"),
@@ -192,7 +191,6 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         patch.object(agent_factory, "build_workspace_backend"),
         patch.object(agent_factory, "build_default_tools", return_value=[]),
         patch.object(agent_factory, "build_workspace_skill_catalog") as build_catalog,
-        patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(
             agent_factory, "build_deep_agent_middleware", side_effect=AssertionError("目录不构建执行中间件")
         ) as build_middleware,

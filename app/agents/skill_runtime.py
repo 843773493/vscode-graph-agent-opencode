@@ -360,27 +360,3 @@ def install_frozen_skill_catalog(
         content=SKILLS_SYSTEM_PROMPT.format(skills_list=lines), revision=snapshot.catalog_revision,
         update_binding=InstructionUpdateBinding("skill_catalog", snapshot.catalog_revision, "resource_activation"),
     ))
-
-
-def append_skill_middlewares(
-    middleware_stack: list[AgentMiddleware],
-    *,
-    catalog: PublishedSkillCatalog | None,
-    system_prompt: str | None = SKILLS_SYSTEM_PROMPT,
-    context_source_manager: ContextSourceManager | None = None,
-    source_registry: WorkspaceFileResourceRegistry | None = None,
-    context_source_reactor: ContextSourceReactor | None = None,
-    execution_owned_catalog: bool = False,
-) -> None:
-    """集中维护 workspace Skill 上下文来源 middleware 顺序。"""
-    if (catalog is not None and catalog.entries) or source_registry is not None:
-        middleware_stack.append(
-            WorkspaceSkillsMiddleware(
-                catalog=catalog,
-                system_prompt=system_prompt,
-                context_source_manager=context_source_manager,
-                source_registry=source_registry,
-                context_source_reactor=context_source_reactor,
-                execution_owned_catalog=execution_owned_catalog,
-            )
-        )
