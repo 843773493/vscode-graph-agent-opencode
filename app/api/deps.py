@@ -32,8 +32,8 @@ from app.services.business.session_interrupt_service import SessionInterruptServ
 from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
-from app.services.business.session_skill_tracking_service import (
-    SessionSkillTrackingService,
+from app.services.business.session_skill_untrack import (
+    SessionSkillUntrackService,
 )
 from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.team.service import TeamCoordinationService
@@ -107,7 +107,7 @@ class _AppContainerProtocol(Protocol):
     persistent_task_runtime: PersistentTaskRuntime
     persistent_task_service: PersistentTaskService
     session_interrupt_service: SessionInterruptService
-    session_skill_tracking_service: SessionSkillTrackingService
+    session_skill_untrack_service: SessionSkillUntrackService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
     session_turn_history_service: SessionTurnHistoryService
@@ -305,8 +305,8 @@ def get_session_interrupt_service(request: Request) -> SessionInterruptService:
     return _require_service(request, "session_interrupt_service", SessionInterruptService, "SessionInterruptService 尚未在应用启动阶段初始化")
 
 
-def get_session_skill_tracking_service(request: Request) -> SessionSkillTrackingService:
-    return _require_service(request, "session_skill_tracking_service", SessionSkillTrackingService, "SessionSkillTrackingService 尚未在应用启动阶段初始化")
+def get_session_skill_untrack_service(request: Request) -> SessionSkillUntrackService:
+    return _require_service(request, "session_skill_untrack_service", SessionSkillUntrackService, "SessionSkillUntrackService 尚未在应用启动阶段初始化")
 
 
 def get_message_stream_store(request: Request) -> MessageStreamStore:

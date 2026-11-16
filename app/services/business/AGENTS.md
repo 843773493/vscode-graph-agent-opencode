@@ -31,7 +31,7 @@
 │   ├── session_changes/                   文件编辑记录、净变化投影与审查
 │   │   ├── service.py                     记录、查询、审查及编辑 ID 生成
 │   │   └── projection.py                  diff、首尾净变化、分组、摘要与预览
-│   ├── session_skill_tracking_service.py
+│   ├── session_skill_untrack.py           受信 API 停止 Skill 追踪；状态仍归 CSM
 │   ├── session_resources/                会话关联资源的聚合与控制分派，不持有资源状态
 │   │   ├── service.py                    会话准入、列表聚合与清理入口
 │   │   ├── registry.py                   按 kind 注册和分派 Provider

@@ -83,8 +83,8 @@ from app.services.business.session_resources.registry import (
 )
 from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
-from app.services.business.session_skill_tracking_service import (
-    SessionSkillTrackingService,
+from app.services.business.session_skill_untrack import (
+    SessionSkillUntrackService,
 )
 from app.services.business.session_turn_history import (
     SessionTurnHistoryService,
@@ -374,7 +374,7 @@ class AppContainer:
     runtime_service: WorkspaceRuntimeLifecycleService
     goal_service: SessionGoalService
     session_interrupt_service: SessionInterruptService
-    session_skill_tracking_service: SessionSkillTrackingService
+    session_skill_untrack_service: SessionSkillUntrackService
     session_context_fork_service: SessionContextForkService
     session_turn_replay_service: SessionTurnReplayService
     session_turn_history_service: SessionTurnHistoryService
@@ -1042,7 +1042,7 @@ def _build_app_container(
         message_stream_store=message_stream_store,
         execution_scope_registry=agent_execution_service.execution_scope_registry,
     )
-    session_skill_tracking_service = SessionSkillTrackingService(
+    session_skill_untrack_service = SessionSkillUntrackService(
         checkpointer=checkpointer,
         session_service=session_service,
     )
@@ -1155,7 +1155,7 @@ def _build_app_container(
         runtime_service=runtime_service,
         goal_service=goal_service,
         session_interrupt_service=session_interrupt_service,
-        session_skill_tracking_service=session_skill_tracking_service,
+        session_skill_untrack_service=session_skill_untrack_service,
         session_context_fork_service=session_context_fork_service,
         session_turn_replay_service=session_turn_replay_service,
         session_turn_history_service=session_turn_history_service,

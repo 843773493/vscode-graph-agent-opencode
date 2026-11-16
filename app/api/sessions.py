@@ -27,7 +27,7 @@ from app.api.deps import (
     get_session_interrupt_service,
     get_session_resource_service,
     get_session_service,
-    get_session_skill_tracking_service,
+    get_session_skill_untrack_service,
     get_team_service,
     get_thread_residency_tracker,
     get_trace_event_store,
@@ -114,8 +114,8 @@ from app.services.business.session_information_service import SessionInformation
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
-from app.services.business.session_skill_tracking_service import (
-    SessionSkillTrackingService,
+from app.services.business.session_skill_untrack import (
+    SessionSkillUntrackService,
 )
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.workspace_resources.owner import ResourceConflict
@@ -476,12 +476,12 @@ async def untrack_session_skill(
     payload: SessionSkillUntrackRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    skill_tracking_service: SessionSkillTrackingService = Depends(
-        get_session_skill_tracking_service
+    skill_untrack_service: SessionSkillUntrackService = Depends(
+        get_session_skill_untrack_service
     ),
 ):
     try:
-        result = await skill_tracking_service.untrack(
+        result = await skill_untrack_service.untrack(
             session_id=session_id,
             thread_id=thread_id,
             name=payload.name,

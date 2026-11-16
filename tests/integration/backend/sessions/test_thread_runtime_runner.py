@@ -51,7 +51,7 @@ from app.api.deps import (
     get_request_id,
     get_session_orchestrator,
     get_session_service,
-    get_session_skill_tracking_service,
+    get_session_skill_untrack_service,
     get_session_turn_history_service,
     verify_local_token,
 )
@@ -2283,12 +2283,12 @@ async def test_real_runner_refreshes_tracked_skill_in_same_generation_and_stops_
 
 
 @pytest.fixture
-async def skill_tracking_client(runtime_case: RuntimeCase):
-    """通过真实 HTTP handler 和服务操作当前 runner 的持久 Skill tracking。"""
+async def skill_untrack_client(runtime_case: RuntimeCase):
+    """通过真实 HTTP handler 和服务停止当前 runner 的 Skill 追踪。"""
     container = runtime_case.runner.container
     application = FastAPI()
     application.include_router(sessions_api.router, prefix="/api/v1")
-    application.dependency_overrides[get_session_skill_tracking_service] = lambda: container.session_skill_tracking_service
+    application.dependency_overrides[get_session_skill_untrack_service] = lambda: container.session_skill_untrack_service
     application.dependency_overrides[verify_local_token] = lambda: "local-test"
     application.dependency_overrides[get_request_id] = lambda: "request-skill-tracking"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
@@ -2343,7 +2343,7 @@ async def gateway_skill_publication(runtime_case: RuntimeCase):
 @pytest.mark.asyncio
 async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebinding_tracked_source(
     runtime_case: RuntimeCase,
-    skill_tracking_client: httpx.AsyncClient,
+    skill_untrack_client: httpx.AsyncClient,
     gateway_skill_publication,
 ):
     case = runtime_case
@@ -2503,7 +2503,7 @@ async def test_real_runner_discovers_skill_overrides_and_downgrades_without_rebi
         file_registry.snapshot(gateway_uri)
 
     # 用户通过已有受信入口停止原 tracking，无需恢复已删除来源即可继续真实请求。
-    response = await skill_tracking_client.post(
+    response = await skill_untrack_client.post(
         f"/api/v1/sessions/{session_id}/threads/{thread_id}/skills/untrack", json={"name": name},
     )
     assert response.status_code == 200

@@ -27,7 +27,7 @@ LOAD_SKILL_CALLER_WHITELIST = {
     "app/agents/tools/skill_loading.py",
     # C7-B1 受信 Session 控制 API：untrack 与 skill_load 工具复用同一
     # CSM load_skill mutation，不存在第二状态机或移除入口。
-    "app/services/business/session_skill_tracking_service.py",
+    "app/services/business/session_skill_untrack.py",
 }
 # tracking 状态的唯一域 owner。
 TRACKING_OWNER_FILES = {

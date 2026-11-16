@@ -30,8 +30,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 )
 
 
-class SessionSkillTrackingService:
-    """以精确 SessionThread 为 owner 复用唯一 CSM untrack mutation。"""
+class SessionSkillUntrackService:
+    """受信 Session API 的 Skill untrack 入口，复用 CSM 唯一 mutation。"""
 
     def __init__(
         self,

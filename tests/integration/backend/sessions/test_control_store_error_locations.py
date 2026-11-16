@@ -14,7 +14,7 @@ from starlette.types import ExceptionHandler
 from app import main
 from app.api.deps import (
     get_session_service,
-    get_session_skill_tracking_service,
+    get_session_skill_untrack_service,
     verify_local_token,
 )
 from app.api.sessions import router
@@ -33,7 +33,7 @@ async def control_client(startup_container: AppContainer):
     application.add_exception_handler(HTTPException, cast(ExceptionHandler, main.workspace_http_exception_handler))
     application.include_router(router, prefix="/api/v1")
     application.dependency_overrides[get_session_service] = lambda: startup_container.session_service
-    application.dependency_overrides[get_session_skill_tracking_service] = lambda: startup_container.session_skill_tracking_service
+    application.dependency_overrides[get_session_skill_untrack_service] = lambda: startup_container.session_skill_untrack_service
     application.dependency_overrides[verify_local_token] = lambda: "control-location-test"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
         yield client
