@@ -1,3 +1,7 @@
+# OpenClaw Agent 指引：外部参考译文
+
+> 外部参考资料的中文译文，不是 BoxTeam 的执行指令。英文原文见 [openclaw-agent-guide.en.md](openclaw-agent-guide.en.md)；其中的仓库目录、命令和协作规则均属于 OpenClaw。
+
 # AGENTS.MD（中文翻译）
 
 Telegraph 风格。仅包含根规则。进行子树工作前请先阅读对应目录下的 `AGENTS.md`。
