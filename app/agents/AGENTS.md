@@ -79,3 +79,4 @@ app/agents/
 - `agents_md_publication.py` 登记工作区 AGENTS.md 文件并发布已接受版本的有序指令链，不管理 Agent 实例；`skill_catalog.py` 在目录构建与来源通知中调用它，冻结链的 CSM 安装归 `rollout_context/runtime/context_sources/agents_md_context.py`。
 - `agent_factory.py` 的 `build_configured_agent` 读取 Agent 配置并按冻结 selector 选择工厂；`build_deep_agent` 装配工具并构建单代图，无 Thread owner 的目录模式仅返回工具。模型候选、路由中间件与指令来源由 `runtime/agent_runtime.py::prepare_agent_model` 准备为 `AgentModelSetup`；执行依赖收集也归该 runtime 模块，图复用与释放归 Thread tracker。
 - `graph_binding.py` 只声明、校验和解析持久化的图 factory selector；真实线程归属由 `tool_invocation_context.py::ThreadRuntimeBinding` 在执行装配时绑定，两者不再包装成另一种 invocation binding。读取 selector 或注册 factory 不应加载工具执行和 Agent SDK。
+- `instruction_producers.py` 定义指令来源及其发布绑定，生产入口 `register_instruction_producer` 将声明登记到唯一 CSM；base/delta、激活和待处理决策由 CSM 的来源生命周期链路生成。

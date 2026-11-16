@@ -3,10 +3,11 @@
 设计表 R01–R07 及 R10 的说明性上下文（Agent 基础说明、runtime identity、条件化
 团队规则、Todo、Skill metadata、Filesystem、compact tool 说明及 CSM 协议）
 在这里取得统一的 producer identity、root 资格声明与 ToolSet policy 绑定；
-producer 只通过 typed spec/observation 提交 provenance 给唯一
+producer 通过 typed spec 登记 provenance 给唯一
 ``ContextSourceManager``，不再直接拼 HumanMessage/system 作为隐式来源。
 
-本模块是纯值合同：不执行 I/O、不读写磁盘、不读取自由 metadata/extensions。
+本模块声明 producer 与发布绑定，并通过 register_instruction_producer 登记到 CSM；
+source 生命周期决策由 CSM 生成。本模块不执行 I/O、不读写磁盘。
 ``root_placement`` 只能由 source owner 显式声明，CSM 不从文件名、路径、wire
 role 或 extensions 推断资格。
 """
@@ -28,18 +29,9 @@ from app.domain.itemized.epoch.root_compilation import (
 )
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.validation import _non_empty_string
-from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
-    ContextSourceOwnerKey,
-)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
     ContextSourceManager,
-)
-from app.services.infrastructure.rollout_context.runtime.context_sources.source_observation import (
-    ApplySourceLifecycleDecision,
-    SourceObservation,
-    SourceRequestedMode,
-    build_source_lifecycle_decision,
 )
 
 InstructionProducerId = Literal["R01", "R02", "R03", "R04", "R05", "R06", "R07", "R10"]
@@ -225,88 +217,6 @@ def build_toolset_policy_keys(
     return tuple(keys)
 
 
-@dataclass(frozen=True, slots=True)
-class InstructionProducerObservation:
-    """producer 向唯一 CSM 提交的一次 typed observation。
-
-    只承载 typed 字段：owner thread、producer spec、published revision、
-    base/delta 关系与激活边界。没有 extensions 入口，因此自由 metadata 无法
-    影响 tracking、role、ordinal 或 stable prefix。
-    """
-
-    owner: ContextSourceOwnerKey
-    spec: InstructionProducerSpec
-    revision: str
-    requested_mode: SourceRequestedMode = "tracked"
-    activation_boundary: Literal["turn", "model_call"] = "turn"
-    from_revision: str | None = None
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.owner, ContextSourceOwnerKey):
-            raise TypeError(
-                "InstructionProducerObservation.owner 必须是 "
-                "ContextSourceOwnerKey"
-            )
-        if not isinstance(self.spec, InstructionProducerSpec):
-            raise TypeError(
-                "InstructionProducerObservation.spec 必须是 "
-                "InstructionProducerSpec"
-            )
-        assert_producer_registrable(self.spec)
-        if self.activation_boundary == "model_call" and (
-            self.spec.update_binding is None
-            or self.spec.update_binding.activation_boundary != "resource_activation"
-        ):
-            raise InstructionProducerError(
-                "instruction-activation-boundary-unsupported",
-                f"producer {self.spec.producer_id} 不支持运行中 model_call 更新",
-            )
-        _non_empty_string(self.revision, "InstructionProducerObservation.revision")
-        if self.from_revision is not None:
-            _non_empty_string(
-                self.from_revision,
-                "InstructionProducerObservation.from_revision",
-            )
-            if self.from_revision == self.revision:
-                raise ValueError(
-                    "InstructionProducerObservation: from_revision 不得等于 revision"
-                )
-
-    @property
-    def decision_kind(self) -> Literal["base", "delta"]:
-        return "base" if self.from_revision is None else "delta"
-
-    def descriptor(self) -> ContextSourceDescriptor:
-        """生成 CSM descriptor；locator 只留在服务端，不进入模型协议。"""
-        return instruction_producer_descriptor(self.spec)
-
-    def source_observation(self) -> SourceObservation:
-        """生成唯一 CSM 的 typed observation；extensions 保持原生空。"""
-        return SourceObservation(
-            owner=self.owner,
-            source_id=self.spec.source_id,
-            source_kind=self.spec.source_kind,
-            name=self.spec.name,
-            revision=self.revision,
-            requested_mode=self.requested_mode,
-            activation_boundary=self.activation_boundary,
-            from_revision=self.from_revision,
-            content=self.spec.content,
-            root_placement=self.spec.root_placement,
-            policy_key=self.spec.policy_key,
-        )
-
-    def lifecycle_decision(
-        self, *, pending_only: bool = False
-    ) -> ApplySourceLifecycleDecision:
-        """映射为 owner 可消费的 lifecycle decision，复用唯一映射实现。"""
-        return build_source_lifecycle_decision(
-            self.source_observation(),
-            decision_kind=self.decision_kind,
-            pending_only=pending_only,
-        )
-
-
 def instruction_producer_descriptor(
     spec: InstructionProducerSpec,
 ) -> ContextSourceDescriptor:
@@ -422,7 +332,6 @@ _FORBIDDEN_METADATA_KEYS: frozenset[str] = frozenset(
 __all__ = [
     "InstructionProducerError",
     "InstructionProducerId",
-    "InstructionProducerObservation",
     "InstructionProducerSpec",
     "InstructionUpdateBinding",
     "RootPlacement",
