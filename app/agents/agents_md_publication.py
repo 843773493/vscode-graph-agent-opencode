@@ -26,7 +26,7 @@ from app.services.infrastructure.resource_platform.virtual_resources import (
 )
 
 
-def register_workspace_agents_source(
+def register_workspace_agents_md_file(
     file_registry: WorkspaceFileResourceRegistry, *, workspace_id: str,
 ) -> tuple[str, ...]:
     """只登记工作区已知根文件；首次读取属于 runtime 编译而非模型请求。"""
@@ -41,7 +41,7 @@ def register_workspace_agents_source(
     return (uri,)
 
 
-def publish_workspace_agents(
+def publish_agents_md_chain(
     *, registry: ResourceRegistry, file_registry: WorkspaceFileResourceRegistry,
     file_uris: tuple[str, ...],
 ) -> ResourceSnapshot:

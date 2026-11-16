@@ -1,4 +1,4 @@
-"""Skill catalog 的来源捕获、纯语义派生和进程内发布；中间件只消费冻结结果。"""
+"""Skill catalog 与 AGENTS.md 指令链的来源捕获和发布；中间件只消费冻结结果。"""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
 
-from app.agents.workspace_agents import (
-    publish_workspace_agents,
-    register_workspace_agents_source,
+from app.agents.agents_md_publication import (
+    publish_agents_md_chain,
+    register_workspace_agents_md_file,
 )
 from app.core.distribution_identity import load_distribution_id
 from app.core.env import get_project_root
@@ -130,7 +130,7 @@ class PublishedSkillCatalog:
     sources: tuple[SkillCatalogSource, ...]
     directory_ids: Mapping[str, str]
     gateway_id: str | None
-    agents_file_uris: tuple[str, ...]
+    agents_md_file_uris: tuple[str, ...]
 
     @property
     def catalog_revision(self) -> str:
@@ -177,7 +177,7 @@ def build_workspace_skill_catalog(
     gateway_sources: GatewaySkillSources | None = None,
     configured_sources: ConfiguredSkillSources | None = None,
 ) -> PublishedSkillCatalog:
-    """构建四层权威 SkillCatalog 并向 ResourceRegistry 发布 immutable revision。
+    """登记 AGENTS.md 指令链，构建四层 SkillCatalog 并发布 immutable revision。
 
     按 workspace > gateway > network > inline 解析唯一 entry;同名高优先级
     层覆盖低优先级层,origin provenance 保留在 entry identity 中。
@@ -185,8 +185,8 @@ def build_workspace_skill_catalog(
     resolved_workspace_root = workspace_root or get_workspace_root()
     resolved_groups = resolve_bundled_skill_groups(bundled_skill_groups)
     workspace_id = load_or_create_workspace_id(resolved_workspace_root)
-    agents_file_uris = register_workspace_agents_source(file_registry, workspace_id=workspace_id)
-    publish_workspace_agents(registry=registry, file_registry=file_registry, file_uris=agents_file_uris)
+    agents_md_file_uris = register_workspace_agents_md_file(file_registry, workspace_id=workspace_id)
+    publish_agents_md_chain(registry=registry, file_registry=file_registry, file_uris=agents_md_file_uris)
     roots: dict[str, tuple[Path, str | None, tuple[str, ...] | None]] = {
         "workspace": (resolved_workspace_root / ".boxteam" / "skills", workspace_id, None),
     }
@@ -218,7 +218,7 @@ def build_workspace_skill_catalog(
     catalog = _publish_workspace_skill_catalog(
         batch,
         registry=registry, directory_ids=directory_ids, gateway_id=resolved_gateway_id,
-        agents_file_uris=agents_file_uris,
+        agents_md_file_uris=agents_md_file_uris,
     )
     if not catalog.catalog_snapshot.available:
         raise _SkillSourceError(batch.diagnostic or catalog.catalog_snapshot.error)
@@ -307,7 +307,7 @@ def _publish_workspace_skill_catalog(
     registry: ResourceRegistry,
     directory_ids: Mapping[str, str],
     gateway_id: str | None,
-    agents_file_uris: tuple[str, ...],
+    agents_md_file_uris: tuple[str, ...],
 ) -> PublishedSkillCatalog:
     """唯一 Skill 发布链：accepted vector → graph facets → catalog。"""
     derivations = tuple(SkillDerivationEntry(
@@ -358,7 +358,7 @@ def _publish_workspace_skill_catalog(
         catalog_snapshot=catalog_snapshot, entries=tuple(entries),
         source_paths=source_paths, activation_bodies=activation_bodies,
         sources=batch.sources, directory_ids=directory_ids, gateway_id=gateway_id,
-        agents_file_uris=agents_file_uris,
+        agents_md_file_uris=agents_md_file_uris,
     )
 
 
@@ -382,8 +382,8 @@ def start_workspace_skill_catalog_publication(
         nonlocal catalog
         if closed or lifetime_scope.state != "open":
             return
-        publish_workspace_agents(
-            registry=registry, file_registry=file_registry, file_uris=catalog.agents_file_uris,
+        publish_agents_md_chain(
+            registry=registry, file_registry=file_registry, file_uris=catalog.agents_md_file_uris,
         )
         batch = _accepted_skill_sources(
             catalog.directory_ids, file_registry=file_registry, gateway_sources=gateway_sources,
@@ -392,7 +392,7 @@ def start_workspace_skill_catalog_publication(
         )
         catalog = _publish_workspace_skill_catalog(
             batch, registry=registry, directory_ids=catalog.directory_ids, gateway_id=catalog.gateway_id,
-            agents_file_uris=catalog.agents_file_uris,
+            agents_md_file_uris=catalog.agents_md_file_uris,
         )
         if not catalog.catalog_snapshot.available:
             failure_detail(
@@ -403,7 +403,7 @@ def start_workspace_skill_catalog_publication(
     async def consume() -> None:
         while not closed and lifetime_scope.state == "open":
             observation = await subscription.next()
-            if observation.gap or observation.uri in catalog.agents_file_uris or observation.directory_id in directory_ids or any(
+            if observation.gap or observation.uri in catalog.agents_md_file_uris or observation.directory_id in directory_ids or any(
                 observation.uri == source.display_uri for source in catalog.sources
             ):
                 publish_current()

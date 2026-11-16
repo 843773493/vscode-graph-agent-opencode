@@ -35,7 +35,7 @@ def _chain_binding(activation: ResourceActivationSnapshotRef) -> ResourceProvena
     return binding
 
 
-def install_frozen_workspace_agents(
+def install_frozen_agents_md_chain(
     manager: ContextSourceManager,
     activation: ResourceActivationSnapshotRef,
     read_payload: Callable[[ResourceActivationSnapshotRef, ResourceProvenanceRef], object],

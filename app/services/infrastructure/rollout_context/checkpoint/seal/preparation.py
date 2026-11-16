@@ -73,6 +73,9 @@ from app.services.infrastructure.rollout_context.checkpoint.seal.lifecycle impor
 from app.services.infrastructure.rollout_context.checkpoint.seal.retry import (
     require_key,
 )
+from app.services.infrastructure.rollout_context.runtime.context_sources.agents_md_context import (
+    install_frozen_agents_md_chain,
+)
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
@@ -91,9 +94,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.skill_c
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
     DiscoveredToolRef,
     tool_definition_batch,
-)
-from app.services.infrastructure.rollout_context.runtime.context_sources.workspace_agents import (
-    install_frozen_workspace_agents,
 )
 from app.services.infrastructure.rollout_context.runtime.prefix_compiler import (
     compile_prefix_context,
@@ -305,7 +305,7 @@ def prepare_registered_context(
                     checkpoint_ns=checkpoint_ns,
                 )
 
-            install_frozen_workspace_agents(
+            install_frozen_agents_md_chain(
                 context_source_manager, activation_snapshot,
                 lambda frozen, binding: owner.read_resource_activation_payload(
                     frozen, binding, checkpoint_ns=checkpoint_ns,

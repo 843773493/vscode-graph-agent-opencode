@@ -7,9 +7,9 @@ import sqlite3
 
 import pytest
 
-from app.agents.workspace_agents import (
-    publish_workspace_agents,
-    register_workspace_agents_source,
+from app.agents.agents_md_publication import (
+    publish_agents_md_chain,
+    register_workspace_agents_md_file,
 )
 from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import resource_display_uri
@@ -108,7 +108,7 @@ async def test_agents_chain_uses_registered_exact_file_facets_without_source_io(
     unknown = workspace / "agents-chain-unknown"
     unknown.mkdir()
     (unknown / "AGENTS.md").write_bytes(b"\xff")
-    file_uris = register_workspace_agents_source(file_owner, workspace_id=workspace_id)
+    file_uris = register_workspace_agents_md_file(file_owner, workspace_id=workspace_id)
     root_source = file_owner.source_descriptor_for_uri(file_uris[0])
     assert root_source.source_id == f"workspace-agents-source:{workspace_id}"
     assert root_source.entry_identity == f"workspace-agents-entry:{workspace_id}"
@@ -129,7 +129,7 @@ async def test_agents_chain_uses_registered_exact_file_facets_without_source_io(
 
     with monkeypatch.context() as patch:
         patch.setattr(file_owner._reconciler._reader, "read", forbid_io)
-        snapshot = publish_workspace_agents(
+        snapshot = publish_agents_md_chain(
             registry=registry, file_registry=file_owner, file_uris=(*file_uris, child_uri),
         )
     assert snapshot.available and snapshot.display_uri is None
@@ -152,16 +152,16 @@ async def test_agents_absence_and_empty_raw_revisions_share_unchanged_semantic_f
     file_owner = source_case.container.workspace_file_resource_registry
     path = file_owner.workspace_root / "AGENTS.md"
     path.unlink(missing_ok=True)
-    file_uris = register_workspace_agents_source(
+    file_uris = register_workspace_agents_md_file(
         file_owner, workspace_id=load_or_create_workspace_id(file_owner.workspace_root),
     )
     absent = file_owner.observed_revision(file_owner.source_id_for_uri(file_uris[0]))
     registry = ResourceRegistry()
-    first = publish_workspace_agents(registry=registry, file_registry=file_owner, file_uris=file_uris)
+    first = publish_agents_md_chain(registry=registry, file_registry=file_owner, file_uris=file_uris)
     path.write_bytes(b"")
     file_owner.refresh(file_uris[0])
     present = file_owner.observed_revision(file_owner.source_id_for_uri(file_uris[0]))
-    second = publish_workspace_agents(registry=registry, file_registry=file_owner, file_uris=file_uris)
+    second = publish_agents_md_chain(registry=registry, file_registry=file_owner, file_uris=file_uris)
     assert absent.revision != present.revision and not absent.exists and present.exists
     assert first == second and agents_content(second.payload) == ""
 
@@ -174,24 +174,24 @@ async def test_agents_invalid_or_unregistered_source_blocks_chain_and_preserves_
     path = file_owner.workspace_root / "AGENTS.md"
     path.write_text("有效指令\n", encoding="utf-8")
     workspace_id = load_or_create_workspace_id(file_owner.workspace_root)
-    file_uris = register_workspace_agents_source(file_owner, workspace_id=workspace_id)
+    file_uris = register_workspace_agents_md_file(file_owner, workspace_id=workspace_id)
     registry = ResourceRegistry()
-    first = publish_workspace_agents(registry=registry, file_registry=file_owner, file_uris=file_uris)
+    first = publish_agents_md_chain(registry=registry, file_registry=file_owner, file_uris=file_uris)
     other_workspace = resource_display_uri(
         scope="workspace", scope_id="other-workspace", kind="files", tail_segments=("root", "AGENTS.md"),
     )
     with pytest.raises(ValueError, match="同一 Workspace"):
-        publish_workspace_agents(registry=registry, file_registry=file_owner, file_uris=(*file_uris, other_workspace))
+        publish_agents_md_chain(registry=registry, file_registry=file_owner, file_uris=(*file_uris, other_workspace))
     assert registry.snapshot(WORKSPACE_AGENTS_RESOURCE_ID) is first
     unknown = resource_display_uri(
         scope="workspace", scope_id=workspace_id, kind="files", tail_segments=("root", "unregistered", "AGENTS.md"),
     )
     with pytest.raises(KeyError, match="工作区资源尚未注册"):
-        publish_workspace_agents(registry=registry, file_registry=file_owner, file_uris=(*file_uris, unknown))
+        publish_agents_md_chain(registry=registry, file_registry=file_owner, file_uris=(*file_uris, unknown))
     assert registry.last_valid_snapshot(WORKSPACE_AGENTS_RESOURCE_ID) == first
     path.write_bytes(b"\xff")
     file_owner.refresh(file_uris[0])
-    invalid = publish_workspace_agents(registry=registry, file_registry=file_owner, file_uris=file_uris)
+    invalid = publish_agents_md_chain(registry=registry, file_registry=file_owner, file_uris=file_uris)
     assert not invalid.available and invalid.error_code == "dependency-unavailable"
     failed = file_owner.observed_revision(file_owner.source_id_for_uri(file_uris[0]))
     assert failed.error_code == "invalid_utf8" and not failed.available

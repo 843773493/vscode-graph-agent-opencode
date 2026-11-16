@@ -23,5 +23,6 @@
 - observe明确区分unchanged、baseline_restored、not_tracked与accepted，pending单独表示尚未封存的更新；持续更新入口必须核验tracked，禁止用布尔回执推断已生效。
 - 名称索引按 source_kind 隔离；Skill 模式操作及同名唯一追踪约束只作用于 Skill，不能覆盖或停止同名 instruction。要求 tracked 的重复登记须在变更 descriptor／绑定和持久控制前核对已有状态。
 
+- `agents_md_context.py` 只将冻结 AGENTS.md 指令链交给 CSM；文件登记和实时发布归 `app/agents/agents_md_publication.py`，纯原文与有序拼接归 `business/resource_derivations/agents.py`。不构造 Agent 实例、不重新读取工作区文件。
 - `tool_definitions.py` 只从实际 canonical 发现与已封存来源派生活动定义 batch；原 activation 是正文来源，提交与校验仍归 Saver，不登记第二个 CSM 控制 owner。
 - `runtime_state.py`只编码显式状态发布intent；原canonical item保留每次发布事实，CSM按同一source/revision合并未封存变化，applied只由seal推进。冷恢复及rebuild从原owner冻结正文，不回读任务定义。
