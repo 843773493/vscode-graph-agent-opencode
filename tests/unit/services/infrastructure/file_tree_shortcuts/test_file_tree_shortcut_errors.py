@@ -10,9 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.path_utils import get_session_path_resolver
-from app.services.infrastructure import file_tree_settings_service as settings_module
-from app.services.infrastructure.file_tree_settings_service import (
-    FileTreeSettingsService,
+from app.services.infrastructure import file_tree_shortcut_store as shortcut_store_module
+from app.services.infrastructure.file_tree_shortcut_store import (
+    FileTreeShortcutStore,
 )
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
@@ -29,16 +29,16 @@ def file_tree_shortcut_case(empty_workspace_scope: tuple[str, Path]):
     paths = WorkspaceFilePaths(
         workspace=root, workspace_id=workspace_id, bindings=None,
     )
-    service = FileTreeSettingsService(workspace_root=root, path_resolver=resolver, file_paths=paths)
+    store = FileTreeShortcutStore(workspace_root=root, path_resolver=resolver, file_paths=paths)
     directory = root / "documents"
     directory.mkdir()
-    service.add_session_shortcut(session, path=str(directory), label="原始标签")
-    service.apply_to_workspace(session, path=str(directory))
+    store.add_session_shortcut(session, path=str(directory), label="原始标签")
+    store.set_workspace_default(session, path=str(directory))
     controls = {
         "session": resolver.resolve_session_node(session) / "ui/file-tree-shortcuts.json",
         "workspace": root / ".boxteam/ui/file-tree-shortcuts.json",
     }
-    return SimpleNamespace(service=service, session=session, directory=directory,
+    return SimpleNamespace(store=store, session=session, directory=directory,
                            controls=controls, root=root, uri=paths.reference(directory))
 
 
@@ -68,16 +68,16 @@ def test_shortcut_io_errors_preserve_original_type_cause_and_atomic_file(
 
             patch.setattr(Path, method, path_fault)
         elif stage == "temporary":
-            patch.setattr(settings_module.tempfile, "NamedTemporaryFile", fail)
+            patch.setattr(shortcut_store_module.tempfile, "NamedTemporaryFile", fail)
         elif stage == "dump":
-            patch.setattr(settings_module.json, "dump", fail)
+            patch.setattr(shortcut_store_module.json, "dump", fail)
         else:
-            patch.setattr(settings_module.os, stage, fail)
+            patch.setattr(shortcut_store_module.os, stage, fail)
 
         def invoke():
             if stage in {"stat", "read"}:
-                return case.service.get(case.session)
-            operation = case.service.add_session_shortcut if scope == "session" else case.service.apply_to_workspace
+                return case.store.read_session_shortcuts(case.session)
+            operation = case.store.add_session_shortcut if scope == "session" else case.store.set_workspace_default
             return operation(case.session, path=str(case.directory), label="新标签")
 
         with pytest.raises(type(fault)) as caught:
@@ -116,7 +116,7 @@ def test_shortcut_read_diagnostics_do_not_echo_invalid_input(file_tree_shortcut_
         corrupted = json.dumps(payload).encode()
     path.write_bytes(corrupted)
     with pytest.raises((TypeError, ValueError)) as caught:
-        case.service.get(case.session)
+        case.store.read_session_shortcuts(case.session)
     message = str(caught.value)
     assert "artifact=file_tree_shortcuts" in message
     assert str(case.root) not in message and "private-input.txt" not in message
@@ -128,7 +128,7 @@ def test_shortcut_read_diagnostics_do_not_echo_invalid_input(file_tree_shortcut_
         assert "start=0, end=1" in message
     assert path.read_bytes() == corrupted
     path.write_bytes(original)
-    assert case.service.get(case.session).session_shortcuts[0].path == case.uri
+    assert case.store.read_session_shortcuts(case.session).session_shortcuts[0].path == case.uri
 
 
 def test_shortcut_snapshot_missing_version_and_duplicate_errors_keep_logical_identity(file_tree_shortcut_case):
@@ -147,9 +147,9 @@ def test_shortcut_snapshot_missing_version_and_duplicate_errors_keep_logical_ide
         expected = {"version": ValueError, "missing": FileNotFoundError, "duplicate": FileExistsError}[failure]
         with pytest.raises(expected) as caught:
             if failure == "duplicate":
-                case.service.initialize_session(case.session)
+                case.store.create_session_snapshot(case.session)
             else:
-                case.service.get(case.session)
+                case.store.read_session_shortcuts(case.session)
         assert "artifact=file_tree_shortcuts" in str(caught.value)
         assert str(case.root) not in str(caught.value)
         if failure == "duplicate":
@@ -171,26 +171,26 @@ def test_shortcut_directory_stat_error_uses_target_uri(file_tree_shortcut_case, 
     with monkeypatch.context() as patch:
         patch.setattr(Path, "exists", exists)
         with pytest.raises(type(fault)) as caught:
-            case.service.add_session_shortcut(case.session, path=str(case.directory), label=None)
+            case.store.add_session_shortcut(case.session, path=str(case.directory), label=None)
     assert caught.value.__cause__ is fault
     assert caught.value.errno == error_number
     assert "stage=directory_stat" in str(caught.value) and case.uri in str(caught.value)
     assert str(case.root) not in str(caught.value) and "private-input.txt" not in str(caught.value)
-    assert case.service.add_session_shortcut(case.session, path=case.uri, label=None).session_shortcuts[0].path == case.uri
+    assert case.store.add_session_shortcut(case.session, path=case.uri, label=None).session_shortcuts[0].path == case.uri
 
 
 @pytest.mark.parametrize("form", ["relative", "absolute", "uri"])
 def test_shortcut_inputs_still_select_the_same_directory(file_tree_shortcut_case, form):
     case = file_tree_shortcut_case
     value = {"relative": "documents", "absolute": str(case.directory), "uri": case.uri}[form]
-    result = case.service.add_session_shortcut(case.session, path=value, label="同一目录")
+    result = case.store.add_session_shortcut(case.session, path=value, label="同一目录")
     assert [(item.path, item.label) for item in result.session_shortcuts] == [(case.uri, "同一目录")]
     assert result.workspace_shortcuts == []
     assert [item.path for item in result.default_shortcuts] == [case.uri]
     file = case.root / "file.txt"
     file.write_text("file", encoding="utf-8")
     with pytest.raises(NotADirectoryError, match="快捷路径不是目录"):
-        case.service.add_session_shortcut(case.session, path=str(file), label=None)
+        case.store.add_session_shortcut(case.session, path=str(file), label=None)
 
 
 def test_shortcut_cleanup_failure_keeps_both_causes_and_original(file_tree_shortcut_case, monkeypatch):
@@ -207,10 +207,10 @@ def test_shortcut_cleanup_failure_keeps_both_causes_and_original(file_tree_short
         raise cleanup_fault
 
     with monkeypatch.context() as patch:
-        patch.setattr(settings_module.os, "replace", refuse_publish)
-        patch.setattr(settings_module.os, "unlink", refuse_cleanup)
+        patch.setattr(shortcut_store_module.os, "replace", refuse_publish)
+        patch.setattr(shortcut_store_module.os, "unlink", refuse_cleanup)
         with pytest.raises(PermissionError) as caught:
-            case.service.add_session_shortcut(case.session, path=case.uri, label="未发布")
+            case.store.add_session_shortcut(case.session, path=case.uri, label="未发布")
     assert caught.value.__cause__ is cleanup_fault
     assert cleanup_fault.__context__ is publish_fault
     assert str(case.root) not in str(caught.value) and "private-input.txt" not in str(caught.value)

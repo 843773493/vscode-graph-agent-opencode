@@ -15,7 +15,7 @@ from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import (
     get_config_service,
     get_context_compaction_service,
-    get_file_tree_settings_service,
+    get_file_tree_shortcut_store,
     get_goal_service,
     get_llm_request_log_reader,
     get_persistent_task_runtime,
@@ -120,8 +120,8 @@ from app.services.business.session_skill_tracking_service import (
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.file_tree_settings_service import (
-    FileTreeSettingsService,
+from app.services.infrastructure.file_tree_shortcut_store import (
+    FileTreeShortcutStore,
 )
 from app.services.infrastructure.llm_request_log_reader import (
     LLMRequestLogError,
@@ -947,10 +947,10 @@ async def get_session_file_tree_settings(
     session_id: CanonicalSessionId,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = service.get(session_id)
+        result = shortcut_store.read_session_shortcuts(session_id)
     except KeyError as error:
         raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
@@ -966,10 +966,10 @@ async def add_session_file_tree_shortcut(
     payload: FileTreeShortcutRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = await asyncio.to_thread(service.add_session_shortcut,
+        result = await asyncio.to_thread(shortcut_store.add_session_shortcut,
             session_id,
             path=payload.path,
             label=payload.label,
@@ -991,10 +991,10 @@ async def remove_session_file_tree_shortcut(
     path: str = Query(min_length=1, max_length=4096),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = await asyncio.to_thread(service.remove_session_shortcut,session_id, path=path)
+        result = await asyncio.to_thread(shortcut_store.remove_session_shortcut,session_id, path=path)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except ValueError as error:
@@ -1012,10 +1012,10 @@ async def apply_file_tree_shortcut_to_workspace(
     payload: FileTreeShortcutRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = await asyncio.to_thread(service.apply_to_workspace,
+        result = await asyncio.to_thread(shortcut_store.set_workspace_default,
             session_id,
             path=payload.path,
             label=payload.label,
@@ -1037,10 +1037,10 @@ async def remove_workspace_file_tree_shortcut(
     path: str = Query(min_length=1, max_length=4096),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    service: FileTreeSettingsService = Depends(get_file_tree_settings_service),
+    shortcut_store: FileTreeShortcutStore = Depends(get_file_tree_shortcut_store),
 ):
     try:
-        result = await asyncio.to_thread(service.remove_workspace_shortcut,session_id, path=path)
+        result = await asyncio.to_thread(shortcut_store.remove_workspace_default,session_id, path=path)
     except KeyError as error:
         raise not_found_http_error(error) from error
     except ValueError as error:

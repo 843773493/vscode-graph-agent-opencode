@@ -113,8 +113,8 @@ from app.services.infrastructure.events.channel_events import (
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.file_tree_settings_service import (
-    FileTreeSettingsService,
+from app.services.infrastructure.file_tree_shortcut_store import (
+    FileTreeShortcutStore,
 )
 from app.services.infrastructure.gateway_client_common import GatewayTransportConnection
 from app.services.infrastructure.gateway_communication_client import (
@@ -413,7 +413,7 @@ class AppContainer:
     text_mutations: WorkspaceTextMutationOwner
     workspace_file_watch_service: WorkspaceFileWatchService
     workspace_file_resource_registry: WorkspaceFileResourceRegistry
-    file_tree_settings_service: FileTreeSettingsService
+    file_tree_shortcut_store: FileTreeShortcutStore
     agent_execution_service: AgentExecutionService
     node_debug_service: NodeDebugService
     job_event_bus: JobEventBusProtocol
@@ -731,13 +731,13 @@ def _build_app_container(
         path_resolver=session_path_resolver,
         creation_service=session_creation_service,
     )
-    file_tree_settings_service = FileTreeSettingsService(
+    file_tree_shortcut_store = FileTreeShortcutStore(
         workspace_root=resolved_workspace_root,
         path_resolver=session_path_resolver,
         file_paths=workspace_service.file_paths,
     )
     session_service.register_change_listener(
-        file_tree_settings_service.handle_session_change
+        file_tree_shortcut_store.handle_session_change
     )
     persistent_task_store = PersistentTaskStore(
         workspace_activity_service.store, workspace_id=workspace_id, paths=session_path_resolver,
@@ -1194,7 +1194,7 @@ def _build_app_container(
         resource_platform=resource_platform,
         resource_navigation=resource_navigation,
         text_mutations=text_mutations,
-        file_tree_settings_service=file_tree_settings_service,
+        file_tree_shortcut_store=file_tree_shortcut_store,
         agent_execution_service=agent_execution_service,
         node_debug_service=node_debug_service,
         job_event_bus=job_event_bus,

@@ -1,8 +1,11 @@
-# tests/unit/services/infrastructure/file_tree_settings
+# tests/unit/services/infrastructure/file_tree_shortcuts
 
 ## 目录用途
 
-存放 `app/services/infrastructure/file_tree_settings_service.py` 的会话及工作区快捷方式单元测试。
+存放 `app/services/infrastructure/file_tree_shortcut_store.py` 的会话及工作区快捷方式单元测试。
+
+- `test_file_tree_shortcut_store.py`：会话快照、新会话默认值和已有快照升级。
+- `test_file_tree_shortcut_errors.py`：读写失败、原件保留与诊断。
 
 ## 可修改内容
 

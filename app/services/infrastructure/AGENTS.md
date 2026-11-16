@@ -48,7 +48,7 @@ infrastructure/
     ├── 前端 HTML 快照
     │   └── html_snapshot_store.py
     ├── 工作区文件与服务装配
-    │   ├── file_tree_settings_service.py
+    │   ├── file_tree_shortcut_store.py  会话快捷目录快照与新会话的工作区默认值
     │   ├── workspace_file_watch_service.py
     │   └── workspace_service.py
     └── 其他基础设施

@@ -12,7 +12,7 @@ infrastructure/
 ├── attachment_blob_catalog/ # 附件目录准入、worker、holder 与取消结算
 ├── config/                # 配置策略、路径差异、监听、快照与 shadow lifecycle
 ├── events/                # typed 事件与 channel 生命周期/重放
-├── file_tree_settings/    # 会话和工作区文件树快捷方式设置
+├── file_tree_shortcuts/    # 会话和工作区文件树快捷方式设置
 ├── gateway_clients/       # Gateway HTTP client 的就绪检查、上下文与 fork relay
 ├── mcp/                   # MCP catalog owner、binding、配置与工具指引
 ├── node_debug/            # Node Debug 进程身份、Inspector、会话和恢复测试

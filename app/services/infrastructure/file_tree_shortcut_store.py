@@ -19,8 +19,8 @@ from app.schemas.internal_v2.workspace import (
 from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 
 
-class FileTreeSettingsService:
-    """持久化会话级快捷路径，并显式管理工作区默认值。"""
+class FileTreeShortcutStore:
+    """持久化会话快捷目录快照与新会话的工作区默认值。"""
 
     def __init__(
         self,
@@ -29,47 +29,42 @@ class FileTreeSettingsService:
         path_resolver: SessionCatalogPathResolver,
         file_paths: WorkspaceFilePaths,
     ) -> None:
-        self._workspace_root = workspace_root.resolve()
         self._path_resolver = path_resolver
         self._file_paths = file_paths
-        self._workspace_settings_path = (
-            self._workspace_root / ".boxteam" / "ui" / "file-tree-shortcuts.json"
+        self._workspace_defaults_path = (
+            workspace_root.resolve() / ".boxteam" / "ui" / "file-tree-shortcuts.json"
         )
         self._snapshot_defaults_for_existing_sessions()
 
-    def get(self, session_id: str) -> SessionFileTreeSettingsDTO:
-        session_path = self._session_settings_path(session_id)
-        session_shortcuts, workspace_shortcuts = self._read_session_settings(
+    def read_session_shortcuts(self, session_id: str) -> SessionFileTreeSettingsDTO:
+        session_path = self._session_snapshot_path(session_id)
+        session_shortcuts, inherited_defaults = self._read_session_snapshot(
             session_path
         )
-        default_shortcuts = self._read_shortcuts(
-            self._workspace_settings_path, source="workspace"
-        )
+        current_defaults = self._read_workspace_defaults()
         effective_by_path = {
-            shortcut.path: shortcut for shortcut in workspace_shortcuts
+            shortcut.path: shortcut for shortcut in inherited_defaults
         }
         for shortcut in session_shortcuts:
             effective_by_path.setdefault(shortcut.path, shortcut)
         return SessionFileTreeSettingsDTO(
             session_id=session_id,
             session_shortcuts=session_shortcuts,
-            workspace_shortcuts=workspace_shortcuts,
-            default_shortcuts=default_shortcuts,
+            workspace_shortcuts=inherited_defaults,
+            default_shortcuts=current_defaults,
             effective_shortcuts=list(effective_by_path.values()),
         )
 
     def handle_session_change(self, action: str, session_id: str) -> None:
         if action == "create":
-            self.initialize_session(session_id)
+            self.create_session_snapshot(session_id)
 
-    def initialize_session(self, session_id: str) -> None:
-        settings_path = self._session_settings_path(session_id)
-        if self._exists(settings_path):
+    def create_session_snapshot(self, session_id: str) -> None:
+        snapshot_path = self._session_snapshot_path(session_id)
+        if self._exists(snapshot_path):
             raise FileExistsError(f"新会话快捷路径快照已存在: session_id={session_id}, artifact=file_tree_shortcuts")
-        defaults = self._read_shortcuts(
-            self._workspace_settings_path, source="workspace"
-        )
-        self._write_session_settings(settings_path, [], defaults)
+        defaults = self._read_workspace_defaults()
+        self._write_session_snapshot(snapshot_path, [], defaults)
 
     def add_session_shortcut(
         self,
@@ -79,14 +74,14 @@ class FileTreeSettingsService:
         label: str | None,
     ) -> SessionFileTreeSettingsDTO:
         normalized_path = self._normalize_directory(path)
-        settings_path = self._session_settings_path(session_id)
-        shortcuts, inherited = self._read_session_settings(settings_path)
-        self._write_session_settings(
-            settings_path,
+        snapshot_path = self._session_snapshot_path(session_id)
+        shortcuts, inherited = self._read_session_snapshot(snapshot_path)
+        self._write_session_snapshot(
+            snapshot_path,
             self._upsert(shortcuts, normalized_path, label, source="session"),
             inherited,
         )
-        return self.get(session_id)
+        return self.read_session_shortcuts(session_id)
 
     def remove_session_shortcut(
         self,
@@ -95,8 +90,8 @@ class FileTreeSettingsService:
         path: str,
     ) -> SessionFileTreeSettingsDTO:
         normalized_path = self._normalize_path(path)
-        settings_path = self._session_settings_path(session_id)
-        shortcuts, inherited = self._read_session_settings(settings_path)
+        snapshot_path = self._session_snapshot_path(session_id)
+        shortcuts, inherited = self._read_session_snapshot(snapshot_path)
         remaining_shortcuts = [
             item for item in shortcuts if item.path != normalized_path
         ]
@@ -107,14 +102,14 @@ class FileTreeSettingsService:
             remaining_inherited
         ) == len(inherited):
             raise KeyError(f"会话快捷路径不存在: {normalized_path}")
-        self._write_session_settings(
-            settings_path,
+        self._write_session_snapshot(
+            snapshot_path,
             remaining_shortcuts,
             remaining_inherited,
         )
-        return self.get(session_id)
+        return self.read_session_shortcuts(session_id)
 
-    def apply_to_workspace(
+    def set_workspace_default(
         self,
         session_id: str,
         *,
@@ -122,7 +117,7 @@ class FileTreeSettingsService:
         label: str | None = None,
     ) -> SessionFileTreeSettingsDTO:
         normalized_path = self._normalize_directory(path)
-        session_settings = self.get(session_id)
+        session_settings = self.read_session_shortcuts(session_id)
         source = next(
             (
                 item
@@ -131,50 +126,41 @@ class FileTreeSettingsService:
             ),
             None,
         )
-        workspace_shortcuts = self._read_shortcuts(
-            self._workspace_settings_path,
-            source="workspace",
-        )
-        self._write_shortcuts(
-            self._workspace_settings_path,
+        workspace_defaults = self._read_workspace_defaults()
+        self._write_workspace_defaults(
             self._upsert(
-                workspace_shortcuts,
+                workspace_defaults,
                 normalized_path,
                 source.label if source is not None else label,
                 source="workspace",
             ),
         )
-        return self.get(session_id)
+        return self.read_session_shortcuts(session_id)
 
-    def remove_workspace_shortcut(
+    def remove_workspace_default(
         self,
         session_id: str,
         *,
         path: str,
     ) -> SessionFileTreeSettingsDTO:
         normalized_path = self._normalize_path(path)
-        shortcuts = self._read_shortcuts(
-            self._workspace_settings_path,
-            source="workspace",
-        )
-        remaining = [item for item in shortcuts if item.path != normalized_path]
-        if len(remaining) == len(shortcuts):
+        defaults = self._read_workspace_defaults()
+        remaining = [item for item in defaults if item.path != normalized_path]
+        if len(remaining) == len(defaults):
             raise KeyError(f"工作区快捷路径不存在: {normalized_path}")
-        self._write_shortcuts(self._workspace_settings_path, remaining)
-        return self.get(session_id)
+        self._write_workspace_defaults(remaining)
+        return self.read_session_shortcuts(session_id)
 
     def _snapshot_defaults_for_existing_sessions(self) -> None:
-        defaults = self._read_shortcuts(
-            self._workspace_settings_path, source="workspace"
-        )
+        defaults = self._read_workspace_defaults()
         for node in self._path_resolver.list_nodes(kind="session"):
-            settings_path = (
+            snapshot_path = (
                 self._path_resolver.resolve_session_node(node.node_id)
                 / "ui"
                 / "file-tree-shortcuts.json"
             )
-            if self._exists(settings_path):
-                raw = self._read_settings_payload(settings_path)
+            if self._exists(snapshot_path):
+                raw = self._read_settings_payload(snapshot_path)
                 if raw.get("version") == 2:
                     continue
                 shortcuts = self._parse_shortcuts(
@@ -182,9 +168,9 @@ class FileTreeSettingsService:
                 )
             else:
                 shortcuts = []
-            self._write_session_settings(settings_path, shortcuts, defaults)
+            self._write_session_snapshot(snapshot_path, shortcuts, defaults)
 
-    def _session_settings_path(self, session_id: str) -> Path:
+    def _session_snapshot_path(self, session_id: str) -> Path:
         try:
             session_node = self._path_resolver.resolve_session_node(session_id)
         except KeyError as error:
@@ -231,20 +217,15 @@ class FileTreeSettingsService:
         )
         return updated
 
-    def _read_shortcuts(
-        self,
-        path: Path,
-        *,
-        source: FileTreeShortcutSource,
-    ) -> list[FileTreeShortcutDTO]:
-        if not self._exists(path):
+    def _read_workspace_defaults(self) -> list[FileTreeShortcutDTO]:
+        if not self._exists(self._workspace_defaults_path):
             return []
-        raw = self._read_settings_payload(path)
+        raw = self._read_settings_payload(self._workspace_defaults_path)
         return self._parse_shortcuts(
-            raw.get("shortcuts"), source=source
+            raw.get("shortcuts"), source="workspace"
         )
 
-    def _read_session_settings(
+    def _read_session_snapshot(
         self,
         path: Path,
     ) -> tuple[list[FileTreeShortcutDTO], list[FileTreeShortcutDTO]]:
@@ -285,9 +266,8 @@ class FileTreeSettingsService:
                 for item in raw
             ]
 
-    def _write_shortcuts(
+    def _write_workspace_defaults(
         self,
-        path: Path,
         shortcuts: list[FileTreeShortcutDTO],
     ) -> None:
         payload = {
@@ -296,9 +276,9 @@ class FileTreeSettingsService:
                 {"path": item.path, "label": item.label} for item in shortcuts
             ],
         }
-        self._write_payload(path, payload)
+        self._write_payload(self._workspace_defaults_path, payload)
 
-    def _write_session_settings(
+    def _write_session_snapshot(
         self,
         path: Path,
         session_shortcuts: list[FileTreeShortcutDTO],

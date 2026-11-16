@@ -45,8 +45,8 @@ from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.file_tree_settings_service import (
-    FileTreeSettingsService,
+from app.services.infrastructure.file_tree_shortcut_store import (
+    FileTreeShortcutStore,
 )
 from app.services.infrastructure.html_snapshot_store import HtmlSnapshotStore
 from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
@@ -126,7 +126,7 @@ class _AppContainerProtocol(Protocol):
     workspace_service: WorkspaceService
     resource_navigation: ResourceNavigation
     workspace_file_watch_service: WorkspaceFileWatchService
-    file_tree_settings_service: FileTreeSettingsService
+    file_tree_shortcut_store: FileTreeShortcutStore
     node_debug_service: NodeDebugService
     session_orchestrator: SessionOrchestrator
     session_catalog_service: SessionCatalogService
@@ -407,8 +407,8 @@ def get_workspace_file_watch_service(request: Request) -> WorkspaceFileWatchServ
     return _require_service(request, "workspace_file_watch_service", WorkspaceFileWatchService, "WorkspaceFileWatchService 尚未在应用启动阶段初始化")
 
 
-def get_file_tree_settings_service(request: Request) -> FileTreeSettingsService:
-    return _require_service(request, "file_tree_settings_service", FileTreeSettingsService, "FileTreeSettingsService 尚未在应用启动阶段初始化")
+def get_file_tree_shortcut_store(request: Request) -> FileTreeShortcutStore:
+    return _require_service(request, "file_tree_shortcut_store", FileTreeShortcutStore, "FileTreeShortcutStore 尚未在应用启动阶段初始化")
 
 
 def get_session_communication_service(request: Request) -> SessionCommunicationService:
