@@ -739,7 +739,7 @@ async def test_read_file_resolves_model_visible_session_artifact_path(
         max_lines=8,
         max_bytes=1_024,
     )
-    stored = store.bound(
+    stored = store.limit_message(
         session_id=session_id,
         tool_name="large_tool",
         tool_call_id="call_relative_artifact",
@@ -785,7 +785,7 @@ async def test_grep_resolves_model_visible_session_artifact_path(
         max_lines=8,
         max_bytes=1_024,
     )
-    stored = store.bound(
+    stored = store.limit_message(
         session_id=session_id,
         tool_name="large_tool",
         tool_call_id="call_grep_artifact",

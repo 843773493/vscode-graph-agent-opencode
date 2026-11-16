@@ -724,7 +724,8 @@ async def process_agent_event_stream(
                     isinstance(raw_output, ToolMessage)
                     and effective_tool_status == "success"
                 ):
-                    output = await tool_output_store.abound(
+                    output = await asyncio.to_thread(
+                        tool_output_store.limit_message,
                         session_id=session_id,
                         tool_name=display_context.tool_name,
                         tool_call_id=raw_output.tool_call_id,

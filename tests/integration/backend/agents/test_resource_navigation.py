@@ -389,7 +389,7 @@ async def test_real_workspace_gateway_navigation_is_fixed_lightweight_and_contai
             session_id = created.json()["data"]["session_id"]
             store = ToolOutputStore(workspace_root=workspace, max_lines=8, max_bytes=1024)
             output = "精确工具正文 Ω\r\n" * 1000
-            bounded = store.bound(
+            bounded = store.limit_message(
                 session_id=session_id, tool_name="large", tool_call_id="navigation-large-output",
                 message=ToolMessage(content=output, tool_call_id="navigation-large-output"),
             )

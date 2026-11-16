@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -68,7 +67,7 @@ class ToolOutputStore:
         self._max_lines = max_lines
         self._max_bytes = max_bytes
 
-    def bound(
+    def limit_message(
         self,
         *,
         session_id: str,
@@ -76,6 +75,7 @@ class ToolOutputStore:
         tool_call_id: str,
         message: ToolMessage,
     ) -> ToolMessage:
+        """消息超过行数或字节上限时保存完整正文，并返回有界预览。"""
         text = _text_content(message.content)
         if text is None:
             return message
@@ -133,7 +133,7 @@ class ToolOutputStore:
     ) -> ToolOutputReference:
         output_path = self._output_path(
             session_id=session_id,
-            tool_call_id=output_key,
+            output_key=output_key,
         )
         resource_uri = session_artifact_uri(
             read_workspace_id(self._workspace_root), session_id, "tool-results", output_path.name,
@@ -158,29 +158,13 @@ class ToolOutputStore:
             truncated=truncated,
         )
 
-    async def abound(
-        self,
-        *,
-        session_id: str,
-        tool_name: str,
-        tool_call_id: str,
-        message: ToolMessage,
-    ) -> ToolMessage:
-        return await asyncio.to_thread(
-            self.bound,
-            session_id=session_id,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            message=message,
-        )
-
-    def _output_path(self, *, session_id: str, tool_call_id: str) -> Path:
+    def _output_path(self, *, session_id: str, output_key: str) -> Path:
         session_root = self._path_resolver.resolve_session_node(session_id)
         output_dir = session_root / "tool-results"
         if output_dir.is_symlink():
             raise PermissionError("工具结果目录不能是符号链接")
-        filename_digest = hashlib.sha256(tool_call_id.encode("utf-8")).hexdigest()[:24]
-        return output_dir / f"tool_{filename_digest}.txt"
+        output_key_digest = hashlib.sha256(output_key.encode("utf-8")).hexdigest()[:24]
+        return output_dir / f"tool_{output_key_digest}.txt"
 
     def read(self, session_id: str, uri: str, max_bytes: int) -> ResourceFileContent:
         parsed = parse_session_artifact_uri(uri, local_gateway_id=get_current_gateway_id())

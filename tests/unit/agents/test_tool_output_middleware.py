@@ -42,7 +42,7 @@ def test_tool_output_store_keeps_small_result_unchanged(workspace_root: Path) ->
     store = ToolOutputStore(workspace_root=workspace_root)
     message = ToolMessage(content="small result", tool_call_id="call-small")
 
-    result = store.bound(
+    result = store.limit_message(
         session_id="ses_019bbea3e8b7744984826ff1d2840e03",
         tool_name="small_tool",
         tool_call_id="call-small",
@@ -79,7 +79,7 @@ def test_tool_output_store_persists_exact_large_result_and_returns_preview(
         artifact={"source": "unit-test"},
     )
 
-    result = store.bound(
+    result = store.limit_message(
         session_id=session_id,
         tool_name="large_tool",
         tool_call_id="call-large",
@@ -135,13 +135,13 @@ def test_tool_output_store_reuses_identical_tool_call_output(
     )
     message = ToolMessage(content=content, tool_call_id="call-repeat")
 
-    first = store.bound(
+    first = store.limit_message(
         session_id=session_id,
         tool_name="repeat_tool",
         tool_call_id="call-repeat",
         message=message,
     )
-    second = store.bound(
+    second = store.limit_message(
         session_id=session_id,
         tool_name="repeat_tool",
         tool_call_id="call-repeat",
@@ -170,7 +170,7 @@ def test_tool_output_store_keeps_large_exec_command_result_valid_json(
         max_bytes=1_024,
     )
 
-    result = store.bound(
+    result = store.limit_message(
         session_id=session_id,
         tool_name="exec_command",
         tool_call_id="call-exec-command",
@@ -265,8 +265,7 @@ async def test_declared_failure_bypasses_output_preview(mode, declaration):
             return source
         result = await middleware.awrap_tool_call(request, completed)
     assert result is source
-    store.bound.assert_not_called()
-    store.abound.assert_not_called()
+    store.limit_message.assert_not_called()
 
 
 def test_tool_output_uri_reopens_after_owner_restart_and_rejects_other_session(workspace_root, session_bundle_factory):
@@ -276,7 +275,7 @@ def test_tool_output_uri_reopens_after_owner_restart_and_rejects_other_session(w
     session_bundle_factory(workspace_root / ".boxteam/sessions", session_id)
     store = ToolOutputStore(workspace_root=workspace_root, max_lines=8, max_bytes=1024)
     body = "hit\r\n" * 1000
-    bounded = store.bound(session_id=session_id, tool_name="large", tool_call_id="call-reopen",
+    bounded = store.limit_message(session_id=session_id, tool_name="large", tool_call_id="call-reopen",
                           message=ToolMessage(content=body, tool_call_id="call-reopen"))
     reference = extract_tool_output_reference(bounded)
     assert reference["path"] == reference["read_path"]
