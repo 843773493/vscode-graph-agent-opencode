@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -57,7 +57,7 @@ class FailedJobTraceReader(Protocol):
 
 
 class SessionTurnReplayService:
-    """在当前会话追加截断 checkpoint，并用稳定 message_id 重新执行。"""
+    """定位主线程的 Message/Turn，回退上下文后创建替换消息并重新派发。"""
 
     def __init__(
         self,
@@ -78,13 +78,13 @@ class SessionTurnReplayService:
         self._trace_event_store = trace_event_store
         self._attachment_holder = attachment_holder
 
-    async def replay(
+    async def replay_message(
         self,
         session_id: str,
         target_message_id: str,
         request: MessageReplayRequest,
     ) -> MessageReplayAccepted:
-        return await self._replay(session_id, target_message_id, request, by_turn=False)
+        return await self._replay(session_id, target_message_id, request, target_kind="message")
 
     async def replay_turn(
         self,
@@ -92,7 +92,7 @@ class SessionTurnReplayService:
         turn_id: str,
         request: MessageReplayRequest,
     ) -> MessageReplayAccepted:
-        return await self._replay(session_id, turn_id, request, by_turn=True)
+        return await self._replay(session_id, turn_id, request, target_kind="turn")
 
     async def _replay(
         self,
@@ -100,7 +100,7 @@ class SessionTurnReplayService:
         target_id: str,
         request: MessageReplayRequest,
         *,
-        by_turn: bool,
+        target_kind: Literal["message", "turn"],
     ) -> MessageReplayAccepted:
         if not request.acknowledge_context_only:
             raise ValueError(
@@ -138,14 +138,14 @@ class SessionTurnReplayService:
                         if (
                             message.role == MessageRole.user
                             and message.metadata.get("turn_id") == target_id
-                            if by_turn
+                            if target_kind == "turn"
                             else message.message_id == target_id
                         )
                     ),
                     -1,
                 )
                 if latest is None or target_index < 0:
-                    if by_turn:
+                    if target_kind == "turn":
                         raise ValueError(f"当前有效上下文中不存在目标 Turn: turn_id={target_id}")
                     raise ValueError(
                         f"目标用户消息不在当前有效上下文中: message_id={target_id}"
@@ -179,7 +179,7 @@ class SessionTurnReplayService:
                     ),
                 )
                 with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
-                    removed_message_count = await self._append_replay_checkpoint(
+                    removed_message_count = await self._rewind_and_write_checkpoint(
                         owner=owner,
                         latest=latest,
                         target_message_id=target_message_id,
@@ -294,7 +294,7 @@ class SessionTurnReplayService:
             return request.content.strip()
         return target.content
 
-    async def _append_replay_checkpoint(
+    async def _rewind_and_write_checkpoint(
         self,
         *,
         owner: MutationIntentOwner,

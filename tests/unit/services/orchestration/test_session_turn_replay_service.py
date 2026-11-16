@@ -19,12 +19,14 @@ from app.schemas.internal_v2.common import JobStatus, RunMode
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO, JobDTO
 from app.schemas.internal_v2.message import MessageReplayRequest, MessageRunAccepted
 from app.services.business.job.input_admission import ThreadInputAdmission
-from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     checkpoint_messages,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
+)
+from app.services.orchestration.session_turn_replay_service import (
+    SessionTurnReplayService,
 )
 from tests.support.message_service import build_message_service
 from tests.support.rollout.fixture_output import commit_fixture_output
@@ -336,7 +338,7 @@ async def test_replay_holds_attachments_after_replacement_creation_until_dispatc
         return replacement
 
     monkeypatch.setattr(service._message_service, "create", paused_create)
-    replay = asyncio.create_task(service.replay(
+    replay = asyncio.create_task(service.replay_message(
         session_id, "msg_1",
         MessageReplayRequest(
             action="edit_and_continue", content="持锁重放", acknowledge_context_only=True,
@@ -378,7 +380,7 @@ async def test_edit_first_turn_removes_all_following_turns(
         ],
     )
 
-    result = await service.replay(
+    result = await service.replay_message(
         "ses_019c205391bb7a4b81b6728df70f63e6",
         "msg_1",
         MessageReplayRequest(
@@ -447,7 +449,7 @@ async def test_regenerate_last_reply_reuses_original_prompt(
         [_job("msg_2", JobStatus.completed)],
     )
 
-    result = await service.replay(
+    result = await service.replay_message(
         "ses_019c205391bb7a4b81b6728df70f63e6",
         "msg_2",
         MessageReplayRequest(
@@ -474,7 +476,7 @@ async def test_retry_failed_clears_partial_tool_messages(
         [_job("msg_2", failure_status)],
     )
 
-    result = await service.replay(
+    result = await service.replay_message(
         "ses_019c205391bb7a4b81b6728df70f63e6",
         "msg_2",
         MessageReplayRequest(
@@ -573,7 +575,7 @@ async def test_retry_requires_failed_or_timed_out_job(
     )
 
     with pytest.raises(ValueError, match="不是失败轮次"):
-        await service.replay(
+        await service.replay_message(
             "ses_019c205391bb7a4b81b6728df70f63e6",
             "msg_2",
             MessageReplayRequest(
@@ -603,7 +605,7 @@ async def test_replay_rejects_running_job_before_mutating_checkpoint(
     assert before is not None
 
     with pytest.raises(ValueError, match="仍有运行中任务"):
-        await service.replay(
+        await service.replay_message(
             "ses_019c205391bb7a4b81b6728df70f63e6",
             "msg_2",
             MessageReplayRequest(
@@ -632,7 +634,7 @@ async def test_replay_does_not_treat_child_jobs_as_main_activity(
     service._job_service = FakeJobService([
         JobDTO(thread_id=f"thr_{uuid4().hex}", **_job("child-input", status, job_id="child-job")),
     ])
-    result = await service.replay(
+    result = await service.replay_message(
         "ses_019c205391bb7a4b81b6728df70f63e6", "msg_2",
         MessageReplayRequest(action="regenerate", acknowledge_context_only=True),
     )
@@ -653,7 +655,7 @@ async def test_replay_requires_explicit_context_only_acknowledgement(
     )
 
     with pytest.raises(ValueError, match="不会撤销工作区文件修改"):
-        await service.replay(
+        await service.replay_message(
             "ses_019c205391bb7a4b81b6728df70f63e6",
             "msg_2",
             MessageReplayRequest(action="regenerate"),

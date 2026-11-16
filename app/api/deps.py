@@ -36,7 +36,6 @@ from app.services.business.session_skill_tracking_service import (
     SessionSkillTrackingService,
 )
 from app.services.business.session_turn_history import SessionTurnHistoryService
-from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.business.workspace_resources.owner import WorkspaceResourceOwner
@@ -82,6 +81,9 @@ from app.services.orchestration.agent_execution_service import AgentExecutionSer
 from app.services.orchestration.communication.service import SessionCommunicationService
 from app.services.orchestration.execution_step.approval import ToolApprovalService
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
+from app.services.orchestration.session_turn_replay_service import (
+    SessionTurnReplayService,
+)
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from app.tool_testing.service import ToolTestService
 

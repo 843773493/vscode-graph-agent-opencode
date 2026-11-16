@@ -25,9 +25,8 @@ tests/unit/services/business/
     │   ├── test_session_information_service.py
     │   ├── test_session_changes_service.py、test_session_interrupt_service.py
     │   └── test_session_goal_service*.py
-    ├── 上下文、分页与回放
-    │   ├── test_session_context_*.py、test_internal_history_paging.py
-    │   └── test_session_turn_replay_service.py
+    ├── 上下文与分页
+    │   └── test_session_context_*.py、test_internal_history_paging.py
     ├── checkpoint 与提醒
     │   ├── test_*checkpoint*.py
     │   └── test_system_reminder_checkpoint_service.py

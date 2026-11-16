@@ -49,11 +49,13 @@ from app.schemas.internal_v2.pending_request import (
 from app.schemas.internal_v2.turn import ThreadAttachmentListDTO
 from app.services.business.job.service import JobAdmissionClosedError
 from app.services.business.message_service import MessageService
-from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
 from app.services.orchestration.communication.service import SessionCommunicationService
+from app.services.orchestration.session_turn_replay_service import (
+    SessionTurnReplayService,
+)
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 logger = logging.getLogger(__name__)
@@ -492,7 +494,7 @@ async def replay_message_turn(
     replay_service: SessionTurnReplayService = Depends(get_session_turn_replay_service),
 ):
     try:
-        result = await replay_service.replay(session_id, message_id, payload)
+        result = await replay_service.replay_message(session_id, message_id, payload)
     except (KeyError, NotFoundError) as exc:
         # 回退入口先解析权威 main thread，缺失时由 owner 查询抛出明确错误。
         raise not_found_http_error(exc) from exc

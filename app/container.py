@@ -90,7 +90,6 @@ from app.services.business.session_skill_tracking_service import (
 from app.services.business.session_turn_history import (
     SessionTurnHistoryService,
 )
-from app.services.business.session_turn_replay_service import SessionTurnReplayService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.artifact_service import ArtifactService
@@ -206,6 +205,9 @@ from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )
 from app.services.orchestration.session_title_service import SessionTitleService
+from app.services.orchestration.session_turn_replay_service import (
+    SessionTurnReplayService,
+)
 from app.services.orchestration.team.fanout_service import TeamFanoutService
 from app.services.orchestration.terminal_steering_service import TerminalSteeringService
 from app.services.orchestration.thread_initial_execution_service import (

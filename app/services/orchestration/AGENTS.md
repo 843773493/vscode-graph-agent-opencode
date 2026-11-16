@@ -34,6 +34,7 @@ orchestration/
 ├── thread_residency_state.py               驻留状态、runtime slot、lease 和快照的数据形状
 ├── session_subagent_service.py            Session subagent 委派
 ├── session_title_service.py               首条用户消息的标题生成与规范化
+├── session_turn_replay_service.py         按 Message/Turn 定位、回退上下文并重新派发
 ├── terminal_steering_service.py            Terminal 完成后的执行引导
 ├── workspace_observation.py               工作区观察流接线
 ├── agent_stream_helpers.py                 Agent 流事件与工具结果的纯转换
