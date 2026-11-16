@@ -22,7 +22,7 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING_JSON
 from tests.support.message_service import build_message_service
 from tests.unit.services.business.job.test_pending_persistence import (

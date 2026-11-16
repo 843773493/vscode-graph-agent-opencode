@@ -4,7 +4,7 @@
 
 ## 模块职责树
 
-下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 27 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
+下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 26 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
 
 ```text
 infrastructure/
@@ -19,7 +19,7 @@ infrastructure/
 ├── node_debug/                Node 调试运行时；按 breakpoint/config/process/session 分区
 ├── resource_platform/         资源观察与已发布快照
 ├── rollout_context/           rollout、checkpoint、fork、seal 的 I/O owner
-├── rollout_history/           rollout 历史只读快照和分页
+├── rollout_history/           RolloutHistoryReader 入口、只读快照、分页和搜索
 ├── team/                      Session 团队协作存储访问
 ├── turn_history/              按 Job Turn 组织的派生读取模型与恢复
 ├── workspace_activity/        工作区活动状态持久化
@@ -61,7 +61,6 @@ infrastructure/
         ├── artifact_service.py
         ├── attachment_content_service.py
         ├── rollout_checkpoint_runtime.py
-        ├── rollout_history_reader.py
         └── runtime_service.py
 ```
 

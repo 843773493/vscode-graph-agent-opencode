@@ -1,9 +1,8 @@
-"""通过统一 reader 按 snapshot 和 include 查询历史；不再持有 DTO 转换。"""
+"""按已提交 snapshot 查询 rollout 历史，展示转换由 mapping 层负责。"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from time import monotonic
 
 from langchain_core.messages import BaseMessage
@@ -13,16 +12,10 @@ from app.core.history_loading import (
     HistoryLoadingConfig,
     default_history_loading_config,
 )
-from app.domain.itemized.enums import ControlOutcome, PayloadKind, SemanticKind
-from app.domain.itemized.records import RuntimeNoticePayload
 from app.schemas.internal_v2.turn import (
-    InternalDisplayProvenanceDTO,
-    InternalExecutionDisplayPartDTO,
-    InternalExecutionHistoryDTO,
     TurnDetailDTO,
     TurnHistoryLoadRequest,
     TurnHistoryPageDTO,
-    TurnResponsePartDTO,
     TurnSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
@@ -62,33 +55,21 @@ from app.services.infrastructure.turn_history.models import (
     StaleTurnReferenceError,
 )
 from app.services.mapping.itemized.history_turns.detail import build_detail
+from app.services.mapping.itemized.history_turns.internal_execution import (
+    build_internal_execution_history,
+)
 from app.services.mapping.itemized.history_turns.projection import (
     project_detail,
     summary,
 )
 from app.services.mapping.itemized.history_turns.tools import tool_result_metadata_dto
 from app.services.mapping.turn_response_parts import (
-    response_part_order,
-    response_parts_from_internal_item,
     response_parts_from_records,
 )
 
 _ASSISTANT_HISTORY_FIELDS = frozenset(
     {"assistant", "assistant_text", "text", "reasoning_detail"}
 )
-
-
-@dataclass(slots=True)
-class _InternalExecutionHistoryProjection:
-    execution_id: str
-    job_id: str
-    session_id: str
-    thread_id: str
-    outcome: str
-    created_at: str
-    updated_at: str
-    display_parts: list[InternalExecutionDisplayPartDTO] = field(default_factory=list)
-    response_parts: list[TurnResponsePartDTO] = field(default_factory=list)
 
 
 class RolloutHistoryReader(HistoryPageReadMixin):
@@ -518,7 +499,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             source_view_id=self._context_reader.context_view_id(chain),
             source_view_revision=snapshot.manifest.history_view_revision,
             summaries=summaries,
-            internal_executions=self._project_internal_entries(
+            internal_executions=build_internal_execution_history(
                 internal_entries,
                 include=include,
             ),
@@ -530,98 +511,3 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             has_after=has_after,
             projection_epoch=projection_epoch,
         )
-
-    @staticmethod
-    def _project_internal_entries(
-        entries: tuple[InternalExecutionHistoryEntry, ...],
-        *,
-        include: tuple[str, ...],
-    ) -> list[InternalExecutionHistoryDTO]:
-        projections: dict[str, _InternalExecutionHistoryProjection] = {}
-        fields = frozenset(include)
-        for entry in entries:
-            outcome = ControlOutcome(entry.outcome)
-            projection = projections.get(entry.execution_id)
-            if projection is None:
-                projection = _InternalExecutionHistoryProjection(
-                    execution_id=entry.execution_id,
-                    job_id=entry.job_id,
-                    session_id=entry.session_id,
-                    thread_id=entry.thread_id,
-                    outcome=outcome.value,
-                    created_at=entry.created_at,
-                    updated_at=entry.updated_at,
-                )
-                projections[entry.execution_id] = projection
-            elif (
-                projection.job_id != entry.job_id
-                or projection.session_id != entry.session_id
-                or projection.thread_id != entry.thread_id
-                or projection.outcome != outcome.value
-                or projection.created_at != entry.created_at
-                or projection.updated_at != entry.updated_at
-            ):
-                raise RuntimeError(
-                    "同一 internal execution 的 durable metadata 不一致: "
-                    f"{entry.execution_id}"
-                )
-
-            item = entry.item
-            if (
-                "internal" in fields
-                and item.semantic_kind == SemanticKind.RUNTIME_NOTICE
-            ):
-                if (
-                    item.payload_kind != PayloadKind.STRUCTURED_CONTENT
-                    or not isinstance(item.payload, Mapping)
-                    or not set(item.payload) & {"prompt", "display_part"}
-                ):
-                    continue
-                notice = RuntimeNoticePayload.from_dict(item.payload)
-                display_part = notice.display_part
-                if (
-                    display_part is not None
-                    and display_part.kind == "generated_session_result"
-                ):
-                    projection.display_parts.append(
-                        InternalExecutionDisplayPartDTO(
-                            kind=display_part.kind,
-                            text=display_part.text,
-                            item_id=item.item_id,
-                            item_sequence=item.item_sequence,
-                            logical_item_ordinal=entry.logical_item_ordinal,
-                            created_at=item.created_at,
-                            provenance=InternalDisplayProvenanceDTO(
-                                **display_part.provenance.to_dict()
-                            ),
-                        )
-                    )
-            projection.response_parts.extend(
-                response_parts_from_internal_item(
-                    item,
-                    include=fields,
-                    logical_item_ordinal=entry.logical_item_ordinal,
-                    elapsed_ms=entry.elapsed_ms,
-                )
-            )
-
-        return [
-            InternalExecutionHistoryDTO(
-                execution_id=projection.execution_id,
-                job_id=projection.job_id,
-                session_id=projection.session_id,
-                thread_id=projection.thread_id,
-                status=projection.outcome,
-                created_at=projection.created_at,
-                updated_at=projection.updated_at,
-                display_parts=sorted(
-                    projection.display_parts,
-                    key=lambda part: part.logical_item_ordinal,
-                ),
-                response_parts=sorted(
-                    projection.response_parts,
-                    key=response_part_order,
-                ),
-            )
-            for projection in projections.values()
-        ]

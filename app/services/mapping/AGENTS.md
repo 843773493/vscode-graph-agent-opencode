@@ -17,7 +17,7 @@ mapping/
 ├── 运行事件
 │   └── trace_event_mapper.py                Trace事件 → Trace DTO
 └── itemized/                                selection、provider与canonical history投影
-    └── history_turns/                       已提交历史消息 → Turn content/tool/detail DTO
+    └── history_turns/                       已提交历史消息 → Turn 详情、摘要及独立执行历史 DTO
 ```
 
 树按转换边界归类，不代表新增文件层级。选择入口时先看输入事实由谁提供、输出要进入哪种协议；只有出现稳定的同类职责簇时才移动文件，并同步迁移全部导入和对应测试。

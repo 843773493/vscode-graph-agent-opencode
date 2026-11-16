@@ -18,7 +18,7 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     ROLLOUT_SCHEMA_VERSION,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from tests.integration.backend.sessions.rollout_context.deterministic_rollout_fixture_helpers import (
     seed_deterministic_v2_rollout,
 )

@@ -68,7 +68,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.mapping.itemized.canonical_langchain import validate_summary_source
 from app.services.mapping.itemized.provider_request import project_user_message_content
 from tests.support.api_helpers import new_message_operation_id

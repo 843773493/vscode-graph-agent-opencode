@@ -129,7 +129,7 @@ from app.services.infrastructure.rollout_history.message_search import (
 )
 
 if TYPE_CHECKING:
-    from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+    from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 
 
 class RolloutCheckpointSaver(
@@ -182,7 +182,7 @@ class RolloutCheckpointSaver(
         self._context_reader = context_reader or RolloutContextReader(self._storage)
         # 历史 DTO 读取器属于 Saver 内部实现，业务层只依赖本类。
         if history_reader is None:
-            from app.services.infrastructure.rollout_history_reader import (
+            from app.services.infrastructure.rollout_history.reader import (
                 RolloutHistoryReader,
             )
 

@@ -39,7 +39,7 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
     ContextPlanDetailStore,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 
 

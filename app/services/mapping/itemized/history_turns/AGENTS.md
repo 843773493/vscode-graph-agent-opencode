@@ -2,6 +2,10 @@
 
 将已提交的有序历史消息和索引字段转换为 content、tool 和 Turn DTO。
 
+`detail.py` 组装 Turn 详情，`content.py` 和 `tools.py` 转换内容与工具字段，
+`projection.py` 处理 include、预算及摘要；`internal_execution.py` 将 Turn 之外的
+独立执行记录按 execution 分组，生成保留历史归属和 canonical 顺序的展示 DTO。
+
 # 可修改内容
 
 - 无 I/O 的内容、工具、摘要、详情和 include 投影。

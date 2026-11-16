@@ -24,7 +24,7 @@ from app.services.infrastructure.rollout_context.checkpoint.reader import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from tests.support.job_thread_fixture import (
     job_fixture_execution_binding,
     job_fixture_thread_id,

@@ -229,7 +229,7 @@ from app.services.infrastructure.rollout_context.runtime.stream_accumulator impo
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.mapping.itemized.resource_activation import (
     project_sealed_resource_refs,
 )

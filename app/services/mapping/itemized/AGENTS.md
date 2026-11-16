@@ -20,7 +20,7 @@ itemized/
 └── history_turns/               历史Turn DTO投影，见子目录指南
 ```
 
-按数据流查找：先在 `selection.py` 确认选择和ref，再由对应投影模块转换；Provider请求与history DTO分别沿 `provider_request.py` 和 `provider_history.py`，Turn级内容、工具和详情由 `history_turns/` 组装。映射层不重新读取storage或补造canonical顺序。
+按数据流查找：先在 `selection.py` 确认选择和ref，再由对应投影模块转换；Provider请求与history DTO分别沿 `provider_request.py` 和 `provider_history.py`，Turn级内容、工具、详情及独立执行历史由 `history_turns/` 组装。映射层不重新读取storage或补造canonical顺序。
 
 # 可修改内容
 

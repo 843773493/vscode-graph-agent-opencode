@@ -65,7 +65,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
-from app.services.infrastructure.rollout_history_reader import RolloutHistoryReader
+from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
