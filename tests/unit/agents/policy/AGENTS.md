@@ -2,7 +2,7 @@
 
 ## 目录用途
 
-存放 `app/agents/policy/` 工具分组、允许列表和策略判定的单元测试。
+存放 `app/agents/policy/` 工具声明解析、分组、允许列表和策略判定的单元测试。`test_custom_tool_spec.py` 对应原始配置的解析与规范化，`test_tool_policy.py` 对应工具策略。
 
 ## 可修改内容
 

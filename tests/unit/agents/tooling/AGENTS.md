@@ -2,11 +2,11 @@
 
 ## 目录用途
 
-存放 `app/agents/default_tools.py`、`custom_tools.py` 与 `model_tool_schema.py` 的单元测试，分别验证默认工具装配、自定义工具配置装配和模型可见工具 schema。
+存放 `app/agents/default_tools.py`、`custom_tools.py` 与 `model_tool_schema.py` 的单元测试，分别验证默认工具装配、已解析声明的 factory 装配和模型可见工具 schema。
 
 ## 可修改内容
 
-- 工具配置项解析、规范化、去重、Skill 归因和 factory 参数传递测试。
+- 工具 factory 参数传递、结果及公开 schema 校验，以及实际工具的 Skill 归因测试；原始声明解析、规范化、去重和 Skill 名校验归 `policy/test_custom_tool_spec.py`。
 - `test_default_tools.py` 验证默认工具集合、顺序及测试／团队工具开关；后台工具实际执行归 `tools/test_background_tools.py`。
 - 模型可见 schema 投影、公开参数校验与协议工具 schema 测试。
 - 上述测试专用的配置样例和 fake factory。

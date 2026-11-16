@@ -9,7 +9,7 @@ import pytest
 
 from app.agents import agent_factory
 from app.agents.instruction_producers import runtime_instruction_producers
-from app.agents.policy import ToolPolicyResolver
+from app.agents.policy import ToolPolicyResolver, parse_custom_tool_specs
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME
 from app.core.trace_middleware import reset_current_gateway_id, set_current_gateway_id
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
@@ -157,7 +157,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "owns_thread": False,
         "thread_id": "thr_00000000400070008000000000000002",
         "agent_id": "default",
-        "custom_tool_specs": [{"tool_id": "test_tool_2"}],
+        "custom_tool_specs": parse_custom_tool_specs([{"tool_id": "test_tool_2"}]),
         "browser_resource_owner": MagicMock(),
         "enabled_tool_names": {"read_file"},
         "background_task_registry": MagicMock(),

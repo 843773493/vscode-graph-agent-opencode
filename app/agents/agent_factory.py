@@ -52,9 +52,9 @@ from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
 )
 from app.agents.policy import (
+    ParsedCustomToolSpec,
     ToolCapabilityPolicy,
     ToolMetadata,
-    custom_tool_spec_names,
     parse_custom_tool_specs,
     validate_tool_dependencies,
 )
@@ -185,7 +185,7 @@ def build_deep_agent(
     enabled_tool_names: set[str] | None = None,
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
-    custom_tool_specs: Sequence[object] | None = None,
+    custom_tool_specs: Sequence[ParsedCustomToolSpec] = (),
     tools: Sequence[ToolDefinitionLike] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
     response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
@@ -380,11 +380,7 @@ def build_deep_agent(
     direct_confirmation_names: set[str] = set()
     extension_policies: dict[str, ToolCapabilityPolicy] = {}
     custom_metadata: dict[str, ToolMetadata] = {}
-    custom_specs_by_name = {
-        spec.name: spec for spec in parse_custom_tool_specs(
-            custom_tool_specs or [], context=f"agent {agent_id} 的 tools.custom",
-        )
-    }
+    custom_specs_by_name = {spec.name: spec for spec in custom_tool_specs}
     custom_skill_bindings = {
         name: spec.skills for name, spec in custom_specs_by_name.items() if spec.skills
     }
@@ -438,7 +434,7 @@ def build_deep_agent(
             text_mutations=text_mutations,
         )
         declared_custom_tools = build_custom_tools(
-            custom_tool_specs or [],
+            custom_tool_specs,
             context=CustomToolFactoryContext(
                 session_id=session_id,
                 agent_id=agent_id,
@@ -914,11 +910,11 @@ def build_configured_agent(
         service.resolve_agent_confirmation_tool_names(agent_id)
         & tool_policy.enabled_names
     )
-    custom_tool_specs = list(tool_config.get("custom", []))
-    configured_custom_tool_names = custom_tool_spec_names(
-        custom_tool_specs,
+    custom_tool_specs = parse_custom_tool_specs(
+        list(tool_config.get("custom", [])),
         context=f"agent {agent_id} 的 tools.custom",
     )
+    configured_custom_tool_names = {spec.name for spec in custom_tool_specs}
     custom_tool_confirmation_names = (
         confirmation_tool_names & configured_custom_tool_names
     )

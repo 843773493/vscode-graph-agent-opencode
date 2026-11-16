@@ -22,7 +22,7 @@ from app.abstractions.session_context import (
 )
 from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.agents.model_tool_schema import get_model_tool_schema
-from app.agents.policy import parse_custom_tool_specs
+from app.agents.policy import ParsedCustomToolSpec
 from app.agents.tool_invocation_context import ToolInvocationContext
 
 if TYPE_CHECKING:
@@ -91,13 +91,13 @@ def load_custom_tool_factory(factory_path: str) -> CustomToolFactory:
 
 
 def build_custom_tools(
-    specs: Iterable[object],
+    specs: Iterable[ParsedCustomToolSpec],
     *,
     context: CustomToolFactoryContext,
 ) -> list[BaseTool]:
-    """构建可由固定扩展入口调用的自定义工具集。"""
+    """消费已校验的声明构建扩展工具，检查 factory 结果与公开 schema。"""
     tools: list[BaseTool] = []
-    for spec in parse_custom_tool_specs(specs):
+    for spec in specs:
         factory = load_custom_tool_factory(spec.factory_path)
         tool = factory(replace(context, tool_options=spec.options))
         if not isinstance(tool, BaseTool):

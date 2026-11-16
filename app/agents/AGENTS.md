@@ -66,7 +66,7 @@ app/agents/
 - `tool_identity.py` 单点定义注册工具的 `ToolDefinitionLike` 和名称提取；策略身份由 `policy/tool_capability.py` 推导，中间件和 ToolSet 注册不再声明同形类型或各自重算分组。
 - `default_tools.py::build_default_tools` 只装配固定默认工具，协作子集归 `tools/collaboration.py`；仅传递实际消费的依赖，不转导出领域工厂。策略过滤、扩展工具和执行图仍由 `agent_factory.py` 装配。
 - `middleware_assembly.py` 统一维护工具、Skill、压缩、路由和校验中间件的构造顺序；Skill 上下文登记、冻结目录安装与来源变化消费归 `skill_context.py`，压缩实例构造归 `summarization/factory.py`。工厂不再额外尝试装入空 Skill 中间件。
-- `agent_factory.py` 直接构造 `CustomToolFactoryContext` 并调用 `custom_tools.py::build_custom_tools` 取得工具列表；工具构造器负责声明校验和逐工具 options 注入，不再包装单字段 Bundle。
+- `agent_factory.py::build_configured_agent` 在配置入口将 `tools.custom` 解析为 `ParsedCustomToolSpec`，图装配和 `custom_tools.py::build_custom_tools` 直接消费该类型，不重复解析原始配置。工具构造器只负责逐工具 options 注入、factory 结果及公开 schema 校验，不再包装单字段 Bundle。
 - `tool_node_adapter.py` 的 `AgentToolNode` 统一适配 LangGraph 工具节点：在执行边界应用审批覆盖，结果仍配对原模型调用，并保留完整媒体内容；`model_call_graph.py` 调用 `adapt_agent_tool_node` 装入该节点。工具确认决策归 `tool_confirmation_middleware.py`，事件消费只通过适配器读取已注册工具。
 - `tool_result_text.py` 统一提取工具输出文本和判定显式状态；Agent step 最终回答的匹配引号还原归 `execution_step/retry.py`。
 - 产品级 Skill 源码统一位于 `resources/skills/`；自动目录只展示 Skill 的 `name`/`description`，显式文件导航只公布规范资源 URI，不暴露 DeepAgents 虚拟挂载或宿主路径。`skill_load(name=...)` 独占正文激活与来源追踪；普通目录导航与文件读取不产生这些副作用，Skill 文件可按公布的 URI 显式读取。

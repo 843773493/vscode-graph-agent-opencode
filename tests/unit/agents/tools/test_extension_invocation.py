@@ -405,7 +405,7 @@ def test_configured_debugging_specs_resolve_into_envelope_targets(
     service.get_state = AsyncMock(return_value=_idle_state())
     service.record_tool_action = AsyncMock()
     tools = build_custom_tools(
-        raw_specs,
+        specs,
         context=replace(
             custom_tool_factory_context, session_id="ses_envelope", node_debug_service=service,
         ),
