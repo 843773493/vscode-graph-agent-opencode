@@ -15,7 +15,7 @@ from app.schemas.internal_v2.session_resource import (
     SessionResourceDTO,
 )
 from app.schemas.internal_v2.workspace_resource import WorkspaceResourceDTO
-from app.services.mapping.session_resource_mapper import SessionResourceMapper
+from app.services.mapping import session_resource_mapper
 from tests.integration.backend.sessions.test_attachment_directory_shell import (
     process_running,
 )
@@ -72,7 +72,7 @@ async def test_resource_publication_failure_keeps_same_pty_and_owner_facts(
     assert ledger_path is not None
     leases = ledger_path.read_bytes()
     original_projection = WorkspaceResourceDTO.from_owner
-    original_mapping = SessionResourceMapper.terminal_to_resource
+    original_mapping = session_resource_mapper.terminal_to_session_resource
     failures: list[dict[str, object]] = []
     for native in (str(directory.resolve()), r"C:\private\runtime-secret",
                    r"\\target\private\runtime-secret", directory.resolve().as_uri()):
@@ -84,17 +84,17 @@ async def test_resource_publication_failure_keeps_same_pty_and_owner_facts(
             return result
 
         def damaged_mapping(
-            mapper: SessionResourceMapper, terminal: dict[str, object], *, available_actions: list[SessionResourceAction],
+            terminal: dict[str, object], *, available_actions: list[SessionResourceAction],
             native: str = native,
         ) -> SessionResourceDTO:
-            result = original_mapping(mapper, terminal, available_actions=available_actions)
+            result = original_mapping(terminal, available_actions=available_actions)
             result.metadata["log_path"] = native
             return result
 
         with monkeypatch.context() as patch:
             # 只补充原入口产生后的展示信息，不代建 PTY、Session、关联或 lease。
             patch.setattr(WorkspaceResourceDTO, "from_owner", classmethod(damaged_projection))
-            patch.setattr(SessionResourceMapper, "terminal_to_resource", damaged_mapping)
+            patch.setattr(session_resource_mapper, "terminal_to_session_resource", damaged_mapping)
             for route in routes:
                 rejected = await client.get(route, headers={"X-Request-ID": "resource-publication-rejected"})
                 assert rejected.status_code == 200, rejected.text

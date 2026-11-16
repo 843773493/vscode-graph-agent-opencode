@@ -1,3 +1,5 @@
+"""后台任务、终端和浏览器快照到会话资源 DTO 的纯映射。"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -9,175 +11,176 @@ from app.schemas.internal_v2.session_resource import (
 )
 
 
-class SessionResourceMapper:
-    def background_task_to_resource(
-        self,
-        handle: BackgroundTaskHandle,
-        *,
-        available_actions: list[SessionResourceAction],
-    ) -> SessionResourceDTO:
-        updated_at = handle.ended_at or handle.started_at or handle.created_at
-        return SessionResourceDTO(
-            resource_id=handle.task_id,
-            session_id=handle.session_id,
-            kind="background_task",
-            name=handle.task_name,
-            status=handle.status,
-            created_at=handle.created_at,
-            updated_at=updated_at,
-            started_at=handle.started_at,
-            ended_at=handle.ended_at,
-            available_actions=available_actions,
-            metadata={**handle.metadata, "thread_id": handle.thread_id, "agent_id": handle.agent_id,
-                      "descriptor_kind": handle.descriptor.kind, "descriptor_version": handle.descriptor.version},
+def background_task_to_session_resource(
+    handle: BackgroundTaskHandle,
+    *,
+    available_actions: list[SessionResourceAction],
+) -> SessionResourceDTO:
+    updated_at = handle.ended_at or handle.started_at or handle.created_at
+    return SessionResourceDTO(
+        resource_id=handle.task_id,
+        session_id=handle.session_id,
+        kind="background_task",
+        name=handle.task_name,
+        status=handle.status,
+        created_at=handle.created_at,
+        updated_at=updated_at,
+        started_at=handle.started_at,
+        ended_at=handle.ended_at,
+        available_actions=available_actions,
+        metadata={**handle.metadata, "thread_id": handle.thread_id, "agent_id": handle.agent_id,
+                  "descriptor_kind": handle.descriptor.kind, "descriptor_version": handle.descriptor.version},
+    )
+
+
+
+def terminal_to_session_resource(
+    terminal: dict[str, object],
+    *,
+    available_actions: list[SessionResourceAction],
+) -> SessionResourceDTO:
+    terminal_id = str(terminal["terminal_id"])
+    session_id = str(terminal["session_id"])
+    status = str(terminal.get("status") or "unknown")
+    created_at = parse_datetime(terminal.get("created_at"), "created_at", terminal_id)
+    updated_at = parse_datetime(terminal.get("updated_at"), "updated_at", terminal_id)
+    started_at = parse_optional_datetime(terminal.get("started_at"), "started_at", terminal_id)
+    ended_at = parse_optional_datetime(terminal.get("ended_at"), "ended_at", terminal_id)
+
+    metadata = {
+        # 只投影工作区内相对目录；绝对真实路径 MUST NOT 进入 API 响应体（裁定 D-A2/D-A3）。
+        "cwd_relative": terminal.get("cwd_relative"),
+        "command": terminal.get("last_command"),
+        "shell_command": terminal.get("command"),
+        "command_status": terminal.get("last_command_status"),
+        "command_exit_code": terminal.get("last_command_exit_code"),
+        "command_started_at": terminal.get("last_command_started_at"),
+        "command_completed_at": terminal.get("last_command_completed_at"),
+        "last_input": terminal.get("last_input"),
+        "last_input_source": terminal.get("last_input_source"),
+        "last_input_at": terminal.get("last_input_at"),
+        "os_pid": terminal.get("os_pid"),
+        "process_group_id": terminal.get("process_group_id"),
+        "process_session_id": terminal.get("process_session_id"),
+        "release_reason": terminal.get("release_reason"),
+        "client_count": terminal.get("client_count"),
+        "sequence": terminal.get("sequence"),
+        "retention_scope": terminal["retention_scope"],
+        "source_thread": terminal["source_thread"],
+        "thread_associations": terminal["thread_associations"],
+        "owner_revision": terminal["owner_revision"],
+        "reconciliation_status": terminal["reconciliation_status"],
+        "reclaim_at": terminal["reclaim_at"],
+        "error": terminal["error"],
+    }
+    if status == "lost":
+        metadata["status_note"] = "终端进程已断开 (lost)，通常是终端管理器重启后无法重新 attach。"
+    elif terminal.get("release_reason") == "terminal_manager_startup_cleanup":
+        metadata["status_note"] = "终端管理器启动时已自动释放上次遗留的终端进程。"
+    elif str(terminal.get("release_reason") or "").startswith("terminal_manager_"):
+        metadata["status_note"] = "终端管理器退出时已自动释放该终端进程。"
+    elif status == "deleted":
+        metadata["status_note"] = "终端已删除 (deleted)，仅保留历史记录，当前不可 attach。"
+
+    return SessionResourceDTO(
+        resource_id=terminal_id,
+        session_id=session_id,
+        kind="terminal",
+        name=f"终端 / {terminal_id}",
+        status=status,
+        created_at=created_at,
+        updated_at=updated_at,
+        started_at=started_at,
+        ended_at=ended_at,
+        available_actions=available_actions,
+        metadata=metadata,
+    )
+
+
+
+def browser_to_session_resource(
+    browser: dict[str, object],
+    *,
+    available_actions: list[SessionResourceAction],
+) -> SessionResourceDTO:
+    browser_id = str(browser["browser_id"])
+    session_id = str(browser["session_id"])
+    status = str(browser.get("status") or "unknown")
+    created_at = parse_datetime(browser.get("created_at"), "created_at", browser_id)
+    updated_at = parse_datetime(browser.get("updated_at"), "updated_at", browser_id)
+    started_at = parse_optional_datetime(browser.get("started_at"), "started_at", browser_id)
+    ended_at = parse_optional_datetime(browser.get("ended_at"), "ended_at", browser_id)
+
+    metadata = {
+        "page_id": browser.get("page_id") or browser_id,
+        "retention_scope": browser["retention_scope"],
+        "source_thread": browser["source_thread"],
+        "thread_associations": browser["thread_associations"],
+        "owner_revision": browser["owner_revision"],
+        "reconciliation_status": browser["reconciliation_status"],
+        "reclaim_at": browser["reclaim_at"],
+        "error": browser["error"],
+        "url": browser.get("url"),
+        "title": browser.get("title"),
+        "viewport": browser.get("viewport"),
+        "device_profile": browser.get("device_profile"),
+        "device_orientation": browser.get("device_orientation"),
+        "device_scale_factor": browser.get("device_scale_factor"),
+        "touch_simulation_enabled": browser.get("touch_simulation_enabled"),
+        "device_emulation": browser.get("device_emulation"),
+        "client_count": browser.get("client_count"),
+        "sequence": browser.get("sequence"),
+        "pending_dialog": browser.get("pending_dialog"),
+        "pending_file_chooser": browser.get("pending_file_chooser"),
+        "release_reason": browser.get("release_reason"),
+        "error_message": browser.get("error_message"),
+        "resource_state": browser.get("resource_state"),
+        "resource_policy": browser.get("resource_policy"),
+        "resource_protection_reasons": browser.get("resource_protection_reasons"),
+        "resource_hard_protection_reasons": browser.get("resource_hard_protection_reasons"),
+        "resource_soft_protection_reasons": browser.get("resource_soft_protection_reasons"),
+        "resource_protections": browser.get("resource_protections"),
+        "resource_transition_reason": browser.get("resource_transition_reason"),
+        "resource_transition_error": browser.get("resource_transition_error"),
+        "frozen_at": browser.get("frozen_at"),
+        "discarded_at": browser.get("discarded_at"),
+        "last_wake_at": browser.get("last_wake_at"),
+        "runtime_generation": browser.get("runtime_generation"),
+        "stream_metrics": browser.get("stream_metrics"),
+        # 只投影不含路径的显式布尔；检查点真实文件路径 MUST NOT 上浮（裁定 D-A5）。
+        "checkpoint_available": bool(browser.get("checkpoint")),
+    }
+    if (
+        status == "lost"
+        and browser.get("resource_state") == "discarded"
+        and isinstance(browser.get("checkpoint"), dict)
+    ):
+        metadata["status_note"] = "浏览器已冷回收，恢复检查点可用，可以重新打开。"
+    elif status == "lost":
+        metadata["status_note"] = (
+            "浏览器运行时或恢复检查点已断开，无法恢复原浏览器。"
         )
+    elif status == "closed":
+        metadata["status_note"] = "浏览器页面已关闭，仅保留历史记录，当前不可 attach。"
+    elif status == "deleted":
+        metadata["status_note"] = "浏览器页面已删除，仅保留历史记录，当前不可 attach。"
+    elif status == "failed":
+        metadata["status_note"] = "浏览器页面启动或导航失败，仅保留失败记录。"
 
-    def terminal_to_resource(
-        self,
-        terminal: dict[str, object],
-        *,
-        available_actions: list[SessionResourceAction],
-    ) -> SessionResourceDTO:
-        terminal_id = str(terminal["terminal_id"])
-        session_id = str(terminal["session_id"])
-        status = str(terminal.get("status") or "unknown")
-        created_at = parse_datetime(terminal.get("created_at"), "created_at", terminal_id)
-        updated_at = parse_datetime(terminal.get("updated_at"), "updated_at", terminal_id)
-        started_at = parse_optional_datetime(terminal.get("started_at"), "started_at", terminal_id)
-        ended_at = parse_optional_datetime(terminal.get("ended_at"), "ended_at", terminal_id)
+    return SessionResourceDTO(
+        resource_id=browser_id,
+        session_id=session_id,
+        kind="browser",
+        name=f"浏览器 / {browser.get('title') or browser_id}",
+        status=status,
+        created_at=created_at,
+        updated_at=updated_at,
+        started_at=started_at,
+        ended_at=ended_at,
+        available_actions=available_actions,
+        metadata=metadata,
+    )
 
-        metadata = {
-            # 只投影工作区内相对目录；绝对真实路径 MUST NOT 进入 API 响应体（裁定 D-A2/D-A3）。
-            "cwd_relative": terminal.get("cwd_relative"),
-            "command": terminal.get("last_command"),
-            "shell_command": terminal.get("command"),
-            "command_status": terminal.get("last_command_status"),
-            "command_exit_code": terminal.get("last_command_exit_code"),
-            "command_started_at": terminal.get("last_command_started_at"),
-            "command_completed_at": terminal.get("last_command_completed_at"),
-            "last_input": terminal.get("last_input"),
-            "last_input_source": terminal.get("last_input_source"),
-            "last_input_at": terminal.get("last_input_at"),
-            "os_pid": terminal.get("os_pid"),
-            "process_group_id": terminal.get("process_group_id"),
-            "process_session_id": terminal.get("process_session_id"),
-            "release_reason": terminal.get("release_reason"),
-            "client_count": terminal.get("client_count"),
-            "sequence": terminal.get("sequence"),
-            "retention_scope": terminal["retention_scope"],
-            "source_thread": terminal["source_thread"],
-            "thread_associations": terminal["thread_associations"],
-            "owner_revision": terminal["owner_revision"],
-            "reconciliation_status": terminal["reconciliation_status"],
-            "reclaim_at": terminal["reclaim_at"],
-            "error": terminal["error"],
-        }
-        if status == "lost":
-            metadata["status_note"] = "终端进程已断开 (lost)，通常是终端管理器重启后无法重新 attach。"
-        elif terminal.get("release_reason") == "terminal_manager_startup_cleanup":
-            metadata["status_note"] = "终端管理器启动时已自动释放上次遗留的终端进程。"
-        elif str(terminal.get("release_reason") or "").startswith("terminal_manager_"):
-            metadata["status_note"] = "终端管理器退出时已自动释放该终端进程。"
-        elif status == "deleted":
-            metadata["status_note"] = "终端已删除 (deleted)，仅保留历史记录，当前不可 attach。"
-
-        return SessionResourceDTO(
-            resource_id=terminal_id,
-            session_id=session_id,
-            kind="terminal",
-            name=f"终端 / {terminal_id}",
-            status=status,
-            created_at=created_at,
-            updated_at=updated_at,
-            started_at=started_at,
-            ended_at=ended_at,
-            available_actions=available_actions,
-            metadata=metadata,
-        )
-
-    def browser_to_resource(
-        self,
-        browser: dict[str, object],
-        *,
-        available_actions: list[SessionResourceAction],
-    ) -> SessionResourceDTO:
-        browser_id = str(browser["browser_id"])
-        session_id = str(browser["session_id"])
-        status = str(browser.get("status") or "unknown")
-        created_at = parse_datetime(browser.get("created_at"), "created_at", browser_id)
-        updated_at = parse_datetime(browser.get("updated_at"), "updated_at", browser_id)
-        started_at = parse_optional_datetime(browser.get("started_at"), "started_at", browser_id)
-        ended_at = parse_optional_datetime(browser.get("ended_at"), "ended_at", browser_id)
-
-        metadata = {
-            "page_id": browser.get("page_id") or browser_id,
-            "retention_scope": browser["retention_scope"],
-            "source_thread": browser["source_thread"],
-            "thread_associations": browser["thread_associations"],
-            "owner_revision": browser["owner_revision"],
-            "reconciliation_status": browser["reconciliation_status"],
-            "reclaim_at": browser["reclaim_at"],
-            "error": browser["error"],
-            "url": browser.get("url"),
-            "title": browser.get("title"),
-            "viewport": browser.get("viewport"),
-            "device_profile": browser.get("device_profile"),
-            "device_orientation": browser.get("device_orientation"),
-            "device_scale_factor": browser.get("device_scale_factor"),
-            "touch_simulation_enabled": browser.get("touch_simulation_enabled"),
-            "device_emulation": browser.get("device_emulation"),
-            "client_count": browser.get("client_count"),
-            "sequence": browser.get("sequence"),
-            "pending_dialog": browser.get("pending_dialog"),
-            "pending_file_chooser": browser.get("pending_file_chooser"),
-            "release_reason": browser.get("release_reason"),
-            "error_message": browser.get("error_message"),
-            "resource_state": browser.get("resource_state"),
-            "resource_policy": browser.get("resource_policy"),
-            "resource_protection_reasons": browser.get("resource_protection_reasons"),
-            "resource_hard_protection_reasons": browser.get("resource_hard_protection_reasons"),
-            "resource_soft_protection_reasons": browser.get("resource_soft_protection_reasons"),
-            "resource_protections": browser.get("resource_protections"),
-            "resource_transition_reason": browser.get("resource_transition_reason"),
-            "resource_transition_error": browser.get("resource_transition_error"),
-            "frozen_at": browser.get("frozen_at"),
-            "discarded_at": browser.get("discarded_at"),
-            "last_wake_at": browser.get("last_wake_at"),
-            "runtime_generation": browser.get("runtime_generation"),
-            "stream_metrics": browser.get("stream_metrics"),
-            # 只投影不含路径的显式布尔；检查点真实文件路径 MUST NOT 上浮（裁定 D-A5）。
-            "checkpoint_available": bool(browser.get("checkpoint")),
-        }
-        if (
-            status == "lost"
-            and browser.get("resource_state") == "discarded"
-            and isinstance(browser.get("checkpoint"), dict)
-        ):
-            metadata["status_note"] = "浏览器已冷回收，恢复检查点可用，可以重新打开。"
-        elif status == "lost":
-            metadata["status_note"] = (
-                "浏览器运行时或恢复检查点已断开，无法恢复原浏览器。"
-            )
-        elif status == "closed":
-            metadata["status_note"] = "浏览器页面已关闭，仅保留历史记录，当前不可 attach。"
-        elif status == "deleted":
-            metadata["status_note"] = "浏览器页面已删除，仅保留历史记录，当前不可 attach。"
-        elif status == "failed":
-            metadata["status_note"] = "浏览器页面启动或导航失败，仅保留失败记录。"
-
-        return SessionResourceDTO(
-            resource_id=browser_id,
-            session_id=session_id,
-            kind="browser",
-            name=f"浏览器 / {browser.get('title') or browser_id}",
-            status=status,
-            created_at=created_at,
-            updated_at=updated_at,
-            started_at=started_at,
-            ended_at=ended_at,
-            available_actions=available_actions,
-            metadata=metadata,
-        )
 
 
 def parse_datetime(value: object, field_name: str, resource_id: str) -> datetime:

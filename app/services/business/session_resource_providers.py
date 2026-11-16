@@ -21,7 +21,7 @@ from app.services.business.session_resource_actions import (
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
-from app.services.mapping.session_resource_mapper import SessionResourceMapper
+from app.services.mapping import session_resource_mapper
 
 _ACTIVE_TERMINAL_STATUSES = frozenset({"created", "running"})
 _CURRENT_BROWSER_STATUSES = frozenset({"created", "running", "frozen", "discarded"})
@@ -30,14 +30,8 @@ _CURRENT_BROWSER_STATUSES = frozenset({"created", "running", "frozen", "discarde
 class BackgroundTaskResourceProvider:
     kind: SessionResourceKind = "background_task"
 
-    def __init__(
-        self,
-        *,
-        task_registry: BackgroundTaskRegistryProtocol,
-        resource_mapper: SessionResourceMapper,
-    ) -> None:
+    def __init__(self, *, task_registry: BackgroundTaskRegistryProtocol) -> None:
         self._task_registry = task_registry
-        self._resource_mapper = resource_mapper
 
     async def list_resources(
         self,
@@ -101,7 +95,7 @@ class BackgroundTaskResourceProvider:
         return await self._task_registry.delete_session(session_id)
 
     def _to_resource(self, handle: BackgroundTaskHandle) -> SessionResourceDTO:
-        return self._resource_mapper.background_task_to_resource(
+        return session_resource_mapper.background_task_to_session_resource(
             handle,
             available_actions=background_task_available_actions(handle.status),
         )
@@ -110,9 +104,8 @@ class BackgroundTaskResourceProvider:
 class TerminalResourceProvider:
     kind: SessionResourceKind = "terminal"
 
-    def __init__(self, *, terminal_owner: TerminalResourceOwner, resource_mapper: SessionResourceMapper) -> None:
+    def __init__(self, *, terminal_owner: TerminalResourceOwner) -> None:
         self._owner = terminal_owner
-        self._resource_mapper = resource_mapper
 
     async def list_resources(
         self,
@@ -182,7 +175,7 @@ class TerminalResourceProvider:
         terminal_resource_data: dict[str, object],
         session_id: str,
     ) -> SessionResourceDTO:
-        return self._resource_mapper.terminal_to_resource(
+        return session_resource_mapper.terminal_to_session_resource(
             {**terminal_resource_data, "session_id": session_id},
             available_actions=(
                 ["cancel"]
@@ -196,9 +189,8 @@ class TerminalResourceProvider:
 class BrowserResourceProvider:
     kind: SessionResourceKind = "browser"
 
-    def __init__(self, *, browser_owner: BrowserResourceOwner, resource_mapper: SessionResourceMapper) -> None:
+    def __init__(self, *, browser_owner: BrowserResourceOwner) -> None:
         self._owner = browser_owner
-        self._resource_mapper = resource_mapper
 
     async def list_resources(
         self,
@@ -292,7 +284,7 @@ class BrowserResourceProvider:
             actions.append("cancel")
             if browser_resource_data.get("resource_state") in {"frozen", "discarded"}:
                 actions.append("resume")
-        return self._resource_mapper.browser_to_resource(
+        return session_resource_mapper.browser_to_session_resource(
             {**browser_resource_data, "session_id": session_id},
             available_actions=actions,
         )

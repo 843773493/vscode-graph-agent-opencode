@@ -13,7 +13,7 @@ mapping/
 │   ├── user_message_content_projection.py   canonical用户正文 → 展示正文与附件元数据
 │   └── turn_response_parts.py               canonical Rollout → 历史/live共用响应部件
 ├── 会话资源
-│   ├── session_resource_mapper.py           会话资源记录 → 资源DTO
+│   ├── session_resource_mapper.py           后台任务句柄、Terminal／Browser快照 → 会话资源DTO
 │   └── session_catalog_search.py             公开 catalog 节点 → 后端与 Gateway 共用搜索键
 ├── 运行事件
 │   └── trace_event_mapper.py                Trace事件 → Trace DTO
@@ -39,3 +39,4 @@ mapping/
 - 映射失败要显式暴露，不要静默丢字段。
 - 命名要能直接体现输入与输出的语义。
 - 消息转换使用模块函数，由 `MessageService` 显式调用；不通过 mixin 继承隐藏纯映射方法。Agent State 保留原生内容及恢复字段，可见 DTO 仍按业务展示策略投影，二者不能相互替代。
+- 会话资源转换由三个 `*_to_session_resource` 纯函数提供；provider 决定动作权限后直接调用，不在容器装配无状态 mapper 实例。

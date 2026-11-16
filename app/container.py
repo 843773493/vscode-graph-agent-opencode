@@ -187,7 +187,6 @@ from app.services.infrastructure.workspace_files.text_owner import (
 )
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
-from app.services.mapping.session_resource_mapper import SessionResourceMapper
 from app.services.orchestration.agent_execution_service import AgentExecutionService
 from app.services.orchestration.communication.service import (
     SessionCommunicationService,
@@ -1047,21 +1046,11 @@ def _build_app_container(
         checkpointer=checkpointer,
         session_service=session_service,
     )
-    session_resource_mapper = SessionResourceMapper()
     session_resource_provider_registry = SessionResourceProviderRegistry(
         [
-            BackgroundTaskResourceProvider(
-                task_registry=background_task_registry,
-                resource_mapper=session_resource_mapper,
-            ),
-            TerminalResourceProvider(
-                terminal_owner=terminal_resource_owner,
-                resource_mapper=session_resource_mapper,
-            ),
-            BrowserResourceProvider(
-                browser_owner=browser_resource_owner,
-                resource_mapper=session_resource_mapper,
-            ),
+            BackgroundTaskResourceProvider(task_registry=background_task_registry),
+            TerminalResourceProvider(terminal_owner=terminal_resource_owner),
+            BrowserResourceProvider(browser_owner=browser_resource_owner),
         ]
     )
     session_resource_service = SessionResourceService(
