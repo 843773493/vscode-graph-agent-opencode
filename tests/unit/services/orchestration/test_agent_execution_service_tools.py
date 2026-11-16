@@ -5,8 +5,6 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
-from langchain.tools import ToolRuntime
-from langchain_core.tools import tool
 
 from app.agents.agent_tools import (
     build_default_tools,
@@ -19,7 +17,6 @@ from app.agents.tool_invocation_context import (
 from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
-from app.runtime.agent_runtime import build_tool_definitions
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.orchestration.background_work.mailbox import BackgroundMailbox
@@ -168,49 +165,6 @@ class _FakeResult:
             "dispatch": self.dispatch.model_dump(mode="json"),
         }
 
-
-
-
-def test_tool_catalog_uses_model_visible_schema_without_runtime_fields():
-    @tool
-    def runtime_aware_tool(value: str, runtime: ToolRuntime) -> str:
-        """返回输入值。"""
-        assert runtime.tool_call_id
-        return value
-
-    definitions = build_tool_definitions([runtime_aware_tool])
-
-    assert len(definitions) == 1
-    assert definitions[0]["name"] == "runtime_aware_tool"
-    assert definitions[0]["parameters"]["properties"] == {
-        "value": {"title": "Value", "type": "string"}
-    }
-    assert definitions[0]["parameters"]["required"] == ["value"]
-
-
-def test_mcp_catalog_definition_uses_extension_group_metadata():
-    @tool
-    def mcp_status(value: str) -> str:
-        """查询 MCP 状态。"""
-        return value
-
-    mcp_status = mcp_status.model_copy(
-        update={"metadata": {"mcp_server_id": "tui-mcp"}}
-    )
-
-    @tool
-    def read_file(value: str) -> str:
-        """读取文件。"""
-        return value
-
-    definitions = build_tool_definitions([read_file], extension_tools=[mcp_status])
-    mcp_definition = next(
-        definition for definition in definitions if definition["name"] == "mcp_status"
-    )
-
-    assert mcp_definition["kind"] == "extension"
-    assert mcp_definition["group_id"] == "mcp:tui-mcp"
-    assert mcp_definition["group_name"] == "扩展工具 · MCP · tui-mcp"
 
 
 @pytest.mark.asyncio

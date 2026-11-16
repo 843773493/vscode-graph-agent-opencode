@@ -15,6 +15,8 @@ mapping tests/
 │   └── test_turn_response_parts.py
 ├── 运行事件
 │   └── test_trace_event_mapper.py（Trace DTO身份、时间、工具状态与Skill字段）
+├── 工具管理目录
+│   └── test_tool_catalog.py（模型可见参数与 MCP 分组字段）
 └── itemized投影
     ├── itemized/test_selection_role_projection.py
     ├── itemized/test_carrier_dedup_tool_result.py

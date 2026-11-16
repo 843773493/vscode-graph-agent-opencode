@@ -632,10 +632,10 @@ def _build_agent_execution_service(dependencies):
     )
 
 
-def test_tool_face_blueprint_cache_is_keyed_without_session(
+def test_tool_catalog_cache_is_keyed_without_session(
     agent_execution_dependencies,
 ):
-    """OpenSpec 8.4：复用的是不含 session/thread 的工具面 blueprint 投影。
+    """管理目录缓存不含 session/thread 或执行状态。
 
     运行选择不能从管理目录中移除定义；同一配置 revision 复用定义，配置变化才重建。
     缓存键不含 session_id，真实 invocation 的 session/thread 依赖不在其中。
@@ -657,7 +657,7 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
             side_effect=[object(), object()],
         ) as build_runtime,
         patch(
-            "app.services.orchestration.agent_execution_service.build_tool_definitions",
+            "app.services.orchestration.agent_execution_service.tools_to_catalog_definitions",
             side_effect=fake_definitions,
         ),
     ):
@@ -678,16 +678,16 @@ def test_tool_face_blueprint_cache_is_keyed_without_session(
     )
     assert second is not first
     # 缓存键不含 session_id：不含任何会话身份。
-    keys = list(service._tool_face_cache)
+    keys = list(service._tool_catalog_cache)
     assert len(keys) == 1
     key = keys[0]
     assert key[0] == "test_agent"
     assert key[1] == "revision-b"
     assert "ses_test" not in str(key)
-    assert service._tool_face_cache[key] == [{"id": "read_file", "name": "read_file"}]
+    assert service._tool_catalog_cache[key] == [{"id": "read_file", "name": "read_file"}]
 
 
-def test_tool_face_resolves_default_agent_before_owns_thread_false_assembly(
+def test_tool_catalog_resolves_default_agent_before_owns_thread_false_assembly(
     agent_execution_dependencies,
 ):
     service = _build_agent_execution_service(agent_execution_dependencies)
@@ -700,7 +700,7 @@ def test_tool_face_resolves_default_agent_before_owns_thread_false_assembly(
     with (
         patch.object(service, "_build_agent", side_effect=build_agent),
         patch(
-            "app.services.orchestration.agent_execution_service.build_tool_definitions",
+            "app.services.orchestration.agent_execution_service.tools_to_catalog_definitions",
             return_value=[],
         ),
     ):

@@ -57,7 +57,6 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.runtime.agent_runtime import (
     AgentRuntimeDependencyProvider,
     build_session_agent_runtime,
-    build_tool_definitions,
 )
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.job.service import JobState
@@ -81,6 +80,7 @@ from app.services.infrastructure.resource_platform.sources.gateway_skill_sources
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
+from app.services.mapping.tool_catalog import tools_to_catalog_definitions
 from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.execution_step.approval import ToolApprovalService
@@ -130,12 +130,10 @@ class AgentExecutionService(JobStepExecutor):
         gateway_skill_sources: GatewaySkillSources | None = None,
         configured_skill_sources: ConfiguredSkillSources | None = None,
     ):
-        # OpenSpec 8.4：进程内复用的只有不含 Session/Thread 的 graph
-        # blueprint/topology 投影——这里缓存的是 Provider 工具面定义（纯 DTO）
-        # 与它的 MCP 工具面指纹；键不含 session/thread，值不捕获会话闭包，也
-        # 不携带任何执行状态。真实 thread 图由 tracker 的 generation scope 持有，
-        # invocation 的 admission 与工具调用 ContextVar 由 Runner 每轮绑定。
-        self._tool_face_cache: dict[tuple[object, ...], list[dict[str, Any]]] = {}
+        # 管理目录按配置与 MCP 版本缓存纯 DTO，不捕获 Session/Thread 或执行闭包。
+        # 真实 Thread 图由 tracker 的 generation scope 持有；invocation 的
+        # admission 与工具调用 ContextVar 由 Runner 每轮绑定。
+        self._tool_catalog_cache: dict[tuple[object, ...], list[dict[str, Any]]] = {}
         self._config_service = config_service
         self._background_task_registry = background_task_registry
         self._background_mailbox = background_mailbox
@@ -461,7 +459,7 @@ class AgentExecutionService(JobStepExecutor):
             except Exception as error:  # noqa: BLE001 - worker 失败后仍排空其它真实 scope。
                 errors.append(error)
             self._sweep_task = None
-        self._tool_face_cache.clear()
+        self._tool_catalog_cache.clear()
         try:
             await run_cleanup_shielded(self._residency_tracker.close)
         except Exception as error:  # noqa: BLE001
@@ -548,14 +546,14 @@ class AgentExecutionService(JobStepExecutor):
             candidate = await persisted_pending_tool_candidate(checkpointer, admission)
         return candidate.checkpoint_id if candidate is not None else None
 
-    def _tool_face_definitions(self, agent_id: str | None) -> list[dict[str, Any]]:
-        """缓存不含执行状态的工具定义；与执行共用注册，不初始化模型或图。"""
+    def get_available_tools(self, agent_id: str | None = None) -> list[dict[str, Any]]:
+        """按配置缓存完整工具目录；运行选择另行投影，不初始化模型或图。"""
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
 
         mcp_tools = list(self._dependency_provider.get_mcp_tools())
         # MCP 工具集是运行时可变的：用它的内容指纹参与缓存键，避免复用过期
-        # 工具面。指纹复用 extension catalog 的唯一 payload 摘要实现。
+        # 工具目录。指纹复用 extension catalog 的唯一 payload 摘要实现。
         mcp_binding = seal_extension_catalog_binding_from_tools(mcp_tools)()
 
         config_snapshot = self._config_service.get_snapshot()
@@ -574,7 +572,7 @@ class AgentExecutionService(JobStepExecutor):
                 mcp_binding.catalog_revision,
                 mcp_binding.generation,
             )
-            cached = self._tool_face_cache.get(cache_key)
+            cached = self._tool_catalog_cache.get(cache_key)
             if cached is not None:
                 return cached
 
@@ -591,24 +589,20 @@ class AgentExecutionService(JobStepExecutor):
                 resource_activation=None,
                 owns_thread=False,
             )
-            definitions = build_tool_definitions(
+            definitions = tools_to_catalog_definitions(
                 cast(list[BaseTool], registered_tools),
                 extension_tools=mcp_tools,
             )
 
-        # 只保留该 agent 的当前工具面：旧配置 revision 的子项
+        # 只保留该 Agent 的当前工具目录：旧配置 revision 的子项
         # 不再被查询命中，留在表里只会无界增长。正在读取的调用方已持有返回值，
         # 移除旧项不影响它在途使用。
         stale_keys = [
             key
-            for key in self._tool_face_cache
+            for key in self._tool_catalog_cache
             if key[0] == cache_key[0] and key != cache_key
         ]
         for stale_key in stale_keys:
-            del self._tool_face_cache[stale_key]
-        self._tool_face_cache[cache_key] = definitions
+            del self._tool_catalog_cache[stale_key]
+        self._tool_catalog_cache[cache_key] = definitions
         return definitions
-
-    def get_available_tools(self, agent_id: str | None = None) -> list[dict[str, Any]]:
-        """工具管理目录：按配置导出完整定义，运行选择由 AgentToolSettingsService 投影。"""
-        return self._tool_face_definitions(agent_id)
