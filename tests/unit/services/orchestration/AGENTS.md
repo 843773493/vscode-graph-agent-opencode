@@ -8,6 +8,7 @@
 
 ```text
 orchestration/
+├── background_work/     后台工具任务、持久邮箱与恢复的状态转换
 ├── communication/       Session 间消息接纳与冷观察的组合规则
 ├── resource_activation/ 资源快照冻结、binding 与 epoch 边界
 ├── test_session_turn_replay_service.py Message/Turn 回退、替换输入与重新派发顺序

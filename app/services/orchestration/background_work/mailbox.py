@@ -9,20 +9,20 @@ from typing import Protocol
 
 from pydantic import JsonValue
 
-from app.abstractions.background_message_bus import (
+from app.core.session_lifecycle_gate import OperationHolderGate
+from app.domain.background_work import (
     BackgroundMessageBatchDTO,
     BackgroundMessageDTO,
     BackgroundMessageKind,
+    BackgroundToolResultIdentity,
 )
-from app.core.background_task_contracts import BackgroundToolResultIdentity
-from app.core.background_task_registry import BackgroundWorkStoreProtocol
-from app.core.session_lifecycle_gate import OperationHolderGate
 from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.identity.tool_call_identity import (
     provider_tool_call_id,
     software_tool_operation_id,
 )
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
 
 
 class BackgroundToolResultReader(Protocol):
@@ -31,8 +31,8 @@ class BackgroundToolResultReader(Protocol):
     ) -> str | None: ...
 
 
-class BackgroundMessageBus:
-    def __init__(self, *, store: BackgroundWorkStoreProtocol) -> None:
+class BackgroundMailbox:
+    def __init__(self, *, store: BackgroundWorkStore) -> None:
         self._store = store
         self._consumers = OperationHolderGate(store.sessions_dir, namespace="background_consumers")
         self._waiters: dict[tuple[str, str, str], set[asyncio.Event]] = {}

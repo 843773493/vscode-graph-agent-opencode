@@ -472,8 +472,8 @@ class WorkspaceLifespan:
                 await run_sync_shielded(load_session_agent_factory)
             with _workspace_startup_stage(container, "team_fanout_service.start"):
                 await container.team_fanout_service.start()
-            with _workspace_startup_stage(container, "background_message_bus.reconcile"):
-                await container.background_message_bus.reconcile(container.checkpointer)
+            with _workspace_startup_stage(container, "background_mailbox.reconcile"):
+                await container.background_mailbox.reconcile(container.checkpointer)
             with _workspace_startup_stage(container, "background_task_registry.start"):
                 await container.background_task_registry.start()
             with _workspace_startup_stage(container, "thread_initial_execution_service.start"):

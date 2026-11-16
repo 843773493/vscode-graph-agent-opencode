@@ -4,15 +4,15 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, tool
 
-from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.background_mailbox import BackgroundMailboxProtocol
 from app.agents.tool_invocation_context import ToolInvocationContext
-from app.core.background_task_contracts import (
+from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundToolResultIdentity,
 )
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 
 def _thread(invocation_context: ToolInvocationContext, session_id: str) -> str:
@@ -59,7 +59,7 @@ def create_background_message_collection_tool(
     session_id: str,
     agent_id: str = "default",
     *,
-    background_message_bus: BackgroundMessageBusProtocol,
+    background_mailbox: BackgroundMailboxProtocol,
     invocation_context: ToolInvocationContext,
 ) -> BaseTool:
     """创建按持久 consumption identity 恢复的精确 Thread 邮箱收集工具。"""
@@ -72,7 +72,7 @@ def create_background_message_collection_tool(
         stop_on_interrupt: bool = True,
     ) -> dict[str, Any]:
         """持续收集当前 thread 与 agent selector 的后台消息。"""
-        batch = await background_message_bus.collect(
+        batch = await background_mailbox.collect(
             session_id, _thread(invocation_context, session_id), agent_id,
             consumption_id=invocation_context.require_operation_id("background_collect"),
             source_id=source_id, after_message_id=after_message_id,

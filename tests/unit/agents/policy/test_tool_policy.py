@@ -153,7 +153,7 @@ def test_policy_default_names_match_actual_agent_graph_tools(
     direct_tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root),
         session_id="ses_policy_consistency",
         background_task_registry=MagicMock(),
-        background_message_bus=MagicMock(),
+        background_mailbox=MagicMock(),
         job_event_bus=MagicMock(),
         job_service=MagicMock(),
         message_service=MagicMock(),

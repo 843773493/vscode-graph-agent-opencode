@@ -4,9 +4,11 @@
 
 当前推荐的目录语义如下：
 
-- `app/core/`：无业务语义的通用内核，如事件总线、路径契约、环境加载、异常、后台任务和一次性存储迁移等。
+- `app/core/`：不承担业务编排的基础能力，如事件总线、路径契约、环境加载、异常、会话存储原语和一次性存储迁移等。
+- `app/domain/`：不依赖 I/O 的领域数据与规则；后台任务和邮箱的纯数据合同位于 `background_work.py`。
 - `app/abstractions/`：应用内部协议与抽象接口，只放 `Protocol`、轻量类型约束和稳定边界定义。
 - `app/services/`：业务服务实现，承载实际业务行为，但不负责应用启动装配。
+  后台工具任务的执行、恢复和持久邮箱归 `services/orchestration/background_work/`，工作区自动化编排归同层 `persistent_tasks/`。
 - `app/runtime/`：运行时组装、依赖提供、Agent 运行上下文与编排入口。
 - `app/agents/`：Agent 构建、工具、middleware 与相关运行增强逻辑。
 - `app/api/`：HTTP 接口层，只处理请求、响应、鉴权和依赖注入，不放业务核心逻辑。

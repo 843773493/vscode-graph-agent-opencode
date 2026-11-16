@@ -5,7 +5,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import JsonValue
 
-from app.core.background_task_contracts import (
+from app.domain.background_work import (
     BackgroundMessageBatchDTO,
     BackgroundMessageDTO,
     BackgroundMessageKind,
@@ -15,7 +15,7 @@ from app.domain.itemized.records import CanonicalItemRecord
 
 
 @runtime_checkable
-class BackgroundMessageBusProtocol(Protocol):
+class BackgroundMailboxProtocol(Protocol):
     async def emit(
         self,
         session_id: str,
@@ -47,5 +47,3 @@ class BackgroundMessageBusProtocol(Protocol):
     def acknowledge(self, session_id: str, consumption_id: str) -> None: ...
 
     def acknowledge_tool_results(self, session_id: str, thread_id: str, items: Sequence[CanonicalItemRecord]) -> None: ...
-
-__all__ = ["BackgroundMessageBatchDTO", "BackgroundMessageBusProtocol", "BackgroundMessageDTO", "BackgroundMessageKind"]

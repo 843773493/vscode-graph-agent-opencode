@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.core.background_task_contracts import BackgroundTaskHandle
+from app.domain.background_work import BackgroundTaskHandle
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceDTO,

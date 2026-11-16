@@ -3,20 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from contextvars import Context
-from pathlib import Path
-from typing import Protocol
 
-from app.core.background_task_contracts import (
-    ACTIVE_TASK_STATUSES,
-    BackgroundTaskDescriptor,
-    BackgroundTaskHandle,
-    BackgroundTaskHandler,
-    BackgroundTaskStatus,
-)
+from app.abstractions.background_task_registry import BackgroundTaskHandler
 from app.core.failures import failure_detail
-from app.core.session_control_store import SessionControlStore
 from app.core.session_lifecycle_gate import (
     OperationHolderGate,
     SessionDeletionPendingError,
@@ -25,24 +15,19 @@ from app.core.thread_residency_contracts import (
     BackgroundResidencyPort,
     ResidencyBlocker,
 )
+from app.domain.background_work import (
+    ACTIVE_BACKGROUND_TASK_STATUSES,
+    BackgroundTaskDescriptor,
+    BackgroundTaskHandle,
+    BackgroundTaskStatus,
+)
 from app.domain.itemized.hashing import sha256_jcs
-
-
-class BackgroundWorkStoreProtocol(Protocol):
-    sessions_dir: Path
-
-    def session_ids(self) -> list[str]: ...
-
-    def resolve_thread(self, session_id: str, thread_id: str) -> None: ...
-
-    def control(self, session_id: str, *, read_only: bool = False) -> AbstractContextManager[SessionControlStore]: ...
-
-    def admission(self, session_id: str) -> AbstractAsyncContextManager[None]: ...
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
 
 
 class BackgroundTaskRegistry:
     def __init__(
-        self, *, store: BackgroundWorkStoreProtocol,
+        self, *, store: BackgroundWorkStore,
         residency_tracker: BackgroundResidencyPort,
         handlers: tuple[BackgroundTaskHandler, ...],
     ) -> None:
@@ -86,7 +71,7 @@ class BackgroundTaskRegistry:
                     task_id=task_id, session_id=session_id, thread_id=thread_id, agent_id=agent_id,
                     descriptor=descriptor, checkpoint=checkpoint, preimage_hash=preimage_hash,
                 )
-            if self._active_session_ids is not None and handle.status in ACTIVE_TASK_STATUSES:
+            if self._active_session_ids is not None and handle.status in ACTIVE_BACKGROUND_TASK_STATUSES:
                 self._active_session_ids.add(session_id)
             if handle.status in {"pending", "running"}:
                 self._launch(handle)
@@ -175,7 +160,7 @@ class BackgroundTaskRegistry:
             raise RuntimeError("后台回调来自已失效的 Thread runtime generation")
 
     def _settle_lease(self, handle: BackgroundTaskHandle) -> None:
-        if handle.status in ACTIVE_TASK_STATUSES:
+        if handle.status in ACTIVE_BACKGROUND_TASK_STATUSES:
             return
         with self._store.control(handle.session_id) as control:
             lease = control.get_lease(handle.lease_id)
@@ -198,7 +183,7 @@ class BackgroundTaskRegistry:
             with self._store.control(session_id) as control:
                 handles = control.list_background_tasks()
             for handle in handles:
-                if handle.status not in ACTIVE_TASK_STATUSES:
+                if handle.status not in ACTIVE_BACKGROUND_TASK_STATUSES:
                     self._settle_lease(handle)
                 else:
                     active_session_ids.add(session_id)
@@ -232,7 +217,7 @@ class BackgroundTaskRegistry:
 
     def list_closed_handles(self, session_id: str) -> list[BackgroundTaskHandle]:
         with self._store.control(session_id, read_only=True) as control:
-            return [handle for handle in control.list_background_tasks() if handle.status not in ACTIVE_TASK_STATUSES]
+            return [handle for handle in control.list_background_tasks() if handle.status not in ACTIVE_BACKGROUND_TASK_STATUSES]
 
     def list_active_handles(self) -> list[BackgroundTaskHandle]:
         # 启动恢复与本 registry 的准入确定候选；状态正文始终读取控制库。
@@ -267,7 +252,7 @@ class BackgroundTaskRegistry:
             handle = self.get_handle(session_id, task_id)
         if handle is None:
             raise RuntimeError("后台任务在取消期间丢失")
-        if handle.status in ACTIVE_TASK_STATUSES:
+        if handle.status in ACTIVE_BACKGROUND_TASK_STATUSES:
             handle = self._finish(handle, "reconcile_required" if handle.external_effect_pending else "cancelled", "任务已取消")
         return handle
 
@@ -287,7 +272,7 @@ class BackgroundTaskRegistry:
                     handle = control.get_background_task(task_id)
                     if handle is None:
                         raise ValueError(f"后台任务不存在: {task_id}")
-                    if handle.status not in ACTIVE_TASK_STATUSES:
+                    if handle.status not in ACTIVE_BACKGROUND_TASK_STATUSES:
                         return handle
                     if handle.status != "reconcile_required":
                         raise ValueError("后台任务不处于外部效果待对账状态")

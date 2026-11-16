@@ -9,9 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.abstractions.mcp_connection_wait import McpWaitPayload, mcp_wait_task_id
 from app.agents.custom_tools import CustomToolFactoryContext
-from app.core.background_task_contracts import BackgroundTaskDescriptor
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.trace_middleware import get_current_gateway_id, get_current_request_id
+from app.domain.background_work import BackgroundTaskDescriptor
 from app.schemas.internal_v2.mcp import McpConnectionRequestDTO
 
 

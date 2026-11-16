@@ -1,11 +1,11 @@
-"""后台工作与恢复 handler 的唯一纯合同。"""
+"""后台任务状态、步骤与持久邮箱消息的纯数据合同。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Literal, Protocol
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -47,7 +47,7 @@ class BackgroundMessageBatchDTO(BaseModel):
     tool_result_identity: BackgroundToolResultIdentity | None = None
 
 
-ACTIVE_TASK_STATUSES = frozenset({"pending", "running", "reconcile_required"})
+ACTIVE_BACKGROUND_TASK_STATUSES = frozenset({"pending", "running", "reconcile_required"})
 BackgroundTaskStatus = Literal[
     "pending", "running", "reconcile_required", "completed", "cancelled", "failed", "deleted"
 ]
@@ -107,20 +107,3 @@ class BackgroundTaskStep:
     messages: tuple[BackgroundMessageDTO, ...] = ()
     result: dict[str, JsonValue] | None = None
     result_message_ids: tuple[str, ...] = ()
-
-
-class BackgroundTaskHandler(Protocol):
-    """每个版本必须校验 descriptor/checkpoint，明确执行副作用能否重放。"""
-
-    kind: str
-    version: int
-    @property
-    def effect(self) -> Literal["atomic_mailbox", "external"]: ...
-
-    def initial_checkpoint(self, descriptor: BackgroundTaskDescriptor) -> dict[str, JsonValue]: ...
-
-    def validate_checkpoint(self, checkpoint: dict[str, JsonValue]) -> None: ...
-
-    async def step(self, handle: BackgroundTaskHandle) -> BackgroundTaskStep: ...
-
-    async def reconcile(self, handle: BackgroundTaskHandle) -> BackgroundTaskStep | None: ...

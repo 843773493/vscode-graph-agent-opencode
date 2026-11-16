@@ -11,7 +11,6 @@ from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import validate_workspace_id
@@ -29,6 +28,7 @@ from app.schemas.internal_v2.runtime import (
 from app.services.business.job.service import JobService, JobState
 from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 
 class WorkspaceRuntimeLifecycleService:

@@ -6,6 +6,7 @@
 
 ```text
 orchestration/
+├── background_work/                     精确 Thread 后台工具任务、持久邮箱与恢复；不管理工作区自动化定义
 ├── job_execution_service.py             Job 状态转换、标题触发、step 调用及完成事件；失败归 JobService 结算
 ├── agent_execution_service.py           Agent/runtime 组装与复用；把单次执行交给 StepRunner
 ├── execution_step/                       单次 Agent step 的控制循环、重试、终态与端口接线

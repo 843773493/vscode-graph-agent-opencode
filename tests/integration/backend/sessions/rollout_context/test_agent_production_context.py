@@ -146,7 +146,7 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
         model=model, instruction_producers=agent_runtime["instruction_producers"],
         tool_selection_reader=selection, checkpointer=saver,
         session_id=session, thread_id=thread, agent_id="default", tools=tools,
-        background_task_registry=MagicMock(), background_message_bus=MagicMock(),
+        background_task_registry=MagicMock(), background_mailbox=MagicMock(),
         job_event_bus=MagicMock(), job_service=MagicMock(), message_service=MagicMock(),
         session_service=sessions, session_orchestrator=MagicMock(),
         session_subagent_service=MagicMock(), session_context_query_service=MagicMock(),

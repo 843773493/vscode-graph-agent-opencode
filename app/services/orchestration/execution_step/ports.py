@@ -11,7 +11,7 @@ from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.thread_residency import ThreadRuntimeLease
 
 if TYPE_CHECKING:
-    from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+    from app.abstractions.background_mailbox import BackgroundMailboxProtocol
     from app.abstractions.job_event_bus import JobEventBusProtocol
     from app.abstractions.session_changes import SessionChangesRecorderProtocol
     from app.abstractions.tool_selection import ToolSelectionReader
@@ -63,7 +63,7 @@ class StepExecutionPorts:
     tool_selection_store: ToolSelectionReader
     session_changes_service: SessionChangesRecorderProtocol
     message_stream_store: MessageStreamStore
-    background_message_bus: BackgroundMessageBusProtocol
+    background_mailbox: BackgroundMailboxProtocol
     committed_item_observer: Callable[[str, str, Sequence[CanonicalItemRecord]], None]
     workspace_root: Path
     agent_factory: StepAgentFactory

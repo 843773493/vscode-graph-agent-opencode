@@ -9,16 +9,16 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from app.core.background_task_contracts import (
-    ACTIVE_TASK_STATUSES,
+from app.core.session_control_thread_catalog.thread_catalog import read_fence_row
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.sqlite_state import load_sql
+from app.domain.background_work import (
+    ACTIVE_BACKGROUND_TASK_STATUSES,
     BackgroundTaskDescriptor,
     BackgroundTaskHandle,
     BackgroundTaskStatus,
     BackgroundTaskStep,
 )
-from app.core.session_control_thread_catalog.thread_catalog import read_fence_row
-from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.core.sqlite_state import load_sql
 
 BACKGROUND_TASKS_DDL = load_sql(__package__, "migrations/background_tasks.sql")
 BACKGROUND_TASKS_ACTIVE_DDL = load_sql(__package__, "migrations/idx_background_tasks_active.sql")
@@ -198,7 +198,7 @@ class BackgroundWorkMixin:
                 raise KeyError(task_id)
             if row["fencing_token"] != token:
                 raise RuntimeError(f"后台任务终结 fencing 失败: {task_id}")
-            if row["status"] not in ACTIVE_TASK_STATUSES and status != "deleted":
+            if row["status"] not in ACTIVE_BACKGROUND_TASK_STATUSES and status != "deleted":
                 return background_task_from_row(row)
             metadata = json.loads(row["metadata_json"])
             if note is not None:
@@ -206,7 +206,7 @@ class BackgroundWorkMixin:
             connection.execute(
                 "UPDATE background_tasks SET status=?,ended_at=?,metadata_json=? "
                 "WHERE task_id=? AND fencing_token=?",
-                (status, None if status in ACTIVE_TASK_STATUSES else datetime.now(UTC).isoformat(),
+                (status, None if status in ACTIVE_BACKGROUND_TASK_STATUSES else datetime.now(UTC).isoformat(),
                  json.dumps(metadata, ensure_ascii=False), task_id, token),
             )
             return background_task_from_row(connection.execute(

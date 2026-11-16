@@ -55,7 +55,6 @@ from app.api.deps import (
     get_session_turn_history_service,
     verify_local_token,
 )
-from app.core.background_task_contracts import BackgroundTaskDescriptor
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import (
     current_execution_admission,
@@ -78,6 +77,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
+from app.domain.background_work import BackgroundTaskDescriptor
 from app.domain.itemized.execution_admission import ExecutionAdmission
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.mutation_intents import MutationIntentOwner

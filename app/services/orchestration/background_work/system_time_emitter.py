@@ -8,11 +8,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from app.abstractions.background_message_bus import (
+from app.domain.background_work import (
     BackgroundMessageDTO,
     BackgroundMessageKind,
-)
-from app.core.background_task_contracts import (
     BackgroundTaskDescriptor,
     BackgroundTaskHandle,
     BackgroundTaskStep,

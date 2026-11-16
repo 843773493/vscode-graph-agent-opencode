@@ -32,7 +32,7 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
             workspace_root=Path("/workspace"),
             config_service=config_service,
             background_task_registry=MagicMock(),
-            background_message_bus=MagicMock(),
+            background_mailbox=MagicMock(),
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=mcp_tools,

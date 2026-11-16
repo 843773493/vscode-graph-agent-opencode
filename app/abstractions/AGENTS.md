@@ -16,8 +16,8 @@ app/abstractions/
 │   ├── session_resources.py        会话资源提供者的列表、控制与清理
 │   └── session_subagent.py         子 Agent 与 owner thread 创建端口
 ├── 执行与消息边界
-│   ├── background_message_bus.py   后台任务消息收发
-│   ├── background_task_registry.py 后台任务创建、查询、对账与清理
+│   ├── background_mailbox.py       后台持久邮箱收集与提交确认
+│   ├── background_task_registry.py 后台任务创建、查询、对账、清理与版本化 handler 端口
 │   ├── job_event_bus.py            Job 事件发布与订阅
 │   ├── job_executor.py             Job 输入 owner 与执行状态
 │   ├── job_service.py              Job 服务调用端口

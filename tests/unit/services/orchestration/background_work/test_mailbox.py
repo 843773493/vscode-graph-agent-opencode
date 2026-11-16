@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from app.abstractions.background_message_bus import BackgroundMessageKind
-from app.core.background_message_bus import BackgroundMessageBus
 from app.core.path_utils import get_session_path_resolver
+from app.domain.background_work import BackgroundMessageKind
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
 
 
 @pytest.fixture
-def background_message_bus_case(empty_workspace_scope: tuple[str, Path], session_bundle_factory):
+def background_mailbox_case(empty_workspace_scope: tuple[str, Path], session_bundle_factory):
     workspace_root = empty_workspace_scope[1]
     sessions = workspace_root / ".boxteam" / "sessions"
     session_ids = [
@@ -24,19 +24,19 @@ def background_message_bus_case(empty_workspace_scope: tuple[str, Path], session
     resolver = get_session_path_resolver(sessions)
     main_thread_ids = [resolver.main_thread_id(session_id) for session_id in session_ids]
     store = BackgroundWorkStore(sessions_dir=sessions)
-    return store, session_ids, main_thread_ids, BackgroundMessageBus(store=store)
+    return store, session_ids, main_thread_ids, BackgroundMailbox(store=store)
 
 
 @pytest.mark.asyncio
-async def test_collect_checkpoint_ack_replays_identical_batch_after_restart(background_message_bus_case):
-    store, session_ids, main_thread_ids, bus = background_message_bus_case
+async def test_collect_checkpoint_ack_replays_identical_batch_after_restart(background_mailbox_case):
+    store, session_ids, main_thread_ids, bus = background_mailbox_case
     for index, content in enumerate(("first", "second", "stop")):
         await bus.emit(session_ids[0], main_thread_ids[0], "agent", content, message_id=f"message-{index}",
                        source_id="clock-stream", kind=BackgroundMessageKind.interrupt if content == "stop" else BackgroundMessageKind.normal)
     batch = await bus.collect(session_ids[0], main_thread_ids[0], "agent", consumption_id="consumer-one", source_id="clock-stream", timeout_seconds=1)
     assert batch.interrupted and not batch.timed_out
     assert [message.content for message in batch.messages] == ["first", "second", "stop"]
-    restarted = BackgroundMessageBus(store=store)
+    restarted = BackgroundMailbox(store=store)
     bus.acknowledge(session_ids[0], batch.consumption_id)
     replay = await restarted.collect(session_ids[0], main_thread_ids[0], "agent", consumption_id="consumer-one", source_id="clock-stream", timeout_seconds=1)
     assert replay == batch
@@ -45,14 +45,14 @@ async def test_collect_checkpoint_ack_replays_identical_batch_after_restart(back
 
 
 @pytest.mark.asyncio
-async def test_mailbox_is_durable_exact_owner_and_idempotent(background_message_bus_case):
-    store, session_ids, main_thread_ids, bus = background_message_bus_case
+async def test_mailbox_is_durable_exact_owner_and_idempotent(background_mailbox_case):
+    store, session_ids, main_thread_ids, bus = background_mailbox_case
     original = await bus.emit(session_ids[0], main_thread_ids[0], "agent", "first", message_id="stable-id", source_id="one")
     replay = await bus.emit(session_ids[0], main_thread_ids[0], "agent", "first", message_id="stable-id", source_id="one")
     assert replay == original
     with pytest.raises(RuntimeError, match="内容冲突"):
         await bus.emit(session_ids[0], main_thread_ids[0], "agent", "changed", message_id="stable-id", source_id="one")
-    cold = BackgroundMessageBus(store=store)
+    cold = BackgroundMailbox(store=store)
     assert await cold.list_messages(session_ids[0], main_thread_ids[0], "agent") == [original]
     assert await cold.list_messages(session_ids[0], main_thread_ids[0], "another-agent") == []
     assert await cold.list_messages(session_ids[1], main_thread_ids[1], "agent") == []
@@ -63,8 +63,8 @@ async def test_mailbox_is_durable_exact_owner_and_idempotent(background_message_
 
 
 @pytest.mark.asyncio
-async def test_interrupted_consumer_resumes_checkpoint_without_losing_messages(background_message_bus_case):
-    store, session_ids, main_thread_ids, bus = background_message_bus_case
+async def test_interrupted_consumer_resumes_checkpoint_without_losing_messages(background_mailbox_case):
+    store, session_ids, main_thread_ids, bus = background_mailbox_case
     await bus.emit(session_ids[0], main_thread_ids[0], "agent", "first", message_id="first", source_id="one")
     task = asyncio.create_task(bus.collect(session_ids[0], main_thread_ids[0], "agent", consumption_id="resume", timeout_seconds=1, poll_interval_seconds=0.01))
     for _ in range(100):
@@ -80,7 +80,7 @@ async def test_interrupted_consumer_resumes_checkpoint_without_losing_messages(b
     with pytest.raises(asyncio.CancelledError):
         await task
     await bus.emit(session_ids[0], main_thread_ids[0], "agent", "stop", message_id="stop", kind="interrupt")
-    batch = await BackgroundMessageBus(store=store).collect(session_ids[0], main_thread_ids[0], "agent", consumption_id="resume", timeout_seconds=1, poll_interval_seconds=0.01)
+    batch = await BackgroundMailbox(store=store).collect(session_ids[0], main_thread_ids[0], "agent", consumption_id="resume", timeout_seconds=1, poll_interval_seconds=0.01)
     assert [message.message_id for message in batch.messages] == ["first", "stop"]
     assert batch.interrupted
     bus.close_session(session_ids[0])

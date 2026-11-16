@@ -4,9 +4,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import Literal
 
+from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.job_service import JobServiceProtocol
 from app.core import session_subtree_delete
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_catalog_store.contracts import CatalogTransactionHook
@@ -86,7 +86,7 @@ class SessionCatalogService(SessionCatalogReadService):
         *,
         session_service: SessionService,
         job_service: JobServiceProtocol | None = None,
-        background_task_registry: BackgroundTaskRegistry | None = None,
+        background_task_registry: BackgroundTaskRegistryProtocol | None = None,
         operations_service: SessionCatalogOperationsService | None = None,
     ) -> None:
         super().__init__(session_service=session_service)

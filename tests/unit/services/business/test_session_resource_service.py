@@ -12,7 +12,7 @@ from app.abstractions.background_task_registry import BackgroundTaskRegistryProt
 from app.abstractions.browser_resources import BrowserPluginDisabled
 from app.abstractions.terminal.resources import TerminalPluginDisabled
 from app.api.sessions import list_session_resources
-from app.core.background_task_contracts import BackgroundTaskHandle
+from app.domain.background_work import BackgroundTaskHandle
 from app.domain.itemized.enums import PayloadKind
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_navigation.service import SessionCatalogService

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain_core.tools import BaseTool
 
-from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.background_mailbox import BackgroundMailboxProtocol
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
@@ -38,11 +38,11 @@ from app.agents.tools.terminal import (
     create_write_stdin_tool,
 )
 from app.agents.tools.testing import create_test_tool
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 if TYPE_CHECKING:
     from app.services.business.session_goal_service import SessionGoalService
@@ -55,7 +55,7 @@ def build_default_tools(
     *,
     text_mutations: WorkspaceTextMutationOwner,
     background_task_registry: BackgroundTaskRegistry,
-    background_message_bus: BackgroundMessageBusProtocol,
+    background_mailbox: BackgroundMailboxProtocol,
     job_event_bus: JobEventBusProtocol,
     job_service: JobServiceProtocol,
     session_orchestrator: SessionOrchestratorProtocol | None = None,
@@ -102,7 +102,7 @@ def build_default_tools(
         create_background_message_collection_tool(
             session_id=session_id,
             agent_id=agent_id,
-            background_message_bus=background_message_bus,
+            background_mailbox=background_mailbox,
             invocation_context=invocation_context,
         ),
         create_exec_command_tool(

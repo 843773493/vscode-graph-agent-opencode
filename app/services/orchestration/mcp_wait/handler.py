@@ -15,19 +15,19 @@ from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.mcp_connection_wait import McpWaitCheckpoint, McpWaitPayload
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.policy.tool_capability import ToolMetadata
-from app.core.background_task_contracts import (
-    BackgroundMessageDTO,
-    BackgroundMessageKind,
-    BackgroundTaskDescriptor,
-    BackgroundTaskHandle,
-    BackgroundTaskStep,
-)
 from app.core.phase_observer import observe_phase
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,
     set_current_gateway_id,
     set_current_request_id,
+)
+from app.domain.background_work import (
+    BackgroundMessageDTO,
+    BackgroundMessageKind,
+    BackgroundTaskDescriptor,
+    BackgroundTaskHandle,
+    BackgroundTaskStep,
 )
 from app.prompting import PromptSection, internal_message_factory
 from app.services.business.session_service import SessionService

@@ -89,8 +89,6 @@ from app.agents.tools.custom_invocation import (
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.agents.tools.tool_discovery import create_search_tools_tool
 from app.agents.workspace_backend import build_workspace_backend
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.failures import (
     mark_public_failure,
 )
@@ -162,6 +160,8 @@ from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 
 if TYPE_CHECKING:
@@ -270,7 +270,7 @@ def create_my_deep_agent(
     debug: bool = False,
     name: str | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
-    background_message_bus: BackgroundMessageBus | None = None,
+    background_mailbox: BackgroundMailbox | None = None,
     job_event_bus: JobEventBusProtocol | None = None,
     job_service: JobServiceProtocol | None = None,
     goal_service: SessionGoalService | None = None,
@@ -329,8 +329,8 @@ def create_my_deep_agent(
 
     if background_task_registry is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundTaskRegistry")
-    if background_message_bus is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundMessageBus")
+    if background_mailbox is None:
+        raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundMailbox")
     if job_event_bus is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 JobEventBus")
     if message_service is None:
@@ -499,7 +499,7 @@ def create_my_deep_agent(
             agent_id=agent_id,
             sender_agent_id=resolved_sender_agent_id,
             background_task_registry=background_task_registry,
-            background_message_bus=background_message_bus,
+            background_mailbox=background_mailbox,
             job_event_bus=job_event_bus,
             job_service=job_service,
             goal_service=goal_service,
@@ -525,7 +525,7 @@ def create_my_deep_agent(
             sender_agent_id=resolved_sender_agent_id,
             workspace_root=workspace_root,
             background_task_registry=background_task_registry,
-            background_message_bus=background_message_bus,
+            background_mailbox=background_mailbox,
             job_event_bus=job_event_bus,
             job_service=job_service,
             session_context_query_service=session_context_query_service,
@@ -955,7 +955,7 @@ def create_runtime_deep_agent_for_session(
     tool_selection_reader: ToolSelectionReader,
     config_service: ConfigService | None = None,
     background_task_registry: BackgroundTaskRegistry | None = None,
-    background_message_bus: BackgroundMessageBus | None = None,
+    background_mailbox: BackgroundMailbox | None = None,
     job_event_bus: JobEventBusProtocol | None = None,
     job_service: JobServiceProtocol | None = None,
     goal_service: SessionGoalService | None = None,
@@ -1066,7 +1066,7 @@ def create_runtime_deep_agent_for_session(
         custom_tool_specs=custom_tool_specs,
         name=name or agent_id,
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        background_mailbox=background_mailbox,
         job_event_bus=job_event_bus,
         job_service=job_service,
         goal_service=goal_service,

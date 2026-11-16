@@ -20,8 +20,6 @@ from app.agents.policy import (
     catalog_group_for_tool,
     parse_custom_tool_specs,
 )
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.lifecycle import LifetimeScope
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
@@ -41,6 +39,8 @@ from app.services.infrastructure.resource_platform.sources.workspace_file_resour
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -123,7 +123,7 @@ def build_session_agent_runtime(
     tool_selection_reader: ToolSelectionReader,
     config_service: ConfigService,
     background_task_registry: BackgroundTaskRegistry,
-    background_message_bus: BackgroundMessageBus,
+    background_mailbox: BackgroundMailbox,
     job_event_bus: JobEventBusProtocol,
     dependency_provider: AgentRuntimeDependencyProvider,
     mcp_tools: Sequence[BaseTool],
@@ -158,7 +158,7 @@ def build_session_agent_runtime(
         tool_selection_reader=tool_selection_reader,
         config_service=config_service,
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        background_mailbox=background_mailbox,
         job_event_bus=job_event_bus,
         job_service=dependency_provider.get_job_service(),
         goal_service=dependency_provider.get_goal_service(),

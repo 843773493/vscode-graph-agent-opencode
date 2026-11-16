@@ -15,13 +15,13 @@ import pytest
 from app import container as container_module
 from app import main
 from app.core import failures
-from app.core.background_task_contracts import (
+from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundTaskHandle,
     BackgroundTaskStep,
 )
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.integration.backend.sessions.test_mounted_workspace_lifespan import (
     MountedCase,

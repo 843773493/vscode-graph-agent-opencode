@@ -30,7 +30,7 @@ def residency_service(residency_clock: list[float], tmp_path: Path) -> AgentExec
     """仅替身未使用的执行依赖；residency、worker 和 scope 都用真实实现。"""
     return AgentExecutionService(
         config_service=MagicMock(), background_task_registry=MagicMock(),
-        background_message_bus=MagicMock(), job_event_bus=MagicMock(),
+        background_mailbox=MagicMock(), job_event_bus=MagicMock(),
         dependency_provider=MagicMock(), session_changes_service=MagicMock(),
         tool_selection_store=MagicMock(), message_stream_store=MagicMock(),
         workspace_id="00000000-4000-7000-8000-000000000001", workspace_root=tmp_path,

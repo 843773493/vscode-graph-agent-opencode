@@ -613,7 +613,7 @@ def _build_agent_execution_service(dependencies):
         team_resource_subscriber=lambda _session, _thread, _registry, _scope: None,
         config_service=dependencies["config_service"],
         background_task_registry=dependencies["registry"],
-        background_message_bus=dependencies["msg_bus"],
+        background_mailbox=dependencies["msg_bus"],
         job_event_bus=dependencies["job_event_bus"],
         dependency_provider=dependencies["dependency_provider"],
         session_changes_service=dependencies["session_changes_service"],

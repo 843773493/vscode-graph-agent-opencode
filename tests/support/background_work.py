@@ -10,17 +10,17 @@ from typing import Literal
 
 from pydantic import JsonValue
 
-from app.core.background_task_contracts import (
+from app.core.path_utils import get_session_path_resolver
+from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundTaskHandle,
     BackgroundTaskStep,
 )
-from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.path_utils import get_session_path_resolver
-from app.services.infrastructure.background_work_handlers import (
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
+from app.services.orchestration.background_work.system_time_emitter import (
     SystemTimeEmitterHandler,
 )
-from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 
 

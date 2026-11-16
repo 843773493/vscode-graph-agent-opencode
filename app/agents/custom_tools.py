@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from langchain_core.tools import BaseTool
 
-from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.background_mailbox import BackgroundMailboxProtocol
 from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.custom_tool_context import (
@@ -39,7 +39,8 @@ class CustomToolFactoryContext:
     sender_agent_id: str
     workspace_root: Path
     background_task_registry: BackgroundTaskRegistryProtocol
-    background_message_bus: BackgroundMessageBusProtocol
+    # 扩展 factory 的公开字段名；实际依赖是持久邮箱，不是 Job 事件总线。
+    background_message_bus: BackgroundMailboxProtocol
     job_event_bus: JobEventBusProtocol
     job_service: JobServiceProtocol | None
     session_context_query_service: SessionContextQueryProtocol
@@ -138,7 +139,7 @@ def build_custom_tool_bundle(
     sender_agent_id: str,
     workspace_root: Path,
     background_task_registry: BackgroundTaskRegistryProtocol,
-    background_message_bus: BackgroundMessageBusProtocol,
+    background_mailbox: BackgroundMailboxProtocol,
     job_event_bus: JobEventBusProtocol,
     job_service: JobServiceProtocol | None,
     session_context_query_service: SessionContextQueryProtocol,
@@ -158,7 +159,7 @@ def build_custom_tool_bundle(
         sender_agent_id=sender_agent_id,
         workspace_root=workspace_root,
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        background_message_bus=background_mailbox,
         job_event_bus=job_event_bus,
         job_service=job_service,
         session_context_query_service=session_context_query_service,

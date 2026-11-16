@@ -17,7 +17,7 @@ from app.agents.tools.session_wait import (
     create_wait_for_session_tool,
 )
 from app.agents.tools.team import create_team_tools
-from app.core.background_task_registry import BackgroundTaskRegistry
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 
 def build_agent_collaboration_tools(

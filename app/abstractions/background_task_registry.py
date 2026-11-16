@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
-from app.core.background_task_contracts import (
+from pydantic import JsonValue
+
+from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundTaskHandle,
+    BackgroundTaskStep,
 )
 
 
@@ -30,3 +33,20 @@ class BackgroundTaskRegistryProtocol(Protocol):
     async def delete(self, session_id: str, task_id: str) -> BackgroundTaskHandle: ...
 
     async def delete_session(self, session_id: str) -> int: ...
+
+
+class BackgroundTaskHandler(Protocol):
+    """每个版本必须校验 descriptor/checkpoint，明确执行副作用能否重放。"""
+
+    kind: str
+    version: int
+    @property
+    def effect(self) -> Literal["atomic_mailbox", "external"]: ...
+
+    def initial_checkpoint(self, descriptor: BackgroundTaskDescriptor) -> dict[str, JsonValue]: ...
+
+    def validate_checkpoint(self, checkpoint: dict[str, JsonValue]) -> None: ...
+
+    async def step(self, handle: BackgroundTaskHandle) -> BackgroundTaskStep: ...
+
+    async def reconcile(self, handle: BackgroundTaskHandle) -> BackgroundTaskStep | None: ...

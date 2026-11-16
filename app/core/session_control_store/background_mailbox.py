@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from app.core.background_task_contracts import (
+from app.core.session_control_thread_catalog.thread_catalog import read_fence_row
+from app.core.session_lifecycle_gate import SessionDeletionPendingError
+from app.core.sqlite_state import load_sql
+from app.domain.background_work import (
     BackgroundMessageBatchDTO,
     BackgroundMessageDTO,
     BackgroundToolResultIdentity,
 )
-from app.core.session_control_thread_catalog.thread_catalog import read_fence_row
-from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.core.sqlite_state import load_sql
 from app.domain.itemized.hashing import sha256_jcs
 
 BACKGROUND_MAILBOX_DDL = load_sql(__package__, "migrations/background_mailbox.sql")

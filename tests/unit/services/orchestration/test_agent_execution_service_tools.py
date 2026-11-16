@@ -16,13 +16,13 @@ from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
 )
-from app.core.background_message_bus import BackgroundMessageBus
 from app.core.identifier import create_uuid_hex
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.runtime.agent_runtime import build_tool_definitions
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
 from tests.support.background_work import build_background_registry
 
 
@@ -218,7 +218,7 @@ async def test_agent_includes_background_message_collection_tool(
     text_mutations_factory, communication_probe, empty_workspace_scope,
 ):
     workspace_root = empty_workspace_scope[1]
-    background_message_bus = _BlueprintBackgroundService()
+    background_mailbox = _BlueprintBackgroundService()
     background_task_registry = _BlueprintBackgroundService()
     job_event_bus = _FakeJobEventBus()
     message_service = _FakeMessageService()
@@ -230,7 +230,7 @@ async def test_agent_includes_background_message_collection_tool(
         session_id="ses_019bca51019973818b63e9d44c0e94f5",
         agent_id="default",
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        background_mailbox=background_mailbox,
         job_event_bus=job_event_bus,
         job_service=job_service,
         message_service=message_service,
@@ -274,7 +274,7 @@ async def test_agent_omits_test_tool_without_development_config(
     tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root), session_communication_service=communication_probe,
         session_id="session_production",
         background_task_registry=_BlueprintBackgroundService(),
-        background_message_bus=_BlueprintBackgroundService(),
+        background_mailbox=_BlueprintBackgroundService(),
         job_event_bus=_FakeJobEventBus(),
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
@@ -300,7 +300,7 @@ async def test_single_agent_tool_set_omits_team_board_tools(
     tools = build_default_tools(text_mutations=text_mutations_factory(workspace_root), session_communication_service=communication_probe,
         session_id="session_single_agent",
         background_task_registry=_BlueprintBackgroundService(),
-        background_message_bus=_BlueprintBackgroundService(),
+        background_mailbox=_BlueprintBackgroundService(),
         job_event_bus=_FakeJobEventBus(),
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
@@ -349,7 +349,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(
         session_id="session_denylist",
         agent_id="default",
         background_task_registry=_BlueprintBackgroundService(),
-        background_message_bus=_BlueprintBackgroundService(),
+        background_mailbox=_BlueprintBackgroundService(),
         job_event_bus=job_event_bus,
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
@@ -397,7 +397,7 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     workspace_root = empty_workspace_scope[1]
     sessions_dir = workspace_root / ".boxteam" / "sessions"
     session_bundle_factory(sessions_dir, "ses_019bca51019973818b63e9d44c0e94f5")
-    background_message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=sessions_dir))
+    background_mailbox = BackgroundMailbox(store=BackgroundWorkStore(sessions_dir=sessions_dir))
     background_task_registry = build_background_registry(sessions_dir)
     thread_id = get_session_path_resolver(sessions_dir).main_thread_id("ses_019bca51019973818b63e9d44c0e94f5")
     invocation = ToolInvocationContext(thread_binding=ThreadRuntimeBinding("ses_019bca51019973818b63e9d44c0e94f5", thread_id))
@@ -405,10 +405,12 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
         projection_message_id="clock-assistant", model_call_id=str(UUID(hex=create_uuid_hex())),
     ))
 
-    async def fake_sleep(_seconds):
-        return None
+    allow_emission = asyncio.Event()
 
-    monkeypatch.setattr("app.services.infrastructure.background_work_handlers.asyncio.sleep", fake_sleep)
+    async def fake_sleep(_seconds):
+        await allow_emission.wait()
+
+    monkeypatch.setattr("app.services.orchestration.background_work.system_time_emitter.asyncio.sleep", fake_sleep)
 
     tool = create_system_time_emitter_tool(
         "ses_019bca51019973818b63e9d44c0e94f5",
@@ -421,6 +423,7 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     assert result["task_name"] == "emit_system_time_messages"
     task = background_task_registry.get_task("ses_019bca51019973818b63e9d44c0e94f5", result["task_id"])
     assert task is not None
+    allow_emission.set()
     await task
 
     handle = background_task_registry.get_handle("ses_019bca51019973818b63e9d44c0e94f5", result["task_id"])
@@ -430,6 +433,6 @@ async def test_emit_system_time_messages_tool_emits_periodic_messages(
     assert handle.metadata["source_id"] == "clock-stream"
     assert isinstance(handle.metadata["result"], dict)
 
-    messages = await background_message_bus.list_messages("ses_019bca51019973818b63e9d44c0e94f5", thread_id, "default")
+    messages = await background_mailbox.list_messages("ses_019bca51019973818b63e9d44c0e94f5", thread_id, "default")
     assert len(messages) == 3
     assert all(message.content for message in messages)

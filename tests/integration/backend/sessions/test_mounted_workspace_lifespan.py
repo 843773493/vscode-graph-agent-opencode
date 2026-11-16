@@ -761,8 +761,8 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
 
             from datetime import UTC, datetime
 
-            from app.core.background_task_contracts import BackgroundTaskDescriptor
-            from app.services.infrastructure.background_work_handlers import (
+            from app.domain.background_work import BackgroundTaskDescriptor
+            from app.services.orchestration.background_work.system_time_emitter import (
                 SystemTimeEmitterHandler,
             )
 

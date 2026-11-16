@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_contracts import (
+from app.core.path_utils import get_session_path_resolver
+from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundTaskStep,
 )
-from app.core.background_task_registry import BackgroundTaskRegistry
-from app.core.path_utils import get_session_path_resolver
-from app.services.infrastructure.background_work_handlers import (
+from app.services.infrastructure.background_work_store import BackgroundWorkStore
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
+from app.services.orchestration.background_work.system_time_emitter import (
     SystemTimeEmitterHandler,
 )
-from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
 from tests.support.background_work import ControlledBackgroundHandler
 
@@ -115,7 +115,7 @@ async def test_time_emitter_resumes_exact_checkpoint_without_duplicate_messages(
         "started_at": datetime.now(UTC).isoformat(),
     })
     handle = await registry.spawn(session_id=session_id, thread_id=thread_id, agent_id="agent", task_id="bgt_resume", descriptor=descriptor)
-    bus = BackgroundMessageBus(store=store)
+    bus = BackgroundMailbox(store=store)
     for _ in range(100):
         messages = await bus.list_messages(session_id, thread_id, "agent")
         if len(messages) == 1:

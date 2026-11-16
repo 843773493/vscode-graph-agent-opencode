@@ -19,8 +19,6 @@ from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.graph_binding import SessionControlGraphBindingStore
-from app.core.background_message_bus import BackgroundMessageBus
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
@@ -101,9 +99,6 @@ from app.services.infrastructure.attachment_blob_catalog.maintenance import (
 from app.services.infrastructure.attachment_blob_catalog.store import (
     ATTACHMENT_ROOT_DIRECTORY_NAME,
     AttachmentBlobStore,
-)
-from app.services.infrastructure.background_work_handlers import (
-    SystemTimeEmitterHandler,
 )
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.browser_manager_client import BrowserManagerClient
@@ -188,6 +183,11 @@ from app.services.infrastructure.workspace_files.text_owner import (
 from app.services.infrastructure.workspace_service import WorkspaceService
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from app.services.orchestration.agent_execution_service import AgentExecutionService
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
+from app.services.orchestration.background_work.system_time_emitter import (
+    SystemTimeEmitterHandler,
+)
 from app.services.orchestration.communication.service import (
     SessionCommunicationService,
 )
@@ -419,7 +419,7 @@ class AppContainer:
     job_event_bus: JobEventBusProtocol
     thread_residency_tracker: ThreadResidencyTracker
     background_task_registry: BackgroundTaskRegistry
-    background_message_bus: BackgroundMessageBus
+    background_mailbox: BackgroundMailbox
     trace_event_store: TraceEventStore
     trace_event_recorder: TraceEventRecorder
     rollout_checkpoint_runtime: RolloutCheckpointRuntime
@@ -611,7 +611,7 @@ def _build_app_container(
         clock=clock_ports.residency, wall_clock=clock_ports.wall,
     )
     background_work_store = BackgroundWorkStore(sessions_dir=resolved_sessions_root)
-    background_message_bus = BackgroundMessageBus(store=background_work_store)
+    background_mailbox = BackgroundMailbox(store=background_work_store)
     trace_event_store = TraceEventStore(
         sessions_dir=resolved_sessions_root, event_service=job_event_bus.event_channel_service,
     )
@@ -883,7 +883,7 @@ def _build_app_container(
         session_catalog=session_catalog,
         config_service=config_service,
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        background_mailbox=background_mailbox,
         job_event_bus=job_event_bus,
         dependency_provider=dependency_provider,
         session_changes_service=session_changes_service,
@@ -1074,7 +1074,7 @@ def _build_app_container(
             # 所有领域资源排空后关闭本 Session 的真实 graph scope；旧
             # residency 记账不能越过 fence/rename 后再查询已删除控制库。
             await thread_residency_tracker.close(session_id=session_id)
-            background_message_bus.close_session(session_id)
+            background_mailbox.close_session(session_id)
             # 附件引用释放与 ingest/claim 定点收敛必须先于 fence CAS 与物理
             # 隔离：删除 owner 按 pin 阻断 canonical 使用、释放 reference 后
             # 才隔离 Session 节点，且不留下指向已删除 owner 的 reference。
@@ -1200,7 +1200,7 @@ def _build_app_container(
         job_event_bus=job_event_bus,
         thread_residency_tracker=thread_residency_tracker,
         background_task_registry=background_task_registry,
-        background_message_bus=background_message_bus,
+        background_mailbox=background_mailbox,
         trace_event_store=trace_event_store,
         trace_event_recorder=trace_event_recorder,
         rollout_checkpoint_runtime=rollout_checkpoint_runtime,

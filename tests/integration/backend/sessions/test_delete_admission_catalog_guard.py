@@ -12,7 +12,6 @@ from time import perf_counter
 
 import pytest
 
-from app.core.background_message_bus import BackgroundMessageBus
 from app.core.exceptions import NotFoundError
 from app.core.job_event_bus import JobEventBus
 from app.core.session_lifecycle_gate import (
@@ -34,6 +33,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.orchestration.background_work.mailbox import BackgroundMailbox
 from tests.harness.python.run_context import TestRunContext
 from tests.support.message_service import build_message_service
 from tests.support.workspaces import prepare_test_workspace
@@ -63,7 +63,7 @@ class _AdmissionHarness:
     workspace: CatalogWorkspaceContext
     session_service: SessionService
     job_service: JobService
-    message_bus: BackgroundMessageBus
+    message_bus: BackgroundMailbox
     executor: _InstantJobExecutor
     input_owner: MessageService
     saver: RolloutCheckpointSaver
@@ -238,7 +238,7 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         creation_service=workspace.creation_service,
 
     )
-    message_bus = BackgroundMessageBus(store=BackgroundWorkStore(sessions_dir=workspace.sessions_root))
+    message_bus = BackgroundMailbox(store=BackgroundWorkStore(sessions_dir=workspace.sessions_root))
     executor = _InstantJobExecutor()
     input_owner = build_message_service(
         workspace.sessions_root, checkpointer=saver,

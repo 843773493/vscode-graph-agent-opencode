@@ -281,7 +281,7 @@ def browser_context(browser_runtime: WorkspaceToolRuntime) -> CustomToolFactoryC
         session_id=session_id, agent_id="default", sender_agent_id="default",
         workspace_root=container.workspace_root,
         background_task_registry=container.background_task_registry,
-        background_message_bus=container.background_message_bus, job_event_bus=container.job_event_bus,
+        background_message_bus=container.background_mailbox, job_event_bus=container.job_event_bus,
         job_service=container.job_service, session_context_query_service=container.session_context_query_service,
         workspace_session_context_client=container.agent_execution_service._dependency_provider.get_workspace_session_context_client(),
         session_orchestrator=container.session_orchestrator, config_service=container.config_service,

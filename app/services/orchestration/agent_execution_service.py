@@ -9,7 +9,7 @@ from typing import Any, Final, cast
 
 from langchain_core.tools import BaseTool
 
-from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.background_mailbox import BackgroundMailboxProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_step_executor import JobStepExecutor
 from app.abstractions.session_changes import SessionChangesRecorderProtocol
@@ -31,7 +31,6 @@ from app.agents.skill_catalog import (
 from app.agents.tools.custom_invocation import (
     seal_extension_catalog_binding_from_tools,
 )
-from app.core.background_task_registry import BackgroundTaskRegistry
 from app.core.identifier import create_prefixed_id
 from app.core.lifecycle import LifetimeScope
 from app.core.path_utils import (
@@ -82,6 +81,7 @@ from app.services.infrastructure.resource_platform.sources.gateway_skill_sources
 from app.services.infrastructure.resource_platform.sources.workspace_file_resources import (
     WorkspaceFileResourceRegistry,
 )
+from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.execution_step.approval import ToolApprovalService
 from app.services.orchestration.execution_step.ports import (
@@ -108,7 +108,7 @@ class AgentExecutionService(JobStepExecutor):
         *,
         config_service: ConfigService,
         background_task_registry: BackgroundTaskRegistry,
-        background_message_bus: BackgroundMessageBusProtocol,
+        background_mailbox: BackgroundMailboxProtocol,
         job_event_bus: JobEventBusProtocol,
         dependency_provider: AgentRuntimeDependencyProvider,
         session_changes_service: SessionChangesRecorderProtocol,
@@ -138,7 +138,7 @@ class AgentExecutionService(JobStepExecutor):
         self._tool_face_cache: dict[tuple[object, ...], list[dict[str, Any]]] = {}
         self._config_service = config_service
         self._background_task_registry = background_task_registry
-        self._background_message_bus = background_message_bus
+        self._background_mailbox = background_mailbox
         self._bus = job_event_bus
         self._dependency_provider = dependency_provider
         self._session_changes_service = session_changes_service
@@ -174,7 +174,7 @@ class AgentExecutionService(JobStepExecutor):
                 tool_selection_store=tool_selection_store,
                 session_changes_service=session_changes_service,
                 message_stream_store=message_stream_store,
-                background_message_bus=background_message_bus,
+                background_mailbox=background_mailbox,
                 committed_item_observer=self._acknowledge_tool_results,
                 workspace_root=workspace_root,
                 control_inbox_state_path=self._control_inbox_state_path,
@@ -193,7 +193,7 @@ class AgentExecutionService(JobStepExecutor):
         self._dependency_provider.get_mcp_catalog_owner().execution_handles.acknowledge_tool_results(
             session_id, thread_id, items,
         )
-        self._background_message_bus.acknowledge_tool_results(session_id, thread_id, items)
+        self._background_mailbox.acknowledge_tool_results(session_id, thread_id, items)
 
     def _resolve_control_inbox_state_path(
         self, session_id: str, turn_stream_id: str
@@ -245,7 +245,7 @@ class AgentExecutionService(JobStepExecutor):
             tool_selection_reader=self._tool_selection_store,
             config_service=self._config_service,
             background_task_registry=self._background_task_registry,
-            background_message_bus=self._background_message_bus,
+            background_mailbox=self._background_mailbox,
             job_event_bus=self._bus,
             dependency_provider=self._dependency_provider,
             mcp_tools=mcp_tools,
@@ -491,8 +491,8 @@ class AgentExecutionService(JobStepExecutor):
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")
         if self._background_task_registry is None:
             raise RuntimeError("AgentExecutionService 未绑定 BackgroundTaskRegistry")
-        if self._background_message_bus is None:
-            raise RuntimeError("AgentExecutionService 未绑定 BackgroundMessageBus")
+        if self._background_mailbox is None:
+            raise RuntimeError("AgentExecutionService 未绑定 BackgroundMailbox")
         try:
             with workspace_context(
                 self._workspace_id,
