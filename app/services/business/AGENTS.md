@@ -23,7 +23,7 @@
 │   └── context_compaction_service.py            上下文压缩
 ├── Turn历史与检查点
 │   ├── session_turn_history/                    Job Turn读取和可见页投影
-│   └── reasoning_checkpoint_service.py          推理检查点
+│   └── execution_message_checkpoint.py    已接受执行输入与最终 assistant 消息的 checkpoint
 ├── 会话状态与资源
 │   ├── session_service.py
 │   ├── session_information_service.py / session_goal_service.py

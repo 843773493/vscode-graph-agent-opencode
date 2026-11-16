@@ -48,8 +48,8 @@ from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.business.reasoning_checkpoint_service import (
-    persist_user_message_checkpoint,
+from app.services.business.execution_message_checkpoint import (
+    checkpoint_accepted_execution_input,
 )
 from app.services.infrastructure.message_stream_store import (
     RECOVERED_TOOL_RESULT_UNKNOWN,
@@ -205,7 +205,7 @@ def _facts(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["user", "internal"])
 @pytest.mark.parametrize("window", ["input_consumption", "admission_readback"])
-async def test_job_cancel_waits_for_real_admission_settlement(
+async def test_job_cancel_waits_for_execution_input_and_admission_reads(
     runner_case: RunnerCase,
     monkeypatch: pytest.MonkeyPatch,
     origin: str,
@@ -216,7 +216,7 @@ async def test_job_cancel_waits_for_real_admission_settlement(
     if window == "input_consumption":
         from app.services.orchestration.execution_step import runner
 
-        original = runner.persist_user_message_checkpoint
+        original = runner.checkpoint_accepted_execution_input
 
         def blocked_write(*args, **kwargs):
             if threading.current_thread() is not threading.main_thread() and not entered.is_set():
@@ -225,26 +225,26 @@ async def test_job_cancel_waits_for_real_admission_settlement(
                     raise TimeoutError("测试 Saver writer 屏障未释放")
             return original(*args, **kwargs)
 
-        monkeypatch.setattr(runner, "persist_user_message_checkpoint", blocked_write)
+        monkeypatch.setattr(runner, "checkpoint_accepted_execution_input", blocked_write)
     else:
         from app.services.orchestration.execution_step import runner
 
-        admission_written = threading.Event()
-        original_write = runner.persist_user_message_checkpoint
+        input_checkpointed = threading.Event()
+        original_write = runner.checkpoint_accepted_execution_input
 
-        def mark_admission_written(*args, **kwargs):
+        def mark_input_checkpointed(*args, **kwargs):
             result = original_write(*args, **kwargs)
-            admission_written.set()
+            input_checkpointed.set()
             return result
 
         monkeypatch.setattr(
-            runner, "persist_user_message_checkpoint", mark_admission_written
+            runner, "checkpoint_accepted_execution_input", mark_input_checkpointed
         )
         original = runner_case.saver.execution_admission_for_job
 
         def blocked_read(*args, **kwargs):
             if (
-                admission_written.is_set()
+                input_checkpointed.is_set()
                 and threading.current_thread() is not threading.main_thread()
                 and not entered.is_set()
             ):
@@ -398,7 +398,7 @@ def _admit(
         MutationIntentOwner(session_id=session_id, thread_id=thread_id),
         langgraph_thread_id=thread_id,
     ):
-        persist_user_message_checkpoint(
+        checkpoint_accepted_execution_input(
             checkpointer=case.saver,
             session_id=session_id,
             thread_id=thread_id,
@@ -614,7 +614,7 @@ async def test_cancelled_runtime_input_failure_preserves_only_accepted_facts(
 
     from app.services.orchestration.execution_step import runner
 
-    monkeypatch.setattr(runner, "persist_user_message_checkpoint", rejected_write)
+    monkeypatch.setattr(runner, "checkpoint_accepted_execution_input", rejected_write)
     job = await _start_job(runner_case, origin, session_id, thread_id)
     try:
         assert await asyncio.to_thread(entered.wait, 3), job.error_message

@@ -4,7 +4,6 @@ import json
 import sqlite3
 from contextlib import closing
 from copy import deepcopy
-from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -26,22 +25,16 @@ from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
 from app.domain.itemized.execution_queue import ExecutionQueueInput
-from app.domain.itemized.hashing import content_hash, sha256_jcs
-from app.domain.itemized.identity.item_projection import (
-    ItemProjectionIdentity,
-    ProjectionGroup,
-    ProjectionPartRef,
-)
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.domain.itemized.records import CanonicalItemRecord
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
-from app.services.business.reasoning_checkpoint_service import (
-    persist_standard_assistant_checkpoint,
-    persist_user_message_checkpoint,
+from app.services.business.execution_message_checkpoint import (
+    checkpoint_accepted_execution_input,
+    persist_final_assistant_checkpoint,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     checkpoint_messages,
@@ -67,9 +60,6 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.mapping.itemized.canonical_langchain import project_canonical_items
-from app.services.mapping.itemized.message_reasoning_merge import (
-    merge_canonical_reasoning,
-)
 from app.services.mapping.itemized.provider_request import (
     project_runtime_notice_content,
 )
@@ -165,7 +155,7 @@ def accept_runtime_input():
 
 
 @pytest.mark.asyncio
-async def test_persist_user_message_checkpoint_is_idempotent(
+async def test_checkpoint_accepted_execution_input_is_idempotent(
     tmp_path,
     session_bundle_factory,
     accept_previous_message,
@@ -209,7 +199,7 @@ async def test_persist_user_message_checkpoint_is_idempotent(
         langgraph_thread_id=thread_id,
     ):
         assert (
-            persist_user_message_checkpoint(
+            checkpoint_accepted_execution_input(
                 checkpointer=saver,
                 session_id=session_id,
                 thread_id=thread_id,
@@ -220,7 +210,7 @@ async def test_persist_user_message_checkpoint_is_idempotent(
             is True
         )
         assert (
-            persist_user_message_checkpoint(
+            checkpoint_accepted_execution_input(
                 checkpointer=saver,
                 session_id=session_id,
                 thread_id=thread_id,
@@ -298,7 +288,7 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
         langgraph_thread_id=thread_id,
     ):
         assert (
-            persist_user_message_checkpoint(
+            checkpoint_accepted_execution_input(
                 checkpointer=saver,
                 session_id=session_id,
                 thread_id=thread_id,
@@ -343,7 +333,7 @@ def test_persist_internal_execution_keeps_notice_outside_user_turn_history(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reopened", [False, True])
-async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
+async def test_checkpoint_accepted_execution_input_discards_stale_execution_tasks(
     tmp_path,
     session_bundle_factory,
     accept_previous_message,
@@ -402,7 +392,7 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
         langgraph_thread_id=thread_id,
     ):
         assert (
-            persist_user_message_checkpoint(
+            checkpoint_accepted_execution_input(
                 checkpointer=saver,
                 session_id=session_id,
                 thread_id=thread_id,
@@ -412,7 +402,7 @@ async def test_persist_user_message_checkpoint_discards_stale_execution_tasks(
             )
             is True
         )
-        assert persist_user_message_checkpoint(
+        assert checkpoint_accepted_execution_input(
             checkpointer=saver,
             session_id=session_id,
             thread_id=thread_id,
@@ -504,8 +494,8 @@ async def test_internal_seed_checkpoint_keeps_graph_messages_and_cleans_stale_ta
             "admission_idempotency_key": seed_execution_intent.admission_idempotency_key,
             "message": None, "execution_intent": seed_execution_intent,
         }
-        assert persist_user_message_checkpoint(**arguments) is stale_tasks
-        assert persist_user_message_checkpoint(**arguments) is False
+        assert checkpoint_accepted_execution_input(**arguments) is stale_tasks
+        assert checkpoint_accepted_execution_input(**arguments) is False
         latest = await saver.aget_tuple(config)
     messages = checkpoint_messages(saver, latest)
     assert len(messages) == 1
@@ -526,7 +516,7 @@ async def test_internal_seed_checkpoint_keeps_graph_messages_and_cleans_stale_ta
 
 
 @pytest.mark.asyncio
-async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
+async def test_persist_final_assistant_checkpoint_appends_replacement(
     tmp_path,
     session_bundle_factory,
 ):
@@ -596,7 +586,7 @@ async def test_persist_standard_assistant_checkpoint_rewrites_latest_message(
         ),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
-        changed = persist_standard_assistant_checkpoint(
+        changed = persist_final_assistant_checkpoint(
             checkpointer=saver,
             session_id=session_id,
             thread_id=thread_id,
@@ -801,7 +791,7 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
             ),
         )
         await adapter.register(model_call_id, 1, "reasoning-checkpoint")
-        assert persist_standard_assistant_checkpoint(
+        assert persist_final_assistant_checkpoint(
             checkpointer=saver,
             session_id=session_id,
             thread_id=thread_id,
@@ -977,7 +967,7 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
         ),
         execution_admission_scope(admission, langgraph_thread_id=thread_id),
     ):
-        assert persist_standard_assistant_checkpoint(
+        assert persist_final_assistant_checkpoint(
             checkpointer=saver,
             session_id=session_id,
             thread_id=thread_id,
@@ -1104,7 +1094,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
             {"source": "test", "step": 1, "writes": {}},
             {"messages": "1"},
         )
-        assert persist_user_message_checkpoint(
+        assert checkpoint_accepted_execution_input(
             checkpointer=saver,
             session_id=session_id,
             thread_id=thread_id,
@@ -1175,7 +1165,7 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
         ),
         execution_admission_scope(user_admission, langgraph_thread_id=thread_id),
     ):
-        changed = persist_standard_assistant_checkpoint(
+        changed = persist_final_assistant_checkpoint(
             checkpointer=saver,
             session_id=session_id,
             thread_id=thread_id,
@@ -1229,270 +1219,3 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
     assert all(
         "<system_reminder>" not in item.content for item in visible_messages.items
     )
-
-
-@pytest.fixture
-def reasoning_items_factory():
-    """输入顺序来自已提交 selection；物理 sequence 故意与它不同。"""
-
-    def make(*indices: int) -> list[CanonicalItemRecord]:
-        items = [
-            CanonicalItemRecord.create(
-                item_sequence=10 - position,
-                item_id=f"reasoning-{index}",
-                semantic_kind="reasoning",
-                payload_kind="text",
-                status="completed",
-                producer_ref={
-                    "producer_kind": "provider",
-                    "producer_id": "test-model",
-                    "invocation_id": "model-call-1",
-                },
-                payload=f"思考 {index}",
-                created_at=MESSAGE_TIME.isoformat(),
-                message_group_id="message-model-call-1",
-                projection_identity=ItemProjectionIdentity(
-                    model_call_id="model-call-1",
-                    block_id=f"model-call-1:block:reasoning-{index}",
-                    block_index=index,
-                ),
-                turn_id="turn-1",
-                turn_scope="turn_member",
-            )
-            for position, index in enumerate(indices)
-        ]
-        items.append(
-            CanonicalItemRecord.create(
-                item_sequence=11,
-                item_id="tool-call-item",
-                semantic_kind="tool_call",
-                payload_kind="tool_call",
-                status="completed",
-                producer_ref={
-                    "producer_kind": "provider",
-                    "producer_id": "test-model",
-                    "invocation_id": "model-call-1",
-                },
-                payload={"tool_calls": [{"id": "call-1", "name": "read", "args": {}}]},
-                created_at=MESSAGE_TIME.isoformat(),
-                projection_identity=ItemProjectionIdentity(
-                    model_call_id="model-call-1"
-                ),
-                turn_id="turn-1",
-                turn_scope="turn_member",
-            )
-        )
-        return items
-
-    return make
-
-
-def test_agent_state_reasoning_merge_preserves_selection_order(reasoning_items_factory):
-    items = reasoning_items_factory(0, 2)
-    message = AIMessage(
-        response_metadata={"model_call_id": "model-call-1"},
-        content="",
-        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
-    )
-    result = merge_canonical_reasoning([message], items)
-    assert [block["id"] for block in result[0].content] == [
-        "model-call-1:block:reasoning-0",
-        "model-call-1:block:reasoning-2",
-    ]
-    assert message.content == ""
-    assert [item.item_sequence for item in items] == [10, 9, 11]
-    assert result[0].tool_calls == message.tool_calls
-
-
-def test_agent_state_reasoning_merge_preserves_text_and_protected_carrier(
-    reasoning_items_factory,
-):
-    protected = {
-        "type": "reasoning",
-        "id": "reasoning-0",
-        "index": 0,
-        "reasoning": "思考 0",
-        "signature": "protected-signature",
-        "extras": {"opaque": "不得丢失"},
-    }
-    text = {"type": "text", "text": "调用前说明", "index": 1, "id": "text-1"}
-    message = AIMessage(
-        response_metadata={"model_call_id": "model-call-1"},
-        content=[protected, text],
-        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
-    )
-    items = reasoning_items_factory(0, 2)
-    original_items = [item.to_dict() for item in items]
-    result = merge_canonical_reasoning([message], items)
-    assert result[0].content == [
-        protected,
-        text,
-        {
-            "type": "reasoning",
-            "reasoning": "思考 2",
-            "id": "model-call-1:block:reasoning-2",
-            "index": 2,
-        },
-    ]
-    assert message.content == [protected, text]
-    assert [item.to_dict() for item in items] == original_items
-    assert merge_canonical_reasoning(result, items)[0].content == result[0].content
-
-
-def test_agent_state_reasoning_merge_reports_unidentified_provider_carrier(
-    reasoning_items_factory,
-):
-    message = AIMessage(
-        response_metadata={"model_call_id": "model-call-1"},
-        content=[
-            {
-                "type": "reasoning_content",
-                "reasoning_content": "思考 0",
-            }
-        ],
-        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
-    )
-    result = merge_canonical_reasoning([message], reasoning_items_factory(0))
-    assert result[0].content == message.content
-    assert result[0].response_metadata["reasoning_source"] == "canonical_item_stream"
-    assert (
-        result[0].response_metadata["reasoning_merge_reason"]
-        == "content_part_index_missing"
-    )
-
-
-def test_agent_state_reasoning_merge_deduplicates_stream_and_checkpoint_items(
-    reasoning_items_factory,
-):
-    items = reasoning_items_factory(0)
-    items.insert(
-        1,
-        replace(
-            items[0],
-            item_id="reasoning-0-checkpoint",
-            projection_group=ProjectionGroup.from_dict(
-                {"content_form": "list", "ordinal": 0, "size": 2}
-            ),
-        ),
-    )
-    message = AIMessage(
-        response_metadata={"model_call_id": "model-call-1"},
-        content=[
-            {
-                "type": "reasoning_content",
-                "reasoning_content": "思考 0",
-            }
-        ],
-        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
-    )
-    result = merge_canonical_reasoning([message], items)
-    assert result[0].content == message.content
-
-
-def test_agent_state_reasoning_merge_excludes_final_carrier_parts_from_tool_message(
-    reasoning_items_factory,
-):
-    items = reasoning_items_factory(0)
-    post_tool = replace(
-        items[0],
-        item_id="reasoning-after-tool",
-        item_sequence=8,
-        payload="工具返回后的 reasoning",
-        content_hash=content_hash("text", "工具返回后的 reasoning"),
-        projection_identity=ItemProjectionIdentity(
-            model_call_id="model-call-2",
-            block_id="model-call-2:block:part-after-tool",
-            block_index=0,
-        ),
-    )
-    items.insert(1, post_tool)
-    items.append(
-        CanonicalItemRecord.create(
-            item_sequence=12,
-            item_id="final-assistant",
-            semantic_kind="assistant_output",
-            payload_kind="structured_content",
-            status="completed",
-            producer_ref={
-                "producer_kind": "provider",
-                "producer_id": "final-assistant",
-                "invocation_id": "turn-1",
-            },
-            payload=[
-                {
-                    "reasoning_content": "工具返回后的 reasoning",
-                    "type": "reasoning_content",
-                },
-                {"text": "最终答复", "type": "text"},
-            ],
-            projection_identity=ItemProjectionIdentity(
-                model_call_id="model-call-2",
-                phase="final_answer",
-                content_part_refs=tuple(
-                    ProjectionPartRef.from_dict(ref)
-                    for ref in [
-                        {"id": "part-after-tool", "index": 0},
-                        {"id": "part-final-text", "index": 1},
-                    ]
-                ),
-            ),
-            turn_id="turn-1",
-            turn_scope="turn_member",
-            wire_role="assistant",
-        )
-    )
-    message = AIMessage(
-        response_metadata={"model_call_id": "model-call-1"},
-        content=[
-            {
-                "type": "reasoning_content",
-                "reasoning_content": "思考 0",
-            }
-        ],
-        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
-    )
-
-    result = merge_canonical_reasoning([message], items)
-
-    assert result[0].content == message.content
-    assert result[0].response_metadata["reasoning_source"] == "canonical_item_stream"
-
-
-@pytest.mark.parametrize("indices", [(0, 2), (2, 0)])
-def test_agent_state_reasoning_merge_keeps_ambiguous_part_order_explicit(
-    reasoning_items_factory,
-    indices,
-):
-    message = AIMessage(
-        response_metadata={"model_call_id": "model-call-1"},
-        content="缺少 content-part 顺序的正文",
-        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
-    )
-    result = merge_canonical_reasoning([message], reasoning_items_factory(*indices))
-    assert result[0].content == message.content
-    assert result[0].response_metadata["reasoning_merge_status"] == (
-        "skipped_ambiguous_order"
-    )
-    assert result[0].response_metadata["reasoning_merge_reason"] == (
-        "content_part_index_missing"
-    )
-    assert message.content == result[0].content
-
-
-def test_agent_state_reasoning_merge_keeps_conflicting_part_order_explicit(
-    reasoning_items_factory,
-):
-    message = AIMessage(
-        response_metadata={"model_call_id": "model-call-1"},
-        content=[{"type": "text", "text": "调用前说明", "index": 1}],
-        tool_calls=[{"id": "call-1", "name": "read", "args": {}}],
-    )
-    result = merge_canonical_reasoning([message], reasoning_items_factory(2, 0))
-    assert result[0].content == message.content
-    assert result[0].response_metadata["reasoning_merge_status"] == (
-        "skipped_ambiguous_order"
-    )
-    assert result[0].response_metadata["reasoning_merge_reason"] == (
-        "content_part_order_conflict"
-    )
-    assert message.content == result[0].content

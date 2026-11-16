@@ -18,7 +18,7 @@ mapping tests/
 └── itemized投影
     ├── itemized/test_selection_role_projection.py
     ├── itemized/test_carrier_dedup_tool_result.py
-    ├── itemized/test_message_reasoning_merge.py 未知 model-call scope 的工具ID匹配
+    ├── itemized/test_message_reasoning_merge.py reasoning 选择顺序、受保护载体、去重与工具归属
     ├── itemized/test_history_time_projection.py
     ├── itemized/test_root_placement_projection.py
     ├── test_history_turn_tool_identity.py      根目录测试，覆盖history_turns投影

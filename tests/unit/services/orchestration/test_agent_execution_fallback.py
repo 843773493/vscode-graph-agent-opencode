@@ -461,11 +461,11 @@ def agent_execution_dependencies(
         lambda _session_id, *, item_id, checkpoint_ns: saved_items.get(item_id)
     )
     monkeypatch.setattr(
-        "app.services.orchestration.execution_step.runner.persist_user_message_checkpoint",
+        "app.services.orchestration.execution_step.runner.checkpoint_accepted_execution_input",
         MagicMock(return_value=True),
     )
     monkeypatch.setattr(
-        "app.services.orchestration.execution_step.runner.persist_standard_assistant_checkpoint",
+        "app.services.orchestration.execution_step.runner.persist_final_assistant_checkpoint",
         persist_final,
     )
     dependency_provider.get_checkpointer.return_value = saver

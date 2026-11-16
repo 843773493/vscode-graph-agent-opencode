@@ -1,3 +1,5 @@
+"""消费已接受执行输入，并固化最终 assistant 消息的 LangGraph checkpoint。"""
+
 from __future__ import annotations
 
 import uuid
@@ -91,18 +93,15 @@ def _content_part_refs(
     return refs
 
 
-def _latest_final_assistant_index(messages: list[object]) -> int:
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if not isinstance(message, AIMessage):
-            continue
-        if getattr(message, "tool_calls", None):
-            continue
-        return index
-    return -1
+def _latest_assistant_response(messages: list[object]) -> AIMessage | None:
+    """定位最近一条不含工具调用的 assistant 消息。"""
+    for message in reversed(messages):
+        if isinstance(message, AIMessage) and not message.tool_calls:
+            return message
+    return None
 
 
-def _rewrite_latest_assistant_message(
+def _append_final_assistant_message(
     messages: list[object],
     *,
     content_blocks: Sequence[Mapping[str, object]],
@@ -113,12 +112,9 @@ def _rewrite_latest_assistant_message(
     turn_id: str | None,
     preserve_content_part_refs: bool,
 ) -> AIMessage | None:
-    latest_index = _latest_final_assistant_index(messages)
-    if latest_index < 0:
+    latest = _latest_assistant_response(messages)
+    if latest is None:
         return None
-    latest = messages[latest_index]
-    if not isinstance(latest, AIMessage):
-        raise TypeError("最终 assistant 定位结果不是 AIMessage")
 
     response_metadata = producer_response_metadata(latest.response_metadata or {})
     response_metadata["phase"] = "final_answer"
@@ -169,7 +165,7 @@ def _rewrite_latest_assistant_message(
         refs = _content_part_refs(content_blocks)
         if refs:
             response_metadata["content_part_refs"] = refs
-    rewritten = latest.model_copy(
+    final_message = latest.model_copy(
         update={
             "id": message_id,
             "content": _build_assistant_content(content_blocks, final_text),
@@ -177,11 +173,11 @@ def _rewrite_latest_assistant_message(
             "response_metadata": response_metadata,
         }
     )
-    messages.append(rewritten)
-    return rewritten
+    messages.append(final_message)
+    return final_message
 
 
-def persist_standard_assistant_checkpoint(
+def persist_final_assistant_checkpoint(
     *,
     checkpointer: BaseCheckpointSaver,
     session_id: str,
@@ -219,7 +215,7 @@ def persist_standard_assistant_checkpoint(
         )
 
     messages = list(raw_messages)
-    rewritten = _rewrite_latest_assistant_message(
+    final_message = _append_final_assistant_message(
         messages,
         content_blocks=content_blocks,
         final_text=final_text,
@@ -229,11 +225,11 @@ def persist_standard_assistant_checkpoint(
         turn_id=turn_id,
         preserve_content_part_refs=preserve_content_part_refs,
     )
-    if rewritten is None:
+    if final_message is None:
         return False
 
     if before_persist is not None:
-        before_persist(rewritten)
+        before_persist(final_message)
 
     channel_values["messages"] = message_snapshot(messages)
     checkpoint["channel_values"] = channel_values
@@ -255,7 +251,7 @@ def persist_standard_assistant_checkpoint(
     return True
 
 
-def persist_user_message_checkpoint(
+def checkpoint_accepted_execution_input(
     *,
     checkpointer: BaseCheckpointSaver,
     session_id: str,

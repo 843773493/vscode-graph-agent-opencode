@@ -39,7 +39,7 @@ tests/unit/services/business/
         └── session_service_test_support.py（共享测试装具）
 ```
 
-根目录直接测试模块仍超过 20 个的结构审查阈值；`test_message_service_checkpoint.py`、`test_reasoning_checkpoint_service.py`、`test_session_context_query_service.py` 和 `test_session_service.py` 都超过约 800 行，应在各自行为边界稳定后优先做文件拆分审查。child-thread 的列表读模型、Team board 发布投影和创建 owner 校验已分到 `session_children/`，避免混在一个超长模块中。移动测试时检查测试矩阵、`out/tests/` 镜像路径和引用；不要只按行数切文件。
+根目录直接测试模块仍超过 20 个的结构审查阈值；`test_message_service_checkpoint.py`、`test_execution_message_checkpoint.py`、`test_session_context_query_service.py` 和 `test_session_service.py` 都超过约 800 行，应在各自行为边界稳定后优先做文件拆分审查。child-thread 的列表读模型、Team board 发布投影和创建 owner 校验已分到 `session_children/`，避免混在一个超长模块中。移动测试时检查测试矩阵、`out/tests/` 镜像路径和引用；不要只按行数切文件。
 
 ## 可修改内容
 

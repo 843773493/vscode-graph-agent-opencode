@@ -17,8 +17,8 @@ from app.domain.itemized.identity.item_projection import (
     ProjectionPartRef,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.business.reasoning_checkpoint_service import (
-    _rewrite_latest_assistant_message,
+from app.services.business.execution_message_checkpoint import (
+    _append_final_assistant_message,
 )
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     CANONICAL_GROUP_FIELD,
@@ -53,7 +53,7 @@ def test_assistant_rebinding_does_not_inherit_or_forge_job_identity() -> None:
             },
         )
     ]
-    rewritten = _rewrite_latest_assistant_message(
+    rewritten = _append_final_assistant_message(
         messages,
         content_blocks=({"type": "text", "text": "final"},),
         final_text="final",

@@ -61,11 +61,11 @@ from app.runtime.agent_runtime import (
 )
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.message import AttachmentRef
-from app.services.business.message_display import DISPLAY_CONTENT_METADATA_KEY
-from app.services.business.reasoning_checkpoint_service import (
-    persist_standard_assistant_checkpoint,
-    persist_user_message_checkpoint,
+from app.services.business.execution_message_checkpoint import (
+    checkpoint_accepted_execution_input,
+    persist_final_assistant_checkpoint,
 )
+from app.services.business.message_display import DISPLAY_CONTENT_METADATA_KEY
 from app.services.infrastructure.message_stream_store import (
     MessageStreamTerminalError,
     MessageStreamWriter,
@@ -380,7 +380,7 @@ class StepRunner:
         admission: ExecutionAdmission | None = None
         message_stream_writer: MessageStreamWriter | None = None
         message_stream_runtime: MessageStreamRuntime | None = None
-        admission_write_task: asyncio.Task[bool] | None = None
+        input_checkpoint_task: asyncio.Task[bool] | None = None
         admission_read_task: asyncio.Task[ExecutionAdmission] | None = None
         input_read_task: asyncio.Task[HumanMessage] | None = None
         stream_open_task: asyncio.Task[MessageStreamWriter] | None = None
@@ -423,7 +423,7 @@ class StepRunner:
             tasks = tuple(
                 task
                 for task in (
-                    admission_write_task,
+                    input_checkpoint_task,
                     admission_read_task,
                     input_read_task,
                     stream_open_task,
@@ -447,7 +447,7 @@ class StepRunner:
                 and runtime_acquire_task.exception() is None
             ):
                 runtime_lease = runtime_acquire_task.result()
-            if admission is None and (admission_write_task is not None or input_read_task is not None):
+            if admission is None and (input_checkpoint_task is not None or input_read_task is not None):
                 try:
                     admission = await asyncio.to_thread(
                         read_admission, session_id, thread_id=thread_id,
@@ -475,8 +475,8 @@ class StepRunner:
             ))
             next_input_messages = [await asyncio.shield(input_read_task)]
             if resume_checkpoint_id is None:
-                admission_write_task = asyncio.create_task(asyncio.to_thread(
-                    persist_user_message_checkpoint,
+                input_checkpoint_task = asyncio.create_task(asyncio.to_thread(
+                    checkpoint_accepted_execution_input,
                     checkpointer=checkpointer,
                     session_id=session_id,
                     thread_id=thread_id,
@@ -491,7 +491,7 @@ class StepRunner:
                     ),
                     checkpoint_ns=rollout_checkpoint_ns,
                 ))
-                await asyncio.shield(admission_write_task)
+                await asyncio.shield(input_checkpoint_task)
             admission_read_task = asyncio.create_task(asyncio.to_thread(
                 read_admission, session_id, thread_id=thread_id,
                 job_id=job_id, checkpoint_ns=rollout_checkpoint_ns,
@@ -716,7 +716,7 @@ class StepRunner:
             assistant_message_created_at = datetime.now(UTC)
             settled.clear()
             assistant_write_task = asyncio.create_task(asyncio.to_thread(
-                persist_standard_assistant_checkpoint,
+                persist_final_assistant_checkpoint,
                 checkpointer=checkpointer,
                 session_id=session_id,
                 thread_id=thread_id,
