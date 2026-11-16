@@ -84,17 +84,6 @@ def has_valid_session_question_reply(
     )
 
 
-def custom_tools_requested_by_message(
-    message: str,
-    configured_custom_tool_names: set[str],
-) -> set[str]:
-    return {
-        tool_name
-        for tool_name in configured_custom_tool_names
-        if tool_name and tool_name in message
-    }
-
-
 def build_missing_custom_tool_retry_reminder(
     *,
     missing_tool_names: set[str],
@@ -132,7 +121,6 @@ __all__ = [
     "build_empty_response_retry_reminder",
     "build_missing_custom_tool_retry_reminder",
     "cancelled_error_reason",
-    "custom_tools_requested_by_message",
     "has_valid_delegated_report",
     "has_valid_session_question_reply",
     "internal_retry_message",

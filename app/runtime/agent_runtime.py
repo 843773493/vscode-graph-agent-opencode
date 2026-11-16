@@ -16,8 +16,6 @@ from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
-from app.agents.policy import parse_custom_tool_specs
-from app.agents.policy.tool_capability import metadata_for_custom_tool
 from app.core.lifecycle import LifetimeScope
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
@@ -274,20 +272,3 @@ def build_session_agent_runtime(
         owns_thread=owns_thread,
         workspace_root=workspace_root,
     )
-
-def get_configured_custom_tool_names(
-    *,
-    agent_id: str,
-    config_service: ConfigService,
-) -> set[str]:
-    """返回当前 agent 策略最终启用的自定义扩展工具名。"""
-    tool_config = config_service.get_agent_tool_config(agent_id)
-    resolver = config_service.get_tool_policy_resolver(agent_id)
-    names: set[str] = set()
-    for spec in parse_custom_tool_specs(
-        tool_config.get("custom", []),
-        context=f"agent {agent_id} 的 tools.custom",
-    ):
-        if resolver.resolve(metadata_for_custom_tool(spec)).execution_enabled:
-            names.add(spec.name)
-    return names

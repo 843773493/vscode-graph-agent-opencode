@@ -16,6 +16,7 @@ from langgraph.types import StateSnapshot
 from app.abstractions.tool_selection import ToolSelectionSnapshot
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING, GraphBindingStorePort
+from app.agents.policy import ToolPolicyResolver
 from app.agents.tools.testing import create_test_tool
 from app.core.execution_admission_context import require_current_execution_admission
 from app.core.model_delta_context import (
@@ -1337,7 +1338,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(stream_agent
 async def test_requested_custom_tool_missing_result_retries_with_system_reminder(
     agent_execution_dependencies,
 ):
-    """用户点名配置 custom tool 但模型只输出正文时，应继续要求真实工具调用。"""
+    """点名工具按静态策略和持久禁用项筛选，缺少真实调用结果时重试。"""
     deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
         "providers": [
@@ -1360,9 +1361,24 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
             {
                 "name": "test_tool_2",
                 "factory": "app.agents.tools.testing:create_test_tool_2",
-            }
+            },
+            {"name": "web_search", "factory": "example.tools:create_web_search"},
+            {"tool_id": "read_context"},
+            {"name": "start_debugging", "factory": "example.debug:create_tool"},
+            {"name": "muted_tool", "factory": "example.tools:create_tool"},
         ],
     }
+    deps["config_service"].get_tool_policy_resolver.return_value = ToolPolicyResolver(
+        policy_defaults={"execution_enabled": False},
+        policy_rules={"by_group": {
+            group: {"execution_enabled": True}
+            for group in ("extension:testing", "extension:tools", "agent-collaboration", "mcp:tui-mcp")
+        }},
+        restrictions={},
+    )
+    deps["tool_selection_store"].snapshot.side_effect = lambda agent_id: ToolSelectionSnapshot(
+        agent_id, {"muted_tool": False, "start_debugging": True}, {"web_search": False},
+    )
     service = _build_agent_execution_service(deps)
 
     input_messages: list[object] = []
@@ -1391,7 +1407,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
                 },
             ),
             last_tool_result_text="4568",
-            completed_custom_tool_names=("test_tool_2",),
+            completed_custom_tool_names=("test_tool_2", "web_search", "read_context"),
         ),
     ]
 
@@ -1413,7 +1429,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
 
         result = await _run_accepted_step(service, agent_execution_dependencies,
             session_id="test",
-            message="请调用 test_tool_2",
+            message="请调用 test_tool_2、web_search、read_context、start_debugging、muted_tool 和 mcp_tool",
             agent_id="test_agent",
             job_id="job_test",
             execution_binding=_user_execution_binding("job_test"),
@@ -1427,7 +1443,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
     assert input_messages[1] == []
     retry = agent_execution_dependencies["dependency_provider"].get_checkpointer.return_value.register_execution_retry_source.call_args.kwargs["message"]
     assert retry.metadata["source"] == "missing_custom_tool_retry"
-    assert "test_tool_2" in retry.metadata["missing_tools"]
+    assert retry.metadata["missing_tools"] == ["read_context", "test_tool_2", "web_search"]
 
 
 @pytest.mark.asyncio

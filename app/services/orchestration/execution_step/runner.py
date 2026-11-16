@@ -17,6 +17,8 @@ from app.agents.execution_checkpoint import (
     persist_final_assistant_checkpoint,
 )
 from app.agents.graph_binding import GraphBindingUnavailableError
+from app.agents.policy import parse_custom_tool_specs
+from app.agents.policy.tool_capability import metadata_for_custom_tool
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import (
     reset_current_execution_admission,
@@ -59,10 +61,7 @@ from app.domain.itemized.execution_admission import (
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
-from app.runtime.agent_runtime import (
-    AGENT_GRAPH_RECURSION_LIMIT,
-    get_configured_custom_tool_names,
-)
+from app.runtime.agent_runtime import AGENT_GRAPH_RECURSION_LIMIT
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.message_display import DISPLAY_CONTENT_METADATA_KEY
@@ -81,9 +80,6 @@ from app.services.orchestration.execution_step.model_call import StepModelCallAd
 from app.services.orchestration.execution_step.ports import (
     StepAgentRuntime,
     StepExecutionPorts,
-)
-from app.services.orchestration.execution_step.reminders import (
-    custom_tools_requested_by_message as _custom_tools_requested_by_message,
 )
 from app.services.orchestration.execution_step.retry import run_agent_with_retries
 from app.services.orchestration.execution_step.stream_bindings import (
@@ -566,22 +562,25 @@ class StepRunner:
             latest_model_content_blocks: tuple[dict[str, object], ...] = ()
             turn_token_usage_parts: list[ModelTokenUsagePayload] = []
             with self.ports.config_service.use_snapshot(config_snapshot):
-                configured_custom_tool_names = get_configured_custom_tool_names(
-                    agent_id=resolved_agent_id,
-                    config_service=self.ports.config_service,
-                )
+                tool_config = self.ports.config_service.get_agent_tool_config(resolved_agent_id)
+                policy_resolver = self.ports.config_service.get_tool_policy_resolver(resolved_agent_id)
+                policy_enabled_custom_tool_names = {
+                    spec.name
+                    for spec in parse_custom_tool_specs(
+                        tool_config.get("custom", []),
+                        context=f"agent {resolved_agent_id} 的 tools.custom",
+                    )
+                    if policy_resolver.resolve(metadata_for_custom_tool(spec)).execution_enabled
+                }
             tool_selection = self.ports.tool_selection_store.snapshot(resolved_agent_id)
             execution_overrides = tool_selection.execution_overrides
             model_visibility_overrides = tool_selection.model_visibility_overrides
-            configured_custom_tool_names = {
+            requested_custom_tool_names = {
                 tool_name
-                for tool_name in configured_custom_tool_names
+                for tool_name in policy_enabled_custom_tool_names
                 if execution_overrides.get(tool_name) is not False
+                and tool_name in message
             }
-            requested_custom_tool_names = _custom_tools_requested_by_message(
-                message,
-                configured_custom_tool_names,
-            )
             if progress_reporter is not None:
                 progress_reporter("agent_start")
             await event_publisher.publish(

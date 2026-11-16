@@ -18,5 +18,6 @@
 # 规范
 
 - public service 用组合调用 runner；retry 必须使用传入端口，不维护第二套依赖来源。
+- 用户点名工具的重试要求由 runner 从静态策略启用的 `tools.custom` 中排除持久禁用项后确定；此集合不含 MCP，不等于最终执行工具全集。runtime 只装配依赖，不查询这条重试规则。
 - 新状态只属于当前 run；事件契约直接 import event_stream/contracts。
 - 所有必需 v2 端口缺失必须明确报错，不允许关闭持久化的降级模式。
