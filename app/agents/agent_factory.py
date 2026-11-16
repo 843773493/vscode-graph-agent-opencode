@@ -27,7 +27,7 @@ from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.agent_tools import build_default_tools
-from app.agents.custom_tools import build_custom_tool_bundle
+from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
 from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
     build_deep_agent_tool_middleware,
@@ -502,29 +502,31 @@ def build_deep_agent(
             filesystem_permissions=permissions,
             text_mutations=text_mutations,
         )
-        custom_tool_bundle = build_custom_tool_bundle(
+        declared_custom_tools = build_custom_tools(
             custom_tool_specs or [],
-            session_id=session_id,
-            agent_id=agent_id,
-            sender_agent_id=resolved_sender_agent_id,
-            workspace_root=workspace_root,
-            background_task_registry=background_task_registry,
-            background_mailbox=background_mailbox,
-            job_event_bus=job_event_bus,
-            job_service=job_service,
-            session_context_query_service=session_context_query_service,
-            workspace_session_context_client=workspace_session_context_client,
-            session_communication_service=session_communication_service,
-            session_orchestrator=session_orchestrator,
-            config_service=config_service,
-            terminal_resource_owner=terminal_resource_owner,
-            browser_resource_owner=browser_resource_owner,
-            invocation_context=tool_invocation_context,
-            node_debug_service=node_debug_service,
-            mcp_connection_service=mcp_connection_service,
+            context=CustomToolFactoryContext(
+                session_id=session_id,
+                agent_id=agent_id,
+                sender_agent_id=resolved_sender_agent_id,
+                workspace_root=workspace_root,
+                background_task_registry=background_task_registry,
+                background_message_bus=background_mailbox,
+                job_event_bus=job_event_bus,
+                job_service=job_service,
+                session_context_query_service=session_context_query_service,
+                workspace_session_context_client=workspace_session_context_client,
+                session_communication_service=session_communication_service,
+                session_orchestrator=session_orchestrator,
+                config_service=config_service,
+                terminal_resource_owner=terminal_resource_owner,
+                browser_resource_owner=browser_resource_owner,
+                invocation_context=tool_invocation_context,
+                node_debug_service=node_debug_service,
+                mcp_connection_service=mcp_connection_service,
+            ),
         )
         custom_tools = []
-        for tool in custom_tool_bundle.tools:
+        for tool in declared_custom_tools:
             if tool.name in resolved_tool_denylist:
                 continue
             metadata = metadata_for_custom_tool(custom_specs_by_name[tool.name])

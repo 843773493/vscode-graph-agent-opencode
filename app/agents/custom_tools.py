@@ -56,11 +56,6 @@ class CustomToolFactoryContext:
     mcp_connection_service: McpConnectionService | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class CustomToolBundle:
-    tools: list[BaseTool]
-
-
 class CustomToolFactory(Protocol):
     def __call__(self, context: CustomToolFactoryContext) -> BaseTool:
         """根据当前 session runtime context 构建自定义扩展工具。"""
@@ -129,49 +124,3 @@ def build_custom_tools(
         tools.append(tool)
 
     return tools
-
-
-def build_custom_tool_bundle(
-    specs: Iterable[object],
-    *,
-    session_id: str,
-    agent_id: str,
-    sender_agent_id: str,
-    workspace_root: Path,
-    background_task_registry: BackgroundTaskRegistryProtocol,
-    background_mailbox: BackgroundMailboxProtocol,
-    job_event_bus: JobEventBusProtocol,
-    job_service: JobServiceProtocol | None,
-    session_context_query_service: SessionContextQueryProtocol,
-    workspace_session_context_client: WorkspaceSessionContextClientProtocol,
-    session_orchestrator: SessionMessageOrchestratorProtocol,
-    config_service: CustomToolConfigProtocol,
-    terminal_resource_owner: TerminalResourceOwner,
-    browser_resource_owner: BrowserResourceOwner,
-    invocation_context: ToolInvocationContext,
-    session_communication_service: SessionCommunicationProtocol | None = None,
-    node_debug_service: NodeDebugService | None = None,
-    mcp_connection_service: McpConnectionService | None = None,
-) -> CustomToolBundle:
-    context = CustomToolFactoryContext(
-        session_id=session_id,
-        agent_id=agent_id,
-        sender_agent_id=sender_agent_id,
-        workspace_root=workspace_root,
-        background_task_registry=background_task_registry,
-        background_message_bus=background_mailbox,
-        job_event_bus=job_event_bus,
-        job_service=job_service,
-        session_context_query_service=session_context_query_service,
-        workspace_session_context_client=workspace_session_context_client,
-        session_orchestrator=session_orchestrator,
-        config_service=config_service,
-        terminal_resource_owner=terminal_resource_owner,
-        browser_resource_owner=browser_resource_owner,
-        invocation_context=invocation_context,
-        session_communication_service=session_communication_service,
-        node_debug_service=node_debug_service,
-        mcp_connection_service=mcp_connection_service,
-    )
-    tools = build_custom_tools(specs, context=context)
-    return CustomToolBundle(tools=tools)
