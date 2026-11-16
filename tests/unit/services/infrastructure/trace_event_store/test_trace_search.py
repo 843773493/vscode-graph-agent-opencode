@@ -16,9 +16,9 @@ from app.schemas.event import (
     JobCreatedEvent,
     JobCreatedPayload,
 )
-from app.services.infrastructure.turn_history import trace_search
-from app.services.infrastructure.turn_history.trace_page import TRACE_PAGE_MAX_BYTES
-from app.services.infrastructure.turn_history.trace_search import (
+from app.services.infrastructure.session_trace import trace_search
+from app.services.infrastructure.session_trace.trace_page import TRACE_PAGE_MAX_BYTES
+from app.services.infrastructure.session_trace.trace_search import (
     TraceSearchBudget,
     TraceSearchError,
 )
@@ -221,7 +221,7 @@ async def test_failed_append_keeps_committed_history_and_search_cursor(records):
     """提交失败不能发布半条事件，也不能使既有搜索快照失效。"""
     import sqlite3
 
-    from app.services.infrastructure.turn_history.trace_database import TraceDatabase
+    from app.services.infrastructure.session_trace.trace_database import TraceDatabase
 
     store, session, path, _main, _child = records
     before = store.read_events(session)

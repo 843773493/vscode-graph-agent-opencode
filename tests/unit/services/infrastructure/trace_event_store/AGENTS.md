@@ -2,7 +2,7 @@
 
 本目录按 Trace event 存储的行为职责组织单元测试；生产实现仍由
 `app/services/infrastructure/trace_event_store.py` 与
-`app/services/infrastructure/turn_history/` 提供。
+`app/services/infrastructure/session_trace/` 提供。
 
 ```text
 trace_event_store/

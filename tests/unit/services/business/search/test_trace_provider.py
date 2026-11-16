@@ -158,7 +158,7 @@ async def test_http_cursor_keeps_machine_reason(catalog, trace_http, records, ch
         elif change == "catalog":
             await catalog._session_service.create(SessionCreateRequest(title="目录变动"))
         else:
-            from app.services.infrastructure.turn_history.trace_database import (
+            from app.services.infrastructure.session_trace.trace_database import (
                 TraceDatabase,
             )
             for owner in records:

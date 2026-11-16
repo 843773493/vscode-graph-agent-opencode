@@ -81,7 +81,7 @@ class TraceDatabase:
                 raise RuntimeError(
                     f"Trace SQLite schema 不受支持: path={self.path}, version={version}; "
                     "请停写后显式执行 uv run python -m "
-                    "app.services.infrastructure.turn_history.trace_database <trace.sqlite>"
+                    "app.services.infrastructure.session_trace.trace_database <trace.sqlite>"
                 )
             # 所有多条读取共用一致快照；写入由 SQLite 原子提交，读取不占写锁。
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")

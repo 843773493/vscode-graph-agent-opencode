@@ -16,11 +16,11 @@ from app.schemas.event import (
     JobCreatedEvent,
     JobCreatedPayload,
 )
+from app.services.infrastructure.session_trace.trace_page import (
+    TracePageBudgetExceededError,
+)
 from app.services.infrastructure.trace_event_store import (
     TraceCursorGoneError,
-)
-from app.services.infrastructure.turn_history.trace_page import (
-    TracePageBudgetExceededError,
 )
 
 
@@ -28,7 +28,7 @@ def test_offline_trace_upgrade_preserves_events_and_builds_thread_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.core.sqlite_state import SQLiteStateDatabase
-    from app.services.infrastructure.turn_history.trace_database import (
+    from app.services.infrastructure.session_trace.trace_database import (
         TraceDatabase,
         _migrations,
     )
@@ -46,7 +46,7 @@ def test_offline_trace_upgrade_preserves_events_and_builds_thread_index(
     with pytest.raises(RuntimeError, match="请停写后显式执行"), TraceDatabase(path).connection():
         pass
     monkeypatch.setattr("sys.argv", ["trace_database", str(path)])
-    entry = "app.services.infrastructure.turn_history.trace_database"
+    entry = "app.services.infrastructure.session_trace.trace_database"
     monkeypatch.delitem(sys.modules, entry)
     runpy.run_module(entry, run_name="__main__")
 

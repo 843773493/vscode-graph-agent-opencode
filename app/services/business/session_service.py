@@ -62,11 +62,11 @@ from app.services.business.session_context_resource import (
     session_resource_uri,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.trace_event_store import TraceEventStore
-from app.services.infrastructure.turn_history.trace_cursor import (
+from app.services.infrastructure.session_trace.trace_cursor import (
     bind_trace_cursor,
     unbind_trace_cursor,
 )
+from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.mapping.trace_event_mapper import TraceEventMapper
 
 

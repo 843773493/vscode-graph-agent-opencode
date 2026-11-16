@@ -36,7 +36,7 @@ from app.schemas.internal_v2.session_navigation import (
 )
 from app.schemas.search_federation import FederatedSearchEventDTO
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogError
-from app.services.infrastructure.turn_history.trace_search import TraceSearchError
+from app.services.infrastructure.session_trace.trace_search import TraceSearchError
 
 GATEWAY = "gateway_" + "a" * 32
 OWNERS = [{"gateway_id": GATEWAY, "workspace_id": f"00000000-0000-4000-8000-{index:012d}"} for index in range(1, 4)]

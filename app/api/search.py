@@ -60,7 +60,7 @@ from app.services.infrastructure.rollout_history.errors import (
     StaleTurnCursorError,
     StaleTurnReferenceError,
 )
-from app.services.infrastructure.turn_history.trace_search import TraceSearchError
+from app.services.infrastructure.session_trace.trace_search import TraceSearchError
 
 router = APIRouter(prefix="/search", tags=["search"])
 

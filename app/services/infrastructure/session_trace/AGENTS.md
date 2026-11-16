@@ -1,6 +1,6 @@
 # 目录用途
 
-`turn_history/` 实现会话节点内的 Session Trace 事件持久化、查询、实时交付和恢复。
+`session_trace/` 实现会话节点内的 Session Trace 事件持久化、查询、实时交付和恢复。
 对话 Turn 的 rollout 历史读取和游标异常由同层 `rollout_history/` 负责；展示预算由
 `app/services/mapping/itemized/history_turns/projection.py` 负责。
 
@@ -24,4 +24,4 @@
 - 搜索续页绑定 SQLite 提交版本；追加或改写后明确失效。传输游标绑定事件逻辑字节边界和采样摘要，搜索引用校验完整正文 SHA256；正文只存一份。
 - 不为开发中间 JSONL 自动导入、修复或双读；存在旧数据而无 SQLite 时明确报错，保留原件。
 
-- Trace schema 升级必须停写后显式运行 `uv run python -m app.services.infrastructure.turn_history.trace_database <trace.sqlite>`；普通请求只核版本，不回填旧库。实时通道不保存历史；追平后直接交付已提交事件，序列缺口及空闲时仍按索引发现其它实例的提交，溢出断流后按最后游标重连。
+- Trace schema 升级必须停写后显式运行 `uv run python -m app.services.infrastructure.session_trace.trace_database <trace.sqlite>`；普通请求只核版本，不回填旧库。实时通道不保存历史；追平后直接交付已提交事件，序列缺口及空闲时仍按索引发现其它实例的提交，溢出断流后按最后游标重连。

@@ -17,31 +17,31 @@ from app.services.infrastructure.events.event_channel_service import (
     EventChannelSpec,
     channel_name,
 )
-from app.services.infrastructure.turn_history.trace_cursor import (
+from app.services.infrastructure.session_trace.trace_cursor import (
     TraceCursorGoneError,
     TraceStreamRecord,
     encode_trace_cursor,
     events_after_cursor,
     offset_after_event,
 )
-from app.services.infrastructure.turn_history.trace_database import (
+from app.services.infrastructure.session_trace.trace_database import (
     TraceDatabase,
     job_threads,
 )
-from app.services.infrastructure.turn_history.trace_page import (
+from app.services.infrastructure.session_trace.trace_page import (
     TRACE_PAGE_MAX_BYTES,
     TraceEventPage,
     parse_trace_record,
     read_trace_event_page,
 )
-from app.services.infrastructure.turn_history.trace_search import (
+from app.services.infrastructure.session_trace.trace_search import (
     TraceSearchBudget,
     TraceSearchPage,
     TraceSearchPosition,
     locate_trace_event,
     search_trace_events,
 )
-from app.services.infrastructure.turn_history.trace_stream import (
+from app.services.infrastructure.session_trace.trace_stream import (
     iter_trace_event_lines,
     stream_trace_records,
 )

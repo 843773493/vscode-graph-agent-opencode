@@ -1,6 +1,6 @@
 # 目录用途
 
-`session_turn_history/` 负责把会话语义事件投影为完整 Job Turn，并编排有界 bootstrap、分页、详情与懒迁移。
+`session_turn_history/` 基于已提交的 rollout 编排精确 Thread 的 bootstrap、历史分页、详情及消息／工具结果查询。活动 Job 摘要来自 JobService；Session Trace 只提供实时流接续游标，不作为对话历史正文来源。
 
 `workspace_search.py` 在原 catalog／SessionThread 归属内编排有界消息正文查询，所有 Thread 共用原 canonical reader 的正文预算，不扫描目录或创建第二份正文。
 
@@ -8,8 +8,8 @@
 
 ## 可修改内容
 
-- 可以修改 Turn 语义投影规则、读取服务和显式迁移编排。
-- 可以补充 steering 合并、重启恢复和迁移竞态的业务测试。
+- 可以修改 rollout 历史读取、分页与活动 Job 摘要的组合。
+- 可以补充精确 Thread、历史分页、活动 Job 和实时接续的业务测试。
 
 ## 不可修改内容
 
@@ -18,6 +18,6 @@
 
 ## 规范
 
-- 只通过 `app/abstractions/` 的协议依赖持久化和事件源。
-- 语义事件缺少可靠 Job 起点时不得猜测生成 Turn。
-- 迁移必须有界启动、显式发布，并在事件水位变化时保留权威投影。
+- 历史正文通过 RolloutCheckpointSaver 的统一历史入口读取，不从 Trace 重建 Turn 或维护第二套历史投影。
+- 在同一次 Session 读准入内解析 Thread 并读取历史；活动 Job 状态继续由 JobService 提供。
+- bootstrap 的 Trace 游标沿用 Session／Thread 绑定，只服务于后续事件流。
