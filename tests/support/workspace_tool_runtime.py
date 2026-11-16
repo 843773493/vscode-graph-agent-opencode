@@ -114,7 +114,7 @@ async def workspace_tool_runtime(
                         record = container.checkpointer.execution_queue_record(
                             session.session_id, thread_id, identity.job_id,
                         )
-                        claim = await container.pending_request_store.claim(record)
+                        claim = await container.execution_queue_service.claim(record)
                         if claim is None:
                             raise RuntimeError("工作区工具装具未取得新建Thread的执行权")
                         ownership_cleanup.push_async_callback(claim.close)

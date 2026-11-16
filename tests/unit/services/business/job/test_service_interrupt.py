@@ -17,7 +17,6 @@ from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.job.lifecycle import transition_job_status
 from app.services.business.job.service import JobDrainBlocker, JobService, JobState
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.reader import (
     RolloutContextReader,
 )
@@ -25,6 +24,7 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from tests.support.job_thread_fixture import (
     job_fixture_execution_binding,
     job_fixture_thread_id,
@@ -506,7 +506,7 @@ async def test_job_control_cancel_queued_job_removes_it_from_queue(job_service_f
     owner = build_message_service(sessions_dir, checkpointer=saver, workspace_root=tmp_path)
     service = job_service_factory(job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
                          session_lifecycle_guard=session_lifecycle_guard, input_owner=owner, terminal_status_writer=saver,
-                         pending_request_store=PendingRequestStore(sessions_dir=sessions_dir, owner=saver,
+                         execution_queue_service=ExecutionQueueService(sessions_dir=sessions_dir, owner=saver,
                              input_reader=lambda ref: owner.accepted_job_message(ref, display=False)))
 
     def fake_start_job_task(job):

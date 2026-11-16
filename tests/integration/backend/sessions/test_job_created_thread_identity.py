@@ -34,12 +34,12 @@ from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.session_trace.recorder import TraceEventRecorder
 from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
@@ -121,7 +121,7 @@ async def producer_case(request: pytest.FixtureRequest) -> AsyncIterator[TracePr
         job_event_bus=bus, job_executor=_NoModelExecutor(),
         session_lifecycle_guard=assert_active, input_owner=input_owner,
         terminal_status_writer=saver,
-        pending_request_store=PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+        execution_queue_service=ExecutionQueueService(sessions_dir=workspace.sessions_root, owner=saver,
             input_reader=lambda ref: input_owner.accepted_job_message(ref, display=False)),
     )
     sessions = SessionService(

@@ -23,7 +23,6 @@ from app.prompting import internal_message_factory
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -32,6 +31,7 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     SKILL_SELECTION_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
 )
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
     restore_schema24,
@@ -43,11 +43,11 @@ from tests.unit.core.catalog_workspace_helper import (
 
 
 @dataclass
-class StoreCase:
+class QueueCase:
     workspace: CatalogWorkspaceContext
     saver: RolloutCheckpointSaver
     messages: MessageService
-    store: PendingRequestStore
+    store: ExecutionQueueService
     session: str
     thread: str
 
@@ -84,7 +84,7 @@ class StoreCase:
 
 
 @pytest.fixture
-async def store_case(request: pytest.FixtureRequest) -> AsyncIterator[StoreCase]:
+async def queue_case(request: pytest.FixtureRequest) -> AsyncIterator[QueueCase]:
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     if context.workspace_root.exists():
         shutil.rmtree(context.workspace_root)
@@ -93,17 +93,17 @@ async def store_case(request: pytest.FixtureRequest) -> AsyncIterator[StoreCase]
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
     messages = MessageService(main_thread_resolver=workspace.resolver.main_thread_id, checkpointer=saver,
                               workspace_root=workspace.workspace_root)
-    store = PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+    store = ExecutionQueueService(sessions_dir=workspace.sessions_root, owner=saver,
         input_reader=lambda reference: messages.accepted_job_message(reference, display=False))
     try:
-        yield StoreCase(workspace, saver, messages, store, session, workspace.resolver.main_thread_id(session))
+        yield QueueCase(workspace, saver, messages, store, session, workspace.resolver.main_thread_id(session))
     finally:
         workspace.close()
 
 
 @pytest.mark.parametrize("internal", [False, True])
-async def test_cold_projection_reads_canonical_body_and_frozen_identity(store_case: StoreCase, internal: bool):
-    case = store_case
+async def test_cold_projection_reads_canonical_body_and_frozen_identity(queue_case: QueueCase, internal: bool):
+    case = queue_case
     record = case.accept(internal=internal)
     loaded, = await case.store.load(case.session)
     assert (loaded.job_id, loaded.execution_binding, loaded.message_id) == (
@@ -118,9 +118,9 @@ async def test_cold_projection_reads_canonical_body_and_frozen_identity(store_ca
 
 
 async def test_global_queue_scan_holds_read_guard_until_snapshot_finishes(
-    store_case: StoreCase, monkeypatch: pytest.MonkeyPatch,
+    queue_case: QueueCase, monkeypatch: pytest.MonkeyPatch,
 ):
-    case = store_case
+    case = queue_case
     record = case.accept()
     session_dir = case.workspace.session_dir(case.session)
     entered = threading.Event()
@@ -166,8 +166,8 @@ async def test_global_queue_scan_holds_read_guard_until_snapshot_finishes(
             await asyncio.wait_for(deletion, 3)
 
 
-async def test_global_queue_scan_skips_deleting_owner_but_explicit_drain_can_read(store_case: StoreCase):
-    case = store_case
+async def test_global_queue_scan_skips_deleting_owner_but_explicit_drain_can_read(queue_case: QueueCase):
+    case = queue_case
     record = case.accept()
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -192,12 +192,12 @@ async def test_global_queue_scan_skips_deleting_owner_but_explicit_drain_can_rea
         await asyncio.wait_for(deletion, 3)
 
 
-async def test_summaries_never_read_body_and_policy_is_durable_cas(store_case: StoreCase):
-    case = store_case
+async def test_summaries_never_read_body_and_policy_is_durable_cas(queue_case: QueueCase):
+    case = queue_case
     records = [case.accept(f"输入 {index}") for index in range(10)]
     def reject(_reference):
         raise AssertionError("摘要不应读取 canonical 正文")
-    cold = PendingRequestStore(sessions_dir=case.workspace.sessions_root, owner=case.saver, input_reader=reject)
+    cold = ExecutionQueueService(sessions_dir=case.workspace.sessions_root, owner=case.saver, input_reader=reject)
     summary = await cold.load_summaries(case.session, thread_id=case.thread, limit=2)
     assert summary.request_count == 10 and summary.truncated
     assert [item.enqueue_sequence for item in summary.requests] == [record.cursor.commit_id for record in records[:2]]
@@ -208,8 +208,8 @@ async def test_summaries_never_read_body_and_policy_is_durable_cas(store_case: S
     assert (await cold.record(case.session, case.thread, reference.job_id)).delivery_policy == "after_interrupt"
 
 
-async def test_holder_generation_and_terminal_commit_protect_same_fifo(store_case: StoreCase):
-    case = store_case
+async def test_holder_generation_and_terminal_commit_protect_same_fifo(queue_case: QueueCase):
+    case = queue_case
     first, second = case.accept(), case.accept("后继")
     claim = await case.store.claim(first)
     assert claim is not None
@@ -236,8 +236,8 @@ async def test_holder_generation_and_terminal_commit_protect_same_fifo(store_cas
 
 
 @pytest.mark.parametrize("internal", [False, True])
-async def test_v5_migration_reuses_original_admission_and_is_idempotent(store_case: StoreCase, internal: bool):
-    case = store_case
+async def test_v5_migration_reuses_original_admission_and_is_idempotent(queue_case: QueueCase, internal: bool):
+    case = queue_case
     original = case.accept(internal=internal)
     path = case.legacy([original])
     with pytest.raises(RuntimeError, match="migrate_schema"):
@@ -249,8 +249,8 @@ async def test_v5_migration_reuses_original_admission_and_is_idempotent(store_ca
 
 
 @pytest.mark.parametrize("failure", ["version", "binding", "hash", "order", "identity"])
-async def test_v5_invalid_input_preserves_original_and_publishes_nothing(store_case: StoreCase, failure: str):
-    case = store_case
+async def test_v5_invalid_input_preserves_original_and_publishes_nothing(queue_case: QueueCase, failure: str):
+    case = queue_case
     records = [case.accept(), case.accept("后继")]
     path = case.legacy(records)
     header, detail = path.read_text().split("\n", 1)
@@ -273,8 +273,8 @@ async def test_v5_invalid_input_preserves_original_and_publishes_nothing(store_c
     assert case.saver.execution_queue_snapshot(case.session, case.thread).records == ()
 
 
-async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(store_case: StoreCase):
-    case = store_case
+async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(queue_case: QueueCase):
+    case = queue_case
     record = case.accept()
     path = case.legacy([record])
     storage = case.saver._storage.storage
@@ -304,8 +304,8 @@ async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(store_c
     assert recovered.cursor == record.cursor
 
 
-async def test_missing_frozen_queue_rejects_startup_instead_of_losing_old_active(store_case: StoreCase):
-    case = store_case
+async def test_missing_frozen_queue_rejects_startup_instead_of_losing_old_active(queue_case: QueueCase):
+    case = queue_case
     record = case.accept()
     storage = case.saver._storage.storage
     original = storage.jsonl_path(case.session, thread_id=case.thread).read_bytes()
@@ -328,8 +328,8 @@ async def test_missing_frozen_queue_rejects_startup_instead_of_losing_old_active
     assert await case.store.records() == ()
 
 
-async def test_control_error_exposes_logical_owner_without_native_path(store_case: StoreCase, monkeypatch):
-    case = store_case
+async def test_control_error_exposes_logical_owner_without_native_path(queue_case: QueueCase, monkeypatch):
+    case = queue_case
     case.accept()
     native = str(case.workspace.session_dir(case.session) / "private-index.sqlite")
 

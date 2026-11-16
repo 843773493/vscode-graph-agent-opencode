@@ -87,7 +87,7 @@ def fixture_lifetime(monkeypatch: pytest.MonkeyPatch) -> FixtureLifetime:
             mark_job_terminal_status=Mock(side_effect=cancel_execution),
         ),
         message_service=SimpleNamespace(accept_user_message=Mock()),
-        pending_request_store=SimpleNamespace(claim=AsyncMock(return_value=claim)),
+        execution_queue_service=SimpleNamespace(claim=AsyncMock(return_value=claim)),
         browser_resource_owner=SimpleNamespace(cleanup_session=AsyncMock(side_effect=lambda _id: cleanup("browser"))),
         terminal_resource_owner=SimpleNamespace(cleanup_session=AsyncMock(side_effect=lambda _id: cleanup("terminal"))),
         workspace_activity_service=SimpleNamespace(store=SimpleNamespace(close=Mock(side_effect=lambda: cleanup("activity")))),
@@ -125,7 +125,7 @@ async def test_successful_teardown_keeps_cleanup_order_and_releases_application_
     assert message.kwargs["queue_input"].execution_binding == message.kwargs["execution_identity"]
     assert message.kwargs["queue_input"].message_id == message.args[0].message_id
     assert (message.kwargs["queue_input"].agent_id, message.kwargs["queue_input"].provider_id) == ("default", "fixture-provider")
-    claim = state.container.pending_request_store.claim.return_value
+    claim = state.container.execution_queue_service.claim.return_value
     claim.start.assert_awaited_once()
     assert state.container.checkpointer.mark_job_terminal_status.call_args.kwargs["job_id"] == message.kwargs["execution_identity"].job_id
     assert state.container.checkpointer.mark_job_terminal_status.call_args.kwargs["status"] == "cancelled"
@@ -136,7 +136,7 @@ async def test_claim_start_failure_still_settles_execution_and_releases_holder(
 ) -> None:
     state = fixture_lifetime
     failure = OSError("装具执行启动失败")
-    claim = state.container.pending_request_store.claim.return_value
+    claim = state.container.execution_queue_service.claim.return_value
     claim.start.side_effect = failure
     with pytest.raises(OSError) as caught:
         async with runtime_fixture.workspace_tool_runtime(tmp_path, application=state.application):
@@ -201,9 +201,9 @@ async def test_preparation_failure_after_acceptance_still_settles_own_execution(
     elif stage == "queue-read":
         state.container.checkpointer.execution_queue_record.side_effect = original
     elif stage == "claim":
-        state.container.pending_request_store.claim.side_effect = original
+        state.container.execution_queue_service.claim.side_effect = original
     else:
-        state.container.pending_request_store.claim.return_value = None
+        state.container.execution_queue_service.claim.return_value = None
 
     with pytest.raises(RuntimeError if stage == "claim-none" else LookupError) as caught:
         async with runtime_fixture.workspace_tool_runtime(tmp_path, application=state.application):

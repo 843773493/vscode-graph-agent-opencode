@@ -28,12 +28,12 @@ from app.services.business.message_service import MessageService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.background_work.mailbox import BackgroundMailbox
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from tests.harness.python.run_context import TestRunContext
 from tests.support.message_service import build_message_service
 from tests.support.workspaces import prepare_test_workspace
@@ -256,7 +256,7 @@ async def admission_harness() -> AsyncIterator[_AdmissionHarness]:
         session_lifecycle_guard=session_lifecycle_guard,
         input_owner=input_owner,
         terminal_status_writer=saver,
-        pending_request_store=PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+        execution_queue_service=ExecutionQueueService(sessions_dir=workspace.sessions_root, owner=saver,
             input_reader=lambda ref: input_owner.accepted_job_message(ref, display=False)),
     )
     try:

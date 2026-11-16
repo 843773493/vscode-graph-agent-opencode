@@ -2646,7 +2646,7 @@ async def test_tool_runtime_reentry_retains_cancelled_queue_and_releases_holder(
                 prior_session, prior_thread, prior_job = previous
                 settled = container.checkpointer.execution_queue_record(prior_session, prior_thread, prior_job)
                 assert (settled.phase, settled.outcome) == ("terminal", "cancelled")
-                assert await container.pending_request_store.records(session_id=prior_session) == ()
+                assert await container.execution_queue_service.records(session_id=prior_session) == ()
             facts.append({"session_id": session_id, "thread_id": thread_id, "job_id": admission.job_id,
                           "message_id": record.input.message_id, "claim_generation": record.claim_generation})
             previous = session_id, thread_id, admission.job_id

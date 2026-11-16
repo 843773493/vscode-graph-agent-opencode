@@ -7,6 +7,7 @@
 ```text
 orchestration/
 ├── background_work/                     精确 Thread 后台工具任务、持久邮箱与恢复；不管理工作区自动化定义
+├── execution_queue.py                    ExecutionQueueService：聚合 rollout 队列、领取与启动持有权、待处理投影；不另存队列
 ├── job_execution_service.py             Job 状态转换、标题触发、step 调用及完成事件；失败归 JobService 结算
 ├── agent_execution_service.py           Agent/runtime 组装与复用；把单次执行交给 StepRunner
 ├── execution_step/                       单次 Agent step 的控制循环、重试、终态与端口接线
@@ -62,6 +63,7 @@ orchestration/
 ## 规范
 
 - 以流程控制为中心，不承担数据持久化职责。
+- `execution_queue.py` 的全工作区恢复扫描逐个取得短 topology 准入和 Session read guard，重新核对 catalog active 状态后读取 main/child 队列；guard 覆盖同步读取线程及取消结算，不并持两个 Session 锁。删除排空中的精确 Session 读取沿用调用方已有准入，不重入该锁；原存储故障继续抛出。执行数据由 rollout owner 保存，既有 v5 显式迁移仍经同一 owner 导入。
 - 保持装配边界清晰，依赖协议而不是具体实现。
 - 失败必须立即暴露，不能默认继续。
 - `workspace_runtime_lifecycle.py` 协调工作区执行，不管理 Backend 进程或 SDK 装配。启动恢复在受保护 worker 中耗尽 SQLite Trace 快照，只保留 Job owner 和生命周期 ID；全部历史格式、协议与跨会话归属检查通过后才领取队列、调用恢复端口或写入终态，不用尾部窗口代替完整校验，不另建恢复账本。

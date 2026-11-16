@@ -18,11 +18,11 @@ app/abstractions/
 ├── 执行与消息边界
 │   ├── background_mailbox.py       后台持久邮箱收集与提交确认
 │   ├── background_task_registry.py 后台任务创建、查询、对账、清理与版本化 handler 端口
+│   ├── execution_queue.py          Thread 执行队列编排、领取句柄与 rollout 存储端口
 │   ├── job_event_bus.py            Job 事件发布与订阅
 │   ├── job_executor.py             Job 输入 owner 与执行状态
 │   ├── job_service.py              Job 服务调用端口
 │   ├── job_step_executor.py        Job 执行步骤端口
-│   ├── pending_request_store.py    等待处理请求存储
 │   ├── trace_event_sink.py         Trace 事件持久化写入端口
 │   └── turn_terminal_status.py     Turn 与工具结果终态
 ├── Agent 与协作边界

@@ -117,7 +117,7 @@ async def test_pending_controls_policy_remove_without_reordering(job_service_fac
     store = store_factory(sessions_dir)
     service = job_service_factory(
         job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
-        session_lifecycle_guard=session_lifecycle_guard, pending_request_store=store,
+        session_lifecycle_guard=session_lifecycle_guard, execution_queue_service=store,
         input_owner=pending_input_owner, terminal_status_writer=saver,
     )
     monkeypatch.setattr(service, "_start_job_task", lambda job: setattr(job, "task", _DummyTask()))
@@ -173,7 +173,7 @@ async def test_pending_controls_policy_remove_without_reordering(job_service_fac
         owner = build_message_service(sessions_dir, checkpointer=restarted, workspace_root=tmp_path)
         restored = job_service_factory(
             job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
-            session_lifecycle_guard=session_lifecycle_guard, pending_request_store=store,
+            session_lifecycle_guard=session_lifecycle_guard, execution_queue_service=store,
             input_owner=owner, terminal_status_writer=restarted,
         )
         assert (await restored.list_pending(session_id)).requests == [] and restored._jobs == {}
@@ -525,7 +525,7 @@ async def test_clear_thread_pending_preserves_sibling_fifo_active_jobs_and_durab
     store = store_factory(sessions_dir)
     service = job_service_factory(
         job_event_bus=JobEventBus(), job_executor=_DummyJobExecutor(),
-        session_lifecycle_guard=session_lifecycle_guard, pending_request_store=store,
+        session_lifecycle_guard=session_lifecycle_guard, execution_queue_service=store,
         input_owner=pending_input_owner, terminal_status_writer=saver,
     )
     monkeypatch.setattr(service, "_start_job_task", lambda job: setattr(job, "task", _DummyTask()))

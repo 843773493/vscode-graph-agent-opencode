@@ -7,7 +7,7 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
-from app.abstractions.pending_request_store import PendingRequestStoreProtocol
+from app.abstractions.execution_queue import ExecutionQueueProtocol
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
@@ -44,7 +44,7 @@ class WorkspaceRuntimeLifecycleService:
         message_stream_store: MessageStreamStore,
         terminal_status_writer: TurnTerminalStatusWriter | None = None,
         pending_tool_checkpoint_id: Callable[[JobState], Awaitable[str | None]],
-        pending_request_store: PendingRequestStoreProtocol,
+        execution_queue_service: ExecutionQueueProtocol,
     ) -> None:
         self._workspace_id = validate_workspace_id(workspace_id)
         self._job_service = job_service
@@ -53,7 +53,7 @@ class WorkspaceRuntimeLifecycleService:
         self._message_stream_store = message_stream_store
         self._terminal_status_writer = terminal_status_writer
         self._pending_tool_checkpoint_id = pending_tool_checkpoint_id
-        self._pending_request_store = pending_request_store
+        self._execution_queue_service = execution_queue_service
         self._lifecycle_state: RuntimeLifecycleState = "ready"
         self._start_time: float | None = None
         self._startup_reconciliation_errors: list[dict[str, str]] = []
@@ -167,7 +167,7 @@ class WorkspaceRuntimeLifecycleService:
         resumed_job_ids: set[str] = set()
         job_owners = await run_sync_shielded(self._read_trace_job_owners)
 
-        records = await self._pending_request_store.records()
+        records = await self._execution_queue_service.records()
         for record in records:
             admission = record.cursor.admission
             owner = (admission.session_id, admission.thread_id)
@@ -178,7 +178,7 @@ class WorkspaceRuntimeLifecycleService:
             if record.phase == "queued":
                 continue
             admission = record.cursor.admission
-            claim = await self._pending_request_store.claim(record)
+            claim = await self._execution_queue_service.claim(record)
             if claim is None:
                 # 本地工作区没有备用 runtime 接管协议；不能跳过队首后宣告启动成功。
                 raise RuntimeError(
@@ -188,7 +188,7 @@ class WorkspaceRuntimeLifecycleService:
                 )
             restored = False
             try:
-                request = await self._pending_request_store.project(claim.record, position=0, snapshot_version=0)
+                request = await self._execution_queue_service.project(claim.record, position=0, snapshot_version=0)
                 job = JobState(
                     job_id=admission.job_id, session_id=admission.session_id, thread_id=admission.thread_id,
                     message=request.content, message_id=request.message_id, message_created_at=request.message_created_at,
@@ -198,7 +198,7 @@ class WorkspaceRuntimeLifecycleService:
                     created_at=request.created_at, updated_at=request.updated_at, delivery_policy=request.delivery_policy,
                     queue_record=claim.record, queue_claim=claim,
                 )
-                if not await self._pending_request_store.before_dispatch(claim.record):
+                if not await self._execution_queue_service.before_dispatch(claim.record):
                     try:
                         job.resume_checkpoint_id = await self._pending_tool_checkpoint_id(job)
                     except CheckpointRecoveryRejectedError as error:

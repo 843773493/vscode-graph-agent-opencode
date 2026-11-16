@@ -27,10 +27,10 @@ from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
@@ -72,7 +72,7 @@ class PendingRecoveryCase:
     queued: tuple[tuple[str, str], tuple[str, str]]
     jobs: JobService
     executor: _HeldExecutor
-    store: PendingRequestStore
+    store: ExecutionQueueService
     workspace_id: str
     workspace_root: Path
     events: list[Event]
@@ -112,7 +112,7 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
         main_thread_resolver=workspace.resolver.main_thread_id, checkpointer=saver,
         workspace_root=workspace_root,
     )
-    store = PendingRequestStore(
+    store = ExecutionQueueService(
         sessions_dir=workspace.sessions_root,
         owner=saver, input_reader=lambda reference: messages.accepted_job_message(reference, display=False),
     )
@@ -120,7 +120,7 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
     def scheduler(executor: _HeldExecutor) -> JobService:
         return JobService(
             job_event_bus=JobEventBus(), job_executor=executor,
-            pending_request_store=store, input_owner=messages, terminal_status_writer=saver,
+            execution_queue_service=store, input_owner=messages, terminal_status_writer=saver,
             session_lifecycle_guard=workspace.resolver.resolve_session_node_for_runtime,
         )
 
@@ -187,19 +187,21 @@ async def test_real_pending_queue_retries_without_replacing_or_replaying_sibling
     pending_recovery_case: PendingRecoveryCase, monkeypatch: pytest.MonkeyPatch, failure: str,
 ) -> None:
     case = pending_recovery_case
-    original_save = case.jobs._pending_requests.refresh_version
+    original_refresh = case.jobs._pending_requests.refresh_version
     original_start = case.jobs._start_job_task
-    save_calls = 0
     starts: list[str] = []
-    failing_save = {"load_projection": 1, "first_dispatch_projection": 2, "sibling_dispatch_projection": 3}.get(failure)
+    fail_projection = failure != "sibling_task"
+    target = 1 if failure == "sibling_dispatch_projection" else 0
+    target_active_job = None if failure == "load_projection" else case.queued[target][0]
     fail_task = failure == "sibling_task"
 
-    async def save_once(session_id):
-        nonlocal save_calls
-        save_calls += 1
-        if save_calls == failing_save:
+    async def refresh_once(session_id):
+        nonlocal fail_projection
+        active_job = case.jobs._thread_current_job.get((session_id, case.threads[target]))
+        if fail_projection and active_job == target_active_job:
+            fail_projection = False
             raise OSError("injected queue persistence failure")
-        await original_save(session_id)
+        await original_refresh(session_id)
 
     def start_once(job):
         nonlocal fail_task
@@ -209,7 +211,7 @@ async def test_real_pending_queue_retries_without_replacing_or_replaying_sibling
         starts.append(job.job_id)
         original_start(job)
 
-    monkeypatch.setattr(case.jobs._pending_requests, "refresh_version", save_once)
+    monkeypatch.setattr(case.jobs._pending_requests, "refresh_version", refresh_once)
     monkeypatch.setattr(case.jobs, "_start_job_task", start_once)
     with pytest.raises(OSError, match="injected"):
         await case.jobs.list_pending(case.session_id)

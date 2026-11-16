@@ -75,7 +75,7 @@ class RecordingTurnStatusWriter:
         return True
 
 
-class EmptyPendingRequestStore:
+class EmptyExecutionQueueService:
     """Runtime 协议替身；只暴露测试显式登记的持久 admission。"""
 
     def __init__(self) -> None:
@@ -181,7 +181,7 @@ def build_runtime(pending_checkpoint_inspector,
         message_stream_store=MessageStreamStore(
             path_resolver=get_session_path_resolver(sessions_dir)
         ),
-        pending_request_store=EmptyPendingRequestStore(),
+        execution_queue_service=EmptyExecutionQueueService(),
         terminal_status_writer=terminal_status_writer,
     )
     return runtime, jobs
@@ -401,7 +401,7 @@ async def test_startup_restores_only_the_matching_created_and_started_owner(
                 ),
             ),
         ))
-    runtime._pending_request_store.add_started(request)
+    runtime._execution_queue_service.add_started(request)
 
     assert await runtime.reconcile_stale_executions() == 0
 
@@ -546,7 +546,7 @@ async def test_startup_releases_other_session_request_bodies_before_recovery(
         queued = _created_request(session_id, thread_id, f"job-queued-request-{index}")
         queued.payload.message = "排队请求正文" * 200_000
         await store.append(session_id, queued)
-        runtime._pending_request_store.add_started(request)
+        runtime._execution_queue_service.add_started(request)
     payloads: dict[str, list[weakref.ReferenceType[JobCreatedPayload]]] = {}
     original_read = store.iter_events
 

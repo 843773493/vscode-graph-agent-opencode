@@ -20,10 +20,10 @@ from app.services.business.job.service import (
     JobService,
 )
 from app.services.business.message_service import MessageService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from tests.support.job_thread_fixture import (
     job_fixture_thread_id,
 )
@@ -44,7 +44,7 @@ def request_factory(pending_input_owner):
 @pytest.fixture
 def store_factory(pending_input_owner):
     def make(sessions_dir):
-        return PendingRequestStore(sessions_dir=sessions_dir, owner=pending_input_owner._checkpointer, input_reader=lambda reference: pending_input_owner.accepted_job_message(reference, display=False))
+        return ExecutionQueueService(sessions_dir=sessions_dir, owner=pending_input_owner._checkpointer, input_reader=lambda reference: pending_input_owner.accepted_job_message(reference, display=False))
     return make
 
 
@@ -65,7 +65,7 @@ def _service(sessions_dir: Path, session_lifecycle_guard, input_owner: MessageSe
     return JobService(
         job_event_bus=JobEventBus(),
         job_executor=_UnusedExecutor(),
-        pending_request_store=PendingRequestStore(sessions_dir=sessions_dir, owner=input_owner._checkpointer, input_reader=lambda reference: input_owner.accepted_job_message(reference, display=False)),
+        execution_queue_service=ExecutionQueueService(sessions_dir=sessions_dir, owner=input_owner._checkpointer, input_reader=lambda reference: input_owner.accepted_job_message(reference, display=False)),
         session_lifecycle_guard=session_lifecycle_guard,
         input_owner=input_owner,
         terminal_status_writer=input_owner._checkpointer,

@@ -18,10 +18,10 @@ from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from tests.harness.python.run_context import TestRunContext
 from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
@@ -48,7 +48,7 @@ class QueueCase:
     thread_id: str
     saver: RolloutCheckpointSaver
     messages: MessageService
-    store: PendingRequestStore
+    store: ExecutionQueueService
     jobs: JobService
     executor: HeldExecutor
 
@@ -90,11 +90,11 @@ async def queue_case(request: pytest.FixtureRequest) -> AsyncIterator[QueueCase]
     saver = RolloutCheckpointSaver(sessions_dir=workspace.sessions_root)
     messages = MessageService(main_thread_resolver=workspace.resolver.main_thread_id, checkpointer=saver,
                               workspace_root=workspace.workspace_root)
-    store = PendingRequestStore(sessions_dir=workspace.sessions_root, owner=saver,
+    store = ExecutionQueueService(sessions_dir=workspace.sessions_root, owner=saver,
                                 input_reader=lambda reference: messages.accepted_job_message(reference, display=False))
     executor = HeldExecutor()
     jobs = JobService(job_event_bus=JobEventBus(), job_executor=executor, input_owner=messages,
-                      pending_request_store=store, terminal_status_writer=saver,
+                      execution_queue_service=store, terminal_status_writer=saver,
                       session_lifecycle_guard=workspace.resolver.resolve_session_node_for_runtime)
     case = QueueCase(workspace, session_id, thread_id, saver, messages, store, jobs, executor)
     try:

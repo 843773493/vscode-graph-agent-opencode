@@ -414,7 +414,7 @@ def _admit(
 
 async def _settle_local_recovery_claim(case: RunnerCase, admission: ExecutionAdmission) -> None:
     """局部恢复 fixture 领取并启动原准入；无活 writer 时释放 holder，进程退出另有专项。"""
-    store = case.container.pending_request_store
+    store = case.container.execution_queue_service
     record = await store.record(admission.session_id, admission.thread_id, admission.job_id)
     claim = await store.claim(record)
     assert claim is not None
@@ -797,7 +797,7 @@ async def test_restart_restores_original_child_before_provider_dispatch(
         message_stream_store=runner_case.container.message_stream_store,
         terminal_status_writer=restarted,
         pending_tool_checkpoint_id=runner_case.container.agent_execution_service.pending_tool_checkpoint_id,
-        pending_request_store=runner_case.container.pending_request_store,
+        execution_queue_service=runner_case.container.execution_queue_service,
     )
     await _settle_local_recovery_claim(runner_case, admission)
     try:
@@ -1006,7 +1006,7 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
         trace_event_store=runner_case.container.trace_event_store,
         message_stream_store=cold_streams, terminal_status_writer=restarted,
         pending_tool_checkpoint_id=runner_case.container.agent_execution_service.pending_tool_checkpoint_id,
-        pending_request_store=runner_case.container.pending_request_store,
+        execution_queue_service=runner_case.container.execution_queue_service,
     )
     assert await runtime.reconcile_stale_executions() == 2
     terminals = [item for item in restarted._storage.storage.read_items(session_id, thread_id)

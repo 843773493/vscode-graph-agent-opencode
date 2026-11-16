@@ -50,7 +50,7 @@ def runtime_endpoint(tmp_path: Path) -> Iterator[tuple[TestClient, Path]]:
         background_task_registry=build_background_registry(sessions_root),
         trace_event_store=TraceEventStore(sessions_dir=sessions_root),
         message_stream_store=MessageStreamStore(path_resolver=get_session_path_resolver(sessions_root)),
-        pending_tool_checkpoint_id=pending_checkpoint, pending_request_store=_EmptyQueueStore(),
+        pending_tool_checkpoint_id=pending_checkpoint, execution_queue_service=_EmptyQueueStore(),
     )
     application = FastAPI()
     application.add_middleware(TraceMiddleware)

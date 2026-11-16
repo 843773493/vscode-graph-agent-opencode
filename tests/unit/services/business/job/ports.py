@@ -119,5 +119,5 @@ def job_service_factory():
         store.snapshot_version = AsyncMock(side_effect=lambda _session: revision)
         store.claim = AsyncMock(side_effect=claim)
         store.update_policy = AsyncMock(side_effect=update)
-        return JobService(input_owner=owner, pending_request_store=store, **kwargs)
+        return JobService(input_owner=owner, execution_queue_service=store, **kwargs)
     return make

@@ -70,7 +70,7 @@ def _build_runtime(tmp_path: Path, session_lifecycle_guard, *, pending_checkpoin
         workspace_id="00000000-0000-4000-8000-000000000001",
         job_service=jobs,
         pending_tool_checkpoint_id=pending_checkpoint_inspector,
-        pending_request_store=_EmptyQueueStore(),
+        execution_queue_service=_EmptyQueueStore(),
         background_task_registry=build_background_registry(sessions_dir),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         message_stream_store=MessageStreamStore(

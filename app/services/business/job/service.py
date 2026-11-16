@@ -9,12 +9,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import TypeVar
 
+from app.abstractions.execution_queue import (
+    ExecutionQueueClaimProtocol,
+    ExecutionQueueProtocol,
+)
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_executor import JobExecutorProtocol, JobInputOwnerProtocol
-from app.abstractions.pending_request_store import (
-    ExecutionQueueClaimProtocol,
-    PendingRequestStoreProtocol,
-)
 from app.abstractions.turn_terminal_status import TurnTerminalStatusWriter
 from app.core.failures import execution_failure_message, report_failure
 from app.core.identifier import create_prefixed_id
@@ -141,7 +141,7 @@ class JobService:
         *,
         job_event_bus: JobEventBusProtocol,
         job_executor: JobExecutorProtocol,
-        pending_request_store: PendingRequestStoreProtocol | None = None,
+        execution_queue_service: ExecutionQueueProtocol | None = None,
         session_lifecycle_guard: Callable[[str], None],
         job_timeout_seconds: float = 600.0,
         job_timeout_seconds_provider: Callable[[], float] | None = None,
@@ -204,9 +204,9 @@ class JobService:
         self._terminal_status_writer = terminal_status_writer
         self._input_owner = input_owner
         self._pending_requests = JobPendingRequestService(
-            queue=self._pending_queue,
+            pending_queue=self._pending_queue,
             lock=self._dispatch_lock,
-            store=pending_request_store,
+            execution_queue=execution_queue_service,
             get_jobs=lambda: self._jobs,
             get_current_jobs=lambda: self._thread_current_job,
             persist_terminal_status=self._persist_terminal_execution_status,
@@ -903,7 +903,7 @@ class JobService:
                             "attachments": [attachment.model_dump(mode="json", exclude={"data_url"}) for attachment in job.attachments],
                             "delivery_policy": job.delivery_policy,
                             "enqueue_sequence": job.queue_record.cursor.commit_id,
-                            "queue_snapshot_version": await self._pending_requests.store.snapshot_version(session_id),
+                            "queue_snapshot_version": await self._pending_requests.execution_queue.snapshot_version(session_id),
                         }, agent_id="job_service",
                     )
         if not self._is_terminal_status(job.status):
@@ -918,11 +918,11 @@ class JobService:
             job = self._jobs.get(admission.job_id)
             if job is not None:
                 return self._existing_dispatch_snapshot(job)
-            record = await self._pending_requests.store.record(admission.session_id, admission.thread_id, admission.job_id)
-            records = await self._pending_requests.store.records(admission.session_id)
+            record = await self._pending_requests.execution_queue.record(admission.session_id, admission.thread_id, admission.job_id)
+            records = await self._pending_requests.execution_queue.records(admission.session_id)
             queued = [candidate for candidate in records
                       if candidate.cursor.admission.thread_id == admission.thread_id and candidate.phase == "queued"]
-            version = await self._pending_requests.store.snapshot_version(admission.session_id)
+            version = await self._pending_requests.execution_queue.snapshot_version(admission.session_id)
             active = next((candidate.cursor.admission.job_id for candidate in records
                            if candidate.cursor.admission.thread_id == admission.thread_id
                            and candidate.phase in {"claimed", "started"}), None)
@@ -1080,7 +1080,7 @@ class JobService:
     async def start_restored_executions(self) -> int:
         """全部工作区 owner 就绪后从原 checkpoint 续接，不经过新消息准入。"""
         owners = dict.fromkeys(record.cursor.admission.session_id
-                              for record in await self._pending_requests.store.records())
+                              for record in await self._pending_requests.execution_queue.records())
         for session_id in owners:
             await self._ensure_pending_loaded(session_id)
         restored = [job for job in self._jobs.values() if job.restoring_execution and job.task is None]
@@ -1717,7 +1717,7 @@ class JobService:
                     raise RuntimeError(f"待处理引用的 canonical execution outcome 无效: {record.job_id} {outcome}")
             # 只消费原 canonical execution，绝不由队列投影推导业务终态。
             records = live_records
-        queue_records = {record.job_id: await self._pending_requests.store.record(session_id, record.thread_id, record.job_id) for record in records}
+        queue_records = {record.job_id: await self._pending_requests.execution_queue.record(session_id, record.thread_id, record.job_id) for record in records}
         queue_snapshot_version = max(
             (record.snapshot_version for record in records),
             default=0,
@@ -1874,7 +1874,7 @@ class JobService:
                         candidate = self._jobs[head.job_id]
                         if candidate.queue_record is None:
                             raise RuntimeError("FIFO 队首缺少 durable queue record")
-                        candidate.queue_claim = await self._pending_requests.store.claim(candidate.queue_record)
+                        candidate.queue_claim = await self._pending_requests.execution_queue.claim(candidate.queue_record)
                         if candidate.queue_claim is None:
                             return False
                         candidate.queue_record = candidate.queue_claim.record

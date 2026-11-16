@@ -435,8 +435,8 @@ class WorkspaceLifespan:
             with _workspace_startup_stage(container, "job_event_bus.register_durable_listeners"):
                 await container.job_event_bus.register_durable_listener(container.thread_initial_execution_service.on_event)
                 await container.job_event_bus.register_durable_listener(self.record_session_activity)
-            with _workspace_startup_stage(container, "pending_request_store.migrate_all"):
-                await container.pending_request_store.migrate_all()
+            with _workspace_startup_stage(container, "execution_queue_service.migrate_all"):
+                await container.execution_queue_service.migrate_all()
             with _workspace_startup_stage(container, "persistent_tasks.import_legacy_goals"):
                 import_legacy_goals(container.persistent_task_runtime.store)
             with _workspace_startup_stage(container, "runtime_service.reconcile_stale_executions"):

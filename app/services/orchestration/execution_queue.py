@@ -1,4 +1,4 @@
-"""Session 查询只聚合 Thread rollout 的执行队列；不维护第二份待执行事实。"""
+"""聚合 Thread rollout 执行队列、协调领取与持有权，并投影待处理请求。"""
 from __future__ import annotations
 
 import asyncio
@@ -7,9 +7,9 @@ from collections.abc import Callable, Iterator
 from contextlib import AsyncExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
 from uuid import uuid4
 
+from app.abstractions.execution_queue import ExecutionQueueOwner
 from app.core.path_utils import get_session_path_resolver
 from app.core.phase_observer import observe_phase
 from app.core.session_lifecycle_gate import (
@@ -33,22 +33,6 @@ from app.schemas.internal_v2.pending_request import (
     PendingRequestSummaryDTO,
     PendingRequestSummaryListDTO,
 )
-
-
-class ExecutionQueueOwner(Protocol):
-    def validate_execution_queue(self, session_id: str, thread_id: str) -> None: ...
-    def execution_queue_before_dispatch(self, record: ExecutionQueueRecord) -> bool: ...
-    def execution_queue_owners(self, *, session_id: str | None) -> tuple[MutationIntentOwner, ...]: ...
-    def execution_queue_record(self, session_id: str, thread_id: str, job_id: str) -> ExecutionQueueRecord: ...
-    def execution_queue_snapshot(self, session_id: str, thread_id: str) -> ExecutionQueueSnapshot: ...
-    def claim_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
-                              claim_owner: str, previous_generation: int) -> ExecutionQueueRecord: ...
-    def start_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
-                              claim_owner: str, claim_generation: int) -> None: ...
-    def update_execution_queue_policy(self, session_id: str, thread_id: str, *, job_id: str,
-                                      policy: str, expected_revision: int) -> ExecutionQueueSnapshot: ...
-    def import_execution_queue(self, session_id: str, thread_id: str,
-                               inputs: tuple[tuple[str, ExecutionQueueInput], ...]) -> None: ...
 
 
 class ExecutionQueueClaim:
@@ -80,7 +64,9 @@ class ExecutionQueueClaim:
             await self._holder.__aexit__(None, None, None)
 
 
-class PendingRequestStore:
+class ExecutionQueueService:
+    """执行事实始终归 rollout owner，本服务不另存队列或消息正文。"""
+
     def __init__(self, *, sessions_dir: Path, owner: ExecutionQueueOwner,
                  input_reader: Callable[[PendingRequestControl], MessageDTO]) -> None:
         self._path_resolver = get_session_path_resolver(sessions_dir)

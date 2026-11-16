@@ -14,15 +14,15 @@ Job业务
 ├── 用户控制
 │   └── control_service.py            pause/resume/cancel与活动槽收尾
 └── 待处理消息
-    ├── pending_request_service.py     查询、修改、持久化协调入口
+    ├── pending_request_service.py     待处理查询、修改与持久执行队列协调
     ├── pending_request_controller.py  DTO投影及队列状态操作
     └── pending_queue.py               FIFO顺序、投递策略和快照版本
 ```
 
 执行链从 `service.py` 开始，队列状态转换统一经过 `lifecycle.py`；用户控制由
 `control_service.py` 协调执行任务和活动槽。待处理消息由
-`pending_request_service.py` 串联 `pending_request_controller.py` 与队列，持久化仍通过
-注入的 store 协议完成。队列按 `(session_id, thread_id)` 保持各 thread 的 FIFO，Session
+`pending_request_service.py` 串联 `pending_request_controller.py`、内存 `pending_queue` 与注入的
+`execution_queue` 编排端口。`ExecutionQueueProtocol` 负责持久执行记录的读取、领取和状态更新，实际写入仍归 rollout owner。队列按 `(session_id, thread_id)` 保持各 thread 的 FIFO，Session
 级查询、删除与清空再聚合全部 thread。
 
 # 可修改内容

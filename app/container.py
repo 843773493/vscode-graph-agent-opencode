@@ -138,7 +138,6 @@ from app.services.infrastructure.node_debug.session.session_admission import (
 from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
-from app.services.infrastructure.pending_request_store import PendingRequestStore
 from app.services.infrastructure.persistent_tasks.events import task_channel
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.resource_platform.bootstrap import (
@@ -191,6 +190,7 @@ from app.services.orchestration.background_work.system_time_emitter import (
 from app.services.orchestration.communication.service import (
     SessionCommunicationService,
 )
+from app.services.orchestration.execution_queue import ExecutionQueueService
 from app.services.orchestration.job_execution_service import JobExecutionService
 from app.services.orchestration.mcp_wait.handler import McpConnectionWaitHandler
 from app.services.orchestration.owner_thread_creation_factory import (
@@ -426,7 +426,7 @@ class AppContainer:
     checkpointer: RolloutCheckpointSaver
     mcp_catalog_owner: McpCatalogOwner
     mcp_connection_service: McpConnectionService
-    pending_request_store: PendingRequestStore
+    execution_queue_service: ExecutionQueueService
     workspace_activity_service: WorkspaceActivityService
     message_stream_store: MessageStreamStore
 
@@ -928,14 +928,14 @@ def _build_app_container(
         job_event_bus=job_event_bus,
         session_title_service=session_title_service,
     )
-    pending_request_store = PendingRequestStore(
+    execution_queue_service = ExecutionQueueService(
         sessions_dir=resolved_sessions_root, owner=checkpointer,
         input_reader=lambda reference: message_service.accepted_job_message(reference, display=False),
     )
     job_service = JobService(
         job_event_bus=job_event_bus,
         job_executor=job_executor,
-        pending_request_store=pending_request_store,
+        execution_queue_service=execution_queue_service,
         session_lifecycle_guard=session_service.assert_session_active,
         job_timeout_seconds=config_service.get_agent_run_timeout_seconds(),
         job_timeout_seconds_provider=config_service.get_agent_run_timeout_seconds,
@@ -1032,7 +1032,7 @@ def _build_app_container(
         message_stream_store=message_stream_store,
         terminal_status_writer=checkpointer,
         pending_tool_checkpoint_id=agent_execution_service.pending_tool_checkpoint_id,
-        pending_request_store=pending_request_store,
+        execution_queue_service=execution_queue_service,
     )
     session_interrupt_service = SessionInterruptService(
         session_service=session_service,
@@ -1206,7 +1206,7 @@ def _build_app_container(
         rollout_checkpoint_runtime=rollout_checkpoint_runtime,
         checkpointer=checkpointer,
         mcp_catalog_owner=mcp_catalog_owner,
-        pending_request_store=pending_request_store,
+        execution_queue_service=execution_queue_service,
         mcp_connection_service=mcp_connection_service,
         workspace_activity_service=workspace_activity_service,
         message_stream_store=message_stream_store,
