@@ -289,7 +289,8 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
 
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-    from app.agents import agent_factory
+    from app.runtime import provider_model
+    from app.runtime.agent_runtime import prepare_agent_model
 
     config_service = MagicMock()
     config_service.get_revision.return_value = "config:runtime-identity"
@@ -320,21 +321,21 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
         ],
     }
     monkeypatch.setattr(
-        agent_factory,
+        provider_model,
         "build_model_from_provider",
         lambda provider, runtime_config, prompt_cache_key=None: FakeListChatModel(
             responses=["ok"]
         ),
     )
 
-    runtime = agent_factory.build_runtime_for_agent(
+    model_setup = prepare_agent_model(
         "default",
         config_service,
     )
 
     import json
 
-    identity = next(item for item in runtime["instruction_producers"] if item.producer_id == "R02")
+    identity = next(item for item in model_setup.instruction_producers if item.producer_id == "R02")
     facts = json.loads(identity.content)["runtime_facts"]
     assert facts["workspace_root"] == "."
     assert facts["configured_candidates"][0] == {"provider_id": "backup_3", "model_id": "gpt-5.6-luna"}

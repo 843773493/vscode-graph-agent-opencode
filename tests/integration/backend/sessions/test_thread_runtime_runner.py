@@ -313,7 +313,7 @@ async def runtime_case(
 
     monkeypatch.setattr(GRAPH_FACTORY_REGISTRY, "resolve", recording_resolve)
     monkeypatch.setattr(agent_factory, "ContextSourceReactor", recording_reactor)
-    monkeypatch.setattr(agent_factory, "build_model_from_provider", model_from_provider)
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", model_from_provider)
     if not case.shutdown_owned_by_lifespan:
         await runner_case.container.mcp_catalog_owner.start()
         platform = runner_case.container.resource_platform

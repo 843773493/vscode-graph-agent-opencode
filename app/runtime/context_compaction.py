@@ -56,19 +56,19 @@ class AgentSummarizationCompactor:
         )
 
     def _build_summarization(self, agent_id: str):
-        from app.agents.agent_factory import build_runtime_for_agent
         from app.agents.summarization.factory import (
             create_cache_preserving_summarization_middleware,
         )
         from app.agents.summarization.preflight import NoDurableOwnerCompactionPreflight
         from app.agents.workspace_backend import build_workspace_backend
+        from app.runtime.agent_runtime import prepare_agent_model
 
-        runtime = build_runtime_for_agent(
+        model_setup = prepare_agent_model(
             agent_id=agent_id,
             config_service=self._config_service,
         )
         summarization = create_cache_preserving_summarization_middleware(
-            runtime["model"],
+            model_setup.model,
             build_workspace_backend(self._workspace_root),
             # 预览装配没有 durable Saver owner；端口仅在真实触发压缩时
             # 才会被调用，按合成装配合同给显式失败端口，不静默跳过。

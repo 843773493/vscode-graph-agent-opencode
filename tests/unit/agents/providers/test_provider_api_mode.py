@@ -11,7 +11,6 @@ from langchain_core.messages import (
     message_chunk_to_message,
 )
 
-from app.agents.agent_factory import build_runtime_for_agent
 from app.agents.providers.litellm_chat import (
     BoxteamLiteLLMChatModel,
     _StreamPartState,
@@ -31,6 +30,7 @@ from app.agents.upstream_request_trace import (
     record_upstream_response,
 )
 from app.core.failures import is_provider_failure
+from app.runtime.agent_runtime import prepare_agent_model
 from app.runtime.provider_model import build_model_from_provider
 from app.services.orchestration.event_stream.model_events import (
     is_chat_model_run_name,
@@ -451,17 +451,17 @@ def test_runtime_skips_invalid_fallback_without_blocking_selected_provider(
             raise ValueError("fallback 配置损坏")
         return primary_model
 
-    monkeypatch.setattr("app.agents.agent_factory.build_model_from_provider", build)
+    monkeypatch.setattr("app.runtime.provider_model.build_model_from_provider", build)
 
-    runtime = build_runtime_for_agent(
+    model_setup = prepare_agent_model(
         "default",
         config_service=ConfigServiceStub(),
         preferred_provider_id="selected",
     )
 
-    assert runtime["model"] is primary_model
-    assert runtime["model_routing"]._candidates[0].provider_id == "selected"
-    assert len(runtime["model_routing"]._candidates) == 1
+    assert model_setup.model is primary_model
+    assert model_setup.routing_middleware._candidates[0].provider_id == "selected"
+    assert len(model_setup.routing_middleware._candidates) == 1
 
 
 def test_runtime_reports_invalid_selected_provider(monkeypatch):
@@ -476,7 +476,7 @@ def test_runtime_reports_invalid_selected_provider(monkeypatch):
             return {"providers": providers, "system_prompt": "test", "runtime_identity_description": ""}
 
     monkeypatch.setattr(
-        "app.agents.agent_factory.build_model_from_provider",
+        "app.runtime.provider_model.build_model_from_provider",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("配置损坏")),
     )
 
@@ -484,7 +484,7 @@ def test_runtime_reports_invalid_selected_provider(monkeypatch):
         RuntimeError,
         match="当前选择的模型配置不可用.*broken-selected.*配置损坏",
     ):
-        build_runtime_for_agent(
+        prepare_agent_model(
             "default",
             config_service=ConfigServiceStub(),
             preferred_provider_id="broken-selected",

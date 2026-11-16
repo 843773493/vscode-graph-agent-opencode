@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -43,9 +44,12 @@ from app.services.orchestration.background_work.mailbox import BackgroundMailbox
 from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 if TYPE_CHECKING:
+    from langchain_core.language_models.chat_models import BaseChatModel
     from langchain_core.tools import BaseTool
 
     from app.agents.graph_binding import GraphBindingStorePort
+    from app.agents.instruction_producers import InstructionProducerSpec
+    from app.agents.model_capability_routing import CapabilityRoutingMiddleware
     from app.agents.skill_catalog import PublishedSkillCatalog
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
@@ -59,6 +63,76 @@ if TYPE_CHECKING:
 
 
 AGENT_GRAPH_RECURSION_LIMIT = 9999
+
+
+@dataclass(frozen=True, slots=True)
+class AgentModelSetup:
+    """模型与其配置指令的准备结果；不持有 Thread、工具或执行图。"""
+
+    model: BaseChatModel
+    routing_middleware: CapabilityRoutingMiddleware
+    instruction_producers: tuple[InstructionProducerSpec, ...]
+
+
+def prepare_agent_model(
+    agent_id: str,
+    config_service: ConfigService | None = None,
+    *,
+    prompt_cache_key: str | None = None,
+    preferred_provider_id: str | None = None,
+) -> AgentModelSetup:
+    """准备配置中的模型候选、路由和指令来源，供执行与压缩预览共用。"""
+    from app.agents.instruction_producers import runtime_instruction_producers
+    from app.agents.model_capability_routing import (
+        CapabilityRoutingMiddleware,
+        build_provider_model_candidate,
+    )
+    from app.runtime.provider_model import (
+        build_model_from_provider,
+        provider_build_failure,
+    )
+
+    if config_service is None:
+        raise RuntimeError("prepare_agent_model 需要显式传入 ConfigService")
+    runtime_config = config_service.get_agent_runtime_config(
+        agent_id,
+        preferred_provider_id=preferred_provider_id,
+    )
+    providers = runtime_config["providers"]
+    candidates = []
+    for index, provider in enumerate(providers):
+        try:
+            model = build_model_from_provider(
+                provider,
+                runtime_config,
+                prompt_cache_key=prompt_cache_key,
+            )
+        except Exception as error:
+            provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
+            detail = provider_build_failure(provider, error)
+            if index == 0:
+                raise RuntimeError(
+                    f"当前选择的模型配置不可用: provider_id={provider_id}; {detail}"
+                ) from error
+            continue
+        candidates.append(
+            build_provider_model_candidate(provider=provider, model=model)
+        )
+    if not candidates:
+        raise RuntimeError("未能构建任何模型实例")
+    return AgentModelSetup(
+        model=candidates[0].model,
+        routing_middleware=CapabilityRoutingMiddleware(candidates),
+        instruction_producers=runtime_instruction_producers(
+            agent_id=agent_id, content=runtime_config["system_prompt"],
+            config_revision=config_service.get_revision(),
+            runtime_identity_description=runtime_config["runtime_identity_description"],
+            provider_candidates=[
+                (candidate.provider_id, candidate.model_id)
+                for candidate in candidates
+            ],
+        ),
+    )
 
 
 class AgentRuntimeDependencyProvider(Protocol):

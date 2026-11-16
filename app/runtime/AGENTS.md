@@ -9,7 +9,7 @@
 ```text
 app/runtime/
 ├── Agent 装配与调度
-│   ├── agent_runtime.py       依赖提供协议、Agent runtime 与工具定义装配
+│   ├── agent_runtime.py       模型准备、执行依赖注入与工具定义装配
 │   ├── graph_factory.py       注册表到 Agent 装配器的 SDK 懒加载边界
 │   ├── context_compaction.py   按需装配显式上下文压缩预览
 │   └── tool_test_tools.py      按需装配工具能力测试所需工具
@@ -73,3 +73,4 @@ app/runtime/
 - `http_server.py` 是 Gateway 与受管 Backend 共用的 Uvicorn 入口；lifespan 可交付 listener-ready 启动回调与关闭前钩子，不在 runner 构造业务 owner。请求退出只改变原 server 状态，实际排空和 lifespan 仍由 Uvicorn 完成，不能将 ACK 当作进程退出。
 
 - `graph_factory.py` 的 `build_deep_agent_graph` 仅在调用时加载 `agents/agent_factory.py::build_deep_agent`；闭集 selector 注册不得触发 SDK 导入。Agent 配置与冻结绑定选择由 `build_configured_agent` 完成，运行依赖由 `agent_runtime.py` 注入；无 Thread owner 的目录模式只返回工具。
+- `agent_runtime.py::prepare_agent_model` 只准备模型候选、路由和指令来源，返回具名字段的 `AgentModelSetup`，供 Agent 构建与压缩预览共用；它不创建 Thread、工具或图。模型实现与路由依赖在该函数内加载，不能为读取声明导入 SDK。

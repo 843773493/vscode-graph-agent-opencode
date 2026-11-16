@@ -74,4 +74,4 @@ app/agents/
 - `manual_compaction_checkpoint.py` 是手动压缩的 LangGraph 检查点适配边界：读取快照并登记 `_force_cache_compaction` 请求。实际摘要生成归 `summarization/` 中间件，检查点持久化归注入的 checkpointer；不在此增加消息副本或另一套存储。
 
 - `agents_md_publication.py` 登记工作区 AGENTS.md 文件并发布已接受版本的有序指令链，不管理 Agent 实例；`skill_catalog.py` 在目录构建与来源通知中调用它，冻结链的 CSM 安装归 `rollout_context/runtime/context_sources/agents_md_context.py`。
-- `agent_factory.py` 的 `build_configured_agent` 读取 Agent 配置并按冻结 selector 选择工厂；`build_deep_agent` 装配工具并构建单代图，无 Thread owner 的目录模式仅返回工具。`build_runtime_for_agent` 只构造 Provider 候选、路由中间件与指令生产者；运行依赖收集归 `runtime/agent_runtime.py`，图复用与释放归 Thread tracker。
+- `agent_factory.py` 的 `build_configured_agent` 读取 Agent 配置并按冻结 selector 选择工厂；`build_deep_agent` 装配工具并构建单代图，无 Thread owner 的目录模式仅返回工具。模型候选、路由中间件与指令来源由 `runtime/agent_runtime.py::prepare_agent_model` 准备为 `AgentModelSetup`；执行依赖收集也归该 runtime 模块，图复用与释放归 Thread tracker。

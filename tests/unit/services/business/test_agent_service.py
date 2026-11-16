@@ -9,9 +9,9 @@ from threading import Event, Thread
 import commentjson
 import pytest
 
-from app.agents import agent_factory
 from app.agents.policy import DEFAULT_AGENT_TOOL_NAMES
 from app.runtime import provider_model
+from app.runtime.agent_runtime import prepare_agent_model
 from app.services.business.agent_service import AgentService
 from app.services.infrastructure.config_service import ConfigService
 
@@ -81,12 +81,12 @@ async def test_agent_list_defers_sdk_failure_to_execution(
         calls.append(provider["id"])
         raise error
 
-    monkeypatch.setattr(agent_factory, "build_model_from_provider", fail_sdk)
+    monkeypatch.setattr(provider_model, "build_model_from_provider", fail_sdk)
     agents = await AgentService(config_service=agent_config_service).list()
     assert agents and all(provider.available for agent in agents for provider in agent.providers)
     assert calls == []
     with pytest.raises(RuntimeError, match="当前选择的模型配置不可用") as caught:
-        agent_factory.build_runtime_for_agent("default", agent_config_service)
+        prepare_agent_model("default", agent_config_service)
     assert caught.value.__cause__ is error
     assert calls == [agent_config_service.get_agent_runtime_config("default")["providers"][0]["id"]]
 

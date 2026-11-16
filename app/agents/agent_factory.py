@@ -43,7 +43,6 @@ from app.agents.instruction_producers import (
     InstructionProducerSpec,
     InstructionUpdateBinding,
     register_instruction_producer,
-    runtime_instruction_producers,
 )
 from app.agents.llm_logging_middleware import LLMLoggingMiddleware
 from app.agents.middleware_prompts import TEAM_COORDINATION_SYSTEM_PROMPT
@@ -51,7 +50,6 @@ from app.agents.model_call_execution import ModelCallExecution
 from app.agents.model_call_graph import create_model_call_agent
 from app.agents.model_capability_routing import (
     CapabilityRoutingMiddleware,
-    build_provider_model_candidate,
 )
 from app.agents.policy import (
     ToolCapabilityPolicy,
@@ -100,8 +98,7 @@ from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
 from app.core.turn_execution_scope import get_current_turn_execution_scope
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.runtime.agent_runtime import AGENT_GRAPH_RECURSION_LIMIT
-from app.runtime.provider_model import build_model_from_provider, provider_build_failure
+from app.runtime.agent_runtime import AGENT_GRAPH_RECURSION_LIMIT, prepare_agent_model
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
@@ -172,60 +169,6 @@ if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
-
-
-def build_runtime_for_agent(
-    agent_id: str,
-    config_service: ConfigService | None = None,
-    *,
-    prompt_cache_key: str | None = None,
-    preferred_provider_id: str | None = None,
-) -> dict[str, Any]:
-    if config_service is None:
-        raise RuntimeError("build_runtime_for_agent 需要显式传入 ConfigService")
-    service = config_service
-    runtime_config = service.get_agent_runtime_config(
-        agent_id,
-        preferred_provider_id=preferred_provider_id,
-    )
-    providers = runtime_config["providers"]
-
-    candidates = []
-    for index, provider in enumerate(providers):
-        try:
-            model = build_model_from_provider(
-                provider,
-                runtime_config,
-                prompt_cache_key=prompt_cache_key,
-            )
-        except Exception as error:
-            provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
-            detail = provider_build_failure(provider, error)
-            if index == 0:
-                raise RuntimeError(
-                    f"当前选择的模型配置不可用: provider_id={provider_id}; {detail}"
-                ) from error
-            continue
-        candidates.append(
-            build_provider_model_candidate(provider=provider, model=model)
-        )
-
-    if not candidates:
-        raise RuntimeError("未能构建任何模型实例")
-
-    return {
-        "model": candidates[0].model,
-        "model_routing": CapabilityRoutingMiddleware(candidates),
-        "instruction_producers": runtime_instruction_producers(
-            agent_id=agent_id, content=runtime_config["system_prompt"],
-            config_revision=service.get_revision(),
-            runtime_identity_description=runtime_config["runtime_identity_description"],
-            provider_candidates=[
-                (candidate.provider_id, candidate.model_id)
-                for candidate in candidates
-            ],
-        ),
-    }
 
 
 def build_deep_agent(
@@ -972,8 +915,8 @@ def build_configured_agent(
     if config_service is None:
         raise RuntimeError("build_configured_agent 需要显式传入 ConfigService")
     service = config_service
-    runtime = (
-        build_runtime_for_agent(
+    model_setup = (
+        prepare_agent_model(
             agent_id=agent_id,
             config_service=service,
             prompt_cache_key=session_id,
@@ -1003,7 +946,7 @@ def build_configured_agent(
             "build_configured_agent 需要显式传入 SessionService"
         )
 
-    model = override_model if override_model is not None else (runtime["model"] if runtime is not None else None)
+    model = override_model if override_model is not None else (model_setup.model if model_setup is not None else None)
 
     # 真实 thread 只由 creation 冻结的精确 selector 分派；合成工具面没有 durable owner。
     binding = (
@@ -1018,14 +961,14 @@ def build_configured_agent(
     return builder(
         model=model,
         response_format=response_format,
-        instruction_producers=runtime["instruction_producers"] if runtime is not None else (),
+        instruction_producers=model_setup.instruction_producers if model_setup is not None else (),
         tool_selection_reader=tool_selection_reader,
         checkpointer=checkpointer,
         session_id=session_id,
         thread_id=thread_id,
         agent_id=agent_id,
-        model_routing_middleware=runtime["model_routing"]
-        if runtime is not None and model_routing_enabled and override_model is None
+        model_routing_middleware=model_setup.routing_middleware
+        if model_setup is not None and model_routing_enabled and override_model is None
         else None,
         sender_agent_id=sender_agent_id,
         enabled_tool_names=enabled_tool_names,

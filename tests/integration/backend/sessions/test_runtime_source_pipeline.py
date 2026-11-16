@@ -23,7 +23,6 @@ from fastapi import FastAPI
 
 from app import main
 from app.abstractions.job_executor import JobRuntimeStateProtocol
-from app.agents import agent_factory
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.container import AppContainer
 from app.core import identifier, phase_observer
@@ -550,7 +549,7 @@ async def test_provider_build_failure_is_publicly_safe_and_same_session_recovers
         raise AssertionError("缺失模型凭据必须失败")
 
     with monkeypatch.context() as patch:
-        patch.setattr(agent_factory, "build_model_from_provider", build_failure)
+        patch.setattr("app.runtime.provider_model.build_model_from_provider", build_failure)
         provider_response = await case.client.get("/api/v1/agents/default")
         assert provider_response.status_code == 200, provider_response.text
         providers = provider_response.json()["data"]["providers"]

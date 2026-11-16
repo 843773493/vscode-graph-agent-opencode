@@ -16,7 +16,6 @@ import pytest
 
 from app import container as container_module
 from app import main
-from app.agents import agent_factory
 from app.container import AppContainer
 from app.core.job_event_bus import EventType
 from app.core.mounted_workspaces import MountedWorkspace
@@ -27,6 +26,7 @@ from app.core.path_utils import (
 )
 from app.core.session_thread_context import current_session_thread_owner
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.runtime import provider_model
 from app.runtime.model_stream import ModelStreamTransportController
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.goal import GoalStatus
@@ -143,7 +143,7 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(container_module, "build_app_container", build)
 
-    model_builder = agent_factory.build_model_from_provider
+    model_builder = provider_model.build_model_from_provider
     def model_runtime(*args, **kwargs):
         owner = current_session_thread_owner()
         assert owner is not None
@@ -153,7 +153,7 @@ def mounted_case(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
         return model_builder(*args, **kwargs)
 
     # 只观察真实编译绑定；模型请求沿共用 model_stream 和实际 SDK 流转。
-    monkeypatch.setattr(agent_factory, "build_model_from_provider", model_runtime)
+    monkeypatch.setattr(provider_model, "build_model_from_provider", model_runtime)
     yield case
     assert not unmounted_root.exists(), "Backend 不得使用未挂载的进程默认根"
 

@@ -12,9 +12,9 @@ from typing import cast
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from app.agents import agent_factory
 from app.core import failures
 from app.runtime import provider_model
+from app.runtime.agent_runtime import prepare_agent_model
 from app.services.infrastructure.config_service import ConfigService
 
 
@@ -91,13 +91,13 @@ def test_provider_native_failure_does_not_become_a_public_runtime_error(
     if broken_log:
         failures.logger.addHandler(handler)
     try:
-        monkeypatch.setattr(provider_model if entry == "availability" else agent_factory, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
+        monkeypatch.setattr(provider_model, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
         if entry == "availability":
             message = provider_model.provider_configuration_error(provider_config)
             assert message is not None
         else:
             with pytest.raises(RuntimeError) as caught:
-                agent_factory.build_runtime_for_agent("default", runtime_config)
+                prepare_agent_model("default", runtime_config)
             assert caught.value.__cause__ is error
             message = str(caught.value)
             assert "provider_id=configuration-failure" in message
@@ -126,10 +126,10 @@ def test_provider_business_rejection_keeps_its_existing_message(
     def fail(*_args: object, **_kwargs: object) -> None:
         raise error
 
-    monkeypatch.setattr(provider_model if entry == "availability" else agent_factory, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
+    monkeypatch.setattr(provider_model, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
     if entry == "availability":
         assert provider_model.provider_configuration_error(provider_config) == str(error)
     else:
         with pytest.raises(RuntimeError, match="当前选择的模型配置不可用.*OAuth 凭据缺少账号信息") as caught:
-            agent_factory.build_runtime_for_agent("default", runtime_config)
+            prepare_agent_model("default", runtime_config)
         assert caught.value.__cause__ is error

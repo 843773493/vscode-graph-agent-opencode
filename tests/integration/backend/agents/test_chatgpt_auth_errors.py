@@ -14,10 +14,10 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.agents.agent_factory import build_runtime_for_agent
 from app.api.agents import router
 from app.api.deps import get_agent_service, verify_local_token
 from app.core.trace_middleware import TraceMiddleware
+from app.runtime.agent_runtime import prepare_agent_model
 from app.services.business.agent_service import AgentService
 from app.services.infrastructure.config_service import ConfigService
 from tests.harness.python.run_context import TestRunContext
@@ -142,7 +142,7 @@ async def test_auth_failure_keeps_agent_visible_and_recovers_same_entry(
                     assert "diagnostic_sink_error" not in provider["configuration_error"]
                 responses.append(response.json())
             with pytest.raises(RuntimeError) as caught:
-                build_runtime_for_agent("default", config_service, preferred_provider_id="backup_4")
+                prepare_agent_model("default", config_service, preferred_provider_id="backup_4")
             assert "provider_id=backup_4" in str(caught.value)
             assert f"artifact={artifact}: stage=" in str(caught.value)
             assert str(path) not in str(caught.value)

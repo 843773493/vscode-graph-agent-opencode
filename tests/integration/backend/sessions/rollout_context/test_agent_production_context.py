@@ -32,6 +32,7 @@ from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
+from app.runtime.agent_runtime import prepare_agent_model
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -134,8 +135,8 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
             "api_mode": {"protocol": protocol},
         }],
     }
-    agent_runtime = agent_factory.build_runtime_for_agent("default", config)
-    model = agent_runtime["model"]
+    model_setup = prepare_agent_model("default", config)
+    model = model_setup.model
     captured["model"] = model
     tools = [StructuredTool.from_function(
         lambda value: value, name=name, description="受信注册工具",
@@ -143,7 +144,7 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
     sessions = MagicMock()
     sessions.session_context_control_admission.side_effect = lambda *_args, **_kwargs: nullcontext()
     graph = agent_factory.build_deep_agent(
-        model=model, instruction_producers=agent_runtime["instruction_producers"],
+        model=model, instruction_producers=model_setup.instruction_producers,
         tool_selection_reader=selection, checkpointer=saver,
         session_id=session, thread_id=thread, agent_id="default", tools=tools,
         background_task_registry=MagicMock(), background_mailbox=MagicMock(),
