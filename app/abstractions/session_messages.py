@@ -16,7 +16,9 @@ from app.schemas.internal_v2.pending_request import DeliveryPolicy
 
 
 @runtime_checkable
-class SessionOrchestratorProtocol(Protocol):
+class SessionMessageOrchestratorProtocol(Protocol):
+    """工具和自动化所需的消息准备、派发与内部 runtime source 投递端口。"""
+
     async def resolve_main_thread(self, session_id: str) -> str: ...
 
     async def publish_runtime_context(

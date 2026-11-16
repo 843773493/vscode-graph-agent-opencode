@@ -166,7 +166,7 @@ async def test_product_graph_history_selector_is_read_only_and_preserves_executi
     accepted = []
     first_messages = None
     for content in ("历史第一轮", "历史第二轮"):
-        result = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
+        result = await container.session_orchestrator.submit_user_message(session.session_id, MessageRunRequest(
             message=MessageCreateRequest(content=content), run=RunOptions(), operation_id=new_message_operation_id(),
         ))
         accepted.append(result)
@@ -217,7 +217,7 @@ async def test_product_graph_history_selector_is_read_only_and_preserves_executi
             assert tuple(connection.iterdump()) == frozen
         assert (rollout / "rollout.jsonl").read_bytes() == frozen_jsonl
     assert len(case.model_requests) == 2
-    successor = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
+    successor = await container.session_orchestrator.submit_user_message(session.session_id, MessageRunRequest(
         message=MessageCreateRequest(content="历史查看后的第三轮"), run=RunOptions(), operation_id=new_message_operation_id(),
     ))
     task = jobs._jobs[successor.job_id].task

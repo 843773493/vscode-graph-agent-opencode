@@ -15,7 +15,7 @@ from typing import Literal
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.core.exceptions import NotFoundError
 from app.core.failures import failure_detail
 from app.core.job_event_bus import EventType
@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 
 
 class PersistentTaskRuntime:
-    def __init__(self, *, store: PersistentTaskStore, orchestrator: SessionOrchestratorProtocol,
+    def __init__(self, *, store: PersistentTaskStore, orchestrator: SessionMessageOrchestratorProtocol,
                  dispatcher: RuntimeSourceDispatcher, sessions: SessionService, events: EventChannel[PersistentTaskChanged],
                  clock: Callable[[], datetime], workspace_root: Path, saver: RolloutCheckpointSaver,
                  job_events: JobEventBusProtocol, goals: SessionGoalService, jobs: JobServiceProtocol,

@@ -115,7 +115,7 @@ async def fork_execution_message(
             interactions = _source_interactions(tool_loop=tool_loop)
             replay.control.plan_model_calls(session_id, thread, interactions)
             with workspace_context(container.workspace_id, container.workspace_root):
-                accepted = await container.session_orchestrator.create_message(session_id, MessageRunRequest(
+                accepted = await container.session_orchestrator.submit_user_message(session_id, MessageRunRequest(
                     message=MessageCreateRequest(content=content, attachments=attachments or []), run=RunOptions(), operation_id=new_message_operation_id(),
                 ))
                 async with asyncio.timeout(45):

@@ -127,7 +127,7 @@ class _FakeMessageService:
     pass
 
 
-class _FakeSessionOrchestrator:
+class _FakeSessionMessageOrchestrator:
     def __init__(self, result=None) -> None:
         self.calls: list[dict[str, object]] = []
         self.result = result or _FakeResult()
@@ -235,7 +235,7 @@ async def test_agent_includes_background_message_collection_tool(
         job_service=job_service,
         message_service=message_service,
         session_service=session_service,
-        session_orchestrator=_FakeSessionOrchestrator(),
+        session_orchestrator=_FakeSessionMessageOrchestrator(),
         session_subagent_service=_FakeSessionSubagentService(),
         team_service=_FakeTeamService(),
         config_service=config_service,
@@ -279,7 +279,7 @@ async def test_agent_omits_test_tool_without_development_config(
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService(),
-        session_orchestrator=_FakeSessionOrchestrator(),
+        session_orchestrator=_FakeSessionMessageOrchestrator(),
         session_subagent_service=_FakeSessionSubagentService(),
         team_service=_FakeTeamService(),
         config_service=_DummyConfigService(),
@@ -305,7 +305,7 @@ async def test_single_agent_tool_set_omits_team_board_tools(
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService(),
-        session_orchestrator=_FakeSessionOrchestrator(),
+        session_orchestrator=_FakeSessionMessageOrchestrator(),
         session_subagent_service=_FakeSessionSubagentService(),
         config_service=_DummyConfigService(),
         terminal_resource_owner=_FakeTerminalManagerClient(),
@@ -354,7 +354,7 @@ async def test_agent_tool_denylist_filters_direct_and_middleware_tools(
         job_service=_FakeJobService(),
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService(),
-        session_orchestrator=_FakeSessionOrchestrator(),
+        session_orchestrator=_FakeSessionMessageOrchestrator(),
         session_subagent_service=_FakeSessionSubagentService(),
         team_service=_FakeTeamService(),
         config_service=config_service,

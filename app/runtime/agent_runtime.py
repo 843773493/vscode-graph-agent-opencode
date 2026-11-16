@@ -11,7 +11,7 @@ from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
@@ -67,7 +67,7 @@ class AgentRuntimeDependencyProvider(Protocol):
 
     def get_session_service(self) -> SessionService: ...
 
-    def get_session_orchestrator(self) -> SessionOrchestratorProtocol: ...
+    def get_session_orchestrator(self) -> SessionMessageOrchestratorProtocol: ...
 
     def get_session_subagent_service(self) -> SessionSubagentProtocol: ...
 

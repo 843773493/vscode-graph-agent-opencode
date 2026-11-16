@@ -47,7 +47,9 @@ _RESERVED_INTERNAL_METADATA_KEYS = frozenset(
 )
 
 
-class SessionOrchestrator:
+class SessionMessageOrchestrator:
+    """协调用户消息准入、持久接收和执行派发，并转交内部 runtime source 投递。"""
+
     def __init__(
         self,
         *,
@@ -157,7 +159,8 @@ class SessionOrchestrator:
             dispatch,
         )
 
-    async def create_message(self, session_id: str, payload: MessageRunRequest, *, thread_id: str | None = None) -> MessageRunAccepted:
+    async def submit_user_message(self, session_id: str, payload: MessageRunRequest, *, thread_id: str | None = None) -> MessageRunAccepted:
+        """按操作身份幂等接收用户消息，并返回执行派发结果。"""
         self._reject_internal_metadata_on_user_path(payload.message.metadata)
         submission_hash = sha256_jcs(payload.model_dump(mode="json", by_alias=True))
 

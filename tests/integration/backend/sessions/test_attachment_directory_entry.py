@@ -193,7 +193,7 @@ async def test_preview_generation_releases_and_rebuilds_same_directory_after_run
     source = BytesIO()
     Image.new("RGB", size, (12, 24, 36)).save(source, format="PNG")
     original = source.getvalue()
-    accepted = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
+    accepted = await container.session_orchestrator.submit_user_message(session.session_id, MessageRunRequest(
         message=MessageCreateRequest(content="图片", attachments=[upload(original, mime="image/png")]), run=RunOptions(), operation_id=new_message_operation_id(),
     ))
     assert isinstance(container.job_service, JobService)

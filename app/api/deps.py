@@ -13,7 +13,6 @@ from app.core.trace_middleware import (
     get_request_id,  # noqa: F401
 )
 from app.core.workspace_identity import validate_workspace_id
-from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
 from app.services.business.agent_tool_settings.service import AgentToolSettingsService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
@@ -80,6 +79,7 @@ from app.services.orchestration.agent_execution_service import AgentExecutionSer
 from app.services.orchestration.communication.service import SessionCommunicationService
 from app.services.orchestration.execution_step.approval import ToolApprovalService
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
 from app.services.orchestration.session_turn_replay_service import (
     SessionTurnReplayService,
 )
@@ -128,7 +128,7 @@ class _AppContainerProtocol(Protocol):
     workspace_file_watch_service: WorkspaceFileWatchService
     file_tree_shortcut_store: FileTreeShortcutStore
     node_debug_service: NodeDebugService
-    session_orchestrator: SessionOrchestrator
+    session_orchestrator: SessionMessageOrchestrator
     session_catalog_service: SessionCatalogService
     session_generation_service: SessionGenerationService
     session_communication_service: SessionCommunicationService
@@ -419,8 +419,8 @@ def get_team_service(request: Request) -> TeamCoordinationService:
     return _require_service(request, "team_service", TeamCoordinationService, "TeamCoordinationService 尚未初始化")
 
 
-def get_session_orchestrator(request: Request) -> SessionOrchestrator:
-    return _require_service(request, "session_orchestrator", SessionOrchestrator, "SessionOrchestrator 尚未在应用启动阶段初始化")
+def get_session_orchestrator(request: Request) -> SessionMessageOrchestrator:
+    return _require_service(request, "session_orchestrator", SessionMessageOrchestrator, "SessionMessageOrchestrator 尚未在应用启动阶段初始化")
 
 
 def get_persistent_task_service(request: Request) -> PersistentTaskService:

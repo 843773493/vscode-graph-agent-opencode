@@ -1170,7 +1170,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_request_id, get_session_orchestrator, verify_local_token
-from app.runtime.session_orchestrator import SessionOrchestrator
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.message import MessageDTO, MessageRunAccepted, MessageRunRequest
 
@@ -1183,9 +1183,9 @@ async def create_message_and_run(
     payload: MessageRunRequest,
     _: str = Depends(verify_local_token),
     request_id: str | None = Depends(get_request_id),
-    session_orchestrator: SessionOrchestrator = Depends(get_session_orchestrator),
+    session_orchestrator: SessionMessageOrchestrator = Depends(get_session_orchestrator),
 ):
-    result = await session_orchestrator.create_message(session_id, payload)
+    result = await session_orchestrator.submit_user_message(session_id, payload)
     return APIResponse(message="ok", data=result, request_id=request_id)
 
 

@@ -40,7 +40,6 @@ from app.gateway.auth import get_gateway_local_token
 from app.runtime.agent_runtime import AgentRuntimeDependencyProvider
 from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS, RuntimeClockPorts
-from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
 from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
 from app.services.business.agent_tool_settings.service import AgentToolSettingsService
@@ -199,6 +198,7 @@ from app.services.orchestration.owner_thread_creation_factory import (
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
 from app.services.orchestration.session_subagent_service import (
     SessionSubagentService,
 )
@@ -247,7 +247,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         self._text_mutations = text_mutations
         self._node_debug_service: NodeDebugService | None = None
         self._job_service: JobServiceProtocol | None = None
-        self._session_orchestrator: SessionOrchestrator | None = None
+        self._session_orchestrator: SessionMessageOrchestrator | None = None
         self._session_communication_service: SessionCommunicationProtocol | None = None
         self._session_subagent_service: SessionSubagentProtocol | None = None
         self._team_service: TeamCoordinationProtocol | None = None
@@ -330,12 +330,12 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
             raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 JobService")
         return self._job_service
 
-    def set_session_orchestrator(self, session_orchestrator: SessionOrchestrator) -> None:
+    def set_session_orchestrator(self, session_orchestrator: SessionMessageOrchestrator) -> None:
         self._session_orchestrator = session_orchestrator
 
-    def get_session_orchestrator(self) -> SessionOrchestrator:
+    def get_session_orchestrator(self) -> SessionMessageOrchestrator:
         if self._session_orchestrator is None:
-            raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionOrchestrator")
+            raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionMessageOrchestrator")
         return self._session_orchestrator
 
     def set_session_subagent_service(
@@ -389,7 +389,7 @@ class AppContainer:
     browser_manager_client: BrowserManagerClient
     context_compaction_service: ContextCompactionService
     session_service: SessionService
-    session_orchestrator: SessionOrchestrator
+    session_orchestrator: SessionMessageOrchestrator
     session_communication_service: SessionCommunicationService
     runtime_source_dispatcher: RuntimeSourceDispatcher
     persistent_task_runtime: PersistentTaskRuntime
@@ -956,7 +956,7 @@ def _build_app_container(
         saver=checkpointer, session_service=session_service, job_service=job_service,
     )
     mcp_connection_wait_handler.bind_dispatcher(runtime_source_dispatcher)
-    session_orchestrator = SessionOrchestrator(
+    session_orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_blob_store.deletion_holder,
         message_service=message_service,
         session_service=session_service,

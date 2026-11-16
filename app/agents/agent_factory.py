@@ -336,7 +336,7 @@ def create_my_deep_agent(
     if message_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 MessageService")
     if session_orchestrator is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionOrchestrator")
+        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionMessageOrchestrator")
     if session_subagent_service is None:
         raise RuntimeError("create_my_deep_agent 需要显式传入 SessionSubagentService")
     if include_team_tools and team_service is None:

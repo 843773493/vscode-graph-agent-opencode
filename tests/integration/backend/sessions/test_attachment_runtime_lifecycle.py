@@ -69,7 +69,7 @@ def clock() -> Clock:
 async def execute_upload(case: RuntimeCase):
     container = case.runner.container
     session = await container.session_service.create(SessionCreateRequest(title="目录运行时释放"))
-    result = await container.session_orchestrator.create_message(session.session_id, MessageRunRequest(
+    result = await container.session_orchestrator.submit_user_message(session.session_id, MessageRunRequest(
         message=MessageCreateRequest(content="读取本次上传", attachments=[upload(b"runtime original")]),
         run=RunOptions(), operation_id=new_message_operation_id(),
     ))
@@ -341,7 +341,7 @@ async def test_file_tool_results_survive_repeated_unload_and_cold_owner_until_ex
         with closing(AttachmentBlobStore(case.runner.workspace, path_resolver=container.session_service.path_resolver)) as cold:
             assert cold.read(sid, output).data == "必须保留的处理结果 Ω\n".encode()
             assert attachment_directory(cold, aid) == directory
-        result = await container.session_orchestrator.create_message(sid, MessageRunRequest(
+        result = await container.session_orchestrator.submit_user_message(sid, MessageRunRequest(
             message=MessageCreateRequest(content="继续使用已有处理结果", attachments=[ref]), run=RunOptions(), operation_id=new_message_operation_id(),
         ))
         assert isinstance(container.job_service, JobService)

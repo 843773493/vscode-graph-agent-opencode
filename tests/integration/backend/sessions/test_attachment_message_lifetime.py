@@ -45,7 +45,6 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.domain.itemized.serialization import normalize_wire_request
 from app.prompting import PromptSection, internal_message_factory
-from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.schemas.internal_v2.message import (
     AttachmentRef,
@@ -72,6 +71,7 @@ from app.services.infrastructure.rollout_history.reader import RolloutHistoryRea
 from app.services.mapping.itemized.canonical_langchain import validate_summary_source
 from app.services.mapping.itemized.provider_request import project_user_message_content
 from app.services.mapping.message_content import checkpoint_message_to_dto
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
 from tests.support.api_helpers import new_message_operation_id
 
 BODY = b"attachment survives until canonical acceptance"
@@ -254,7 +254,7 @@ class MessageLifetimeCase:
     store: AttachmentBlobStore
     saver: RolloutCheckpointSaver
     messages: MessageService
-    orchestrator: SessionOrchestrator
+    orchestrator: SessionMessageOrchestrator
     owner: MutationIntentOwner
     identity: UserExecutionIdentity
     started_jobs: list[str]
@@ -306,7 +306,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
             main_thread_resolver=resolver.main_thread_id, checkpointer=saver,
             attachment_store=store, workspace_root=root,
         )
-        orchestrator = SessionOrchestrator(
+        orchestrator = SessionMessageOrchestrator(
             message_service=messages,
             session_service=SimpleNamespace(
                 get=get_session, resolve_main_thread=resolve_main_thread, path_resolver=resolver,
@@ -465,7 +465,7 @@ async def test_thread_delete_drains_message_before_releasing_real_attachment(
         monkeypatch.setattr(case.messages, "create", paused_create)
     monkeypatch.setattr(case.messages, "accept_user_message", paused_accept)
     if prepared is None:
-        operation = case.orchestrator.create_message(
+        operation = case.orchestrator.submit_user_message(
             session_id,
             MessageRunRequest(run=RunOptions(), message=MessageCreateRequest(
                 role="user", content="读取附件", attachments=[attachment],

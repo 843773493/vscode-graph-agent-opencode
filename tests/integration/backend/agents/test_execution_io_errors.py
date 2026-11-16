@@ -79,7 +79,7 @@ async def test_native_io_failure_converges_with_known_file_diagnostics(
     caplog.set_level(logging.ERROR)
     session = await container.session_service.create(SessionCreateRequest(title="原生 I/O 失败"))
     request = MessageRunRequest(message=MessageCreateRequest(content="验证失败收口"), run=RunOptions(), operation_id=new_message_operation_id())
-    accepted = await container.session_orchestrator.create_message(session.session_id, request)
+    accepted = await container.session_orchestrator.submit_user_message(session.session_id, request)
     job = container.job_service._jobs[accepted.job_id]
     await asyncio.wait_for(asyncio.shield(job.task), 20)
     assert job.status == JobStatus.failed, job.error_message
@@ -139,7 +139,7 @@ async def test_native_io_failure_converges_with_known_file_diagnostics(
 
     # 同一 thread 经产品入口继续，旧失败及 canonical 前缀仍可冷读且不被改写。
     case.response_chunks = None
-    successor = await container.session_orchestrator.create_message(
+    successor = await container.session_orchestrator.submit_user_message(
         session.session_id, request.model_copy(update={"operation_id": new_message_operation_id()}),
     )
     next_job = container.job_service._jobs[successor.job_id]

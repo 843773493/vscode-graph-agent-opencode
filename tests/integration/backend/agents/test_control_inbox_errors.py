@@ -72,7 +72,7 @@ async def test_control_state_rejection_keeps_locations_out_of_execution_records(
     request = MessageRunRequest(message=MessageCreateRequest(content="验证控制状态错误"), run=RunOptions(), operation_id=new_message_operation_id())
     with monkeypatch.context() as failure:
         failure.setattr(runner, "ports", replace(runner.ports, control_inbox_state_path=corrupt_state))
-        accepted = await container.session_orchestrator.create_message(session.session_id, request)
+        accepted = await container.session_orchestrator.submit_user_message(session.session_id, request)
         job = jobs._jobs[accepted.job_id]
         assert job.task is not None
         await asyncio.wait_for(asyncio.shield(job.task), 20)
@@ -122,7 +122,7 @@ async def test_control_state_rejection_keeps_locations_out_of_execution_records(
         original_rows = connection.execute("SELECT * FROM item_catalog ORDER BY item_sequence").fetchall()
 
     # 原损坏状态仍可诊断；下一消息仍从同一产品入口执行，不改写已失败的历史。
-    successor = await container.session_orchestrator.create_message(
+    successor = await container.session_orchestrator.submit_user_message(
         session.session_id, request.model_copy(update={"operation_id": new_message_operation_id()}),
     )
     next_job = jobs._jobs[successor.job_id]

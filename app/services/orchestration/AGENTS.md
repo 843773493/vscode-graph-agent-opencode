@@ -7,6 +7,7 @@
 ```text
 orchestration/
 ├── background_work/                     精确 Thread 后台工具任务、持久邮箱与恢复；不管理工作区自动化定义
+├── session_messages.py                  SessionMessageOrchestrator：用户消息准入、幂等接收、Job 派发与内部消息投递
 ├── execution_queue.py                    ExecutionQueueService：聚合 rollout 队列、领取与启动持有权、待处理投影；不另存队列
 ├── job_execution_service.py             Job 状态转换、标题触发、step 调用及完成事件；失败归 JobService 结算
 ├── agent_execution_service.py           Agent/runtime 组装与复用；把单次执行交给 StepRunner

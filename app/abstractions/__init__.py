@@ -13,7 +13,7 @@ from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol, TeamStoreProtocol
 
@@ -27,7 +27,7 @@ __all__ = [
     "JobServiceProtocol",
     "JobStepExecutor",
     "SessionContextQueryProtocol",
-    "SessionOrchestratorProtocol",
+    "SessionMessageOrchestratorProtocol",
     "SessionSubagentProtocol",
     "TeamCoordinationProtocol",
     "TeamStoreProtocol",

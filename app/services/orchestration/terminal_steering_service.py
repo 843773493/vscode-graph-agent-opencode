@@ -4,7 +4,7 @@ import asyncio
 import logging
 from urllib.error import URLError
 
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.abstractions.terminal.execution_monitor import (
     TerminalExecutionMonitorClientProtocol,
 )
@@ -29,7 +29,7 @@ class TerminalSteeringService:
         self,
         *,
         terminal_client: TerminalExecutionMonitorClientProtocol,
-        session_orchestrator: SessionOrchestratorProtocol,
+        session_orchestrator: SessionMessageOrchestratorProtocol,
         poll_interval_seconds: float = 0.5,
     ) -> None:
         if poll_interval_seconds <= 0:

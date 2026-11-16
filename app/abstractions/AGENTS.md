@@ -11,7 +11,7 @@ app/abstractions/
 ├── 会话边界
 │   ├── session_changes.py          工具文件编辑前后观察、Changes 记录与存储端口
 │   ├── session_context.py          上下文查询、修订与 fork 传输
-│   ├── session_orchestrator.py     会话编排调用端口
+│   ├── session_messages.py         用户消息派发与内部 runtime source 投递端口
 │   ├── session_read.py             单条／列表读取、Thread 解析与会话读准入
 │   ├── session_resources.py        会话资源提供者的列表、控制与清理
 │   └── session_subagent.py         子 Agent 与 owner thread 创建端口

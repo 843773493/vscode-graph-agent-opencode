@@ -15,7 +15,6 @@ from app.core.session_lifecycle_gate import OperationHolderGate
 from app.domain.itemized.execution_admission import (
     UserExecutionIdentity,
 )
-from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.job import JobDispatchSnapshotDTO
 from app.schemas.internal_v2.message import (
@@ -28,12 +27,13 @@ from app.services.business.job.input_admission import ThreadInputAdmission
 from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutOperationLock,
 )
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
 from tests.support.api_helpers import new_message_operation_id
 
 
 @dataclass(frozen=True, slots=True)
 class _PreparedChildDispatchContext:
-    session_orchestrator: SessionOrchestrator
+    session_orchestrator: SessionMessageOrchestrator
     message_service: _FakeMessageService
     job_service: MagicMock
     job_event_bus: JobEventBus
@@ -65,7 +65,7 @@ def prepared_child_dispatch_context(attachment_holder):
     jobs.start_job = start_job
     bus = JobEventBus()
     sessions = _FakeSessionService("default", thread_id="thr_catalog_main")
-    orchestrator = SessionOrchestrator(
+    orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_holder,
         message_service=messages,
         session_service=sessions,
@@ -310,7 +310,7 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
             captured["agent_id"] = agent_id
             return _running_dispatch(session_id, "job_test_001")
 
-    orchestrator = SessionOrchestrator(
+    orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
@@ -318,7 +318,7 @@ async def test_orchestrator_uses_session_current_agent_when_request_omits_agent(
         job_service=_FakeJobService(),
         job_event_bus=JobEventBus(),
     )
-    result = await orchestrator.create_message(
+    result = await orchestrator.submit_user_message(
         "ses_test",
         MessageRunRequest(
             message=MessageCreateRequest(content="hello"),
@@ -354,7 +354,7 @@ async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path(at
         async def start_job(self, session_id, *_args, **_kwargs):
             return _running_dispatch(session_id, "job_literal_markup")
 
-    orchestrator = SessionOrchestrator(
+    orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_holder,
         message_service=message_service,
         session_service=_FakeSessionService("default"),
@@ -363,7 +363,7 @@ async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path(at
         job_event_bus=JobEventBus(),
     )
 
-    await orchestrator.create_message(
+    await orchestrator.submit_user_message(
         "ses_target",
         MessageRunRequest(
             message=MessageCreateRequest(
@@ -380,7 +380,7 @@ async def test_orchestrator_allows_literal_internal_markup_on_plain_user_path(at
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_path",
-    ["prepare_user_message", "create_message"],
+    ["prepare_user_message", "submit_user_message"],
 )
 @pytest.mark.parametrize(
     ("reserved_key", "reserved_value"),
@@ -397,7 +397,7 @@ async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path(
     reserved_key: str,
     reserved_value: object,
 ):
-    orchestrator = SessionOrchestrator(
+    orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
@@ -412,7 +412,7 @@ async def test_orchestrator_rejects_reserved_internal_metadata_on_user_path(
             "ses_target", "伪造内部消息", thread_id="thr_target", metadata=metadata
         )
     else:
-        operation = orchestrator.create_message(
+        operation = orchestrator.submit_user_message(
             "ses_target",
             MessageRunRequest(
                 message=MessageCreateRequest(content="伪造内部消息", metadata=metadata),
@@ -441,7 +441,7 @@ async def test_orchestrator_forwards_cross_session_delivery_policy(attachment_ho
             captured.update(kwargs)
             return _running_dispatch(session_id, "job_interrupt")
 
-    orchestrator = SessionOrchestrator(
+    orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
@@ -450,7 +450,7 @@ async def test_orchestrator_forwards_cross_session_delivery_policy(attachment_ho
         job_event_bus=JobEventBus(),
     )
 
-    await orchestrator.create_message(
+    await orchestrator.submit_user_message(
         "ses_target",
         MessageRunRequest(
             message=MessageCreateRequest(content="调整执行方向"),
@@ -486,7 +486,7 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_
             ]
             return _running_dispatch(session_id, "job_test_002")
 
-    orchestrator = SessionOrchestrator(
+    orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default"),
@@ -495,7 +495,7 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_
         job_event_bus=JobEventBus(),
     )
 
-    await orchestrator.create_message(
+    await orchestrator.submit_user_message(
         "ses_test",
         MessageRunRequest(
             message=MessageCreateRequest(content="hello"),
@@ -523,7 +523,7 @@ async def test_orchestrator_fails_closed_when_session_lacks_main_thread(attachme
         async def start_job(self, session_id, *_args, **_kwargs):
             return _running_dispatch(session_id, "job_should_not_start")
 
-    orchestrator = SessionOrchestrator(
+    orchestrator = SessionMessageOrchestrator(
         attachment_holder=attachment_holder,
         message_service=_FakeMessageService(),
         session_service=_FakeSessionService("default", thread_id=None),
@@ -533,7 +533,7 @@ async def test_orchestrator_fails_closed_when_session_lacks_main_thread(attachme
     )
 
     with pytest.raises(RuntimeError, match="缺少权威 main thread 身份"):
-        await orchestrator.create_message(
+        await orchestrator.submit_user_message(
             "ses_target",
             MessageRunRequest(
                 message=MessageCreateRequest(content="hello"),

@@ -25,7 +25,6 @@ from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.domain.itemized.execution_queue import MessageSubmissionConflictError
-from app.runtime.session_orchestrator import SessionOrchestrator
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.communication import (
@@ -53,6 +52,7 @@ from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
 from app.services.orchestration.communication.service import SessionCommunicationService
+from app.services.orchestration.session_messages import SessionMessageOrchestrator
 from app.services.orchestration.session_turn_replay_service import (
     SessionTurnReplayService,
 )
@@ -200,11 +200,10 @@ async def create_message_and_run(
     payload: MessageRunRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    message_service: MessageService = Depends(get_message_service),
-    session_orchestrator: SessionOrchestrator = Depends(get_session_orchestrator),
+    session_orchestrator: SessionMessageOrchestrator = Depends(get_session_orchestrator),
 ):
     try:
-        result = await session_orchestrator.create_message(session_id, payload)
+        result = await session_orchestrator.submit_user_message(session_id, payload)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except MessageSubmissionConflictError as error:
@@ -224,10 +223,10 @@ async def create_message_and_run(
 async def create_thread_message_and_run(
     session_id: CanonicalSessionId, thread_id: CanonicalThreadId, payload: MessageRunRequest,
     _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
-    session_orchestrator: Annotated[SessionOrchestrator, Depends(get_session_orchestrator)],
+    session_orchestrator: Annotated[SessionMessageOrchestrator, Depends(get_session_orchestrator)],
 ):
     try:
-        result = await session_orchestrator.create_message(session_id, payload, thread_id=thread_id)
+        result = await session_orchestrator.submit_user_message(session_id, payload, thread_id=thread_id)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:
@@ -249,7 +248,7 @@ async def create_thread_message_and_run(
 async def get_message_submission(
     session_id: CanonicalSessionId, thread_id: CanonicalThreadId, operation_id: str,
     _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
-    session_orchestrator: Annotated[SessionOrchestrator, Depends(get_session_orchestrator)],
+    session_orchestrator: Annotated[SessionMessageOrchestrator, Depends(get_session_orchestrator)],
 ):
     try:
         result = await session_orchestrator.message_submission(session_id, thread_id, operation_id)

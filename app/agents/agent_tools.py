@@ -10,7 +10,7 @@ from app.abstractions.background_mailbox import BackgroundMailboxProtocol
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -58,7 +58,7 @@ def build_default_tools(
     background_mailbox: BackgroundMailboxProtocol,
     job_event_bus: JobEventBusProtocol,
     job_service: JobServiceProtocol,
-    session_orchestrator: SessionOrchestratorProtocol | None = None,
+    session_orchestrator: SessionMessageOrchestratorProtocol | None = None,
     session_subagent_service: SessionSubagentProtocol | None = None,
     team_service: TeamCoordinationProtocol | None = None,
     message_service: Any | None = None,
@@ -75,7 +75,7 @@ def build_default_tools(
 ) -> list[BaseTool]:
     """构建默认工具集。"""
     if session_orchestrator is None:
-        raise RuntimeError("build_default_tools 需要显式传入 SessionOrchestrator")
+        raise RuntimeError("build_default_tools 需要显式传入 SessionMessageOrchestrator")
     if session_subagent_service is None:
         raise RuntimeError("build_default_tools 需要显式传入 SessionSubagentService")
     if include_team_tools and team_service is None:

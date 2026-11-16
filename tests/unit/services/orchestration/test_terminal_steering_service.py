@@ -117,7 +117,7 @@ class _FlakyTerminalClient(_FakeTerminalClient):
         return []
 
 
-class _FakeSessionOrchestrator:
+class _FakeSessionMessageOrchestrator:
     def __init__(
         self,
         *,
@@ -192,14 +192,14 @@ def terminal_client(
 @pytest.fixture
 def session_orchestrator(
     terminal_client: _FakeTerminalClient,
-) -> _FakeSessionOrchestrator:
-    return _FakeSessionOrchestrator(terminal_client=terminal_client)
+) -> _FakeSessionMessageOrchestrator:
+    return _FakeSessionMessageOrchestrator(terminal_client=terminal_client)
 
 
 @pytest.fixture
 def terminal_steering_service(
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
 ) -> TerminalSteeringService:
     return TerminalSteeringService(
         terminal_client=terminal_client,
@@ -211,7 +211,7 @@ def terminal_steering_service(
 @pytest.mark.parametrize("availability", ["disabled", "starting"])
 async def test_unavailable_plugin_keeps_monitor_alive_and_resumes_after_enable(
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     availability: str,
 ) -> None:
     from app.abstractions.terminal.resources import (
@@ -270,7 +270,7 @@ async def test_monitor_reports_non_transition_http_failures(
 @pytest.mark.asyncio
 async def test_scan_dispatches_one_terminal_completion_message(
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     terminal_steering_service: TerminalSteeringService,
 ) -> None:
     await terminal_steering_service.scan_once()
@@ -290,7 +290,7 @@ async def test_scan_dispatches_one_terminal_completion_message(
 @pytest.mark.parametrize("released_at", ["claim", "finish"])
 async def test_released_thread_association_does_not_kill_completion_monitor(
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     terminal_steering_service: TerminalSteeringService,
     monkeypatch: pytest.MonkeyPatch,
     released_at: str,
@@ -319,7 +319,7 @@ async def test_released_thread_association_does_not_kill_completion_monitor(
 async def test_pending_claim_retries_original_event_after_finish_failure(
     terminal_with_unobserved_command_completion: dict[str, object],
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     terminal_steering_service: TerminalSteeringService,
 ) -> None:
     terminal_client.finish_failures = 1
@@ -345,7 +345,7 @@ async def test_pending_claim_retries_original_event_after_finish_failure(
 @pytest.mark.asyncio
 async def test_scan_releases_claim_when_dispatch_fails(
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     terminal_steering_service: TerminalSteeringService,
 ) -> None:
     session_orchestrator.error = RuntimeError("dispatch failed")
@@ -360,7 +360,7 @@ async def test_scan_releases_claim_when_dispatch_fails(
 async def test_scan_ignores_completion_already_observed_by_model(
     terminal_with_unobserved_command_completion: dict[str, object],
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     terminal_steering_service: TerminalSteeringService,
 ) -> None:
     terminal_with_unobserved_command_completion["completion_observed_by_model"] = True
@@ -378,7 +378,7 @@ async def test_monitor_retries_when_terminal_manager_is_temporarily_unavailable(
     terminal_client = _FlakyTerminalClient(failures=2)
     service = TerminalSteeringService(
         terminal_client=terminal_client,
-        session_orchestrator=_FakeSessionOrchestrator(),  # type: ignore[arg-type]
+        session_orchestrator=_FakeSessionMessageOrchestrator(),  # type: ignore[arg-type]
         poll_interval_seconds=0.001,
     )
 
@@ -392,7 +392,7 @@ async def test_monitor_retries_when_terminal_manager_is_temporarily_unavailable(
 @pytest.mark.asyncio
 async def test_orphan_failure_is_reported_after_other_completion_is_dispatched(
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     terminal_steering_service: TerminalSteeringService,
 ) -> None:
     terminal_client.sweep_error = ExceptionGroup(
@@ -408,7 +408,7 @@ async def test_orphan_failure_is_reported_after_other_completion_is_dispatched(
 async def test_source_session_delete_race_does_not_block_other_completion(
     terminal_with_unobserved_command_completion: dict[str, object],
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     terminal_steering_service: TerminalSteeringService,
 ) -> None:
     other = {
@@ -428,7 +428,7 @@ async def test_source_session_delete_race_does_not_block_other_completion(
 @pytest.fixture
 def protected_scan_monitor(
     terminal_client: _FakeTerminalClient,
-    session_orchestrator: _FakeSessionOrchestrator,
+    session_orchestrator: _FakeSessionMessageOrchestrator,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TerminalSteeringService, asyncio.Event, asyncio.Event, list[str]]:
     entered, release = asyncio.Event(), asyncio.Event()

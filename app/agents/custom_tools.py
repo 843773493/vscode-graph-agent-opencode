@@ -20,7 +20,7 @@ from app.abstractions.session_context import (
     SessionContextQueryProtocol,
     WorkspaceSessionContextClientProtocol,
 )
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.agents.model_tool_schema import get_model_tool_schema
 from app.agents.policy import parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -45,7 +45,7 @@ class CustomToolFactoryContext:
     job_service: JobServiceProtocol | None
     session_context_query_service: SessionContextQueryProtocol
     workspace_session_context_client: WorkspaceSessionContextClientProtocol
-    session_orchestrator: SessionOrchestratorProtocol
+    session_orchestrator: SessionMessageOrchestratorProtocol
     config_service: CustomToolConfigProtocol
     terminal_resource_owner: TerminalResourceOwner
     browser_resource_owner: BrowserResourceOwner
@@ -144,7 +144,7 @@ def build_custom_tool_bundle(
     job_service: JobServiceProtocol | None,
     session_context_query_service: SessionContextQueryProtocol,
     workspace_session_context_client: WorkspaceSessionContextClientProtocol,
-    session_orchestrator: SessionOrchestratorProtocol,
+    session_orchestrator: SessionMessageOrchestratorProtocol,
     config_service: CustomToolConfigProtocol,
     terminal_resource_owner: TerminalResourceOwner,
     browser_resource_owner: BrowserResourceOwner,

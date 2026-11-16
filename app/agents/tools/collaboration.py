@@ -4,7 +4,7 @@ from langchain_core.tools import BaseTool
 
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
+from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.abstractions.session_read import SessionReaderProtocol
 from app.abstractions.session_subagent import (
     SessionSubagentProtocol,
@@ -28,7 +28,7 @@ def build_agent_collaboration_tools(
     background_task_registry: BackgroundTaskRegistry,
     job_service: JobServiceProtocol,
     session_service: SessionReaderProtocol,
-    session_orchestrator: SessionOrchestratorProtocol,
+    session_orchestrator: SessionMessageOrchestratorProtocol,
     session_subagent_service: SessionSubagentProtocol,
     team_service: TeamCoordinationProtocol | None,
     invocation_context: ToolInvocationContext,
