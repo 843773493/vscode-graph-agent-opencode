@@ -28,6 +28,8 @@ from app.services.infrastructure.rollout_context.checkpoint.message_codec import
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.mapping.agent_state_messages import message_to_agent_state_record
+from app.services.mapping.message_content import is_user_visible_message
 from tests.support.message_service import build_message_service
 
 MESSAGE_TIME = "2026-07-14T00:00:00+00:00"
@@ -527,7 +529,7 @@ def test_agent_state_record_preserves_canonical_user_preview_without_display_dum
         ),
     )
 
-    record = MessageService._message_to_agent_state_record(message)
+    record = message_to_agent_state_record(message)
 
     assert record["content"] == message.content
     assert "preview" in json.dumps(record, ensure_ascii=False)
@@ -1328,13 +1330,13 @@ def test_system_reminder_with_explicit_display_content_is_user_visible():
         response_metadata=prepared.metadata,
     )
 
-    assert MessageService._is_user_visible_message(message) is True
+    assert is_user_visible_message(message) is True
 
 
 def test_literal_system_reminder_without_internal_metadata_stays_visible():
     message = HumanMessage(content="<system_reminder>提醒</system_reminder>")
 
-    assert MessageService._is_user_visible_message(message) is True
+    assert is_user_visible_message(message) is True
 
 
 def test_registered_hidden_system_reminder_stays_hidden():
@@ -1347,7 +1349,7 @@ def test_registered_hidden_system_reminder_stays_hidden():
         response_metadata=prepared.metadata,
     )
 
-    assert MessageService._is_user_visible_message(message) is False
+    assert is_user_visible_message(message) is False
 
 
 @pytest.mark.asyncio

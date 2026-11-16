@@ -22,12 +22,12 @@ from app.domain.itemized.runtime_wakeup import (
     RuntimeExecutionWakeup,
 )
 from app.schemas.internal_v2.goal import GoalStatus
-from app.services.business.message_service import MessageService
 from app.services.business.persistent_tasks.goal import (
     continuation_message,
     objective_updated_message,
 )
 from app.services.business.session_goal_service import SessionGoalService
+from app.services.mapping.message_content import is_user_visible_message
 from app.services.orchestration.persistent_tasks.goal import GoalWork
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 
@@ -198,7 +198,7 @@ async def test_idle_goal_dispatch_is_idempotent_and_pause_stops_it(
         content=session_orchestrator.calls[0][1],
         response_metadata=session_orchestrator.calls[0][2],
     )
-    assert MessageService._is_user_visible_message(internal_message) is False
+    assert is_user_visible_message(internal_message) is False
     assert "完成目标" in str(internal_message.content)
     assert "相同阻塞连续至少三个 Goal 轮次" in str(internal_message.content)
     assert "当前工作区和外部状态为权威依据" in str(internal_message.content)

@@ -10,7 +10,8 @@
 业务服务
 ├── Agent消息与用户内容
 │   ├── agent_service.py
-│   ├── message_service.py / message_display.py
+│   ├── message_service.py         消息准入、checkpoint 读取和消息查询
+│   ├── message_display.py         内部消息的可见性与公开内容策略
 │   └── user_content_builder.py
 ├── 会话上下文资源与查询
 │   ├── session_context_resource.py              身份、URI、游标与预算基础

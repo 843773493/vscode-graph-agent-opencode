@@ -11,6 +11,7 @@ mapping tests/
 ├── 对话内容与Turn
 │   ├── test_agent_content_mapper.py
 │   ├── test_user_message_content_projection.py
+│   ├── test_message_content.py 原生 Agent State 记录与轻量内容的边界
 │   └── test_turn_response_parts.py
 ├── 运行事件
 │   └── test_trace_event_mapper.py

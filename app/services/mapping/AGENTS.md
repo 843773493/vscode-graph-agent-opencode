@@ -8,7 +8,8 @@
 mapping/
 ├── 对话内容与Turn展示
 │   ├── agent_content_mapper.py             Agent流式内容 → 可见响应块
-│   ├── message_content.py                  Message DTO、附件与Agent State → 消息投影
+│   ├── message_content.py                  checkpoint消息 → 可见DTO、附件与轻量内容
+│   ├── agent_state_messages.py             原生消息或字典 → Agent State原始记录
 │   ├── user_message_content_projection.py   canonical用户正文 → 展示正文与附件元数据
 │   └── turn_response_parts.py               canonical Rollout → 历史/live共用响应部件
 ├── 会话资源
@@ -37,3 +38,4 @@ mapping/
 - 保持函数尽量纯粹、无副作用。
 - 映射失败要显式暴露，不要静默丢字段。
 - 命名要能直接体现输入与输出的语义。
+- 消息转换使用模块函数，由 `MessageService` 显式调用；不通过 mixin 继承隐藏纯映射方法。Agent State 保留原生内容及恢复字段，可见 DTO 仍按业务展示策略投影，二者不能相互替代。

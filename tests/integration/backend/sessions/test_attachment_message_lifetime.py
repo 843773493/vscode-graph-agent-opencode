@@ -71,6 +71,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
 from app.services.mapping.itemized.canonical_langchain import validate_summary_source
 from app.services.mapping.itemized.provider_request import project_user_message_content
+from app.services.mapping.message_content import checkpoint_message_to_dto
 from tests.support.api_helpers import new_message_operation_id
 
 BODY = b"attachment survives until canonical acceptance"
@@ -136,7 +137,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
     assert frozen.response_metadata["attachments"] == list(payload.attachments)
     assert frozen.response_metadata["attachment_blocks"] == list(payload.attachment_blocks)
     validate_summary_source(frozen, (notice,))
-    visible = case.messages._message_to_dto(owner.session_id, owner.thread_id, 0, frozen)
+    visible = checkpoint_message_to_dto(owner.session_id, owner.thread_id, 0, frozen)
     assert private not in visible.model_dump_json()
     assert visible.content == ("生成分支已结束，正在处理结果。" if kind == "generated_session_result" else "")
     assert visible.attachments == message.attachments

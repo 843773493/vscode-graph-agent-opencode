@@ -82,6 +82,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.store import (
     RolloutContextStore,
 )
+from app.services.mapping.agent_state_messages import message_to_agent_state_record
 from app.services.mapping.itemized.canonical_langchain import project_tool_result
 from tests.support.rollout.view_mutations import mutate_view_members
 
@@ -894,7 +895,7 @@ async def test_compaction_checkpoint_preserves_selected_state_cutoff(
         assert context["raw_message_count"] == 4
         assert context["compaction_cutoff"] == 3
         assert context["records"] == [
-            MessageService._message_to_agent_state_record(message)
+            message_to_agent_state_record(message)
             for message in [state[0], summary, state[3]]
         ]
 

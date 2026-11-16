@@ -1,4 +1,4 @@
-"""MessageService：从 LangGraph checkpoint 读取会话历史。"""
+"""消息准入、checkpoint 读取与可见消息查询。"""
 from __future__ import annotations
 
 import json
@@ -64,14 +64,19 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     message_annotations,
 )
+from app.services.mapping.agent_state_messages import project_agent_state_records
 from app.services.mapping.itemized.message_reasoning_merge import (
     merge_canonical_reasoning,
 )
 from app.services.mapping.itemized.provider_history import public_message_record
-from app.services.mapping.message_content import MessageContentProjectionMixin
+from app.services.mapping.message_content import (
+    attachments_from_message_metadata,
+    checkpoint_message_to_dto,
+    is_user_visible_message,
+)
 
 
-class MessageService(MessageContentProjectionMixin):
+class MessageService:
     def __init__(
         self,
         *,
@@ -252,7 +257,7 @@ class MessageService(MessageContentProjectionMixin):
                 job.session_id, thread_id=job.thread_id,
                 job_id=job.job_id, message_id=job.message_id,
             )
-            dto = self._message_to_dto(job.session_id, job.thread_id, 0, frozen)
+            dto = checkpoint_message_to_dto(job.session_id, job.thread_id, 0, frozen)
             if (admission.turn_id != binding.turn_id
                     or admission.admission_idempotency_key != binding.admission_idempotency_key
                     or dto.content != job.message or dto.attachments != job.attachments):
@@ -268,7 +273,7 @@ class MessageService(MessageContentProjectionMixin):
             raise ValueError("seed/reference 准入不得携带未登记的附件")
         if "canonical_item_manifests" in job.message_metadata:
             response = dict(job.message_metadata)
-            if self._attachments_from_metadata(response) != job.attachments:
+            if attachments_from_message_metadata(response) != job.attachments:
                 raise ValueError("内部 Job 附件与已接受 canonical 输入不一致")
         else:
             built = UserContentBuilder(attachment_service=AttachmentContentService(
@@ -320,7 +325,7 @@ class MessageService(MessageContentProjectionMixin):
                 reference.session_id, thread_id=reference.thread_id,
                 job_id=reference.job_id, message_id=reference.message_id, intent=binding,
             )
-        dto = self._message_to_dto(reference.session_id, reference.thread_id, 0, human)
+        dto = checkpoint_message_to_dto(reference.session_id, reference.thread_id, 0, human)
         if display or isinstance(binding, UserExecutionIdentity):
             return dto
         if not isinstance(human.content, str):
@@ -354,7 +359,7 @@ class MessageService(MessageContentProjectionMixin):
                 raw_messages,
                 canonical_items,
             )
-        return await run_sync_shielded(self._agent_state_records, raw_messages, context_name="Agent State")
+        return await run_sync_shielded(project_agent_state_records, raw_messages, context_name="Agent State")
 
     async def get_agent_context_state(
         self, session_id: str, thread_id: str
@@ -407,7 +412,7 @@ class MessageService(MessageContentProjectionMixin):
                 raise ValueError("_summarization_event 缺少 summary_message")
             effective_messages = apply_summarization_event(raw_messages, event)
 
-        records = await run_sync_shielded(self._agent_state_records, effective_messages, context_name="Agent Context")
+        records = await run_sync_shielded(project_agent_state_records, effective_messages, context_name="Agent Context")
 
         return {
             "records": records,
@@ -553,9 +558,9 @@ class MessageService(MessageContentProjectionMixin):
                 continue
             # 普通消息列表只暴露用户可见的输入和最终回复；工具调用、
             # system_reminder 与空 assistant 仍可通过 Agent State 调试视图查看。
-            if not self._is_user_visible_message(message):
+            if not is_user_visible_message(message):
                 continue
-            dto = self._message_to_dto(session_id, thread_id, index, message)
+            dto = checkpoint_message_to_dto(session_id, thread_id, index, message)
             visible_key = (dto.role.value, dto.message_id)
             if visible_key in seen_visible_messages:
                 continue
