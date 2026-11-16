@@ -12,6 +12,10 @@ from app.agents.checkpoint_recovery import (
     CheckpointRecoveryRejectedError,
     pending_tool_checkpoint,
 )
+from app.agents.execution_checkpoint import (
+    checkpoint_accepted_execution_input,
+    persist_final_assistant_checkpoint,
+)
 from app.agents.graph_binding import GraphBindingUnavailableError
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import (
@@ -61,10 +65,6 @@ from app.runtime.agent_runtime import (
 )
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.message import AttachmentRef
-from app.services.business.execution_message_checkpoint import (
-    checkpoint_accepted_execution_input,
-    persist_final_assistant_checkpoint,
-)
 from app.services.business.message_display import DISPLAY_CONTENT_METADATA_KEY
 from app.services.infrastructure.message_stream_store import (
     MessageStreamTerminalError,
@@ -718,7 +718,6 @@ class StepRunner:
             assistant_write_task = asyncio.create_task(asyncio.to_thread(
                 persist_final_assistant_checkpoint,
                 checkpointer=checkpointer,
-                session_id=session_id,
                 thread_id=thread_id,
                 turn_id=admission.turn_id,
                 content_blocks=latest_model_content_blocks,

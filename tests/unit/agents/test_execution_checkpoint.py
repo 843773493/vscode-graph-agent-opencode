@@ -11,6 +11,10 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Send
 
+from app.agents.execution_checkpoint import (
+    checkpoint_accepted_execution_input,
+    persist_final_assistant_checkpoint,
+)
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
@@ -32,10 +36,6 @@ from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.common import MessageRole
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
-from app.services.business.execution_message_checkpoint import (
-    checkpoint_accepted_execution_input,
-    persist_final_assistant_checkpoint,
-)
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
     checkpoint_messages,
 )
@@ -588,7 +588,6 @@ async def test_persist_final_assistant_checkpoint_appends_replacement(
     ):
         changed = persist_final_assistant_checkpoint(
             checkpointer=saver,
-            session_id=session_id,
             thread_id=thread_id,
             turn_id=turn_id,
             content_blocks=(
@@ -793,7 +792,6 @@ async def test_final_before_persist_convergence_replays_without_typed_provenance
         await adapter.register(model_call_id, 1, "reasoning-checkpoint")
         assert persist_final_assistant_checkpoint(
             checkpointer=saver,
-            session_id=session_id,
             thread_id=thread_id,
             turn_id=turn_id,
             content_blocks=(
@@ -969,7 +967,6 @@ async def test_persist_checkpoint_keeps_encrypted_response_reasoning(
     ):
         assert persist_final_assistant_checkpoint(
             checkpointer=saver,
-            session_id=session_id,
             thread_id=thread_id,
             turn_id=turn_id,
             content_blocks=(
@@ -1167,7 +1164,6 @@ async def test_persist_checkpoint_preserves_existing_system_reminder_source(
     ):
         changed = persist_final_assistant_checkpoint(
             checkpointer=saver,
-            session_id=session_id,
             thread_id=thread_id,
             turn_id=turn_id,
             content_blocks=(

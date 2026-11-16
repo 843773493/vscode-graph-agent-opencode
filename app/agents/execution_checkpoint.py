@@ -1,4 +1,4 @@
-"""消费已接受执行输入，并固化最终 assistant 消息的 LangGraph checkpoint。"""
+"""Agent 执行输入与最终回复的 LangGraph 检查点适配。"""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def _latest_assistant_response(messages: list[object]) -> AIMessage | None:
     return None
 
 
-def _append_final_assistant_message(
+def _append_final_assistant_replacement(
     messages: list[object],
     *,
     content_blocks: Sequence[Mapping[str, object]],
@@ -112,6 +112,7 @@ def _append_final_assistant_message(
     turn_id: str | None,
     preserve_content_part_refs: bool,
 ) -> AIMessage | None:
+    """追加最终回复及其替代关系，保留原始模型消息。"""
     latest = _latest_assistant_response(messages)
     if latest is None:
         return None
@@ -180,7 +181,6 @@ def _append_final_assistant_message(
 def persist_final_assistant_checkpoint(
     *,
     checkpointer: BaseCheckpointSaver,
-    session_id: str,
     thread_id: str,
     turn_id: str | None = None,
     content_blocks: Sequence[Mapping[str, object]],
@@ -191,7 +191,7 @@ def persist_final_assistant_checkpoint(
     preserve_content_part_refs: bool = False,
     before_persist: Callable[[AIMessage], None] | None = None,
 ) -> bool:
-    """把本轮最终 assistant 消息保存为 LangChain 标准 content blocks。"""
+    """在调用方持有的 Thread 执行作用域中保存最终回复及标准 content blocks。"""
     if not message_id:
         raise ValueError("最终 assistant 消息缺少 message_id")
     if message_created_at.tzinfo is None:
@@ -215,7 +215,7 @@ def persist_final_assistant_checkpoint(
         )
 
     messages = list(raw_messages)
-    final_message = _append_final_assistant_message(
+    final_message = _append_final_assistant_replacement(
         messages,
         content_blocks=content_blocks,
         final_text=final_text,

@@ -22,7 +22,7 @@ tests/unit/agents/
     ├── Provider 配置（根目录）
     │   └── test_provider_api_mode_config.py
     ├── 上下文、checkpoint 与摘要
-    │   ├── test_checkpoint_recovery.py
+    │   ├── test_checkpoint_recovery.py、test_execution_checkpoint.py
     │   ├── test_context_source_boundary_audit.py
     │   └── test_*summarization*.py
     ├── 工具装配与调用中间件

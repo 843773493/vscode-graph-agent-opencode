@@ -11,15 +11,15 @@ from langchain_core.messages import (
     message_to_dict,
 )
 
+from app.agents.execution_checkpoint import (
+    _append_final_assistant_replacement,
+)
 from app.domain.itemized.hashing import content_hash
 from app.domain.itemized.identity.item_projection import (
     ItemProjectionIdentity,
     ProjectionPartRef,
 )
 from app.domain.itemized.records import CanonicalItemRecord
-from app.services.business.execution_message_checkpoint import (
-    _append_final_assistant_message,
-)
 from app.services.infrastructure.rollout_context.checkpoint.codec.metadata import (
     CANONICAL_GROUP_FIELD,
     TOOL_BINDING_FIELD,
@@ -53,7 +53,7 @@ def test_assistant_rebinding_does_not_inherit_or_forge_job_identity() -> None:
             },
         )
     ]
-    rewritten = _append_final_assistant_message(
+    rewritten = _append_final_assistant_replacement(
         messages,
         content_blocks=({"type": "text", "text": "final"},),
         final_text="final",

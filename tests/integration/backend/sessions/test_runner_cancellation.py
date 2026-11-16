@@ -18,6 +18,9 @@ from langgraph.checkpoint.base import empty_checkpoint
 from langgraph.graph.message import add_messages
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
+from app.agents.execution_checkpoint import (
+    checkpoint_accepted_execution_input,
+)
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
@@ -48,9 +51,6 @@ from app.schemas.internal_v2.common import JobStatus, MessageRole
 from app.schemas.internal_v2.job import JobControlRequest
 from app.schemas.internal_v2.message import MessageDTO
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.business.execution_message_checkpoint import (
-    checkpoint_accepted_execution_input,
-)
 from app.services.infrastructure.message_stream_store import (
     RECOVERED_TOOL_RESULT_UNKNOWN,
     MessageStreamStore,
