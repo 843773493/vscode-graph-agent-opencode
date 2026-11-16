@@ -13,7 +13,7 @@ from threading import Event
 
 from app.abstractions.workspace_resources import (
     ResourceKind,
-    ResourceSessionReader,
+    ResourceSessionAccess,
     ResourceSnapshot,
     ResourceThreadResolver,
     ResourceTransport,
@@ -69,7 +69,7 @@ class WorkspaceResourceOwner:
         *,
         workspace_root: Path,
         workspace_id: str,
-        sessions: ResourceSessionReader,
+        sessions: ResourceSessionAccess,
         threads: ResourceThreadResolver,
         transport: ResourceTransport,
         leases: ExternalResourceLeaseLedger,

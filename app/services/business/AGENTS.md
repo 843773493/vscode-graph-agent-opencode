@@ -37,7 +37,7 @@
 │   ├── session_resource_registry.py
 │   ├── browser_resources/       Browser资源归属
 │   ├── terminal_resources/      Terminal资源归属
-│   ├── workspace_resources/     工作区文件资源
+│   ├── workspace_resources/     Terminal／Browser 共用的准入、保留、关联与 lease
 │   └── resource_derivations/    资源派生模型
 ├── 持久任务
 │   ├── persistent_task_service.py  工作区任务管理、目标和 revision 校验

@@ -35,7 +35,7 @@ app/abstractions/
 │   ├── browser_resources.py        Browser 动作与传输
 │   ├── resource_file_content.py    原字节/MIME 读取端口
 │   ├── resource_search.py          Gateway 工作区发现与领域搜索流
-│   └── workspace_resources.py      工作区资源快照与授权
+│   └── workspace_resources.py      资源 owner 的 Session 写准入、Thread 定位与共用传输
 ├── terminal/                       Terminal 资源与执行观察协议
 │   ├── execution_monitor.py        持久终端执行状态观察端口
 │   └── resources.py                Terminal owner 与 PTY 传输协议
@@ -61,4 +61,5 @@ app/abstractions/
 - 类型尽量显式，避免把不透明字典作为长期接口。
 - 修改协议后需要同步检查所有实现类和调用点。
 - 通用 Session 读取协议统一在 `session_read.py`：`SessionReaderProtocol` 只读单条，`SessionListReaderProtocol` 提供会话列表与读准入，`SessionThreadReaderProtocol` 提供 Thread 解析与读准入；上下文、委派和 Turn 历史模块只保留各自领域协议。
+- 资源 owner 的 Session 写准入由 `workspace_resources.ResourceSessionAccess` 声明；Terminal／Browser 专属动作分别使用 `TerminalTransport`／`BrowserTransport`，不以通用 `ResourceTransport` 代替专属能力。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

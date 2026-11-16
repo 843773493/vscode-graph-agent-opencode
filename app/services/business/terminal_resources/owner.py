@@ -9,12 +9,12 @@ from pathlib import Path
 
 from app.abstractions.terminal.resources import (
     TerminalSnapshot,
+    TerminalTransport,
     TerminalWorkingDirectories,
 )
 from app.abstractions.workspace_resources import (
-    ResourceSessionReader,
+    ResourceSessionAccess,
     ResourceThreadResolver,
-    ResourceTransport,
     RetentionScope,
 )
 from app.core.failures import failure_detail
@@ -36,12 +36,13 @@ from app.services.infrastructure.workspace_files.paths import WorkspaceFilePaths
 class TerminalResourceOwner(WorkspaceResourceOwner):
     kind = "terminal"
     lease_kind = "terminal"
+    _transport: TerminalTransport
 
     def __init__(
         self, *, file_paths: WorkspaceFilePaths,
         working_directories: TerminalWorkingDirectories | None,
-        sessions: ResourceSessionReader, threads: ResourceThreadResolver,
-        transport: ResourceTransport, leases: ExternalResourceLeaseLedger,
+        sessions: ResourceSessionAccess, threads: ResourceThreadResolver,
+        transport: TerminalTransport, leases: ExternalResourceLeaseLedger,
         thread_release_fence: Callable[[str, str, int], bool],
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:

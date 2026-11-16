@@ -32,7 +32,9 @@ class ResourceTransportGrantRejected(RuntimeError):
         super().__init__(message)
 
 
-class ResourceSessionReader(Protocol):
+class ResourceSessionAccess(Protocol):
+    """资源 owner 核定 Session 归属及取得写准入所需的能力。"""
+
     @property
     def workspace_id(self) -> str: ...
 
