@@ -63,6 +63,7 @@ app/agents/
 - 运行时配置应通过 `ConfigService` 或显式参数传入。
 - 后台工具依赖 `orchestration/background_work/` 的任务注册器与持久邮箱；CustomToolFactoryContext.background_message_bus 是扩展 factory 的既有公开字段名，其值为 BackgroundMailbox，不表示 Job 事件广播。
 - `CustomToolFactoryContext.session_orchestrator` 是扩展 factory 的既有公开字段名，其值实现 `SessionMessageOrchestratorProtocol`；消息准入与派发由 `orchestration/session_messages.py` 实现，不代表 Session 创建、删除或 runtime 装配。
+- `tool_identity.py` 单点定义注册工具的 `ToolDefinitionLike` 和名称提取；策略身份由 `policy/tool_capability.py` 推导，中间件和 ToolSet 注册不再声明同形类型或各自重算分组。
 - `default_tools.py::build_default_tools` 只装配固定默认工具，协作子集归 `tools/collaboration.py`；仅传递实际消费的依赖，不转导出领域工厂。策略过滤、扩展工具和执行图仍由 `agent_factory.py` 装配。
 - `middleware_assembly.py` 统一维护工具、Skill、压缩、路由和校验中间件的构造顺序；Skill 来源消费归 `skill_runtime.py`，压缩实例构造归 `summarization/factory.py`。工厂不再额外尝试装入空 Skill 中间件。
 - `agent_factory.py` 直接构造 `CustomToolFactoryContext` 并调用 `custom_tools.py::build_custom_tools` 取得工具列表；工具构造器负责声明校验和逐工具 options 注入，不再包装单字段 Bundle。

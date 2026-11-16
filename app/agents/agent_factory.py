@@ -54,7 +54,6 @@ from app.agents.model_capability_routing import (
 from app.agents.policy import (
     ToolCapabilityPolicy,
     ToolMetadata,
-    catalog_group_for_tool,
     custom_tool_spec_names,
     parse_custom_tool_specs,
     validate_tool_dependencies,
@@ -72,7 +71,11 @@ from app.agents.summarization.tool_middleware import (
     create_compact_conversation_tool,
     create_read_compaction_history_tool,
 )
-from app.agents.tool_identity import TOOL_DISCOVERY_NAME, tool_definition_name
+from app.agents.tool_identity import (
+    TOOL_DISCOVERY_NAME,
+    ToolDefinitionLike,
+    tool_definition_name,
+)
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
@@ -183,7 +186,7 @@ def build_deep_agent(
     enabled_runtime_middleware_names: set[str] | None = None,
     tool_denylist: set[str] | None = None,
     custom_tool_specs: Sequence[object] | None = None,
-    tools: Sequence[BaseTool | Callable[..., Any] | dict[str, Any]] | None = None,
+    tools: Sequence[ToolDefinitionLike] | None = None,
     middleware: Sequence[AgentMiddleware] | None = None,
     response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
     skill_catalog: PublishedSkillCatalog | None = None,
@@ -784,11 +787,8 @@ def build_deep_agent(
         agent_id=agent_id, selection_reader=tool_selection_reader,
         policy_resolver=capability_resolver, tools=registered_tools,
         metadata={
-            tool_definition_name(tool): ToolMetadata(
-                tool_id=tool_definition_name(tool), origin="builtin",
-                kind=catalog_group_for_tool(tool_definition_name(tool)).kind,
-                group_id=catalog_group_for_tool(tool_definition_name(tool)).group_id,
-            ) for tool in registered_tools
+            tool_definition_name(tool): metadata_for_tool(tool, origin="builtin")
+            for tool in registered_tools
         },
     )
     # routing 和所有 request producer 的真实 attempt 直接调用唯一执行 owner。

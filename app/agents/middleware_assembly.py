@@ -17,7 +17,6 @@ from langchain.agents.middleware import (
 )
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.tools import BaseTool
 
 from app.abstractions.resource_file_content import ResourceFileReader
 from app.agents.instruction_producers import (
@@ -50,7 +49,7 @@ from app.agents.summarization.tool_middleware import (
     CachePreservingSummarizationToolMiddleware,
 )
 from app.agents.tool_confirmation_middleware import ToolConfirmationMiddleware
-from app.agents.tool_identity import tool_definition_name
+from app.agents.tool_identity import ToolDefinitionLike, tool_definition_name
 from app.agents.tool_invocation_context import ToolInvocationContextMiddleware
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.workspace_filesystem_tools import configure_workspace_filesystem_tools
@@ -74,7 +73,6 @@ from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
 )
 
-ToolDefinition = BaseTool | Callable[..., Any] | dict[str, Any]
 FILESYSTEM_INTERNAL_TOOL_DENYLIST = {"execute"}
 
 
@@ -95,9 +93,9 @@ class SourceOwnedTodoListMiddleware(TodoListMiddleware):
 
 
 def filter_tools_by_name(
-    tools: list[ToolDefinition],
+    tools: list[ToolDefinitionLike],
     denylist: set[str],
-) -> list[ToolDefinition]:
+) -> list[ToolDefinitionLike]:
     if not denylist:
         return tools
     return [tool for tool in tools if tool_definition_name(tool) not in denylist]
