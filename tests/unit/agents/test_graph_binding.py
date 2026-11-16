@@ -1,14 +1,13 @@
 """OpenSpec 8.4 GraphBinding 基础设施的单元测试。
 
 覆盖：VO 四元组校验、hash 口径确定性、registry 注册/解析与四种不匹配、
-不回退红线、持久化往返与重启重建、AgentFactory 集成、组合绑定辅助。
+不回退红线、持久化往返与重启重建、AgentFactory 集成。
 """
 
 from __future__ import annotations
 
 import dataclasses
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -25,14 +24,11 @@ from app.agents.graph_binding import (
     GraphBindingUnavailableError,
     GraphFactoryRegistrationConflictError,
     GraphFactoryRegistry,
-    InvocationGraphBinding,
     SessionControlGraphBindingStore,
-    binding_for,
     compute_capability_profile_hash,
     compute_graph_schema_hash,
     resolve_graph_binding,
 )
-from app.agents.tool_invocation_context import ThreadRuntimeBinding
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
 from app.runtime.graph_factory import build_deep_agent_graph
 from tests.support.canonical_id_at import thread_id_at
@@ -534,23 +530,3 @@ def test_resolve_graph_binding_rejects_revision_drift_without_fallback() -> None
             owner=_owner(),
             registry=graph_factory_registry,
         )
-
-
-# ---------------------------------------------------------------------------
-# P2：组合绑定辅助
-# ---------------------------------------------------------------------------
-
-
-def test_binding_for_combines_graph_and_thread_bindings() -> None:
-    thread_binding = ThreadRuntimeBinding(
-        session_id="ses_graph",
-        thread_id=thread_id_at(datetime(2026, 6, 1, tzinfo=UTC)),
-    )
-    combined = binding_for(DEEP_AGENT_GRAPH_BINDING, thread_binding)
-    assert isinstance(combined, InvocationGraphBinding)
-    assert combined.graph is DEEP_AGENT_GRAPH_BINDING
-    assert combined.thread is thread_binding
-    with pytest.raises(TypeError, match="GraphBinding"):
-        binding_for("not-graph", thread_binding)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="ThreadRuntimeBinding"):
-        binding_for(DEEP_AGENT_GRAPH_BINDING, "not-thread")  # type: ignore[arg-type]

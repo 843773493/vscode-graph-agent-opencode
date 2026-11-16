@@ -44,7 +44,6 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from app.agents.tool_invocation_context import ThreadRuntimeBinding
 from app.core.session_control_store import SessionControlStore
 from app.runtime.graph_factory import build_deep_agent_graph
 
@@ -468,42 +467,6 @@ class SessionControlGraphBindingStore:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class InvocationGraphBinding:
-    """一次 invocation 的完整绑定：持久 graph selector + 受信线程归属。"""
-
-    graph: GraphBinding
-    thread: ThreadRuntimeBinding
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.graph, GraphBinding):
-            raise TypeError(
-                f"InvocationGraphBinding.graph 必须是 GraphBinding: "
-                f"{type(self.graph).__name__}"
-            )
-        if not isinstance(self.thread, ThreadRuntimeBinding):
-            raise TypeError(
-                f"InvocationGraphBinding.thread 必须是 ThreadRuntimeBinding: "
-                f"{type(self.thread).__name__}"
-            )
-
-
-def binding_for(
-    graph_binding: GraphBinding,
-    thread_runtime_binding: ThreadRuntimeBinding,
-) -> InvocationGraphBinding:
-    """组合查询辅助：把持久 selector 与 invocation 线程归属组成完整绑定。
-
-    持久 selector 负责解析受注册的 factory；线程
-    归属只来自 generation 装配时的 :class:`ThreadRuntimeBinding`，二者合成
-    一次 invocation 的完整身份。
-    """
-    return InvocationGraphBinding(
-        graph=graph_binding,
-        thread=thread_runtime_binding,
-    )
-
-
 def resolve_graph_binding(
     *,
     store: GraphBindingStorePort,
@@ -538,9 +501,7 @@ __all__ = [
     "GraphFactoryBuilder",
     "GraphFactoryRegistrationConflictError",
     "GraphFactoryRegistry",
-    "InvocationGraphBinding",
     "SessionControlGraphBindingStore",
-    "binding_for",
     "compute_capability_profile_hash",
     "compute_graph_schema_hash",
     "resolve_graph_binding",
