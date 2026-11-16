@@ -33,6 +33,7 @@ tests/unit/core/
 │   ├── test_background_message_bus.py、test_job_event_bus.py
 │   └── test_job_event_bus_channel_adapter.py
 ├── execution/
+│   ├── test_background_task_registry.py（持久后台任务的终态、对账与恢复）
 │   ├── test_cancelable_stream.py、test_execution_admission_context.py
 │   ├── test_key_lock_pool.py、test_lifetime_handle.py
 │   └── test_lifetime_scope.py、test_turn_execution_scope.py

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.custom_tool_context import (
     CustomToolConfigProtocol,
 )
@@ -13,10 +14,6 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextClientProtocol,
 )
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.abstractions.session_resources import (
-    BackgroundTaskRegistryProtocol,
-    SessionResourceMessageProtocol,
-)
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol, TeamStoreProtocol
 
@@ -31,7 +28,6 @@ __all__ = [
     "JobStepExecutor",
     "SessionContextQueryProtocol",
     "SessionOrchestratorProtocol",
-    "SessionResourceMessageProtocol",
     "SessionSubagentProtocol",
     "TeamCoordinationProtocol",
     "TeamStoreProtocol",

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Protocol
 from langchain_core.tools import BaseTool
 
 from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
+from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.custom_tool_context import (
     CustomToolConfigProtocol,
@@ -20,9 +21,6 @@ from app.abstractions.session_context import (
     WorkspaceSessionContextClientProtocol,
 )
 from app.abstractions.session_orchestrator import SessionOrchestratorProtocol
-from app.abstractions.session_resources import (
-    BackgroundTaskRegistryProtocol,
-)
 from app.agents.model_tool_schema import get_model_tool_schema
 from app.agents.policy import parse_custom_tool_specs
 from app.agents.tool_invocation_context import ToolInvocationContext

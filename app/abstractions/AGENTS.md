@@ -13,10 +13,11 @@ app/abstractions/
 │   ├── session_context.py          上下文查询、修订与 fork 传输
 │   ├── session_orchestrator.py     会话编排调用端口
 │   ├── session_read.py             单条／列表读取、Thread 解析与会话读准入
-│   ├── session_resources.py        会话资源读取端口
+│   ├── session_resources.py        会话资源提供者的列表、控制与清理
 │   └── session_subagent.py         子 Agent 与 owner thread 创建端口
 ├── 执行与消息边界
 │   ├── background_message_bus.py   后台任务消息收发
+│   ├── background_task_registry.py 后台任务创建、查询、对账与清理
 │   ├── job_event_bus.py            Job 事件发布与订阅
 │   ├── job_executor.py             Job 输入 owner 与执行状态
 │   ├── job_service.py              Job 服务调用端口
@@ -62,4 +63,5 @@ app/abstractions/
 - 修改协议后需要同步检查所有实现类和调用点。
 - 通用 Session 读取协议统一在 `session_read.py`：`SessionReaderProtocol` 只读单条，`SessionListReaderProtocol` 提供会话列表与读准入，`SessionThreadReaderProtocol` 提供 Thread 解析与读准入；上下文、委派和 Turn 历史模块只保留各自领域协议。
 - 资源 owner 的 Session 写准入由 `workspace_resources.ResourceSessionAccess` 声明；Terminal／Browser 专属动作分别使用 `TerminalTransport`／`BrowserTransport`，不以通用 `ResourceTransport` 代替专属能力。
+- 后台任务能力归 `background_task_registry.py`；`session_resources.py` 只声明会话资源 provider，不承担后台任务注册或消息历史接口。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

@@ -8,8 +8,8 @@ import portalocker
 import pytest
 from fastapi import HTTPException
 
+from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.browser_resources import BrowserPluginDisabled
-from app.abstractions.session_resources import BackgroundTaskRegistryProtocol
 from app.abstractions.terminal.resources import TerminalPluginDisabled
 from app.api.sessions import list_session_resources
 from app.core.background_task_contracts import BackgroundTaskHandle

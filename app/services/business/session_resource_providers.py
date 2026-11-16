@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from itertools import chain
 
+from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.browser_resources import BrowserPluginDisabled
-from app.abstractions.session_resources import (
-    BackgroundTaskRegistryProtocol,
-)
 from app.abstractions.terminal.resources import TerminalPluginDisabled
 from app.core.background_task_contracts import BackgroundTaskHandle
 from app.schemas.internal_v2.session_resource import (
