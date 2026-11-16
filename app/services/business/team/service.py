@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import logging
 
+from app.abstractions.session_read import SessionReaderProtocol
 from app.abstractions.session_subagent import (
     OwnerThreadCreationFactoryProtocol,
-    SessionReaderProtocol,
     SessionSubagentProtocol,
 )
 from app.abstractions.team import TeamFanoutProtocol, TeamStoreProtocol

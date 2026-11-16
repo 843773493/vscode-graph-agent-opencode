@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.turn_history import TurnSessionLookupProtocol
+from app.abstractions.session_read import SessionThreadReaderProtocol
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.phase_observer import observe_phase
 from app.core.shielded_cleanup import run_sync_shielded
@@ -37,7 +37,7 @@ class SessionTurnHistoryService:
         self,
         *,
         checkpointer: RolloutCheckpointSaver,
-        session_service: TurnSessionLookupProtocol,
+        session_service: SessionThreadReaderProtocol,
         job_service: JobServiceProtocol,
         trace_event_store: TraceEventStore,
     ) -> None:

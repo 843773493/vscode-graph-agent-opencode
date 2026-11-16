@@ -10,10 +10,10 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Awaitable, Callable
 
+from app.abstractions.session_read import SessionReaderProtocol
 from app.abstractions.session_subagent import (
     GENERAL_PURPOSE_SUBAGENT,
     OwnerThreadCreationFactoryProtocol,
-    SessionReaderProtocol,
     SessionSubagentAccepted,
     TaskContextForkProtocol,
 )

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from app.core.thread_creation import ThreadCreationResult, ThreadCreationService
-from app.schemas.internal_v2.session import SessionDTO, SessionTaskContext
+from app.schemas.internal_v2.session import SessionTaskContext
 
 GENERAL_PURPOSE_SUBAGENT = "general-purpose"
 
@@ -44,13 +44,6 @@ class SessionSubagentAccepted:
     admission_state: str
     execution_binding_id: str
     frozen_job_id: str
-
-
-@runtime_checkable
-class SessionReaderProtocol(Protocol):
-    """按 ID 读取 Session DTO 的最小只读协议（委派/协作工具共用）。"""
-
-    async def get(self, session_id: str) -> SessionDTO: ...
 
 
 @runtime_checkable

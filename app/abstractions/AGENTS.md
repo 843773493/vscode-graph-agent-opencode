@@ -12,6 +12,7 @@ app/abstractions/
 │   ├── session_changes.py          工具文件编辑前后观察、Changes 记录与存储端口
 │   ├── session_context.py          上下文查询、修订与 fork 传输
 │   ├── session_orchestrator.py     会话编排调用端口
+│   ├── session_read.py             单条／列表读取、Thread 解析与会话读准入
 │   ├── session_resources.py        会话资源读取端口
 │   └── session_subagent.py         子 Agent 与 owner thread 创建端口
 ├── 执行与消息边界
@@ -22,7 +23,6 @@ app/abstractions/
 │   ├── job_step_executor.py        Job 执行步骤端口
 │   ├── pending_request_store.py    等待处理请求存储
 │   ├── trace_event_sink.py         Trace 事件持久化写入端口
-│   ├── turn_history.py             Turn 历史读取端口
 │   └── turn_terminal_status.py     Turn 与工具结果终态
 ├── Agent 与协作边界
 │   ├── communication.py            Session 间通信端口
@@ -60,4 +60,5 @@ app/abstractions/
 - 协议命名应体现调用方语义，而不是具体实现细节。
 - 类型尽量显式，避免把不透明字典作为长期接口。
 - 修改协议后需要同步检查所有实现类和调用点。
+- 通用 Session 读取协议统一在 `session_read.py`：`SessionReaderProtocol` 只读单条，`SessionListReaderProtocol` 提供会话列表与读准入，`SessionThreadReaderProtocol` 提供 Thread 解析与读准入；上下文、委派和 Turn 历史模块只保留各自领域协议。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。

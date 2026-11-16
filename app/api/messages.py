@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.turn_history import TurnSessionLookupProtocol
+from app.abstractions.session_read import SessionThreadReaderProtocol
 from app.api.deps import (
     get_attachment_blob_store,
     get_job_service,
@@ -71,7 +71,7 @@ async def list_pending_requests(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     thread_id: CanonicalThreadId | None = None,
 ):
     try:
@@ -98,7 +98,7 @@ async def list_main_thread_pending_requests(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     job_service: JobServiceProtocol = Depends(get_job_service),
-    session_service: TurnSessionLookupProtocol = Depends(get_session_service),
+    session_service: SessionThreadReaderProtocol = Depends(get_session_service),
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -144,7 +144,7 @@ async def clear_pending_requests(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     thread_id: CanonicalThreadId | None = None,
 ):
     try:
@@ -340,7 +340,7 @@ async def observe_communication(
 )
 async def list_messages(
     session_id: CanonicalSessionId,
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
     _: str = Depends(verify_local_token),
@@ -374,7 +374,7 @@ async def list_thread_attachments(
     _: Annotated[str, Depends(verify_local_token)],
     request_id: Annotated[str, Depends(get_request_id)],
     attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     after: str = Query(default="", pattern=r"^(?:att_[0-9a-f]{32})?$"),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> APIResponse[ThreadAttachmentListDTO]:
@@ -435,7 +435,7 @@ async def get_session_attachment_content(
 )
 async def get_agent_state_messages(
     session_id: CanonicalSessionId,
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),
@@ -458,7 +458,7 @@ async def get_agent_state_messages(
 async def get_message(
     session_id: CanonicalSessionId,
     message_id: str,
-    session_service: Annotated[TurnSessionLookupProtocol, Depends(get_session_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
     message_service: MessageService = Depends(get_message_service),

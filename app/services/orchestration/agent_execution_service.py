@@ -180,7 +180,6 @@ class AgentExecutionService(JobStepExecutor):
                 control_inbox_state_path=self._control_inbox_state_path,
                 agent_factory=self._acquire_step_agent,
                 checkpointer_provider=dependency_provider.get_checkpointer,
-                session_service_provider=dependency_provider.get_session_service,
                 tool_approvals=self.tool_approvals,
                 external_resource_leases=external_resource_leases,
                 model_timeout_seconds=model_timeout_seconds,

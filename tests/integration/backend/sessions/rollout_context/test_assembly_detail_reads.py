@@ -11,8 +11,8 @@ import pytest
 
 from app.abstractions.session_context import (
     SessionContextMessageSourceProtocol,
-    SessionLookupProtocol,
 )
+from app.abstractions.session_read import SessionListReaderProtocol
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import SessionContextReadRequest
 from app.services.business.session_context_query_service import (
@@ -42,7 +42,7 @@ def assembly_detail(assembly_case):
     workspace_id = "00000000-0000-4000-8000-000000000001"
     identity = session_resource_identity(workspace_id, case.session_id)
     uri = session_resource_uri(workspace_id, case.session_id)
-    lookup = create_autospec(SessionLookupProtocol, spec_set=True)
+    lookup = create_autospec(SessionListReaderProtocol, spec_set=True)
     lookup.session_read_admission.return_value = nullcontext()
     lookup.get.return_value = SessionDTO(
         session_id=case.session_id, thread_id=case.thread_id,

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from app.abstractions.job_event_bus import JobEventBusProtocol
 from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.turn_history import TurnSessionLookupProtocol
+from app.abstractions.session_read import SessionThreadReaderProtocol
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
 from app.core.session_interrupt_state import SessionInterruptState
@@ -36,7 +36,7 @@ class SessionInterruptService:
         job_event_bus: JobEventBusProtocol,
         message_service: MessageService,
         message_stream_store: MessageStreamStore,
-        session_service: TurnSessionLookupProtocol,
+        session_service: SessionThreadReaderProtocol,
         execution_scope_registry: TurnExecutionScopeRegistry | None = None,
     ) -> None:
         self._job_service = job_service

@@ -15,8 +15,8 @@ from app.abstractions.session_context import (
     SessionContextSearchBudgetError,
     SessionContextSearchPatternError,
     SessionInformationSourceProtocol,
-    SessionLookupProtocol,
 )
+from app.abstractions.session_read import SessionListReaderProtocol
 from app.core.phase_observer import observe_phase
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_current_gateway_id
@@ -96,7 +96,7 @@ class SessionContextQueryService:
         self,
         *,
         message_source: SessionContextMessageSourceProtocol,
-        session_lookup: SessionLookupProtocol,
+        session_lookup: SessionListReaderProtocol,
         assembly_source: SessionContextAssemblySourceProtocol,
         workspace_id: str,
     ) -> None:

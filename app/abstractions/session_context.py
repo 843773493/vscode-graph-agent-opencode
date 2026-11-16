@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
@@ -18,9 +17,7 @@ if TYPE_CHECKING:
 
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.session import (
-    SessionDTO,
     SessionInformationSnapshotDTO,
-    SessionListResultDTO,
 )
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
@@ -155,20 +152,6 @@ class SessionContextAssemblySourceProtocol(Protocol):
         *,
         checkpoint_ns: str = "",
     ) -> SessionContextHistoryProjection: ...
-
-
-class SessionLookupProtocol(Protocol):
-    def session_read_admission(self, session_id: str) -> AbstractAsyncContextManager[None]: ...
-
-    async def get(self, session_id: str) -> SessionDTO: ...
-
-    async def list(
-        self,
-        workspace_id: str | None = None,
-        skip: int = 0,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> SessionListResultDTO: ...
 
 
 class SessionInformationSourceProtocol(Protocol):

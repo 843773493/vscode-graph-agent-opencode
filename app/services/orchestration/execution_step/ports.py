@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from app.abstractions.background_message_bus import BackgroundMessageBusProtocol
     from app.abstractions.job_event_bus import JobEventBusProtocol
     from app.abstractions.session_changes import SessionChangesRecorderProtocol
-    from app.abstractions.session_context import SessionLookupProtocol
     from app.abstractions.tool_selection import ToolSelectionReader
     from app.domain.itemized.execution_admission import ExecutionAdmission
     from app.domain.itemized.records import CanonicalItemRecord
@@ -73,7 +72,6 @@ class StepExecutionPorts:
     # .boxteam/sessions 会话节点下；测试可用显式实现替换。
     control_inbox_state_path: Callable[[str, str], Path]
     checkpointer_provider: Callable[[], RolloutCheckpointSaver]
-    session_service_provider: Callable[[], SessionLookupProtocol]
     tool_approvals: ToolApprovalService
     external_resource_leases: ExternalResourceLeaseLedger | None = None
     model_timeout_seconds: float | None = None
