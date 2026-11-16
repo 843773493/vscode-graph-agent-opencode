@@ -20,7 +20,7 @@ from app.agents.skill_runtime import (
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import ToolInvocationContext
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
 )

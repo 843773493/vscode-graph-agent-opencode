@@ -19,7 +19,7 @@ from app.abstractions.session_context import (
     SessionContextSearchPatternError,
 )
 from app.agents.model_tool_schema import export_model_tool_json_schema
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
 )

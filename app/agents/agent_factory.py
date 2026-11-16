@@ -80,7 +80,7 @@ from app.agents.tool_invocation_context import (
 )
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.tool_set_producer import RegisteredToolSetProducer
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
 )

@@ -25,12 +25,12 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContextMiddleware,
 )
 from app.agents.tool_node_adapter import extract_agent_tools_by_name
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.debugging import create_debugging_tools
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
     sealed_extension_catalog_binding_resolver,
 )
-from app.agents.tools.debugging import create_debugging_tools
 from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
 from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
 from app.services.infrastructure.config_service import ConfigService

@@ -18,7 +18,7 @@ from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
 )
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
 )

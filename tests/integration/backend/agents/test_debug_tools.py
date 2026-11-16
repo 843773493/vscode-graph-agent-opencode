@@ -19,11 +19,11 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
 )
 from app.agents.tool_node_adapter import extract_agent_tools_by_name
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.debugging import create_debugging_tools
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
 )
-from app.agents.tools.debugging import create_debugging_tools
 from app.core.trace_middleware import (
     reset_current_gateway_id,
     reset_current_request_id,

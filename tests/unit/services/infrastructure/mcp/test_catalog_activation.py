@@ -16,7 +16,7 @@ from pydantic import Field, create_model
 
 from app.agents.policy import ToolMetadata, ToolPolicyResolver
 from app.agents.tool_set_producer import RegisteredToolSetProducer
-from app.agents.tools.custom_invocation import create_extension_tool_invoker_tool
+from app.agents.tools.extension_invocation import create_extension_tool_invoker_tool
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.lifecycle import LifetimeScope

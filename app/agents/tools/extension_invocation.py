@@ -186,22 +186,22 @@ async def _invoke_target_tool_without_nested_callbacks(
 
 
 def create_extension_tool_invoker_tool(
-    custom_tools: Sequence[BaseTool],
+    extension_tools: Sequence[BaseTool],
     *,
     is_tool_execution_enabled: Callable[[BaseTool], bool] | None = None,
     catalog_binding_resolver: ExtensionCatalogBindingResolver | None = None,
     invocation_context: ToolInvocationContext | None = None,
     target_resolver: Callable[[ExtensionTargetBinding, McpResourceUse | None], AbstractContextManager[ExtensionExecutionTarget]] | None = None,
 ) -> BaseTool:
-    """创建固定扩展工具入口，通过参数分发到工作区配置的自定义工具。"""
+    """创建固定扩展工具入口，按封存目录调用 MCP 或工作区自定义工具。"""
     tools_by_name: dict[str, BaseTool] = {}
     tool_names: set[str] = set()
-    for custom_tool in custom_tools:
-        if custom_tool.name in tool_names:
-            raise ValueError(f"重复的扩展工具: {custom_tool.name}")
-        tool_names.add(custom_tool.name)
+    for extension_tool in extension_tools:
+        if extension_tool.name in tool_names:
+            raise ValueError(f"重复的扩展工具: {extension_tool.name}")
+        tool_names.add(extension_tool.name)
         if target_resolver is None:
-            tools_by_name[custom_tool.name] = custom_tool
+            tools_by_name[extension_tool.name] = extension_tool
     if catalog_binding_resolver is None:
         raise ValueError(
             "extension invoker 必须显式提供 sealed catalog binding resolver；"

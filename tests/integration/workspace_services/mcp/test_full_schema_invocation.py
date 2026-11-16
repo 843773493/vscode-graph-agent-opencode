@@ -14,7 +14,7 @@ from langchain_core.messages import ToolMessage
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import ToolPolicyResolver
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     sealed_extension_catalog_binding_resolver,
 )

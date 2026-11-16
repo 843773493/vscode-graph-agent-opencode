@@ -22,7 +22,7 @@ from app.agents.execution_checkpoint import (
     checkpoint_accepted_execution_input,
 )
 from app.agents.graph_binding import compute_capability_profile_hash
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
 )

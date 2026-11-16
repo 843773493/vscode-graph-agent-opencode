@@ -28,7 +28,7 @@ from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     start_workspace_skill_catalog_publication,
 )
-from app.agents.tools.custom_invocation import (
+from app.agents.tools.extension_invocation import (
     seal_extension_catalog_binding_from_tools,
 )
 from app.core.identifier import create_prefixed_id
