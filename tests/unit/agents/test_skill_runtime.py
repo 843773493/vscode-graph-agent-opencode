@@ -15,7 +15,7 @@ from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     resolve_bundled_skill_groups,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     WorkspaceSkillsMiddleware,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME

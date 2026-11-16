@@ -18,7 +18,7 @@ from app.agents.providers.wire_finalize import (
     ResponsesWireProfile,
     finalize_provider_wire,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     install_frozen_skill_catalog,
 )
 from app.core.execution_admission_context import require_current_execution_admission

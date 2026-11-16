@@ -35,7 +35,7 @@ from app.agents.middleware_prompts import (
 from app.agents.skill_catalog import (
     PublishedSkillCatalog,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     WorkspaceSkillsMiddleware,
 )
 from app.agents.structured_prompt_validation_middleware import (

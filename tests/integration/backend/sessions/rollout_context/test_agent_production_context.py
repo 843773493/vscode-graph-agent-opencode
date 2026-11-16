@@ -21,7 +21,7 @@ from app.agents.policy import ToolPolicyResolver
 from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     WorkspaceSkillsMiddleware,
 )
 from app.agents.tool_node_adapter import extract_agent_tools_by_name

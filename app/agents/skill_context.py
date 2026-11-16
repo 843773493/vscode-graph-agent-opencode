@@ -1,3 +1,5 @@
+"""消费已发布的 Skill 目录，登记上下文来源并安装冻结调用目录。"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -127,12 +129,9 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
             lines.append("  -> 匹配后调用 `skill_load(name=\"...\")` 激活正文")
         return "\n".join(lines)
 
-    def _register_context_sources(
-        self,
-        update: Mapping[str, Any],
-    ) -> dict[str, Any]:
+    def _register_catalog_sources(self) -> None:
         if self._context_source_manager is None:
-            return dict(update)
+            return
         for entry in self._catalog.entries if self._catalog is not None else ():
             name, description, resource_uri = entry.name, entry.description, entry.display_uri
             if self._source_registry is not None:
@@ -159,11 +158,6 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
                 # SkillCatalog revision;binding 与内容 revision 分离。
                 binding_revision=self._catalog.catalog_revision,
             )
-        normalized = dict(update)
-        normalized["skills_metadata"] = [
-            entry.metadata_view() for entry in self._catalog.entries
-        ] if self._catalog is not None else []
-        return normalized
 
     def _install_activation_snapshot(self) -> None:
         """把 D1 发布的 immutable catalog 冻结成 activation snapshot。
@@ -195,7 +189,7 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
 
     def before_agent(self, state: Any, runtime: Any, config: RunnableConfig) -> dict[str, Any] | None:
         del state, runtime, config
-        return self._register_workspace_context_sources()
+        return self._initialize_skill_context()
 
     async def abefore_agent(
         self,
@@ -204,30 +198,24 @@ class WorkspaceSkillsMiddleware(AgentMiddleware[Any, Any, Any]):
         config: RunnableConfig | None = None,
     ) -> dict[str, Any] | None:
         del state, runtime, config
-        return self._register_workspace_context_sources()
+        return self._initialize_skill_context()
 
-    def _register_workspace_context_sources(self) -> dict[str, Any]:
+    def _initialize_skill_context(self) -> dict[str, Any]:
         """登记 Skill catalog 来源，注册完成后统一建立订阅。
         顺序契约：descriptor 全部注册完成后才 sync_sources，reactor 才能一次
         性为 Skill 文件建立订阅并播下首帧观察种子。
         """
-        update: dict[str, Any] = {
-            "skills_metadata": [
-                entry.metadata_view() for entry in self._catalog.entries
-            ]
-            if self._catalog is not None
-            else [],
-        }
-        if self._execution_owned_catalog:
-            # 正式 runtime 的 catalog/metadata/activation 只在 Saver 的真实冻结边界消费。
-            update = {"skills_metadata": []}
-        else:
-            update = self._register_context_sources(update)
+        # 正式 runtime 的 catalog/metadata/activation 只在 Saver 的真实冻结边界消费。
+        metadata = [] if self._execution_owned_catalog or self._catalog is None else [
+            entry.metadata_view() for entry in self._catalog.entries
+        ]
+        if not self._execution_owned_catalog:
+            self._register_catalog_sources()
         self._sync_source_bindings()
         if not self._execution_owned_catalog:
             self._install_activation_snapshot()
             self._register_catalog_instructions()
-        return update
+        return {"skills_metadata": metadata}
 
     def _register_catalog_instructions(self) -> None:
         """R05 只发布 catalog 正文与权威语义 revision，不编辑模型请求。"""

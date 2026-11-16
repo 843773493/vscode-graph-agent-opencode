@@ -17,7 +17,7 @@ from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     start_workspace_skill_catalog_publication,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     WorkspaceSkillsMiddleware,
 )
 from app.agents.tools.skill_loading import create_skill_load_tool

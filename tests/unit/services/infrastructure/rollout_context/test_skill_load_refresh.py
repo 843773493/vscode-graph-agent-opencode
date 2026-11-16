@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.agents.skill_runtime import install_frozen_skill_catalog
+from app.agents.skill_context import install_frozen_skill_catalog
 from app.domain.itemized.epoch.tool_set import ToolSetSnapshot
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.serde.epoch import context_seal_binding_to_dict

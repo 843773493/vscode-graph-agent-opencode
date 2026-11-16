@@ -10,7 +10,7 @@ import pytest
 from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
 )
-from app.agents.skill_runtime import (
+from app.agents.skill_context import (
     WorkspaceSkillsMiddleware,
 )
 from app.core.lifecycle import LifetimeScope

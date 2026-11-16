@@ -37,6 +37,7 @@ tests/unit/agents/
     │   └── test_workspace_backend.py
     └── 指令与 Skill 生命周期
         ├── test_instruction_producers.py、test_middleware_prompts.py
+        ├── test_skill_context.py    Skill 上下文登记与来源事件消费
         └── test_skill_*.py
 ```
 

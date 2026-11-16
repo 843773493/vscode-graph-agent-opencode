@@ -32,7 +32,7 @@ app/agents/
 │   ├── structured_tool_call_middleware.py、tool_output_middleware.py
 │   └── llm_logging_middleware.py、upstream_request_trace.py
 ├── [指令与 Skill]
-│   ├── instruction_producers.py、middleware_prompts.py、skill_catalog.py、skill_runtime.py
+│   ├── instruction_producers.py、middleware_prompts.py、skill_catalog.py、skill_context.py
 │   ├── agents_md_publication.py   AGENTS.md 文件登记与指令链发布
 │   └── tools/skill_loading.py
 └── [工作区适配]
@@ -65,7 +65,7 @@ app/agents/
 - `CustomToolFactoryContext.session_orchestrator` 是扩展 factory 的既有公开字段名，其值实现 `SessionMessageOrchestratorProtocol`；消息准入与派发由 `orchestration/session_messages.py` 实现，不代表 Session 创建、删除或 runtime 装配。
 - `tool_identity.py` 单点定义注册工具的 `ToolDefinitionLike` 和名称提取；策略身份由 `policy/tool_capability.py` 推导，中间件和 ToolSet 注册不再声明同形类型或各自重算分组。
 - `default_tools.py::build_default_tools` 只装配固定默认工具，协作子集归 `tools/collaboration.py`；仅传递实际消费的依赖，不转导出领域工厂。策略过滤、扩展工具和执行图仍由 `agent_factory.py` 装配。
-- `middleware_assembly.py` 统一维护工具、Skill、压缩、路由和校验中间件的构造顺序；Skill 来源消费归 `skill_runtime.py`，压缩实例构造归 `summarization/factory.py`。工厂不再额外尝试装入空 Skill 中间件。
+- `middleware_assembly.py` 统一维护工具、Skill、压缩、路由和校验中间件的构造顺序；Skill 上下文登记、冻结目录安装与来源变化消费归 `skill_context.py`，压缩实例构造归 `summarization/factory.py`。工厂不再额外尝试装入空 Skill 中间件。
 - `agent_factory.py` 直接构造 `CustomToolFactoryContext` 并调用 `custom_tools.py::build_custom_tools` 取得工具列表；工具构造器负责声明校验和逐工具 options 注入，不再包装单字段 Bundle。
 - `tool_node_adapter.py` 的 `AgentToolNode` 统一适配 LangGraph 工具节点：在执行边界应用审批覆盖，结果仍配对原模型调用，并保留完整媒体内容；`model_call_graph.py` 调用 `adapt_agent_tool_node` 装入该节点。工具确认决策归 `tool_confirmation_middleware.py`，事件消费只通过适配器读取已注册工具。
 - `tool_result_text.py` 统一提取工具输出文本和判定显式状态；Agent step 最终回答的匹配引号还原归 `execution_step/retry.py`。
