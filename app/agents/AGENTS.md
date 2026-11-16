@@ -9,7 +9,8 @@
 ```text
 app/agents/
 ├── [Agent 装配与模型调用]
-│   ├── agent_factory.py、workspace_agents.py、deep_agent_stack.py
+│   ├── agent_factory.py          配置与绑定选择、单代图编译
+│   ├── workspace_agents.py、deep_agent_stack.py
 │   ├── graph_binding.py、graph_tool_adapter.py、model_call_graph.py
 │   └── model_call_execution.py、sealed_assembly_dispatch.py
 ├── [Provider 配置、能力与路由]
@@ -68,3 +69,5 @@ app/agents/
 
 - `execution_checkpoint.py` 只适配活动执行的 LangGraph 输入通道、失效 Pregel task 清理和最终回复替代消息；执行准入与 canonical 持久化仍归注入的 Saver owner，不在这里创建准入或另存消息。
 - `manual_compaction_checkpoint.py` 是手动压缩的 LangGraph 检查点适配边界：读取快照并登记 `_force_cache_compaction` 请求。实际摘要生成归 `summarization/` 中间件，检查点持久化归注入的 checkpointer；不在此增加消息副本或另一套存储。
+
+- `agent_factory.py` 的 `build_configured_agent` 读取 Agent 配置并按冻结 selector 选择工厂；`build_deep_agent` 装配工具并构建单代图，无 Thread owner 的目录模式仅返回工具。`build_runtime_for_agent` 只构造 Provider 候选、路由中间件与指令生产者；运行依赖收集归 `runtime/agent_runtime.py`，图复用与释放归 Thread tracker。

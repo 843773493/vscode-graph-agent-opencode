@@ -22,7 +22,7 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
     skill_catalog = MagicMock()
 
     with patch(
-        "app.agents.agent_factory.create_runtime_deep_agent_for_session"
+        "app.agents.agent_factory.build_configured_agent"
     ) as create_runtime:
         build_session_agent_runtime(
             session_id="session_test",

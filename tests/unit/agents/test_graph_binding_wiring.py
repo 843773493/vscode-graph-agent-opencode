@@ -34,7 +34,7 @@ def test_runtime_layer_passes_graph_binding_store_through() -> None:
     skill_catalog = MagicMock()
 
     with patch(
-        "app.agents.agent_factory.create_runtime_deep_agent_for_session"
+        "app.agents.agent_factory.build_configured_agent"
     ) as create_runtime:
         build_session_agent_runtime(
             session_id="session_test",
@@ -70,7 +70,7 @@ def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> Non
     skill_catalog = MagicMock()
 
     with patch(
-        "app.agents.agent_factory.create_runtime_deep_agent_for_session"
+        "app.agents.agent_factory.build_configured_agent"
     ) as create_runtime:
         build_session_agent_runtime(
             session_id="session_test",

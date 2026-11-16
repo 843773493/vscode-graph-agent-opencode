@@ -241,9 +241,7 @@ def build_runtime_for_agent(
     }
 
 
-# 编译函数只装配一个 generation 的图与纯 thread 依赖；复用与释放归 tracker 所有。
-
-def create_my_deep_agent(
+def build_deep_agent(
     *,
     model: BaseChatModel | None,
     instruction_producers: Sequence[InstructionProducerSpec],
@@ -301,12 +299,13 @@ def create_my_deep_agent(
     include_team_tools: bool = False,
     owns_thread: bool = True,
 ) -> Any:
+    """装配工具与单代图；无 Thread owner 时仅返回工具，不构建执行图。"""
     if checkpointer is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 checkpointer")
+        raise RuntimeError("build_deep_agent 需要显式传入 checkpointer")
     if config_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 ConfigService")
+        raise RuntimeError("build_deep_agent 需要显式传入 ConfigService")
     if session_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionService")
+        raise RuntimeError("build_deep_agent 需要显式传入 SessionService")
 
     resolved_sender_agent_id = sender_agent_id or agent_id
     resolved_tool_denylist = set(tool_denylist or set())
@@ -328,25 +327,25 @@ def create_my_deep_agent(
     )
 
     if background_task_registry is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundTaskRegistry")
+        raise RuntimeError("build_deep_agent 需要显式传入 BackgroundTaskRegistry")
     if background_mailbox is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 BackgroundMailbox")
+        raise RuntimeError("build_deep_agent 需要显式传入 BackgroundMailbox")
     if job_event_bus is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 JobEventBus")
+        raise RuntimeError("build_deep_agent 需要显式传入 JobEventBus")
     if message_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 MessageService")
+        raise RuntimeError("build_deep_agent 需要显式传入 MessageService")
     if session_orchestrator is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionMessageOrchestrator")
+        raise RuntimeError("build_deep_agent 需要显式传入 SessionMessageOrchestrator")
     if session_subagent_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionSubagentService")
+        raise RuntimeError("build_deep_agent 需要显式传入 SessionSubagentService")
     if include_team_tools and team_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 TeamCoordinationService")
+        raise RuntimeError("build_deep_agent 需要显式传入 TeamCoordinationService")
     if job_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 JobService")
+        raise RuntimeError("build_deep_agent 需要显式传入 JobService")
     if session_context_query_service is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 SessionContextQueryService")
+        raise RuntimeError("build_deep_agent 需要显式传入 SessionContextQueryService")
     if workspace_session_context_client is None:
-        raise RuntimeError("create_my_deep_agent 需要显式传入 WorkspaceSessionContextClient")
+        raise RuntimeError("build_deep_agent 需要显式传入 WorkspaceSessionContextClient")
 
     workspace_root = workspace_root.resolve()
 
@@ -492,7 +491,7 @@ def create_my_deep_agent(
     else:
         if browser_resource_owner is None:
             raise RuntimeError(
-                "create_my_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
+                "build_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
             )
         visible_tools = build_default_tools(
             session_id=session_id,
@@ -922,19 +921,16 @@ def create_my_deep_agent(
         cache=None,
     )
 
-    if hasattr(agent, "with_config"):
-        runtime_agent = agent.with_config(
-            {
-                "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
-                "metadata": {
-                    "ls_integration": "deepagents",
-                    "versions": {"deepagents": "custom"},
-                    "lc_agent_name": name,
-                },
-            }
-        )
-    else:
-        runtime_agent = agent
+    runtime_agent = agent.with_config(
+        {
+            "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
+            "metadata": {
+                "ls_integration": "deepagents",
+                "versions": {"deepagents": "custom"},
+                "lc_agent_name": name,
+            },
+        }
+    )
 
     # 仅记录真实构建对象的进程内身份；compiled graph 不进入业务库或 trace。
     observe_phase_sync(thread_id, "agent.graph.compiled", details={
@@ -947,7 +943,7 @@ def create_my_deep_agent(
     return runtime_agent
 
 
-def create_runtime_deep_agent_for_session(
+def build_configured_agent(
     *,
     session_id: str,
     thread_id: str,
@@ -999,8 +995,9 @@ def create_runtime_deep_agent_for_session(
     text_mutations: WorkspaceTextMutationOwner,
     owns_thread: bool = True,
 ):
+    """读取 Agent 配置并按冻结 selector 装配；无 Thread owner 时仅返回工具。"""
     if config_service is None:
-        raise RuntimeError("create_runtime_deep_agent_for_session 需要显式传入 ConfigService")
+        raise RuntimeError("build_configured_agent 需要显式传入 ConfigService")
     service = config_service
     runtime = (
         build_runtime_for_agent(
@@ -1030,7 +1027,7 @@ def create_runtime_deep_agent_for_session(
     )
     if session_service is None:
         raise RuntimeError(
-            "create_runtime_deep_agent_for_session 需要显式传入 SessionService"
+            "build_configured_agent 需要显式传入 SessionService"
         )
 
     model = override_model if override_model is not None else (runtime["model"] if runtime is not None else None)

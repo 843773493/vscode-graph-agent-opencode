@@ -108,11 +108,11 @@ def load_session_agent_factory() -> Callable[..., Any]:
     """加载内置执行依赖，不构建模型、Thread 或配置中的自定义工具。"""
     from importlib import import_module
 
-    from app.agents.agent_factory import create_runtime_deep_agent_for_session
+    from app.agents.agent_factory import build_configured_agent
 
     # SDK 首次访问 chat/responses 会同步加载整套资源模块，统一在就绪前的 worker 中完成。
     import_module("openai.resources")
-    return create_runtime_deep_agent_for_session
+    return build_configured_agent
 
 
 def build_session_agent_runtime(
@@ -146,12 +146,12 @@ def build_session_agent_runtime(
     include_team_tools: bool = False,
     owns_thread: bool = True,
 ) -> Any:
-    create_runtime_deep_agent_for_session = load_session_agent_factory()
+    build_configured_agent = load_session_agent_factory()
     resolved_agent_id = config_service.resolve_agent_id(agent_id)
     checkpointer = dependency_provider.get_checkpointer()
     if checkpointer is None:
         raise RuntimeError("AgentRuntimeDependencyProvider 必须显式提供 checkpointer")
-    return create_runtime_deep_agent_for_session(
+    return build_configured_agent(
         session_id=session_id,
         thread_id=thread_id,
         agent_id=resolved_agent_id,

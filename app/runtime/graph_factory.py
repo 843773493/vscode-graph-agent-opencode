@@ -7,6 +7,6 @@ from typing import Any
 
 def build_deep_agent_graph(**kwargs: Any) -> object:
     """按注册的精确 selector 构建图，原样传递 thread generation 依赖。"""
-    from app.agents.agent_factory import create_my_deep_agent
+    from app.agents.agent_factory import build_deep_agent
 
-    return create_my_deep_agent(**kwargs)
+    return build_deep_agent(**kwargs)

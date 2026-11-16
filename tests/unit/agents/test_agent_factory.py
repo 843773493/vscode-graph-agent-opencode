@@ -108,7 +108,7 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
             wraps=agent_factory.create_extension_tool_invoker_tool,
         ) as create_invoker,
     ):
-        result = agent_factory.create_my_deep_agent(**required)
+        result = agent_factory.build_deep_agent(**required)
 
     assert result is configured_agent
     assert graph_observations == [{
@@ -202,7 +202,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     ):
         gateway_token = set_current_gateway_id("gateway_ed824856cf39565635b0e5a6bf8e08da")
         try:
-            tools = agent_factory.create_my_deep_agent(**required)
+            tools = agent_factory.build_deep_agent(**required)
         finally:
             reset_current_gateway_id(gateway_token)
 
