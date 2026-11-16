@@ -38,7 +38,6 @@ orchestration/
 ├── terminal_steering_service.py            Terminal 完成后的执行引导
 ├── workspace_observation.py               工作区观察流接线
 ├── workspace_runtime_lifecycle.py         工作区执行启动恢复、Job 准入排空和强制中断
-├── agent_stream_helpers.py                 Agent 流事件与工具结果的纯转换
 ├── communication/                         Session 间 Inbox admission 与冷观察
 ├── resource_activation/                    Execution/ModelCall 资源快照冻结
 └── team/                                   团队 fanout、恢复与 team_state 发布

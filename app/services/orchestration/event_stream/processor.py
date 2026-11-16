@@ -19,7 +19,7 @@ from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
-from app.agents.tool_result_text import tool_output_status
+from app.agents.tool_result_text import extract_tool_result_text, tool_output_status
 from app.core.failures import report_failure
 from app.core.job_context import set_active_tool_name, set_interruptible_phase
 from app.core.job_event_bus import EventType
@@ -42,11 +42,6 @@ from app.services.mapping.agent_content_mapper import (
     extract_agent_stream_content_parts,
 )
 from app.services.orchestration.activity_runtime import activity_failure_message
-from app.services.orchestration.agent_stream_helpers import (
-    extract_tool_result_text,
-    is_tracked_chat_model_event,
-    normalize_tool_args,
-)
 from app.services.orchestration.event_stream.contracts import (
     AgentEventSource,
     AgentEventStreamResult,
@@ -60,6 +55,7 @@ from app.services.orchestration.event_stream.identity import (
     validate_stream_event_identity,
 )
 from app.services.orchestration.event_stream.model_events import (
+    is_chat_model_run_name,
     materialize_model_content_parts,
     merge_model_content_part,
     stream_chunk_token_usage,
@@ -74,6 +70,7 @@ from app.services.orchestration.event_stream.tool_events import (
     activity_result_detail,
     build_tool_display_context,
     file_edits_from_text_mutation_result,
+    normalize_tool_args,
     resource_activity_binding_from_metadata,
     stored_edit_payload,
     text_mutation_has_file_effects,
@@ -340,7 +337,7 @@ async def process_agent_event_stream(
             is_model_event = (
                 isinstance(event_type, str)
                 and event_type.startswith("on_chat_model_")
-                and is_tracked_chat_model_event(name)
+                and is_chat_model_run_name(name)
             )
             is_model_failed_event = (
                 event_type == "on_custom_event" and name == MODEL_FAILED_CUSTOM_EVENT
@@ -389,7 +386,7 @@ async def process_agent_event_stream(
                     )
                 continue
 
-            if event_type == "on_chat_model_start" and is_tracked_chat_model_event(name):
+            if event_type == "on_chat_model_start" and is_chat_model_run_name(name):
                 latest_model_part_ids_in_order.clear()
                 latest_model_parts_by_id.clear()
                 latest_model_visible_text_seen = False
@@ -428,7 +425,7 @@ async def process_agent_event_stream(
                 )
                 continue
 
-            if event_type == "on_chat_model_stream" and is_tracked_chat_model_event(name):
+            if event_type == "on_chat_model_stream" and is_chat_model_run_name(name):
                 chunk = data.get("chunk")
                 if chunk is None:
                     continue
@@ -451,7 +448,7 @@ async def process_agent_event_stream(
 
                 continue
 
-            if event_type == "on_chat_model_end" and is_tracked_chat_model_event(name):
+            if event_type == "on_chat_model_end" and is_chat_model_run_name(name):
                 model_run_id = event_run_id(event)
                 is_summary_candidate = message_stream_runtime is not None and message_stream_runtime.is_summary_candidate(model_run_id)
                 if not is_summary_candidate and not latest_model_visible_text_seen:

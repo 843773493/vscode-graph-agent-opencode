@@ -20,13 +20,19 @@ from app.agents.tool_result_text import declared_tool_payload_status
 from app.services.infrastructure.workspace_files.text_journal import (
     load_text_mutation_snapshots,
 )
-from app.services.orchestration.agent_stream_helpers import (
-    normalize_tool_args,
-)
 from app.services.orchestration.event_stream.contracts import ToolEventDisplayContext
 
 FILE_EDIT_TOOL_NAMES = {"write_file", "edit_file", "apply_patch"}
 SUBAGENT_TOOL_NAMES = frozenset({"task"})
+
+
+def normalize_tool_args(value: object) -> dict[str, Any]:
+    """将事件中的工具输入转为展示字典，工具 schema 校验由执行入口负责。"""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    return {"input": value}
 
 
 @dataclass(frozen=True, slots=True)

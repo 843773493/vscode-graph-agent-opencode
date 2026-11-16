@@ -32,8 +32,8 @@ from app.agents.upstream_request_trace import (
 )
 from app.core.failures import is_provider_failure
 from app.runtime.provider_model import build_model_from_provider
-from app.services.orchestration.agent_stream_helpers import (
-    is_tracked_chat_model_event,
+from app.services.orchestration.event_stream.model_events import (
+    is_chat_model_run_name,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 
@@ -379,7 +379,7 @@ def test_responses_mode_uses_encrypted_reasoning_and_stable_cache_key():
     )
     assert isinstance(model, BoxteamOpenAIResponsesModel)
     assert isinstance(model, BoxteamLiteLLMChatModel)
-    assert is_tracked_chat_model_event(type(model).__name__)
+    assert is_chat_model_run_name(type(model).__name__)
     assert model.responses_store is False
     assert model.responses_include == ["reasoning.encrypted_content"]
     assert model._client_params["prompt_cache_key"] == "session-123"

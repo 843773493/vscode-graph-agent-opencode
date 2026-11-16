@@ -13,6 +13,14 @@ def serialize_tool_value(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def extract_tool_result_text(output: object) -> str:
+    """提取 ToolMessage 正文；原始工具值沿同一序列化规则转为文本。"""
+    content = getattr(output, "content", None)
+    if content is not None:
+        return serialize_tool_value(content)
+    return serialize_tool_value(output)
+
+
 def declared_tool_payload_status(parsed: Mapping[str, object]) -> Literal["success", "error"] | None:
     """解析工具返回体中显式声明的执行状态，未声明时返回 None。
 
@@ -36,8 +44,7 @@ def tool_output_status(output: object) -> Literal["success", "error"]:
     status = getattr(output, "status", None)
     if status == "error":
         return "error"
-    content = getattr(output, "content", None)
-    text = serialize_tool_value(content if content is not None else output).strip()
+    text = extract_tool_result_text(output).strip()
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:

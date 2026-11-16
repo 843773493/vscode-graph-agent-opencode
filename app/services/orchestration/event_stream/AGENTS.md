@@ -5,7 +5,7 @@
 # 可修改内容
 
 - contracts 定义事件源/结果/异常，identity 校验 session/job，reader 管理迭代与取消。
-- model_events 累计已规范化的模型事件；tool_events 协调工具事件的执行状态和可信引用。
+- model_events 识别 LangChain 模型 run 名称并累计模型内容与用量；tool_events 归一化事件中的工具输入，协调执行状态和可信引用。工具输出的文本提取与状态判定共用 `app/agents/tool_result_text.py`。
 - processor 按事件推进流程，只调用现有 writer、runtime 和业务端口。
 - 文件工具回执经 tool_events 转为 `ObservedFileEdit`，显式携带 owner 观察到的 before/after；processor 将其交给 Changes recorder，不把整次编辑命名为 before 快照，也不重读当前磁盘推断后件。
 

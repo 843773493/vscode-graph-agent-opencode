@@ -5,7 +5,7 @@
 # 可修改内容
 
 - ports 定义显式执行依赖与 Agent factory；runner 拥有单次执行的流程和清理。
-- retry 决定继续/停止时机；reminders 保留对应控制策略；failures 协调终态。
+- retry 决定继续/停止时机，并仅在最终回答去除引号后精确匹配最后工具文本时还原工具原文；reminders 保留对应控制策略；failures 协调终态。
 - model_call 与 stream_bindings 只调用既有 Saver/event 端口。
 - approval 从原图 checkpoint 投影待确认调用，经原控制 inbox 提交决定；只持有活动等待句柄，不另建审批存储。
 

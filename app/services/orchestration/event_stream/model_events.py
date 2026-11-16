@@ -1,4 +1,4 @@
-"""累计当前模型事件的临时 content parts 与 token usage，不创建 durable item。"""
+"""识别模型 run，累计当前模型事件的临时 content parts 与 token usage。"""
 
 from __future__ import annotations
 
@@ -15,6 +15,18 @@ from app.services.mapping.agent_content_mapper import (
 )
 
 _TEXT_CHUNKS_KEY = "_stream_text_chunks"
+_CHAT_MODEL_RUN_NAMES = {
+    "ChatOpenAI",
+    "BoxteamLiteLLMChatModel",
+    "BoxteamOpenAIResponsesModel",
+    "ChatLiteLLM",
+    "ChatLiteLLMRouter",
+}
+
+
+def is_chat_model_run_name(name: str) -> bool:
+    """按 LangChain 事件的 name 字段识别需要消费的模型 run。"""
+    return name in _CHAT_MODEL_RUN_NAMES
 
 
 def _usage_token_count(
