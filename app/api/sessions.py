@@ -134,14 +134,12 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.fork.source_capture import (
     IncompleteForkSourceCaptureError,
 )
+from app.services.infrastructure.session_trace.store import TraceEventStore
+from app.services.infrastructure.session_trace.trace_cursor import TraceCursorGoneError
 from app.services.infrastructure.session_trace.trace_page import (
     TracePageBudgetExceededError,
 )
 from app.services.infrastructure.session_trace.trace_search import TraceSearchError
-from app.services.infrastructure.trace_event_store import (
-    TraceCursorGoneError,
-    TraceEventStore,
-)
 from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
 from app.services.orchestration.persistent_tasks.runtime import PersistentTaskRuntime
 from app.services.orchestration.thread_residency import ThreadResidencyTracker

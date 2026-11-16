@@ -9,7 +9,7 @@ from app.core.workspace_identity import read_workspace_id
 from app.schemas.internal_v2.llm_request_log import LLMRequestLogReferenceDTO
 from app.schemas.internal_v2.trace_search import TraceReferenceDTO
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.support.session_catalog_owner import fixture_catalog_scope
 
 

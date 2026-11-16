@@ -31,7 +31,7 @@ from app.services.business.session_service import SessionService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.session_navigation.catalog_intents import (

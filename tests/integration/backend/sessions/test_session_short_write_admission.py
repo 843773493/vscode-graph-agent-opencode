@@ -53,7 +53,7 @@ from app.services.infrastructure.node_debug.session.session_store import (
     NodeDebugSessionStore,
 )
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
 from tests.harness.python.run_context import TestRunContext

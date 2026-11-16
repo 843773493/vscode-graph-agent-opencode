@@ -38,7 +38,7 @@ from app.gateway.routes.workspaces_managed import router as managed_workspaces_r
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
 from app.gateway.runtime.port_forwarding import SshPortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.support.e2e_control.harness import E2EProcessLease

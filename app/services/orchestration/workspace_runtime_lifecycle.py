@@ -28,7 +28,7 @@ from app.schemas.internal_v2.runtime import (
 )
 from app.services.business.job.service import JobService, JobState
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 
 
 class WorkspaceRuntimeLifecycleService:

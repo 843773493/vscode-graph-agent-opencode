@@ -16,11 +16,9 @@ from app.schemas.event import (
     JobCreatedEvent,
     JobCreatedPayload,
 )
+from app.services.infrastructure.session_trace.trace_cursor import TraceCursorGoneError
 from app.services.infrastructure.session_trace.trace_page import (
     TracePageBudgetExceededError,
-)
-from app.services.infrastructure.trace_event_store import (
-    TraceCursorGoneError,
 )
 
 
@@ -368,7 +366,7 @@ async def test_live_trace_orders_external_commits_and_recovers_after_overflow(tr
     from app.services.infrastructure.events.event_channel_service import (
         EventChannelOverflowError,
     )
-    from app.services.infrastructure.trace_event_store import TraceEventStore
+    from app.services.infrastructure.session_trace.store import TraceEventStore
 
     session_id = "ses_019c5c7e3adc77a3b10ccaa504be3e74"
     store, _ = trace_event_store_factory(session_id)

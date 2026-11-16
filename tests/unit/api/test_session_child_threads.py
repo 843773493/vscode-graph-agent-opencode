@@ -43,7 +43,7 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.mapping.itemized.thread_seed import frozen_thread_seed
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,

@@ -18,7 +18,6 @@ from app.services.infrastructure.events.event_channel_service import (
     channel_name,
 )
 from app.services.infrastructure.session_trace.trace_cursor import (
-    TraceCursorGoneError,
     TraceStreamRecord,
     encode_trace_cursor,
     events_after_cursor,
@@ -46,7 +45,7 @@ from app.services.infrastructure.session_trace.trace_stream import (
     stream_trace_records,
 )
 
-__all__ = ["TraceCursorGoneError", "TraceEventStore"]
+__all__ = ["TraceEventStore"]
 TRACE_STORE_LOCK_SHARDS = 64
 
 

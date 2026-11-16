@@ -36,7 +36,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     SkillCatalogBinding,
     _revision,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 from tests.unit.services.infrastructure.rollout_context.conftest import SourceSealCase
 

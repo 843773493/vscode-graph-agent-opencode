@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 
 
 @pytest.fixture

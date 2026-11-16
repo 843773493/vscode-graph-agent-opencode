@@ -10,7 +10,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.schemas.event import JobStartedEvent, JobStartedPayload
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.ports import e2e_port_block_for_file
 from tests.support.processes.gateway import (

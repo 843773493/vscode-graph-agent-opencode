@@ -34,7 +34,7 @@ from app.services.business.session_navigation.operations_service import (
 from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.session_navigation.catalog_intents import create_catalog_intent
 from tests.unit.core.catalog_workspace_helper import (

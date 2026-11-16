@@ -53,7 +53,7 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.gateway_communication_client import (
     GatewayCommunicationClient,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.communication.inbox_admission_worker import (
     InboxAdmissionTarget,
     InboxExecutionBinding,

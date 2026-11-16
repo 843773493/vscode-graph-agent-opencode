@@ -33,7 +33,7 @@ from app.services.infrastructure.pending_request_store import PendingRequestStor
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from tests.harness.python.run_context import TestRunContext
 from tests.support.message_service import build_message_service
 from tests.support.workspaces import prepare_test_workspace

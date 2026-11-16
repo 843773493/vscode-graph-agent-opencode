@@ -23,7 +23,7 @@ from app.services.infrastructure.pending_request_store import PendingRequestStor
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.workspace_runtime_lifecycle import (
     WorkspaceRuntimeLifecycleService,
 )

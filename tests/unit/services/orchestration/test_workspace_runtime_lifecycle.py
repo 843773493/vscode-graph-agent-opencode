@@ -35,7 +35,7 @@ from app.services.business.job.service import (
     JobState,
 )
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.workspace_runtime_lifecycle import (
     WorkspaceRuntimeLifecycleService,
 )

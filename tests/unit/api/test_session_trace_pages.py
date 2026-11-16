@@ -24,8 +24,8 @@ from app.schemas.event import (
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.session_trace.trace_database import TraceDatabase
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,

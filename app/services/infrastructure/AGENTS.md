@@ -4,7 +4,7 @@
 
 ## 模块职责树
 
-下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 25 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
+下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 23 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
 
 ```text
 infrastructure/
@@ -47,10 +47,8 @@ infrastructure/
     │   ├── tool_output_store.py
     │   ├── tool_selection_store.py
     │   └── tool_service.py
-    ├── 日志与 trace
-    │   ├── llm_request_log_service.py
-    │   ├── trace_event_recorder.py
-    │   └── trace_event_store.py
+    ├── 模型请求日志
+    │   └── llm_request_log_service.py
     ├── 前端 HTML 快照
     │   └── html_snapshot_store.py
     ├── 工作区文件与服务装配

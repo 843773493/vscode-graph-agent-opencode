@@ -16,8 +16,8 @@ from app.schemas.event import (
     JobFailedEvent,
     JobFailedPayload,
 )
-from app.services.infrastructure.trace_event_recorder import TraceEventRecorder
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.recorder import TraceEventRecorder
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.execution_step.stream_bindings import StepEventPublisher
 from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.job_thread_fixture import job_fixture_thread_id

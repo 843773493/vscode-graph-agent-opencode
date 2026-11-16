@@ -4,9 +4,21 @@
 对话 Turn 的 rollout 历史读取和游标异常由同层 `rollout_history/` 负责；展示预算由
 `app/services/mapping/itemized/history_turns/projection.py` 负责。
 
+```text
+session_trace/
+├── recorder.py        JobEventBus 的持久监听与会话路由回收
+├── store.py           TraceEventStore，统一追加、查询和订阅入口
+├── trace_database.py  SQLite 事务、事件与 Thread 索引
+├── trace_cursor.py    游标绑定、校验与 TraceCursorGoneError
+├── trace_page.py      有界诊断分页及事件解析
+├── trace_stream.py    历史补读、实时交付与恢复解析
+├── trace_search.py    正文搜索、预算与精确定位
+└── migrations/        按版本有序的 SQL 升级
+```
+
 ## 可修改内容
 
-- 可以修改 Trace SQLite、事件分页、传输游标、正文搜索和补读实现。
+- 可以修改事件录制、存储入口、Trace SQLite、事件分页、传输游标、正文搜索和补读实现。
 - 可以增加针对崩溃恢复、分页稳定性和会话路径边界的聚焦模块。
 
 ## 不可修改内容

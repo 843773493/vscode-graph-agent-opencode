@@ -58,8 +58,8 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.team.store import TeamStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.owner_thread_creation_factory import (
     OwnerThreadCreationFactory,
 )
@@ -87,7 +87,7 @@ from app.core.session_control_store import SessionControlStore
 from app.services.business.session_service import SessionService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.rollout_context.checkpoint.saver import RolloutCheckpointSaver
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.owner_thread_creation_factory import OwnerThreadCreationFactory
 from app.services.orchestration.team.fanout_service import TeamFanoutService
 from tests.support.session_catalog_owner import fixture_catalog_scope

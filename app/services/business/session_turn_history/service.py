@@ -24,8 +24,8 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_history.message_search import (
     MessageSearchBudget,
 )
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.session_trace.trace_cursor import bind_trace_cursor
-from app.services.infrastructure.trace_event_store import TraceEventStore
 
 _BOOTSTRAP_ACTIVE_JOB_LIMIT = 8
 

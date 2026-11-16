@@ -164,14 +164,14 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.session_changes_store import SessionChangesStore
+from app.services.infrastructure.session_trace.recorder import TraceEventRecorder
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.team.store import TeamStore
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
 from app.services.infrastructure.tool_catalog_service import ToolCatalogService
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 from app.services.infrastructure.tool_service import ToolService
-from app.services.infrastructure.trace_event_recorder import TraceEventRecorder
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )

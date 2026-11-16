@@ -70,7 +70,7 @@ from app.services.infrastructure.gateway_session_context_client import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.communication.service import SessionCommunicationService
 from tests.support.api_helpers import checkpoint_fixture
 from tests.support.ports import integration_port_block_for_file

@@ -20,11 +20,9 @@ from app.schemas.event import (
     TextDeltaPayload,
 )
 from app.services.infrastructure.session_trace.trace_cursor import (
+    TraceCursorGoneError,
     bind_trace_cursor,
     unbind_trace_cursor,
-)
-from app.services.infrastructure.trace_event_store import (
-    TraceCursorGoneError,
 )
 
 

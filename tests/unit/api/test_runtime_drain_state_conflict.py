@@ -30,7 +30,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.trace_middleware import TraceMiddleware
 from app.services.business.job.service import JobService, JobState
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.workspace_runtime_lifecycle import (
     WorkspaceRuntimeLifecycleService,
 )

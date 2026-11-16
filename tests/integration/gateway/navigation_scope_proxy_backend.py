@@ -33,7 +33,7 @@ from app.services.business.session_navigation.queue_store import (
 from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 
 
 class _RouteCatalogService(SessionCatalogService):

@@ -52,7 +52,7 @@ from app.services.infrastructure.persistent_tasks.store import PersistentTaskSto
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.orchestration.persistent_tasks.conditions import (
     TaskCheckError,
     condition_input,

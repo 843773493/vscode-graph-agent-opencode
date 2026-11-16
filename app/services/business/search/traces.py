@@ -19,12 +19,12 @@ from app.services.business.session_navigation.read_service import (
     SessionCatalogReadService,
 )
 from app.services.business.session_service import SessionService
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.session_trace.trace_search import (
     TraceSearchBudget,
     TraceSearchError,
     TraceSearchPosition,
 )
-from app.services.infrastructure.trace_event_store import TraceEventStore
 
 MAX_SCANNED_SESSIONS = 64
 

@@ -66,8 +66,8 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.tool_service import ToolService
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )

@@ -26,7 +26,7 @@ from app.services.business.session_turn_history.workspace_search import (
     search_workspace_messages,
 )
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 
 
 def register_navigation_search(

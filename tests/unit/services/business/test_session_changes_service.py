@@ -23,7 +23,7 @@ from app.services.business.session_changes.service import SessionChangesService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.infrastructure.session_trace.store import TraceEventStore
 
 
 def _uri(workspace_id: str, path: str) -> str:

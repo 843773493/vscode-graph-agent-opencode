@@ -111,8 +111,8 @@ from app.services.infrastructure.rollout_context.runtime.detail_manifest import 
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
 )
+from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.resource_activation import ResourceActivationCoordinator
