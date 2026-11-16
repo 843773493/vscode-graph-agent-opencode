@@ -22,7 +22,7 @@ from app.services.business.persistent_task_service import PersistentTaskService
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_changes_service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
-from app.services.business.session_context_query_service import (
+from app.services.business.session_context_query.workspace import (
     SessionContextQueryService,
 )
 from app.services.business.session_generation import SessionGenerationService

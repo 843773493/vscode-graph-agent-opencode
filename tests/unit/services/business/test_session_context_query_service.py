@@ -41,17 +41,19 @@ from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,
     SessionContextSearchRequest,
 )
-from app.services.business.session_context_query_service import (
-    SessionContextQueryService,
-)
-from app.services.business.session_context_resource import (
-    SessionContextCursorCodec,
-    context_assembly_identity,
+from app.services.business.session_context_query.pagination import (
+    encode_session_context_cursor,
     session_context_read_operation,
+)
+from app.services.business.session_context_query.resources import (
+    context_assembly_identity,
     session_resource_identity,
     session_resource_uri,
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
+)
+from app.services.business.session_context_query.workspace import (
+    SessionContextQueryService,
 )
 
 BACKEND_WORKSPACE_ID = "00000000-0000-4000-8000-000000000001"
@@ -67,7 +69,7 @@ def _resign_cursor_offset(cursor: str, offset: int) -> str:
     """保留原 cursor 的签名身份，只改写 offset，用于伪造越界游标。"""
     padded = cursor + "=" * (-len(cursor) % 4)
     payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-    return SessionContextCursorCodec.encode(
+    return encode_session_context_cursor(
         resource_identity=payload["resource_identity"],
         uri=payload["uri"],
         scope=payload["scope"],
@@ -992,7 +994,7 @@ async def test_read_cursor_offset_beyond_items_is_rejected(
     assert len(first.items) == 9
     assert first.next_cursor is None
 
-    beyond = SessionContextCursorCodec.encode(
+    beyond = encode_session_context_cursor(
         resource_identity=request.resource_identity,
         uri=request.uri,
         scope=request.scope,
@@ -1013,7 +1015,7 @@ async def test_read_cursor_offset_beyond_items_is_rejected(
     tail = await service.read_context(
         request.model_copy(
             update={
-                "cursor": SessionContextCursorCodec.encode(
+                "cursor": encode_session_context_cursor(
                     resource_identity=request.resource_identity,
                     uri=request.uri,
                     scope=request.scope,

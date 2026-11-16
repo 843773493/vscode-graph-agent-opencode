@@ -27,7 +27,7 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
     SessionContextSearchResultDTO,
 )
-from app.services.business.session_context_query_service import (
+from app.services.business.session_context_query.workspace import (
     SessionContextQueryService,
 )
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (

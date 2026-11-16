@@ -46,7 +46,7 @@ from app.gateway.federation.store import (
     federation_control_database,
 )
 from app.gateway.runtime.process_ports import allocate_local_port_in_range
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,
     session_resource_identity,

@@ -11,12 +11,12 @@ from app.services.business.search.service import (
     SearchContractError,
     WorkspaceSearchService,
 )
-from app.services.business.session_context_query_service import (
-    SessionContextQueryService,
-)
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
+)
+from app.services.business.session_context_query.workspace import (
+    SessionContextQueryService,
 )
 
 

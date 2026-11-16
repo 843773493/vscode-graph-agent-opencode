@@ -17,7 +17,7 @@ from app.agents import agent_factory
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.turn import TurnHistoryPageDTO
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_uri,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (

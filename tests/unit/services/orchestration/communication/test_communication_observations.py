@@ -37,8 +37,10 @@ from app.services.business.communication.addresses import (
     ResolvedMainTargetBinding,
 )
 from app.services.business.communication.wait import WaitSelector
-from app.services.business.session_context_projection import SessionContextReadSnapshot
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.projection import (
+    SessionContextReadSnapshot,
+)
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
 )

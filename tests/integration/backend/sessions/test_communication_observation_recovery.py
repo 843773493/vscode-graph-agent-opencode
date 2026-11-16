@@ -16,7 +16,7 @@ import pytest
 from app.core.session_control_primitives import CONTROL_DATABASE_NAME
 from app.core.session_control_store import SessionControlStore
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
 )

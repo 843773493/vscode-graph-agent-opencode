@@ -15,13 +15,13 @@ from app.abstractions.session_context import (
 from app.abstractions.session_read import SessionListReaderProtocol
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import SessionContextReadRequest
-from app.services.business.session_context_query_service import (
-    SessionContextQueryService,
-)
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     context_assembly_identity,
     session_resource_identity,
     session_resource_uri,
+)
+from app.services.business.session_context_query.workspace import (
+    SessionContextQueryService,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,

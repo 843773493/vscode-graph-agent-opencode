@@ -22,7 +22,7 @@ from app.core.session_control_thread_catalog.search import (
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.search import SearchProviderCapabilityDTO
 from app.services.business.search.service import WorkspaceSearchService
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )

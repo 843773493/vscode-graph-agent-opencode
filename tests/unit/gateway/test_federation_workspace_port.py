@@ -34,7 +34,7 @@ from app.gateway.federation.workspace_port import (
     WorkspaceCatalogPort,
     WorkspaceSessionMainPort,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
 )

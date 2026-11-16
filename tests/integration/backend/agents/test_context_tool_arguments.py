@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from app.domain.itemized.serialization import normalize_wire_request
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )

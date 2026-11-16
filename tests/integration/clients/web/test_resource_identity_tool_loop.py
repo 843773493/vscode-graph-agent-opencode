@@ -13,7 +13,7 @@ from typing import cast
 import httpx
 import pytest
 
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )

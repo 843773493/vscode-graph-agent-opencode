@@ -18,7 +18,7 @@ from app.core.path_utils import get_session_path_resolver
 from app.gateway.credentials import load_or_create_gateway_id
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
 from app.services.business.session_context_fork_service import SessionContextForkService
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,

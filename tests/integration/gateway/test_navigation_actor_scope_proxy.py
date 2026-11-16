@@ -17,7 +17,7 @@ from app.core.identifier import create_prefixed_id
 from app.core.workspace_identity import read_workspace_id
 from app.gateway.credentials import FederationCredential, FederationCredentialStore
 from app.gateway.proxy_upstream import load_proxy_gateway_id
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )

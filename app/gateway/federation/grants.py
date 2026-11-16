@@ -96,7 +96,7 @@ class ContextGrantTarget:
     scope: str
 
     def __post_init__(self) -> None:
-        from app.services.business.session_context_resource import (
+        from app.services.business.session_context_query.resources import (
             gateway_session_inventory_identity,
             parse_session_context_ref,
             session_resource_identity,

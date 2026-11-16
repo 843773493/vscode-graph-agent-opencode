@@ -47,11 +47,13 @@ from app.schemas.search_federation import (
     GatewayContextSearchRequest,
     GatewayContextSearchResultDTO,
 )
-from app.services.business.gateway_context_query_service import (
+from app.services.business.session_context_query.gateway import (
     GatewayContextQueryService,
     require_gateway_inventory,
 )
-from app.services.business.session_context_resource import parse_session_context_ref
+from app.services.business.session_context_query.resources import (
+    parse_session_context_ref,
+)
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     RESOURCE_URI_RESOLVE_REASON_CODES,
 )

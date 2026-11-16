@@ -140,7 +140,7 @@ from app.schemas.internal_v2.turn import TurnHistoryLoadRequest, TurnHistoryPage
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
 from app.services.business.session_context_fork_service import SessionContextForkService
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_uri,
 )
 from app.services.business.session_service import SessionService

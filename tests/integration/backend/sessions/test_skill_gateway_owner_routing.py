@@ -16,7 +16,7 @@ import pytest
 
 from app.core.path_utils import get_session_path_resolver
 from app.core.resource_uri import parse_resource_uri, resource_display_uri
-from app.services.business.session_context_resource import session_resource_uri
+from app.services.business.session_context_query.resources import session_resource_uri
 from app.testing.model_stream import build_cassette, chat_completion_frames
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.agents.test_resource_navigation import _tracking_counts

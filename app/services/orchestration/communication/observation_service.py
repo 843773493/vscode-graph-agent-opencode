@@ -50,15 +50,19 @@ from app.services.business.communication.wait import (
     remaining_wait_budget_seconds,
     resolve_wait_status,
 )
-from app.services.business.session_context_projection import SessionContextReadSnapshot
-from app.services.business.session_context_query_service import (
-    SessionContextQueryService,
+from app.services.business.session_context_query.pagination import (
+    set_exact_returned_chars,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.projection import (
+    SessionContextReadSnapshot,
+)
+from app.services.business.session_context_query.resources import (
     parse_session_context_ref,
     session_resource_identity,
     session_resource_uri,
-    set_exact_returned_chars,
+)
+from app.services.business.session_context_query.workspace import (
+    SessionContextQueryService,
 )
 from app.services.orchestration.communication.observation_cursor import (
     _decode_observation_cursor,

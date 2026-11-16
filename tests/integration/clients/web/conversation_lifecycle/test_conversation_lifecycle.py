@@ -23,7 +23,7 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.domain.itemized.hashing import sha256_jcs
 from app.gateway.runtime.process_lifecycle import ManagedProcess
-from app.services.business.session_context_resource import session_resource_uri
+from app.services.business.session_context_query.resources import session_resource_uri
 from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414 - 正式工作台构建装具

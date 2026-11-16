@@ -12,11 +12,11 @@ from app.schemas.internal_v2.session_context import (
     SessionContextItemDTO,
     SessionContextReadRequest,
 )
-from app.services.business.session_context_projection import (
+from app.services.business.session_context_query.projection import (
     SessionContextReadSnapshot,
     project_record_items,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     ParsedSessionContextResource,
     context_assembly_identity,
 )

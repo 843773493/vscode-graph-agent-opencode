@@ -17,7 +17,7 @@ from app.domain.itemized.identity.refs import ContextRef, selection_ref_identity
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     context_assembly_identity,
     session_resource_uri,
 )

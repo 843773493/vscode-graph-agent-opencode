@@ -36,7 +36,7 @@ from app.schemas.search_federation import (
     FederatedSearchSourceDTO,
     FederatedSearchSummaryDTO,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     parse_session_context_ref,
     session_resource_identity,
     workspace_session_inventory_identity,

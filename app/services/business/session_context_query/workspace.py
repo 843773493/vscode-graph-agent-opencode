@@ -30,10 +30,18 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchResultDTO,
     SessionContextSearchSource,
 )
-from app.services.business.session_context_assembly_query_service import (
+from app.services.business.session_context_query.assembly import (
     SessionContextAssemblyQueryService,
 )
-from app.services.business.session_context_projection import (
+from app.services.business.session_context_query.pagination import (
+    decode_session_context_cursor,
+    encode_session_context_cursor,
+    exact_json_result_chars,
+    require_cursor_offset_in_range,
+    require_session_context_revision,
+    set_exact_returned_chars,
+)
+from app.services.business.session_context_query.projection import (
     SessionContextReadSnapshot,
     context_revision,
     is_effective_user,
@@ -43,16 +51,11 @@ from app.services.business.session_context_projection import (
     tool_summary,
     visible_text,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     ParsedSessionContextResource,
-    SessionContextCursorCodec,
-    exact_json_result_chars,
     parse_session_context_ref,
-    require_cursor_offset_in_range,
-    require_session_context_revision,
     session_resource_identity,
     session_resource_uri,
-    set_exact_returned_chars,
     validate_session_context_read_view,
     workspace_session_inventory_identity,
 )
@@ -66,7 +69,7 @@ from app.services.infrastructure.resource_platform.virtual_resources.values impo
 
 
 @dataclass(frozen=True, slots=True)
-class _SessionContextSnapshot:
+class _SessionContextRecords:
     resource_identity: ResourceIdentity
     uri: str
     scope: str
@@ -164,49 +167,49 @@ class SessionContextQueryService:
             if resource.kind == "workspace_sessions":
                 return await self._freeze_inventory(resource)
 
-            snapshot = await self._load_snapshot(resource, await self._load_session(resource))
+            context_records = await self._load_context_records(resource, await self._load_session(resource))
             if request.record_index is not None:
-                items = self._selected_record_items(snapshot, resource, request)
+                items = self._selected_record_items(context_records, resource, request)
             elif request.view == "information":
-                items = [await self._information_item(snapshot)]
+                items = [await self._information_item(context_records)]
             elif request.view == "overview":
-                items = await self._overview_items(snapshot, request)
+                items = await self._overview_items(context_records, request)
             else:
                 items = project_record_items(
                     resource_identity=resource.resource_identity,
                     uri=resource.uri,
                     scope=resource.scope,
-                    records=snapshot.records,
+                    records=context_records.records,
                     include=set(request.include),
                     messages_only=request.view == "messages",
                 )
             return SessionContextReadSnapshot(
-                revision=snapshot.revision,
+                revision=context_records.revision,
                 items=items,
-                compacted=snapshot.compacted,
-                compaction_cutoff=snapshot.compaction_cutoff,
-                raw_message_count=snapshot.raw_message_count,
-                effective_record_count=len(snapshot.records),
+                compacted=context_records.compacted,
+                compaction_cutoff=context_records.compaction_cutoff,
+                raw_message_count=context_records.raw_message_count,
+                effective_record_count=len(context_records.records),
             )
 
     def _selected_record_items(
         self,
-        snapshot: _SessionContextSnapshot,
+        context_records: _SessionContextRecords,
         resource: ParsedSessionContextResource,
         request: SessionContextReadRequest,
     ) -> list[SessionContextItemDTO]:
         record_index = request.record_index
         if record_index is None:
             raise RuntimeError("record_index 结构化选择缺失")
-        if record_index >= len(snapshot.records):
+        if record_index >= len(context_records.records):
             raise ValueError(
-                f"record_index 越界: index={record_index}, total={len(snapshot.records)}"
+                f"record_index 越界: index={record_index}, total={len(context_records.records)}"
             )
         return project_record_items(
             resource_identity=resource.resource_identity,
             uri=resource.uri,
             scope=resource.scope,
-            records=snapshot.records,
+            records=context_records.records,
             include=set(request.include),
             messages_only=False,
             indexes=[record_index],
@@ -245,7 +248,7 @@ class SessionContextQueryService:
                         sort_keys=True,
                     ).encode("utf-8")
                 ).hexdigest()
-                offset, char_offset = SessionContextCursorCodec.decode(
+                offset, char_offset = decode_session_context_cursor(
                     request.cursor,
                     resource_identity=resource.resource_identity,
                     uri=resource.uri,
@@ -383,7 +386,7 @@ class SessionContextQueryService:
         has_more = offset + returned_match_count < total_matches
         next_cursor = None
         if has_more:
-            next_cursor = SessionContextCursorCodec.encode(
+            next_cursor = encode_session_context_cursor(
                 resource_identity=request.resource_identity,
                 uri=request.uri,
                 scope=request.scope,
@@ -408,22 +411,22 @@ class SessionContextQueryService:
 
     async def _overview_items(
         self,
-        snapshot: _SessionContextSnapshot,
+        context_records: _SessionContextRecords,
         request: SessionContextReadRequest,
     ) -> list[SessionContextItemDTO]:
-        session = await self._session_lookup.get(snapshot.session_id)
+        session = await self._session_lookup.get(context_records.session_id)
         items = [
             SessionContextItemDTO(
                 kind="session",
-                resource_identity=snapshot.resource_identity,
-                uri=snapshot.uri,
-                scope=snapshot.scope,
+                resource_identity=context_records.resource_identity,
+                uri=context_records.uri,
+                scope=context_records.scope,
                 data=public_session_data(session),
             )
         ]
         user_indexes = [
             index
-            for index, record in enumerate(snapshot.records)
+            for index, record in enumerate(context_records.records)
             if is_effective_user(record)
         ]
         selected_indexes: list[int] = []
@@ -435,7 +438,7 @@ class SessionContextQueryService:
                 if len(user_indexes) >= request.recent_rounds
                 else user_indexes[0]
             )
-            selected_indexes.extend(range(recent_start, len(snapshot.records)))
+            selected_indexes.extend(range(recent_start, len(context_records.records)))
 
         seen: set[int] = set()
         unique_indexes: list[int] = []
@@ -444,10 +447,10 @@ class SessionContextQueryService:
                 seen.add(index)
                 unique_indexes.append(index)
         record_items = project_record_items(
-            resource_identity=snapshot.resource_identity,
-            uri=snapshot.uri,
-            scope=snapshot.scope,
-            records=snapshot.records,
+            resource_identity=context_records.resource_identity,
+            uri=context_records.uri,
+            scope=context_records.scope,
+            records=context_records.records,
             include=set(request.include),
             messages_only=True,
             indexes=unique_indexes,
@@ -455,14 +458,14 @@ class SessionContextQueryService:
         items.extend(record_items)
         if self._information_source is not None:
             information = await self._information_source.get_information(
-                snapshot.session_id
+                context_records.session_id
             )
             items.append(
                 SessionContextItemDTO(
                     kind="execution",
-                    resource_identity=snapshot.resource_identity,
-                    uri=snapshot.uri,
-                    scope=snapshot.scope,
+                    resource_identity=context_records.resource_identity,
+                    uri=context_records.uri,
+                    scope=context_records.scope,
                     data=information.execution.model_dump(mode="json"),
                 )
             )
@@ -470,20 +473,20 @@ class SessionContextQueryService:
 
     async def _information_item(
         self,
-        snapshot: _SessionContextSnapshot,
+        context_records: _SessionContextRecords,
     ) -> SessionContextItemDTO:
         if self._information_source is None:
             raise RuntimeError(
                 "SessionContextQueryService 尚未绑定 information source，无法读取 information view"
             )
         information = await self._information_source.get_information(
-            snapshot.session_id
+            context_records.session_id
         )
         return SessionContextItemDTO(
             kind="information",
-            resource_identity=snapshot.resource_identity,
-            uri=snapshot.uri,
-            scope=snapshot.scope,
+            resource_identity=context_records.resource_identity,
+            uri=context_records.uri,
+            scope=context_records.scope,
             data=information.model_dump(mode="json"),
         )
 
@@ -547,9 +550,9 @@ class SessionContextQueryService:
                 # 消息正文仍需确认物理会话及 main thread；目录搜索只消费 catalog。
                 if not single_session:
                     session = await self._load_session(session_resource)
-                snapshot = await self._load_snapshot(session_resource, session)
-                revisions.append(snapshot.revision)
-                await self._append_session_search_candidates(candidates, snapshot, sources)
+                context_records = await self._load_context_records(session_resource, session)
+                revisions.append(context_records.revision)
+                await self._append_session_search_candidates(candidates, context_records, sources)
         revision = (
             revisions[0] if single_session and len(revisions) == 1
             else hashlib.sha256("\n".join(revisions).encode("utf-8")).hexdigest()
@@ -559,23 +562,23 @@ class SessionContextQueryService:
     async def _append_session_search_candidates(
         self,
         candidates: list[_SearchCandidate],
-        snapshot: _SessionContextSnapshot,
+        context_records: _SessionContextRecords,
         sources: list[SessionContextSearchSource],
     ) -> None:
         if "effective_context" in sources:
-            for index, record in enumerate(snapshot.records):
+            for index, record in enumerate(context_records.records):
                 text = visible_text(record)
                 summary = tool_summary(record)
                 searchable = "\n".join([text, *summary]).strip()
                 if searchable:
                     candidates.append(
                         _SearchCandidate(
-                            resource_identity=snapshot.resource_identity,
-                            uri=snapshot.uri,
-                            scope=snapshot.scope,
+                            resource_identity=context_records.resource_identity,
+                            uri=context_records.uri,
+                            scope=context_records.scope,
                             source="effective_context",
                             text=searchable,
-                            revision=snapshot.revision,
+                            revision=context_records.revision,
                             record_index=index,
                         )
                     )
@@ -586,24 +589,24 @@ class SessionContextQueryService:
                     "无法搜索 session_information"
                 )
             information = await self._information_source.get_information(
-                snapshot.session_id
+                context_records.session_id
             )
             candidates.append(
                 _SearchCandidate(
-                    resource_identity=snapshot.resource_identity,
-                    uri=snapshot.uri,
-                    scope=snapshot.scope,
+                    resource_identity=context_records.resource_identity,
+                    uri=context_records.uri,
+                    scope=context_records.scope,
                     source="session_information",
                     text=information.model_dump_json(),
-                    revision=snapshot.revision,
+                    revision=context_records.revision,
                 )
             )
 
-    async def _load_snapshot(
+    async def _load_context_records(
         self,
         resource: ParsedSessionContextResource,
         session: SessionDTO,
-    ) -> _SessionContextSnapshot:
+    ) -> _SessionContextRecords:
         if resource.session_id is None:
             raise ValueError(f"URI 不是单个 session 资源: {resource.uri}")
         if session.thread_id is None:
@@ -616,7 +619,7 @@ class SessionContextQueryService:
             session.thread_id,
         )
         revision = await run_sync_shielded(context_revision, state)
-        return _SessionContextSnapshot(
+        return _SessionContextRecords(
             resource_identity=resource.resource_identity,
             uri=resource.uri,
             scope=resource.scope,

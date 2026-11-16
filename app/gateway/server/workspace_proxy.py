@@ -72,7 +72,9 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchRequest,
 )
 from app.schemas.internal_v2.sse import SseErrorDTO
-from app.services.business.session_context_resource import parse_session_context_ref
+from app.services.business.session_context_query.resources import (
+    parse_session_context_ref,
+)
 from app.services.business.session_navigation.catalog_query import CatalogCursorError
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,

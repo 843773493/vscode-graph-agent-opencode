@@ -22,16 +22,19 @@ from app.schemas.search_federation import (
     GatewayContextSearchRequest,
     GatewayContextSearchResultDTO,
 )
-from app.services.business.session_context_resource import (
-    ParsedSessionContextResource,
-    SessionContextCursorCodec,
+from app.services.business.session_context_query.pagination import (
+    decode_session_context_cursor,
+    encode_session_context_cursor,
     exact_json_result_chars,
-    gateway_session_inventory_identity,
-    parse_session_context_ref,
     require_cursor_offset_in_range,
     require_session_context_revision,
     session_context_read_operation,
     set_exact_returned_chars,
+)
+from app.services.business.session_context_query.resources import (
+    ParsedSessionContextResource,
+    gateway_session_inventory_identity,
+    parse_session_context_ref,
     validate_session_context_read_view,
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
@@ -87,7 +90,7 @@ class GatewayContextQueryService:
         inventory = await self._transport.list_gateway_workspaces()
         revision = _workspace_inventory_revision(inventory)
         require_session_context_revision(request.revision, revision)
-        offset, char_offset = SessionContextCursorCodec.decode(
+        offset, char_offset = decode_session_context_cursor(
             request.cursor,
             resource_identity=request.resource_identity,
             uri=request.uri,
@@ -184,7 +187,7 @@ def _build_gateway_read_result(
         truncated=has_more,
         has_more=has_more,
         next_cursor=(
-            SessionContextCursorCodec.encode(
+            encode_session_context_cursor(
                 resource_identity=request.resource_identity,
                 uri=request.uri,
                 scope=request.scope,

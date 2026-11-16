@@ -392,4 +392,4 @@ async def run_agent_with_retries(
 
 __all__ = ["StepAgentRetryResult", "run_agent_with_retries"]
 from app.services.business.communication.addresses import GlobalThreadAddress
-from app.services.business.session_context_resource import session_resource_uri
+from app.services.business.session_context_query.resources import session_resource_uri

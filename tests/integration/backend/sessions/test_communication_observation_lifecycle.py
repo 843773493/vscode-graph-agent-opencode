@@ -41,12 +41,12 @@ from app.services.business.communication.addresses import (
 )
 from app.services.business.communication.admission import CommunicationPayload
 from app.services.business.communication.wait import WaitSelector, freeze_wait_deadline
-from app.services.business.session_context_query_service import (
-    SessionContextQueryService,
-)
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
+)
+from app.services.business.session_context_query.workspace import (
+    SessionContextQueryService,
 )
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService

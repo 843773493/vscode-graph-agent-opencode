@@ -14,11 +14,11 @@
 │   ├── message_display.py         内部消息的可见性与公开内容策略
 │   └── user_content_builder.py
 ├── 会话上下文资源与查询
-│   ├── session_context_resource.py              身份、URI、游标与预算基础
-│   ├── session_context_projection.py            读取和搜索结果投影
-│   ├── session_context_query_service.py         工作区内查询入口
-│   ├── session_context_assembly_query_service.py Assembly读取
-│   ├── gateway_context_query_service.py         Gateway侧聚合查询
+│   ├── session_context_query/                  读取、搜索和冻结查询投影
+│   │   ├── workspace.py / gateway.py           工作区查询与 Gateway inventory 查询
+│   │   ├── assembly.py                         已封存 Assembly 读取
+│   │   ├── resources.py                        资源身份、URI 与视图准入
+│   │   └── projection.py / pagination.py       内容投影与统一游标、字符预算、分片
 │   ├── session_context_fork_service.py          Fork来源与转移
 │   └── context_compaction_service.py            上下文压缩
 ├── Turn历史与检查点

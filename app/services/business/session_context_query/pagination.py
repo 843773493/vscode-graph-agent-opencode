@@ -1,202 +1,184 @@
+"""会话上下文分页的游标绑定、字符预算与读取分片。"""
+
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
-
-from pydantic import BaseModel, ConfigDict
+from collections.abc import Sequence
+from typing import Protocol, TypeVar
 
 from app.abstractions.session_context import (
-    AgentContextState,
     SessionContextCursorError,
+    SessionContextRevisionChangedError,
 )
-from app.prompting.validation import internal_prompt_metadata
-from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_context import (
-    SessionContextInclude,
     SessionContextItemDTO,
     SessionContextReadRequest,
     SessionContextReadResultDTO,
 )
-from app.services.business.session_context_resource import (
-    SessionContextCursorCodec,
-    exact_json_result_chars,
-    require_cursor_offset_in_range,
-    require_session_context_revision,
-    session_context_read_operation,
-    set_exact_returned_chars,
-)
-from app.services.mapping.itemized.provider_history import (
-    public_message_record,
-    reasoning_projection_rows,
-)
-from app.services.mapping.itemized.provider_history import (
-    visible_text as litellm_visible_text,
+from app.services.infrastructure.resource_platform.virtual_resources.values import (
+    ResourceIdentity,
 )
 
 
-class SessionContextReadSnapshot(BaseModel):
-    """冻结的完整冷投影；普通 read 和 durable RemoteObservation 共用分页器。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    revision: str
-    items: list[SessionContextItemDTO]
-    compacted: bool = False
-    compaction_cutoff: int | None = None
-    raw_message_count: int = 0
-    effective_record_count: int = 0
-
-    def page(self, request: SessionContextReadRequest) -> SessionContextReadResultDTO:
-        require_session_context_revision(request.revision, self.revision)
-        offset, char_offset = SessionContextCursorCodec.decode(
-            request.cursor, resource_identity=request.resource_identity, uri=request.uri, scope=request.scope,
-            revision=self.revision, operation=session_context_read_operation(
-                view=request.view, include=request.include, recent_rounds=request.recent_rounds,
-                include_initial_goal=request.include_initial_goal,
-            ), record_index=request.record_index, assembly_ref=request.assembly_ref,
-        )
-        return paginate_read_items(
-            request=request, revision=self.revision, items=self.items, offset=offset, char_offset=char_offset,
-            compacted=self.compacted, compaction_cutoff=self.compaction_cutoff,
-            raw_message_count=self.raw_message_count, effective_record_count=self.effective_record_count,
-        )
-
-
-def public_session_data(session: SessionDTO) -> dict[str, object]:
-    data = session.model_dump(mode="json")
-    allowed = {
-        "session_id",
-        "workspace_id",
-        "title",
-        "current_agent_id",
-        "current_provider_id",
-        "parent_session_id",
-        "kind",
-        "created_at",
-        "updated_at",
-    }
-    return {key: value for key, value in data.items() if key in allowed}
-
-
-def sessions_revision(sessions: list[SessionDTO]) -> str:
-    payload = [session.model_dump(mode="json") for session in sessions]
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-
-
-def context_revision(state: AgentContextState) -> str:
-    # checkpoint_id 只用于 Saver 定位；revision 必须反映查询实际看到的内容。
-    payload = {
-        "records": state["records"],
-        "raw_message_count": state["raw_message_count"],
-        "compacted": state["compacted"],
-        "compaction_cutoff": state["compaction_cutoff"],
-    }
-    digest = hashlib.sha256()
-    encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    # 逐段摘要，避免把全部历史再合并成一份字符串和 bytes。
-    for chunk in encoder.iterencode(payload):
-        digest.update(chunk.encode("utf-8"))
-    return f"content:{digest.hexdigest()}"
-
-
-def record_role(record: dict[str, object]) -> str | None:
-    role = record.get("role")
-    if isinstance(role, str):
-        return role
-    message_type = record.get("type")
-    mapping = {"human": "user", "ai": "assistant", "tool": "tool"}
-    return mapping.get(message_type) if isinstance(message_type, str) else None
-
-
-def visible_text(record: dict[str, object]) -> str:
-    if record_role(record) == "tool" or record.get("tool_call_id") is not None:
-        return ""
-    content = record.get("content")
-    projected = litellm_visible_text(content)
-    if projected:
-        return projected.strip()
-    if isinstance(content, str):
-        return content.strip()
-    parts: list[str] = []
-    for block in _content_blocks(record):
-        if block.get("type") not in {None, "text", "input_text", "output_text"}:
-            continue
-        text = block.get("text")
-        if isinstance(text, str) and text.strip():
-            parts.append(text.strip())
-    return "\n".join(parts)
-
-
-def is_effective_user(record: dict[str, object]) -> bool:
-    text = visible_text(record)
-    response_metadata = record.get("response_metadata")
-    is_internal = (
-        internal_prompt_metadata(response_metadata)
-        if isinstance(response_metadata, dict)
-        else None
-    )
-    return (
-        record_role(record) == "user"
-        and bool(text)
-        and is_internal is None
-    )
-
-
-def tool_summary(record: dict[str, object]) -> list[str]:
-    summaries: list[str] = []
-    for call in _tool_calls(record):
-        name = call.get("name")
-        if isinstance(name, str):
-            summaries.append(name)
-    if record_role(record) == "tool":
-        name = record.get("name")
-        summaries.append(str(name) if name else "tool result")
-    return summaries
-
-
-def project_record_items(
+def session_context_read_operation(
     *,
-    resource_identity: str,
+    view: str,
+    include: Sequence[str],
+    recent_rounds: int,
+    include_initial_goal: bool,
+) -> str:
+    selection = json.dumps(
+        {
+            "include": sorted(set(include)),
+            "recent_rounds": recent_rounds,
+            "include_initial_goal": include_initial_goal,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"read:{view}:{hashlib.sha256(selection).hexdigest()}"
+
+
+def require_session_context_revision(expected: str | None, actual: str) -> None:
+    if expected is not None and expected != actual:
+        raise SessionContextRevisionChangedError(
+            expected_revision=expected,
+            actual_revision=actual,
+        )
+
+
+def require_cursor_offset_in_range(offset: int, total: int, *, uri: str) -> None:
+    """游标 offset 越过真实条目数时 fail-closed。"""
+    if offset > total:
+        raise SessionContextCursorError(
+            "position_out_of_bounds", f"cursor offset 越界: uri={uri} offset={offset} total={total}"
+        )
+
+
+class _SerializedResult(Protocol):
+    returned_chars: int
+
+    def model_dump_json(self) -> str: ...
+
+
+_SerializedResultT = TypeVar("_SerializedResultT", bound=_SerializedResult)
+
+
+def set_exact_returned_chars(
+    result: _SerializedResultT,
+    *,
+    operation: str,
+) -> _SerializedResultT:
+    """把 result.returned_chars 收敛为序列化后的真实字符数。"""
+    result.returned_chars = exact_json_result_chars(
+        serialized_chars=len(result.model_dump_json()),
+        reported_chars=result.returned_chars,
+        operation=operation,
+    )
+    return result
+
+
+def exact_json_result_chars(
+    *,
+    serialized_chars: int,
+    reported_chars: int,
+    operation: str = "session context",
+) -> int:
+    """returned_chars 只改变自身的十进制位数；完整响应与增量预算共用这次收敛。"""
+    base_returned_chars = serialized_chars - len(str(reported_chars))
+    candidate_returned_chars = serialized_chars
+    for _ in range(8):
+        exact_returned_chars = base_returned_chars + len(str(candidate_returned_chars))
+        if exact_returned_chars == candidate_returned_chars:
+            return exact_returned_chars
+        candidate_returned_chars = exact_returned_chars
+    raise RuntimeError(f"无法稳定计算 {operation} 响应字符数")
+
+
+def encode_session_context_cursor(
+    *,
+    resource_identity: ResourceIdentity,
     uri: str,
     scope: str,
-    records: list[dict[str, object]],
-    include: set[SessionContextInclude],
-    messages_only: bool,
-    indexes: list[int] | None = None,
-) -> list[SessionContextItemDTO]:
-    target_indexes = indexes if indexes is not None else list(range(len(records)))
-    items: list[SessionContextItemDTO] = []
-    for index in target_indexes:
-        record = records[index]
-        role = record_role(record)
-        if role in {"system", "developer"} and "system" not in include:
-            continue
-        text = visible_text(record) if "visible_text" in include else ""
-        reasoning = _reasoning_text(record) if "reasoning" in include else ""
-        calls = _tool_calls(record) if "tool_calls" in include else []
-        results = _tool_results(record) if "tool_results" in include else []
-        summary = tool_summary(record) if "tool_summary" in include else []
-        if messages_only and not any((text, reasoning, calls, results, summary)):
-            continue
-        items.append(
-            SessionContextItemDTO(
-                kind="message" if messages_only else "record",
-                resource_identity=resource_identity,
-                uri=uri,
-                scope=scope,
-                role=role,
-                record_index=index,
-                text=text or None,
-                reasoning=reasoning or None,
-                tool_summary=summary,
-                tool_calls=calls,
-                tool_results=results,
-                raw_record=public_message_record(record) if "raw_record" in include else None,
-            )
+    revision: str,
+    operation: str,
+    record_index: int | None = None,
+    assembly_ref: ResourceIdentity | None = None,
+    offset: int,
+    char_offset: int = 0,
+) -> str:
+    payload = json.dumps(
+        {
+            "resource_identity": str(resource_identity),
+            "uri": uri,
+            "scope": scope,
+            "revision": revision,
+            "operation": operation,
+            "record_index": record_index,
+            "assembly_ref": str(assembly_ref) if assembly_ref is not None else None,
+            "offset": offset,
+            "char_offset": char_offset,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def decode_session_context_cursor(
+    cursor: str | None,
+    *,
+    resource_identity: ResourceIdentity,
+    uri: str,
+    scope: str,
+    revision: str,
+    operation: str,
+    record_index: int | None = None,
+    assembly_ref: ResourceIdentity | None = None,
+) -> tuple[int, int]:
+    if cursor is None:
+        return 0, 0
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    except (
+        ValueError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        binascii.Error,
+    ) as error:
+        raise SessionContextCursorError("malformed", "cursor 格式无效") from error
+    if not isinstance(payload, dict):
+        raise SessionContextCursorError("malformed", "cursor payload 必须是对象")
+    cursor_revision = payload.get("revision")
+    if cursor_revision != revision:
+        raise SessionContextRevisionChangedError(
+            expected_revision=str(cursor_revision),
+            actual_revision=revision,
         )
-    return items
+    expected = {
+        "resource_identity": str(resource_identity),
+        "uri": uri,
+        "scope": scope,
+    }
+    if any(payload.get(key) != value for key, value in expected.items()):
+        raise SessionContextCursorError("owner_mismatch", "cursor 与当前资源或查询选择不匹配")
+    selection = {"operation": operation, "record_index": record_index,
+                 "assembly_ref": str(assembly_ref) if assembly_ref is not None else None}
+    if any(payload.get(key) != value for key, value in selection.items()):
+        raise SessionContextCursorError("query_mismatch", "cursor 与当前资源或查询选择不匹配")
+    offset = payload.get("offset")
+    if type(offset) is not int or offset < 0:
+        raise SessionContextCursorError("position_invalid", "cursor offset 无效")
+    char_offset = payload.get("char_offset", 0)
+    if type(char_offset) is not int or char_offset < 0:
+        raise SessionContextCursorError("position_invalid", "cursor char_offset 无效")
+    return offset, char_offset
+
 
 
 def paginate_read_items(
@@ -389,7 +371,7 @@ def _build_read_result(
     has_more = next_item_char_offset is not None or offset + completed_items < total_items
     next_cursor = None
     if has_more:
-        next_cursor = SessionContextCursorCodec.encode(
+        next_cursor = encode_session_context_cursor(
             resource_identity=request.resource_identity,
             uri=request.uri,
             scope=request.scope,
@@ -423,37 +405,3 @@ def _build_read_result(
         items=items,
     )
     return set_exact_returned_chars(result, operation="read_context")
-
-
-def _content_blocks(record: dict[str, object]) -> list[dict[str, object]]:
-    content = record.get("content")
-    if not isinstance(content, list):
-        return []
-    return [item for item in content if isinstance(item, dict)]
-
-
-def _reasoning_text(record: dict[str, object]) -> str:
-    return "\n".join(
-        str(row["text"])
-        for row in reasoning_projection_rows(record.get("content"))
-        if row.get("kind") in {"reasoning", "summary"}
-        and isinstance(row.get("text"), str)
-        and row["text"]
-    )
-
-
-def _tool_calls(record: dict[str, object]) -> list[dict[str, object]]:
-    value = record.get("tool_calls")
-    if not isinstance(value, list):
-        return []
-    return [dict(item) for item in value if isinstance(item, dict)]
-
-
-def _tool_results(record: dict[str, object]) -> list[dict[str, object]]:
-    if record_role(record) != "tool" and record.get("tool_call_id") is None:
-        return []
-    result: dict[str, object] = {}
-    for key in ("tool_call_id", "name", "content"):
-        if key in record:
-            result[key] = record[key]
-    return [result] if result else []

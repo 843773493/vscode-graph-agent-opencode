@@ -28,7 +28,7 @@ from app.core.resource_uri import (
 from app.core.session_catalog_store.contracts import ForkCapturedPoint
 from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_fork_transfer import FORK_TRANSFER_CHUNK_BYTES
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_uri,
 )
 from app.services.infrastructure.attachment_blob_catalog.locator import (

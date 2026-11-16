@@ -35,7 +35,9 @@ from app.domain.itemized.hashing import (
 )
 from app.schemas.internal_v2.session_context import SessionContextReadResultDTO
 from app.services.business.resource_derivations.agents import WORKSPACE_AGENTS_SOURCE_ID
-from app.services.business.session_context_resource import context_assembly_identity
+from app.services.business.session_context_query.resources import (
+    context_assembly_identity,
+)
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
 )

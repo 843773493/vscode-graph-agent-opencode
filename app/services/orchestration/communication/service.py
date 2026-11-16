@@ -52,7 +52,7 @@ from app.services.business.communication.wait import (
     WaitSelector,
     WaitUntil,
 )
-from app.services.business.session_context_query_service import (
+from app.services.business.session_context_query.workspace import (
     SessionContextQueryService,
 )
 from app.services.business.session_service import SessionService

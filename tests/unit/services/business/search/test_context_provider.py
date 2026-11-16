@@ -33,7 +33,7 @@ from app.services.business.search.service import (
     SearchContractError,
     WorkspaceSearchService,
 )
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )
@@ -52,7 +52,7 @@ GATEWAY = "gateway_0123456789abcdef0123456789abcdef"
 
 @pytest.fixture
 def context_source(session_context_service_factory, monkeypatch):
-    monkeypatch.setattr("app.services.business.session_context_query_service.get_current_gateway_id", lambda: GATEWAY)
+    monkeypatch.setattr("app.services.business.session_context_query.workspace.get_current_gateway_id", lambda: GATEWAY)
     return session_context_service_factory(_FakeMessageSource())
 
 
@@ -138,7 +138,7 @@ async def test_expensive_regex_obeys_deadline_without_blocking_other_requests(
 ):
     source = _FakeMessageSource()
     source.records = [{"role": "user", "type": "human", "content": "a" * 100_000 + "!"}]
-    monkeypatch.setattr("app.services.business.session_context_query_service.get_current_gateway_id", lambda: GATEWAY)
+    monkeypatch.setattr("app.services.business.session_context_query.workspace.get_current_gateway_id", lambda: GATEWAY)
     context = session_context_service_factory(source)
     deadline_at = time.time() + 0.25
     if unified:

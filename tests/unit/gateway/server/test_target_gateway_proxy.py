@@ -38,7 +38,7 @@ from app.gateway.server.text_mutation import router as text_mutation_router
 from app.gateway.server.workspace_proxy import router
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     workspace_session_inventory_identity,
     workspace_session_inventory_uri,
 )

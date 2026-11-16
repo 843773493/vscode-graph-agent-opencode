@@ -57,7 +57,7 @@ from app.schemas.internal_v2.session import (
     TitleSource,
 )
 from app.schemas.internal_v2.trace import TraceEventDTO
-from app.services.business.session_context_resource import (
+from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,
 )

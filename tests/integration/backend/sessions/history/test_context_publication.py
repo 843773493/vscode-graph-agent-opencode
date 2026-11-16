@@ -17,7 +17,9 @@ from app.schemas.internal_v2.session_context import (
     SessionContextSearchResultDTO,
 )
 from app.services.business.job.service import JobService
-from app.services.business.session_context_projection import SessionContextReadSnapshot
+from app.services.business.session_context_query.projection import (
+    SessionContextReadSnapshot,
+)
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RuntimeSourceCase,
     _job,
