@@ -12,7 +12,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from app.abstractions.session_changes import (
-    FileEditSnapshot,
+    ObservedFileEdit,
     StoredFileEdit,
 )
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
@@ -103,12 +103,12 @@ def stored_edit_payload(record: StoredFileEdit) -> dict[str, object]:
     }
 
 
-def text_mutation_snapshots_from_result(
+def file_edits_from_text_mutation_result(
     *,
     result_text: str,
     workspace_root: Path,
-) -> list[FileEditSnapshot]:
-    snapshots: list[FileEditSnapshot] = []
+) -> list[ObservedFileEdit]:
+    edits: list[ObservedFileEdit] = []
     result = json.loads(result_text)
     changed = {item["path"] for item in result["files"] if item["state"] in {"published", "unknown"}}
     for raw_snapshot in load_text_mutation_snapshots(
@@ -135,16 +135,16 @@ def text_mutation_snapshots_from_result(
             raise RuntimeError(f"文本修改 journal 快照 {file_path} 缺少后件或观察错误")
         if not isinstance(after_exists, bool) or not isinstance(after_content, str):
             raise TypeError(f"文本修改 journal 快照 {file_path} 的后件无效")
-        snapshots.append(
-            FileEditSnapshot(
+        edits.append(
+            ObservedFileEdit(
                 file_path=file_path,
-                existed=before_exists,
-                content=before_content,
+                before_exists=before_exists,
+                before_content=before_content,
                 after_exists=after_exists,
                 after_content=after_content,
             )
         )
-    return snapshots
+    return edits
 
 
 def build_tool_display_context(

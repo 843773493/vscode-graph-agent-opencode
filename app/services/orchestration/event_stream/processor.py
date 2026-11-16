@@ -73,10 +73,10 @@ from app.services.orchestration.event_stream.tool_events import (
     SUBAGENT_TOOL_NAMES,
     activity_result_detail,
     build_tool_display_context,
+    file_edits_from_text_mutation_result,
     resource_activity_binding_from_metadata,
     stored_edit_payload,
     text_mutation_has_file_effects,
-    text_mutation_snapshots_from_result,
     tool_message_from_output,
 )
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
@@ -744,33 +744,28 @@ async def process_agent_event_stream(
                 if display_context.invocation_tool_name == EXTENSION_TOOL_INVOKER_NAME:
                     completed_custom_tool_names.append(display_context.tool_name)
                 stored_edits: list[StoredFileEdit] = []
-                if run_id:
-                    snapshots = None
-                    has_file_effects = effective_tool_status == "success" or (
-                        display_context.tool_name in FILE_EDIT_TOOL_NAMES and text_mutation_has_file_effects(raw_result_text)
+                if (
+                    run_id
+                    and display_context.tool_name in FILE_EDIT_TOOL_NAMES
+                    and (
+                        effective_tool_status == "success"
+                        or text_mutation_has_file_effects(raw_result_text)
                     )
-                    if (
-                        display_context.tool_name in FILE_EDIT_TOOL_NAMES
-                        and has_file_effects
+                ):
+                    for observed_edit in file_edits_from_text_mutation_result(
+                        result_text=raw_result_text,
+                        workspace_root=workspace_root,
                     ):
-                        snapshots = text_mutation_snapshots_from_result(
-                            result_text=raw_result_text,
-                            workspace_root=workspace_root,
+                        stored_edit = await session_changes_service.record_tool_file_edit(
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            tool_call_id=tool_call_id,
+                            execution_id=run_id,
+                            tool_name=display_context.tool_name,
+                            edit=observed_edit,
                         )
-                    if snapshots is not None and has_file_effects:
-                        for snapshot in snapshots:
-                            stored_edit = (
-                                await session_changes_service.record_tool_file_edit(
-                                    session_id=session_id,
-                                    turn_id=turn_id,
-                                    tool_call_id=tool_call_id,
-                                    execution_id=run_id,
-                                    tool_name=display_context.tool_name,
-                                    before=snapshot,
-                                )
-                            )
-                            if stored_edit is not None:
-                                stored_edits.append(stored_edit)
+                        if stored_edit is not None:
+                            stored_edits.append(stored_edit)
                 tool_attempt_id = message_stream_tool_attempt_ids_by_run_id.get(run_id, run_id)
                 payload = {
                     "part_id": tool_attempt_id,

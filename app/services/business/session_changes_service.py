@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from functools import cache, partial
 
 from app.abstractions.session_changes import (
-    FileEditSnapshot,
+    ObservedFileEdit,
     SessionChangesStoreProtocol,
     StoredFileEdit,
 )
@@ -56,19 +56,17 @@ class SessionChangesService:
         tool_call_id: str,
         execution_id: str,
         tool_name: str,
-        before: FileEditSnapshot,
+        edit: ObservedFileEdit,
     ) -> StoredFileEdit | None:
         def record() -> StoredFileEdit | None:
-            file_path = self._store.normalize_file_reference(before.file_path)
-            after_content = before.after_content
-            after_exists = before.after_exists
-            if before.existed == after_exists and before.content == after_content:
+            file_path = self._store.normalize_file_reference(edit.file_path)
+            if edit.before_exists == edit.after_exists and edit.before_content == edit.after_content:
                 return None
 
             diff_text = build_unified_diff(
                 file_path=file_path,
-                before_content=before.content if before.existed else "",
-                after_content=after_content if after_exists else "",
+                before_content=edit.before_content if edit.before_exists else "",
+                after_content=edit.after_content if edit.after_exists else "",
             )
             additions, deletions = count_diff_lines(diff_text)
             edit_id = build_edit_id(
@@ -86,19 +84,19 @@ class SessionChangesService:
                 tool_name=tool_name,
                 file_path=file_path,
                 kind=detect_change_kind(
-                    before_exists=before.existed,
-                    after_exists=after_exists,
+                    before_exists=edit.before_exists,
+                    after_exists=edit.after_exists,
                 ),
                 additions=additions,
                 deletions=deletions,
                 created_at=datetime.now(UTC).isoformat(),
-                before_exists=before.existed,
-                after_exists=after_exists,
+                before_exists=edit.before_exists,
+                after_exists=edit.after_exists,
             )
             self._store.save_edit(
                 record=record,
-                before_content=before.content,
-                after_content=after_content,
+                before_content=edit.before_content,
+                after_content=edit.after_content,
                 diff_text=diff_text,
             )
             return record

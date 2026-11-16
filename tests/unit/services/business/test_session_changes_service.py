@@ -8,7 +8,7 @@ from threading import Event
 
 import pytest
 
-from app.abstractions.session_changes import FileEditSnapshot
+from app.abstractions.session_changes import ObservedFileEdit
 from app.core.exceptions import ForbiddenError
 from app.core.path_utils import (
     get_session_changes_dir,
@@ -166,7 +166,7 @@ async def test_records_readable_changesets_for_file_tools(
     target = workspace_root / "src" / "hello.txt"
     target.parent.mkdir(parents=True)
 
-    before = FileEditSnapshot(_uri(workspace_id, "src/hello.txt"), False, "", True, "hello\nworld\n")
+    edit = ObservedFileEdit(_uri(workspace_id, "src/hello.txt"), False, "", True, "hello\nworld\n")
     target.write_text("hello\nworld\n", encoding="utf-8")
     record = await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -174,7 +174,7 @@ async def test_records_readable_changesets_for_file_tools(
         tool_call_id="call_1",
         execution_id="run_1",
         tool_name="write_file",
-        before=before,
+        edit=edit,
     )
 
     assert record is not None
@@ -229,7 +229,7 @@ async def test_marks_file_changes_reviewed(
     )
     target = workspace_root / "notes.md"
     target.write_text("before\n", encoding="utf-8")
-    before = FileEditSnapshot(_uri(workspace_id, "notes.md"), True, "before\n", True, "after\n")
+    edit = ObservedFileEdit(_uri(workspace_id, "notes.md"), True, "before\n", True, "after\n")
     target.write_text("after\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -237,7 +237,7 @@ async def test_marks_file_changes_reviewed(
         tool_call_id="call_2",
         execution_id="run_2",
         tool_name="edit_file",
-        before=before,
+        edit=edit,
     )
 
     result = await service.set_file_reviewed(
@@ -280,7 +280,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     second_file = workspace_root / "src" / "second.txt"
     first_file.parent.mkdir(parents=True)
 
-    before_second_create = FileEditSnapshot(_uri(workspace_id, "src/second.txt"), False, "", True, "second\n")
+    second_create = ObservedFileEdit(_uri(workspace_id, "src/second.txt"), False, "", True, "second\n")
     second_file.write_text("second\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -288,10 +288,10 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         tool_call_id="call_write_second",
         execution_id="run_write_second",
         tool_name="write_file",
-        before=before_second_create,
+        edit=second_create,
     )
 
-    before_first_create = FileEditSnapshot(_uri(workspace_id, "src/first.txt"), False, "", True, "one\n")
+    first_create = ObservedFileEdit(_uri(workspace_id, "src/first.txt"), False, "", True, "one\n")
     first_file.write_text("one\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -299,10 +299,10 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         tool_call_id="call_write_first",
         execution_id="run_write_first",
         tool_name="write_file",
-        before=before_first_create,
+        edit=first_create,
     )
 
-    before_first_edit = FileEditSnapshot(_uri(workspace_id, "src/first.txt"), True, "one\n", True, "one\ntwo\n")
+    first_edit = ObservedFileEdit(_uri(workspace_id, "src/first.txt"), True, "one\n", True, "one\ntwo\n")
     first_file.write_text("one\ntwo\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -310,10 +310,10 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         tool_call_id="call_edit_first",
         execution_id="run_edit_first",
         tool_name="edit_file",
-        before=before_first_edit,
+        edit=first_edit,
     )
 
-    before_second_turn = FileEditSnapshot(_uri(workspace_id, "src/first.txt"), True, "one\ntwo\n", True, "one\ntwo\nthree\n")
+    second_turn_edit = ObservedFileEdit(_uri(workspace_id, "src/first.txt"), True, "one\ntwo\n", True, "one\ntwo\nthree\n")
     first_file.write_text("one\ntwo\nthree\n", encoding="utf-8")
     await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -321,7 +321,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
         tool_call_id="call_edit_first_again",
         execution_id="run_edit_first_again",
         tool_name="edit_file",
-        before=before_second_turn,
+        edit=second_turn_edit,
     )
 
     changesets = await service.list_changesets(session.session_id)
@@ -384,7 +384,7 @@ async def test_aggregates_multiple_file_edit_tool_calls_across_turns(
     await service.record_tool_file_edit(
         session_id=session.session_id, turn_id="job_3", tool_call_id="call_delete",
         execution_id="run_delete", tool_name="delete_file",
-        before=FileEditSnapshot(_uri(workspace_id, "src/first.txt"), True,
+        edit=ObservedFileEdit(_uri(workspace_id, "src/first.txt"), True,
                                 "one\ntwo\nthree\n", False, ""),
     )
     changesets = await service.list_changesets(session.session_id)
@@ -418,7 +418,7 @@ async def test_counts_changed_lines_and_preserves_normalized_newlines(
     target = workspace_root / "src" / "counter.txt"
     target.parent.mkdir(parents=True)
 
-    before = FileEditSnapshot(_uri(workspace_id, "src/counter.txt"), bool(before_content), before_content, True, after_content)
+    edit = ObservedFileEdit(_uri(workspace_id, "src/counter.txt"), bool(before_content), before_content, True, after_content)
     target.write_text(after_content, encoding="utf-8")
     record = await service.record_tool_file_edit(
         session_id=session.session_id,
@@ -426,7 +426,7 @@ async def test_counts_changed_lines_and_preserves_normalized_newlines(
         tool_call_id="call_prefix",
         execution_id="run_prefix",
         tool_name="write_file",
-        before=before,
+        edit=edit,
     )
 
     assert record is not None
@@ -450,7 +450,7 @@ async def test_internal_file_edits_stay_in_all_changes_and_have_no_turn_changese
         store=SessionChangesStore(workspace_root=workspace_root),
     )
     target = workspace_root / "internal.txt"
-    before = FileEditSnapshot(_uri(workspace_id, "internal.txt"), False, "", True, "internal output\n")
+    edit = ObservedFileEdit(_uri(workspace_id, "internal.txt"), False, "", True, "internal output\n")
     target.write_text("internal output\n", encoding="utf-8")
 
     record = await service.record_tool_file_edit(
@@ -459,7 +459,7 @@ async def test_internal_file_edits_stay_in_all_changes_and_have_no_turn_changese
         tool_call_id="call_internal",
         execution_id="execution_internal",
         tool_name="write_file",
-        before=before,
+        edit=edit,
     )
 
     assert record is not None
@@ -490,7 +490,7 @@ async def test_remote_observation_is_recorded_without_reading_source_decoy(works
         kind="files", tail_segments=("root", "same.txt"), gateway_authority="gateway_0123456789abcdef0123456789abcdef")
     record = await service.record_tool_file_edit(session_id=session.session_id, turn_id="turn_remote", tool_call_id="call_remote",
         execution_id="run_remote", tool_name="edit_file",
-        before=FileEditSnapshot(remote_uri, True, "TARGET BEFORE\n", True, "TARGET AFTER\n"))
+        edit=ObservedFileEdit(remote_uri, True, "TARGET BEFORE\n", True, "TARGET AFTER\n"))
     assert record is not None and record.file_path == remote_uri
     changed, = (await service.get_changeset(session_id=session.session_id, changeset_id="all")).files
     assert changed.file_path == remote_uri
@@ -514,7 +514,7 @@ async def recorded_file_change(workspace_root, workspace_id, session_service):
     service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     record = await service.record_tool_file_edit(session_id=session.session_id, turn_id="turn_cold",
         tool_call_id="call_cold", execution_id="execution_cold", tool_name="edit_file",
-        before=FileEditSnapshot(_uri(workspace_id, "src/cold.txt"), True, "before\n", True, "after\n"))
+        edit=ObservedFileEdit(_uri(workspace_id, "src/cold.txt"), True, "before\n", True, "after\n"))
     assert record is not None
     return session, record, get_session_changes_dir(session.session_id)
 
@@ -599,7 +599,7 @@ async def test_dangling_workspace_and_gateway_change_uris_preserve_content_after
     service = SessionChangesService(session_service=session_service, store=SessionChangesStore(workspace_root=workspace_root))
     record = await service.record_tool_file_edit(session_id=session.session_id, turn_id=None,
         tool_call_id="call_dangling", execution_id="execution_dangling", tool_name="edit_file",
-        before=FileEditSnapshot(reference, True, "before /etc/hosts\n", False, ""))
+        edit=ObservedFileEdit(reference, True, "before /etc/hosts\n", False, ""))
     assert record is not None and record.kind == "delete"
     await service.set_file_reviewed(session_id=session.session_id, file_path=reference, reviewed=True)
     index = get_session_changes_dir(session.session_id) / "index.jsonl"

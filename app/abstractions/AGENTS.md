@@ -9,7 +9,7 @@
 ```text
 app/abstractions/
 ├── 会话边界
-│   ├── session_changes.py          会话文件变更快照
+│   ├── session_changes.py          工具文件编辑前后观察、Changes 记录与存储端口
 │   ├── session_context.py          上下文查询、修订与 fork 传输
 │   ├── session_orchestrator.py     会话编排调用端口
 │   ├── session_resources.py        会话资源读取端口

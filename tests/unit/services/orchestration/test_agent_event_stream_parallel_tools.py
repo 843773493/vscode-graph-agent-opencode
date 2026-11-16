@@ -15,6 +15,7 @@ from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt.tool_node import ToolRuntime
 from langgraph.types import Command, Durability
 
+from app.abstractions.session_changes import ObservedFileEdit
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.session_messaging import create_send_message_to_session_tool
@@ -2030,6 +2031,11 @@ async def test_file_edit_keeps_model_tool_call_id_and_execution_id_separate(
     assert len(changes.recorded) == 1
     assert changes.recorded[0]["tool_call_id"] == "call_write"
     assert changes.recorded[0]["execution_id"] == "run_write"
+    edit = changes.recorded[0]["edit"]
+    assert isinstance(edit, ObservedFileEdit)
+    assert (edit.before_exists, edit.before_content, edit.after_exists, edit.after_content) == (
+        False, "", True, "ok",
+    )
     assert published[0][1]["part_id"] == "run_write"
     assert published[0][1]["execution_id"] == "run_write"
     assert published[1][1]["tool_call_id"] == "call_write"
