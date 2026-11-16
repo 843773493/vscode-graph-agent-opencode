@@ -1,6 +1,6 @@
 # 目录用途
 
-存放 Agent 可用工具的聚焦 factory 模块，按工具所属领域拆分，供 `app/agents/agent_tools.py` 统一注册。
+存放 Agent 可用工具的聚焦 factory 模块，按工具所属领域拆分；默认工具由 `app/agents/default_tools.py` 装配，配置扩展由 `app/agents/custom_tools.py` 装配。
 
 终端工具沿一条调用链分工：
 

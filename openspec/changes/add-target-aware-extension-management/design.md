@@ -283,7 +283,7 @@ DAP 合同覆盖 initialize／能力协商、launch 与 configurationDone、源�
 
 ### D17. 工具族清点与统一执行边界
 
-实际静态分组是 `default`、`agent-collaboration`、`debugging`，不是按每个服务拆组。以下依据 `agent_tools.py`、`builtin_tool_registry.py`、`workspace_filesystem_tools.py`、各工具注册和外部进程创建点盘点；MCP／custom 的动态集合另按原目录 owner 的运行快照核对，不能凭静态名单宣称覆盖所有未来工具。迁移不改变公开 group_id、工具名、输入输出、封存资格、schema hash、call ID 或结果归属；“扩展工具”也不等于旧 VS Code 扩展，删除旧宿主不能误删这些注册。
+实际静态分组是 `default`、`agent-collaboration`、`debugging`，不是按每个服务拆组。以下依据 `default_tools.py`、`builtin_tool_registry.py`、`workspace_filesystem_tools.py`、各工具注册和外部进程创建点盘点；MCP／custom 的动态集合另按原目录 owner 的运行快照核对，不能凭静态名单宣称覆盖所有未来工具。迁移不改变公开 group_id、工具名、输入输出、封存资格、schema hash、call ID 或结果归属；“扩展工具”也不等于旧 VS Code 扩展，删除旧宿主不能误删这些注册。
 
 | 工具族／执行链 | 权威业务 owner 与执行归属 | 本 change 范围 |
 |---|---|---|

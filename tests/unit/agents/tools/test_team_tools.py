@@ -20,11 +20,6 @@ def test_agent_collaboration_group_collects_cross_session_tools(communication_pr
     tools = build_agent_collaboration_tools(
         session_id="ses_current",
         agent_id="default",
-        sender_agent_id="default",
-        background_task_registry=MagicMock(),
-        job_service=MagicMock(),
-        session_service=MagicMock(),
-        session_orchestrator=MagicMock(),
         session_subagent_service=MagicMock(),
         team_service=MagicMock(),
         invocation_context=ToolInvocationContext(),

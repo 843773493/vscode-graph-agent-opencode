@@ -20,7 +20,7 @@ app/agents/
 ├── [工具策略、注册与运行]
 │   ├── policy/                    工具能力、分组与策略解析
 │   ├── tools/                     内置工具实现
-│   ├── agent_tools.py、builtin_tool_registry.py、custom_tools.py
+│   ├── default_tools.py、builtin_tool_registry.py、custom_tools.py
 │   ├── model_tool_schema.py、tool_identity.py、tool_set_producer.py
 │   └── tool_result_text.py、tool_invocation_context.py
 ├── [模型上下文与摘要]
@@ -63,6 +63,7 @@ app/agents/
 - 运行时配置应通过 `ConfigService` 或显式参数传入。
 - 后台工具依赖 `orchestration/background_work/` 的任务注册器与持久邮箱；CustomToolFactoryContext.background_message_bus 是扩展 factory 的既有公开字段名，其值为 BackgroundMailbox，不表示 Job 事件广播。
 - `CustomToolFactoryContext.session_orchestrator` 是扩展 factory 的既有公开字段名，其值实现 `SessionMessageOrchestratorProtocol`；消息准入与派发由 `orchestration/session_messages.py` 实现，不代表 Session 创建、删除或 runtime 装配。
+- `default_tools.py::build_default_tools` 只装配固定默认工具，协作子集归 `tools/collaboration.py`；仅传递实际消费的依赖，不转导出领域工厂。策略过滤、扩展工具和执行图仍由 `agent_factory.py` 装配。
 - `agent_factory.py` 直接构造 `CustomToolFactoryContext` 并调用 `custom_tools.py::build_custom_tools` 取得工具列表；工具构造器负责声明校验和逐工具 options 注入，不再包装单字段 Bundle。
 - `tool_node_adapter.py` 的 `AgentToolNode` 统一适配 LangGraph 工具节点：在执行边界应用审批覆盖，结果仍配对原模型调用，并保留完整媒体内容；`model_call_graph.py` 调用 `adapt_agent_tool_node` 装入该节点。工具确认决策归 `tool_confirmation_middleware.py`，事件消费只通过适配器读取已注册工具。
 - `tool_result_text.py` 统一提取工具输出文本和判定显式状态；Agent step 最终回答的匹配引号还原归 `execution_step/retry.py`。

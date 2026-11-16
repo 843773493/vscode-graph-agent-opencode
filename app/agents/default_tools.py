@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain_core.tools import BaseTool
 
 from app.abstractions.background_mailbox import BackgroundMailboxProtocol
 from app.abstractions.communication import SessionCommunicationProtocol
-from app.abstractions.job_event_bus import JobEventBusProtocol
-from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.agents.tool_invocation_context import ToolInvocationContext
@@ -21,16 +17,7 @@ from app.agents.tools.background import (
 )
 from app.agents.tools.collaboration import build_agent_collaboration_tools
 from app.agents.tools.goal import create_goal_tools
-from app.agents.tools.python_execution import (
-    create_python_execution_tool,
-    get_python_executable,
-)
-from app.agents.tools.session_messaging import create_send_message_to_session_tool
-from app.agents.tools.session_subagent import create_session_subagent_tool
-from app.agents.tools.session_wait import (
-    create_wait_for_session_tool,
-)
-from app.agents.tools.team import create_team_tools
+from app.agents.tools.python_execution import create_python_execution_tool
 from app.agents.tools.terminal import (
     create_exec_command_tool,
     create_kill_terminal_tool,
@@ -51,41 +38,25 @@ if TYPE_CHECKING:
 def build_default_tools(
     session_id: str,
     agent_id: str = "default",
-    sender_agent_id: str = "default",
     *,
     text_mutations: WorkspaceTextMutationOwner,
     background_task_registry: BackgroundTaskRegistry,
     background_mailbox: BackgroundMailboxProtocol,
-    job_event_bus: JobEventBusProtocol,
-    job_service: JobServiceProtocol,
-    session_orchestrator: SessionMessageOrchestratorProtocol | None = None,
     session_subagent_service: SessionSubagentProtocol | None = None,
     team_service: TeamCoordinationProtocol | None = None,
-    message_service: Any | None = None,
-    session_service: Any | None = None,
-    config_service: Any | None = None,
     terminal_resource_owner: TerminalResourceOwner | None = None,
     invocation_context: ToolInvocationContext | None = None,
-    workspace_root: Path | None = None,
     goal_service: SessionGoalService | None = None,
     session_communication_service: SessionCommunicationProtocol | None = None,
     include_test_tools: bool = False,
     include_team_tools: bool = False,
     filesystem_permissions: list[FilesystemPermission] | None = None,
 ) -> list[BaseTool]:
-    """构建默认工具集。"""
-    if session_orchestrator is None:
-        raise RuntimeError("build_default_tools 需要显式传入 SessionMessageOrchestrator")
+    """装配固定默认工具；策略过滤由调用方负责。"""
     if session_subagent_service is None:
         raise RuntimeError("build_default_tools 需要显式传入 SessionSubagentService")
     if include_team_tools and team_service is None:
         raise RuntimeError("build_default_tools 需要显式传入 TeamCoordinationService")
-    if message_service is None:
-        raise RuntimeError("build_default_tools 需要显式传入 MessageService")
-    if session_service is None:
-        raise RuntimeError("build_default_tools 需要显式传入 SessionService")
-    if config_service is None:
-        raise RuntimeError("build_default_tools 需要显式传入 ConfigService")
     if terminal_resource_owner is None:
         raise RuntimeError("build_default_tools 需要显式传入 TerminalResourceOwner")
     if invocation_context is None:
@@ -129,16 +100,11 @@ def build_default_tools(
         *build_agent_collaboration_tools(
             session_id=session_id,
             agent_id=agent_id,
-            sender_agent_id=sender_agent_id,
-            background_task_registry=background_task_registry,
-            job_service=job_service,
-            session_service=session_service,
-            session_orchestrator=session_orchestrator,
             session_subagent_service=session_subagent_service,
             team_service=team_service,
             invocation_context=invocation_context,
             session_communication_service=session_communication_service,
-                include_team_tools=include_team_tools,
+            include_team_tools=include_team_tools,
         ),
     ]
     if goal_service is not None:
@@ -148,23 +114,3 @@ def build_default_tools(
     if include_test_tools:
         tools.insert(0, create_test_tool())
     return tools
-
-
-__all__ = [
-    "build_agent_collaboration_tools",
-    "build_default_tools",
-    "create_apply_patch_tool",
-    "create_background_message_collection_tool",
-    "create_exec_command_tool",
-    "create_kill_terminal_tool",
-    "create_list_terminal_sessions_tool",
-    "create_python_execution_tool",
-    "create_send_message_to_session_tool",
-    "create_session_subagent_tool",
-    "create_system_time_emitter_tool",
-    "create_team_tools",
-    "create_test_tool",
-    "create_wait_for_session_tool",
-    "create_write_stdin_tool",
-    "get_python_executable",
-]

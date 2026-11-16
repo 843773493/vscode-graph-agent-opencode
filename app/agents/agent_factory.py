@@ -26,12 +26,12 @@ from app.abstractions.session_context import (
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
-from app.agents.agent_tools import build_default_tools
 from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
 from app.agents.deep_agent_stack import (
     build_deep_agent_middleware,
     build_deep_agent_tool_middleware,
 )
+from app.agents.default_tools import build_default_tools
 from app.agents.graph_binding import (
     DEEP_AGENT_GRAPH_BINDING,
     GRAPH_FACTORY_REGISTRY,
@@ -424,21 +424,13 @@ def build_deep_agent(
         visible_tools = build_default_tools(
             session_id=session_id,
             agent_id=agent_id,
-            sender_agent_id=resolved_sender_agent_id,
             background_task_registry=background_task_registry,
             background_mailbox=background_mailbox,
-            job_event_bus=job_event_bus,
-            job_service=job_service,
             goal_service=goal_service,
-            message_service=message_service,
-            session_service=session_service,
-            session_orchestrator=session_orchestrator,
             session_subagent_service=session_subagent_service,
             team_service=team_service,
-            config_service=config_service,
             terminal_resource_owner=terminal_resource_owner,
             invocation_context=tool_invocation_context,
-            workspace_root=workspace_root,
             session_communication_service=session_communication_service,
             include_test_tools=config_service.development_test_tools_enabled(),
             include_team_tools=include_team_tools,

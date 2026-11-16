@@ -3,9 +3,6 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool
 
 from app.abstractions.communication import SessionCommunicationProtocol
-from app.abstractions.job_service import JobServiceProtocol
-from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
-from app.abstractions.session_read import SessionReaderProtocol
 from app.abstractions.session_subagent import (
     SessionSubagentProtocol,
 )
@@ -17,18 +14,12 @@ from app.agents.tools.session_wait import (
     create_wait_for_session_tool,
 )
 from app.agents.tools.team import create_team_tools
-from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 
 def build_agent_collaboration_tools(
     *,
     session_id: str,
     agent_id: str,
-    sender_agent_id: str,
-    background_task_registry: BackgroundTaskRegistry,
-    job_service: JobServiceProtocol,
-    session_service: SessionReaderProtocol,
-    session_orchestrator: SessionMessageOrchestratorProtocol,
     session_subagent_service: SessionSubagentProtocol,
     team_service: TeamCoordinationProtocol | None,
     invocation_context: ToolInvocationContext,

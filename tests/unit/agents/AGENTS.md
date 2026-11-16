@@ -11,7 +11,7 @@ tests/unit/agents/
 ├── conftest.py                  共享 Agent 测试依赖
 ├── policy/                      工具策略解析与分组
 ├── providers/                   Provider 请求、流式生命周期与上游追踪
-├── tooling/                     自定义工具配置与模型可见 schema
+├── tooling/                     默认／自定义工具装配与模型可见 schema
 ├── tools/                       内置工具执行与固定扩展工具入口
 └── 根目录测试（按职责检索）
     ├── Agent 组装与模型调用
@@ -46,7 +46,7 @@ tests/unit/agents/
 
 - Agent 组件的隔离测试与测试专用 fake。
 - `policy/`、`providers/`、`tools/` 等生产子模块对应的测试分区。
-- `tooling/` 自定义工具配置与模型可见 schema 合同。
+- `tooling/` 默认工具装配、自定义工具配置与模型可见 schema 合同。
 
 ## 不可修改内容
 

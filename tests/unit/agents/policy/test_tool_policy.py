@@ -9,8 +9,8 @@ from langchain.agents import create_agent
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.agents.agent_tools import build_default_tools
 from app.agents.deep_agent_stack import build_deep_agent_middleware
+from app.agents.default_tools import build_default_tools
 from app.agents.policy import (
     DEFAULT_AGENT_TOOL_NAMES,
     build_agent_tool_universe,
@@ -154,17 +154,10 @@ def test_policy_default_names_match_actual_agent_graph_tools(
         session_id="ses_policy_consistency",
         background_task_registry=MagicMock(),
         background_mailbox=MagicMock(),
-        job_event_bus=MagicMock(),
-        job_service=MagicMock(),
-        message_service=MagicMock(),
-        session_service=MagicMock(),
-        session_orchestrator=MagicMock(),
         session_subagent_service=MagicMock(),
         team_service=MagicMock(),
-        config_service=MagicMock(),
         terminal_resource_owner=MagicMock(),
         invocation_context=invocation_context,
-        workspace_root=workspace_root,
         session_communication_service=communication_probe,
         include_team_tools=True,
     )
