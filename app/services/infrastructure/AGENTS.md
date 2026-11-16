@@ -21,7 +21,7 @@ infrastructure/
 ├── rollout_context/           rollout、checkpoint、fork、seal 的 I/O owner
 ├── rollout_history/           RolloutHistoryReader 入口、只读快照、分页和搜索
 ├── team/                      Session 团队协作存储访问
-├── turn_history/              按 Job Turn 组织的派生读取模型与恢复
+├── turn_history/              Session Trace 存储、查询、流与恢复
 ├── workspace_activity/        工作区活动状态持久化
 ├── workspace_config_events/   工作区配置事件游标与状态
 ├── workspace_config_source/   工作区配置来源与快照

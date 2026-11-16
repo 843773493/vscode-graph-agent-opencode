@@ -18,13 +18,13 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_history.cursor import HistoryCursorMixin
+from app.services.infrastructure.rollout_history.errors import (
+    InvalidTurnCursorError,
+    StaleTurnReferenceError,
+)
 from app.services.infrastructure.rollout_history.snapshot import (
     IndexedHistory,
     IndexedTurnSpan,
-)
-from app.services.infrastructure.turn_history.models import (
-    InvalidTurnCursorError,
-    StaleTurnReferenceError,
 )
 
 _INTERNAL_HISTORY_PAGE_LIMIT = 256

@@ -55,7 +55,7 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.resource_platform.virtual_resources.resolver import (
     ResourceUriResolveError,
 )
-from app.services.infrastructure.turn_history import (
+from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
     StaleTurnReferenceError,

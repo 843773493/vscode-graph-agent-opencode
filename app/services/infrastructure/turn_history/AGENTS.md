@@ -1,10 +1,12 @@
 # 目录用途
 
-`turn_history/` 实现会话节点内的 Trace 持久化、按 Job Turn 组织的读取模型及恢复边界。
+`turn_history/` 实现会话节点内的 Session Trace 事件持久化、查询、实时交付和恢复。
+对话 Turn 的 rollout 历史读取和游标异常由同层 `rollout_history/` 负责；展示预算由
+`app/services/mapping/itemized/history_turns/projection.py` 负责。
 
 ## 可修改内容
 
-- 可以修改 Turn manifest、operation generation、timeline、cursor 和投影读取实现。
+- 可以修改 Trace SQLite、事件分页、传输游标、正文搜索和补读实现。
 - 可以增加针对崩溃恢复、分页稳定性和会话路径边界的聚焦模块。
 
 ## 不可修改内容

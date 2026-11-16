@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Protocol
+from dataclasses import dataclass, field
 
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.turn import (
@@ -15,24 +15,56 @@ from app.schemas.internal_v2.turn import (
 )
 
 
-class BudgetLimits(Protocol):
-    @property
-    def item_chars(self) -> int: ...
+@dataclass(frozen=True, slots=True)
+class HistoryProjectionLimits:
+    fragments: int = 512
+    bytes: int = 4 * 1024 * 1024
+    chars: int = 256 * 1024
+    item_chars: int = 64 * 1024
+
+    def __post_init__(self) -> None:
+        if any(
+            value < 1
+            for value in (
+                self.fragments,
+                self.bytes,
+                self.chars,
+                self.item_chars,
+            )
+        ):
+            raise ValueError("历史读取 limits 必须全部为正整数")
 
 
-class DetailBudget(Protocol):
-    """调用方拥有的单次请求预算，不访问 storage 或全局状态。"""
+@dataclass(slots=True)
+class HistoryProjectionBudget:
+    """单页展示投影的预算；每次加入文本或 JSON 片段时记账。"""
 
-    @property
-    def limits(self) -> BudgetLimits: ...
-    def can_add(self, *, byte_count: int, char_count: int) -> bool: ...
-    def add(self, *, byte_count: int, char_count: int) -> None: ...
+    limits: HistoryProjectionLimits = field(default_factory=HistoryProjectionLimits)
+    fragments_used: int = 0
+    bytes_used: int = 0
+    chars_used: int = 0
+
+    def can_add(self, *, byte_count: int, char_count: int) -> bool:
+        return (
+            self.fragments_used < self.limits.fragments
+            and byte_count <= self.limits.item_chars
+            and char_count <= self.limits.item_chars
+            and self.bytes_used + byte_count <= self.limits.bytes
+            and self.chars_used + char_count <= self.limits.chars
+        )
+
+    def add(self, *, byte_count: int, char_count: int) -> None:
+        if not self.can_add(byte_count=byte_count, char_count=char_count):
+            raise ValueError("详情读取预算已耗尽")
+        self.fragments_used += 1
+        self.bytes_used += byte_count
+        self.chars_used += char_count
 
 
 def project_detail(
     detail: TurnDetailDTO,
     include: tuple[str, ...],
-    budget: DetailBudget,
+    budget: HistoryProjectionBudget,
 ) -> TurnDetailDTO:
     fields = set(include)
     user_messages = detail.user_messages if "user" in fields else []
@@ -207,7 +239,7 @@ def project_detail(
 
 def bounded_text(
     value: str,
-    budget: DetailBudget,
+    budget: HistoryProjectionBudget,
 ) -> tuple[str, bool]:
     if not value:
         return "", False

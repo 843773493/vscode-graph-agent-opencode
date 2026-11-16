@@ -20,7 +20,7 @@ from app.core.trace_middleware import TraceMiddleware
 from app.domain.itemized.errors import ItemSchemaError
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.business.session_turn_history import SessionTurnHistoryService
-from app.services.infrastructure.turn_history import (
+from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
     StaleTurnReferenceError,

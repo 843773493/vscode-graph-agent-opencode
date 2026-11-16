@@ -25,12 +25,12 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     InternalExecutionHistoryEntry,
     InternalExecutionHistoryPage,
 )
-from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
-from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
-from app.services.infrastructure.turn_history.models import (
+from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
 )
+from app.services.infrastructure.rollout_history.paging import HistoryPageReadMixin
+from app.services.infrastructure.rollout_history.snapshot import IndexedHistory
 from app.services.mapping.itemized.history_turns.internal_execution import (
     build_internal_execution_history,
 )

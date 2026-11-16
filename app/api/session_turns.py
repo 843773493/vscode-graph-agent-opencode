@@ -45,7 +45,7 @@ from app.services.business.session_turn_history import SessionTurnHistoryService
 from app.services.business.session_turn_history.workspace_search import (
     WorkspaceMessageSearchCursorError,
 )
-from app.services.infrastructure.turn_history import (
+from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
     StaleTurnReferenceError,

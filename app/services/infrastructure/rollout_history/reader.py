@@ -32,6 +32,11 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
+from app.services.infrastructure.rollout_history.errors import (
+    InvalidTurnCursorError,
+    StaleTurnCursorError,
+    StaleTurnReferenceError,
+)
 from app.services.infrastructure.rollout_history.message_search import (
     MessageSearchBudget,
     search_messages,
@@ -45,20 +50,12 @@ from app.services.infrastructure.rollout_history.snapshot import (
     IndexedTurnSpan,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
-from app.services.infrastructure.turn_history.load_plan import (
-    DetailReadBudget,
-    LoadLimits,
-)
-from app.services.infrastructure.turn_history.models import (
-    InvalidTurnCursorError,
-    StaleTurnCursorError,
-    StaleTurnReferenceError,
-)
 from app.services.mapping.itemized.history_turns.detail import build_detail
 from app.services.mapping.itemized.history_turns.internal_execution import (
     build_internal_execution_history,
 )
 from app.services.mapping.itemized.history_turns.projection import (
+    HistoryProjectionBudget,
     project_detail,
     summary,
 )
@@ -418,8 +415,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         tool_call_ids: tuple[str, ...] = (),
         internal_entries: tuple[InternalExecutionHistoryEntry, ...] = (),
     ) -> TurnHistoryPageDTO:
-        budget = DetailReadBudget(LoadLimits())
-        summary_budget = DetailReadBudget(LoadLimits())
+        budget = HistoryProjectionBudget()
+        summary_budget = HistoryProjectionBudget()
         include_fields = set(include)
         load_tool_payload = (
             "tool_call" in include_fields or "tool_result" in include_fields
