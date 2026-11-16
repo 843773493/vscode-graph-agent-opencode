@@ -1,4 +1,4 @@
-"""checkpoint/runtime reminder 的 source lifecycle producer。
+"""执行期间 runtime reminder 的 source lifecycle producer。
 
 提醒是 runtime source，不是 LangGraph message checkpoint。该模块只构造稳定的
 ``ApplySourceLifecycleDecision``，由唯一 Saver/ContextStore owner 写入
@@ -69,7 +69,7 @@ def _event_identity(
     raise ValueError(f"checkpoint reminder 缺少真实 event identity: session_id={session_id} source={checkpoint_source}")
 
 
-def build_checkpoint_reminder_decision(
+def build_runtime_reminder_decision(
     *,
     session_id: str,
     thread_id: str,
@@ -131,13 +131,13 @@ def build_checkpoint_reminder_decision(
     )
 
 
-def submit_checkpoint_reminder(
+def submit_runtime_reminder(
     *, checkpointer: object, session_id: str, thread_id: str, reminder: str,
     response_metadata: Mapping[str, object], checkpoint_source: str,
     event_identity: str | None = None, execution_id: str,
 ) -> bool:
     """向唯一 source intent owner 提交一次 pending runtime reminder。"""
-    decision = build_checkpoint_reminder_decision(
+    decision = build_runtime_reminder_decision(
         session_id=session_id, thread_id=thread_id, reminder=reminder,
         response_metadata=response_metadata, checkpoint_source=checkpoint_source,
         event_identity=event_identity, execution_id=execution_id,
@@ -151,7 +151,7 @@ def submit_checkpoint_reminder(
     return True
 
 
-def persist_interrupt_checkpoint(
+def submit_execution_interruption_reminder(
     *,
     checkpointer: object | None,
     session_id: str,
@@ -161,7 +161,7 @@ def persist_interrupt_checkpoint(
     event_identity: str,
     execution_id: str,
 ) -> None:
-    """任务被取消时提交 pending runtime reminder。
+    """用户中断、执行超时或执行丢失时提交 pending runtime reminder。
 
     半成品 assistant 文本由 stream/canonical producer 独立收敛；本函数只负责
     reminder source，避免把半成品 assistant 与 reminder 拼成第二份 checkpoint
@@ -188,7 +188,7 @@ def persist_interrupt_checkpoint(
             f"AgentLoop 在 {interrupted_at} 因内部执行丢失而停止，未收到用户中断请求。"
             "请保留此前已完成的工具结果，根据最新用户请求继续或明确报告失败。"
         )
-    submit_checkpoint_reminder(
+    submit_runtime_reminder(
         checkpointer=checkpointer,
         session_id=session_id,
         thread_id=thread_id,
@@ -205,8 +205,8 @@ def persist_interrupt_checkpoint(
 
 
 __all__ = [
-    "build_checkpoint_reminder_decision",
+    "build_runtime_reminder_decision",
     "build_user_interrupt_reminder",
-    "persist_interrupt_checkpoint",
-    "submit_checkpoint_reminder",
+    "submit_execution_interruption_reminder",
+    "submit_runtime_reminder",
 ]

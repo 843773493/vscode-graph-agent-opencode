@@ -1967,7 +1967,7 @@ async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_a
             side_effect=process_cancelled,
         ),
         patch(
-            "app.services.orchestration.execution_step.failures.persist_interrupt_checkpoint",
+            "app.services.orchestration.execution_step.failures.submit_execution_interruption_reminder",
         ) as persist_checkpoint,
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -2011,7 +2011,7 @@ async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
             side_effect=process_job_timeout,
         ),
         patch(
-            "app.services.orchestration.execution_step.failures.persist_interrupt_checkpoint",
+            "app.services.orchestration.execution_step.failures.submit_execution_interruption_reminder",
         ),
         pytest.raises(asyncio.CancelledError),
     ):
@@ -2053,7 +2053,7 @@ async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt
             side_effect=process_scope_deadline,
         ),
         patch(
-            "app.services.orchestration.execution_step.failures.persist_interrupt_checkpoint",
+            "app.services.orchestration.execution_step.failures.submit_execution_interruption_reminder",
         ) as persist_checkpoint,
         pytest.raises(ScopeCancelledError, match="scope_deadline_exceeded"),
     ):
@@ -2115,7 +2115,7 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
             side_effect=process_cancelled,
         ),
         patch(
-            "app.services.orchestration.execution_step.failures.persist_interrupt_checkpoint",
+            "app.services.orchestration.execution_step.failures.submit_execution_interruption_reminder",
         ),
         pytest.raises(asyncio.CancelledError),
     ):

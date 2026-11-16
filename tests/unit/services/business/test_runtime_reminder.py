@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from app.domain.itemized.mutation_intents import ApplySourceLifecycleDecision
-from app.services.business.system_reminder_checkpoint_service import (
-    persist_interrupt_checkpoint,
+from app.services.business.runtime_reminder import (
+    submit_execution_interruption_reminder,
 )
 
 THREAD_ID = "thr_018f1234567870008000000000000001"
@@ -24,10 +24,10 @@ class FakeMutationIntentOwner:
         self.intents.append(intent)
 
 
-def test_persist_interrupt_checkpoint_submits_pending_source_intent() -> None:
+def test_submit_execution_interruption_reminder_submits_pending_source_intent() -> None:
     owner = FakeMutationIntentOwner()
 
-    persist_interrupt_checkpoint(
+    submit_execution_interruption_reminder(
         checkpointer=owner,
         session_id="sess_interrupt",
         thread_id=THREAD_ID,
@@ -50,12 +50,12 @@ def test_persist_interrupt_checkpoint_submits_pending_source_intent() -> None:
     assert decision.extensions["boxteam.checkpoint.annotations"]["value"]["internal"] is True
 
 
-def test_persist_interrupt_checkpoint_submits_tool_reminder_without_checkpoint_mutation() -> (
+def test_submit_execution_interruption_reminder_submits_tool_reminder_without_checkpoint_mutation() -> (
     None
 ):
     owner = FakeMutationIntentOwner()
 
-    persist_interrupt_checkpoint(
+    submit_execution_interruption_reminder(
         checkpointer=owner,
         session_id="sess_interrupt",
         thread_id=THREAD_ID,

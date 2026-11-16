@@ -43,11 +43,11 @@ from app.schemas.internal_v2.message import (
     MessageDTO,
 )
 from app.schemas.internal_v2.pending_request import PendingRequestControl
-from app.services.business.session_turn_history.visible_page import visible_message_page
-from app.services.business.system_reminder_checkpoint_service import (
-    build_checkpoint_reminder_decision,
-    submit_checkpoint_reminder,
+from app.services.business.runtime_reminder import (
+    build_runtime_reminder_decision,
+    submit_runtime_reminder,
 )
+from app.services.business.session_turn_history.visible_page import visible_message_page
 from app.services.business.user_content_builder import (
     UserContentBuilder,
     build_human_response_metadata,
@@ -463,7 +463,7 @@ class MessageService:
     ) -> bool:
         if self._checkpointer is None:
             raise RuntimeError("MessageService 未配置 checkpointer，无法写入 system_reminder")
-        return submit_checkpoint_reminder(
+        return submit_runtime_reminder(
             checkpointer=self._checkpointer,
             session_id=session_id,
             thread_id=thread_id,
@@ -480,7 +480,7 @@ class MessageService:
     ) -> InternalExecutionInterrupt | str:
         if self._checkpointer is None:
             raise RuntimeError("MessageService 缺少 internal interrupt owner")
-        decision = build_checkpoint_reminder_decision(
+        decision = build_runtime_reminder_decision(
             session_id=admission.session_id, thread_id=admission.thread_id,
             execution_id=admission.execution_id, reminder=reminder,
             response_metadata=response_metadata, checkpoint_source="user_interrupt",

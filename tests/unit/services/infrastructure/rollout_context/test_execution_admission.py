@@ -36,8 +36,8 @@ from app.domain.itemized.serde.runtime import (
     execution_record_to_dict,
 )
 from app.prompting.factory import PromptSection, internal_message_factory
-from app.services.business.system_reminder_checkpoint_service import (
-    submit_checkpoint_reminder,
+from app.services.business.runtime_reminder import (
+    submit_runtime_reminder,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -104,7 +104,7 @@ def test_pending_notice_selection_preserves_acceptance_cut_and_internal_owner(
     source_id = f"checkpoint:{kind}:notice-fence"
     notice_id = f"item-{source_id}"
     if timing == "prior_before_acceptance":
-        submit_checkpoint_reminder(
+        submit_runtime_reminder(
             checkpointer=saver, session_id=SESSION_ID, thread_id=thread_id,
             reminder="真实接纳游标前的来源", response_metadata={"source": kind},
             checkpoint_source=kind, event_identity="notice-fence", execution_id=previous.execution_id,
@@ -119,7 +119,7 @@ def test_pending_notice_selection_preserves_acceptance_cut_and_internal_owner(
     )
     current = notice_turn_factory("current")
     if timing != "prior_before_acceptance":
-        submit_checkpoint_reminder(
+        submit_runtime_reminder(
             checkpointer=saver, session_id=SESSION_ID, thread_id=thread_id,
             reminder="真实接纳游标后的来源", response_metadata={"source": kind},
             checkpoint_source=kind, event_identity="notice-fence",

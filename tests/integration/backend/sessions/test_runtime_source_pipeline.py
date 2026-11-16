@@ -51,9 +51,9 @@ from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
 from app.prompting import PromptSection, internal_message_factory
 from app.runtime.model_stream import configure_model_stream_from_environment
 from app.services.business.message_display import project_message_for_display
-from app.services.business.system_reminder_checkpoint_service import (
-    persist_interrupt_checkpoint,
-    submit_checkpoint_reminder,
+from app.services.business.runtime_reminder import (
+    submit_execution_interruption_reminder,
+    submit_runtime_reminder,
 )
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOURCE_ID
@@ -874,7 +874,7 @@ async def test_h2_goal_terminal_and_interrupt_sources_keep_real_execution(source
         await asyncio.to_thread(case.control.acknowledged, interrupted_call, "model.response_ready", 20)
         admission = case.container.checkpointer.execution_admission_for_job(session_id, thread_id=thread_id, job_id=accepted["job_id"])
         for _attempt in range(2):
-            submit_checkpoint_reminder(checkpointer=case.container.checkpointer,
+            submit_runtime_reminder(checkpointer=case.container.checkpointer,
                 session_id=session_id, thread_id=thread_id, reminder="H2 同一真实执行事件提醒",
                 response_metadata={"source": "h2-boundary"}, checkpoint_source="h2-boundary",
                 event_identity="h2-stable-event", execution_id=admission.execution_id)
@@ -1018,7 +1018,7 @@ async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpo
                "tool_dispatch_timeout", "execution_lost", "execution_error", "resource_cancel")
     for reason in reasons:
         for _attempt in range(2):
-            persist_interrupt_checkpoint(checkpointer=saver, session_id=session_id, thread_id=thread_id,
+            submit_execution_interruption_reminder(checkpointer=saver, session_id=session_id, thread_id=thread_id,
                 active_tool_name="exec_command" if reason in {"tool_dispatch_timeout", "resource_cancel"} else None,
                 checkpoint_source=reason, event_identity=f"{active.execution_id}:{reason}", execution_id=active.execution_id)
     source_ids = {f"checkpoint:{reason}:{active.execution_id}:{reason}" for reason in reasons}
@@ -1039,13 +1039,13 @@ async def test_e07_reminder_reasons_commit_once_and_cold_restore_without_checkpo
         assert canonical_json_bytes([item.to_dict() for item in cold._storage.storage.read_items(
             session_id, thread_id, item_ids=item_ids)]) == canonical_json_bytes([item.to_dict() for item in items])
         for reason in reasons:
-            persist_interrupt_checkpoint(checkpointer=cold, session_id=session_id, thread_id=thread_id,
+            submit_execution_interruption_reminder(checkpointer=cold, session_id=session_id, thread_id=thread_id,
                 active_tool_name="exec_command" if reason in {"tool_dispatch_timeout", "resource_cancel"} else None,
                 checkpoint_source=reason, event_identity=f"{active.execution_id}:{reason}", execution_id=active.execution_id)
         assert not any(value.source_id in source_ids for value in cold.load_context_source_control_states(
             ContextSourceOwnerKey(session_id, thread_id)))
         with pytest.raises((RuntimeError, ValueError)):
-            submit_checkpoint_reminder(checkpointer=cold, session_id=session_id, thread_id=thread_id,
+            submit_runtime_reminder(checkpointer=cold, session_id=session_id, thread_id=thread_id,
                 reminder="同一事件正文漂移必须拒绝", response_metadata={"source": "interrupt"}, checkpoint_source="interrupt",
                 event_identity=f"{active.execution_id}:interrupt", execution_id=active.execution_id)
     assert case.sql(session_id, thread_id, "SELECT * FROM checkpoints ORDER BY checkpoint_id") == checkpoint_headers

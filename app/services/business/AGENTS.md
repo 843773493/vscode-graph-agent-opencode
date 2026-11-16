@@ -23,8 +23,7 @@
 │   └── context_compaction_service.py            上下文压缩
 ├── Turn历史与检查点
 │   ├── session_turn_history/                    Job Turn读取和可见页投影
-│   ├── reasoning_checkpoint_service.py          推理检查点
-│   └── system_reminder_checkpoint_service.py    系统提醒检查点
+│   └── reasoning_checkpoint_service.py          推理检查点
 ├── 会话状态与资源
 │   ├── session_service.py
 │   ├── session_information_service.py / session_goal_service.py
@@ -43,6 +42,7 @@
 │   ├── persistent_task_service.py  工作区任务管理、目标和 revision 校验
 │   └── persistent_tasks/goal.py    Goal 目标、预算记账与内部提示的纯应用规则
 ├── 会话执行与通信
+│   ├── runtime_reminder.py                     执行提醒的来源构造与提交，不读写 checkpoint
 │   ├── search/                  工作区具名搜索 Provider 与安全结算
 │   ├── session_generation/      生成入口和结果回执
 │   ├── session_navigation/      导航操作及目录状态

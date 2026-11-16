@@ -11,8 +11,8 @@ from app.agents.checkpoint_recovery import CheckpointRecoveryRejectedError
 from app.core.failures import execution_failure_message, report_failure
 from app.core.job_event_bus import EventType
 from app.core.turn_execution_scope import ScopeCancelledError
-from app.services.business.system_reminder_checkpoint_service import (
-    persist_interrupt_checkpoint,
+from app.services.business.runtime_reminder import (
+    submit_execution_interruption_reminder,
 )
 from app.services.orchestration.event_stream.contracts import (
     AgentEventStreamTimeoutError,
@@ -88,7 +88,7 @@ async def handle_step_cancelled(
     if not (user_interrupt and state.user_interrupt_reminder_injected):
         try:
             await asyncio.to_thread(
-                persist_interrupt_checkpoint,
+                submit_execution_interruption_reminder,
                 checkpointer=checkpointer,
                 session_id=session_id,
                 thread_id=thread_id,
@@ -98,14 +98,14 @@ async def handle_step_cancelled(
                 execution_id=execution_id,
             )
             logger.info(
-                "[agent_execution_service] cancellation checkpoint persisted: "
+                "[agent_execution_service] cancellation runtime reminder submitted: "
                 "turn_id=%s code=%s",
                 turn_id,
                 failure_code,
             )
         except Exception:
             logger.exception(
-                "[agent_execution_service] cancellation checkpoint persistence failed: "
+                "[agent_execution_service] cancellation runtime reminder submission failed: "
                 "turn_id=%s",
                 turn_id,
             )
@@ -222,7 +222,7 @@ async def handle_step_failure(
     if isinstance(error, ScopeCancelledError):
         try:
             await asyncio.to_thread(
-                persist_interrupt_checkpoint,
+                submit_execution_interruption_reminder,
                 checkpointer=checkpointer,
                 session_id=session_id,
                 thread_id=thread_id,
@@ -233,7 +233,7 @@ async def handle_step_failure(
             )
         except Exception:
             logger.exception(
-                "[agent_execution_service] scope failure checkpoint persistence "
+                "[agent_execution_service] scope failure runtime reminder submission "
                 "failed: turn_id=%s",
                 turn_id,
             )

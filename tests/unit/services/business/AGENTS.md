@@ -29,7 +29,7 @@ tests/unit/services/business/
     │   └── test_session_context_*.py、test_internal_history_paging.py
     ├── checkpoint 与提醒
     │   ├── test_*checkpoint*.py
-    │   └── test_system_reminder_checkpoint_service.py
+    │   └── test_runtime_reminder.py
     ├── 资源 owner
     │   ├── test_browser_resource_owner.py、test_terminal_resource_owner.py
     │   └── test_session_resource_*.py

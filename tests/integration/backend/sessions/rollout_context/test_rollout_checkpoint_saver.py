@@ -39,8 +39,8 @@ from app.domain.itemized.records import RuntimeNoticePayload
 from app.prompting.factory import PromptSection, internal_message_factory
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
 from app.services.business.message_display import project_message_for_display
-from app.services.business.system_reminder_checkpoint_service import (
-    submit_checkpoint_reminder,
+from app.services.business.runtime_reminder import (
+    submit_runtime_reminder,
 )
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
@@ -1957,7 +1957,7 @@ def test_hidden_system_reminder_does_not_create_empty_chat_turn(
         )
 
         assert (
-            submit_checkpoint_reminder(
+            submit_runtime_reminder(
                 checkpointer=saver,
                 session_id=SESSION_ID,
                 thread_id=thread_id,
@@ -2033,7 +2033,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         turn_id="turn-reminder-events",
     )
 
-    assert submit_checkpoint_reminder(
+    assert submit_runtime_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
         thread_id=thread_id,
@@ -2043,7 +2043,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         event_identity="timeout-event-1", execution_id=admission.execution_id,
     )
     # metadata key 顺序变化不能破坏同一事件的 canonical identity。
-    assert submit_checkpoint_reminder(
+    assert submit_runtime_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
         thread_id=thread_id,
@@ -2052,7 +2052,7 @@ def test_checkpoint_reminder_reuses_event_identity_and_separates_events(
         checkpoint_source="job_timeout",
         event_identity="timeout-event-1", execution_id=admission.execution_id,
     )
-    assert submit_checkpoint_reminder(
+    assert submit_runtime_reminder(
         checkpointer=saver,
         session_id=SESSION_ID,
         thread_id=thread_id,
@@ -2122,7 +2122,7 @@ def test_checkpoint_reminder_source_transaction_rolls_back_jsonl_on_sqlite_failu
             fail_view_membership,
         )
         with pytest.raises(RuntimeError, match="injected SQLite view failure"):
-            submit_checkpoint_reminder(
+            submit_runtime_reminder(
                 checkpointer=saver,
                 session_id=SESSION_ID,
                 thread_id=thread_id,
