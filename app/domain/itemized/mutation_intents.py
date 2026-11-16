@@ -17,7 +17,7 @@ infrastructure 侧 owner 实现，本模块不得反向导入它们。
 （失败时保证不推进的持久状态集合）；owner 消费失败必须保持该 outcome，
 不得产生半 item、半 revision 或半 transition。
 
-ToolSet desired 由 ToolSelectionStore/ToolService 控制；新 model-call prepare
+ToolSet desired 由 ToolSelectionStore/AgentToolSettingsService 控制；新 model-call prepare
 取得完整 ToolSetSnapshot，只有成功 assembly seal binding 确立 applied，
 不经独立 mutation intent 推进第二套 applied 状态。
 """

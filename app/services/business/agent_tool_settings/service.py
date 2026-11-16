@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Protocol
 
 from app.agents.policy import (
     DEFAULT_TOOL_GROUP,
@@ -14,6 +13,7 @@ from app.schemas.internal_v2.tool import (
     ToolDTO,
     ToolSelectionPatchRequest,
 )
+from app.services.business.agent_tool_settings.catalog import ToolCatalogReader
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 
@@ -26,15 +26,13 @@ class ToolSelectionError(ValueError):
     """工具开关请求无法形成有效的 Agent 工具集合。"""
 
 
-class ToolCatalog(Protocol):
-    def get_available_tools(self, agent_id: str | None = None) -> list[dict]: ...
+class AgentToolSettingsService:
+    """查询和修改工作区内 Agent 的工具执行、模型可见开关。"""
 
-
-class ToolService:
     def __init__(
         self,
         *,
-        tool_catalog: ToolCatalog,
+        tool_catalog: ToolCatalogReader,
         selection_store: ToolSelectionStore,
         config_service: ConfigService,
         test_supported_tools: set[str],
@@ -151,9 +149,6 @@ class ToolService:
                 f"包含后端不支持的工具: {', '.join(sorted(unknown))}"
             )
         resolver = self._config_service.get_tool_policy_resolver(agent_id)
-        execution_overrides = self._selection_store.snapshot(
-            agent_id
-        ).execution_overrides
         catalog_tools = {
             tool["id"]: tool
             for tool in self._tool_catalog.get_available_tools(agent_id)
@@ -171,7 +166,6 @@ class ToolService:
                 raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止执行")
             if model_visible and static_policy.model_visibility_locked:
                 raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止对模型可见")
-            execution_overrides[tool_id] = execution_enabled
         candidate_enabled = {tool.tool_id for tool in tools if tool.execution_enabled}
         for tool_id, (execution_enabled, model_visible) in changes.items():
             if not execution_enabled and model_visible:

@@ -8,6 +8,7 @@
 
 ```text
 tests/unit/services/business/
+├── agent_tool_settings/   Agent 工具管理目录、能力状态与开关变更
 ├── communication/        Session 间消息与接纳规则
 ├── job/                   Job 队列、取消、超时和服务收口
 ├── resource_derivations/  语义资源投影与派生

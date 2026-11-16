@@ -610,5 +610,5 @@ class AgentExecutionService(JobStepExecutor):
         return definitions
 
     def get_available_tools(self, agent_id: str | None = None) -> list[dict[str, Any]]:
-        """工具管理目录：按配置导出完整定义，运行选择由 ToolService 投影。"""
+        """工具管理目录：按配置导出完整定义，运行选择由 AgentToolSettingsService 投影。"""
         return self._tool_face_definitions(agent_id)

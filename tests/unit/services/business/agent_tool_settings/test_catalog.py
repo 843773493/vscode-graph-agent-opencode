@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.tool_catalog_service import ToolCatalogService
 
 
 class _RuntimeCatalog:
@@ -82,7 +82,7 @@ def test_catalog_exposes_declared_extensions_with_static_policy_metadata(
         config_dir=Path.cwd() / "configs",
         config_path=config_path,
     )
-    service = ToolCatalogService(
+    service = AgentToolCatalog(
         runtime_catalog=_RuntimeCatalog(),
         config_service=config_service,
     )
@@ -133,7 +133,7 @@ def test_catalog_groups_default_session_context_extensions_as_collaboration(
         ),
         encoding="utf-8",
     )
-    service = ToolCatalogService(
+    service = AgentToolCatalog(
         runtime_catalog=_RuntimeCatalog(),
         config_service=ConfigService(
             config_dir=Path.cwd() / "configs",

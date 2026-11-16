@@ -15,12 +15,12 @@ from app.schemas.internal_v2.tool import (
     ToolSelectionChange,
     ToolSelectionPatchRequest,
 )
-from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from app.services.infrastructure.tool_service import (
+from app.services.business.agent_tool_settings.service import (
+    AgentToolSettingsService,
     ToolNotFoundError,
     ToolSelectionError,
-    ToolService,
 )
+from app.services.infrastructure.tool_selection_store import ToolSelectionStore
 
 
 class _ToolCatalogStub:
@@ -86,7 +86,7 @@ def _service(
     *,
     tool_catalog: _ToolCatalogStub | None = None,
     default_agent_id: str = "default",
-) -> ToolService:
+) -> AgentToolSettingsService:
     config_service = MagicMock()
     config_service.validate_agent_id.side_effect = (
         lambda agent_id: default_agent_id if agent_id is None else agent_id
@@ -105,7 +105,7 @@ def _service(
         },
         restrictions={},
     )
-    return ToolService(
+    return AgentToolSettingsService(
         tool_catalog=tool_catalog or _ToolCatalogStub(),
         selection_store=ToolSelectionStore(boxteam_root=tmp_path / ".boxteam"),
         config_service=config_service,
@@ -153,7 +153,7 @@ async def test_get_unknown_tool_maps_to_http_404(tmp_path: Path) -> None:
             agent_id="default",
             _="local-dev-token",
             request_id="req_get_missing",
-            tool_service=_service(tmp_path),
+            agent_tool_settings_service=_service(tmp_path),
         )
 
     assert error.value.status_code == 404
@@ -197,7 +197,7 @@ async def test_unknown_tool_selection_maps_to_http_400(tmp_path: Path) -> None:
             payload=request,
             _="local-dev-token",
             request_id="req_select_missing",
-            tool_service=_service(tmp_path),
+            agent_tool_settings_service=_service(tmp_path),
         )
 
     assert error.value.status_code == 400
@@ -282,7 +282,7 @@ async def test_tool_list_api_passes_omitted_agent_to_default_resolution(
     response = await list_tools(
         _="local-dev-token",
         request_id="req_tools_default_agent",
-        tool_service=service,
+        agent_tool_settings_service=service,
     )
 
     assert [tool.tool_id for tool in response.data] == ["read_file", "write_file"]
@@ -316,7 +316,7 @@ async def test_update_selection_maps_unknown_agent_to_http_400(
             payload=request,
             _="local-dev-token",
             request_id="req_selection_missing_agent",
-            tool_service=service,
+            agent_tool_settings_service=service,
         )
 
     assert error.value.status_code == 400

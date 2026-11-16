@@ -44,6 +44,8 @@ from app.runtime.context_compaction import AgentSummarizationCompactor
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS, RuntimeClockPorts
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
+from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
+from app.services.business.agent_tool_settings.service import AgentToolSettingsService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.job.service import JobService
@@ -168,10 +170,8 @@ from app.services.infrastructure.session_trace.recorder import TraceEventRecorde
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.team.store import TeamStore
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
-from app.services.infrastructure.tool_catalog_service import ToolCatalogService
 from app.services.infrastructure.tool_output_store import ToolOutputStore
 from app.services.infrastructure.tool_selection_store import ToolSelectionStore
-from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
@@ -404,7 +404,7 @@ class AppContainer:
     team_fanout_service: TeamFanoutService
     llm_request_log_service: LLMRequestLogService
     html_snapshot_store: HtmlSnapshotStore
-    tool_service: ToolService
+    agent_tool_settings_service: AgentToolSettingsService
     tool_test_service: ToolTestService
     tool_selection_store: ToolSelectionStore
     workspace_service: WorkspaceService
@@ -1130,12 +1130,12 @@ def _build_app_container(
         / "workspaces"
         / "model_tool_test_workspace",
     )
-    tool_catalog_service = ToolCatalogService(
+    agent_tool_catalog = AgentToolCatalog(
         runtime_catalog=agent_execution_service,
         config_service=config_service,
     )
-    tool_service = ToolService(
-        tool_catalog=tool_catalog_service,
+    agent_tool_settings_service = AgentToolSettingsService(
+        tool_catalog=agent_tool_catalog,
         selection_store=tool_selection_store,
         config_service=config_service,
         test_supported_tools=tool_test_service.supported_tools,
@@ -1185,7 +1185,7 @@ def _build_app_container(
         team_fanout_service=team_fanout_service,
         llm_request_log_service=llm_request_log_service,
         html_snapshot_store=html_snapshot_store,
-        tool_service=tool_service,
+        agent_tool_settings_service=agent_tool_settings_service,
         tool_test_service=tool_test_service,
         tool_selection_store=tool_selection_store,
         workspace_service=workspace_service,

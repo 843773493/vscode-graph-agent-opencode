@@ -99,7 +99,7 @@ Workspace 配置 MUST 支持声明全局默认能力、按 `origin`/`kind`/`grou
 #### Scenario: 目录和 Agent 使用同一套工具元数据
 
 - **WHEN** 前端获取工具目录并随后启动 Agent 请求
-- **THEN** ToolService 和 Agent runtime MUST 使用相同的来源、类型和分组字段计算有效能力，不得出现目录显示可用但 Agent 使用另一套默认值的情况
+- **THEN** AgentToolSettingsService 和 Agent runtime MUST 使用相同的来源、类型和分组字段计算有效能力，不得出现目录显示可用但 Agent 使用另一套默认值的情况
 
 ### Requirement: 配置和运行时覆盖职责必须分离
 

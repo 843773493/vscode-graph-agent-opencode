@@ -32,12 +32,12 @@ from app.agents.tools.custom_invocation import (
 )
 from app.agents.tools.debugging import create_debugging_tools
 from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
+from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetBindingInput,
     build_extension_catalog_binding,
 )
-from app.services.infrastructure.tool_catalog_service import ToolCatalogService
 
 #: 16 个 DebugMCP 风格内层目标（不含 4 个方案管理目标）。
 DEBUG_TARGET_NAMES = frozenset(
@@ -326,7 +326,7 @@ def test_catalog_keeps_debugging_targets_in_inner_directory(
         json.dumps({"agents": {"default": {"name": "信封目录检查"}}}),
         encoding="utf-8",
     )
-    catalog = ToolCatalogService(
+    catalog = AgentToolCatalog(
         runtime_catalog=_RuntimeCatalog(),
         config_service=ConfigService(
             config_dir=Path.cwd() / "configs",

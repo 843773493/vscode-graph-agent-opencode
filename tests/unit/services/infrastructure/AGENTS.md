@@ -19,7 +19,7 @@ infrastructure/
 ├── resource_platform/     # 资源观察、注册与虚拟资源
 ├── rollout_context/       # rollout/checkpoint 持久化及恢复职责
 ├── team/                  # 团队协作服务
-├── tool_services/         # 工具目录、选择、输出存储与服务接口
+├── tool_services/         # 工具选择与工具结果持久化
 ├── session_trace/         # 事件采集、Trace 存储、索引和恢复
 ├── workspace_activity/    # 工作区活动事件与游标
 ├── workspace_files/       # 工作区文件路径、读取写入、资源观察与持久操作

@@ -14,19 +14,19 @@ from app.agents.tools.debugging import debugging_tool_input_json_schema
 from app.services.infrastructure.config_service import ConfigService
 
 
-class RuntimeToolCatalog(Protocol):
+class ToolCatalogReader(Protocol):
     def get_available_tools(
         self, agent_id: str | None = None
     ) -> list[dict[str, Any]]: ...
 
 
-class ToolCatalogService:
+class AgentToolCatalog:
     """把运行时工具与配置中的扩展工具映射为前端目录结构。"""
 
     def __init__(
         self,
         *,
-        runtime_catalog: RuntimeToolCatalog,
+        runtime_catalog: ToolCatalogReader,
         config_service: ConfigService,
     ) -> None:
         self._runtime_catalog = runtime_catalog

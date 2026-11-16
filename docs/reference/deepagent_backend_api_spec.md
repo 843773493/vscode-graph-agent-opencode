@@ -981,7 +981,7 @@ app/
 │   ├── message_service.py
 │   ├── job_service.py
 │   ├── agent_service.py
-│   ├── tool_service.py
+│   ├── business/agent_tool_settings/  # Agent 工具目录与能力开关
 │   ├── artifact_service.py
 │   ├── config_service.py
 │   └── event_service.py
@@ -1305,38 +1305,11 @@ async def get_agent(
 
 ## 21.9 app/api/tools.py
 
-```python
-from __future__ import annotations
-
-from fastapi import APIRouter, Depends
-
-from app.api.deps import get_request_id, verify_local_token
-from app.schemas.internal_v2.common import APIResponse
-from app.schemas.internal_v2.tool import ToolDTO
-from app.services.tool_service import ToolService
-
-router = APIRouter(prefix="/tools", tags=["tools"])
-
-
-@router.get("", response_model=APIResponse[list[ToolDTO]], summary="获取 Tool 列表")
-async def list_tools(
-    _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
-):
-    result = await ToolService().list()
-    return APIResponse(data=result, request_id=request_id)
-
-
-@router.get("/{tool_id}", response_model=APIResponse[ToolDTO], summary="获取 Tool 详情")
-async def get_tool(
-    tool_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str | None = Depends(get_request_id),
-):
-    result = await ToolService().get(tool_id)
-    return APIResponse(data=result, request_id=request_id)
-
-```
+工具列表、详情和选择变更由 `app/api/tools.py` 适配，使用
+`Depends(get_agent_tool_settings_service)` 取得容器中的 `AgentToolSettingsService`。
+业务实现位于 `app/services/business/agent_tool_settings/service.py`，目录合成位于同目录
+`catalog.py`；工具执行仍归 Agent runtime，选择持久化仍归 `ToolSelectionStore`。
+具体签名和错误映射以当前路由为准，不在文档中维护另一份可漂移的路由实现。
 
 ## 21.10 app/api/artifacts.py
 
@@ -1405,7 +1378,7 @@ async def update_config(
 - `MessageService`
 - `JobService`
 - `AgentService`
-- `ToolService`
+- `AgentToolSettingsService`
 - `ArtifactService`
 - `ConfigService`
 

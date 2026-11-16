@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import ValidationError
 
 from app.api.deps import (
+    get_agent_tool_settings_service,
     get_request_id,
-    get_tool_service,
     get_tool_test_service,
     verify_local_token,
 )
@@ -20,10 +20,10 @@ from app.schemas.internal_v2.tool_test import (
     ToolTestRunListDTO,
     ToolTestStartRequest,
 )
-from app.services.infrastructure.tool_service import (
+from app.services.business.agent_tool_settings.service import (
+    AgentToolSettingsService,
     ToolNotFoundError,
     ToolSelectionError,
-    ToolService,
 )
 from app.tool_testing.service import ToolTestService
 
@@ -35,10 +35,10 @@ async def list_tools(
     agent_id: str | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    tool_service: ToolService = Depends(get_tool_service),
+    agent_tool_settings_service: AgentToolSettingsService = Depends(get_agent_tool_settings_service),
 ):
     try:
-        result = await tool_service.list(agent_id)
+        result = await agent_tool_settings_service.list(agent_id)
     except ValidationError:
         raise
     except ValueError as error:
@@ -56,10 +56,10 @@ async def update_tool_selection(
     payload: ToolSelectionPatchRequest,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    tool_service: ToolService = Depends(get_tool_service),
+    agent_tool_settings_service: AgentToolSettingsService = Depends(get_agent_tool_settings_service),
 ):
     try:
-        result = await tool_service.update_selection(payload)
+        result = await agent_tool_settings_service.update_selection(payload)
     except ToolSelectionError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return APIResponse(data=result, request_id=request_id)
@@ -130,10 +130,10 @@ async def get_tool(
     agent_id: str | None = None,
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    tool_service: ToolService = Depends(get_tool_service),
+    agent_tool_settings_service: AgentToolSettingsService = Depends(get_agent_tool_settings_service),
 ):
     try:
-        result = await tool_service.get(tool_id, agent_id)
+        result = await agent_tool_settings_service.get(tool_id, agent_id)
     except ValidationError:
         raise
     except ValueError as error:

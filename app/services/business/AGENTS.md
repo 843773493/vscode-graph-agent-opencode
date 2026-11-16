@@ -10,6 +10,7 @@
 业务服务
 ├── Agent消息与用户内容
 │   ├── agent_service.py
+│   ├── agent_tool_settings/     Agent 工具管理目录、能力投影与开关变更，不执行工具
 │   ├── message_service.py         消息准入、checkpoint 读取和消息查询
 │   ├── message_display.py         内部消息的可见性与公开内容策略
 │   └── user_content_builder.py

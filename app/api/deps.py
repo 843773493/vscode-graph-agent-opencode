@@ -15,6 +15,7 @@ from app.core.trace_middleware import (
 from app.core.workspace_identity import validate_workspace_id
 from app.runtime.session_orchestrator import SessionOrchestrator
 from app.services.business.agent_service import AgentService
+from app.services.business.agent_tool_settings.service import AgentToolSettingsService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.message_service import MessageService
@@ -67,7 +68,6 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.session_trace.store import TraceEventStore
-from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
 )
@@ -121,7 +121,7 @@ class _AppContainerProtocol(Protocol):
     session_service: SessionService
     llm_request_log_service: LLMRequestLogService
     html_snapshot_store: HtmlSnapshotStore
-    tool_service: ToolService
+    agent_tool_settings_service: AgentToolSettingsService
     tool_test_service: ToolTestService
     workspace_service: WorkspaceService
     resource_navigation: ResourceNavigation
@@ -361,8 +361,8 @@ def get_html_snapshot_store(request: Request) -> HtmlSnapshotStore:
     return _require_service(request, "html_snapshot_store", HtmlSnapshotStore, "HtmlSnapshotStore 尚未在应用启动阶段初始化")
 
 
-def get_tool_service(request: Request) -> ToolService:
-    return _require_service(request, "tool_service", ToolService, "ToolService 尚未在应用启动阶段初始化")
+def get_agent_tool_settings_service(request: Request) -> AgentToolSettingsService:
+    return _require_service(request, "agent_tool_settings_service", AgentToolSettingsService, "AgentToolSettingsService 尚未在应用启动阶段初始化")
 
 
 def get_tool_test_service(request: Request) -> ToolTestService:

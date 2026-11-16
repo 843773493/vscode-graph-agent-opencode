@@ -40,8 +40,8 @@ from app.services.business.session_context_query.resources import (
 from tests.support.communication.probe import TARGET_SESSION, WORKSPACE_ID
 
 
-class _MissingAgentToolService:
-    """ToolService.list 在 agent 不存在时抛 ValueError（配置层口径）。"""
+class _MissingAgentToolSettingsService:
+    """AgentToolSettingsService.list 在 agent 不存在时抛 ValueError（配置层口径）。"""
 
     async def list(self, agent_id: str = "default"):
         raise ValueError(f"agent {agent_id} 不存在")
@@ -85,7 +85,7 @@ async def test_list_tools_maps_unknown_agent_to_400() -> None:
             "nope",
             _="local",
             request_id="req",
-            tool_service=_MissingAgentToolService(),
+            agent_tool_settings_service=_MissingAgentToolSettingsService(),
         )
 
     assert captured.value.status_code == 400
@@ -99,7 +99,7 @@ async def test_get_tool_maps_unknown_agent_to_400() -> None:
             "nope",
             _="local",
             request_id="req",
-            tool_service=_MissingAgentToolService(),
+            agent_tool_settings_service=_MissingAgentToolSettingsService(),
         )
 
     assert captured.value.status_code == 400
