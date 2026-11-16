@@ -25,8 +25,8 @@ from app.agents.tool_invocation_context import (
 from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.debugging import create_debugging_tools
 from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.testing import create_test_tool_2
 from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
@@ -94,7 +94,7 @@ async def test_envelope_uses_target_result_contract_without_nested_events(async_
         name="protocol_result", description="完整结果", response_format="content_and_artifact",
     )
     envelope = create_extension_tool_invoker_tool(
-        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+        [target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]),
     )
     events = [event async for event in envelope.astream_events({
         "type": "tool_call", "id": "result-contract-call", "name": envelope.name,
@@ -115,7 +115,7 @@ async def test_envelope_preserves_target_error_policy_and_original_call_identity
 
     target = StructuredTool.from_function(fail, name="failing_target", description="错误策略", handle_tool_error=lambda error: f"目标回执：{error}")
     envelope = create_extension_tool_invoker_tool(
-        [target], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([target]),
+        [target], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([target]),
     )
     result = await envelope.ainvoke({
         "type": "tool_call", "id": "error-contract-call", "name": envelope.name,
@@ -178,7 +178,7 @@ async def test_envelope_only_accepts_tool_name_and_arguments() -> None:
     debug_tools = _debugging_tools()
     envelope = create_extension_tool_invoker_tool(
         debug_tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(debug_tools),
     )
     schema = envelope.tool_call_schema.model_json_schema()
 
@@ -221,7 +221,7 @@ async def test_envelope_rejects_unknown_and_runtime_arguments_before_target() ->
     )
     envelope = create_extension_tool_invoker_tool(
         tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(tools),
     )
 
     for field_name in FORBIDDEN_RUNTIME_ARGUMENT_FIELDS:
@@ -256,7 +256,7 @@ def test_envelope_description_and_schema_do_not_expose_target_names() -> None:
     debug_tools = _debugging_tools()
     envelope = create_extension_tool_invoker_tool(
         debug_tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(debug_tools),
     )
     exposed_text = envelope.description + json.dumps(
         envelope.tool_call_schema.model_json_schema(),
@@ -273,7 +273,7 @@ def test_provider_tool_list_contains_only_fixed_envelope_for_debugging() -> None
     debug_tools = _debugging_tools()
     envelope = create_extension_tool_invoker_tool(
         debug_tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(debug_tools),
     )
     agent = create_agent(
         FakeListChatModel(responses=["ok"]),
@@ -290,15 +290,15 @@ def test_envelope_schema_is_stable_when_debugging_targets_change() -> None:
     tools = _debugging_tools()
     empty_envelope = create_extension_tool_invoker_tool(
         [],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools([]),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools([]),
     )
     single_envelope = create_extension_tool_invoker_tool(
         tools[:1],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(tools[:1]),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(tools[:1]),
     )
     full_envelope = create_extension_tool_invoker_tool(
         tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(tools),
     )
 
     assert empty_envelope.name == full_envelope.name == EXTENSION_TOOL_INVOKER_NAME
@@ -414,7 +414,7 @@ def test_configured_debugging_specs_resolve_into_envelope_targets(
     assert {tool.name for tool in tools} == DEBUGGING_TOOL_NAMES
     envelope = create_extension_tool_invoker_tool(
         tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(tools),
     )
     provider_tool_names = set(extract_agent_tools_by_name(
         create_agent(FakeListChatModel(responses=["ok"]), tools=[envelope])
@@ -439,7 +439,7 @@ async def test_envelope_preserves_original_tool_call_id_pairing() -> None:
     )
     envelope = create_extension_tool_invoker_tool(
         tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(tools),
         invocation_context=context,
     )
     middleware = ToolInvocationContextMiddleware(context)
@@ -493,7 +493,7 @@ async def test_extension_invoker_dispatches_configured_tool_without_skill_activa
     custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
         [custom_tool],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
             [custom_tool]
         ),
     )
@@ -517,7 +517,7 @@ async def test_extension_invoker_rechecks_effective_execution_policy(
     custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
         [custom_tool],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
             [custom_tool]
         ),
         is_tool_execution_enabled=lambda _tool: False,
@@ -538,7 +538,7 @@ async def test_extension_invoker_preserves_local_extra_policy_and_rejects_unknow
     custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
         [custom_tool],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
             [custom_tool]
         ),
     )
@@ -579,7 +579,7 @@ def test_extension_invoker_description_is_fixed_and_contains_no_target_schema():
 
     invoker = create_extension_tool_invoker_tool(
         [visible_extension, hidden_extension],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
             [visible_extension, hidden_extension]
         ),
     )
@@ -605,7 +605,7 @@ async def test_extension_invoker_executes_mcp_style_target_and_validates_schema(
     )
     invoker = create_extension_tool_invoker_tool(
         [mcp_status],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
             [mcp_status]
         ),
     )
@@ -637,7 +637,7 @@ async def test_extension_invoker_uses_ainvoke_for_mcp_style_base_tool():
     ainvoke_only = AinvokeOnlyMcpTool()
     invoker = create_extension_tool_invoker_tool(
         [ainvoke_only],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
             [ainvoke_only]
         ),
     )
@@ -667,7 +667,7 @@ async def test_extension_invoker_preserves_container_injected_invocation_context
 
     invoker = create_extension_tool_invoker_tool(
         [context_aware],
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
             [context_aware]
         ),
     )

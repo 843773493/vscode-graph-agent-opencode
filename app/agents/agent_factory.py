@@ -84,8 +84,8 @@ from app.agents.tool_invocation_context import (
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.tool_set_producer import RegisteredToolSetProducer
 from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.agents.tools.tool_discovery import create_search_tools_tool
@@ -635,7 +635,7 @@ def build_deep_agent(
         target_resolver = resolve_target
         permission_check = enabled_extension
     else:
-        resolve_catalog = seal_extension_catalog_binding_from_tools(extension_tools)
+        resolve_catalog = create_extension_catalog_resolver_from_tools(extension_tools)
         permission_check = lambda target: bool(
             getattr(extension_policies.get(target.name), "execution_enabled", False)
         )

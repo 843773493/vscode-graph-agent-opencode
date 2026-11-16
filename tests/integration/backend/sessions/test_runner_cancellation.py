@@ -23,8 +23,8 @@ from app.agents.execution_checkpoint import (
 )
 from app.agents.graph_binding import compute_capability_profile_hash
 from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.container import AppContainer, build_app_container
 from app.core.checkpoint_config import build_checkpoint_config
@@ -842,7 +842,7 @@ async def started_tool_attempt(
             owner=ContextSourceOwnerKey(session_id, thread_id), control_state_port=saver,
         )
         envelope = create_extension_tool_invoker_tool(
-            [], catalog_binding_resolver=seal_extension_catalog_binding_from_tools([]),
+            [], catalog_binding_resolver=create_extension_catalog_resolver_from_tools([]),
         )
         producer = registered_tool_set_producer_factory([envelope])
         producer.freeze_structured_output_tools({})

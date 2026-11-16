@@ -29,7 +29,7 @@ from app.agents.skill_catalog import (
     start_workspace_skill_catalog_publication,
 )
 from app.agents.tools.extension_invocation import (
-    seal_extension_catalog_binding_from_tools,
+    create_extension_catalog_resolver_from_tools,
 )
 from app.core.identifier import create_prefixed_id
 from app.core.lifecycle import LifetimeScope
@@ -554,7 +554,7 @@ class AgentExecutionService(JobStepExecutor):
         mcp_tools = list(self._dependency_provider.get_mcp_tools())
         # MCP 工具集是运行时可变的：用它的内容指纹参与缓存键，避免复用过期
         # 工具目录。指纹复用 extension catalog 的唯一 payload 摘要实现。
-        mcp_binding = seal_extension_catalog_binding_from_tools(mcp_tools)()
+        mcp_binding = create_extension_catalog_resolver_from_tools(mcp_tools)()
 
         config_snapshot = self._config_service.get_snapshot()
         with self._config_service.use_snapshot(config_snapshot):

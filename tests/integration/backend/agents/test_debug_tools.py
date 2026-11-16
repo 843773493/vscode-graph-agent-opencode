@@ -21,8 +21,8 @@ from app.agents.tool_invocation_context import (
 from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.debugging import create_debugging_tools
 from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.core.trace_middleware import (
     reset_current_gateway_id,
@@ -363,7 +363,7 @@ def test_provider_model_schema_keeps_only_fixed_extension_envelope(
     )
     envelope = create_extension_tool_invoker_tool(
         debug_tools,
-        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(debug_tools),
+        catalog_binding_resolver=create_extension_catalog_resolver_from_tools(debug_tools),
     )
     provider_agent = create_agent(
         FakeListChatModel(responses=["ok"]),

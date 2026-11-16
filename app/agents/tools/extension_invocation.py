@@ -93,7 +93,7 @@ def _validate_target_arguments(
         raise ToolException(f"{detail}, issues={json.dumps(issues, ensure_ascii=False)}") from error
 
 
-# E4 第三段 typed resolve 端口：返回当前 model-call 封存的扩展目录 binding ref。
+# 解析器返回当前 model-call 封存的扩展目录 binding ref。
 ExtensionCatalogBindingResolver = Callable[[], ExtensionCatalogBindingRef]
 
 
@@ -108,10 +108,10 @@ def sealed_extension_catalog_binding_resolver(
     return resolve
 
 
-def seal_extension_catalog_binding_from_tools(
+def create_extension_catalog_resolver_from_tools(
     tools: Sequence[BaseTool],
 ) -> ExtensionCatalogBindingResolver:
-    """纯工具面检查与独立 unit 构建；真实 runtime 使用 Saver 的 durable resolver。"""
+    """从工具注册快照构造固定目录解析器；执行恢复使用 Saver 的持久解析器。"""
     entries: list[ExtensionTargetBindingInput] = []
     for tool_item in sorted(tools, key=lambda item: item.name):
         metadata = tool_item.metadata or {}
@@ -218,7 +218,7 @@ def create_extension_tool_invoker_tool(
             raise ValueError("tool_name 不能为空")
 
         with ExitStack() as access:
-            # E4 第三段：旧 tool call 只按封存 ref 解析；live 目录后续增删改
+            # 旧 tool call 只按封存 ref 解析；live 目录后续增删改
             # 不参与解析，缺失 target 显式 paired failure，不回退 live 目录。
             try:
                 binding_ref = catalog_binding_resolver()

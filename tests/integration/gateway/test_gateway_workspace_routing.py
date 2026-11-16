@@ -19,8 +19,8 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
 )
 from app.agents.tools.extension_invocation import (
+    create_extension_catalog_resolver_from_tools,
     create_extension_tool_invoker_tool,
-    seal_extension_catalog_binding_from_tools,
 )
 from app.agents.tools.session_history import (
     create_read_context_tool,
@@ -742,7 +742,7 @@ async def test_session_context_tools_query_another_workspace_through_gateway(
 
         invoker = create_extension_tool_invoker_tool(
             [read_tool, search_tool],
-            catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            catalog_binding_resolver=create_extension_catalog_resolver_from_tools(
                 [read_tool, search_tool]
             ),
         )
