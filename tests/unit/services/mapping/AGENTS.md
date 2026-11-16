@@ -14,7 +14,7 @@ mapping tests/
 │   ├── test_message_content.py 原生 Agent State 记录与轻量内容的边界
 │   └── test_turn_response_parts.py
 ├── 运行事件
-│   └── test_trace_event_mapper.py
+│   └── test_trace_event_mapper.py（Trace DTO身份、时间、工具状态与Skill字段）
 └── itemized投影
     ├── itemized/test_selection_role_projection.py
     ├── itemized/test_carrier_dedup_tool_result.py

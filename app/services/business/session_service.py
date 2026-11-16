@@ -67,7 +67,7 @@ from app.services.infrastructure.session_trace.trace_cursor import (
     unbind_trace_cursor,
 )
 from app.services.infrastructure.trace_event_store import TraceEventStore
-from app.services.mapping.trace_event_mapper import TraceEventMapper
+from app.services.mapping.trace_event_mapper import trace_event_to_dto
 
 
 class SessionService:
@@ -899,12 +899,11 @@ class SessionService:
             self._trace_event_store.read_trace_page,
             session_id, cursor=storage_cursor, limit=limit, thread_id=thread_id,
         )
-        mapper = TraceEventMapper()
         owners = await run_sync_shielded(self._trace_event_store.event_threads, session_id, page.events)
         items = []
         for event in page.events:
             owner = owners[event.event_id]
-            dto = mapper.map_one(event.model_dump(), session_id=session_id, thread_id=owner)
+            dto = trace_event_to_dto(event.model_dump(), session_id=session_id, thread_id=owner)
             if dto is not None:
                 items.append(dto)
         return CursorPage(
@@ -929,7 +928,6 @@ class SessionService:
         if thread_id is not None:
             await self.resolve_thread(session_id, thread_id)
         storage_cursor = unbind_trace_cursor(after_event_id, session_id=session_id, thread_id=thread_id, kind="stream")
-        mapper = TraceEventMapper()
         owners: dict[str, str] = {}
         async with aclosing(self._trace_event_store.stream_events(
             session_id, storage_cursor, thread_id=thread_id,
@@ -946,6 +944,6 @@ class SessionService:
                 explicit = getattr(event.payload, "thread_id", owner)
                 if explicit != owner:
                     raise RuntimeError(f"Trace Job 的 Thread 归属漂移: job_id={event.job_id}")
-                dto = mapper.map_one(event.model_dump(), session_id=session_id, thread_id=owner)
+                dto = trace_event_to_dto(event.model_dump(), session_id=session_id, thread_id=owner)
                 if dto is not None:
                     yield dto, bind_trace_cursor(record.cursor, session_id=session_id, thread_id=thread_id, kind="stream")

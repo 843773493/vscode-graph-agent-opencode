@@ -718,61 +718,6 @@ class TestSessionService:
         assert second_cursor.startswith("ts2.")
 
     @pytest.mark.asyncio
-    async def test_trace_event_mapper_maps_tool_events(self):
-        from app.services.mapping.trace_event_mapper import TraceEventMapper
-
-        mapper = TraceEventMapper()
-
-        event = mapper.map_one(
-            {
-                "event_id": "evt_tool",
-                "job_id": "job_1",
-                "step_id": "step_1",
-                "timestamp": "2024-03-09T12:00:00+00:00",
-                "type": "tool_call_end",
-                "payload": {"tool_name": "search_files"},
-            },
-            session_id="ses_1",
-            thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
-        )
-
-        assert event is not None
-        assert event.type == "tool_call_end"
-        assert event.phase == "tool"
-        assert event.title == "工具返回"
-        assert event.content == "工具 search_files 已返回结果"
-        assert event.tool_name == "search_files"
-        assert event.status == "completed"
-
-    @pytest.mark.asyncio
-    async def test_trace_event_mapper_maps_tool_skill_names(self):
-        from app.services.mapping.trace_event_mapper import TraceEventMapper
-
-        mapper = TraceEventMapper()
-
-        event = mapper.map_one(
-            {
-                "event_id": "evt_tool_skill",
-                "job_id": "job_1",
-                "step_id": "step_1",
-                "timestamp": "2024-03-09T12:00:00+00:00",
-                "type": "tool_call_start",
-                "payload": {
-                    "tool_name": "test_tool_2",
-                    "args": {},
-                    "skill_names": ["test-tool-2"],
-                },
-            },
-            session_id="ses_1",
-            thread_id="thr_019bef80066f7038ae8e88ccb2e5e2ea",
-        )
-
-        assert event is not None
-        assert event.type == "tool_call_start"
-        assert event.tool_name == "test_tool_2"
-        assert event.skill_names == ["test-tool-2"]
-
-    @pytest.mark.asyncio
     async def test_delete_cleans_all_files(self):
         session = await self.service.create(SessionCreateRequest(title="Cleanup Test"))
         session_dir = get_session_path(session.session_id)

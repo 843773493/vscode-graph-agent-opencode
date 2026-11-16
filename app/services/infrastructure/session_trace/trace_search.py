@@ -17,7 +17,7 @@ from app.schemas.internal_v2.trace_search import (
     TraceReferenceDTO,
     TraceSearchLimit,
 )
-from app.services.mapping.trace_event_mapper import TraceEventMapper
+from app.services.mapping.trace_event_mapper import trace_event_to_dto
 
 from .trace_cursor import TraceCursorGoneError
 from .trace_page import (
@@ -182,7 +182,7 @@ def locate_trace_event(
     text = _text(record.event)
     if reference.end_codepoint > len(text):
         raise TraceSearchError("stale_trace_reference", "position_out_of_bounds", "Trace 命中位置已失效")
-    dto = TraceEventMapper().map_one(record.event.model_dump(mode="json"), reference.session_id, thread_id=thread)
+    dto = trace_event_to_dto(record.event.model_dump(mode="json"), reference.session_id, thread_id=thread)
     if dto is None:
         raise ValueError(f"Trace 事件没有公开详情映射: {record.event.type}")
     return TraceLocationDTO(reference=reference, record=dto, text=text)
