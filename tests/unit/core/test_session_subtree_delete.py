@@ -35,7 +35,7 @@ from app.core.session_subtree_delete import (
     SessionSubtreeDeleteService,
     SubtreeDeleteResult,
 )
-from app.services.business.session_resource_service import SessionResourceService
+from app.services.business.session_resources.service import SessionResourceService
 from tests.support.canonical_id_at import session_id_at, thread_id_at
 from tests.support.graph_binding import TEST_THREAD_GRAPH_BINDING
 

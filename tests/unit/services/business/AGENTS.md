@@ -18,6 +18,7 @@ tests/unit/services/business/
 ├── session_generation/    Session 创建与默认值
 ├── session_children/      child-thread 读模型、Team board 发布投影与创建 owner
 ├── session_navigation/    Session 导航目录与操作队列
+├── session_resources/     会话关联资源聚合、控制与 Provider 分派
 ├── session_turn_history/ Turn 历史读取
 ├── team/                  团队协作与成员状态
 └── 根目录测试
@@ -32,8 +33,7 @@ tests/unit/services/business/
     │   ├── test_*checkpoint*.py
     │   └── test_runtime_reminder.py
     ├── 资源 owner
-    │   ├── test_browser_resource_owner.py、test_terminal_resource_owner.py
-    │   └── test_session_resource_*.py
+    │   └── test_browser_resource_owner.py、test_terminal_resource_owner.py
     └── Agent、Gateway 与内容
         ├── test_agent_service.py、test_gateway_context_query_service.py
         ├── test_user_content_builder.py

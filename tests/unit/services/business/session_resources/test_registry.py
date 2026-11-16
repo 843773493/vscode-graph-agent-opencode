@@ -10,7 +10,7 @@ from app.schemas.internal_v2.session_resource import (
     SessionResourceDTO,
     SessionResourceKind,
 )
-from app.services.business.session_resource_registry import (
+from app.services.business.session_resources.registry import (
     SessionResourceProviderRegistry,
 )
 

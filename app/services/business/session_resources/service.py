@@ -7,13 +7,15 @@ from app.schemas.internal_v2.session_resource import (
     SessionResourceKind,
     SessionResourceListDTO,
 )
-from app.services.business.session_resource_registry import (
+from app.services.business.session_resources.registry import (
     SessionResourceProviderRegistry,
 )
 from app.services.business.session_service import SessionService
 
 
 class SessionResourceService:
+    """聚合会话关联资源；资源状态和控制事实由各领域 owner 持有。"""
+
     def __init__(
         self,
         *,

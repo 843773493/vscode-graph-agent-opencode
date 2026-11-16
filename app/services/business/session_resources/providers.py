@@ -5,7 +5,10 @@ from itertools import chain
 from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.browser_resources import BrowserPluginDisabled
 from app.abstractions.terminal.resources import TerminalPluginDisabled
-from app.domain.background_work import BackgroundTaskHandle
+from app.domain.background_work import (
+    ACTIVE_BACKGROUND_TASK_STATUSES,
+    BackgroundTaskHandle,
+)
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
@@ -13,9 +16,6 @@ from app.schemas.internal_v2.session_resource import (
     SessionResourceKind,
 )
 from app.services.business.browser_resources.owner import BrowserResourceOwner
-from app.services.business.session_resource_actions import (
-    background_task_available_actions,
-)
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.business.workspace_resources.owner import ResourceConflict
 from app.services.business.workspace_resources.records import ThreadRef
@@ -93,9 +93,18 @@ class BackgroundTaskResourceProvider:
         return await self._task_registry.delete_session(session_id)
 
     def _to_resource(self, handle: BackgroundTaskHandle) -> SessionResourceDTO:
+        actions: list[SessionResourceAction]
+        if handle.status == "reconcile_required":
+            actions = ["reconcile"]
+        elif handle.status == "deleted":
+            actions = []
+        elif handle.status in ACTIVE_BACKGROUND_TASK_STATUSES:
+            actions = ["cancel", "delete"]
+        else:
+            actions = ["delete"]
         return session_resource_mapper.background_task_to_session_resource(
             handle,
-            available_actions=background_task_available_actions(handle.status),
+            available_actions=actions,
         )
 
 

@@ -16,15 +16,15 @@ from app.domain.background_work import BackgroundTaskHandle
 from app.domain.itemized.enums import PayloadKind
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.business.session_navigation.service import SessionCatalogService
-from app.services.business.session_resource_providers import (
+from app.services.business.session_resources.providers import (
     BackgroundTaskResourceProvider,
     BrowserResourceProvider,
     TerminalResourceProvider,
 )
-from app.services.business.session_resource_registry import (
+from app.services.business.session_resources.registry import (
     SessionResourceProviderRegistry,
 )
-from app.services.business.session_resource_service import SessionResourceService
+from app.services.business.session_resources.service import SessionResourceService
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )

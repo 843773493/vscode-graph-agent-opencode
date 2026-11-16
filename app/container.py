@@ -73,15 +73,15 @@ from app.services.business.session_goal_service import SessionGoalService
 from app.services.business.session_information_service import SessionInformationService
 from app.services.business.session_interrupt_service import SessionInterruptService
 from app.services.business.session_navigation.service import SessionCatalogService
-from app.services.business.session_resource_providers import (
+from app.services.business.session_resources.providers import (
     BackgroundTaskResourceProvider,
     BrowserResourceProvider,
     TerminalResourceProvider,
 )
-from app.services.business.session_resource_registry import (
+from app.services.business.session_resources.registry import (
     SessionResourceProviderRegistry,
 )
-from app.services.business.session_resource_service import SessionResourceService
+from app.services.business.session_resources.service import SessionResourceService
 from app.services.business.session_service import SessionService
 from app.services.business.session_skill_tracking_service import (
     SessionSkillTrackingService,

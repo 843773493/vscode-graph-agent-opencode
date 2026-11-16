@@ -13,7 +13,7 @@ from app.schemas.internal_v2.session_resource import (
 
 
 class SessionResourceProviderRegistry:
-    """注册并分发会话后台资源提供者。"""
+    """按资源类型分派会话资源查询、控制与清理。"""
 
     def __init__(
         self,

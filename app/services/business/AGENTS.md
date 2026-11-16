@@ -32,10 +32,10 @@
 │   │   ├── service.py                     记录、查询、审查及编辑 ID 生成
 │   │   └── projection.py                  diff、首尾净变化、分组、摘要与预览
 │   ├── session_skill_tracking_service.py
-│   ├── session_resource_service.py
-│   ├── session_resource_actions.py
-│   ├── session_resource_providers.py
-│   ├── session_resource_registry.py
+│   ├── session_resources/                会话关联资源的聚合与控制分派，不持有资源状态
+│   │   ├── service.py                    会话准入、列表聚合与清理入口
+│   │   ├── registry.py                   按 kind 注册和分派 Provider
+│   │   └── providers.py                  后台任务、Terminal、Browser 的会话视图与控制适配
 │   ├── browser_resources/       Browser资源归属
 │   ├── terminal_resources/      Terminal资源归属
 │   ├── workspace_resources/     Terminal／Browser 共用的准入、保留、关联与 lease
