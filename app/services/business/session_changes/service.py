@@ -1,5 +1,9 @@
+"""会话文件编辑的记录、变更集查询与审查操作。"""
+
 from __future__ import annotations
 
+import hashlib
+import time
 from datetime import UTC, datetime
 from functools import cache, partial
 
@@ -18,8 +22,7 @@ from app.schemas.internal_v2.session_changes import (
     SessionFileChangeDTO,
     SessionFileReviewResultDTO,
 )
-from app.services.business.session_changes_logic import (
-    build_edit_id,
+from app.services.business.session_changes.projection import (
     build_unified_diff,
     changeset_kind_and_turn,
     changeset_records,
@@ -32,6 +35,19 @@ from app.services.business.session_changes_logic import (
     summarize_records,
 )
 from app.services.business.session_service import SessionService
+
+
+def _new_edit_id(
+    *,
+    turn_id: str | None,
+    execution_id: str,
+    tool_call_id: str,
+    file_path: str,
+) -> str:
+    owner_id = turn_id if turn_id is not None else execution_id
+    value = f"{owner_id}\0{tool_call_id}\0{file_path}\0{time.time_ns()}"
+    return f"edit_{hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]}"
+
 
 
 class SessionChangesService:
@@ -69,7 +85,7 @@ class SessionChangesService:
                 after_content=edit.after_content if edit.after_exists else "",
             )
             additions, deletions = count_diff_lines(diff_text)
-            edit_id = build_edit_id(
+            edit_id = _new_edit_id(
                 turn_id=turn_id,
                 execution_id=execution_id,
                 tool_call_id=tool_call_id,

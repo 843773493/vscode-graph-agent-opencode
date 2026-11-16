@@ -104,7 +104,7 @@ from app.schemas.internal_v2.workspace import (
     SessionFileTreeSettingsDTO,
 )
 from app.services.business.context_compaction_service import ContextCompactionService
-from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_changes.service import SessionChangesService
 from app.services.business.session_context_fork_service import SessionContextForkService
 from app.services.business.session_goal_service import (
     TOKEN_BUDGET_UNSET,

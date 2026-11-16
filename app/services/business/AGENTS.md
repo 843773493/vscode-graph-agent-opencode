@@ -28,7 +28,9 @@
 │   ├── session_service.py
 │   ├── session_information_service.py / session_goal_service.py
 │   ├── session_interrupt_service.py
-│   ├── session_changes_logic.py / session_changes_service.py
+│   ├── session_changes/                   文件编辑记录、净变化投影与审查
+│   │   ├── service.py                     记录、查询、审查及编辑 ID 生成
+│   │   └── projection.py                  diff、首尾净变化、分组、摘要与预览
 │   ├── session_skill_tracking_service.py
 │   ├── session_resource_service.py
 │   ├── session_resource_actions.py

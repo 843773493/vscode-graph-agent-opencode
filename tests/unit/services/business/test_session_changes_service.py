@@ -19,7 +19,7 @@ from app.core.path_utils import (
 )
 from app.core.resource_uri import resource_display_uri
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.services.business.session_changes_service import SessionChangesService
+from app.services.business.session_changes.service import SessionChangesService
 from app.services.business.session_service import SessionService
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.session_changes_store import SessionChangesStore

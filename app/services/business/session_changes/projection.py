@@ -1,8 +1,8 @@
+"""会话编辑记录到 diff、净变化摘要和预览的投影规则。"""
+
 from __future__ import annotations
 
-import hashlib
 import re
-import time
 from collections.abc import Callable, Iterator
 from typing import Literal
 
@@ -31,18 +31,6 @@ _DIFF_LINE_BREAKS = (
     "\u2028",
     "\u2029",
 )
-
-
-def build_edit_id(
-    *,
-    turn_id: str | None,
-    execution_id: str,
-    tool_call_id: str,
-    file_path: str,
-) -> str:
-    owner_id = turn_id if turn_id is not None else execution_id
-    value = f"{owner_id}\0{tool_call_id}\0{file_path}\0{time.time_ns()}"
-    return f"edit_{hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]}"
 
 
 def build_unified_diff(
