@@ -3,13 +3,12 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from app.agents.policy import (
-    AGENT_COLLABORATION_TOOL_GROUP,
     DEBUGGING_TOOL_GROUP,
     DEFAULT_TOOL_GROUP,
     ParsedCustomToolSpec,
-    catalog_group_for_tool,
     parse_custom_tool_specs,
 )
+from app.agents.policy.tool_groups import catalog_group_for_custom_tool
 from app.agents.tools.debugging import debugging_tool_input_json_schema
 from app.services.infrastructure.config_service import ConfigService
 
@@ -60,22 +59,10 @@ class AgentToolCatalog:
 
     @staticmethod
     def _custom_definition(spec: ParsedCustomToolSpec) -> dict[str, Any]:
-        module_name = spec.factory_path.split(":", 1)[0].rsplit(".", 1)[-1]
-        known_group = catalog_group_for_tool(spec.name)
-        if known_group in {
-            AGENT_COLLABORATION_TOOL_GROUP,
-            DEBUGGING_TOOL_GROUP,
-        }:
-            group_fields = known_group.as_catalog_fields()
-        else:
-            group_fields = {
-                "group_id": f"extension:{module_name}",
-                "group_name": f"扩展工具 · {module_name}",
-                "kind": "extension",
-            }
+        group = catalog_group_for_custom_tool(spec)
         parameters = (
             debugging_tool_input_json_schema(spec.name)
-            if known_group == DEBUGGING_TOOL_GROUP
+            if group == DEBUGGING_TOOL_GROUP
             else {}
         )
         return {
@@ -85,6 +72,6 @@ class AgentToolCatalog:
             "availability": "unknown",
             "description": spec.description or f"工作区扩展工具 {spec.name}",
             "parameters": parameters,
-            "category": group_fields["kind"],
-            **group_fields,
+            "category": group.kind,
+            **group.as_catalog_fields(),
         }

@@ -100,6 +100,9 @@ def test_catalog_exposes_declared_extensions_with_static_policy_metadata(
     assert definitions[1]["group_name"] == "默认工具 · Agent Collaboration"
     assert definitions[1]["kind"] == "collaboration"
     assert definitions[3]["description"] == "网络搜索"
+    assert definitions[3]["group_id"] == definitions[4]["group_id"] == "extension:example"
+    assert definitions[3]["group_name"] == "扩展工具 · example"
+    assert definitions[3]["kind"] == definitions[3]["category"] == "extension"
     assert all(
         item["origin"] == "custom"
         for item in definitions[2:]

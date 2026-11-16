@@ -61,7 +61,10 @@ from app.agents.policy import (
     parse_custom_tool_specs,
     validate_tool_dependencies,
 )
-from app.agents.policy.tool_capability import metadata_for_tool
+from app.agents.policy.tool_capability import (
+    metadata_for_custom_tool,
+    metadata_for_tool,
+)
 from app.agents.skill_catalog import (
     PublishedSkillCatalog,
     build_workspace_skill_catalog,
@@ -524,17 +527,7 @@ def build_deep_agent(
         for tool in custom_tool_bundle.tools:
             if tool.name in resolved_tool_denylist:
                 continue
-            spec = custom_specs_by_name.get(tool.name)
-            group_id = None
-            if spec is not None:
-                module_name = spec.factory_path.split(":", 1)[0].rsplit(".", 1)[-1]
-                known_group = catalog_group_for_tool(tool.name)
-                group_id = (
-                    known_group.group_id
-                    if known_group.kind != "default"
-                    else f"extension:{module_name}"
-                )
-            metadata = metadata_for_tool(tool, origin="custom", group_id=group_id)
+            metadata = metadata_for_custom_tool(custom_specs_by_name[tool.name])
             custom_metadata[tool.name] = metadata
             policy = capability_resolver.resolve(
                 metadata,

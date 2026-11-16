@@ -2,10 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from langchain_core.tools import BaseTool
 
-from app.agents.policy.tool_groups import catalog_group_for_tool
+from app.agents.policy.tool_groups import (
+    catalog_group_for_custom_tool,
+    catalog_group_for_tool,
+)
+
+if TYPE_CHECKING:
+    from app.agents.policy.custom_tool_spec import ParsedCustomToolSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +23,12 @@ class ToolMetadata:
     origin: str
     kind: str
     group_id: str
+
+
+def metadata_for_custom_tool(spec: ParsedCustomToolSpec) -> ToolMetadata:
+    """从已校验声明取得策略身份，列表筛选与执行装配共用。"""
+    group = catalog_group_for_custom_tool(spec)
+    return ToolMetadata(spec.name, "custom", group.kind, group.group_id)
 
 
 def metadata_for_tool(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -135,7 +136,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     config_service = MagicMock()
     config_service.get_tool_policy_resolver.return_value = ToolPolicyResolver(
         policy_defaults={},
-        policy_rules={},
+        policy_rules={"by_group": {"extension:testing": {"execution_enabled": False}}},
         restrictions={},
     )
     checkpointer = RolloutCheckpointSaver(tmp_path / "sessions")
@@ -157,7 +158,8 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         "owns_thread": False,
         "thread_id": "thr_00000000400070008000000000000002",
         "agent_id": "default",
-        "tools": [],
+        "custom_tool_specs": [{"tool_id": "test_tool_2"}],
+        "browser_resource_owner": MagicMock(),
         "enabled_tool_names": {"read_file"},
         "background_task_registry": MagicMock(),
         "background_mailbox": MagicMock(),
@@ -188,6 +190,7 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         ),
         patch.object(agent_factory, "ContextSourceManager", wraps=ContextSourceManager) as context_manager,
         patch.object(agent_factory, "build_workspace_backend"),
+        patch.object(agent_factory, "build_default_tools", return_value=[]),
         patch.object(agent_factory, "build_workspace_skill_catalog") as build_catalog,
         patch.object(agent_factory, "append_skill_middlewares"),
         patch.object(
@@ -213,5 +216,12 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
     reactor.assert_not_called()
     build_catalog.assert_not_called()
     build_middleware.assert_not_called()
+    invoker = next(tool for tool in tools if tool.name == EXTENSION_TOOL_INVOKER_NAME)
+    result = asyncio.run(invoker.ainvoke({
+        "type": "tool_call", "id": "call_disabled_extension", "name": invoker.name,
+        "args": {"tool_name": "test_tool_2", "arguments": {}},
+    }))
+    assert result.status == "error"
+    assert result.text == "扩展工具 'test_tool_2' 已被策略禁用"
     names = {tool.name for tool in tools}
     assert {"read_file", "write_todos", "compact_conversation", "read_compaction_history"} <= names

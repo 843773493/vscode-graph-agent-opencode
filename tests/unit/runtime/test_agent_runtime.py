@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from app.agents.policy import ToolPolicyResolver
 from app.runtime.agent_runtime import (
     build_session_agent_runtime,
     get_configured_custom_tool_names,
@@ -69,11 +70,19 @@ def test_get_configured_custom_tool_names_excludes_mcp_extensions() -> None:
             {
                 "name": "web_search",
                 "factory": "example.tools:create_web_search",
-            }
+            },
+            {"tool_id": "read_context"},
+            {"name": "start_debugging", "factory": "example.debug:create_tool"},
         ]
     }
-    config_service.resolve_agent_tool_policy.return_value.enabled_names = frozenset(
-        {"web_search", "mcp__tui-mcp__list_sessions"}
+    config_service.get_tool_policy_resolver.return_value = ToolPolicyResolver(
+        policy_defaults={"execution_enabled": False},
+        policy_rules={"by_group": {
+            "extension:tools": {"execution_enabled": True},
+            "agent-collaboration": {"execution_enabled": True},
+            "mcp:tui-mcp": {"execution_enabled": True},
+        }},
+        restrictions={},
     )
 
     result = get_configured_custom_tool_names(
@@ -81,4 +90,4 @@ def test_get_configured_custom_tool_names_excludes_mcp_extensions() -> None:
         config_service=config_service,
     )
 
-    assert result == {"web_search"}
+    assert result == {"web_search", "read_context"}

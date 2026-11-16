@@ -9,9 +9,9 @@
 ```text
 app/agents/policy/
 ├── custom_tool_spec.py  校验和归一化内置/扩展工具声明
-├── tool_groups.py       维护工具分组及工具到分组的映射
+├── tool_groups.py       工具分组映射；自定义声明的模块分组由 catalog_group_for_custom_tool 统一推导
 ├── tool_policy.py       解析工具全集、allow/deny selector 与跨工具依赖
-├── tool_capability.py   合并 Workspace/Agent 规则和强制限制
+├── tool_capability.py   工具策略身份与能力合并；metadata_for_custom_tool 供配置筛选和执行装配共用
 └── __init__.py          导出策略目录的公共类型与函数
 ```
 

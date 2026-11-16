@@ -16,10 +16,10 @@ from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.policy import (
-    ToolMetadata,
     catalog_group_for_tool,
     parse_custom_tool_specs,
 )
+from app.agents.policy.tool_capability import metadata_for_custom_tool
 from app.core.lifecycle import LifetimeScope
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
@@ -217,23 +217,7 @@ def get_configured_custom_tool_names(
         tool_config.get("custom", []),
         context=f"agent {agent_id} 的 tools.custom",
     ):
-        known_group = catalog_group_for_tool(spec.name)
-        module_name = spec.factory_path.split(":", 1)[0].rsplit(".", 1)[-1]
-        metadata = ToolMetadata(
-            tool_id=spec.name,
-            origin="custom",
-            kind=(
-                known_group.kind
-                if known_group.kind != "default"
-                else "extension"
-            ),
-            group_id=(
-                known_group.group_id
-                if known_group.kind != "default"
-                else f"extension:{module_name}"
-            ),
-        )
-        if resolver.resolve(metadata).execution_enabled:
+        if resolver.resolve(metadata_for_custom_tool(spec)).execution_enabled:
             names.add(spec.name)
     return names
 
