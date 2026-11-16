@@ -163,7 +163,6 @@ from app.services.infrastructure.rollout_context.activation.body import (
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.session_changes_store import SessionChangesStore
 from app.services.infrastructure.team.store import TeamStore
 from app.services.infrastructure.terminal_manager_client import TerminalManagerClient
@@ -214,6 +213,9 @@ from app.services.orchestration.thread_initial_execution_service import (
     ThreadInitialExecutionService,
 )
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from app.tool_testing import ToolTestRegistry, ToolTestService, ToolTestStore
 
 
@@ -370,7 +372,7 @@ class AppContainer:
     message_service: MessageService
     attachment_blob_store: AttachmentBlobStore
     external_resource_leases: ExternalResourceLeaseLedger
-    runtime_service: RuntimeService
+    runtime_service: WorkspaceRuntimeLifecycleService
     goal_service: SessionGoalService
     session_interrupt_service: SessionInterruptService
     session_skill_tracking_service: SessionSkillTrackingService
@@ -1023,9 +1025,8 @@ def _build_app_container(
 
     agent_service = AgentService(config_service=config_service)
     artifact_service = ArtifactService()
-    runtime_service = RuntimeService(
+    runtime_service = WorkspaceRuntimeLifecycleService(
         workspace_id=workspace_service.workspace_id,
-        workspace_root=resolved_workspace_root,
         job_service=job_service,
         background_task_registry=background_task_registry,
         trace_event_store=trace_event_store,

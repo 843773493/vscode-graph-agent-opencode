@@ -4,7 +4,7 @@
 
 ## 模块职责树
 
-下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 26 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
+下面先列实际子目录，再按职责索引仍直接放在本目录的模块。根级模块目前有 25 个；职责分组只是查找索引，不代表这些文件已迁入子目录。
 
 ```text
 infrastructure/
@@ -60,8 +60,7 @@ infrastructure/
     └── 其他基础设施
         ├── artifact_service.py
         ├── attachment_content_service.py
-        ├── rollout_checkpoint_runtime.py
-        └── runtime_service.py
+        └── rollout_checkpoint_runtime.py
 ```
 
 新增实现优先归入职责匹配的现有子目录；跨域根级模块只在确实服务多个子域时保留。迁移既有文件时，全量平移导入方与对应测试，并同步修订这棵树；不要只移动文件留下旧路径或重复入口。
@@ -85,7 +84,6 @@ infrastructure/
 - 失败时直接抛错，避免“看起来成功”的假默认值。
 - HTML快照按metadata创建时刻保留30天，过期读取返回不存在；工作区每小时任务在worker中删除metadata和HTML，并回收超过30天的未发布HTML。只通过catalog逐会话定位并持有原生命周期gate，不递归发现未知会话；回收不读取HTML正文、不在普通读取中扫描目录。
 - Context detail复用每小时任务，经RolloutCheckpointRuntime持原Session生命周期gate逐会话、逐已发布Thread和namespace调用原GC owner；worker只删除已过期且无封存引用的正文，不裁剪恢复依赖、不新建空rollout、不在请求路径回收。
-- Runtime 启动恢复在受保护 worker 中耗尽 SQLite Trace 快照的逐事件读取，只保留 Job owner 和生命周期 ID；所有历史格式、协议与跨会话归属检查通过后才领取队列、调用恢复端口或写入终态。不得用任意尾部窗口代替这次全历史校验，也不为此新建恢复账本。
 - 不要引入与 `app/core/` 职责重复的内容。
 - 会话专属持久化必须先通过统一会话路径解析器取得物理会话节点，再使用该节点下的对应子目录；禁止拼接或假设 `${workspace_abs_path}/.boxteam/sessions/{session_id}/` 固定路径。
 - 新增会话存储时必须同时考虑会话移动、删除、导出和迁移，确保操作解析后的整个会话目录即可完整处理数据。

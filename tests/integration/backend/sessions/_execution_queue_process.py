@@ -23,8 +23,10 @@ from app.services.infrastructure.pending_request_store import PendingRequestStor
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from tests.support.background_work import build_background_registry
 from tests.unit.core.catalog_workspace_helper import build_catalog_workspace
 
@@ -92,8 +94,9 @@ async def run(root: Path, mode: str, barrier: str) -> None:
     else:
         async def checkpoint(_job):
             return None
-        runtime = RuntimeService(workspace_id=workspace.workspace_id, workspace_root=workspace.workspace_root,
-            job_service=jobs, background_task_registry=build_background_registry(workspace.sessions_root),
+        runtime = WorkspaceRuntimeLifecycleService(
+            workspace_id=workspace.workspace_id, job_service=jobs,
+            background_task_registry=build_background_registry(workspace.sessions_root),
             trace_event_store=TraceEventStore(sessions_dir=workspace.sessions_root),
             message_stream_store=MessageStreamStore(path_resolver=workspace.resolver), terminal_status_writer=saver,
             pending_tool_checkpoint_id=checkpoint, pending_request_store=store)

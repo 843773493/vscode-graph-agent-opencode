@@ -26,7 +26,9 @@ from app.services.infrastructure.html_snapshot_store import (
     HtmlSnapshotInput,
     HtmlSnapshotStore,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 
 router = APIRouter(prefix="/runtime", tags=["runtime"])
 logger = logging.getLogger(__name__)
@@ -45,7 +47,7 @@ class UiSnapshotRequest(BaseModel):
 async def get_runtime_status(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
+    runtime_service: WorkspaceRuntimeLifecycleService = Depends(get_runtime_service),
 ):
     result = await runtime_service.status()
     return APIResponse(data=result, request_id=request_id)
@@ -59,7 +61,7 @@ async def get_runtime_status(
 async def begin_runtime_drain(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
+    runtime_service: WorkspaceRuntimeLifecycleService = Depends(get_runtime_service),
 ):
     try:
         result = await runtime_service.begin_drain()
@@ -77,7 +79,7 @@ async def begin_runtime_drain(
 async def cancel_runtime_drain(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
+    runtime_service: WorkspaceRuntimeLifecycleService = Depends(get_runtime_service),
 ):
     try:
         result = await runtime_service.cancel_drain()
@@ -95,7 +97,7 @@ async def cancel_runtime_drain(
 async def force_runtime_drain(
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
-    runtime_service: RuntimeService = Depends(get_runtime_service),
+    runtime_service: WorkspaceRuntimeLifecycleService = Depends(get_runtime_service),
 ):
     try:
         result = await runtime_service.force_interrupt()

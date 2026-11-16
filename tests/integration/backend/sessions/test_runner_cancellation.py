@@ -68,10 +68,12 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
 from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
 from app.services.orchestration.session_title_service import SessionTitleService
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
@@ -787,9 +789,8 @@ async def test_restart_restores_original_child_before_provider_dispatch(
         ),
     )
     restarted = RolloutCheckpointSaver(sessions_root)
-    runtime = RuntimeService(
+    runtime = WorkspaceRuntimeLifecycleService(
         workspace_id=runner_case.container.workspace_service.workspace_id,
-        workspace_root=runner_case.workspace,
         job_service=runner_case.container.job_service,
         background_task_registry=runner_case.container.background_task_registry,
         trace_event_store=runner_case.container.trace_event_store,
@@ -998,9 +999,8 @@ async def test_restart_closes_original_tool_attempt_before_internal_prepare(
         path_resolver=get_session_path_resolver(sessions_root),
         workspace_id=runner_case.container.workspace_service.workspace_id,
     )
-    runtime = RuntimeService(
+    runtime = WorkspaceRuntimeLifecycleService(
         workspace_id=runner_case.container.workspace_service.workspace_id,
-        workspace_root=runner_case.workspace,
         job_service=runner_case.container.job_service,
         background_task_registry=runner_case.container.background_task_registry,
         trace_event_store=runner_case.container.trace_event_store,

@@ -1,10 +1,11 @@
+"""工作区执行的启动恢复、准入排空与强制停止编排。"""
+
 from __future__ import annotations
 
 import os
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from pathlib import Path
 
 from app.abstractions.pending_request_store import PendingRequestStoreProtocol
 from app.abstractions.state_conflict import ClientStateConflictError
@@ -15,7 +16,6 @@ from app.core.identifier import create_prefixed_id
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import validate_workspace_id
 from app.schemas.event import (
-    Event,
     SessionInterruptedEvent,
     SessionInterruptedPayload,
 )
@@ -31,17 +31,13 @@ from app.services.infrastructure.message_stream_store import MessageStreamStore
 from app.services.infrastructure.trace_event_store import TraceEventStore
 
 
-def is_job_timeout_event(event: Event) -> bool:
-    """Job 的两类超时由唯一结构化 code 判定。"""
-    return getattr(event.payload, "code", None) in {"job_timeout", "job_startup_timeout"}
+class WorkspaceRuntimeLifecycleService:
+    """协调本工作区的 Job、后台任务及持久执行恢复；不管理 Backend 进程。"""
 
-
-class RuntimeService:
     def __init__(
         self,
         *,
         workspace_id: str,
-        workspace_root: Path,
         job_service: JobService,
         background_task_registry: BackgroundTaskRegistry,
         trace_event_store: TraceEventStore,
@@ -51,7 +47,6 @@ class RuntimeService:
         pending_request_store: PendingRequestStoreProtocol,
     ) -> None:
         self._workspace_id = validate_workspace_id(workspace_id)
-        self._workspace_root = workspace_root.expanduser().resolve()
         self._job_service = job_service
         self._background_task_registry = background_task_registry
         self._trace_event_store = trace_event_store
@@ -63,12 +58,9 @@ class RuntimeService:
         self._start_time: float | None = None
         self._startup_reconciliation_errors: list[dict[str, str]] = []
 
-    def get_log_dir(self) -> Path:
-        return self._workspace_root / ".boxteam" / "logs"
-
     @property
     def startup_reconciliation_errors(self) -> list[dict[str, str]]:
-        """返回启动恢复时发现的历史 Trace 错误，供健康检查暴露。"""
+        """返回启动恢复被拒的检查点信息，供健康检查暴露。"""
         return list(self._startup_reconciliation_errors)
 
     async def status(self) -> RuntimeInfoDTO:

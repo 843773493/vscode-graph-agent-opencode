@@ -35,8 +35,10 @@ from app.services.business.job.service import (
     JobState,
 )
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from tests.support.api_helpers import running_job_dispatch_snapshot
 from tests.support.background_work import build_background_registry
 
@@ -162,7 +164,7 @@ def build_runtime(pending_checkpoint_inspector,
     terminal_status_writer: RecordingTurnStatusWriter | None = None,
     *,
     session_lifecycle_guard,
-) -> tuple[RuntimeService, JobService]:
+) -> tuple[WorkspaceRuntimeLifecycleService, JobService]:
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     bus = RecordingJobEventBus()
     jobs = JobService(
@@ -170,18 +172,13 @@ def build_runtime(pending_checkpoint_inspector,
         job_executor=NeverFinishExecutor(),
         session_lifecycle_guard=session_lifecycle_guard,
     )
-    runtime = RuntimeService(
+    runtime = WorkspaceRuntimeLifecycleService(
         workspace_id="00000000-0000-4000-8000-000000000001",
-        workspace_root=tmp_path,
         job_service=jobs,
         pending_tool_checkpoint_id=pending_checkpoint_inspector,
         background_task_registry=build_background_registry(sessions_dir),
         trace_event_store=TraceEventStore(sessions_dir=sessions_dir),
         message_stream_store=MessageStreamStore(
-            # R18 catalog 模式适配：经 path_utils 开关工厂取 resolver
-            # （catalog 模式走 SQLite catalog 链，旧模式返回原 legacy
-            # resolver，行为不变）。直连旧类会在 catalog 模式下解析不到
-            # 经 factory 注册的会话。
             path_resolver=get_session_path_resolver(sessions_dir)
         ),
         pending_request_store=EmptyPendingRequestStore(),
@@ -205,7 +202,6 @@ async def test_status_reports_the_injected_workspace_uuid_without_storage_locati
     assert status.workspace_id == "00000000-0000-4000-8000-000000000001"
     assert "storage" not in status.model_dump()
     assert str(tmp_path) not in status.model_dump_json()
-    assert runtime.get_log_dir() == tmp_path / ".boxteam" / "logs"
 
 
 @pytest.mark.asyncio

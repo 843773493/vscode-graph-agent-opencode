@@ -1,13 +1,13 @@
 """Runtime 生命周期守卫的状态冲突契约测试。
 
-``RuntimeService`` 用裸 ``RuntimeError`` 表达「当前生命周期状态不允许该动作」。
+``WorkspaceRuntimeLifecycleService`` 用 ``ClientStateConflictError`` 表达「当前生命周期状态不允许该动作」。
 这类客户端可触发的状态冲突若在适配层漏接，会被 TraceMiddleware 统一转成 500，
 并把 ``RuntimeError:`` 类名写进响应体。本文件冻结三个守卫统一落 409 且不泄漏
 内部类名的行为。
 
 按 tests/unit/api 规范：直接调用公开处理函数断言错误映射，并用进程内
 TestClient 验证真实 HTTP 封套；不启动真实后端进程，文件系统用 pytest 临时目录。
-本测试使用真实 ``RuntimeService``（不注入 fake 服务），只改其可达状态。
+本测试使用真实 ``WorkspaceRuntimeLifecycleService``（不注入 fake 服务），只改其可达状态。
 """
 
 from __future__ import annotations
@@ -30,8 +30,10 @@ from app.core.path_utils import get_session_path_resolver
 from app.core.trace_middleware import TraceMiddleware
 from app.services.business.job.service import JobService, JobState
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.trace_event_store import TraceEventStore
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from tests.support.background_work import build_background_registry
 
 
@@ -56,17 +58,16 @@ def pending_checkpoint_inspector():
     return inspect
 
 
-def _build_runtime(tmp_path: Path, session_lifecycle_guard, *, pending_checkpoint_inspector) -> RuntimeService:
-    """真实 RuntimeService；只替换 executor/bus 这些外部边界。"""
+def _build_runtime(tmp_path: Path, session_lifecycle_guard, *, pending_checkpoint_inspector) -> WorkspaceRuntimeLifecycleService:
+    """真实 WorkspaceRuntimeLifecycleService；只替换 executor/bus 这些外部边界。"""
     sessions_dir = tmp_path / ".boxteam" / "sessions"
     jobs = JobService(
         job_event_bus=_RecordingJobEventBus(),
         job_executor=_NeverFinishExecutor(),
         session_lifecycle_guard=session_lifecycle_guard,
     )
-    return RuntimeService(
+    return WorkspaceRuntimeLifecycleService(
         workspace_id="00000000-0000-4000-8000-000000000001",
-        workspace_root=tmp_path,
         job_service=jobs,
         pending_tool_checkpoint_id=pending_checkpoint_inspector,
         pending_request_store=_EmptyQueueStore(),

@@ -37,6 +37,7 @@ orchestration/
 ├── session_turn_replay_service.py         按 Message/Turn 定位、回退上下文并重新派发
 ├── terminal_steering_service.py            Terminal 完成后的执行引导
 ├── workspace_observation.py               工作区观察流接线
+├── workspace_runtime_lifecycle.py         工作区执行启动恢复、Job 准入排空和强制中断
 ├── agent_stream_helpers.py                 Agent 流事件与工具结果的纯转换
 ├── communication/                         Session 间 Inbox admission 与冷观察
 ├── resource_activation/                    Execution/ModelCall 资源快照冻结
@@ -64,6 +65,7 @@ orchestration/
 - 以流程控制为中心，不承担数据持久化职责。
 - 保持装配边界清晰，依赖协议而不是具体实现。
 - 失败必须立即暴露，不能默认继续。
+- `workspace_runtime_lifecycle.py` 协调工作区执行，不管理 Backend 进程或 SDK 装配。启动恢复在受保护 worker 中耗尽 SQLite Trace 快照，只保留 Job owner 和生命周期 ID；全部历史格式、协议与跨会话归属检查通过后才领取队列、调用恢复端口或写入终态，不用尾部窗口代替完整校验，不另建恢复账本。
 - 工具参数流只在累计正文可能以 JSON 对象结束时调用标准 JSON 解析器；不完整、格式无效或非对象的输入仍保留 raw 和未完成标记，不能提前触发工具执行。
 - Terminal完成监控的关闭每次最多观察原任务30秒；到期保留句柄和关闭准入，重入不再次取消原扫描或重启监控。正常轮询中的可重试错误在关闭阶段须交回原异常，不能消耗后返回成功。原结果交回Workspace后才继续后续依赖，不能把观察到期当作扫描已停止或整个shutdown已有硬期限。
 - Agent驻留服务由唯一关闭任务等待原扫描及tracker排空，每次调用最多观察30秒；观察取消或到期保留原任务和关闭准入，扫描结算前不清句柄或缓存。关闭期原错不按周期重试消耗，迟到失败先交回观察者，再允许显式重试剩余关闭；不能重启扫描或另建资源事实源。

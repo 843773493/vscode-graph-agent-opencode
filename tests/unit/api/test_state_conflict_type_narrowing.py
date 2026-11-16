@@ -31,12 +31,14 @@ from app.api.errors import state_conflict_error, state_conflict_http_error
 from app.api.runtime import router
 from app.core.trace_middleware import TraceMiddleware
 from app.main import workspace_http_exception_handler
-from app.services.infrastructure.runtime_service import RuntimeService
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 
 
 @pytest.fixture
 def runtime_api() -> Iterator[tuple[TestClient, MagicMock]]:
-    service = MagicMock(spec=RuntimeService)
+    service = MagicMock(spec=WorkspaceRuntimeLifecycleService)
     service.begin_drain = AsyncMock()
     service.cancel_drain = AsyncMock()
     application = FastAPI()

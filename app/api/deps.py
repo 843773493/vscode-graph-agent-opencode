@@ -66,7 +66,6 @@ from app.services.infrastructure.resource_platform.sources.resource_navigation i
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
-from app.services.infrastructure.runtime_service import RuntimeService
 from app.services.infrastructure.tool_service import ToolService
 from app.services.infrastructure.trace_event_store import TraceEventStore
 from app.services.infrastructure.workspace_file_watch_service import (
@@ -85,6 +84,9 @@ from app.services.orchestration.session_turn_replay_service import (
     SessionTurnReplayService,
 )
 from app.services.orchestration.thread_residency import ThreadResidencyTracker
+from app.services.orchestration.workspace_runtime_lifecycle import (
+    WorkspaceRuntimeLifecycleService,
+)
 from app.tool_testing.service import ToolTestService
 
 
@@ -100,7 +102,7 @@ class _AppContainerProtocol(Protocol):
     agent_execution_service: AgentExecutionService
     message_service: MessageService
     attachment_blob_store: AttachmentBlobStore
-    runtime_service: RuntimeService
+    runtime_service: WorkspaceRuntimeLifecycleService
     goal_service: SessionGoalService
     persistent_task_runtime: PersistentTaskRuntime
     persistent_task_service: PersistentTaskService
@@ -287,8 +289,8 @@ def get_attachment_blob_store(request: Request) -> AttachmentBlobStore:
     return _require_service(request, "attachment_blob_store", AttachmentBlobStore, "AttachmentBlobStore 尚未在应用启动阶段初始化")
 
 
-def get_runtime_service(request: Request) -> RuntimeService:
-    return _require_service(request, "runtime_service", RuntimeService, "RuntimeService 尚未在应用启动阶段初始化")
+def get_runtime_service(request: Request) -> WorkspaceRuntimeLifecycleService:
+    return _require_service(request, "runtime_service", WorkspaceRuntimeLifecycleService, "WorkspaceRuntimeLifecycleService 尚未在应用启动阶段初始化")
 
 
 def get_goal_service(request: Request) -> SessionGoalService:
