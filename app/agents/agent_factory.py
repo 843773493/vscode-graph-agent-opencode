@@ -54,8 +54,8 @@ from app.agents.model_capability_routing import (
     build_provider_model_candidate,
 )
 from app.agents.policy import (
+    ToolCapabilityPolicy,
     ToolMetadata,
-    ToolPolicyResolver,
     catalog_group_for_tool,
     custom_tool_spec_names,
     parse_custom_tool_specs,
@@ -169,22 +169,6 @@ if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
-
-
-def _resolve_tool_policy(
-    resolver: ToolPolicyResolver,
-    tool: BaseTool,
-    *,
-    origin: str,
-    execution_overrides: Mapping[str, bool],
-    model_visibility_overrides: Mapping[str, bool],
-    group_id: str | None = None,
-):
-    return resolver.resolve(
-        metadata_for_tool(tool, origin=origin, group_id=group_id),
-        execution_override=execution_overrides.get(tool.name),
-        model_visibility_override=model_visibility_overrides.get(tool.name),
-    )
 
 
 def build_runtime_for_agent(
@@ -312,7 +296,7 @@ def build_deep_agent(
     resolved_execution_overrides = dict(execution_overrides or {})
     resolved_model_visibility_overrides = dict(model_visibility_overrides or {})
 
-    policy_resolver = config_service.get_tool_policy_resolver(agent_id)
+    capability_resolver = config_service.get_tool_policy_resolver(agent_id)
     thread_binding = (
         ThreadRuntimeBinding(
             session_id=session_id,
@@ -448,7 +432,7 @@ def build_deep_agent(
         )
     extension_confirmation_names: set[str] = set()
     direct_confirmation_names: set[str] = set()
-    extension_policies: dict[str, object] = {}
+    extension_policies: dict[str, ToolCapabilityPolicy] = {}
     custom_metadata: dict[str, ToolMetadata] = {}
     custom_specs_by_name = {
         spec.name: spec for spec in parse_custom_tool_specs(
@@ -468,12 +452,10 @@ def build_deep_agent(
         显式 ``tools`` 与默认工具集两条来源只在「是否过滤 denylist、是否跳过
         非 BaseTool 项」上不同，策略准入与登记必须共用这一条实现。
         """
-        policy = _resolve_tool_policy(
-            policy_resolver,
-            tool,
-            origin="builtin",
-            execution_overrides=resolved_execution_overrides,
-            model_visibility_overrides=resolved_model_visibility_overrides,
+        policy = capability_resolver.resolve(
+            metadata_for_tool(tool, origin="builtin"),
+            execution_override=resolved_execution_overrides.get(tool.name),
+            model_visibility_override=resolved_model_visibility_overrides.get(tool.name),
         )
         if not policy.execution_enabled:
             return
@@ -552,15 +534,13 @@ def build_deep_agent(
                     if known_group.kind != "default"
                     else f"extension:{module_name}"
                 )
-            policy = _resolve_tool_policy(
-                policy_resolver,
-                tool,
-                origin="custom",
-                group_id=group_id,
-                execution_overrides=resolved_execution_overrides,
-                model_visibility_overrides=resolved_model_visibility_overrides,
+            metadata = metadata_for_tool(tool, origin="custom", group_id=group_id)
+            custom_metadata[tool.name] = metadata
+            policy = capability_resolver.resolve(
+                metadata,
+                execution_override=resolved_execution_overrides.get(tool.name),
+                model_visibility_override=resolved_model_visibility_overrides.get(tool.name),
             )
-            custom_metadata[tool.name] = metadata_for_tool(tool, origin="custom", group_id=group_id)
             extension_policies[tool.name] = policy
             custom_tools.append(tool)
             if policy.execution_enabled and policy.confirmation_required:
@@ -569,12 +549,10 @@ def build_deep_agent(
         for tool in mcp_tools or []:
             if tool.name in resolved_tool_denylist:
                 continue
-            policy = _resolve_tool_policy(
-                policy_resolver,
-                tool,
-                origin="mcp",
-                execution_overrides=resolved_execution_overrides,
-                model_visibility_overrides=resolved_model_visibility_overrides,
+            policy = capability_resolver.resolve(
+                metadata_for_tool(tool, origin="mcp"),
+                execution_override=resolved_execution_overrides.get(tool.name),
+                model_visibility_override=resolved_model_visibility_overrides.get(tool.name),
             )
             extension_policies[tool.name] = policy
             mcp_tools_for_agent.append(tool)
@@ -598,13 +576,13 @@ def build_deep_agent(
     def discovery_catalog_resolver() -> FrozenToolCatalog:
         raise ExtensionCatalogUnavailableError("search_tools 需要调用所属的冻结完整目录")
 
-    def extension_context_policies(metadata: Sequence[ToolMetadata]):
+    def resolve_extension_capabilities(metadata: Sequence[ToolMetadata]) -> dict[str, ToolCapabilityPolicy]:
         selection = tool_selection_reader.snapshot(agent_id)
         execution_overrides = selection.execution_overrides
         visibility_overrides = selection.model_visibility_overrides
         policies = {}
         for entry in metadata:
-            policy = policy_resolver.resolve(
+            policy = capability_resolver.resolve(
                 entry, execution_override=execution_overrides.get(entry.tool_id),
                 model_visibility_override=visibility_overrides.get(entry.tool_id),
             )
@@ -623,7 +601,7 @@ def build_deep_agent(
             metadata = target.metadata or {}
             origin = "mcp" if metadata.get("mcp_server_id") else "custom"
             group_id = custom_metadata[target.name].group_id if target.name in custom_metadata else None
-            return extension_context_policies((metadata_for_tool(
+            return resolve_extension_capabilities((metadata_for_tool(
                 target, origin=origin, group_id=group_id,
             ),))[target.name].execution_enabled
 
@@ -641,7 +619,7 @@ def build_deep_agent(
         )
         publisher = McpCatalogResourcePublisher(
             registry=resource_registry, custom_tools=custom_tools,
-            policy_resolver=extension_context_policies, custom_metadata=custom_metadata,
+            policy_resolver=resolve_extension_capabilities, custom_metadata=custom_metadata,
             custom_skill_bindings=custom_skill_bindings,
             skill_sources=published_skill_sources,
             gateway_id=resolved_skills.gateway_id if resolved_skills is not None else None,
@@ -740,8 +718,8 @@ def build_deep_agent(
     )
     resolved_tools.append(extension_invoker)
 
-    def discovery_policies(catalog: FrozenToolCatalog):
-        return extension_context_policies(tuple(definition.metadata for definition in catalog.definitions))
+    def resolve_discovery_capabilities(catalog: FrozenToolCatalog) -> dict[str, ToolCapabilityPolicy]:
+        return resolve_extension_capabilities(tuple(definition.metadata for definition in catalog.definitions))
 
     async def write_discovered_definition(definition: FrozenToolDefinition, entry: dict[str, object]):
         call_id = tool_invocation_context.require_tool_call_id()
@@ -752,9 +730,9 @@ def build_deep_agent(
         )
 
     discovery_tool = create_search_tools_tool(
-        catalog_resolver=discovery_catalog_resolver, policy_resolver=discovery_policies,
+        catalog_resolver=discovery_catalog_resolver, policy_resolver=resolve_discovery_capabilities,
         definition_writer=write_discovered_definition,
-        response_byte_limit=min(tool_output_store.inline_byte_limit, policy_resolver.resolve(
+        response_byte_limit=min(tool_output_store.inline_byte_limit, capability_resolver.resolve(
             ToolMetadata(TOOL_DISCOVERY_NAME, "builtin", "default", "default"),
         ).max_result_bytes),
     )
@@ -882,7 +860,7 @@ def build_deep_agent(
     ]
     tool_set_producer = RegisteredToolSetProducer(
         agent_id=agent_id, selection_reader=tool_selection_reader,
-        policy_resolver=policy_resolver, tools=registered_tools,
+        policy_resolver=capability_resolver, tools=registered_tools,
         metadata={
             tool_definition_name(tool): ToolMetadata(
                 tool_id=tool_definition_name(tool), origin="builtin",
@@ -897,7 +875,7 @@ def build_deep_agent(
         context_source_manager=context_source_manager,
         source_message_grouping_supplier=config_service.get_source_message_grouping,
         tool_set_producer=tool_set_producer,
-        extension_policy_resolver=extension_context_policies,
+        extension_policy_resolver=resolve_extension_capabilities,
         extension_call_scope=extension_call_scope,
         resource_activation=resource_activation,
         context_read_admission=lambda: session_service.session_read_admission(session_id),
