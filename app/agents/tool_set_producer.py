@@ -47,44 +47,34 @@ class RegisteredToolSetProducer:
         self._metadata = dict(metadata)
         self._default_model_visibility: dict[str, bool] = {}
         self._last_snapshot: tuple[tuple[str, bool, bool], ToolSetSnapshot] | None = None
-        self._schemas_json = canonical_json_bytes(
+        schemas_json = canonical_json_bytes(
             [convert_to_openai_tool(tool) for tool in tools]
         )
         # 解析模板不对外暴露；ToolSetSnapshot 会把输入复制到独立的规范 JSON。
-        self._schema_templates: tuple[dict[str, Any], ...] = tuple(
-            json.loads(self._schemas_json)
+        self._registered_tool_schemas: tuple[dict[str, Any], ...] = tuple(
+            json.loads(schemas_json)
         )
-        self._structured_tools_json: bytes | None = None
-        self._structured_tool_templates: tuple[dict[str, Any], ...] = ()
+        # None 表示尚未冻结；空 tuple 表示图已确认没有结构化输出工具。
+        self._structured_output_schemas: tuple[dict[str, Any], ...] | None = None
 
     def freeze_structured_output_tools(self, tools: Mapping[str, BaseTool]) -> None:
         """只冻结图已经注册的结构化输出工具，不从请求或绑定结果补造 schema。"""
-        if self._structured_tools_json is not None:
+        if self._structured_output_schemas is not None:
             raise RuntimeError("ToolSet producer 的图结构化输出注册表已冻结")
         if any(name != tool.name for name, tool in tools.items()):
             raise ValueError("source-mismatch: 图结构化输出工具名与注册表不一致")
-        normal_names = {schema["function"]["name"] for schema in self._schema_templates}
+        normal_names = {schema["function"]["name"] for schema in self._registered_tool_schemas}
         if normal_names.intersection(tools):
             raise ValueError("source-mismatch: 结构化输出工具与普通工具名称重复")
         structured_tools_json = canonical_json_bytes(
             [convert_to_openai_tool(tool) for tool in tools.values()]
         )
-        structured_tool_templates = tuple(json.loads(structured_tools_json))
-        self._structured_tools_json = structured_tools_json
-        self._structured_tool_templates = structured_tool_templates
-
-    @property
-    def structured_tool_names(self) -> tuple[str, ...]:
-        if self._structured_tools_json is None:
-            raise RuntimeError("ToolSet producer 尚未绑定图结构化输出注册表")
-        return tuple(
-            schema["function"]["name"] for schema in self._structured_tool_templates
-        )
+        self._structured_output_schemas = tuple(json.loads(structured_tools_json))
 
     def snapshot(
         self, include_structured_output: bool = False, *, tools_enabled: bool = True
     ) -> ToolSetSnapshot:
-        if self._structured_tools_json is None:
+        if self._structured_output_schemas is None:
             raise RuntimeError("ToolSet producer 尚未绑定图结构化输出注册表")
         selection_snapshot = self._selection_reader.snapshot(self._agent_id)
         if (
@@ -112,7 +102,7 @@ class RegisteredToolSetProducer:
         execution_overrides = selection_snapshot.execution_overrides
         model_visibility_overrides = selection_snapshot.model_visibility_overrides
         visible_tool_schemas = []
-        for schema in self._schema_templates:
+        for schema in self._registered_tool_schemas:
             tool_name = schema["function"]["name"]
             # 固定扩展信封不依赖内部 target 的数量或开关。
             if tool_name in {EXTENSION_TOOL_INVOKER_NAME, TOOL_DISCOVERY_NAME}:
@@ -142,7 +132,7 @@ class RegisteredToolSetProducer:
         )
         if include_structured_output:
             # 输出 schema 不属于可执行工具 policy，沿用图注册顺序与框架策略。
-            visible_tool_schemas.extend(self._structured_tool_templates)
+            visible_tool_schemas.extend(self._structured_output_schemas)
         snapshot = ToolSetSnapshot(
             selection_revision=selection_revision,
             tools=visible_tool_schemas,
