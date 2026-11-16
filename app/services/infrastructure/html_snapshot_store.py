@@ -1,3 +1,5 @@
+"""前端 HTML 快照的读写、身份校验与过期回收。"""
+
 from __future__ import annotations
 
 import json
@@ -7,6 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlencode
 
 from app.core.atomic_fs import native_io_path
@@ -72,13 +75,13 @@ def _read_snapshot_metadata(
 
 def _read_snapshot_payload(
     directory: Path, snapshot_id: str, workspace_id: str,
-    session_id: str | None, metadata: bool,
+    session_id: str | None, part: Literal["html", "metadata"],
 ) -> str:
     directory = native_io_path(directory)
     raw_metadata, created = _read_snapshot_metadata(directory, snapshot_id, workspace_id, session_id)
     if created <= datetime.now(UTC) - _SNAPSHOT_RETENTION:
         raise KeyError(f"快照已过期: {snapshot_id}")
-    if metadata:
+    if part == "metadata":
         return raw_metadata
     return (directory / f"{snapshot_id}.html").read_text(encoding="utf-8")
 
@@ -109,7 +112,7 @@ def _prune_snapshot_files(directory: Path, workspace_id: str, session_id: str | 
 
 
 @dataclass(slots=True)
-class LogSnapshotRecord:
+class HtmlSnapshotInput:
     session_id: str | None
     html: str
     page_title: str | None = None
@@ -117,7 +120,7 @@ class LogSnapshotRecord:
     source: str = "webview"
 
 
-class LogService:
+class HtmlSnapshotStore:
     def __init__(
         self, *, workspace_root: Path, path_resolver: SessionCatalogPathResolver
     ) -> None:
@@ -153,24 +156,24 @@ class LogService:
                 yield node / "logs" / "webview"
 
     async def write_html_snapshot(
-        self, record: LogSnapshotRecord
+        self, snapshot_input: HtmlSnapshotInput
     ) -> UiSnapshotResultDTO:
         snapshot_id = create_prefixed_id("snapshot")
         metadata = {
             "snapshot_id": snapshot_id,
             "workspace_id": self._path_resolver.workspace_id,
-            "session_id": record.session_id,
-            "page_title": record.page_title,
-            "status": record.status,
-            "source": record.source,
+            "session_id": snapshot_input.session_id,
+            "page_title": snapshot_input.page_title,
+            "status": snapshot_input.status,
+            "source": snapshot_input.source,
             "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
-        async with self._snapshot_directory(record.session_id) as directory:
+        async with self._snapshot_directory(snapshot_input.session_id) as directory:
             await run_sync_shielded(
                 _write_snapshot_files,
                 directory,
                 snapshot_id,
-                record.html,
+                snapshot_input.html,
                 json.dumps(metadata, ensure_ascii=False, indent=2),
             )
         base = (
@@ -178,8 +181,8 @@ class LogService:
             f"/runtime/log-snapshot/{snapshot_id}"
         )
         query = (
-            f"?{urlencode({'session_id': record.session_id})}"
-            if record.session_id
+            f"?{urlencode({'session_id': snapshot_input.session_id})}"
+            if snapshot_input.session_id
             else ""
         )
         return UiSnapshotResultDTO(
@@ -188,12 +191,12 @@ class LogService:
             metadata_url=f"{base}/metadata{query}",
         )
 
-    async def read_html_snapshot(
+    async def read_snapshot_file(
         self,
         snapshot_id: str,
         *,
         session_id: str | None,
-        metadata: bool,
+        part: Literal["html", "metadata"],
     ) -> str:
         if _SNAPSHOT_ID.fullmatch(snapshot_id) is None:
             raise ValueError(f"非法 snapshot_id: {snapshot_id!r}")
@@ -204,5 +207,5 @@ class LogService:
                 snapshot_id,
                 self._path_resolver.workspace_id,
                 session_id,
-                metadata,
+                part,
             )

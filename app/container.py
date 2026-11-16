@@ -127,8 +127,8 @@ from app.services.infrastructure.gateway_communication_client import (
 from app.services.infrastructure.gateway_session_context_client import (
     GatewaySessionContextClient,
 )
+from app.services.infrastructure.html_snapshot_store import HtmlSnapshotStore
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
-from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
@@ -400,7 +400,7 @@ class AppContainer:
     team_service: TeamCoordinationService
     team_fanout_service: TeamFanoutService
     llm_request_log_service: LLMRequestLogService
-    log_service: LogService
+    html_snapshot_store: HtmlSnapshotStore
     tool_service: ToolService
     tool_test_service: ToolTestService
     tool_selection_store: ToolSelectionStore
@@ -1126,7 +1126,7 @@ def _build_app_container(
     )
     register_llm_request_search(workspace_search_service, session_catalog_service, session_service, llm_request_log_service)
     register_trace_search(workspace_search_service, session_catalog_service, session_service, trace_event_store)
-    log_service = LogService(workspace_root=resolved_workspace_root, path_resolver=session_path_resolver)
+    html_snapshot_store = HtmlSnapshotStore(workspace_root=resolved_workspace_root, path_resolver=session_path_resolver)
     tool_test_service = ToolTestService(
         config_service=config_service,
         registry=ToolTestRegistry(),
@@ -1192,7 +1192,7 @@ def _build_app_container(
         team_service=team_service,
         team_fanout_service=team_fanout_service,
         llm_request_log_service=llm_request_log_service,
-        log_service=log_service,
+        html_snapshot_store=html_snapshot_store,
         tool_service=tool_service,
         tool_test_service=tool_test_service,
         tool_selection_store=tool_selection_store,

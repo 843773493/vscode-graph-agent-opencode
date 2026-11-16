@@ -49,9 +49,10 @@ infrastructure/
     │   └── tool_service.py
     ├── 日志与 trace
     │   ├── llm_request_log_service.py
-    │   ├── log_service.py
     │   ├── trace_event_recorder.py
     │   └── trace_event_store.py
+    ├── 前端 HTML 快照
+    │   └── html_snapshot_store.py
     ├── 工作区文件与服务装配
     │   ├── file_tree_settings_service.py
     │   ├── workspace_file_watch_service.py

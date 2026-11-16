@@ -15,14 +15,17 @@ from app.core.path_utils import (
     get_session_catalog_components,
 )
 from app.core.session_subtree_delete import SessionSubtreeDeleteService
-from app.services.infrastructure.log_service import LogService, LogSnapshotRecord
+from app.services.infrastructure.html_snapshot_store import (
+    HtmlSnapshotInput,
+    HtmlSnapshotStore,
+)
 
 SESSION_ID = "ses_019c257bff2c7c6989d1c38a6ae7fbf2"
 
 
 @dataclass(frozen=True, slots=True)
-class LogSnapshotFixture:
-    log_service: LogService
+class HtmlSnapshotFixture:
+    html_snapshot_store: HtmlSnapshotStore
     catalog_components: SessionCatalogComponents
     subtree_deletion: SessionSubtreeDeleteService
     session_directory: Path
@@ -49,11 +52,11 @@ def long_path_workspace(tmp_path: Path) -> tuple[Path, WorkspacePathResolverProb
 
 
 @pytest.fixture
-def snapshot_storage(tmp_path: Path, session_bundle_factory) -> LogSnapshotFixture:
+def snapshot_storage(tmp_path: Path, session_bundle_factory) -> HtmlSnapshotFixture:
     sessions_root = tmp_path / ".boxteam" / "sessions"
     session_directory = session_bundle_factory(sessions_root, SESSION_ID)
     catalog_components = get_session_catalog_components(sessions_root)
-    log_service = LogService(
+    html_snapshot_store = HtmlSnapshotStore(
         workspace_root=tmp_path,
         path_resolver=catalog_components.resolver,
     )
@@ -62,8 +65,8 @@ def snapshot_storage(tmp_path: Path, session_bundle_factory) -> LogSnapshotFixtu
         sessions_root=sessions_root,
         workspace_id=catalog_components.resolver.workspace_id,
     )
-    return LogSnapshotFixture(
-        log_service=log_service,
+    return HtmlSnapshotFixture(
+        html_snapshot_store=html_snapshot_store,
         catalog_components=catalog_components,
         subtree_deletion=subtree_deletion,
         session_directory=session_directory,
@@ -75,10 +78,10 @@ def snapshot_storage(tmp_path: Path, session_bundle_factory) -> LogSnapshotFixtu
 async def test_catalog_rename_keeps_snapshot_reference_and_delete_isolates_whole_node(
     snapshot_storage,
 ) -> None:
-    service = snapshot_storage.log_service
+    service = snapshot_storage.html_snapshot_store
     catalog_components = snapshot_storage.catalog_components
     result = await service.write_html_snapshot(
-        LogSnapshotRecord(session_id=SESSION_ID, html="<p>历史</p>")
+        HtmlSnapshotInput(session_id=SESSION_ID, html="<p>历史</p>")
     )
     store = catalog_components.resolver.catalog_store
     store.rename_node(SESSION_ID, "重命名后")
@@ -91,10 +94,10 @@ async def test_catalog_rename_keeps_snapshot_reference_and_delete_isolates_whole
     )
     store.move_node(SESSION_ID, folder_id)
     assert (
-        await service.read_html_snapshot(
+        await service.read_snapshot_file(
             result.snapshot_id,
             session_id=SESSION_ID,
-            metadata=False,
+            part="html",
         )
         == "<p>历史</p>"
     )
@@ -114,14 +117,14 @@ async def test_catalog_rename_keeps_snapshot_reference_and_delete_isolates_whole
         isolated / "logs" / "webview" / f"{result.snapshot_id}.html"
     ).read_text() == "<p>历史</p>"
     with pytest.raises(KeyError):
-        await service.read_html_snapshot(
+        await service.read_snapshot_file(
             result.snapshot_id,
             session_id=SESSION_ID,
-            metadata=False,
+            part="html",
         )
     with pytest.raises(KeyError):
         await service.write_html_snapshot(
-            LogSnapshotRecord(session_id=SESSION_ID, html="<p>禁止复活</p>")
+            HtmlSnapshotInput(session_id=SESSION_ID, html="<p>禁止复活</p>")
         )
     assert not snapshot_storage.session_directory.exists()
 
@@ -130,18 +133,18 @@ async def test_catalog_rename_keeps_snapshot_reference_and_delete_isolates_whole
 async def test_snapshot_reopen_uses_catalog_and_metadata_identity(
     snapshot_storage,
 ) -> None:
-    result = await snapshot_storage.log_service.write_html_snapshot(
-        LogSnapshotRecord(session_id=SESSION_ID, html="<p>重启读取</p>")
+    result = await snapshot_storage.html_snapshot_store.write_html_snapshot(
+        HtmlSnapshotInput(session_id=SESSION_ID, html="<p>重启读取</p>")
     )
-    reopened = LogService(
+    reopened = HtmlSnapshotStore(
         workspace_root=snapshot_storage.workspace_root,
         path_resolver=snapshot_storage.catalog_components.resolver,
     )
     assert (
-        await reopened.read_html_snapshot(
+        await reopened.read_snapshot_file(
             result.snapshot_id,
             session_id=SESSION_ID,
-            metadata=False,
+            part="html",
         )
         == "<p>重启读取</p>"
     )
@@ -153,27 +156,27 @@ async def test_snapshot_reopen_uses_catalog_and_metadata_identity(
     )
     metadata.write_text('{"snapshot_id":"other"}')
     with pytest.raises(RuntimeError, match="身份不一致"):
-        await reopened.read_html_snapshot(
-            result.snapshot_id, session_id=SESSION_ID, metadata=True
+        await reopened.read_snapshot_file(
+            result.snapshot_id, session_id=SESSION_ID, part="metadata"
         )
 
 
 @pytest.mark.asyncio
 async def test_snapshot_expiration_removes_published_pair_and_preserves_fresh(snapshot_storage) -> None:
-    service = snapshot_storage.log_service
-    expired = await service.write_html_snapshot(LogSnapshotRecord(session_id=SESSION_ID, html="旧快照"))
-    fresh = await service.write_html_snapshot(LogSnapshotRecord(session_id=None, html="新快照"))
+    service = snapshot_storage.html_snapshot_store
+    expired = await service.write_html_snapshot(HtmlSnapshotInput(session_id=SESSION_ID, html="旧快照"))
+    fresh = await service.write_html_snapshot(HtmlSnapshotInput(session_id=None, html="新快照"))
     directory = snapshot_storage.session_directory / "logs/webview"
     metadata = directory / f"{expired.snapshot_id}.json"
     value = json.loads(metadata.read_text())
     value["created_at"] = (datetime.now(UTC) - timedelta(days=31)).isoformat()
     metadata.write_text(json.dumps(value))
-    for metadata_only in (True, False):
+    for part in ("metadata", "html"):
         with pytest.raises(KeyError, match="已过期"):
-            await service.read_html_snapshot(expired.snapshot_id, session_id=SESSION_ID, metadata=metadata_only)
+            await service.read_snapshot_file(expired.snapshot_id, session_id=SESSION_ID, part=part)
     assert await service.prune_html_snapshots() == 1
     assert not metadata.exists() and not (directory / f"{expired.snapshot_id}.html").exists()
-    assert await service.read_html_snapshot(fresh.snapshot_id, session_id=None, metadata=False) == "新快照"
+    assert await service.read_snapshot_file(fresh.snapshot_id, session_id=None, part="html") == "新快照"
 
 
 @pytest.mark.asyncio
@@ -184,26 +187,26 @@ async def test_workspace_snapshot_round_trips_with_windows_long_path(
     snapshots_directory = workspace_root / ".boxteam" / "logs" / "webview"
     assert len(str(snapshots_directory)) > 260
 
-    service = LogService(
+    service = HtmlSnapshotStore(
         workspace_root=workspace_root,
         path_resolver=path_resolver,
     )
 
     result = await service.write_html_snapshot(
-        LogSnapshotRecord(session_id=None, html="<p>long path</p>")
+        HtmlSnapshotInput(session_id=None, html="<p>long path</p>")
     )
 
     assert (
-        await service.read_html_snapshot(
+        await service.read_snapshot_file(
             result.snapshot_id,
             session_id=None,
-            metadata=False,
+            part="html",
         )
         == "<p>long path</p>"
     )
-    metadata = await service.read_html_snapshot(
+    metadata = await service.read_snapshot_file(
         result.snapshot_id,
         session_id=None,
-        metadata=True,
+        part="metadata",
     )
     assert json.loads(metadata)["snapshot_id"] == result.snapshot_id

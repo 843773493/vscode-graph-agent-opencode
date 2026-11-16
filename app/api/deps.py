@@ -48,8 +48,8 @@ from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.file_tree_settings_service import (
     FileTreeSettingsService,
 )
+from app.services.infrastructure.html_snapshot_store import HtmlSnapshotStore
 from app.services.infrastructure.llm_request_log_service import LLMRequestLogService
-from app.services.infrastructure.log_service import LogService
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.message_stream_store import MessageStreamStore
@@ -116,7 +116,7 @@ class _AppContainerProtocol(Protocol):
     browser_resource_owner: BrowserResourceOwner
     session_service: SessionService
     llm_request_log_service: LLMRequestLogService
-    log_service: LogService
+    html_snapshot_store: HtmlSnapshotStore
     tool_service: ToolService
     tool_test_service: ToolTestService
     workspace_service: WorkspaceService
@@ -353,8 +353,8 @@ def get_trace_event_store(request: Request) -> TraceEventStore:
     return _require_service(request, "trace_event_store", TraceEventStore, "TraceEventStore 尚未在应用启动阶段初始化")
 
 
-def get_log_service(request: Request) -> LogService:
-    return _require_service(request, "log_service", LogService, "LogService 尚未在应用启动阶段初始化")
+def get_html_snapshot_store(request: Request) -> HtmlSnapshotStore:
+    return _require_service(request, "html_snapshot_store", HtmlSnapshotStore, "HtmlSnapshotStore 尚未在应用启动阶段初始化")
 
 
 def get_tool_service(request: Request) -> ToolService:

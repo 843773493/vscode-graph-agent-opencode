@@ -20,7 +20,7 @@ from app.services.infrastructure.attachment_blob_catalog.maintenance import (
     AttachmentMaintenanceBusyError,
     AttachmentMaintenanceLock,
 )
-from app.services.infrastructure.log_service import LogSnapshotRecord
+from app.services.infrastructure.html_snapshot_store import HtmlSnapshotInput
 from app.services.infrastructure.workspace_state_store import WorkspaceActivityService
 from tests.integration.backend.sessions.test_attachment_maintenance import (
     maintenance_case as maintenance_case,  # noqa: PLC0414
@@ -251,7 +251,7 @@ async def test_periodic_retention_in_mounted_workspace(
             path = resolver.resolve_thread_node(session.session_id, thread) / record.relative_path
             assert path.is_file()
             detail_paths.append(path)
-        snapshot = await selected.log_service.write_html_snapshot(LogSnapshotRecord(session_id=None, html="过期快照"))
+        snapshot = await selected.html_snapshot_store.write_html_snapshot(HtmlSnapshotInput(session_id=None, html="过期快照"))
         metadata = selected.workspace_root / f".boxteam/logs/webview/{snapshot.snapshot_id}.json"
         payload = json.loads(metadata.read_text())
         payload["created_at"] = (datetime.now(UTC) - timedelta(days=40)).isoformat()

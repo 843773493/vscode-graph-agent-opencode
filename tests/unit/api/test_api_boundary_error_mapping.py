@@ -66,7 +66,7 @@ class _RejectingContextService:
         raise ValueError("上下文资源 URI 不符合规范")
 
 
-class _UnwritableLogService:
+class _UnwritableHtmlSnapshotStore:
     async def write_html_snapshot(self, record):
         raise PermissionError("快照 owner 目录不可写")
 
@@ -278,7 +278,7 @@ async def test_save_log_snapshot_exposes_owner_storage_failure() -> None:
             ),
             _="local",
             request_id="req",
-            log_service=_UnwritableLogService(),
+            html_snapshot_store=_UnwritableHtmlSnapshotStore(),
         )
 
 

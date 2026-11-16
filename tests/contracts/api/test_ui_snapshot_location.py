@@ -23,7 +23,7 @@ from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.workspace_proxy import router as proxy_router
-from app.services.infrastructure.log_service import LogService
+from app.services.infrastructure.html_snapshot_store import HtmlSnapshotStore
 
 SESSION_ID = "ses_019c257bff2c7c6989d1c38a6ae7fbf2"
 
@@ -33,8 +33,8 @@ def snapshot_endpoint(tmp_path: Path, session_bundle_factory) -> Iterator[tuple[
     sessions_root = tmp_path / ".boxteam" / "sessions"
     session_root = session_bundle_factory(sessions_root, SESSION_ID)
     resolver = get_session_path_resolver(sessions_root)
-    service = LogService(workspace_root=tmp_path, path_resolver=resolver)
-    container = SimpleNamespace(log_service=service)
+    service = HtmlSnapshotStore(workspace_root=tmp_path, path_resolver=resolver)
+    container = SimpleNamespace(html_snapshot_store=service)
 
     class Registry:
         def get(self, workspace_id: str):
