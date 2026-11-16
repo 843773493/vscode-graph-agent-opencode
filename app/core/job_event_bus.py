@@ -84,7 +84,7 @@ JOB_EVENT_QUEUE_SIZE: Final[int] = 100
 JOB_PUBLISH_LOCK_SHARDS: Final[int] = 64
 
 
-class EventSubscription(asyncio.Queue[Event]):
+class EventSubscription(asyncio.Queue[Event | None]):
     """支持事件类型过滤，并在溢出后向消费者暴露明确错误的临时订阅。"""
 
     def __init__(
@@ -121,6 +121,11 @@ class EventSubscription(asyncio.Queue[Event]):
                 event_type=event.type,
                 max_queue_size=self.maxsize,
             )
+            # 溢出后 get 只会报错，立即释放已无法交付的正文。
+            while not self.empty():
+                self.get_nowait()
+            # 唤醒已经等待 get 的消费者，让它也立即收到同一个溢出错误。
+            self.put_nowait(None)
             return False
         return True
 
@@ -130,6 +135,7 @@ class EventSubscription(asyncio.Queue[Event]):
         event = await super().get()
         if self._overflow_error is not None:
             raise self._overflow_error
+        assert event is not None
         return event
 
     @property

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 
 import pytest
 from pydantic import ValidationError
@@ -172,7 +173,8 @@ async def test_unregister_durable_listener_stops_receiving():
 
 
 @pytest.mark.asyncio
-async def test_slow_transient_subscriber_is_closed_without_failing_publish(caplog):
+@pytest.mark.parametrize("waiting", [False, True])
+async def test_slow_transient_subscriber_is_closed_without_failing_publish(caplog, waiting):
     caplog.set_level(logging.INFO, logger="app.core.job_event_bus")
     bus = JobEventBus()
     queue = await bus.subscribe(
@@ -180,6 +182,9 @@ async def test_slow_transient_subscriber_is_closed_without_failing_publish(caplo
         subscriber_kind="test_slow_consumer",
         metadata={"client_id": "client-42"},
     )
+    receiving = asyncio.create_task(queue.get()) if waiting else None
+    if receiving is not None:
+        await asyncio.sleep(0)
     for index in range(queue.maxsize + 1):
         event = await bus.publish(
             job_id="job_full",
@@ -187,10 +192,13 @@ async def test_slow_transient_subscriber_is_closed_without_failing_publish(caplo
             payload={"result": str(index)},
             agent_id="test",
         )
+        if index == 0:
+            first_event = weakref.ref(event)
 
     assert event.payload.result == str(queue.maxsize)
+    assert first_event() is None
     with pytest.raises(RuntimeError, match="subscriber_kind=test_slow_consumer") as exc_info:
-        await queue.get()
+        await asyncio.wait_for(receiving if receiving is not None else queue.get(), 1.0)
     assert exc_info.value.subscription_id == queue.subscription_id
     assert exc_info.value.job_id == "job_full"
     assert queue.metadata == {"client_id": "client-42"}
