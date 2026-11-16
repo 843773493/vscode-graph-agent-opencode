@@ -189,7 +189,7 @@ class _ChannelSubscriber(Generic[EventT]):
         *,
         subscription_id: str,
         label: str,
-        queue: asyncio.Queue[ChannelDelivery[EventT]] | None,
+        queue: asyncio.Queue[ChannelDelivery[EventT] | None] | None,
         sink: ChannelEventSink[EventT] | None,
     ) -> None:
         self.subscription_id = subscription_id
@@ -243,6 +243,7 @@ class EventChannelSubscription(Generic[EventT]):
         assert self._subscriber.queue is not None
         delivery = await self._subscriber.queue.get()
         self.check_overflow()
+        assert delivery is not None
         self._after_consume(delivery)
         return delivery
 
@@ -254,6 +255,7 @@ class EventChannelSubscription(Generic[EventT]):
         pending_deliveries: list[ChannelDelivery[EventT]] = []
         while not queue.empty():
             delivery = queue.get_nowait()
+            assert delivery is not None
             self._after_consume(delivery)
             pending_deliveries.append(delivery)
         return tuple(pending_deliveries)
@@ -557,6 +559,11 @@ class EventChannel(Generic[EventT]):
                 f"label={subscriber.label} max_queue_size={subscriber.queue.maxsize} "
                 f"event_sequence={sequence}"
             )
+            # 溢出后消费只会报错，立即释放已无法交付的正文；历史补读由持久层负责。
+            while not subscriber.queue.empty():
+                subscriber.queue.get_nowait()
+            # 唤醒已在 queue.get() 等待的消费者，由 check_overflow 抛出原错误。
+            subscriber.queue.put_nowait(None)
             return (
                 ChannelPublishReceipt(
                     subscription_id=subscriber.subscription_id,
