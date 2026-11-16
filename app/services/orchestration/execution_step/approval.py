@@ -18,7 +18,9 @@ from app.schemas.internal_v2.tool_approval import (
     ToolApprovalDTO,
     ToolApprovalSubmitRequest,
 )
-from app.services.orchestration.activity_runtime import current_activity_runtime
+from app.services.orchestration.message_stream.activities import (
+    current_activity_runtime,
+)
 
 _REQUEST = TypeAdapter(HITLRequest)
 LiteralCommandStatus = Literal["accepted", "consumed", "rejected"]

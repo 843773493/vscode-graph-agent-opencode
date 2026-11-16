@@ -1,4 +1,4 @@
-"""实时 stream trace observer 与 runtime observer mixin。"""
+"""将消息流规范化 block 转为 Trace 诊断事件。"""
 
 from __future__ import annotations
 
@@ -8,20 +8,8 @@ from typing import Any
 from app.core.job_event_bus import EventType
 
 
-class StreamTraceObserverMixin:
-    """把实时事件交给唯一的 normalized-block observer。"""
-
-    async def _observe(
-        self,
-        event_type: str,
-        payload: Mapping[str, object],
-    ) -> None:
-        if self._normalized_block_observer is not None:
-            await self._normalized_block_observer(event_type, payload)
-
-
 class MessageStreamTraceObserver:
-    """将已提交的规范化 block 投影为旧 Trace 的诊断事件。
+    """将已提交的规范化 block 投影为 Trace 的诊断事件。
 
     该投影只服务事件/诊断视图，聊天主时间线不再消费这些事件。
     """

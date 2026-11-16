@@ -18,7 +18,7 @@ from app.services.orchestration.event_stream.contracts import (
 from app.services.orchestration.event_stream.model_events import is_chat_model_run_name
 
 if TYPE_CHECKING:
-    from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+    from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 # 仅限制首次可观察进展；模型 idle watchdog 只在调用方显式配置时启用。
 DEFAULT_INITIAL_EVENT_TIMEOUT_SECONDS = 180.0
 DEFAULT_TOOL_DISPATCH_TIMEOUT_SECONDS = 30.0

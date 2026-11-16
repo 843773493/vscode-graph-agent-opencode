@@ -55,8 +55,10 @@ from app.services.orchestration.event_stream.processor import (
 from app.services.orchestration.event_stream.tool_events import (
     activity_result_detail,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
-from app.services.orchestration.trace_observer import MessageStreamTraceObserver
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.trace_observer import (
+    MessageStreamTraceObserver,
+)
 
 
 @pytest.fixture

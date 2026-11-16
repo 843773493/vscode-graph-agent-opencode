@@ -61,7 +61,7 @@ from app.services.mapping.itemized.canonical_langchain import project_canonical_
 from app.services.orchestration.execution_step.failures import handle_step_failure
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.harness.python.run_context import TestRunContext
 from tests.support.rollout.view_mutations import mutate_view_members
 from tests.support.workspaces import prepare_test_workspace

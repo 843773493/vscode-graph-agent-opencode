@@ -19,12 +19,11 @@ orchestration/
 │   ├── reader.py                          事件读取、超时和取消处理
 │   ├── processor.py                       按事件驱动运行时状态与现有写入端口
 │   └── model_events.py / tool_events.py   模型用量和工具展示数据
-├── message_stream_runtime.py             将消息流状态组合到单一 writer/runtime
-├── stream_block_assembler.py             流式 block 组装
-├── tool_call_registry.py                 工具调用与结果的关联、去重和等待
-├── activity_runtime.py                   活动处理器注册和工具活动发布
-├── terminal_finalization.py              消息流终态和中断事实收口
-├── trace_observer.py                     消息流 trace 观察接线
+├── message_stream/                       消息流运行时；模型 block、工具调用、活动和终态收口
+│   ├── runtime.py                        MessageStreamRuntime 状态与端口装配
+│   ├── block_assembly.py / tool_calls.py  provider block 组装与工具调用、结果关联
+│   ├── activities.py / finalization.py    活动发布与消息流终态（不管理终端进程）
+│   └── trace_observer.py                 规范化 block 到 Trace 诊断事件的投影
 ├── initial_execution_binding_worker.py   持久初始执行 intent 的 claim/bind 消费
 ├── thread_initial_execution_service.py   child Thread 初始执行绑定与 dispatch
 ├── owner_thread_creation_factory.py      按操作作用域装配 Thread 创建依赖并显式关闭控制连接

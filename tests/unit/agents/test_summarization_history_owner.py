@@ -32,7 +32,7 @@ from app.agents.workspace_backend import build_workspace_backend
 from app.core.path_utils import workspace_context
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityHandlerRegistry,
     ActivityRuntime,
 )

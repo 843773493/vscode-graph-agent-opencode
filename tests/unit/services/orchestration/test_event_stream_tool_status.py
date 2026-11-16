@@ -13,7 +13,7 @@ from app.agents.tool_result_text import tool_output_status
 from app.services.orchestration.event_stream.tool_events import (
     activity_result_detail,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 # 调试扩展工具（app/agents/tools/debugging/payloads.py 的 _failure/_success）的固定结果形状：

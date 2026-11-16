@@ -22,7 +22,7 @@ from app.schemas.internal_v2.message import (
 )
 from app.schemas.internal_v2.session import SessionCreateRequest
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RuntimeSourceCase,
     _job,

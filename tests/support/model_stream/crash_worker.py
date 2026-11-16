@@ -55,7 +55,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 from tests.support.model_stream.frozen_provider import create_frozen_provider_activation
 from tests.support.session_catalog_owner import fixture_catalog_scope

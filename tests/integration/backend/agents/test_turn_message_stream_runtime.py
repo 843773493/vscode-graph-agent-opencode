@@ -21,13 +21,13 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.message_stream_store import MessageStreamStore
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityCapabilities,
     ActivityHandlerRegistry,
     ActivityRuntime,
     DefaultActivityHandler,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 
 

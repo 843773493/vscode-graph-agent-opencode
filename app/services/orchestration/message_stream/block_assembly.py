@@ -16,7 +16,7 @@ from app.services.infrastructure.rollout_context.runtime.stream_accumulator impo
 from app.services.mapping.agent_content_mapper import extract_reasoning_summary
 
 
-class StreamBlockAssemblyMixin:
+class MessageStreamBlockAssemblyMixin:
     async def prepare_tool_execution(self, model_call_id: str) -> None:
         """工具只在原模型登记并提交 canonical 调用后执行，不另建注册链。"""
         if self._model_call_registrar is None:
@@ -298,7 +298,7 @@ class StreamBlockAssemblyMixin:
                         model_call_id=model_call_id or self.current_model_call_id,
                         block_id=block_id,
                     )
-                await self._observe("block.started", payload)
+                await self._observe_normalized_block("block.started", payload)
 
         if carrier_type == "reasoning_items":
             items = block.get("reasoning_items")
@@ -320,7 +320,7 @@ class StreamBlockAssemblyMixin:
                                 model_call_id=self.current_model_call_id,
                                 block_id=block_id,
                             )
-                        await self._observe("block.delta", payload)
+                        await self._observe_normalized_block("block.delta", payload)
                         self._accept_canonical_block(
                             payload,
                             model_call_id=model_call_id,
@@ -342,7 +342,7 @@ class StreamBlockAssemblyMixin:
                     model_call_id=model_call_id or self.current_model_call_id,
                     block_id=block_id,
                 )
-            await self._observe("block.delta", payload)
+            await self._observe_normalized_block("block.delta", payload)
             self._accept_canonical_block(payload, model_call_id=model_call_id)
             return
 
@@ -373,7 +373,7 @@ class StreamBlockAssemblyMixin:
                     model_call_id=model_call_id or self.current_model_call_id,
                     block_id=block_id,
                 )
-            await self._observe("block.delta", payload)
+            await self._observe_normalized_block("block.delta", payload)
             self._accept_canonical_block(payload, model_call_id=model_call_id)
             if carrier_type in {"text", "output_text", "refusal"}:
                 self._normalized_text_by_block[block_id] = (
@@ -693,7 +693,7 @@ class StreamBlockAssemblyMixin:
                     model_call_id=model_call_id or self.current_model_call_id,
                     block_id=block_id,
                 )
-            await self._observe("block.completed", payload)
+            await self._observe_normalized_block("block.completed", payload)
         finally:
             self._active_block_ids.pop(block_id, None)
             self._closing_blocks.discard(block_id)

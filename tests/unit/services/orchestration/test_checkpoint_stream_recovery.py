@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 
 from app.abstractions.turn_terminal_status import ToolResultCompletion
 from app.domain.itemized.runtime import ModelCallRecord
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 @dataclass(frozen=True, slots=True)

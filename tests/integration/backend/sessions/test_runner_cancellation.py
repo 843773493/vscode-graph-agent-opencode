@@ -69,7 +69,7 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceManager,
 )
 from app.services.orchestration.execution_step.stream_bindings import CanonicalItemSink
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from app.services.orchestration.session_title_service import SessionTitleService
 from app.services.orchestration.workspace_runtime_lifecycle import (
     WorkspaceRuntimeLifecycleService,

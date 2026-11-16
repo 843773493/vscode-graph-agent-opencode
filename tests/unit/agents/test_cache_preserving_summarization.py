@@ -61,7 +61,7 @@ from app.services.infrastructure.rollout_context.checkpoint.boundary.tool_protoc
 from app.services.mapping.itemized.canonical_langchain import (
     strip_media_from_summary_messages,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 class _SummarizationBoundaryStub:

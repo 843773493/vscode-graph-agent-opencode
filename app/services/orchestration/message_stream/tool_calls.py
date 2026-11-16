@@ -32,7 +32,7 @@ class PendingToolCompletion:
     payload: Mapping[str, object]
 
 
-class StreamToolRegistryMixin:
+class MessageStreamToolCallsMixin:
     _tool_call_names_by_id: dict[str, str]
 
     async def complete_tool_approval(self, message: ToolMessage, *, model_call_id: str) -> None:

@@ -35,7 +35,7 @@ from app.runtime.provider_model import build_model_from_provider
 from app.services.orchestration.event_stream.model_events import (
     is_chat_model_run_name,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 def _provider(api_mode: str) -> dict[str, object]:

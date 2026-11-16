@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessageChunk, ToolMessage
 
 from app.core.job_context import get_interruptible_phase
 from app.services.orchestration.event_stream.processor import process_agent_event_stream
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414

@@ -131,7 +131,7 @@ from app.services.orchestration.event_stream import processor as event_processor
 from app.services.orchestration.execution_step import retry as stream_retry
 from app.services.orchestration.execution_step import stream_bindings
 from app.services.orchestration.execution_step.model_call import StepModelCallAdapter
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from app.services.orchestration.session_title_service import SessionTitleService
 from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_test_workspace import (

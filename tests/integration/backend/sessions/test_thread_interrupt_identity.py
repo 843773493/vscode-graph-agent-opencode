@@ -22,7 +22,7 @@ from app.core.path_utils import workspace_context
 from app.core.session_interrupt_state import SessionInterruptState
 from app.core.trace_middleware import TraceMiddleware
 from app.schemas.internal_v2.common import JobStatus
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.integration.backend.sessions.test_runner_cancellation import _session
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,

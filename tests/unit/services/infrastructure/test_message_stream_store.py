@@ -27,11 +27,11 @@ from app.services.infrastructure.message_stream_store import (
     MessageStreamStore,
     MessageStreamTerminalError,
 )
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityHandlerRegistry,
     ActivityRuntime,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.canonical_id_at import thread_id_at
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
 

@@ -15,17 +15,20 @@ from app.services.infrastructure.message_stream_store import MessageStreamWriter
 from app.services.infrastructure.rollout_context.runtime.stream_accumulator import (
     CanonicalBlockAccumulator,
 )
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityHandlerRegistry,
     ActivityRuntime,
 )
-from app.services.orchestration.stream_block_assembler import StreamBlockAssemblyMixin
-from app.services.orchestration.terminal_finalization import StreamTerminalStateMixin
-from app.services.orchestration.tool_call_registry import (
-    PendingToolCompletion,
-    StreamToolRegistryMixin,
+from app.services.orchestration.message_stream.block_assembly import (
+    MessageStreamBlockAssemblyMixin,
 )
-from app.services.orchestration.trace_observer import StreamTraceObserverMixin
+from app.services.orchestration.message_stream.finalization import (
+    MessageStreamFinalizationMixin,
+)
+from app.services.orchestration.message_stream.tool_calls import (
+    MessageStreamToolCallsMixin,
+    PendingToolCompletion,
+)
 
 NormalizedBlockObserver = Callable[[str, Mapping[str, object]], Awaitable[None]]
 CanonicalItemSink = Callable[[Sequence[CanonicalItemRecord]], Awaitable[None]]
@@ -35,10 +38,9 @@ ModelCallOutcomeSink = Callable[[str, str], Awaitable[None]]
 
 
 class MessageStreamRuntime(
-    StreamBlockAssemblyMixin,
-    StreamToolRegistryMixin,
-    StreamTerminalStateMixin,
-    StreamTraceObserverMixin,
+    MessageStreamBlockAssemblyMixin,
+    MessageStreamToolCallsMixin,
+    MessageStreamFinalizationMixin,
 ):
     """把模型 chunk 和 AgentLoop 生命周期提交到同一个消息流 writer。"""
 
@@ -111,6 +113,12 @@ class MessageStreamRuntime(
         self._tool_completion_lock = asyncio.Lock()
         self._model_completed = False
         self._interruption_facts_finalized = False
+
+    async def _observe_normalized_block(
+        self, event_type: str, payload: Mapping[str, object],
+    ) -> None:
+        if self._normalized_block_observer is not None:
+            await self._normalized_block_observer(event_type, payload)
 
     def register_summary_candidate(self, model_call_id: str) -> None:
         """callback 在首个 delta 前登记；仍由 start_model 提交真实 ModelCall。"""

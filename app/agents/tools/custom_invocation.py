@@ -40,7 +40,9 @@ from app.services.infrastructure.mcp.invocation import (
 from app.services.infrastructure.rollout_context.activation.common import (
     ResourceActivationStoreError,
 )
-from app.services.orchestration.activity_runtime import current_activity_runtime
+from app.services.orchestration.message_stream.activities import (
+    current_activity_runtime,
+)
 
 
 class CustomToolInvocationInput(BaseModel):

@@ -90,14 +90,16 @@ from app.services.orchestration.execution_step.stream_bindings import (
     CanonicalItemSink,
     StepEventPublisher,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.trace_observer import (
+    MessageStreamTraceObserver,
+)
 from app.services.orchestration.resource_activation.contracts import (
     reset_current_execution_resource_activation,
     resource_activation_policy_from_config,
     set_current_execution_resource_activation,
 )
 from app.services.orchestration.thread_residency import ThreadRuntimeLease
-from app.services.orchestration.trace_observer import MessageStreamTraceObserver
 
 
 class StepRunner:

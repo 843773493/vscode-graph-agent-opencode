@@ -1,11 +1,11 @@
-"""模型/工具流的 terminal、retry 与 interruption 状态 owner。"""
+"""消息流的模型完成、重试、中断与最终状态收口。"""
 
 from __future__ import annotations
 
 from app.domain.itemized.enums import CanonicalItemStatus
 
 
-class StreamTerminalStateMixin:
+class MessageStreamFinalizationMixin:
     async def finish_model(
         self,
         *,

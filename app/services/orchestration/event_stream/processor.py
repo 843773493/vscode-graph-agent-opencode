@@ -41,7 +41,6 @@ from app.services.mapping.agent_content_mapper import (
     AgentStreamContentPart,
     extract_agent_stream_content_parts,
 )
-from app.services.orchestration.activity_runtime import activity_failure_message
 from app.services.orchestration.event_stream.contracts import (
     AgentEventSource,
     AgentEventStreamResult,
@@ -76,7 +75,10 @@ from app.services.orchestration.event_stream.tool_events import (
     text_mutation_has_file_effects,
     tool_message_from_output,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.activities import (
+    activity_failure_message,
+)
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 
 
 def _field_value(value: object, field_name: str) -> object | None:

@@ -13,10 +13,12 @@ from app.protocol.codecs.message_stream import (
     message_stream_to_proto,
 )
 from app.schemas.internal_v2.mcp import McpInvocationReceipt
-from app.services.orchestration.message_stream_runtime import (
+from app.services.orchestration.message_stream.runtime import (
     MessageStreamRuntime,
 )
-from app.services.orchestration.trace_observer import MessageStreamTraceObserver
+from app.services.orchestration.message_stream.trace_observer import (
+    MessageStreamTraceObserver,
+)
 
 
 @pytest.fixture

@@ -21,7 +21,7 @@ from app.services.orchestration.execution_step.failures import (
     handle_step_failure,
 )
 from app.services.orchestration.execution_step.runner import StepRunner
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414

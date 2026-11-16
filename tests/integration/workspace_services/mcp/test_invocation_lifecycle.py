@@ -36,7 +36,7 @@ from app.services.infrastructure.mcp.invocation import (
     mcp_progress_scope,
 )
 from app.services.infrastructure.message_stream_store import MessageStreamWriter
-from app.services.orchestration.activity_runtime import (
+from app.services.orchestration.message_stream.activities import (
     ActivityHandlerRegistry,
     ActivityRuntime,
 )

@@ -45,7 +45,7 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
     _RolloutFileLock,
 )
-from app.services.orchestration.message_stream_runtime import MessageStreamRuntime
+from app.services.orchestration.message_stream.runtime import MessageStreamRuntime
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
     RuntimeCase,
     _child,
