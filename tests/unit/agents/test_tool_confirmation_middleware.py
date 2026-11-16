@@ -208,12 +208,12 @@ async def test_direct_edit_executes_selected_tool_without_rewriting_emitting_cal
     from langchain_core.tools import tool
     from langgraph.graph import END, START, StateGraph
 
-    from app.agents.graph_tool_adapter import ContentPreservingToolNode
     from app.agents.tool_confirmation_middleware import ToolApprovalState
     from app.agents.tool_invocation_context import (
         ToolInvocationContext,
         ToolInvocationContextMiddleware,
     )
+    from app.agents.tool_node_adapter import AgentToolNode
 
     context = ToolInvocationContext()
     received = []
@@ -244,7 +244,7 @@ async def test_direct_edit_executes_selected_tool_without_rewriting_emitting_cal
     middleware = ToolConfirmationMiddleware(frozenset(), interrupt_on={"original_tool": True})
     result = middleware.after_model(state, MagicMock())
     invocation = ToolInvocationContextMiddleware(context)
-    node = ContentPreservingToolNode([original_tool, selected_tool],
+    node = AgentToolNode([original_tool, selected_tool],
                                     wrap_tool_call=invocation.wrap_tool_call,
                                     awrap_tool_call=invocation.awrap_tool_call)
     builder = StateGraph(ToolApprovalState)

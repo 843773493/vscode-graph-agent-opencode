@@ -16,7 +16,6 @@ from langchain_core.tools import StructuredTool
 from langgraph.runtime import ExecutionInfo, Runtime
 
 from app.agents import agent_factory
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_call_execution import ModelCallExecution
 from app.agents.policy import ToolPolicyResolver
 from app.agents.skill_catalog import (
@@ -25,6 +24,7 @@ from app.agents.skill_catalog import (
 from app.agents.skill_runtime import (
     WorkspaceSkillsMiddleware,
 )
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.skill_loading import create_skill_load_tool
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.lifecycle import LifetimeScope

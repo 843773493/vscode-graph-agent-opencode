@@ -11,7 +11,6 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from app.agents.agent_tools import build_default_tools
 from app.agents.deep_agent_stack import build_deep_agent_middleware
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.policy import (
     DEFAULT_AGENT_TOOL_NAMES,
     build_agent_tool_universe,
@@ -24,6 +23,7 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.tool_discovery import create_search_tools_tool
 
 

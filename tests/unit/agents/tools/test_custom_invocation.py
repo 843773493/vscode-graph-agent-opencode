@@ -15,7 +15,6 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import ValidationError
 
 from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy import DEBUGGING_TOOL_GROUP, parse_custom_tool_specs
 from app.agents.policy.tool_groups import DEBUGGING_TOOL_NAMES
@@ -25,6 +24,7 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
     ToolInvocationContextMiddleware,
 )
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,

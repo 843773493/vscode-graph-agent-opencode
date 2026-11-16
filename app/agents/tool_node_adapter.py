@@ -1,3 +1,5 @@
+"""适配 LangGraph ToolNode 的审批执行、原调用身份和完整结果内容。"""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -14,44 +16,44 @@ from app.agents.tool_confirmation_middleware import (
 )
 
 
-class ContentPreservingToolNode(ToolNode):
-    """沿用框架执行，只保留 ToolMessage 已校验的完整内容块。"""
+class AgentToolNode(ToolNode):
+    """沿用框架调度，应用审批覆盖、保留原调用配对和完整内容块。"""
 
-    def _approval_request(self, request: ToolCallRequest) -> ToolCallRequest:
-        edited = approved_tool_call(request.state, request.tool_call)
-        if edited is request.tool_call:
+    def _apply_tool_approval(self, request: ToolCallRequest) -> ToolCallRequest:
+        approved_call = approved_tool_call(request.state, request.tool_call)
+        if approved_call is request.tool_call:
             return request
-        return replace(request, tool_call=edited, tool=self.tools_by_name.get(edited["name"]))
+        return replace(request, tool_call=approved_call, tool=self.tools_by_name.get(approved_call["name"]))
 
     # TODO: 上游支持在执行端解析审批覆盖后，移除这两个私有入口适配。
     # 在现有身份／结果中间件之后覆盖，保证 emitting call 始终取自原 AI carrier。
     def _execute_tool_sync(self, request: ToolCallRequest, input_type, config: RunnableConfig):
-        approved = self._approval_request(request)
-        result = super()._execute_tool_sync(approved, input_type, config)
-        return self._approval_response(result, request.tool_call, input_type) if approved is not request else result
+        execution_request = self._apply_tool_approval(request)
+        result = super()._execute_tool_sync(execution_request, input_type, config)
+        return self._restore_emitting_tool_name(result, request.tool_call, input_type) if execution_request is not request else result
 
     async def _execute_tool_async(self, request: ToolCallRequest, input_type, config: RunnableConfig):
-        approved = self._approval_request(request)
-        result = await super()._execute_tool_async(approved, input_type, config)
-        if approved is not request:
-            result = self._approval_response(result, request.tool_call, input_type)
-            if approved.tool is None:
+        execution_request = self._apply_tool_approval(request)
+        result = await super()._execute_tool_async(execution_request, input_type, config)
+        if execution_request is not request:
+            result = self._restore_emitting_tool_name(result, request.tool_call, input_type)
+            if execution_request.tool is None:
                 assert isinstance(result, ToolMessage)
                 await complete_tool_approval_results(request.state, (result,))
         return result
 
-    def _approval_response(
-        self, result: ToolMessage | Command | list[Command | ToolMessage], original: ToolCall,
+    def _restore_emitting_tool_name(
+        self, result: ToolMessage | Command | list[Command | ToolMessage], emitting_call: ToolCall,
         input_type: Literal["list", "dict", "tool_calls"],
     ) -> ToolMessage | Command | list[Command | ToolMessage]:
         # 结果属于原模型调用；实际执行目标仍由审批决定、工具事件和输出引用记录。
         if isinstance(result, ToolMessage):
-            return result.model_copy(update={"name": original["name"]})
+            return result.model_copy(update={"name": emitting_call["name"]})
         if isinstance(result, Command):
-            return self._validate_tool_command(result, original, input_type)
-        normalized = [item.model_copy(update={"name": original["name"]}) if isinstance(item, ToolMessage) else item
+            return self._validate_tool_command(result, emitting_call, input_type)
+        normalized = [item.model_copy(update={"name": emitting_call["name"]}) if isinstance(item, ToolMessage) else item
                       for item in result]
-        return self._validate_tool_command_list(normalized, original, input_type)
+        return self._validate_tool_command_list(normalized, emitting_call, input_type)
 
     # TODO: 上游 ToolNode 的内容白名单支持标准音视频块后，移除此私有协议适配。
     def _normalize_tool_response(
@@ -77,9 +79,9 @@ class ContentPreservingToolNode(ToolNode):
                 if isinstance(item, Command) else item for item in response]
 
 
-def content_preserving_tool_node(node: ToolNode) -> ToolNode:
-    """重建同一执行节点，保留原工具、注入、错误策略和中间件。"""
-    return ContentPreservingToolNode(
+def adapt_agent_tool_node(node: ToolNode) -> ToolNode:
+    """用项目 ToolNode 重建同一节点，保留原工具、注入、错误策略和中间件。"""
+    return AgentToolNode(
         list(node.tools_by_name.values()), name=node.name,
         tags=list(node.tags) if node.tags is not None else None,
         handle_tool_errors=node._handle_tool_errors, messages_key=node._messages_key,
@@ -88,7 +90,7 @@ def content_preserving_tool_node(node: ToolNode) -> ToolNode:
 
 
 def extract_agent_tools_by_name(agent: Any) -> dict[str, Any]:
-    """从 DeepAgents 图中提取工具映射，集中隔离第三方私有结构访问。"""
+    """提取图中 ToolNode 的已注册工具，集中隔离框架节点结构访问。"""
     graph_view = agent.get_graph()
     nodes = getattr(graph_view, "nodes", {}) or {}
     tool_map: dict[str, Any] = {}

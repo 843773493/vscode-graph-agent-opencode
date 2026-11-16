@@ -15,10 +15,10 @@ from app.abstractions.session_changes import (
     SessionChangesRecorderProtocol,
     StoredFileEdit,
 )
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.model_capability_routing import MODEL_FAILED_CUSTOM_EVENT
 from app.agents.model_tool_schema import filter_tool_event_injected_arguments
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tool_result_text import extract_tool_result_text, tool_output_status
 from app.core.failures import report_failure
 from app.core.job_context import set_active_tool_name, set_interruptible_phase

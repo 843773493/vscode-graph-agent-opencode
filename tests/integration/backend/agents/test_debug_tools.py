@@ -13,12 +13,12 @@ import pytest
 from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
-from app.agents.graph_tool_adapter import extract_agent_tools_by_name
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.agents.tool_invocation_context import (
     ThreadRuntimeBinding,
     ToolInvocationContext,
 )
+from app.agents.tool_node_adapter import extract_agent_tools_by_name
 from app.agents.tools.custom_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,

@@ -11,7 +11,7 @@ app/agents/
 ├── [Agent 装配与模型调用]
 │   ├── agent_factory.py          配置与绑定选择、单代图编译
 │   ├── deep_agent_stack.py
-│   ├── graph_binding.py、graph_tool_adapter.py、model_call_graph.py
+│   ├── graph_binding.py、tool_node_adapter.py、model_call_graph.py
 │   └── model_call_execution.py、sealed_assembly_dispatch.py
 ├── [Provider 配置、能力与路由]
 │   ├── provider_api_mode.py、provider_capabilities.py
@@ -63,6 +63,7 @@ app/agents/
 - 运行时配置应通过 `ConfigService` 或显式参数传入。
 - 后台工具依赖 `orchestration/background_work/` 的任务注册器与持久邮箱；CustomToolFactoryContext.background_message_bus 是扩展 factory 的既有公开字段名，其值为 BackgroundMailbox，不表示 Job 事件广播。
 - `CustomToolFactoryContext.session_orchestrator` 是扩展 factory 的既有公开字段名，其值实现 `SessionMessageOrchestratorProtocol`；消息准入与派发由 `orchestration/session_messages.py` 实现，不代表 Session 创建、删除或 runtime 装配。
+- `tool_node_adapter.py` 的 `AgentToolNode` 统一适配 LangGraph 工具节点：在执行边界应用审批覆盖，结果仍配对原模型调用，并保留完整媒体内容；`model_call_graph.py` 调用 `adapt_agent_tool_node` 装入该节点。工具确认决策归 `tool_confirmation_middleware.py`，事件消费只通过适配器读取已注册工具。
 - `tool_result_text.py` 统一提取工具输出文本和判定显式状态；Agent step 最终回答的匹配引号还原归 `execution_step/retry.py`。
 - 产品级 Skill 源码统一位于 `resources/skills/`；自动目录只展示 Skill 的 `name`/`description`，显式文件导航只公布规范资源 URI，不暴露 DeepAgents 虚拟挂载或宿主路径。`skill_load(name=...)` 独占正文激活与来源追踪；普通目录导航与文件读取不产生这些副作用，Skill 文件可按公布的 URI 显式读取。
 - 普通文件目标按用户裁定接受相对路径、目标机器原生绝对路径与资源 URI；三者经同一目标解析后执行，工作区外目标按实际 owner 能力访问或明确拒绝，禁止去除根或盘符后改投工作区。`.` 表示显式目标工作区根；DeepAgents 的 `/` 虚拟路径只存在于内部适配层，补丁内文件名仍只允许相对固定根。源码调试继续遵守其工作区能力边界。
