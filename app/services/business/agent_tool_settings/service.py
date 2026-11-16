@@ -52,7 +52,7 @@ class AgentToolSettingsService:
         return self._list_resolved(resolved_agent_id)
 
     def _list_resolved(self, agent_id: str) -> list[ToolDTO]:
-        tools = self._tool_catalog.get_available_tools(agent_id)
+        definitions = self._tool_catalog.list_tool_definitions(agent_id)
         resolver = self._config_service.get_tool_policy_resolver(agent_id)
         selection = self._selection_store.snapshot(agent_id)
         execution_overrides = selection.execution_overrides
@@ -64,7 +64,7 @@ class AgentToolSettingsService:
                 execution_overrides=execution_overrides,
                 visibility_overrides=visibility_overrides,
             )
-            for tool in tools
+            for tool in definitions
         ]
 
     def _build_tool_dto(
@@ -137,36 +137,26 @@ class AgentToolSettingsService:
             agent_id = self._config_service.validate_agent_id(request.agent_id)
         except ValueError as error:
             raise ToolSelectionError(str(error)) from error
-        tools = self._list_resolved(agent_id)
-        available = {tool.tool_id for tool in tools}
+        current_tools = self._list_resolved(agent_id)
+        tools_by_id = {tool.tool_id: tool for tool in current_tools}
         changes = {
             change.tool_id: (change.execution_enabled, change.model_visible)
             for change in request.changes
         }
-        unknown = set(changes) - available
+        unknown = set(changes) - tools_by_id.keys()
         if unknown:
             raise ToolSelectionError(
                 f"包含后端不支持的工具: {', '.join(sorted(unknown))}"
             )
-        resolver = self._config_service.get_tool_policy_resolver(agent_id)
-        catalog_tools = {
-            tool["id"]: tool
-            for tool in self._tool_catalog.get_available_tools(agent_id)
-        }
         for tool_id, (execution_enabled, model_visible) in changes.items():
-            tool = catalog_tools[tool_id]
-            metadata = ToolMetadata(
-                tool_id=tool_id,
-                origin=tool.get("origin", "builtin"),
-                kind=tool.get("kind", DEFAULT_TOOL_GROUP.kind),
-                group_id=tool.get("group_id", DEFAULT_TOOL_GROUP.group_id),
-            )
-            static_policy = resolver.resolve(metadata)
-            if static_policy.execution_locked:
+            tool = tools_by_id[tool_id]
+            if tool.execution_locked:
                 raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止执行")
-            if model_visible and static_policy.model_visibility_locked:
+            if model_visible and tool.model_visibility_locked:
                 raise ToolSelectionError(f"工具 {tool_id!r} 被策略禁止对模型可见")
-        candidate_enabled = {tool.tool_id for tool in tools if tool.execution_enabled}
+        candidate_enabled = {
+            tool.tool_id for tool in current_tools if tool.execution_enabled
+        }
         for tool_id, (execution_enabled, model_visible) in changes.items():
             if not execution_enabled and model_visible:
                 raise ToolSelectionError(

@@ -546,7 +546,7 @@ class AgentExecutionService(JobStepExecutor):
             candidate = await persisted_pending_tool_candidate(checkpointer, admission)
         return candidate.checkpoint_id if candidate is not None else None
 
-    def get_available_tools(self, agent_id: str | None = None) -> list[dict[str, Any]]:
+    def list_tool_definitions(self, agent_id: str | None = None) -> list[dict[str, Any]]:
         """按配置缓存完整工具目录；运行选择另行投影，不初始化模型或图。"""
         if self._config_service is None:
             raise RuntimeError("AgentExecutionService 未绑定 ConfigService")

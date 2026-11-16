@@ -66,7 +66,7 @@ orchestration/
 - 以流程控制为中心，不承担数据持久化职责。
 - `execution_queue.py` 的全工作区恢复扫描逐个取得短 topology 准入和 Session read guard，重新核对 catalog active 状态后读取 main/child 队列；guard 覆盖同步读取线程及取消结算，不并持两个 Session 锁。删除排空中的精确 Session 读取沿用调用方已有准入，不重入该锁；原存储故障继续抛出。执行数据由 rollout owner 保存，既有 v5 显式迁移仍经同一 owner 导入。
 - 保持装配边界清晰，依赖协议而不是具体实现。
-- `AgentExecutionService.get_available_tools` 装配并缓存不含执行状态的管理目录，`_tool_catalog_cache` 按 Agent、配置及 MCP 版本失效；纯字段转换归 `mapping/tool_catalog.py`，目录查询不构建模型或执行图。
+- `AgentExecutionService.list_tool_definitions` 装配并缓存不含执行状态的管理目录，`_tool_catalog_cache` 按 Agent、配置及 MCP 版本失效；纯字段转换归 `mapping/tool_catalog.py`，目录查询不构建模型或执行图。
 - 失败必须立即暴露，不能默认继续。
 - `workspace_runtime_lifecycle.py` 协调工作区执行，不管理 Backend 进程或 SDK 装配。启动恢复在受保护 worker 中耗尽 SQLite Trace 快照，只保留 Job owner 和生命周期 ID；全部历史格式、协议与跨会话归属检查通过后才领取队列、调用恢复端口或写入终态，不用尾部窗口代替完整校验，不另建恢复账本。
 - 工具参数流只在累计正文可能以 JSON 对象结束时调用标准 JSON 解析器；不完整、格式无效或非对象的输入仍保留 raw 和未完成标记，不能提前触发工具执行。

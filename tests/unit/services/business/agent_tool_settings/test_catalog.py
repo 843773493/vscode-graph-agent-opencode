@@ -10,7 +10,7 @@ from app.services.infrastructure.config_service import ConfigService
 
 
 class _RuntimeCatalog:
-    def get_available_tools(self, agent_id: str = "default") -> list[dict]:
+    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
         return [
             {
                 "id": "read_file",
@@ -87,7 +87,7 @@ def test_catalog_exposes_declared_extensions_with_static_policy_metadata(
         config_service=config_service,
     )
 
-    definitions = service.get_available_tools()
+    definitions = service.list_tool_definitions()
 
     assert [item["id"] for item in definitions] == [
         "read_file",
@@ -146,7 +146,7 @@ def test_catalog_groups_default_session_context_extensions_as_collaboration(
 
     by_id = {
         item["id"]: item
-        for item in service.get_available_tools()
+        for item in service.list_tool_definitions()
     }
     session_reader = by_id["read_context"]
     assert session_reader["group_id"] == "agent-collaboration"

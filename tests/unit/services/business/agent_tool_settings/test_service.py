@@ -27,7 +27,7 @@ class _ToolCatalogStub:
     def __init__(self) -> None:
         self.agent_ids: list[str] = []
 
-    def get_available_tools(self, agent_id: str = "default") -> list[dict]:
+    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
         self.agent_ids.append(agent_id)
         return [
             {
@@ -46,8 +46,8 @@ class _ToolCatalogStub:
 
 
 class _DependencyToolCatalogStub(_ToolCatalogStub):
-    def get_available_tools(self, agent_id: str = "default") -> list[dict]:
-        tools = super().get_available_tools(agent_id)
+    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
+        tools = super().list_tool_definitions(agent_id)
         tools.extend(
             {
                 "id": tool_id,
@@ -65,8 +65,8 @@ class _DependencyToolCatalogStub(_ToolCatalogStub):
 
 
 class _DebuggingToolCatalogStub(_ToolCatalogStub):
-    def get_available_tools(self, agent_id: str = "default") -> list[dict]:
-        tools = super().get_available_tools(agent_id)
+    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
+        tools = super().list_tool_definitions(agent_id)
         tools.append(
             {
                 "id": "start_debugging",
@@ -414,12 +414,12 @@ async def test_cold_list_does_not_block_or_overlap_catalog_builds(
     calls: list[str] = []
 
     class BlockingCatalog(_ToolCatalogStub):
-        def get_available_tools(self, agent_id: str = "default") -> list[dict]:
+        def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
             calls.append(agent_id)
             if len(calls) == 1:
                 started.set()
                 assert release.wait(5), "事件循环应能继续运行并释放构建"
-            return super().get_available_tools(agent_id)
+            return super().list_tool_definitions(agent_id)
 
     service = _service(tmp_path, tool_catalog=BlockingCatalog())
     first = asyncio.create_task(service.list("default"))

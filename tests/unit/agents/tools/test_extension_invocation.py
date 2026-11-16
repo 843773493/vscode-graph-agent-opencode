@@ -129,7 +129,7 @@ async def test_envelope_preserves_target_error_policy_and_original_call_identity
 class _RuntimeCatalog:
     """只提供目录聚合所需的运行时工具投影。"""
 
-    def get_available_tools(self, agent_id: str = "default") -> list[dict]:
+    def list_tool_definitions(self, agent_id: str = "default") -> list[dict]:
         return [
             {
                 "id": "read_file",
@@ -328,7 +328,7 @@ def test_catalog_keeps_debugging_targets_in_inner_directory(
         ),
     )
 
-    definitions = {item["id"]: item for item in catalog.get_available_tools()}
+    definitions = {item["id"]: item for item in catalog.list_tool_definitions()}
 
     assert DEBUGGING_TOOL_NAMES <= definitions.keys()
     for target_name in DEBUGGING_TOOL_NAMES:

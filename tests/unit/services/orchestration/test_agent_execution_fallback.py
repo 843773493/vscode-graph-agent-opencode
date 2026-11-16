@@ -661,12 +661,12 @@ def test_tool_catalog_cache_is_keyed_without_session(
             side_effect=fake_definitions,
         ),
     ):
-        first = service.get_available_tools("test_agent")
+        first = service.list_tool_definitions("test_agent")
         agent_execution_dependencies["tool_selection_store"].snapshot.side_effect = lambda agent_id: ToolSelectionSnapshot(
             agent_id, {"read_file": False}, {"read_file": False},
         )
-        assert service.get_available_tools("test_agent") is first  # 命中缓存
-        second = service.get_available_tools("test_agent")
+        assert service.list_tool_definitions("test_agent") is first  # 命中缓存
+        second = service.list_tool_definitions("test_agent")
 
     assert build_runtime.call_count == 2  # 配置 revision 变化 → 重建
     assert all(call.kwargs["execution_overrides"] == {} and call.kwargs["model_visibility_overrides"] == {}
@@ -704,7 +704,7 @@ def test_tool_catalog_resolves_default_agent_before_owns_thread_false_assembly(
             return_value=[],
         ),
     ):
-        assert service.get_available_tools() == []
+        assert service.list_tool_definitions() == []
 
     assert agent_execution_dependencies["config_service"].validate_agent_id.call_args.args == (None,)
     assert assembled == [("test_agent", False)]

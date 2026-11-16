@@ -14,13 +14,15 @@ from app.services.infrastructure.config_service import ConfigService
 
 
 class ToolCatalogReader(Protocol):
-    def get_available_tools(
+    """读取包含禁用工具的管理定义；执行与模型可见状态由设置服务投影。"""
+
+    def list_tool_definitions(
         self, agent_id: str | None = None
     ) -> list[dict[str, Any]]: ...
 
 
 class AgentToolCatalog:
-    """把运行时工具与配置中的扩展工具映射为前端目录结构。"""
+    """合成运行时工具与配置扩展的管理定义，不按执行开关筛选。"""
 
     def __init__(
         self,
@@ -31,7 +33,7 @@ class AgentToolCatalog:
         self._runtime_catalog = runtime_catalog
         self._config_service = config_service
 
-    def get_available_tools(self, agent_id: str | None = None) -> list[dict[str, Any]]:
+    def list_tool_definitions(self, agent_id: str | None = None) -> list[dict[str, Any]]:
         resolved_agent_id = self._config_service.validate_agent_id(agent_id)
         definitions = [
             {
@@ -45,7 +47,7 @@ class AgentToolCatalog:
                 ),
                 "kind": item.get("kind", DEFAULT_TOOL_GROUP.kind),
             }
-            for item in self._runtime_catalog.get_available_tools(resolved_agent_id)
+            for item in self._runtime_catalog.list_tool_definitions(resolved_agent_id)
             if item["id"] != "invoke_extension_tool"
         ]
         tool_config = self._config_service.get_agent_tool_config(resolved_agent_id)
