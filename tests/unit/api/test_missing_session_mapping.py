@@ -85,7 +85,7 @@ class _FakeLlmLogService:
 
 
 class _FakeCompactionService:
-    async def compact(self, *, session_id: str):
+    async def request_compaction(self, *, session_id: str):
         raise NotFoundError(f"Session {session_id} not found")
 
 

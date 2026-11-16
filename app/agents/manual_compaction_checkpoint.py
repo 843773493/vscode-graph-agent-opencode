@@ -16,27 +16,31 @@ from app.services.infrastructure.rollout_context.checkpoint.codec.message_channe
 
 
 @dataclass(slots=True)
-class ContextCompactionCheckpoint:
+class ManualCompactionSnapshot:
+    """手动压缩预览与请求提交共用的 LangGraph 检查点快照。"""
+
     owner: MutationIntentOwner
     raw_messages: list[object]
-    event: object
-    _tuple: CheckpointTuple
-    _checkpoint: Checkpoint
-    _channel_values: dict[str, object]
+    summarization_event: object
+    source_tuple: CheckpointTuple
+    graph_checkpoint: Checkpoint
+    channel_values: dict[str, object]
 
 
-class ContextCompactionCheckpointStore:
+class ManualCompactionCheckpointAdapter:
+    """读取 LangGraph 快照，将手动压缩请求写回既有 checkpointer。"""
+
     def __init__(self, *, checkpointer: BaseCheckpointSaver) -> None:
         self._checkpointer = checkpointer
 
-    async def load(self, owner: MutationIntentOwner) -> ContextCompactionCheckpoint | None:
+    async def load_snapshot(self, owner: MutationIntentOwner) -> ManualCompactionSnapshot | None:
         with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
-            tup = await self._checkpointer.aget_tuple(build_checkpoint_config(owner.thread_id))
-        if tup is None:
+            source_tuple = await self._checkpointer.aget_tuple(build_checkpoint_config(owner.thread_id))
+        if source_tuple is None:
             return None
 
-        checkpoint = tup.checkpoint.copy()
-        raw_channel_values = checkpoint.get("channel_values", {})
+        graph_checkpoint = source_tuple.checkpoint.copy()
+        raw_channel_values = graph_checkpoint.get("channel_values", {})
         if not isinstance(raw_channel_values, dict):
             raise TypeError(
                 "LangGraph checkpoint channel_values 应为 dict，"
@@ -44,47 +48,33 @@ class ContextCompactionCheckpointStore:
             )
         channel_values: dict[str, object] = dict(raw_channel_values)
         with session_thread_owner_scope(owner, langgraph_thread_id=owner.thread_id):
-            raw_messages = await acheckpoint_messages(self._checkpointer, tup)
+            raw_messages = await acheckpoint_messages(self._checkpointer, source_tuple)
         channel_values["messages"] = raw_messages
         if not isinstance(raw_messages, list):
             raise TypeError(
                 f"LangGraph checkpoint messages 应为 list，实际类型: {type(raw_messages).__name__}"
             )
 
-        return ContextCompactionCheckpoint(
+        return ManualCompactionSnapshot(
             owner=owner,
             raw_messages=raw_messages,
-            event=channel_values.get("_summarization_event"),
-            _tuple=tup,
-            _checkpoint=checkpoint,
-            _channel_values=channel_values,
+            summarization_event=channel_values.get("_summarization_event"),
+            source_tuple=source_tuple,
+            graph_checkpoint=graph_checkpoint,
+            channel_values=channel_values,
         )
 
-    async def save_compaction_request(
+    async def request_compaction(
         self,
         *,
-        checkpoint: ContextCompactionCheckpoint,
+        snapshot: ManualCompactionSnapshot,
     ) -> None:
-        await self._save_channel_value(
-            checkpoint=checkpoint,
-            channel="_force_cache_compaction",
-            value=True,
-            source="manual_compact_request",
-        )
+        channel = "_force_cache_compaction"
+        channel_values = dict(snapshot.channel_values)
+        channel_values["messages"] = message_snapshot(snapshot.raw_messages)
+        channel_values[channel] = True
 
-    async def _save_channel_value(
-        self,
-        *,
-        checkpoint: ContextCompactionCheckpoint,
-        channel: str,
-        value: object,
-        source: str,
-    ) -> None:
-        channel_values = dict(checkpoint._channel_values)
-        channel_values["messages"] = message_snapshot(checkpoint.raw_messages)
-        channel_values[channel] = value
-
-        next_checkpoint = checkpoint._checkpoint.copy()
+        next_checkpoint = snapshot.graph_checkpoint.copy()
         next_checkpoint["channel_values"] = channel_values
         next_checkpoint["id"] = str(uuid.uuid4())
 
@@ -95,17 +85,17 @@ class ContextCompactionCheckpointStore:
                 f"实际类型: {type(raw_channel_versions).__name__}"
             )
         channel_versions = dict(raw_channel_versions)
-        value_version = self._checkpointer.get_next_version(
+        request_version = self._checkpointer.get_next_version(
             channel_versions.get(channel),
             None,
         )
-        channel_versions[channel] = value_version
+        channel_versions[channel] = request_version
         next_checkpoint["channel_versions"] = channel_versions
 
-        with session_thread_owner_scope(checkpoint.owner, langgraph_thread_id=checkpoint.owner.thread_id):
+        with session_thread_owner_scope(snapshot.owner, langgraph_thread_id=snapshot.owner.thread_id):
             await self._checkpointer.aput(
-                config=checkpoint._tuple.config,
+                config=snapshot.source_tuple.config,
                 checkpoint=next_checkpoint,
-                metadata={**message_snapshot_metadata(checkpoint._tuple.metadata), "source": source, "step": -1, "writes": {}},
-                new_versions={channel: value_version},
+                metadata={**message_snapshot_metadata(snapshot.source_tuple.metadata), "source": "manual_compact_request", "step": -1, "writes": {}},
+                new_versions={channel: request_version},
             )

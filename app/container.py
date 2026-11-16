@@ -17,8 +17,8 @@ from app.abstractions.resource_file_content import ResourceFileContent
 from app.abstractions.session_context import WorkspaceSessionContextClientProtocol
 from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
-from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
 from app.agents.graph_binding import SessionControlGraphBindingStore
+from app.agents.manual_compaction_checkpoint import ManualCompactionCheckpointAdapter
 from app.core.env import get_project_root
 from app.core.job_event_bus import JobEventBus
 from app.core.mounted_workspaces import MountedWorkspace, MountedWorkspaceRegistry
@@ -1099,7 +1099,7 @@ def _build_app_container(
     session_context_query_service.bind_information_source(
         session_information_service
     )
-    context_checkpoint_store = ContextCompactionCheckpointStore(
+    compaction_checkpoint_adapter = ManualCompactionCheckpointAdapter(
         checkpointer=checkpointer,
     )
     summarization_compactor = AgentSummarizationCompactor(
@@ -1107,7 +1107,7 @@ def _build_app_container(
         workspace_root=resolved_workspace_root,
     )
     context_compaction_service = ContextCompactionService(
-        checkpoint_store=context_checkpoint_store,
+        checkpoint_adapter=compaction_checkpoint_adapter,
         job_service=job_service,
         session_service=session_service,
         summarization_compactor=summarization_compactor,

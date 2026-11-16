@@ -21,7 +21,7 @@
 │   │   ├── resources.py                        资源身份、URI 与视图准入
 │   │   └── projection.py / pagination.py       内容投影与统一游标、字符预算、分片
 │   ├── session_context_fork_service.py          Fork来源与转移
-│   └── context_compaction_service.py            上下文压缩
+│   └── context_compaction_service.py            Thread 空闲准入下的手动压缩预览与请求登记
 ├── Turn历史与检查点
 │   ├── session_turn_history/                    Job Turn读取和可见页投影
 │   └── execution_message_checkpoint.py    已接受执行输入与最终 assistant 消息的 checkpoint

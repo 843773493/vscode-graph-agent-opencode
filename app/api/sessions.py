@@ -1081,7 +1081,7 @@ async def compact_session_context(
     ),
 ):
     try:
-        result = await context_compaction_service.compact(session_id=session_id)
+        result = await context_compaction_service.request_compaction(session_id=session_id)
     except SessionDeletionPendingError as error:
         raise state_conflict_http_error(error) from error
     except (KeyError, NotFoundError) as error:

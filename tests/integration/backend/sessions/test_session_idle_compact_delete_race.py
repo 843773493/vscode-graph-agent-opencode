@@ -10,7 +10,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.agents.context_checkpoint_store import ContextCompactionCheckpoint
+from app.agents.manual_compaction_checkpoint import ManualCompactionSnapshot
 from app.api.deps import (
     get_context_compaction_service,
     get_job_service,
@@ -49,21 +49,21 @@ class _ImmediateJobExecutor:
         return "done"
 
 
-class _RecordingCheckpointStore:
+class _RecordingCheckpointAdapter:
     def __init__(self, workspace: CatalogWorkspaceContext) -> None:
         self.workspace = workspace
         self.load_calls = 0
         self.save_calls = 0
 
-    async def load(self, owner: MutationIntentOwner) -> ContextCompactionCheckpoint | None:
+    async def load_snapshot(self, owner: MutationIntentOwner) -> ManualCompactionSnapshot | None:
         assert self.workspace.resolver.main_thread_id(owner.session_id) == owner.thread_id
         self.load_calls += 1
         return None
 
-    async def save_compaction_request(
-        self, *, checkpoint: ContextCompactionCheckpoint
+    async def request_compaction(
+        self, *, snapshot: ManualCompactionSnapshot
     ) -> None:
-        del checkpoint
+        del snapshot
         self.save_calls += 1
         raise AssertionError("空 checkpoint 不应创建压缩请求")
 
@@ -91,7 +91,7 @@ class _Harness:
     session_service: SessionService
     job_service: JobService
     catalog_service: SessionCatalogService
-    checkpoint_store: _RecordingCheckpointStore
+    checkpoint_adapter: _RecordingCheckpointAdapter
     compactor: _CompactorProbe
 
 
@@ -118,10 +118,10 @@ async def harness() -> AsyncIterator[_Harness]:
         session_service=session_service,
         job_service=job_service,
     )
-    checkpoint_store = _RecordingCheckpointStore(workspace)
+    checkpoint_adapter = _RecordingCheckpointAdapter(workspace)
     compactor = _CompactorProbe()
     compaction_service = ContextCompactionService(
-        checkpoint_store=checkpoint_store,
+        checkpoint_adapter=checkpoint_adapter,
         job_service=job_service,
         session_service=session_service,
         summarization_compactor=compactor,
@@ -148,7 +148,7 @@ async def harness() -> AsyncIterator[_Harness]:
                 session_service=session_service,
                 job_service=job_service,
                 catalog_service=catalog_service,
-                checkpoint_store=checkpoint_store,
+                checkpoint_adapter=checkpoint_adapter,
                 compactor=compactor,
             )
         finally:
@@ -172,8 +172,8 @@ async def test_active_compaction_and_missing_session_keep_their_api_contracts(
     assert compact.status_code == 200, compact.text
     assert compact.json()["data"]["status"] == "skipped"
     assert missing.status_code == 404, missing.text
-    assert harness.checkpoint_store.load_calls == 1
-    assert harness.checkpoint_store.save_calls == 0
+    assert harness.checkpoint_adapter.load_calls == 1
+    assert harness.checkpoint_adapter.save_calls == 0
     assert harness.compactor.check_calls == 0
 
 
@@ -227,8 +227,8 @@ async def test_compaction_during_real_delete_returns_conflict_before_checkpoint_
         assert compact.status_code == 409, compact.text
         assert "session_deletion_pending" in compact.json()["detail"]
         assert session_get_calls == 0
-        assert harness.checkpoint_store.load_calls == 0
-        assert harness.checkpoint_store.save_calls == 0
+        assert harness.checkpoint_adapter.load_calls == 0
+        assert harness.checkpoint_adapter.save_calls == 0
         assert harness.compactor.check_calls == 0
         continue_drain.set()
         receipt = await catalog.operations.await_terminal(

@@ -23,7 +23,7 @@ app/agents/
 │   ├── model_tool_schema.py、tool_identity.py、tool_set_producer.py
 │   └── tool_result_text.py、tool_invocation_context.py
 ├── [模型上下文与摘要]
-│   ├── checkpoint_recovery.py、context_checkpoint_store.py
+│   ├── checkpoint_recovery.py、compaction_checkpoint_adapter.py
 │   └── summarization/              摘要计划、投影、重试和状态
 ├── [运行中间件与调用上下文]
 │   ├── tool_confirmation_middleware.py
@@ -64,3 +64,5 @@ app/agents/
 - 产品级 Skill 源码统一位于 `resources/skills/`；自动目录只展示 Skill 的 `name`/`description`，显式文件导航只公布规范资源 URI，不暴露 DeepAgents 虚拟挂载或宿主路径。`skill_load(name=...)` 独占正文激活与来源追踪；普通目录导航与文件读取不产生这些副作用，Skill 文件可按公布的 URI 显式读取。
 - 普通文件目标按用户裁定接受相对路径、目标机器原生绝对路径与资源 URI；三者经同一目标解析后执行，工作区外目标按实际 owner 能力访问或明确拒绝，禁止去除根或盘符后改投工作区。`.` 表示显式目标工作区根；DeepAgents 的 `/` 虚拟路径只存在于内部适配层，补丁内文件名仍只允许相对固定根。源码调试继续遵守其工作区能力边界。
 - 失败时抛出明确错误，不要返回虚假的默认值。
+
+- `manual_compaction_checkpoint.py` 是手动压缩的 LangGraph 检查点适配边界：读取快照并登记 `_force_cache_compaction` 请求。实际摘要生成归 `summarization/` 中间件，检查点持久化归注入的 checkpointer；不在此增加消息副本或另一套存储。

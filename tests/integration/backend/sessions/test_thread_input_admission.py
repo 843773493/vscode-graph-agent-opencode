@@ -177,11 +177,11 @@ async def test_main_manual_compaction_allows_child_input_while_main_input_waits(
     loading = asyncio.Event()
     release = asyncio.Event()
     main_prepared = asyncio.Event()
-    store = case.container.context_compaction_service._checkpoint_store
-    original_load = store.load
+    adapter = case.container.context_compaction_service._checkpoint_adapter
+    original_load = adapter.load_snapshot
     original_create = case.container.message_service.create
 
-    async def load(owner):
+    async def load_snapshot(owner):
         checkpoint = await original_load(owner)
         loading.set()
         await release.wait()
@@ -193,7 +193,7 @@ async def test_main_manual_compaction_allows_child_input_while_main_input_waits(
             main_prepared.set()
         return message
 
-    monkeypatch.setattr(store, "load", load)
+    monkeypatch.setattr(adapter, "load_snapshot", load_snapshot)
     monkeypatch.setattr(case.container.message_service, "create", create)
     compact = asyncio.create_task(case.client.post(f"/api/v1/sessions/{session}/compact"))
     send = None

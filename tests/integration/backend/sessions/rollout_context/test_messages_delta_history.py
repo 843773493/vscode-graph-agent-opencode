@@ -20,7 +20,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Overwrite
 
-from app.agents.context_checkpoint_store import ContextCompactionCheckpointStore
+from app.agents.manual_compaction_checkpoint import ManualCompactionCheckpointAdapter
 from app.core.checkpoint_config import build_checkpoint_config
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
@@ -278,9 +278,9 @@ async def test_manual_message_baseline_keeps_other_channel_replay_counters(chann
         compiled = graph.compile(checkpointer=saver)
         actual = await compiled.ainvoke({"messages": [user], "events": ["输入"]}, config)
         before = saver.get_tuple(config)
-        store = ContextCompactionCheckpointStore(checkpointer=saver)
-        loaded = await store.load(MutationIntentOwner(admission.session_id, admission.thread_id))
-        await store.save_compaction_request(checkpoint=loaded)
+        adapter = ManualCompactionCheckpointAdapter(checkpointer=saver)
+        snapshot = await adapter.load_snapshot(MutationIntentOwner(admission.session_id, admission.thread_id))
+        await adapter.request_compaction(snapshot=snapshot)
         after = saver.get_tuple(config)
         assert after.metadata["counters_since_delta_snapshot"]["events"] == before.metadata["counters_since_delta_snapshot"]["events"]
         assert "messages" not in after.metadata["counters_since_delta_snapshot"]

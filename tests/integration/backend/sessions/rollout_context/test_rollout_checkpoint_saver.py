@@ -2857,7 +2857,7 @@ def test_application_container_exposes_one_checkpoint_entrypoint(
     assert checkpointer is container.session_turn_replay_service._checkpointer
     assert (
         checkpointer
-        is container.context_compaction_service._checkpoint_store._checkpointer
+        is container.context_compaction_service._checkpoint_adapter._checkpointer
     )
     assert (
         checkpointer

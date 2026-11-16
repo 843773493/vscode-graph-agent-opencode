@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.checkpoint.base import Checkpoint, CheckpointTuple
 
-from app.agents.context_checkpoint_store import ContextCompactionCheckpoint
+from app.agents.manual_compaction_checkpoint import ManualCompactionSnapshot
 from app.api.deps import (
     get_context_compaction_service,
     get_goal_service,
@@ -70,31 +70,31 @@ class _InstantJobExecutor:
         return "done"
 
 
-class _RecordingCheckpointStore:
+class _RecordingCheckpointAdapter:
     def __init__(self, workspace: CatalogWorkspaceContext) -> None:
         self.workspace = workspace
-        self.checkpoint: ContextCompactionCheckpoint | None = None
+        self.snapshot: ManualCompactionSnapshot | None = None
         self.load_calls = 0
         self.save_calls = 0
 
-    async def load(self, owner: MutationIntentOwner) -> ContextCompactionCheckpoint:
+    async def load_snapshot(self, owner: MutationIntentOwner) -> ManualCompactionSnapshot:
         assert self.workspace.resolver.main_thread_id(owner.session_id) == owner.thread_id
         self.load_calls += 1
         messages = [HumanMessage(content="旧消息"), HumanMessage(content="新消息")]
-        self.checkpoint = ContextCompactionCheckpoint(
+        self.snapshot = ManualCompactionSnapshot(
             owner=owner,
             raw_messages=list(messages),
-            event=None,
-            _tuple=cast(CheckpointTuple, object()),
-            _checkpoint=cast(Checkpoint, {"channel_versions": {}}),
-            _channel_values={"messages": messages},
+            summarization_event=None,
+            source_tuple=cast(CheckpointTuple, object()),
+            graph_checkpoint=cast(Checkpoint, {"channel_versions": {}}),
+            channel_values={"messages": messages},
         )
-        return self.checkpoint
+        return self.snapshot
 
-    async def save_compaction_request(
-        self, *, checkpoint: ContextCompactionCheckpoint
+    async def request_compaction(
+        self, *, snapshot: ManualCompactionSnapshot
     ) -> None:
-        assert checkpoint is self.checkpoint
+        assert snapshot is self.snapshot
         self.save_calls += 1
 
 
@@ -175,7 +175,7 @@ class _Harness:
     goal_service: SessionGoalService
     runtime: _RuntimeProbe
     compaction_service: ContextCompactionService
-    checkpoint_store: _RecordingCheckpointStore
+    checkpoint_adapter: _RecordingCheckpointAdapter
     compactor: _CompactorProbe
 
 
@@ -214,10 +214,10 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
         return await runtime.sample_active_progress(session_id)
 
     monkeypatch.setattr("app.api.sessions.sample_goal_progress", sample_probe)
-    checkpoint_store = _RecordingCheckpointStore(workspace)
+    checkpoint_adapter = _RecordingCheckpointAdapter(workspace)
     compactor = _CompactorProbe()
     compaction_service = ContextCompactionService(
-        checkpoint_store=checkpoint_store,
+        checkpoint_adapter=checkpoint_adapter,
         job_service=job_service,
         session_service=session_service,
         summarization_compactor=compactor,
@@ -247,7 +247,7 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
                 goal_service=goal_service,
                 runtime=runtime,
                 compaction_service=compaction_service,
-                checkpoint_store=checkpoint_store,
+                checkpoint_adapter=checkpoint_adapter,
                 compactor=compactor,
             )
         finally:
@@ -276,8 +276,8 @@ async def test_active_short_write_endpoints_keep_their_contracts(
     compact = await harness.client.post(f"/api/v1/sessions/{session_id}/compact")
     assert compact.status_code == 200, compact.text
     assert compact.json()["data"]["status"] == "scheduled"
-    assert harness.checkpoint_store.load_calls == 1
-    assert harness.checkpoint_store.save_calls == 1
+    assert harness.checkpoint_adapter.load_calls == 1
+    assert harness.checkpoint_adapter.save_calls == 1
     assert harness.compactor.check_calls == 1
 
     created = await harness.client.put(
@@ -535,8 +535,8 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
     assert harness.workspace.node(session_id).name == "保持原状"
     assert (await harness.session_service.get(session_id)).title == "保持原状"
     assert await harness.goal_service.get(session_id) is None
-    assert harness.checkpoint_store.load_calls == 0
-    assert harness.checkpoint_store.save_calls == 0
+    assert harness.checkpoint_adapter.load_calls == 0
+    assert harness.checkpoint_adapter.save_calls == 0
     assert harness.compactor.check_calls == 0
     assert harness.workspace.node(session_id).state == "deleting"
     assert harness.workspace.session_dir(session_id).is_dir()
