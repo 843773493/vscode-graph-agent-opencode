@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import weakref
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,7 +14,6 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from pydantic import ValidationError
 
 from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
-from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy import DEBUGGING_TOOL_GROUP, parse_custom_tool_specs
 from app.agents.policy.tool_groups import DEBUGGING_TOOL_NAMES
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
@@ -29,15 +27,11 @@ from app.agents.tools.debugging import create_debugging_tools
 from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     seal_extension_catalog_binding_from_tools,
-    sealed_extension_catalog_binding_resolver,
 )
+from app.agents.tools.testing import create_test_tool_2
 from app.schemas.internal_v2.node_debug import NodeDebugStateDTO
 from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.mcp.extension_catalog import (
-    ExtensionTargetBindingInput,
-    build_extension_catalog_binding,
-)
 
 #: 16 个 DebugMCP 风格内层目标（不含 4 个方案管理目标）。
 DEBUG_TARGET_NAMES = frozenset(
@@ -371,9 +365,10 @@ def _debugging_custom_specs(tmp_path: Path) -> list[object]:
     ]
 
 
-def _factory_context(tmp_path: Path, service: MagicMock) -> CustomToolFactoryContext:
+@pytest.fixture
+def custom_tool_factory_context(tmp_path: Path) -> CustomToolFactoryContext:
     return CustomToolFactoryContext(
-        session_id="ses_envelope",
+        session_id="ses_test",
         agent_id="default",
         sender_agent_id="default",
         workspace_root=tmp_path,
@@ -388,12 +383,12 @@ def _factory_context(tmp_path: Path, service: MagicMock) -> CustomToolFactoryCon
         terminal_resource_owner=MagicMock(),
         browser_resource_owner=MagicMock(),
         invocation_context=ToolInvocationContext(),
-        node_debug_service=service,
     )
 
 
 def test_configured_debugging_specs_resolve_into_envelope_targets(
     tmp_path: Path,
+    custom_tool_factory_context: CustomToolFactoryContext,
 ) -> None:
     raw_specs = _debugging_custom_specs(tmp_path)
     specs = parse_custom_tool_specs(raw_specs, context="测试 tools.custom")
@@ -409,7 +404,12 @@ def test_configured_debugging_specs_resolve_into_envelope_targets(
     service = MagicMock()
     service.get_state = AsyncMock(return_value=_idle_state())
     service.record_tool_action = AsyncMock()
-    tools = build_custom_tools(raw_specs, context=_factory_context(tmp_path, service))
+    tools = build_custom_tools(
+        raw_specs,
+        context=replace(
+            custom_tool_factory_context, session_id="ses_envelope", node_debug_service=service,
+        ),
+    )
 
     assert {tool.name for tool in tools} == DEBUGGING_TOOL_NAMES
     envelope = create_extension_tool_invoker_tool(
@@ -486,248 +486,200 @@ async def test_envelope_preserves_original_tool_call_id_pairing() -> None:
     assert recorded_binding.target_schema_hash.startswith("sha256:")
 
 
-# ---------------------------------------------------------------------------
-# E4 第三段：sealed ExtensionCatalogBindingRef resolve 端口合同
-# ---------------------------------------------------------------------------
-
-
-def _extension_binding_inputs(tools):
-    """从工具列表构建 sealed binding 输入；origin/server_id 与注册元数据一致。"""
-    inputs = []
-    for tool_item in tools:
-        metadata = getattr(tool_item, "metadata", None)
-        server_id = (
-            metadata.get("mcp_server_id") if isinstance(metadata, dict) else None
-        )
-        inputs.append(
-            ExtensionTargetBindingInput(
-                target_id=tool_item.name,
-                origin="mcp" if server_id else "custom",
-                input_schema=export_model_tool_json_schema(tool_item),
-                server_id=server_id,
-                connection_ref=metadata.get("mcp_connection_ref") if server_id else None,
-            )
-        )
-    return inputs
-
-
-def _sealed_binding_resolver(tools):
-    """按工具快照封存 binding ref，并适配为 invoker 的 typed resolve 端口。"""
-    binding = build_extension_catalog_binding(
-        catalog_revision="sha256:"
-        + hashlib.sha256(b"test-catalog-rev").hexdigest(),
-        generation=1,
-        targets=_extension_binding_inputs(tools),
-    )
-    return sealed_extension_catalog_binding_resolver(binding), binding
-
-
 @pytest.mark.asyncio
-async def test_sealed_binding_resolver_resolves_sealed_custom_target():
-    from langchain_core.tools import tool
-
-    @tool
-    def sealed_custom(value: str) -> str:
-        """sealed binding 端口下的 custom target。"""
-        return f"sealed:{value}"
-
-    resolver, _binding = _sealed_binding_resolver([sealed_custom])
+async def test_extension_invoker_dispatches_configured_tool_without_skill_activation(
+    custom_tool_factory_context: CustomToolFactoryContext,
+):
+    custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
-        [sealed_custom],
-        catalog_binding_resolver=resolver,
+        [custom_tool],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [custom_tool]
+        ),
     )
 
     result = await invoker.ainvoke(
-        {"tool_name": "sealed_custom", "arguments": {"value": "ok"}},
+        {
+            "tool_name": "test_tool_2",
+            "arguments": {},
+        }
     )
 
-    assert result == "sealed:ok"
+    assert invoker.name == EXTENSION_TOOL_INVOKER_NAME
+    assert set(invoker.args) == {"tool_name", "arguments"}
+    assert result == "4568"
 
 
 @pytest.mark.asyncio
-async def test_sealed_resolution_is_isolated_from_live_catalog_changes():
-    """live 目录新增 target 不影响封存解析；未封存 target 显式失败。"""
-    from langchain_core.tools import tool
-
-    @tool
-    def sealed_alpha() -> str:
-        """封存时存在的 target。"""
-        return "alpha"
-
-    @tool
-    def live_beta() -> str:
-        """封存后才加入 live 目录的 target。"""
-        return "beta"
-
-    # binding 只封存 sealed_alpha 快照；live 注册表随后包含额外 target。
-    resolver, binding = _sealed_binding_resolver([sealed_alpha])
+async def test_extension_invoker_rechecks_effective_execution_policy(
+    custom_tool_factory_context: CustomToolFactoryContext,
+):
+    custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
-        [sealed_alpha, live_beta],
-        catalog_binding_resolver=resolver,
+        [custom_tool],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [custom_tool]
+        ),
+        is_tool_execution_enabled=lambda _tool: False,
     )
 
-    alpha_result = await invoker.ainvoke(
-        {"tool_name": "sealed_alpha", "arguments": {}},
+    # 权限撤销在执行点拒绝，并按 envelope 合同返回真实 paired 错误结果。
+    denied_result = await invoker.ainvoke(
+        {"tool_name": "test_tool_2", "arguments": {}},
     )
-    assert alpha_result == "alpha"
-    assert binding.resolve("sealed_alpha").target_id == "sealed_alpha"
-    live_beta_result = await invoker.ainvoke(
-        {"tool_name": "live_beta", "arguments": {}},
-    )
-    assert isinstance(live_beta_result, str)
-    assert "live_beta" in live_beta_result
-    assert "不存在 target" in live_beta_result
+    assert isinstance(denied_result, str)
+    assert "已被策略禁用" in denied_result
 
 
 @pytest.mark.asyncio
-async def test_sealed_target_missing_registration_fails_closed():
-    """sealed target 在注册表中已不存在时 fail closed，不回退 live 目录。"""
-    from langchain_core.tools import tool
-
-    @tool
-    def sealed_gamma() -> str:
-        """只在封存 ref 中存在的 target。"""
-        return "gamma"
-
-    resolver, _binding = _sealed_binding_resolver([sealed_gamma])
+async def test_extension_invoker_preserves_local_extra_policy_and_rejects_unknown_envelope_arguments(
+    custom_tool_factory_context: CustomToolFactoryContext,
+):
+    custom_tool = create_test_tool_2(custom_tool_factory_context)
     invoker = create_extension_tool_invoker_tool(
-        [],
-        catalog_binding_resolver=resolver,
+        [custom_tool],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [custom_tool]
+        ),
     )
 
-    missing_result = await invoker.ainvoke(
-        {"tool_name": "sealed_gamma", "arguments": {}},
+    result = await invoker.ainvoke(
+        {
+            "tool_name": "test_tool_2",
+            "arguments": {"unexpected": True},
+        }
     )
-    assert isinstance(missing_result, str)
-    assert "缺少可执行注册" in missing_result
+    assert isinstance(result, str)
+    # 本地模型的默认 extra=ignore 必须保持；信封自身仍拒绝后端注入字段。
+    assert result == "4568"
+    assert await custom_tool.ainvoke({"unexpected": True}) == result
+
+    with pytest.raises(ValidationError):
+        invoker.args_schema.model_validate(
+            {
+                "tool_name": "test_tool_2",
+                "arguments": {},
+                "session_id": "must-not-be-accepted",
+            }
+        )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("server_id", ["server-a", "server-b"])
-async def test_sealed_mcp_target_requires_matching_server_and_connection_identity(server_id: str):
-    """同名同 schema 目标也必须匹配原 Server 和精确连接。"""
+def test_extension_invoker_description_is_fixed_and_contains_no_target_schema():
     from langchain_core.tools import tool
 
     @tool
-    def sealed_mcp_status(value: str) -> str:
-        """MCP target stub。"""
-        return f"status:{value}"
-
-    registered = sealed_mcp_status.model_copy(
-        update={"metadata": {"mcp_server_id": "server-a", "mcp_connection_ref": "mcp-connection:v1:" + "a" * 32 + ":1"}}
-    )
-    resolver, _binding = _sealed_binding_resolver([registered])
-    matching_invoker = create_extension_tool_invoker_tool(
-        [registered],
-        catalog_binding_resolver=resolver,
-    )
-    drifted_invoker = create_extension_tool_invoker_tool(
-        [
-            sealed_mcp_status.model_copy(
-                update={"metadata": {"mcp_server_id": server_id, "mcp_connection_ref": "mcp-connection:v1:" + "b" * 32 + ":1"}}
-            )
-        ],
-        catalog_binding_resolver=resolver,
-    )
-
-    matching_result = await matching_invoker.ainvoke(
-        {"tool_name": "sealed_mcp_status", "arguments": {"value": "ready"}},
-    )
-    assert matching_result == "status:ready"
-    drifted_result = await drifted_invoker.ainvoke(
-        {"tool_name": "sealed_mcp_status", "arguments": {"value": "ready"}},
-    )
-    assert isinstance(drifted_result, str)
-    assert "身份不一致" in drifted_result
-
-
-def test_owner_resolved_invoker_does_not_retain_initial_tools():
-    from langchain_core.tools import tool
-
-    @tool
-    def initial_target(value: str) -> str:
-        """检查 Agent 信封不再长期捕获初始注册。"""
+    def visible_extension(value: str) -> str:
+        """可见扩展工具。"""
         return value
 
-    resolver, _binding = _sealed_binding_resolver([initial_target])
-    initial_ref = weakref.ref(initial_target)
-
-    def reject_resolution(_binding, _use):
-        raise AssertionError("本测试不执行工具")
+    @tool
+    def hidden_extension(secret: str) -> str:
+        """隐藏扩展工具。"""
+        return secret
 
     invoker = create_extension_tool_invoker_tool(
-        [initial_target], catalog_binding_resolver=resolver,
-        target_resolver=reject_resolution,
+        [visible_extension, hidden_extension],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [visible_extension, hidden_extension]
+        ),
     )
-    del initial_target
-    assert initial_ref() is None
-    assert invoker.name == EXTENSION_TOOL_INVOKER_NAME
+
+    assert "visible_extension" not in invoker.description
+    assert "可见扩展工具" not in invoker.description
+    assert "hidden_extension" not in invoker.description
+    assert "隐藏扩展工具" not in invoker.description
+    assert set(invoker.args) == {"tool_name", "arguments"}
 
 
 @pytest.mark.asyncio
-async def test_sealed_resolution_failure_keeps_tool_call_id_pairing():
-    """tool_call 输入下，封存解析失败返回按 tool_call_id 配对的错误 ToolMessage。"""
+async def test_extension_invoker_executes_mcp_style_target_and_validates_schema():
     from langchain_core.tools import tool
 
     @tool
-    def sealed_only() -> str:
-        """唯一封存 target。"""
-        return "only"
+    def mcp_status(value: str) -> str:
+        """MCP 状态查询 stub。"""
+        return f"status:{value}"
 
-    resolver, _binding = _sealed_binding_resolver([sealed_only])
+    mcp_status = mcp_status.model_copy(
+        update={"metadata": {"mcp_server_id": "tui-mcp", "mcp_connection_ref": "mcp-connection:v1:" + "a" * 32 + ":1"}}
+    )
     invoker = create_extension_tool_invoker_tool(
-        [sealed_only],
-        catalog_binding_resolver=resolver,
+        [mcp_status],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [mcp_status]
+        ),
     )
 
     result = await invoker.ainvoke(
         {
-            "type": "tool_call",
-            "id": "call_sealed_miss",
-            "name": invoker.name,
-            "args": {"tool_name": "not_in_sealed_ref", "arguments": {}},
+            "tool_name": "mcp_status",
+            "arguments": {"value": "ready"},
         }
     )
 
-    assert isinstance(result, ToolMessage)
-    assert result.status == "error"
-    assert result.tool_call_id == "call_sealed_miss"
-    assert "not_in_sealed_ref" in result.text
+    assert result == "status:ready"
 
 
 @pytest.mark.asyncio
-async def test_execution_revocation_fails_at_sealed_target_execution_point():
-    """封存调用在执行点重验最新策略，撤权时返回配对失败。"""
-    from langchain_core.tools import tool
+async def test_extension_invoker_uses_ainvoke_for_mcp_style_base_tool():
+    from langchain_core.tools import BaseTool
 
-    @tool
-    def revocable_target() -> str:
-        """可撤权的 sealed target。"""
-        return "should-not-run"
+    class AinvokeOnlyMcpTool(BaseTool):
+        name: str = "mcp_async_status"
+        description: str = "只暴露 ainvoke 的 MCP stub。"
 
-    resolver, _binding = _sealed_binding_resolver([revocable_target])
-    enabled = True
+        def _run(self, value: str) -> str:
+            raise AssertionError("该 stub 不应走同步 _run")
+
+        async def ainvoke(self, input, config=None, **kwargs):
+            return f"async-status:{input['value']}"
+
+    ainvoke_only = AinvokeOnlyMcpTool()
     invoker = create_extension_tool_invoker_tool(
-        [revocable_target],
-        catalog_binding_resolver=resolver,
-        is_tool_execution_enabled=lambda _target: enabled,
+        [ainvoke_only],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [ainvoke_only]
+        ),
     )
 
-    enabled_result = await invoker.ainvoke(
-        {"tool_name": "revocable_target", "arguments": {}}
-    )
-    assert enabled_result == "should-not-run"
-
-    enabled = False
-    revoked_result = await invoker.ainvoke(
+    result = await invoker.ainvoke(
         {
-            "type": "tool_call",
-            "id": "call_revoked_target",
-            "name": invoker.name,
-            "args": {"tool_name": "revocable_target", "arguments": {}},
+            "tool_name": "mcp_async_status",
+            "arguments": {"value": "ready"},
         }
     )
-    assert isinstance(revoked_result, ToolMessage)
-    assert revoked_result.status == "error"
-    assert revoked_result.tool_call_id == "call_revoked_target"
-    assert "已被策略禁用" in revoked_result.text
+
+    assert result == "async-status:ready"
+
+
+@pytest.mark.asyncio
+async def test_extension_invoker_preserves_container_injected_invocation_context(
+    custom_tool_factory_context: CustomToolFactoryContext,
+) -> None:
+    from langchain_core.tools import tool
+
+    context = custom_tool_factory_context
+
+    @tool
+    def context_aware() -> str:
+        """读取由统一执行中间件注入到容器的调用 ID。"""
+        return context.invocation_context.require_tool_call_id()
+
+    invoker = create_extension_tool_invoker_tool(
+        [context_aware],
+        catalog_binding_resolver=seal_extension_catalog_binding_from_tools(
+            [context_aware]
+        ),
+    )
+    token = context.invocation_context.set_tool_call_id("call_from_outer_invoker")
+    try:
+        result = await invoker.ainvoke(
+            {
+                "tool_name": "context_aware",
+                "arguments": {},
+            }
+        )
+    finally:
+        context.invocation_context.reset_tool_call_id(token)
+
+    assert result == "call_from_outer_invoker"

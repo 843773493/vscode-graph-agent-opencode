@@ -37,8 +37,10 @@ tests/unit/agents/
     │   └── test_workspace_backend.py
     └── 指令与 Skill 生命周期
         ├── test_instruction_producers.py、test_middleware_prompts.py
-        ├── test_skill_context.py    Skill 上下文登记与来源事件消费
-        └── test_skill_*.py
+        ├── test_skill_catalog.py    Skill 目录来源捕获、加载与不可变发布
+        ├── test_skill_context.py    Skill 目录展示、上下文登记与来源事件消费
+        ├── test_skill_catalog_layers.py    Skill 目录分层与遮蔽
+        └── test_skill_load_snapshot_binding.py    Skill 读取与封存来源绑定
 ```
 
 根目录目前有多个直接测试模块，新增独立职责时优先放入有明确边界的子目录并补齐本地 `AGENTS.md`；成组迁移现有测试时同步更新测试矩阵标识和镜像输出路径，避免只移动文件却留下旧归属。

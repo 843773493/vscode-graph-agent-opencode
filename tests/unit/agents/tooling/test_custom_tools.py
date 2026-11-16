@@ -11,7 +11,11 @@ from app.agents.custom_tools import (
     CustomToolFactoryContext,
     build_custom_tools,
 )
-from app.agents.policy import custom_tool_spec_names, parse_custom_tool_specs
+from app.agents.policy import (
+    custom_tool_spec_names,
+    parse_custom_tool_spec,
+    parse_custom_tool_specs,
+)
 from app.agents.tool_invocation_context import ToolInvocationContext
 
 TEST_TOOL_SPEC = {
@@ -212,3 +216,43 @@ def test_build_custom_tools_rejects_hidden_runtime_injection(
         match="必须由 CustomToolFactoryContext 容器注入",
     ):
         build_custom_tools([TEST_TOOL_SPEC], context=_context())
+
+
+def test_custom_tool_spec_parses_independent_skill_attribution():
+    spec = parse_custom_tool_spec(
+        {
+            "name": "test_tool_2",
+            "factory": "app.agents.tools.testing:create_test_tool_2",
+            "skills": ["demo-skill"],
+        }
+    )
+
+    assert spec.skills == ("demo-skill",)
+    assert spec.to_config()["skills"] == ["demo-skill"]
+
+
+def test_custom_tool_spec_rejects_invalid_skill_attribution():
+    with pytest.raises(ValueError, match="重复 Skill 名"):
+        parse_custom_tool_spec(
+            {
+                "name": "test_tool_2",
+                "factory": "app.agents.tools.testing:create_test_tool_2",
+                "skills": ["demo", "demo"],
+            }
+        )
+    with pytest.raises(ValueError, match="格式无效"):
+        parse_custom_tool_spec(
+            {
+                "name": "test_tool_2",
+                "factory": "app.agents.tools.testing:create_test_tool_2",
+                "skills": ["Bad_Skill"],
+            }
+        )
+    with pytest.raises(TypeError, match="字符串数组"):
+        parse_custom_tool_spec(
+            {
+                "name": "test_tool_2",
+                "factory": "app.agents.tools.testing:create_test_tool_2",
+                "skills": "demo",
+            }
+        )

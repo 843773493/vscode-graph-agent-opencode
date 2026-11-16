@@ -1,4 +1,4 @@
-"""WorkspaceSkillsMiddleware 的事件驱动上下文来源消费测试。"""
+"""WorkspaceSkillsMiddleware 的目录展示与事件驱动上下文来源消费测试。"""
 
 from __future__ import annotations
 
@@ -197,3 +197,46 @@ async def test_unregistered_source_is_rejected_before_body_consumption(
         await scope.close()
     finally:
         await watch_service.shutdown()
+
+
+def test_workspace_skills_prompt_keeps_custom_tools_out_of_skill_list(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("BOXTEAM_HOME", str(tmp_path / "boxteam-home"))
+    monkeypatch.delenv("BOXTEAM_DEFAULT_SKILL_GROUPS", raising=False)
+    skill_dir = tmp_path / ".boxteam" / "skills" / "test-tool-2"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: test-tool-2\n"
+        "description: Test skill for custom validation.\n"
+        "allowed-tools: test_tool_2\n"
+        "---\n"
+        "# Test\n"
+        "调用 `test_tool_2`。\n",
+        encoding="utf-8",
+    )
+    catalog = build_workspace_skill_catalog(
+        tmp_path,
+        registry=ResourceRegistry(),
+        file_registry=WorkspaceFileResourceRegistry(
+            workspace_root=tmp_path,
+            watch_service=WorkspaceFileWatchService(workspace_root=tmp_path),
+        ),
+    )
+    middleware = WorkspaceSkillsMiddleware(catalog=catalog)
+
+    skill_list = middleware._format_skills_list(
+        [entry.metadata_view() for entry in catalog.entries]
+    )
+
+    assert "test-tool-2" in skill_list
+    assert "/.boxteam/skills/test-tool-2/SKILL.md" not in skill_list
+    assert 'skill_load(name="...")' in skill_list
+    assert "test_tool_2" not in skill_list
+    # allowed_tools 已按 4.2 从 Skill context contract 移除。
+    assert all(
+        "allowed_tools" not in view
+        for view in [entry.metadata_view() for entry in catalog.entries]
+    )

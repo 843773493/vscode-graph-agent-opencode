@@ -6,7 +6,7 @@
 
 ## 可修改内容
 
-- 工具配置项解析、规范化、去重和 factory 参数传递测试。
+- 工具配置项解析、规范化、去重、Skill 归因和 factory 参数传递测试。
 - `test_default_tools.py` 验证默认工具集合、顺序及测试／团队工具开关；后台工具实际执行归 `tools/test_background_tools.py`。
 - 模型可见 schema 投影、公开参数校验与协议工具 schema 测试。
 - 上述测试专用的配置样例和 fake factory。

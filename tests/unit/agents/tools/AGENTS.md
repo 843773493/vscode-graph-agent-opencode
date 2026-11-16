@@ -4,7 +4,7 @@
 
 存放 `app/agents/tools/` 内置 Agent 工具及其运行时协议的单元测试。
 
-`test_extension_invocation.py` 对应固定扩展入口，覆盖 MCP 和工作区自定义工具的封存目标调用；参数错误归 `test_extension_argument_errors.py`。
+`test_extension_invocation.py` 覆盖固定扩展入口的 schema、分派、结果配对与调用上下文；`test_extension_invocation_binding.py` 覆盖封存目录绑定、注册身份与执行点撤权；参数错误归 `test_extension_argument_errors.py`。
 
 ## 可修改内容
 
