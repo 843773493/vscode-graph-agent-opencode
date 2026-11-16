@@ -34,6 +34,7 @@ from app.gateway.federation.errors import (
     FederationError,
 )
 from app.gateway.federation.identity import FederationPeerIdentity
+from app.schemas.gateway import federation_targets as grant_targets
 
 GrantKind = Literal["discovery", "operation"]
 OperationKind = Literal["send", "read", "wait", "reply", "fork_source", "fork_target", "file_write"]
@@ -66,172 +67,44 @@ def _canonical_bytes(payload: dict[str, object]) -> bytes:
     ).encode("utf-8")
 
 
-@dataclass(frozen=True, slots=True)
-class GrantTarget:
-    """规范 target：gateway/workspace-qualified session，不含 connection/channel locator。
-
-    ``gateway_id`` 是稳定身份（不是连接、channel 或 route）；它是 operation
-    grant 的 audience 判定与 hub transit 转发的路由依据。
-    """
-
-    gateway_id: str
-    workspace_id: str
-    session_id: str
-
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "gateway_id": self.gateway_id,
-            "workspace_id": self.workspace_id,
-            "session_id": self.session_id,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class ContextGrantTarget:
-    """read grant 的真实上下文资源目标，和 Session 通信地址保持各自字段闭集。"""
-
-    gateway_id: str
-    resource_identity: str
-    uri: str
-    scope: str
-
-    def __post_init__(self) -> None:
-        from app.services.business.session_context_query.resources import (
-            gateway_session_inventory_identity,
-            parse_session_context_ref,
-            session_resource_identity,
-            workspace_session_inventory_identity,
-        )
-        resource = parse_session_context_ref(
-            resource_identity=self.resource_identity, uri=self.uri, scope=self.scope,
-            local_gateway_id=self.gateway_id,
-        )
-        if resource.gateway_authority is not None:
-            raise ValueError("资源 URI authority 与 grant audience 不一致")
-        if resource.scope == "workspace":
-            if resource.kind == "session" and resource.session_id is not None:
-                expected = session_resource_identity(resource.scope_id, resource.session_id)
-            elif resource.kind == "workspace_sessions":
-                expected = workspace_session_inventory_identity(resource.scope_id)
-            else:
-                raise ValueError("read grant 只支持现有 Session 上下文资源")
-        elif resource.scope == "gateway" and resource.kind == "workspace_sessions" and resource.scope_id == self.gateway_id:
-            expected = gateway_session_inventory_identity(self.gateway_id)
-        else:
-            raise ValueError("read grant 资源 scope 与实际 Gateway 不一致")
-        if resource.resource_identity != expected:
-            raise ValueError("read grant ResourceIdentity 与 URI owner 不一致")
-
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "gateway_id": self.gateway_id, "resource_identity": self.resource_identity,
-            "uri": self.uri, "scope": self.scope,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceNavigationGrantTarget:
-    """轻量只读导航绑定固定 URI，不为普通文件访问制造持久身份。"""
-
-    gateway_id: str
-    uri: str
-
-    def __post_init__(self) -> None:
-        from app.core.resource_uri import parse_resource_uri
-
-        resource = parse_resource_uri(self.uri, local_gateway_id=self.gateway_id)
-        if resource.gateway_authority is not None or resource.scope not in {"workspace", "gateway"}:
-            raise ValueError("导航 URI 必须属于固定 audience 的 Workspace 或 Gateway")
-        if resource.scope == "gateway" and resource.scope_id != self.gateway_id:
-            raise ValueError("导航 URI 的 Gateway scope 与 audience 不一致")
-
-    def to_payload(self) -> dict[str, object]:
-        return {"gateway_id": self.gateway_id, "uri": self.uri}
-
-
-@dataclass(frozen=True, slots=True)
-class TextMutationGrantTarget:
-    """独立 file_write grant 只授权固定工作区文件根或单文件。"""
-
-    gateway_id: str
-    uri: str
-    mutation_kind: Literal["text"] = "text"
-
-    def __post_init__(self) -> None:
-        from app.core.resource_uri import parse_resource_uri
-
-        resource = parse_resource_uri(self.uri, local_gateway_id=self.gateway_id)
-        if (self.mutation_kind != "text" or resource.gateway_authority is not None
-                or resource.scope != "workspace" or resource.kind not in {"files", "attachments"}):
-            raise ValueError("文本写入 grant 必须绑定 audience 的 Workspace 文件或附件目标")
-
-    def to_payload(self) -> dict[str, object]:
-        return {"gateway_id": self.gateway_id, "uri": self.uri, "mutation_kind": self.mutation_kind}
-
-
-@dataclass(frozen=True, slots=True)
-class ForkGrantTarget:
-    """fork capability 的精确领域 URI；来源导出和目标创建分别授权。"""
-
-    gateway_id: str
-    uri: str
-    fork_role: Literal["source", "target"]
-
-    def __post_init__(self) -> None:
-        from app.core.resource_uri import parse_resource_uri, parse_session_thread_uri
-
-        if self.fork_role not in {"source", "target"}:
-            raise ValueError("fork grant role 必须是 source 或 target")
-        resource = parse_resource_uri(self.uri, local_gateway_id=self.gateway_id)
-        if resource.gateway_authority is not None or resource.scope != "workspace":
-            raise ValueError("fork grant URI 不属于固定 audience Workspace")
-        if self.fork_role == "source":
-            parse_session_thread_uri(self.uri, local_gateway_id=self.gateway_id)
-        elif resource.kind not in {"session", "folder"}:
-            raise ValueError("fork target grant 必须指向 Session 集合、Session 或 Folder 容器")
-
-    def to_payload(self) -> dict[str, object]:
-        return {"gateway_id": self.gateway_id, "uri": self.uri, "fork_role": self.fork_role}
-
-
-def decode_grant_target(raw: object) -> GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget:
+def decode_grant_target(raw: object) -> grant_targets.FederationGrantTarget:
     """grant 和实际 RPC 请求共用同一闭集 decoder，不猜测或补齐目标字段。"""
     if not isinstance(raw, dict):
         raise FederationError(FEDERATION_MALFORMED_FRAME, "grant target 必须是对象")
     if set(raw) == {"gateway_id", "workspace_id", "session_id"}:
-        return GrantTarget(**{key: _require_str(raw, key) for key in raw})
+        return grant_targets.GrantTarget(**{key: _require_str(raw, key) for key in raw})
     if set(raw) == {"gateway_id", "uri"}:
         try:
-            return ResourceNavigationGrantTarget(**{key: _require_str(raw, key) for key in raw})
+            return grant_targets.ResourceNavigationGrantTarget(**{key: _require_str(raw, key) for key in raw})
         except ValueError as error:
             raise FederationError(FEDERATION_MALFORMED_FRAME, "导航 grant target 无效") from error
     if set(raw) == {"gateway_id", "uri", "mutation_kind"}:
         try:
-            return TextMutationGrantTarget(**{key: _require_str(raw, key) for key in raw})
+            return grant_targets.TextMutationGrantTarget(**{key: _require_str(raw, key) for key in raw})
         except ValueError as error:
             raise FederationError(FEDERATION_MALFORMED_FRAME, "文本写入 grant target 无效") from error
     if set(raw) == {"gateway_id", "uri", "fork_role"}:
         try:
-            return ForkGrantTarget(**{key: _require_str(raw, key) for key in raw})
+            return grant_targets.ForkGrantTarget(**{key: _require_str(raw, key) for key in raw})
         except (TypeError, ValueError) as error:
             raise FederationError(FEDERATION_MALFORMED_FRAME, str(error)) from error
     if set(raw) == {"gateway_id", "resource_identity", "uri", "scope"}:
         try:
-            return ContextGrantTarget(**{key: _require_str(raw, key) for key in raw})
+            return grant_targets.ContextGrantTarget(**{key: _require_str(raw, key) for key in raw})
         except (TypeError, ValueError) as error:
             raise FederationError(FEDERATION_MALFORMED_FRAME, str(error)) from error
     raise FederationError(FEDERATION_MALFORMED_FRAME, "grant target 字段闭集不一致")
 
 
 def validate_grant_operation(
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget, operation: OperationKind,
+    target: grant_targets.FederationGrantTarget, operation: OperationKind,
 ) -> None:
     """operation 与 typed target 在所有签发及 relay 入口共用一个闭集。"""
-    if isinstance(target, TextMutationGrantTarget):
+    if isinstance(target, grant_targets.TextMutationGrantTarget):
         valid = operation == "file_write"
-    elif isinstance(target, ForkGrantTarget):
+    elif isinstance(target, grant_targets.ForkGrantTarget):
         valid = operation == "fork_" + target.fork_role
-    elif isinstance(target, (ContextGrantTarget, ResourceNavigationGrantTarget)):
+    elif isinstance(target, (grant_targets.ContextGrantTarget, grant_targets.ResourceNavigationGrantTarget)):
         valid = operation == "read"
     else:
         valid = operation in {"send", "read", "wait", "reply"}
@@ -254,7 +127,7 @@ class FederationGrant:
     issued_at: datetime
     principal_ref: str
     request_hash: str
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget | None = None
+    target: grant_targets.FederationGrantTarget | None = None
     operation: OperationKind | None = None
     source_gateway_id: str | None = None
     operation_invocation_id: str | None = None
@@ -312,7 +185,7 @@ class FederationGrant:
                     FEDERATION_GRANT_KIND_MISMATCH, f"未知 operation: {operation!r}"
                 )
             raw_target = raw.get("target")
-            target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget | None = None
+            target: grant_targets.FederationGrantTarget | None = None
             if raw_target is not None:
                 target = decode_grant_target(raw_target)
             raw_path = raw.get("transit_path")
@@ -396,7 +269,7 @@ def sign_grant(
     principal_ref: str,
     request_preimage: dict[str, object],
     lifetime_seconds: float,
-    target: GrantTarget | ContextGrantTarget | ForkGrantTarget | ResourceNavigationGrantTarget | TextMutationGrantTarget | None = None,
+    target: grant_targets.FederationGrantTarget | None = None,
     operation: OperationKind | None = None,
     source_gateway_id: str | None = None,
     operation_invocation_id: str | None = None,
@@ -535,14 +408,9 @@ __all__ = [
     "GRANT_CLOCK_SKEW_SECONDS",
     "MAX_GATEWAY_HOPS",
     "MAX_TRANSIT_GATEWAYS",
-    "ContextGrantTarget",
     "FederationGrant",
-    "ForkGrantTarget",
     "GrantKind",
-    "GrantTarget",
     "OperationKind",
-    "ResourceNavigationGrantTarget",
-    "TextMutationGrantTarget",
     "decode_grant_target",
     "required_wait_grant_lifetime",
     "sign_grant",

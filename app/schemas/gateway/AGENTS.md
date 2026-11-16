@@ -8,6 +8,7 @@ gateway/
 ├── diagnostics.py        健康状态、诊断日志和开发运行时重启结果
 ├── directory.py          Gateway 目录 URI 与目录列表
 ├── federation.py         联邦协议、对端和入站工作区
+├── federation_targets.py Gateway 与 Workspace 共用的授权目标值及 URI 约束
 ├── lifecycle.py          运行组重启、状态、阻塞项和影响范围
 ├── native_directories.py 原生目录绑定与解析
 ├── resource_address.py   唯一 URI grammar 的公开地址投影
@@ -35,5 +36,6 @@ gateway/
 # 规范
 
 - 消费者直接导入拥有该 DTO 的具体模块；同一类型只定义一处。
+- 授权目标值统一从 `federation_targets.py` 导入；该模块只校验目标结构与 URI，签名、audience/path、期限和防重放仍由 Gateway 联邦实现负责。Workspace DTO 和业务代码不得为使用目标值而导入签名模块。
 - 普通结构搬迁保持公开字段、验证和序列化行为；已授权的共享 Backend 合同字段与全部消费者同批迁齐。
 - 工作区在 Gateway、Backend 与公开 DTO 中使用同一 UUID，跨 Gateway 引用保留完整 `(gateway_id, workspace_id)`；连接 ID、generation、完整影响集合和 blocker 各自消费其 owner 的事实，不新增工作区别名或换算字段。

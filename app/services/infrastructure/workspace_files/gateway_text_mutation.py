@@ -15,7 +15,7 @@ from app.gateway.federation.errors import (
     FEDERATION_MALFORMED_FRAME,
     FederationError,
 )
-from app.gateway.federation.grants import TextMutationGrantTarget
+from app.schemas.gateway.federation_targets import TextMutationGrantTarget
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.communication import (
     CommunicationGatewayRequest,

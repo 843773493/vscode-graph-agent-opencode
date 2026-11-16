@@ -24,10 +24,6 @@ from app.gateway.control.catalog_search import (
 )
 from app.gateway.credentials import FederationCredentialStore, load_or_create_gateway_id
 from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
-from app.gateway.federation.grants import (
-    ContextGrantTarget,
-    ResourceNavigationGrantTarget,
-)
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.main import gateway_http_exception_handler
 from app.gateway.proxy_upstream import TARGET_GATEWAY_ID_HEADER
@@ -36,6 +32,10 @@ from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.resource_navigation import router as navigation_router
 from app.gateway.server.text_mutation import router as text_mutation_router
 from app.gateway.server.workspace_proxy import router
+from app.schemas.gateway.federation_targets import (
+    ContextGrantTarget,
+    ResourceNavigationGrantTarget,
+)
 from app.schemas.gateway.search import GatewaySearchWorkspaceOwnerDTO
 from app.schemas.internal_v2.session_navigation import SessionCatalogNodeDTO
 from app.services.business.session_context_query.resources import (

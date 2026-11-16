@@ -20,7 +20,7 @@ from app.core.resource_uri import parse_resource_uri
 from app.core.session_catalog_store.contracts import ForkSourceCaptureRecord
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import require_current_gateway_id
-from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_fork_transfer import (
     FORK_TRANSFER_CHUNK_BYTES,

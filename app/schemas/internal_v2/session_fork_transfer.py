@@ -14,7 +14,7 @@ from app.core.session_catalog_store.contracts import (
     SessionGenerationOriginDTO,
     fork_source_capture_relative_locator,
 )
-from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.session import SessionForkRequest, SessionForkResultDTO
 
 FORK_TRANSFER_CHUNK_BYTES = 64 * 1024

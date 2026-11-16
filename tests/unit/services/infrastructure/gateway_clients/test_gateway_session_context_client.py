@@ -22,7 +22,7 @@ from app.core.trace_middleware import (
     set_current_gateway_id,
     set_current_request_id,
 )
-from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.session import SessionForkRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,

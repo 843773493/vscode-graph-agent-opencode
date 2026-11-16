@@ -46,7 +46,6 @@ from app.gateway.federation.errors import (
 from app.gateway.federation.grants import (
     MAX_GATEWAY_HOPS,
     MAX_TRANSIT_GATEWAYS,
-    GrantTarget,
     sign_grant,
 )
 from app.gateway.federation.identity import (
@@ -78,6 +77,7 @@ from app.gateway.federation.store import (
     federation_control_database,
 )
 from app.gateway.runtime.process_ports import allocate_local_port_in_range
+from app.schemas.gateway.federation_targets import GrantTarget
 from app.services.business.session_context_query.resources import (
     session_resource_identity,
     session_resource_uri,

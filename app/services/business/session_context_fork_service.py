@@ -53,7 +53,7 @@ from app.core.trace_middleware import (
 )
 from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.mutation_intents import MutationIntentOwner
-from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.goal import SessionGoalSetRequest
 from app.schemas.internal_v2.session import (
     SessionDTO,

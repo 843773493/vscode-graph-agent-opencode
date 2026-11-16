@@ -31,7 +31,6 @@ from app.core.trace_middleware import NAVIGATION_ACTOR_HEADER, get_request_id
 from app.gateway.auth import LOCAL_TOKEN, GatewayAuthContext, verify_gateway_access
 from app.gateway.control.catalog_search import GatewaySessionCatalogSearchService
 from app.gateway.federation.errors import FederationError
-from app.gateway.federation.grants import ContextGrantTarget
 from app.gateway.federation.messages import FEDERATION_DEADLINE_SECONDS
 from app.gateway.federation.policy import (
     federation_capability_allowed,
@@ -65,6 +64,7 @@ from app.schemas.canonical_params import (
     CanonicalThreadId,
     CanonicalWorkspaceId,
 )
+from app.schemas.gateway.federation_targets import ContextGrantTarget
 from app.schemas.internal_v2.common import APIResponse
 from app.schemas.internal_v2.communication import ContextQueryRequest
 from app.schemas.internal_v2.session_context import (

@@ -25,13 +25,8 @@ from app.gateway.federation.errors import (
 from app.gateway.federation.grants import (
     MAX_GATEWAY_HOPS,
     MAX_TRANSIT_GATEWAYS,
-    ContextGrantTarget,
     FederationGrant,
-    ForkGrantTarget,
-    GrantTarget,
     OperationKind,
-    ResourceNavigationGrantTarget,
-    TextMutationGrantTarget,
     decode_grant_target,
     required_wait_grant_lifetime,
     sign_grant,
@@ -51,6 +46,13 @@ from app.gateway.federation.policy import (
     normalize_policy,
 )
 from app.gateway.federation.rpc import FederationRpcService
+from app.schemas.gateway.federation_targets import (
+    ContextGrantTarget,
+    ForkGrantTarget,
+    GrantTarget,
+    ResourceNavigationGrantTarget,
+    TextMutationGrantTarget,
+)
 from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,

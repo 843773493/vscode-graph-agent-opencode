@@ -24,7 +24,7 @@ from app.core.trace_middleware import (
     get_current_request_id,
     require_current_gateway_id,
 )
-from app.gateway.federation.grants import ContextGrantTarget
+from app.schemas.gateway.federation_targets import ContextGrantTarget
 from app.schemas.gateway.search import GatewaySearchScopeRequest
 from app.schemas.internal_v2.search import WorkspaceContextSearchOptionsDTO
 from app.schemas.internal_v2.session_context import (

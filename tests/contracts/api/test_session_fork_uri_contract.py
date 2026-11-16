@@ -17,7 +17,7 @@ from app.api.deps import (
 from app.api.sessions import router
 from app.core.resource_uri import thread_resource_uri
 from app.core.trace_middleware import TraceMiddleware
-from app.gateway.federation.grants import ForkGrantTarget
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.session import (
     SessionDTO,
     SessionForkRequest,

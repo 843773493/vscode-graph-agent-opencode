@@ -21,7 +21,7 @@ from app.gateway.federation.errors import (
     FEDERATION_ERROR_CODES,
     FEDERATION_TARGET_OWNER_REJECTED,
 )
-from app.gateway.federation.grants import ContextGrantTarget
+from app.schemas.gateway.federation_targets import ContextGrantTarget
 from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
 from app.schemas.internal_v2.communication import ContextQueryRequest
 from app.schemas.internal_v2.session_context import (

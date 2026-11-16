@@ -8,13 +8,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from app.gateway.federation.grants import (
+from app.schemas.canonical_params import CanonicalWorkspaceId
+from app.schemas.gateway.federation_targets import (
     ContextGrantTarget,
     ForkGrantTarget,
     ResourceNavigationGrantTarget,
     TextMutationGrantTarget,
 )
-from app.schemas.canonical_params import CanonicalWorkspaceId
 from app.schemas.internal_v2.resource_navigation import ResourceNavigationRequest
 from app.schemas.internal_v2.session_context import (
     SessionContextReadRequest,

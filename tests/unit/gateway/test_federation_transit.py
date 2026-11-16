@@ -30,13 +30,7 @@ from app.gateway.federation.errors import (
     FEDERATION_UNKNOWN_PEER,
     FederationError,
 )
-from app.gateway.federation.grants import (
-    MAX_GATEWAY_HOPS,
-    MAX_TRANSIT_GATEWAYS,
-    ContextGrantTarget,
-    GrantTarget,
-    ResourceNavigationGrantTarget,
-)
+from app.gateway.federation.grants import MAX_GATEWAY_HOPS, MAX_TRANSIT_GATEWAYS
 from app.gateway.federation.identity import load_or_create_signing_key
 from app.gateway.federation.policy import FederationPolicyStore
 from app.gateway.federation.router import router as federation_router
@@ -46,6 +40,11 @@ from app.gateway.federation.store import (
     federation_control_database,
 )
 from app.gateway.runtime.process_ports import allocate_local_port_in_range
+from app.schemas.gateway.federation_targets import (
+    ContextGrantTarget,
+    GrantTarget,
+    ResourceNavigationGrantTarget,
+)
 from app.services.business.session_context_query.resources import (
     gateway_session_inventory_identity,
     gateway_session_inventory_uri,

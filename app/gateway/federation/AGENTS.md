@@ -27,6 +27,8 @@ federation/
 dispatch 流程中，纯帧、载荷、grant 和策略规则分别归上面的专用模块。不要按
 “一侧一个实现”拆出重复信任逻辑，也不要把 Gateway 协议逻辑放入 Workspace 业务层。
 
+五种授权目标值由 `app/schemas/gateway/federation_targets.py` 唯一定义，Gateway 和 Workspace 直接消费同一合同；`grants.py` 只拥有 grant 签发、解码、验证和授权操作规则，不转导出共享目标类型。
+
 ## 可修改内容
 
 - `ws://.../api/gateway/federation/channel` 的握手、心跳、断线语义与 RPC 分发。

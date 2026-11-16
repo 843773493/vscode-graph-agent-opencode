@@ -112,8 +112,8 @@ from app.domain.itemized.plans.contributions import ContextContribution
 from app.domain.itemized.records import CanonicalItemRecord, user_input_payload
 from app.domain.itemized.resource_activation import ResourceActivationPolicySnapshot
 from app.domain.itemized.serialization import normalize_wire_request
-from app.gateway.federation.grants import ForkGrantTarget
 from app.prompting.factory import PromptSection, internal_message_factory
+from app.schemas.gateway.federation_targets import ForkGrantTarget
 from app.schemas.internal_v2.message import AttachmentRef, MessageCreateRequest
 from app.schemas.internal_v2.node_debug import (
     NodeDebugActionRecordDTO,
