@@ -8,14 +8,14 @@ verification/
 ├── verification-readiness.mjs          共用Gateway就绪观察
 ├── verification-readiness.test.mjs     就绪HTTP与进程状态场景
 ├── verification-shutdown.test.mjs      Windows Gateway停止观察
-├── verification-process-cleanup.test.mjs taskkill本地化输出与进程存在性
+├── verification-process-cleanup.test.mjs Windows原Launcher停机命令与退出观察
 ├── verification-product-errors.test.mjs 安装验收与清理同时失败的错误保留
-└── verification-shutdown-timers.test.mjs  两验证器的进程终态与关闭等待
+└── verification-shutdown-timers.test.mjs  Linux进程终态与关闭等待
 ```
 
-先按安装流程、就绪观察、关闭观察区分职责，再进入相应场景。关闭清理以`exitCode`或`signalCode`判断Launcher是否已结束；信号退出不是仍在运行，不再发送信号或创建45秒等待。活跃进程保留原信号、等待期限和超时强杀行为。
+先按安装流程、就绪观察、关闭观察区分职责，再进入相应场景。关闭清理以`exitCode`或`signalCode`判断Launcher是否已结束。Linux保留原信号、等待期限和超时强杀行为；Windows npm／便携版均由发行Node执行原Launcher的`stop`命令，传入本次隔离Home、PATH与安装目录，不另发信号或维护taskkill分支。原命令有180秒外部上限，完成后最多5秒观察所持有Launcher句柄退出，再确认Gateway停止；失败明确报告，由验证进程外保护负责最终回收所属进程。
 
-关闭计时器测试的独立Node观察将可重放的`observer.mjs`、`input.json`保留在`out/tests/packaging/runtime/verification/verification-shutdown-timers/workspace/<run_id>/<scenario>/`，对应原始结果位于同根`artifacts/<run_id>/<scenario>/`。信号终态场景只终止自己创建的Node子进程，再调用真实生产函数；后续发信号边界由替身拦截，不能触及已复用PID或用户进程。Linux实测与Windows/macOS平台替身的证据范围分开，不能把后者表述为原生验证。
+关闭计时器测试的独立Node观察将可重放的`observer.mjs`、`input.json`保留在`out/tests/packaging/runtime/verification/verification-shutdown-timers/workspace/<run_id>/<scenario>/`，对应原始结果位于同根`artifacts/<run_id>/<scenario>/`。信号终态场景只终止自己创建的Node子进程，再调用真实Linux生产函数；后续发信号边界由替身拦截，不能触及已复用PID或用户进程。Windows命令边界测试不能代替原生发行验收。
 
 # 可修改内容
 

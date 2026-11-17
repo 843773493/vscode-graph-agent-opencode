@@ -7,7 +7,7 @@ import {
   rmSync,
 } from "node:fs";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import crossSpawn from "cross-spawn";
 import { extractZipArchive } from "../archives/zip.mjs";
@@ -41,6 +41,7 @@ function run(command, args, options = {}) {
     env: options.env ?? process.env,
     encoding: "utf8",
     stdio: options.capture ? "pipe" : "inherit",
+    timeout: options.timeout,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -50,32 +51,6 @@ function run(command, args, options = {}) {
     );
   }
   return result.stdout?.trim() ?? "";
-}
-
-function stopWindowsProcessTree(pid) {
-  const result = spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(pid)], {
-    encoding: "utf8",
-    stdio: "pipe",
-    timeout: 5_000,
-  });
-  if (result.status === 0) return;
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    if (error.code === "ESRCH") return;
-    throw error;
-  }
-  const message = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-  if (result.error?.code === "ETIMEDOUT") {
-    throw new Error(
-      `taskkill.exe /T /F /PID ${String(pid)} 超时（5 秒），Launcher 仍在运行\n${message}`,
-      { cause: result.error },
-    );
-  }
-  if (result.error) throw result.error;
-  throw new Error(
-    `命令失败 (${String(result.status)}): taskkill.exe /T /F /PID ${String(pid)}\n${message}`,
-  );
 }
 
 function requiredTarball(prefix) {
@@ -108,19 +83,6 @@ function requiredStandaloneArchive() {
     throw new Error(`期望一个 Windows 便携版 ZIP，实际: ${result.join(", ")}`);
   }
   return result[0];
-}
-
-function signalChild(child, signal) {
-  try {
-    child.kill(signal);
-  } catch (error) {
-    if (process.platform !== "win32" || error?.code !== "ENOSYS") {
-      throw error;
-    }
-    // TODO: Bun 的 Windows child_process 当前不实现信号发送，使用精确 PID
-    // 的 taskkill 兜底，避免验证失败时遗留 Gateway 进程。
-    stopWindowsProcessTree(child.pid);
-  }
 }
 
 async function waitForGatewayStopped({
@@ -224,39 +186,26 @@ async function requestJson(pathname, options = {}) {
   return JSON.parse(text);
 }
 
-async function stopLauncher(child) {
+async function stopLauncher(child, { nodeExecutable, launcherEntry, cwd, env }) {
   // 被信号终止时exitCode仍为null，必须同时查看signalCode。
   if (child.exitCode !== null || child.signalCode !== null) return;
-  signalChild(child, process.platform === "win32" ? "SIGBREAK" : "SIGTERM");
+  // 由发行 Node 执行原认证停机链，避免验证器重复管理 Windows 进程树。
+  run(nodeExecutable, [launcherEntry, "stop"], { cwd, env, timeout: 180_000 });
+  if (child.exitCode !== null || child.signalCode !== null) return;
   let timer;
-  let exitedGracefully;
   try {
-    exitedGracefully = await Promise.race([
-      once(child, "exit").then(() => true),
-      new Promise((resolve) => {
-        timer = setTimeout(() => resolve(false), 45_000);
+    await Promise.race([
+      once(child, "exit"),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("stop 命令完成后原 Launcher 仍未退出")), 5_000);
       }),
     ]);
   } finally {
     clearTimeout(timer);
   }
-  if (exitedGracefully || child.exitCode !== null || child.signalCode !== null) return;
-  if (process.platform === "win32") {
-    stopWindowsProcessTree(child.pid);
-    return;
-  }
-  try {
-    process.kill(-child.pid, "SIGKILL");
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
-  }
 }
 
-async function verifyRunningProduct(
-  child,
-  readLauncherOutput,
-  { forceWindowsTreeShutdown = false, pluginArchive, nodeExecutable },
-) {
+async function verifyRunningProduct({ pluginArchive, nodeExecutable }) {
   const rootResponse = await fetch(`${gatewayUrl}/`);
   if (
     !rootResponse.ok ||
@@ -313,43 +262,6 @@ async function verifyRunningProduct(
   if (restored.data?.metadata?.page_id !== browser.page_id) {
     throw new Error(`Backend 重启后 Browser 页面身份改变: ${JSON.stringify(restored.data)}`);
   }
-
-  const windowsShutdown = process.platform === "win32";
-  const forcedWindowsTreeShutdown = forceWindowsTreeShutdown && windowsShutdown;
-  if (forcedWindowsTreeShutdown) {
-    // Windows 原生启动器还会托管 Node/Python 子进程，必须连同进程树一起结束。
-    stopWindowsProcessTree(child.pid);
-  } else {
-    signalChild(child, process.platform === "win32" ? "SIGBREAK" : "SIGINT");
-  }
-  let exitResult;
-  let timer;
-  try {
-    exitResult = await Promise.race([
-      once(child, "exit"),
-      new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Launcher 关闭超时")),
-          45_000,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-  const [exitCode, signal] = exitResult;
-  // TODO: Windows 的 Node/命令外壳结束码可能是 1 或带有信号标记；以 Gateway
-  // 端口确实关闭作为清理成功条件，避免把已清理完成的进程树误报为失败。
-  if (!windowsShutdown && (exitCode !== 0 || signal !== null)) {
-    throw new Error(
-      `Launcher 关闭结果异常: exit=${String(exitCode)} signal=${String(signal)}`,
-    );
-  }
-  if (windowsShutdown) await waitForGatewayStopped();
-  const launcherOutput = readLauncherOutput();
-  if (/Traceback|KeyboardInterrupt|CancelledError/.test(launcherOutput)) {
-    throw new Error(`Launcher 关闭输出包含异常堆栈:\n${launcherOutput}`);
-  }
 }
 
 async function verifyInstalledProduct(child, readLauncherOutput, options) {
@@ -358,12 +270,20 @@ async function verifyInstalledProduct(child, readLauncherOutput, options) {
     await waitForInstalledGateway({
       child, url: `${gatewayUrl}/api/gateway/health`, headers, timeoutMs: gatewayReadyTimeoutMs,
     });
-    await verifyRunningProduct(child, readLauncherOutput, options);
+    await verifyRunningProduct(options);
   } catch (error) {
     failures.push(error);
   }
   try {
-    await stopLauncher(child);
+    await stopLauncher(child, options);
+    if (child.exitCode !== 0 || child.signalCode !== null) {
+      throw new Error(`Launcher 关闭结果异常: exit=${String(child.exitCode)} signal=${String(child.signalCode)}`);
+    }
+    await waitForGatewayStopped();
+    const launcherOutput = readLauncherOutput();
+    if (/Traceback|KeyboardInterrupt|CancelledError/.test(launcherOutput)) {
+      throw new Error(`Launcher 关闭输出包含异常堆栈:\n${launcherOutput}`);
+    }
   } catch (error) {
     failures.push(error);
   }
@@ -456,6 +376,9 @@ async function main() {
     pluginArchive: path.join(relocatedRoot,
       "node_modules/@boxteam/runtime-windows-x64/application/resources/plugins/developer-tools.zip"),
     nodeExecutable,
+    launcherEntry,
+    cwd: relocatedRoot,
+    env: environment,
   });
 
   for (const name of [
@@ -582,9 +505,13 @@ async function main() {
   await verifyInstalledProduct(
     standaloneChild,
     () => standaloneOutput,
-    { forceWindowsTreeShutdown: true, pluginArchive: path.join(
+    { pluginArchive: path.join(
       standalonePackageRoot, "runtime/application/resources/plugins/developer-tools.zip",
-    ), nodeExecutable: standaloneNode },
+    ), nodeExecutable: standaloneNode,
+      launcherEntry: path.join(standalonePackageRoot, "launcher/bin/boxteam.mjs"),
+      cwd: standalonePackageRoot,
+      env: standaloneEnvironment,
+    },
   );
   for (const name of [
     "gateway.jsonc",

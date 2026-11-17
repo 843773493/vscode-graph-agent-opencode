@@ -66,10 +66,6 @@ const functions = {
     stopLauncher: extractFunction("linux", "stopLauncher"),
     verifyRunningProduct: extractFunction("linux", "verifyRunningProduct"),
   },
-  windows: {
-    stopLauncher: extractFunction("windows", "stopLauncher"),
-    verifyRunningProduct: extractFunction("windows", "verifyRunningProduct"),
-  },
 };
 
 function createTimerHarness() {
@@ -116,9 +112,8 @@ function createChild({ exitOnSignal = false } = {}) {
   return child;
 }
 
-function makeBaseContext(platform, timers, child, { exitOnTreeKill = false } = {}) {
+function makeBaseContext(platform, timers, child) {
   const processSignals = [];
-  const treeKills = [];
   const requestCalls = [];
   const context = {
     once,
@@ -131,18 +126,6 @@ function makeBaseContext(platform, timers, child, { exitOnTreeKill = false } = {
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
     queueMicrotask,
-    signalChild(target, signal) {
-      target.kill(signal);
-    },
-    stopWindowsProcessTree(pid) {
-      treeKills.push(pid);
-      if (exitOnTreeKill) {
-        queueMicrotask(() => {
-          child.exitCode = 0;
-          child.emit("exit", 0, null);
-        });
-      }
-    },
     waitForGatewayStopped: async () => {},
     verifyBrowserResource: async (_requestJson, options) => {
       expect(options.workspaceId).toBe("workspace-fixture");
@@ -173,7 +156,7 @@ function makeBaseContext(platform, timers, child, { exitOnTreeKill = false } = {
       throw new Error(`未预期的 Gateway API: ${pathname}`);
     },
   };
-  return { context, processSignals, treeKills, requestCalls };
+  return { context, processSignals, requestCalls };
 }
 
 function evaluate(source, context) {
@@ -181,14 +164,14 @@ function evaluate(source, context) {
 }
 
 describe("已结束的 Launcher 不再进入关闭等待", () => {
-  for (const [verifier, platform] of [["linux", "linux"], ["linux", "darwin"], ["windows", "win32"], ["windows", "linux"]]) {
+  for (const [verifier, platform] of [["linux", "linux"], ["linux", "darwin"]]) {
     test(`${verifier}验证器在${platform}上识别信号退出和普通退出`, async () => {
       for (const [exitCode, signalCode] of [[null, "SIGTERM"], [7, null]]) {
         const timers = createTimerHarness();
         const child = createChild();
         child.exitCode = exitCode;
         child.signalCode = signalCode;
-        const { context, processSignals, treeKills } = makeBaseContext(platform, timers, child);
+        const { context, processSignals } = makeBaseContext(platform, timers, child);
         const stopping = evaluate(functions[verifier].stopLauncher, context)(child);
         try {
           expect(child.signals).toEqual([]);
@@ -199,7 +182,6 @@ describe("已结束的 Launcher 不再进入关闭等待", () => {
           await stopping;
         }
         expect(processSignals).toEqual([]);
-        expect(treeKills).toEqual([]);
       }
     });
   }
@@ -230,21 +212,6 @@ describe("Linux Launcher 关闭计时器", () => {
   });
 });
 
-describe("Windows Launcher 关闭计时器", () => {
-  test("等待超时后清除计时器并结束进程树", async () => {
-    const timers = createTimerHarness();
-    const child = createChild();
-    const { context, treeKills } = makeBaseContext("win32", timers, child);
-    const stopping = evaluate(functions.windows.stopLauncher, context)(child);
-    timers.fire();
-    await stopping;
-
-    expect(child.signals).toEqual(["SIGBREAK"]);
-    expect(treeKills).toEqual([child.pid]);
-    timers.expectCleared();
-  });
-});
-
 describe("产品验证关闭计时器", () => {
   test("Linux Launcher 收到 SIGINT 并退出后清除计时器", async () => {
     const timers = createTimerHarness();
@@ -258,29 +225,6 @@ describe("产品验证关闭计时器", () => {
 
     expect(child.signals).toEqual(["SIGINT"]);
     expect(requestCalls).toHaveLength(3);
-    timers.expectCleared();
-  });
-
-  test("Windows 后续 Gateway 停止错误发生前已清除计时器", async () => {
-    const timers = createTimerHarness();
-    const child = createChild();
-    const { context, treeKills } = makeBaseContext("win32", timers, child, {
-      exitOnTreeKill: true,
-    });
-    context.waitForGatewayStopped = async () => {
-      expect(timers.cleared).toEqual([timers.scheduled[0]]);
-      throw new Error("fixture Gateway 停止观察错误");
-    };
-
-    await expect(
-      evaluate(functions.windows.verifyRunningProduct, context)(
-        child,
-        () => "",
-        { forceWindowsTreeShutdown: true, pluginArchive: "/fixture/developer-tools.zip" },
-      ),
-    ).rejects.toThrow("fixture Gateway 停止观察错误");
-
-    expect(treeKills).toEqual([child.pid]);
     timers.expectCleared();
   });
 });
@@ -313,7 +257,7 @@ test("真实 45 秒计时器在 Launcher 自然退出后不阻止子进程结束
   expect(runNodeObservation("natural-exit", script, functions.linux.stopLauncher)).toBe("natural-exit");
 });
 
-test.skipIf(process.platform === "win32")("真实子进程被信号终止后，两验证器均不再发送信号或安排等待", () => {
+test.skipIf(process.platform === "win32")("真实子进程被信号终止后，Linux 验证器不再发送信号或安排等待", () => {
   const script = `
     import assert from "node:assert/strict";
     import { spawn } from "node:child_process";
@@ -338,7 +282,6 @@ test.skipIf(process.platform === "win32")("真实子进程被信号终止后，�
         const stopLauncher = vm.runInNewContext("(" + source + ")", {
           once,
           process: { platform: process.platform, kill: (...args) => signals.push(args) },
-          signalChild: (target, signal) => target.kill(signal),
           setTimeout: (callback, delayMs) => {
             timers.push(delayMs);
             // 记录真实生产期限，但不为复现已退出状态而等待45秒。
@@ -359,7 +302,7 @@ test.skipIf(process.platform === "win32")("真实子进程被信号终止后，�
       }
     }
   `;
-  const result = JSON.parse(runNodeObservation("already-signaled", script, [functions.linux.stopLauncher, functions.windows.stopLauncher]));
+  const result = JSON.parse(runNodeObservation("already-signaled", script, [functions.linux.stopLauncher]));
   expect(result.exitCode).toBeNull();
   expect(result.signalCode).toBe("SIGTERM");
   expect(result.signals).toEqual([]);
