@@ -2,6 +2,8 @@
 
 存放 Session、Job、模型协议和配置迁移之间的集成测试。
 
+`tool_discovery/` 验证发现工具在发布、冻结、封存和恢复之间的合同；完整 Agent/模型执行场景继续由 `test_tool_definition_recovery.py` 验证。
+
 ## 可修改内容
 
 - 真实后端进程配合本地模型协议桩的 Session 流程测试。

@@ -42,8 +42,8 @@ from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileChangeBatch,
     WorkspaceFileWatchService,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 正式 SQLite fixture 按当前测试路径隔离
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 from tests.unit.services.infrastructure.rollout_context.conftest import (
     SourceSealCase,

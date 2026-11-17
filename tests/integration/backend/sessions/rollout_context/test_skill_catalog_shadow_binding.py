@@ -54,10 +54,10 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.skill_c
     skill_catalog_from_activation,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 使用当前文件的正式隔离工作区
-)
 from tests.support.gateway_skill_sources import accepted_gateway_skill_sources
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
 
 GATEWAY_ID = "gateway_0123456789abcdef0123456789abcdef"
 GATEWAY_BODY = "Gateway shared 原始正文\n"

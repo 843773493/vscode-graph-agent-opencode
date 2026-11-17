@@ -48,14 +48,14 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 当前正式测试路径的 Saver fixture
-)
 from tests.integration.workspace_services.mcp.schema_server import (
     RESULT_AUDIO_BASE64,
     RESULT_IMAGE_BASE64,
 )
 from tests.support.mcp.http_endpoint import sdk_http_session_factory
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
 
 
 @dataclass

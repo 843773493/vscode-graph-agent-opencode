@@ -11,11 +11,11 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceDescriptor,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 沿用正式隔离工作区
-)
 from tests.integration.backend.sessions.rollout_context.test_context_production_prefix import (
     production_context as production_context,  # noqa: PLC0414 - 经过真实准入与 seal
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)

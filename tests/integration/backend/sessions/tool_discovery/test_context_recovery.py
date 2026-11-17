@@ -18,18 +18,10 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
     definition_source_values,
 )
-from tests.unit.services.infrastructure.mcp import test_tool_search as search
-
-registry_db = search.registry_db
-catalog_workspace = search.catalog_workspace
-catalog_runtime = search.catalog_runtime
-discovery_store = search.discovery_store
-discovery_tool_factory = search.discovery_tool_factory
-guidance_prepare = search.guidance_prepare
 
 
 @pytest.fixture
-def discovery_history(guidance_prepare, registry_db, discovery_tool_factory):
+def discovery_history(prepare_tool_context, registry_db, discovery_tool_factory):
     saver, session, connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     admission = saver.execution_admission(session, thread_id=thread, execution_id=accepted["initial_execution_id"])
@@ -43,7 +35,7 @@ def discovery_history(guidance_prepare, registry_db, discovery_tool_factory):
         from app.services.infrastructure.mcp.tool_definitions import (
             tool_catalog_from_activation,
         )
-        wire, activation = guidance_prepare("recovery-start", boundary=boundary)
+        wire, activation = prepare_tool_context("recovery-start", boundary=boundary)
         snapshot = wire["snapshot"]
         catalog = tool_catalog_from_activation(activation, lambda frozen, binding: saver.read_resource_activation_payload(
             frozen, binding, storage_owner=(session, thread)))
@@ -80,11 +72,11 @@ def discovery_history(guidance_prepare, registry_db, discovery_tool_factory):
     (None, []), ("four-field-resource", None), ("with-skill-association", ["CI Guide"]),
 ], indirect=["catalog_runtime"])
 async def test_immediate_compaction_restores_definition_not_present_in_previous_assembly(
-    discovery_history, guidance_prepare, target, catalog_runtime, registry_db, expected_skill_names,
+    discovery_history, prepare_tool_context, target, catalog_runtime, registry_db, expected_skill_names,
 ):
     entry, _scope, connection = await discovery_history(target=target, compact=True)
     assert entry["schema_state"] == ("needs_read" if target == "huge" else "inline_complete")
-    wire, _activation = guidance_prepare("recovery-after-immediate-compaction")
+    wire, _activation = prepare_tool_context("recovery-after-immediate-compaction")
     restored, = [value for value, _ in definition_source_values(wire["snapshot"])]
     assert restored.tool_id == target and restored.status == "available"
     assert restored.definition is not None
@@ -111,36 +103,36 @@ async def test_immediate_compaction_restores_definition_not_present_in_previous_
     else:
         assert restored.definition.input_schema == entry["input_schema"]
     assert connection.execute("SELECT count(*) FROM context_source_control_states WHERE source_id LIKE 'extension-tool-definition:%'").fetchone() == (0,)
-    successor, _ = guidance_prepare("recovery-stable-successor")
+    successor, _ = prepare_tool_context("recovery-stable-successor")
     assert tuple(definition_source_values(successor["snapshot"])) == tuple(definition_source_values(wire["snapshot"]))
 
 
-async def test_current_complete_result_does_not_inject_duplicate_definition(discovery_history, guidance_prepare):
+async def test_current_complete_result_does_not_inject_duplicate_definition(discovery_history, prepare_tool_context):
     await discovery_history()
-    wire, _ = guidance_prepare("recovery-inline-successor")
+    wire, _ = prepare_tool_context("recovery-inline-successor")
     assert not tuple(definition_source_values(wire["snapshot"]))
 
 
 @pytest.mark.parametrize("authorization", [False, True])
 async def test_compacted_known_definition_reports_missing_connection(
-    discovery_history, guidance_prepare, catalog_runtime, authorization,
+    discovery_history, prepare_tool_context, catalog_runtime, authorization,
 ):
     await discovery_history(target="mcp__mini__echo", compact=True)
     owner, _factory, _registry, _scope = catalog_runtime
     await owner.disconnect_server("mini", admit=lambda: None)
     if authorization:
         owner.mark_authorization_required("mini")
-    wire, _ = guidance_prepare("recovery:known-unready")
+    wire, _ = prepare_tool_context("recovery:known-unready")
     value, = [value for value, _ in definition_source_values(wire["snapshot"])]
     assert value.status == "unavailable" and value.definition is None
     assert value.reason == ("connection-authorization-required" if authorization else "connection-disconnected")
 
 
 @pytest.mark.parametrize("restriction", ["model_hidden", "execution_disabled"])
-async def test_compacted_definition_obeys_current_hard_policy(discovery_history, guidance_prepare, restriction):
+async def test_compacted_definition_obeys_current_hard_policy(discovery_history, prepare_tool_context, restriction):
     await discovery_history(compact=True)
     resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={restriction: ["ci_logs"]})
-    wire, _ = guidance_prepare("recovery-restricted", policies_for=lambda metadata: {entry.tool_id: resolver.resolve(entry) for entry in metadata})
+    wire, _ = prepare_tool_context("recovery-restricted", policies_for=lambda metadata: {entry.tool_id: resolver.resolve(entry) for entry in metadata})
     values = tuple(definition_source_values(wire["snapshot"]))
     if restriction == "model_hidden":
         assert not values
@@ -149,21 +141,21 @@ async def test_compacted_definition_obeys_current_hard_policy(discovery_history,
         assert value.status == "unavailable" and value.reason == "tool-disabled" and value.definition is None
 
 
-async def test_needs_read_stays_a_reference_until_restore(discovery_history, guidance_prepare):
+async def test_needs_read_stays_a_reference_until_restore(discovery_history, prepare_tool_context):
     entry, _scope, _connection = await discovery_history(target="huge")
     assert entry["schema_state"] == "needs_read"
-    wire, _ = guidance_prepare("recovery-reference-successor")
+    wire, _ = prepare_tool_context("recovery-reference-successor")
     assert not tuple(definition_source_values(wire["snapshot"]))
 
 
-async def test_restore_after_restart_keeps_original_frozen_provenance(discovery_history, guidance_prepare, registry_db):
+async def test_restore_after_restart_keeps_original_frozen_provenance(discovery_history, prepare_tool_context, registry_db):
     from app.services.infrastructure.rollout_context.checkpoint.saver import (
         RolloutCheckpointSaver,
     )
     entry, _scope, _connection = await discovery_history(compact=True)
     saver, _session, _connection, _accepted = registry_db
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        wire, _ = guidance_prepare("recovery-cold", context_owner=cold)
+        wire, _ = prepare_tool_context("recovery-cold", context_owner=cold)
         restored, = [value for value, _ in definition_source_values(wire["snapshot"])]
         assert restored.definition is not None
         assert restored.definition.provenance.model_dump() == entry["provenance"]
@@ -172,7 +164,7 @@ async def test_restore_after_restart_keeps_original_frozen_provenance(discovery_
 
 @pytest.mark.parametrize("catalog_runtime", ["v2"], indirect=True)
 async def test_v2_history_restores_definition_after_compaction_but_cannot_dispatch(
-    discovery_history, guidance_prepare, registry_db, catalog_runtime,
+    discovery_history, prepare_tool_context, registry_db, catalog_runtime,
 ):
     from app.domain.itemized.hashing import canonical_json_bytes
     from app.services.infrastructure.mcp import catalog_activation
@@ -198,7 +190,7 @@ async def test_v2_history_restores_definition_after_compaction_but_cannot_dispat
                   if binding.resource_id == catalog_activation.MCP_TOOL_CATALOG_RESOURCE_ID)
     assert "extension-catalog:v2" in dict(parent.source_lineage_ref.sources)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        wire, _activation = guidance_prepare("recovery-v2-cold", context_owner=cold)
+        wire, _activation = prepare_tool_context("recovery-v2-cold", context_owner=cold)
         restored, = [value for value, _ in definition_source_values(wire["snapshot"])]
         assert restored.definition is not None
         assert restored.definition.input_schema == entry["input_schema"]
@@ -215,7 +207,7 @@ async def test_v2_history_restores_definition_after_compaction_but_cannot_dispat
 
 
 async def test_catalog_change_supplies_full_replacement_and_removal(
-    discovery_history, guidance_prepare, catalog_runtime,
+    discovery_history, prepare_tool_context, catalog_runtime,
 ):
     from tests.support.mcp.session_doubles import drain_pending_relists
     entry, _scope, _connection = await discovery_history(target="mcp__mini__echo")
@@ -223,7 +215,7 @@ async def test_catalog_change_supplies_full_replacement_and_removal(
     factory.session.minimum = 7
     factory.changed()
     await drain_pending_relists(_owner)
-    wire, _ = guidance_prepare("recovery-definition-replacement")
+    wire, _ = prepare_tool_context("recovery-definition-replacement")
     updated, = [value for value, _ in definition_source_values(wire["snapshot"])]
     assert updated.definition is not None
     properties = updated.definition.input_schema["properties"]
@@ -236,14 +228,14 @@ async def test_catalog_change_supplies_full_replacement_and_removal(
     factory.session.empty = True
     factory.changed()
     await drain_pending_relists(_owner)
-    removed, _ = guidance_prepare("recovery-definition-removal")
+    removed, _ = prepare_tool_context("recovery-definition-removal")
     values = [value for value, _ in definition_source_values(removed["snapshot"])]
     assert values[-1].status == "unavailable" and values[-1].reason == "tool-removed"
     assert values[-1].definition is None
 
 
 async def test_missing_original_body_does_not_fall_back_to_current_catalog(
-    discovery_history, guidance_prepare, registry_db, monkeypatch,
+    discovery_history, prepare_tool_context, registry_db, monkeypatch,
 ):
     from app.services.infrastructure.mcp.extension_catalog import (
         ExtensionCatalogUnavailableError,
@@ -262,12 +254,12 @@ async def test_missing_original_body_does_not_fall_back_to_current_catalog(
     monkeypatch.setattr(saver, "read_resource_activation_payload", missing)
     before = connection.execute("SELECT count(*) FROM context_assemblies").fetchone()
     with pytest.raises(ExtensionCatalogUnavailableError, match="原冻结定义正文缺失"):
-        guidance_prepare("recovery-missing-original")
+        prepare_tool_context("recovery-missing-original")
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == before
 
 
 async def test_rewind_before_discovery_does_not_restore_later_definition(
-    discovery_history, guidance_prepare, registry_db, catalog_runtime,
+    discovery_history, prepare_tool_context, registry_db, catalog_runtime,
 ):
     from app.services.infrastructure.rollout_context.checkpoint.codec.message_channel import (
         acheckpoint_messages,
@@ -280,7 +272,7 @@ async def test_rewind_before_discovery_does_not_restore_later_definition(
     factory.session.minimum = 4
     factory.changed()
     await drain_pending_relists(owner)
-    updated, _ = guidance_prepare("recovery-before-rewind")
+    updated, _ = prepare_tool_context("recovery-before-rewind")
     assert tuple(definition_source_values(updated["snapshot"]))
     with scope():
         loaded = await saver.aget_tuple(build_checkpoint_config(thread))
@@ -295,12 +287,12 @@ async def test_rewind_before_discovery_does_not_restore_later_definition(
                     if item.semantic_kind == "tool_call")
         assert call.projection_identity is not None
         saver.rewind(config, checkpoint_id=checkpoint["id"], source_anchor=call.projection_identity.projection_message_id, anchor_mode="before")
-    rewound, _ = guidance_prepare("recovery-after-rewind")
+    rewound, _ = prepare_tool_context("recovery-after-rewind")
     assert not tuple(definition_source_values(rewound["snapshot"]))
 
 
 async def test_turn_boundary_keeps_original_definition_after_live_catalog_change(
-    discovery_history, guidance_prepare, catalog_runtime,
+    discovery_history, prepare_tool_context, catalog_runtime,
 ):
     from tests.support.mcp.session_doubles import drain_pending_relists
     entry, _scope, _connection = await discovery_history(target="mcp__mini__echo", boundary="turn")
@@ -308,13 +300,13 @@ async def test_turn_boundary_keeps_original_definition_after_live_catalog_change
     factory.session.minimum = 9
     factory.changed()
     await drain_pending_relists(owner)
-    wire, frozen = guidance_prepare("recovery-same-turn", boundary="turn")
+    wire, frozen = prepare_tool_context("recovery-same-turn", boundary="turn")
     assert frozen.activation_snapshot_id == entry["provenance"]["activation_snapshot_id"]
     assert not tuple(definition_source_values(wire["snapshot"]))
 
 
 def test_prepare_rejects_canonical_advance_between_source_read_and_composition(
-    guidance_prepare, registry_db, monkeypatch,
+    prepare_tool_context, registry_db, monkeypatch,
 ):
     saver, session, connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
@@ -336,7 +328,7 @@ def test_prepare_rejects_canonical_advance_between_source_read_and_composition(
     monkeypatch.setattr(saver, "register_context_contribution", register_and_accept)
     before = connection.execute("SELECT count(*) FROM context_assemblies").fetchone()
     with pytest.raises(RuntimeError, match="context-prepare-state-conflict"):
-        guidance_prepare("recovery-racing-request")
+        prepare_tool_context("recovery-racing-request")
     assert advanced
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == before
     assert connection.execute("SELECT count(*) FROM turn_records").fetchone() == (2,)

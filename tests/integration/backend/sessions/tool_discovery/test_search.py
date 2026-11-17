@@ -6,186 +6,34 @@ import hashlib
 import json
 import logging
 from dataclasses import replace
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import ToolCall, ToolMessage
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from pydantic import ValidationError
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import ToolPolicyResolver
-from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tool_output_middleware import ToolOutputMiddleware
-from app.agents.tools.tool_discovery import SearchToolsInput, create_search_tools_tool
-from app.core.lifecycle import LifetimeScope
-from app.services.infrastructure.events.event_channel_service import EventChannelService
-from app.services.infrastructure.external_resource_leases import (
-    ExternalResourceLeaseLedger,
-)
-from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
+from app.services.infrastructure.mcp import McpCatalogResourcePublisher
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
     ExtensionTargetResolutionError,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
-    PluginToolSource,
     SkillToolSource,
-    ToolDefinition,
-    _tool_skill_associations,
     definition_resource_id,
     tool_catalog_from_activation,
 )
-from app.services.infrastructure.resource_platform.registry.semantic_registry import (
-    ResourceRegistry,
-)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
-)
-from app.services.infrastructure.tool_output_store import ToolOutputStore
-from tests.harness.python.run_context import TestRunContext
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 当前测试路径的正式 SQLite fixture
 )
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
     diagnostic_sink as diagnostic_sink,  # noqa: PLC0414 - 复用真实原生日志写入故障。
 )
 from tests.support.mcp.session_doubles import drain_pending_relists
-from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
-    CatalogSessionFactory,
-)
-from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
-    catalog_workspace as catalog_workspace,  # noqa: PLC0414 - 完整工作区 fixture
-)
-from tests.unit.services.infrastructure.mcp.test_catalog_activation import (
-    guidance_prepare as guidance_prepare,  # noqa: PLC0414 - 既有真实 freeze/seal 链路
-)
-
-
-@pytest.fixture
-async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, request, monkeypatch):
-    factory = CatalogSessionFactory()
-    factory.session.description = "查找 CI 失败记录与日志"
-    owner = McpCatalogOwner(
-        leases=ExternalResourceLeaseLedger(),
-        raw_config={"servers": {"mini": {
-            "enabled": True, "transport": "streamable_http", "url": "http://127.0.0.1:1/mini/mcp",
-        }}},
-        workspace_root=catalog_workspace, event_service=EventChannelService(), session_factory=factory,
-    )
-    calls = []
-
-    def execute(**arguments):
-        calls.append(arguments)
-        return arguments
-
-    schema = {
-        "type": "object", "$defs": {"run": {"enum": ["failed", "passed"]}},
-        "properties": {"run": {"$ref": "#/$defs/run"}}, "required": ["run"],
-        "additionalProperties": {"type": "string"},
-    }
-    custom = tuple(StructuredTool.from_function(
-        func=execute, name=name, description=description,
-        args_schema={**schema, **({"$defs": {"run": {"enum": ["failed", "passed"], "description": "完整大定义" * 6000}}} if name == "huge" else {})},
-    ) for name, description in (
-        ("ci_logs", "读取 CI 失败日志"), ("ci_runs", "查找 CI 失败执行"),
-        ("notes", "读取笔记"), ("huge", "读取大定义"),
-        ("hidden_ci", "CI 失败日志硬隐藏"),
-    ))
-    await owner.start()
-    registry = ResourceRegistry(publication_lock=owner.publication_lock, capture_validator=owner.validate_resource_capture)
-    scope = LifetimeScope("tool-discovery")
-    # 历史读取测试从 publisher 首次登记起生成 v2 资产，避免改写已登记的 descriptor。
-    with monkeypatch.context() as historical_writer:
-        if getattr(request, "param", None) == "v2":
-            from app.services.infrastructure.mcp import catalog_activation
-            historical_writer.setattr(catalog_activation, "EXTENSION_CATALOG_SOURCE_ID", "extension-catalog:v2")
-        if getattr(request, "param", None) == "four-field-resource":
-            historical_writer.setattr(ToolDefinition, "resource_payload", property(lambda definition: definition.contract_payload))
-        policies_for = extension_catalog_policy_resolver
-        if isinstance(getattr(request, "param", None), dict):
-            resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions=request.param)
-
-            def configured_policies(metadata):
-                return {entry.tool_id: resolver.resolve(entry) for entry in metadata}
-
-            policies_for = configured_policies
-        skill_sources = (SkillToolSource(
-            name="CI Guide", source_id="workspace-skills:v1", entry_identity="workspace-skill:ci-guide:v1",
-            display_uri="boxteam://workspace/test/resources/skills/CI%20Guide/SKILL.md",
-        ),) if getattr(request, "param", None) == "with-skill-association" else ()
-        publisher = McpCatalogResourcePublisher(
-            registry=registry, custom_tools=custom, policy_resolver=policies_for,
-            skill_sources=skill_sources,
-            custom_skill_bindings={name: ("CI Guide",) for name in ("ci_logs", "huge")} if skill_sources else {},
-        )
-        scope.register(owner.subscribe_publication(publisher.publish), label="discovery-publication")
-    try:
-        yield owner, factory, registry, scope
-        assert calls == [], "发现不得执行候选"
-    finally:
-        await scope.close()
-        await owner.shutdown()
-
-
-@pytest.fixture
-def discovery_store(request: pytest.FixtureRequest):
-    # 与 registry_db 的真实会话使用同一测试工作区，避免大结果物化访问另一份 catalog。
-    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
-    return ToolOutputStore(workspace_root=context.workspace_root)
-
-
-@pytest.fixture
-async def discovery_tool_factory(discovery_store, registry_db):
-    _saver, session, _connection, _accepted = registry_db
-    invocation_context = ToolInvocationContext()
-    token = invocation_context.set_tool_call_id("discovery-fixture")
-
-    def build(*, catalog_resolver, policy_resolver, response_byte_limit=None):
-        return create_search_tools_tool(
-            catalog_resolver=catalog_resolver, policy_resolver=policy_resolver,
-            tool_output_store=discovery_store, session_id=session,
-            invocation_context=invocation_context,
-            response_byte_limit=discovery_store.inline_byte_limit if response_byte_limit is None else response_byte_limit,
-        )
-
-    try:
-        yield build
-    finally:
-        invocation_context.reset_tool_call_id(token)
-
-
-@pytest.fixture
-def discovery_case(guidance_prepare, registry_db, discovery_tool_factory):
-    saver, session, _connection, _accepted = registry_db
-    thread = saver._storage.storage.main_thread_id(session)
-    _wire, frozen = guidance_prepare("discovery:initial", boundary="turn")
-
-    def read(snapshot, binding):
-        return saver.read_resource_activation_payload(snapshot, binding, storage_owner=(session, thread))
-
-    catalog = tool_catalog_from_activation(frozen, read)
-    policy_resolver = ToolPolicyResolver(
-        policy_defaults={"model_visible": False}, policy_rules={},
-        restrictions={"execution_disabled": ["notes"], "model_hidden": ["hidden_ci"]},
-    )
-    policies = {definition.metadata.tool_id: policy_resolver.resolve(definition.metadata) for definition in catalog.definitions}
-    tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda _: policies)
-    return tool, catalog, policies, frozen, read
-
-
-@pytest.mark.parametrize("arguments", [
-    {}, {"query": ""}, {"query": "   "}, {"tool_ids": []}, {"tool_ids": [""]},
-    {"query": "CI", "tool_ids": ["ci_logs"]}, {"query": "CI", "limit": True},
-    {"query": "CI", "limit": 0}, {"query": "CI", "max_response_bytes": 2047},
-    {"query": "CI", "unknown": True},
-])
-def test_invalid_selectors_and_budgets_are_rejected(arguments):
-    with pytest.raises(ValidationError):
-        SearchToolsInput.model_validate(arguments)
 
 
 async def test_task_search_is_deterministic_cross_origin_and_keeps_hidden_schema(discovery_case):
@@ -209,7 +57,7 @@ async def test_task_search_is_deterministic_cross_origin_and_keeps_hidden_schema
 
 
 async def test_custom_skill_association_is_published_frozen_and_returned_by_search(
-    catalog_runtime, guidance_prepare, discovery_tool_factory, extension_catalog_policy_resolver, registry_db,
+    catalog_runtime, prepare_tool_context, discovery_tool_factory, extension_catalog_policy_resolver, registry_db,
 ):
     _owner, _factory, registry, _scope = catalog_runtime
 
@@ -229,7 +77,7 @@ async def test_custom_skill_association_is_published_frozen_and_returned_by_sear
         ),),
     )
     publisher.publish(_owner.publication_snapshot())
-    _wire, frozen = guidance_prepare("skill-tool-association:freeze", boundary="turn")
+    _wire, frozen = prepare_tool_context("skill-tool-association:freeze", boundary="turn")
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     restored = tool_catalog_from_activation(
@@ -269,7 +117,7 @@ async def test_custom_skill_association_is_published_frozen_and_returned_by_sear
 
 
 async def test_skill_associations_do_not_disclose_hidden_or_disabled_tool_names(
-    catalog_runtime, guidance_prepare, discovery_tool_factory, extension_catalog_policy_resolver, registry_db,
+    catalog_runtime, prepare_tool_context, discovery_tool_factory, extension_catalog_policy_resolver, registry_db,
 ):
     owner, _factory, registry, _scope = catalog_runtime
 
@@ -286,7 +134,7 @@ async def test_skill_associations_do_not_disclose_hidden_or_disabled_tool_names(
             display_uri="boxteam://workspace/test/resources/skills/Private%20Guide/SKILL.md"),),
     )
     publisher.publish(owner.publication_snapshot())
-    _wire, frozen = guidance_prepare("private-tool-association", boundary="turn")
+    _wire, frozen = prepare_tool_context("private-tool-association", boundary="turn")
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     catalog = tool_catalog_from_activation(frozen, lambda snapshot, binding: saver.read_resource_activation_payload(
@@ -302,82 +150,6 @@ async def test_skill_associations_do_not_disclose_hidden_or_disabled_tool_names(
     assert "hidden_skill_tool" not in json.dumps(result)
     assert "disabled_skill_tool" not in json.dumps(result)
     assert result["results"][0]["skill_names"] == ["Private Guide"]
-
-
-def test_plugin_tool_association_requires_exact_source_and_schema_identity():
-    from app.agents.policy.tool_capability import ToolMetadata
-    from app.domain.itemized.hashing import canonical_json_bytes
-    from app.schemas.gateway.service_plugin import PluginToolBinding
-    from app.schemas.gateway.skill_sources import PluginSkillSourceDTO
-    from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
-
-    tool_id = "mcp__browser__navigate"
-    schema = {"type": "object", "properties": {"url": {"type": "string"}}}
-    schema_hash = extension_schema_hash(schema)
-    plugin = PluginSkillSourceDTO(
-        package_id="browser-tools", plugin_id="browser", package_version="1.2.0",
-        package_digest="a" * 64, contribution_id="browser.skills", workspace_id=None,
-        tool_bindings=[PluginToolBinding(
-            tool_id=tool_id, service_id="browser-mcp", contract_version=1, schema_hash=schema_hash,
-        )],
-    )
-    source = SkillToolSource(
-        name="Browser Guide", source_id="gateway-skills:v1", entry_identity="browser-guide:v1",
-        display_uri="boxteam://gateway/test/resources/skills/Browser%20Guide/SKILL.md", plugin=plugin,
-    )
-    definition = ToolDefinition(
-        metadata=ToolMetadata(tool_id, "mcp", "tool", "browser"), schema_hash=schema_hash,
-        description="navigate", _input_schema_json=canonical_json_bytes(schema),
-    )
-
-    missing_source, = _tool_skill_associations(tool_id, definition, (source,), (), gateway_id="gateway-1")
-    assert (missing_source.status, missing_source.reason) == ("unavailable", "plugin-service-source-unverified")
-
-    exact_source = PluginToolSource(
-        gateway_id="gateway-1", package_id="browser-tools", plugin_id="browser", package_version="1.2.0",
-        package_digest="a" * 64, service_id="browser-mcp", workspace_id=None, contract_version=1,
-    )
-    verified_definition = ToolDefinition(
-        metadata=definition.metadata, schema_hash=schema_hash, description=definition.description,
-        _input_schema_json=definition._input_schema_json, plugin_tool_source=exact_source,
-    )
-    available, = _tool_skill_associations(tool_id, verified_definition, (source,), (), gateway_id="gateway-1")
-    assert (available.status, available.reason) == ("available", None)
-    assert available.tool_source == exact_source
-    deduplicated, = _tool_skill_associations(
-        tool_id, verified_definition, (source,), ("Browser Guide",), gateway_id="gateway-1",
-    )
-    assert deduplicated.status == "available"
-
-    for invalid_source in (
-        PluginToolSource(**{**exact_source.to_dict(), "gateway_id": "other-gateway"}),
-        PluginToolSource(**{**exact_source.to_dict(), "package_digest": "b" * 64}),
-        PluginToolSource(**{**exact_source.to_dict(), "service_id": "other-service"}),
-        PluginToolSource(**{**exact_source.to_dict(), "contract_version": 2}),
-    ):
-        invalid_definition = ToolDefinition(
-            metadata=definition.metadata, schema_hash=schema_hash, description=definition.description,
-            _input_schema_json=definition._input_schema_json, plugin_tool_source=invalid_source,
-        )
-        unavailable, = _tool_skill_associations(
-            tool_id, invalid_definition, (source,), (), gateway_id="gateway-1",
-        )
-        assert (unavailable.status, unavailable.reason) in {
-            ("unavailable", "plugin-service-source-mismatch"),
-            ("unavailable", "tool-contract-version-unsupported"),
-        }
-
-    shadowed, = _tool_skill_associations(
-        tool_id, verified_definition, (replace(source, effective=False),), (), gateway_id="gateway-1",
-    )
-    assert (shadowed.status, shadowed.reason) == ("unavailable", "skill-source-not-effective")
-
-    wrong_schema_definition = ToolDefinition(
-        metadata=definition.metadata, schema_hash="sha256:" + "b" * 64, description=definition.description,
-        _input_schema_json=definition._input_schema_json, plugin_tool_source=exact_source,
-    )
-    mismatched, = _tool_skill_associations(tool_id, wrong_schema_definition, (source,), (), gateway_id="gateway-1")
-    assert (mismatched.status, mismatched.reason) == ("unavailable", "tool-schema-hash-mismatch")
 
 
 async def test_exact_ids_keep_order_errors_and_do_not_disclose_disabled_schema(discovery_case):
@@ -397,11 +169,11 @@ async def test_exact_ids_keep_order_errors_and_do_not_disclose_disabled_schema(d
     "execution_disabled": ["notes", "mcp__mini__echo"], "model_hidden": ["hidden_ci"],
 }], indirect=True)
 async def test_disabled_before_publication_remains_known_after_freeze_and_cold_read(
-    catalog_runtime, guidance_prepare, registry_db, discovery_tool_factory,
+    catalog_runtime, prepare_tool_context, registry_db, discovery_tool_factory,
 ):
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
-    wire, frozen = guidance_prepare("initially-disabled-catalog")
+    wire, frozen = prepare_tool_context("initially-disabled-catalog")
     assembly = saver.get_context_assembly(session, thread, assembly_id=wire["assembly_id"])
     policy = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={
         "execution_disabled": ["notes", "mcp__mini__echo"], "model_hidden": ["hidden_ci"],
@@ -538,7 +310,7 @@ async def test_reference_exceeding_effective_policy_budget_is_an_explicit_error(
 
 
 async def test_model_call_boundary_replaces_full_schema_without_changing_provider_tools(
-    catalog_runtime, guidance_prepare, registry_db,
+    catalog_runtime, prepare_tool_context, registry_db,
 ):
     owner, factory, _registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
@@ -549,12 +321,12 @@ async def test_model_call_boundary_replaces_full_schema_without_changing_provide
             snapshot, lambda frozen, binding: saver.read_resource_activation_payload(frozen, binding, storage_owner=(session, thread)),
         )
 
-    before_wire, before = guidance_prepare("discovery:model-first", boundary="model_call")
+    before_wire, before = prepare_tool_context("discovery:model-first", boundary="model_call")
     first = catalog(before)
     factory.session.minimum = 8
     factory.changed()
     await drain_pending_relists(owner)
-    after_wire, after = guidance_prepare("discovery:model-second", boundary="model_call")
+    after_wire, after = prepare_tool_context("discovery:model-second", boundary="model_call")
     updated = catalog(after)
     old_definition, = (entry for entry in first.definitions if entry.metadata.origin == "mcp")
     new_definition, = (entry for entry in updated.definitions if entry.metadata.origin == "mcp")
@@ -571,12 +343,12 @@ async def test_model_call_boundary_replaces_full_schema_without_changing_provide
 
 @pytest.mark.parametrize("readiness", ["disconnected", "authorization_required"])
 async def test_known_unready_definition_is_frozen_without_execution_qualification(
-    catalog_runtime, guidance_prepare, registry_db, discovery_tool_factory, readiness,
+    catalog_runtime, prepare_tool_context, registry_db, discovery_tool_factory, readiness,
 ):
     owner, _factory, registry, _scope = catalog_runtime
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
-    _wire, ready = guidance_prepare("known:ready")
+    _wire, ready = prepare_tool_context("known:ready")
     original_binding = owner.binding_snapshot()
     await owner.disconnect_server("mini", admit=lambda: None)
     if readiness == "authorization_required":
@@ -586,7 +358,7 @@ async def test_known_unready_definition_is_frozen_without_execution_qualificatio
     assert not disconnected_binding.targets and not owner.get_tools()
     with pytest.raises(ExtensionTargetResolutionError, match="连接未就绪"):
         disconnected_binding.resolve("mcp__mini__echo")
-    _wire, frozen = guidance_prepare("known:unready")
+    _wire, frozen = prepare_tool_context("known:unready")
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         catalog = tool_catalog_from_activation(frozen, lambda snapshot, binding: cold.read_resource_activation_payload(
             snapshot, binding, storage_owner=(session, thread)))
@@ -651,7 +423,7 @@ async def test_cursor_fences_query_policy_and_catalog_changes(discovery_case, di
 
 
 async def test_full_definition_freeze_survives_owner_update_delete_and_cold_saver(
-    discovery_case, catalog_runtime, guidance_prepare, registry_db, discovery_tool_factory,
+    discovery_case, catalog_runtime, prepare_tool_context, registry_db, discovery_tool_factory,
 ):
     tool, original, _policies, frozen, read = discovery_case
     _owner, factory, registry, _scope = catalog_runtime
@@ -661,7 +433,7 @@ async def test_full_definition_freeze_survives_owner_update_delete_and_cold_save
     factory.changed()
     await drain_pending_relists(_owner)
     assert definition_resource_id("mcp__mini__echo") not in {item.resource_id for item in registry.capture().snapshots}
-    _wire, same_turn = guidance_prepare("discovery:same-turn", boundary="turn")
+    _wire, same_turn = prepare_tool_context("discovery:same-turn", boundary="turn")
     assert same_turn == frozen
     assert tool_catalog_from_activation(same_turn, read) == original
     saver, session, _connection, _accepted = registry_db

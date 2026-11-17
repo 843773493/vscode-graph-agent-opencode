@@ -23,11 +23,11 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 当前测试路径隔离正式工作区
-)
 from tests.integration.backend.sessions.rollout_context.test_skill_catalog_shadow_binding import (
     skill_catalog_owner as skill_catalog_owner,  # noqa: PLC0414 - 真实文件发布与冻结
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 

@@ -22,8 +22,8 @@ from app.services.infrastructure.rollout_context.storage.schema import (
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
     restore_schema22,
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 使用当前测试目录工作区
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 

@@ -28,11 +28,11 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.test_agent_production_context import (
     factory_context as factory_context,  # noqa: PLC0414 - 沿正式 factory 入口复用 fixture
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 工作区按本测试路径隔离
-)
 from tests.integration.backend.sessions.rollout_test_workspace import (
     prepare_rollout_workspace,
+)
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 

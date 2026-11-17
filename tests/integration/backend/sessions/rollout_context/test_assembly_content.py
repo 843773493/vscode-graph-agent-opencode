@@ -39,17 +39,17 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context._channel_version_fixtures import (
     restore_schema21,
-)
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 按当前测试文件隔离工作区
 )
 from tests.integration.backend.sessions.rollout_context.test_context_production_prefix import (
     production_context as production_context,  # noqa: PLC0414 - 复用真实prepare链
 )
 from tests.support.e2e_control.harness import E2ETestControlHarness
-from tests.harness.python.run_context import TestRunContext
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
 

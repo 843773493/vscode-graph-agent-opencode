@@ -5,7 +5,6 @@
 ```text
 mcp/
 ├── AGENTS.md
-├── conftest.py                        # 直接调用原工厂的生命周期 fixture
 ├── test_catalog_activation.py          # catalog 成员向资源平台发布与激活
 ├── test_catalog_owner.py               # owner 生命周期、刷新、generation 与事件
 ├── test_config.py                      # MCP 配置规范化与校验
@@ -16,12 +15,13 @@ mcp/
 ├── test_config_replacement.py          # HTTP 与插件服务候选隔离、共同切换、退役资格排空和清理失败
 ├── test_invocation_leases.py           # 精确调用占用、冷启动核对与写盘失败
 ├── test_tool_adapter.py                # SDK 完整分页、原参数与协议结果转换
-├── test_tool_definition_recovery.py    # 发现、压缩、策略、冷读与 rewind 边界
-├── test_tool_search.py                 # 冻结定义、策略、排名、字节边界、分页和冷恢复
+├── test_tool_definitions.py            # 工具与 Skill 关联的精确来源和 schema 身份
 └── test_tool_guidance.py               # 工具指引输出与语义
 ```
 
 需要 `EventChannelService` 的测试从上级 `infrastructure/conftest.py` 注入隔离实例。
+
+工具发现的输入校验归 `tests/unit/agents/tools/test_tool_discovery.py`；真实发布、freeze/seal、发现和冷恢复归 `tests/integration/backend/sessions/tool_discovery/`。共享前提从 `tests/support/mcp/` 导入，不再由本目录测试文件转导出。
 
 # 可修改内容
 

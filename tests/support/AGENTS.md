@@ -27,6 +27,7 @@
 │   ├── catalog_session_bundle.py          catalog、物理节点和会话控制数据的统一播种
 │   ├── job_thread_fixture.py              Job测试的Thread与执行绑定
 │   └── rollout/                            canonical历史与视图场景装具
+│       ├── context_registry.py             正式Session、执行准入和registry数据库fixture
 │       ├── fixture_output.py               通过正式owner提交静态fixture输出
 │       ├── view_mutations.py                隔离注入view成员索引损坏
 │       └── web_boundary_seeding.py           Web历史边界场景数据
@@ -55,6 +56,8 @@
 │   └── crash_worker.py                     独立模型流故障执行入口
 ├── mcp/                                    MCP测试配置和协议替身
 │   ├── configuration.py                    MCP配置文件准备
+│   ├── frozen_catalog.py                   隔离工作区与真实Provider上下文封存fixture
+│   ├── tool_discovery.py                   工具发现的发布目录、结果存储与调用上下文fixture
 │   └── session_doubles.py                  MCP会话及工厂替身
 ├── 通信目标与故障
 │   └── communication/

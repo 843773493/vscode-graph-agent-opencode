@@ -67,8 +67,8 @@ from app.services.orchestration.resource_activation.contracts import (
     set_current_execution_resource_activation,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 由当前测试路径隔离真实工作区
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 _SKILL_BODY = "仅显式加载后可见的集成样本正文：production-context-skill-body"

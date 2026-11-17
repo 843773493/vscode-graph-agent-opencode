@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 
 from app.services.infrastructure.mcp import McpCatalogOwner
 from app.services.infrastructure.mcp.config import McpServerConfig
@@ -82,6 +82,54 @@ class FakeMcpSessionFactory:
         return _session()
 
 
+class MutableSchemaSession:
+    def __init__(self) -> None:
+        self.minimum = 1
+        self.description = "回显给定文本"
+        self.empty = False
+        self.error: Exception | None = None
+        self.list_calls = 0
+
+    async def initialize(self) -> None:
+        return None
+
+    def supports_tool_list_changed(self) -> bool:
+        return True
+
+    async def list_tools(self) -> list[BaseTool]:
+        self.list_calls += 1
+        if self.error is not None:
+            raise self.error
+        if self.empty:
+            return []
+
+        async def echo(text: str) -> str:
+            return text
+
+        return [StructuredTool.from_function(
+            coroutine=echo, name="echo", description=self.description,
+            args_schema=create_model("EchoInput", text=(str, Field(min_length=self.minimum))),
+        )]
+
+
+class MutableSchemaSessionFactory:
+    def __init__(self) -> None:
+        self.session = MutableSchemaSession()
+        self.notify: Callable[[], None] | None = None
+
+    @asynccontextmanager
+    async def __call__(
+        self, server: McpServerConfig, notify: Callable[[], None],
+    ) -> AsyncIterator[MutableSchemaSession]:
+        assert server.server_id == "mini"
+        self.notify = notify
+        yield self.session
+
+    def changed(self) -> None:
+        assert self.notify is not None
+        self.notify()
+
+
 async def drain_pending_relists(owner: McpCatalogOwner) -> None:
     """等待 owner 内部所有待处理的重新列举任务结束。"""
 
@@ -94,6 +142,8 @@ __all__ = [
     "EchoToolInput",
     "FakeMcpSession",
     "FakeMcpSessionFactory",
+    "MutableSchemaSession",
+    "MutableSchemaSessionFactory",
     "drain_pending_relists",
     "make_remote_tool",
 ]

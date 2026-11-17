@@ -1,9 +1,10 @@
 # 目录用途
 
-集中存放 canonical rollout fixture 的输出提交、view 成员损坏注入和 Web 历史边界播种。
+集中存放 canonical rollout fixture 的数据库前提、输出提交、view 成员损坏注入和 Web 历史边界播种。
 
 ```text
 rollout/
+├── context_registry.py    正式 schema 的 Session、执行准入与 registry 数据库 fixture
 ├── fixture_output.py      经真实执行 owner 提交静态历史输出
 ├── skill_catalog.py       局部合同的冻结 Skill 输入，经正式 load 激活
 ├── view_mutations.py      隔离修改 view 成员并重建私有分块索引

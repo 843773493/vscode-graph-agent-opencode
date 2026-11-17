@@ -21,10 +21,10 @@ from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     native_http_server as native_http_server,  # noqa: PLC0414 - 使用当前测试文件的真实 HTTP 协议桩
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 复用当前测试目录隔离的真实 Saver
-)
 from tests.support.catalog_session_bundle import seed_catalog_session_bundle
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
 from tests.support.workspaces import prepare_default_test_workspace
 
 

@@ -15,8 +15,8 @@ from app.services.infrastructure.rollout_context.assembly.plans.registry import 
 from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
     draft as draft,  # noqa: PLC0414 - 显式导出 pytest fixture
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - 使用本文件的正式输出路径
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
 )
 
 

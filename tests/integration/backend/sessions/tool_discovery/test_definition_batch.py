@@ -47,24 +47,16 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.tool_de
     definition_source_values,
 )
 from tests.harness.python.run_context import TestRunContext
-from tests.unit.services.infrastructure.mcp import test_tool_search as search
-
-registry_db = search.registry_db
-catalog_workspace = search.catalog_workspace
-catalog_runtime = search.catalog_runtime
-discovery_store = search.discovery_store
-discovery_tool_factory = search.discovery_tool_factory
-guidance_prepare = search.guidance_prepare
 
 
 @pytest.fixture
-def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
+def discovered_batch(prepare_tool_context, registry_db, discovery_tool_factory):
     saver, session, _connection, accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     admission = saver.execution_admission(session, thread_id=thread, execution_id=accepted["initial_execution_id"])
 
     async def create(source_count, call_count, *, damage=None, compact=True, split_calls=False):
-        wire, activation = guidance_prepare("batch-discovery-start")
+        wire, activation = prepare_tool_context("batch-discovery-start")
         snapshot = wire["snapshot"]
         catalog = tool_catalog_from_activation(activation, lambda frozen, binding: saver.read_resource_activation_payload(
             frozen, binding, storage_owner=(session, thread),
@@ -121,7 +113,7 @@ def discovered_batch(guidance_prepare, registry_db, discovery_tool_factory):
 @pytest.mark.parametrize("ordinary_count", [0, 8])
 @pytest.mark.parametrize("compact", [False, True])
 async def test_prepare_checks_definition_owner_collisions_with_one_batch_pass(
-    discovered_batch, guidance_prepare, registry_db, monkeypatch, request, ordinary_count, compact,
+    discovered_batch, prepare_tool_context, registry_db, monkeypatch, request, ordinary_count, compact,
 ):
     originals, _activation_id = await discovered_batch(4, 1, compact=compact)
     saver, session, _connection, _accepted = registry_db
@@ -164,7 +156,7 @@ async def test_prepare_checks_definition_owner_collisions_with_one_batch_pass(
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         for key, owner in (("first", saver), ("successor", saver), ("cold", cold)):
             source_manager = manager if owner is saver else make_manager(owner)
-            wire, _ = guidance_prepare("definition-owner-" + key, context_owner=owner, context_source_manager=source_manager)
+            wire, _ = prepare_tool_context("definition-owner-" + key, context_owner=owner, context_source_manager=source_manager)
             snapshot = wire["snapshot"]
             values = [value for value, _revision in definition_source_values(snapshot)]
             assert [value.tool_id for value in values] == (sorted(originals) if compact else [])
@@ -182,7 +174,7 @@ async def test_prepare_checks_definition_owner_collisions_with_one_batch_pass(
 
 
 async def test_prepare_rejects_definition_registered_with_a_second_owner(
-    discovered_batch, guidance_prepare, registry_db,
+    discovered_batch, prepare_tool_context, registry_db,
 ):
     originals, _activation_id = await discovered_batch(4, 1)
     saver, session, connection, _accepted = registry_db
@@ -197,21 +189,21 @@ async def test_prepare_rejects_definition_registered_with_a_second_owner(
     before = connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall()
     pending = manager.prepare_pending()
     with pytest.raises(ExtensionCatalogUnavailableError, match="活动定义不得登记第二个 CSM owner"):
-        guidance_prepare("definition-owner-rejected", context_source_manager=manager)
+        prepare_tool_context("definition-owner-rejected", context_source_manager=manager)
     assert connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall() == before
     assert manager.prepare_pending() == pending
 
 
 @pytest.mark.parametrize("call_count", [1, 2])
 async def test_seal_preserves_discovery_provenance_in_successor_and_cold_restore(
-    discovered_batch, guidance_prepare, registry_db, call_count,
+    discovered_batch, prepare_tool_context, registry_db, call_count,
 ):
     originals, _activation_id = await discovered_batch(4, call_count, split_calls=True)
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         for key, owner in (("restored", saver), ("successor", saver), ("cold", cold)):
-            wire, _ = guidance_prepare("batch-sql-" + key, context_owner=owner)
+            wire, _ = prepare_tool_context("batch-sql-" + key, context_owner=owner)
             restored = [value for value, _ in definition_source_values(wire["snapshot"])]
             assert [value.tool_id for value in restored] == sorted(originals)
             assert {value.discovered_from.tool_call_id for value in restored} == {
@@ -228,12 +220,12 @@ async def test_seal_preserves_discovery_provenance_in_successor_and_cold_restore
 
 @pytest.mark.parametrize("damage", ["missing", "unknown", "revision", "previous_revision", "control_revision", "redundant"])
 async def test_seal_rejects_invalid_definition_receipts_atomically(
-    discovered_batch, guidance_prepare, registry_db, monkeypatch, damage,
+    discovered_batch, prepare_tool_context, registry_db, monkeypatch, damage,
 ):
     await discovered_batch(4, 1)
     _saver, _session, connection, _accepted = registry_db
     if damage == "redundant":
-        guidance_prepare("batch-receipt-already-applied")
+        prepare_tool_context("batch-receipt-already-applied")
     before = connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall()
     tables = ("context_assembly_selections", "resource_activation_assembly_bindings")
     counts = tuple(connection.execute(f"SELECT count(*) FROM {table}").fetchone() for table in tables)
@@ -265,7 +257,7 @@ async def test_seal_rejects_invalid_definition_receipts_atomically(
     monkeypatch.setattr(source_activation, "_validate_definition_sources", damage_receipt)
     message = "回执缺少真实 selected 来源" if damage == "unknown" else "applied 回执与封存前驱不一致"
     with pytest.raises(ItemSchemaError, match=message):
-        guidance_prepare("batch-receipt-rejected:" + damage)
+        prepare_tool_context("batch-receipt-rejected:" + damage)
     assert injected
     assert connection.execute("SELECT * FROM context_assemblies ORDER BY assembly_id").fetchall() == before
     assert tuple(connection.execute(f"SELECT count(*) FROM {table}").fetchone() for table in tables) == counts
@@ -273,7 +265,7 @@ async def test_seal_rejects_invalid_definition_receipts_atomically(
 
 @pytest.mark.parametrize("damage", ["binding", "discovery"])
 async def test_seal_does_not_reuse_proofs_for_another_resource_or_tool_call(
-    discovered_batch, guidance_prepare, registry_db, monkeypatch, damage,
+    discovered_batch, prepare_tool_context, registry_db, monkeypatch, damage,
 ):
     originals, activation_id = await discovered_batch(4, 2, split_calls=True)
     _saver, _session, connection, _accepted = registry_db
@@ -308,7 +300,7 @@ async def test_seal_does_not_reuse_proofs_for_another_resource_or_tool_call(
     monkeypatch.setattr(source_activation, "_validate_definition_sources", damage_before_validation)
     message = "冻结定义缺失或身份不唯一" if damage == "binding" else "原发现调用不属于所指冻结请求"
     with pytest.raises(ItemSchemaError, match=message):
-        guidance_prepare("batch-sql-rejected")
+        prepare_tool_context("batch-sql-rejected")
     assert injected
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == before_assemblies
     # 新请求的 freeze 在 seal 前独立提交；本事务必须回滚对原冻结 binding 的注入。
@@ -321,7 +313,7 @@ async def test_seal_does_not_reuse_proofs_for_another_resource_or_tool_call(
 @pytest.mark.parametrize("source_count", [1, 4])
 @pytest.mark.parametrize("call_count", [1, 2])
 async def test_prepare_reads_discovered_catalog_once_per_activation(
-    discovered_batch, guidance_prepare, registry_db, monkeypatch, request, source_count, call_count,
+    discovered_batch, prepare_tool_context, registry_db, monkeypatch, request, source_count, call_count,
 ):
     originals, activation_id = await discovered_batch(source_count, call_count)
     saver, session, connection, _accepted = registry_db
@@ -358,7 +350,7 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         for key, owner in (("restored", saver), ("successor", saver), ("cold", cold)):
             phases.append({"phase": key, "calls": [], "catalogs": 0, "bodies": [], "source_values": []})
-            wire, _ = guidance_prepare("batch-discovery-" + key, context_owner=owner)
+            wire, _ = prepare_tool_context("batch-discovery-" + key, context_owner=owner)
             snapshot = wire["snapshot"]
             restored = [value for value, _revision in definition_source_values(snapshot)]
             assert [value.tool_id for value in restored] == sorted(originals)
@@ -389,7 +381,7 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
 
 @pytest.mark.parametrize("same_retained", [False, True])
 async def test_previous_definition_revision_is_not_taken_from_a_partial_retained_set(
-    discovered_batch, guidance_prepare, registry_db, monkeypatch, same_retained,
+    discovered_batch, prepare_tool_context, registry_db, monkeypatch, same_retained,
 ):
     await discovered_batch(4, 1)
     prepare = preparation.tool_definition_batch
@@ -415,7 +407,7 @@ async def test_previous_definition_revision_is_not_taken_from_a_partial_retained
 
     with monkeypatch.context() as patch:
         patch.setattr(preparation, "tool_definition_batch", observe_prepare)
-        wire, _ = guidance_prepare("batch-revision-restored")
+        wire, _ = prepare_tool_context("batch-revision-restored")
     previous = wire["snapshot"]
     expected = {value.discovered_from.resource_id: revision
                 for value, revision in definition_source_values(previous)}
@@ -437,7 +429,7 @@ async def test_previous_definition_revision_is_not_taken_from_a_partial_retained
 @pytest.mark.parametrize("compact", [False, True])
 @pytest.mark.parametrize("call_count", [1, 2])
 async def test_prepare_decodes_each_discovery_result_once(
-    discovered_batch, guidance_prepare, registry_db, monkeypatch, request, compact, call_count,
+    discovered_batch, prepare_tool_context, registry_db, monkeypatch, request, compact, call_count,
 ):
     originals, _activation_id = await discovered_batch(4, call_count, compact=compact)
     saver, session, _connection, _accepted = registry_db
@@ -453,7 +445,7 @@ async def test_prepare_decodes_each_discovery_result_once(
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         for key, owner in (("successor", saver), ("cold", cold)):
             phases.append({"phase": key, "results": []})
-            wire, _ = guidance_prepare("batch-decode-" + key, context_owner=owner)
+            wire, _ = prepare_tool_context("batch-decode-" + key, context_owner=owner)
             values = [value for value, _revision in definition_source_values(wire["snapshot"])]
             # 当前完整发现结果保持原引用；压缩后才恢复完整来源，不能改变注入时机。
             assert [value.tool_id for value in values] == (sorted(originals) if compact else [])
@@ -482,11 +474,11 @@ async def test_prepare_decodes_each_discovery_result_once(
     ("inline", "发现结果正文与原冻结定义不一致"),
 ])
 async def test_batch_reuse_rejects_mismatched_discovery_without_sealing(
-    discovered_batch, guidance_prepare, registry_db, damage, message,
+    discovered_batch, prepare_tool_context, registry_db, damage, message,
 ):
     await discovered_batch(4, 2, damage=damage)
     _saver, _session, connection, _accepted = registry_db
     before = connection.execute("SELECT count(*) FROM context_assemblies").fetchone()
     with pytest.raises(ExtensionCatalogUnavailableError, match=message):
-        guidance_prepare("batch-discovery-rejected")
+        prepare_tool_context("batch-discovery-rejected")
     assert connection.execute("SELECT count(*) FROM context_assemblies").fetchone() == before

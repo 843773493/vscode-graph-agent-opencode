@@ -29,9 +29,6 @@ from tests.integration.backend.sessions.itemized_projection_helpers import (
 from tests.integration.backend.sessions.rollout_context.test_agent_production_context import (
     factory_context as factory_context,  # noqa: PLC0414 - 复用真实 factory，工作区按当前测试文件隔离
 )
-from tests.integration.backend.sessions.rollout_context.test_context_plan_registry import (
-    registry_db as registry_db,  # noqa: PLC0414 - factory fixture 的真实存储依赖
-)
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     RuntimeSourceCase,
     _job,
@@ -41,6 +38,9 @@ from tests.integration.backend.sessions.test_runtime_source_pipeline import (
     source_case as source_case,  # noqa: PLC0414 - 正式Session/消息与model_stream生成冻结输入
 )
 from tests.support.api_helpers import create_session
+from tests.support.rollout.context_registry import (
+    registry_db as registry_db,  # noqa: PLC0414 - 显式注入 pytest fixture
+)
 
 
 @pytest.mark.parametrize("factory_context", ["chat_completions", "responses"], indirect=True)
