@@ -14,6 +14,20 @@ export async function verifyBrowserResource(requestJson, { gatewayId, workspaceI
     })).data,
     { gateway_id: gatewayId, path: packagePath, expected_digest: packageDigest },
   );
+  // 默认工作区的模板导入由原配置 owner 异步完成；结清后再冻结来源 CAS 基线。
+  const configurationDeadline = performance.now() + 30_000;
+  while (true) {
+    const status = (await requestJson("/api/gateway/service-plugins/status", {
+      method: "POST", body: JSON.stringify({ gateway_id: gatewayId }),
+    })).data;
+    const configuration = status.workspace_configurations.find((item) => item.workspace_id === workspaceId);
+    if (configuration?.state === "ready") break;
+    if (configuration?.state === "failed") {
+      throw new Error(`工作区插件初始配置失败: ${JSON.stringify(configuration)}`);
+    }
+    if (performance.now() >= configurationDeadline) throw new Error("工作区插件初始配置未在期限内就绪");
+    await delay(100);
+  }
   const headers = { "X-BoxTeam-Workspace-Id": workspaceId };
   const sourcePath = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/config/sources/workspace_root_mutable_override`;
   const document = (await requestJson(sourcePath, { headers })).data;
