@@ -349,7 +349,7 @@ def test_cli_initialize_automatically_migrates_supported_legacy_layout(
     assert not legacy_path.exists()
     assert (config_root / "boxteam.jsonc.migrated.bak").read_bytes() == original
     assert _load_jsonc_object(config_root / "gateway.jsonc")["config_version"] == 5
-    assert _load_jsonc_object(config_root / "workspace.jsonc")["config_version"] == 2
+    assert _load_jsonc_object(config_root / "workspace.jsonc")["config_version"] == 3
 
 
 def test_cli_initialize_rejects_old_home_layout_without_moving_any_files(

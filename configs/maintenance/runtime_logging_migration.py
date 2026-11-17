@@ -17,7 +17,7 @@ from app.gateway.config.connection_ids import _CONNECTION_ID_RECORD_VERSION
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
 
 ConfigDomain = Literal["gateway", "workspace"]
-TARGET_CONFIG_VERSIONS = {"gateway": 5, "workspace": 2}
+TARGET_CONFIG_VERSIONS = {"gateway": 5, "workspace": 3}
 _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
     "gateway": ("gateway_mutable_override", "gateway_local_mutable_override"),
     "workspace": (

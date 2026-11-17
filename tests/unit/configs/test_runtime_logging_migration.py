@@ -173,7 +173,7 @@ def test_cli_preview_empty_home_does_not_install_or_create_databases(
     report = json.loads(capsys.readouterr().out)
     assert report["action"] == "migrate-runtime-config"
     assert report["validation_stage"] == "logging_preflight"
-    assert report["target_config_versions"] == {"gateway": 5, "workspace": 2}
+    assert report["target_config_versions"] == {"gateway": 5, "workspace": 3}
     assert report["settings"] is None
     assert report["conflicts"] == report["unsettled"] == []
     assert all(source["presence"] == "absent" for source in report["sources"])
@@ -239,7 +239,7 @@ def test_partial_legacy_settings_use_shared_contract_defaults(migration_home: Pa
     {"logger": None}, {"logger": {"level": "verbose"}}, {"logger": {"level": 1}},
     {"logger": {"pretty": "false"}}, {"logger": {"pretty": 0}},
     {"logger": {"unknown": True}}, {"logging": {"runtime": {"level": "info"}}},
-    {"config_version": 3}, {"config_version": 0}, {"config_version": True}, {"config_version": None},
+    {"config_version": 4}, {"config_version": 0}, {"config_version": True}, {"config_version": None},
 ])
 def test_invalid_workspace_logging_is_rejected_even_with_explicit_choices(
     migration_home: Path, payload: dict[str, object],
@@ -392,7 +392,7 @@ def test_sqlite_source_version_is_validated_even_without_payload_version(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
 ) -> None:
     workspace_store.sync_config_source(
-        config_key="workspace_mutable_override", uri=None, config_version=3,
+        config_key="workspace_mutable_override", uri=None, config_version=4,
         presence="present", payload={"logger": {"level": "info"}}, layer_digest="future-version",
     )
     with pytest.raises(ValueError, match="配置版本不在日志迁移支持范围"):
@@ -474,10 +474,10 @@ def test_migration_preserves_active_business_state_and_source_cas(
     with WorkspaceStateStore(workspace_root=first) as restored:
         migrated = restored.get_active_config_snapshot("workspace")
         assert migrated is not None
-        assert migrated.payload == {key: (2 if key == "config_version" else value) for key, value in active.items() if key != "logger"}
+        assert migrated.payload == {key: (3 if key == "config_version" else value) for key, value in active.items() if key != "logger"}
         assert migrated.active_revision > original.active_revision
         assert migrated.effective_digest == config_revision(migrated.payload)
-        assert migrated.schema_version == 2
+        assert migrated.schema_version == 3
         layer = restored.get_source_layer(source.config_key)
         assert layer is not None
         assert layer.layer_revision == source.layer_revision + 1
@@ -497,7 +497,7 @@ def test_migration_preserves_active_business_state_and_source_cas(
     with pytest.raises(RuntimeError, match="配置被外部修改"):
         commit_runtime_logging_migration(boxteam_home=migration_home, restore=True)
     assert _database_dump(workspace_store.path) == after
-    assert json.loads(path.read_text()) == {key: (2 if key == "config_version" else value) for key, value in changed.items() if key != "logger"}
+    assert json.loads(path.read_text()) == {key: (3 if key == "config_version" else value) for key, value in changed.items() if key != "logger"}
 
 
 def test_restore_database_before_restart_returns_exact_original(
@@ -543,7 +543,7 @@ def test_interrupted_migration_blocks_runtime_and_can_resume_or_restore(
         assert path.read_bytes() == original
         assert not (migration_home / "config/gateway.jsonc").exists()
     else:
-        assert json.loads(path.read_text()) == {"config_version": 2}
+        assert json.loads(path.read_text()) == {"config_version": 3}
         assert read_jsonc_object(migration_home / "config/gateway.jsonc")["logging"] == {"runtime": {"level": "debug", "pretty": True}}
 
 
@@ -603,7 +603,7 @@ def test_interrupt_after_database_commit_retains_recoverable_owner_boundary(
     else:
         with WorkspaceStateStore(workspace_root=first) as store:
             active = store.get_active_config_snapshot("workspace")
-            assert active is not None and active.schema_version == 2 and "logger" not in active.payload
+            assert active is not None and active.schema_version == 3 and "logger" not in active.payload
 
 
 @pytest.mark.parametrize("registered", [False, True])
@@ -801,17 +801,18 @@ def test_environment_secret_digest_matches_real_startup_after_migration(
     from app.services.infrastructure.config_service import ConfigService
 
     payload = _legacy_payload()
-    providers = cast(list[dict[str, object]], cast(dict[str, object], payload["llm"])["providers"])
-    providers[0]["api_key"] = "${BOXTEAM_MIGRATION_TEST_KEY}"
+    providers = cast(dict[str, dict[str, object]], cast(dict[str, object], payload["llm"])["providers"])
+    defaults = cast(dict[str, object], providers["primary"]["defaults"])
+    defaults["api_key"] = "${BOXTEAM_MIGRATION_TEST_KEY}"
     if already_migrated:
         payload.pop("logger")
-        payload["config_version"] = 2
+        payload["config_version"] = 3
     stored = prepare_config_for_persistence(payload)
     original = workspace_store.ensure_active_config_snapshot(
         config_domain="workspace", payload=stored, source_baseline={}, source_generation=0,
         layer_revisions={}, layer_digests={}, secret_bindings={},
         effective_digest=config_revision(stored) if already_migrated else config_revision(payload),
-        schema_version=2 if already_migrated else 1,
+        schema_version=3 if already_migrated else 1,
     )
     workspace_store.close()
     first = migration_workspaces[0]
@@ -824,8 +825,8 @@ def test_environment_secret_digest_matches_real_startup_after_migration(
         snapshot = service.get_snapshot()
         assert snapshot.revision == active.effective_digest
         llm = snapshot.to_dict()["llm"]
-        assert llm["providers"][0]["api_key"] == "${BOXTEAM_MIGRATION_TEST_KEY}"
-        assert active.payload["llm"]["providers"][0]["api_key"] == "env:BOXTEAM_MIGRATION_TEST_KEY"
+        assert llm["providers"]["primary"]["defaults"]["api_key"] == "${BOXTEAM_MIGRATION_TEST_KEY}"
+        assert active.payload["llm"]["providers"]["primary"]["defaults"]["api_key"] == "env:BOXTEAM_MIGRATION_TEST_KEY"
     assert commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))["state"] == "unchanged"
 
 

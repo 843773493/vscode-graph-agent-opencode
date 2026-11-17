@@ -18,6 +18,9 @@ import psutil
 from app.core.config_migration_guard import config_migration_marker
 from app.core.config_sources import config_revision, read_stable_config_file
 from app.core.sqlite_state import SQLiteProcessOwnership, sqlite_file_uri
+from app.services.infrastructure.config.state import (
+    restore_environment_secret_references,
+)
 from configs.installer import atomic_write, resolve_config_resource_source
 from configs.maintenance.runtime_logging_migration import (
     ConfigDomain,
@@ -129,6 +132,8 @@ def validate_runtime_logging_plan(
     for item in plan.inputs:
         if item.kind == "active" and item.payload is not None:
             candidate = migrated_active_payload(item.payload, item.domain, plan, inline[item.domain], connection_entries)
+            if item.domain == "workspace":
+                candidate = cast(dict[str, object], restore_environment_secret_references(candidate))
             validate_config(candidate, schema_path=resolve_config_resource_source(f"{item.domain}_schema.jsonc", project_root=project_root))
 
 

@@ -35,6 +35,55 @@ def legacy_workspace_payload() -> dict[str, object]:
     return payload
 
 
+@pytest.mark.parametrize("upgrade_gateway", [False, True])
+def test_initialize_current_workspace_reenters_without_rewriting_it(
+    startup_home: Path, capsys: pytest.CaptureFixture[str], upgrade_gateway: bool,
+) -> None:
+    main()
+    assert json.loads(capsys.readouterr().out)["upgrades"] == {}
+    config = startup_home / "config"
+    workspace = config / "workspace.jsonc"
+    assert read_jsonc_object(workspace)["config_version"] == 3
+    original = workspace.read_bytes()
+    if upgrade_gateway:
+        gateway = config / "gateway.jsonc"
+        payload = read_jsonc_object(gateway)
+        payload["config_version"] = 4
+        gateway.write_text(json.dumps(payload), encoding="utf-8")
+
+    main()
+    upgrades = json.loads(capsys.readouterr().out)["upgrades"]
+    if upgrade_gateway:
+        assert upgrades["configuration"]["state"] == "completed"
+    else:
+        assert upgrades == {}
+    assert workspace.read_bytes() == original
+    after = {path: path.read_bytes() for path in config.rglob("*") if path.is_file()}
+    main()
+    assert json.loads(capsys.readouterr().out)["upgrades"] == {}
+    assert {path: path.read_bytes() for path in config.rglob("*") if path.is_file()} == after
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_initialize_does_not_relabel_legacy_model_configuration(
+    startup_home: Path, monkeypatch: pytest.MonkeyPatch, preview: bool,
+) -> None:
+    path = startup_home / "config/workspace.jsonc"
+    path.parent.mkdir(parents=True)
+    original = json.dumps({"config_version": 2, "llm": {"providers": [{
+        "id": "primary", "model": "user-model", "endpoint": "https://example.invalid/v1",
+        "custom_llm_provider": "openai", "api_key": "${USER_MODEL_KEY}",
+    }]}}).encode()
+    path.write_bytes(original)
+    monkeypatch.setattr("sys.argv", ["boxteam", "initialize", *(["--preview"] if preview else [])])
+
+    with pytest.raises(ValueError, match="配置验证失败"):
+        main()
+
+    assert list(path.parent.iterdir()) == [path]
+    assert path.read_bytes() == original
+
+
 def test_initialize_upgrades_old_config_with_exact_backups_and_reenters_without_writes(
     startup_home: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -49,7 +98,7 @@ def test_initialize_upgrades_old_config_with_exact_backups_and_reenters_without_
     migration = first["upgrades"]["configuration"]
     assert migration["state"] == "completed"
     assert original in [file.read_bytes() for file in Path(migration["backup_root"]).glob("file-*.before")]
-    assert read_jsonc_object(path) == {"config_version": 2}
+    assert read_jsonc_object(path) == {"config_version": 3}
     assert read_jsonc_object(config / "gateway.jsonc")["logging"]["runtime"]["level"] == "debug"
     after = {file: file.read_bytes() for file in config.rglob("*") if file.is_file()}
     main()
@@ -351,7 +400,7 @@ def test_registered_and_explicit_workspace_layout_acquires_one_owner(
     main()
     result = json.loads(capsys.readouterr().out)
     assert result["migrated_workspace_layout"] is True
-    assert read_jsonc_object(workspace / ".boxteam/workspace.jsonc")["config_version"] == 2
+    assert read_jsonc_object(workspace / ".boxteam/workspace.jsonc")["config_version"] == 3
 
 
 @pytest.mark.parametrize("state", ["prepared", "applying"])
