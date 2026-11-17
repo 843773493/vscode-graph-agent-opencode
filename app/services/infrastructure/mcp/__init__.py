@@ -10,7 +10,6 @@ from app.services.infrastructure.mcp.catalog_owner import (
     McpCatalogOwner,
     McpCatalogPublication,
     McpCatalogRelistError,
-    McpCatalogSnapshot,
     McpServerSnapshot,
     McpToolDescriptor,
 )
@@ -59,7 +58,6 @@ __all__ = [
     "McpCatalogPublication",
     "McpCatalogRelistError",
     "McpCatalogResourcePublisher",
-    "McpCatalogSnapshot",
     "McpServerSnapshot",
     "McpToolDescriptor",
     "build_extension_catalog_binding",

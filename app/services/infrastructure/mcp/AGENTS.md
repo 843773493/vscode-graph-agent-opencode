@@ -12,7 +12,7 @@
 - `session_runtime.py` 在每个 Server 的原 task 中创建、初始化并关闭 SDK session；现有 LifetimeScope 持有关闭与排空回调，外层启动／关闭 task 不拥有 SDK CancelScope。插件 MCP 经 Gateway 精确路由到插件实例，插件进程由 Gateway 插件运行时持有；MCP owner 不登记插件 PID。目录发布和通知 fencing 仍只由 `McpCatalogOwner` 决定。
 - 自有 MCP stdio bridge 的唯一源码归 `resources/plugins/mcp-stdio/bridge.py`；Backend 只沿 Gateway Streamable HTTP 接入，不维护进程或传输副本。`invocation.py` 仅传递当前调用进度与取消投递事实，不充当持久 invocation lease；取消通知投递成功不代表远端停止。
 - 管理视图在原 runtime 失败／关闭期间保留唯一已知 descriptors，执行准入与 connection_ref 仍只来自真实 running；主动断开依唯一 publication.definitions 的 disconnected readiness 保持工具列表为空，不建立第二目录或状态源。
-- `mcp.catalog/*` 目录事件合同的发布接线。
+- `mcp.catalog/*` 目录事件合同的发布接线。完整目录读取统一消费 `McpCatalogPublication`；Owner 的 `_committed_catalog_revision` 只标记最近成功发布，不能用失败候选的 unavailable publication 代替，不再保存第二份工具快照。
 - MCP Tool 名称映射和 LangChain 适配。
 - `tool_adapter.py` 是 SDK 完整分页和调用的唯一工具适配入口；公开参数不能与 Python 注入参数重名后被吞掉，协议结果继续复用现有库转换，不另写传输协议。
 - 扩展目录 binding（ExtensionCatalogBindingRef）与目录 generation lease 的维护。
