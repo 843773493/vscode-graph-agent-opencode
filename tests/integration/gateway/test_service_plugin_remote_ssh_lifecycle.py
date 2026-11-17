@@ -15,8 +15,10 @@ import time
 import zipfile
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -28,12 +30,17 @@ from pydantic import JsonValue, TypeAdapter
 from app.gateway.runtime.ssh_process import start_ssh_tunnel_process
 from app.gateway.service_types import LocalForwardSpec
 from app.gateway.ssh_command import build_ssh_command
+from app.runtime.windows_fs import native_process_path
 from app.schemas.gateway.plugin_installation import (
     PluginInstallOperationDTO,
     PluginSourceArtifact,
     PluginSourceCatalogDTO,
 )
-from app.schemas.gateway.service_plugin import PluginRuntimeStatusDTO
+from app.schemas.gateway.service_plugin import (
+    PluginPackageTarget,
+    PluginRuntimeStatusDTO,
+    PluginSlotStatusDTO,
+)
 from configs.installer import install_user_configuration
 from tests.harness.python.run_context import TestRunContext
 from tests.support.processes.gateway import (
@@ -47,17 +54,24 @@ from tests.support.workspaces import (
 )
 
 _REMOTE_ALIAS = os.environ.get("BOXTEAM_REMOTE_PLUGIN_GATEWAY_ALIAS")
-_REMOTE_HOME = os.environ.get("BOXTEAM_REMOTE_PLUGIN_GATEWAY_HOME")
-_REMOTE_REPOSITORY = os.environ.get("BOXTEAM_REMOTE_PLUGIN_GATEWAY_REPOSITORY")
-_REMOTE_PYTHON = os.environ.get("BOXTEAM_REMOTE_PLUGIN_GATEWAY_PYTHON")
-_REMOTE_PORT = int(os.environ.get("BOXTEAM_REMOTE_PLUGIN_GATEWAY_PORT", "8014"))
+_REMOTE_RECEIPT = os.environ.get("BOXTEAM_REMOTE_PLUGIN_GATEWAY_RECEIPT")
 _PACKAGE_ID = "remote.ssh.lifecycle"
 _PLUGIN_ID = "http_probe"
-_WINDOWS_SERVER_PORT = 18414
-_ENVIRONMENT_NAME = "BOXTEAM_REMOTE_PLUGIN_ACCEPTANCE_SECRET"
+_ENVIRONMENT_NAME = "REMOTE_PLUGIN_ACCEPTANCE_SECRET"
 _TARGET_ENVIRONMENT_VALUE = "windows-target-owned-environment"
 _RELAY_ENVIRONMENT_VALUE = "linux-relay-must-not-resolve"
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
+pytest_plugins = ["tests.integration.packaging.test_service_plugin_distribution"]
+
+
+@dataclass(frozen=True)
+class _RemoteDistribution:
+    home: str
+    application: str
+    python: str
+    port: int
+    target: PluginPackageTarget
+    sha256: str
 
 
 class _PluginCatalog:
@@ -122,25 +136,20 @@ class _PluginCatalog:
         self.thread.join(timeout=5)
 
 
-def _plugin_archive(version: str) -> bytes:
+def _plugin_archive(version: str, *, target: PluginPackageTarget, runtime: Literal["python", "node"]) -> bytes:
     manifest = {
         "manifest_version": 1,
         "package_id": _PACKAGE_ID,
         "version": version,
         "name": "Remote SSH lifecycle probe",
-        "target": {
-            "os": "windows",
-            "architecture": "x64",
-            "system_baseline": "windows-10.0.0",
-            "python": {"version": "3.12.4", "abi": "cp312"},
-        },
+        "target": target.model_dump(mode="json", exclude={"node" if runtime == "python" else "python"}, exclude_none=True),
         "extension_contract_version": 1,
         "plugins": [{
             "id": _PLUGIN_ID,
             "name": "Remote HTTP probe",
             "instance_scope": "gateway",
-            "runtime": "python",
-            "entrypoint": ["server.py"],
+            "runtime": runtime,
+            "entrypoint": ["server.py" if runtime == "python" else "server.mjs"],
             "management_protocol_version": 1,
             "requires": [{"extension_point": "services", "version": 1},
                          {"extension_point": "configuration", "version": 1}],
@@ -198,10 +207,58 @@ server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1',
     port=int(os.environ['BOXTEAM_PLUGIN_PORT']), log_config=None))
 server.run()
 '''
+    node_source = '''
+import http from 'node:http';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+const source = name => pathToFileURL(path.join(process.env.BOXTEAM_PROJECT_ROOT, 'src/shared', name)).href;
+const { createPluginRuntimeManagement } = await import(source('serverPluginRuntime.mjs'));
+const { createRuntimeLogger } = await import(source('serverRuntimeLogging.mjs'));
+const logger = createRuntimeLogger('remote-lifecycle-probe');
+const parameters = JSON.parse(process.env.BOXTEAM_PLUGIN_PARAMETERS);
+const effects = [];
+const readJson = async request => { let body=''; for await (const chunk of request) body+=chunk; return body ? JSON.parse(body) : {}; };
+const management = createPluginRuntimeManagement({ service:'remote-lifecycle-probe', logger, readJson,
+  shutdown: () => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())) });
+const identity = management.identity;
+const server = http.createServer(async (request, response) => {
+  try {
+    const pathname = new URL(request.url, 'http://localhost').pathname;
+    if (await management.handleRequest(request, response, pathname)) return;
+    if (request.headers['x-local-token'] !== management.token) { response.writeHead(403); response.end(); return; }
+    const request_id = request.headers['x-request-id'];
+    if (pathname === '/services/echo/effects' && request.method === 'GET') {
+      response.writeHead(200, {'Content-Type':'application/json'});
+      response.end(JSON.stringify({ effects, request_id })); return;
+    }
+    if (pathname === '/services/echo/stream' || (pathname === '/services/echo/effects' && request.method === 'POST')) {
+      const effect = pathname.endsWith('/effects');
+      if (effect) effects.push(request_id);
+      response.writeHead(200, {'Content-Type':'application/x-ndjson'});
+      response.write(JSON.stringify({ instance_id:identity.instance_id, request_id,
+        ...(effect ? {kind:'accepted'} : {}) }) + '\\n');
+      if (!effect) {
+        const timer = setInterval(() => response.write('still-open\\n'), 50);
+        response.on('close', () => clearInterval(timer));
+      }
+      return;
+    }
+    if (pathname === '/services/echo/') {
+      response.writeHead(200, {'Content-Type':'application/json'});
+      response.end(JSON.stringify({ instance_id:identity.instance_id, package_version:identity.package_version,
+        process_id:process.pid, request_id,
+        credential_digest:createHash('sha256').update(parameters.credentialValue).digest('hex') })); return;
+    }
+    response.writeHead(404); response.end();
+  } catch (error) { logger.error('probe request failed', error); response.writeHead(500); response.end(); }
+});
+server.listen(management.port, '127.0.0.1');
+'''
     content = io.BytesIO()
     with zipfile.ZipFile(content, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest))
-        archive.writestr("server.py", source)
+        archive.writestr("server.py" if runtime == "python" else "server.mjs", source if runtime == "python" else node_source)
     return content.getvalue()
 
 
@@ -263,7 +320,7 @@ def _remote_file_contents(alias: str, path: str) -> str:
 
 @pytest.mark.windows_gateway_server
 def test_serve_isolated_windows_gateway_for_remote_lifecycle_acceptance(
-    integration_workspace_root_path: str,
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """专用 Windows target test owner；由 Linux 验收完成后通过 task Home sentinel 关闭。"""
     if sys.platform != "win32":
@@ -276,89 +333,58 @@ def test_serve_isolated_windows_gateway_for_remote_lifecycle_acceptance(
     ready_path = home / ".remote-plugin-server-ready.json"
     if not (home.parent / ".remote-plugin-server-mode").is_file():
         pytest.skip(f"没有显式启用一次性 Windows Gateway server test: home={home}")
+    if not os.environ.get("BOXTEAM_TEST_PREPARED_LAUNCHER"):
+        pytest.skip("需要已准备的发行 Launcher，不使用源码 Gateway 替代发行入口")
     stop_path.unlink(missing_ok=True)
     ready_path.unlink(missing_ok=True)
-    workspace = Path(integration_workspace_root_path)
-    prepare_default_test_workspace(
-        workspace_root=workspace,
-        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+    ssh_client = os.environ.get("SSH_CLIENT", "").split()
+    if not ssh_client:
+        raise RuntimeError("Windows 远程 SSH 测试缺少 SSH_CLIENT，无法限定插件目录的直连例外")
+    no_proxy_entries = dict.fromkeys(
+        entry.strip()
+        for key in ("NO_PROXY", "no_proxy")
+        for entry in os.environ.get(key, "").split(",")
+        if entry.strip()
     )
-    install_test_workspace_config(
-        workspace_root=workspace,
-        config_path=Path("configs/tests/workspace/default.jsonc"),
-        schema_path=Path("configs/workspace_schema.jsonc"),
-    )
-    context = TestRunContext.from_test_file(Path(__file__)).prepare()
-    from tests.support.e2e_control.harness import E2EProcessLease
-
-    lease = E2EProcessLease(
-        context.runtime_root_for_node("windows-gateway-b-server") / "ports.json",
-        (_WINDOWS_SERVER_PORT,),
-    )
-    lease.acquire()
-    gateway = None
+    no_proxy_entries.setdefault(ssh_client[0], None)
+    for key in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(key, ",".join(no_proxy_entries))
+    monkeypatch.setenv(_ENVIRONMENT_NAME, _TARGET_ENVIRONMENT_VALUE)
+    # 复用发行验收的隔离安装、重定位、空PATH、Launcher与正常停机，不另起源码服务。
+    client, context, distribution, distribution_home = request.getfixturevalue("distribution_gateway")
     try:
-        ssh_client = os.environ.get("SSH_CLIENT", "").split()
-        if not ssh_client:
-            raise RuntimeError("Windows 远程 SSH 测试缺少 SSH_CLIENT，无法限定插件目录的直连例外")
-        no_proxy_entries = dict.fromkeys(
-            entry.strip()
-            for key in ("NO_PROXY", "no_proxy")
-            for entry in os.environ.get(key, "").split(",")
-            if entry.strip()
-        )
-        no_proxy_entries.setdefault(ssh_client[0], None)
-        no_proxy = ",".join(no_proxy_entries)
-        gateway = start_gateway_process(
-            workspace_root=workspace,
-            default_backend_url=None,
-            port=_WINDOWS_SERVER_PORT,
-            boxteam_home=home,
-            artifacts_dir=context.artifacts_dir / "windows-gateway-b",
-            extra_env={
-                _ENVIRONMENT_NAME: _TARGET_ENVIRONMENT_VALUE,
-                "NO_PROXY": no_proxy,
-                "no_proxy": no_proxy,
-            },
-        )
-        gateway_id = httpx.get(
-            f"http://127.0.0.1:{_WINDOWS_SERVER_PORT}/api/gateway/health",
-            headers=LOCAL_TOKEN_HEADERS,
-            timeout=10,
-            trust_env=False,
-        ).raise_for_status().json()["data"]["gateway_id"]
-        ready_path.write_text(json.dumps({
-            "gateway_id": gateway_id,
-            "process_id": gateway.process.pid,
-            "port": _WINDOWS_SERVER_PORT,
-        }), encoding="utf-8")
+        manifest = json.loads((distribution / "runtime-manifest.json").read_text(encoding="utf-8"))
+        with zipfile.ZipFile(distribution / "application/resources/plugins/developer-tools.zip") as archive:
+            target = json.loads(archive.read("plugin.jsonc"))["target"]
+        receipt = json.loads((context.artifacts_dir / "distribution.json").read_text(encoding="utf-8"))
+        receipt.update({"home": str(distribution_home), "target": target,
+            "python": native_process_path(distribution / manifest["python_executable"]),
+            "application": native_process_path(distribution / manifest["application_root"]),
+            "port": client.base_url.port,
+            "gateway_id": client.get("/api/gateway/health").raise_for_status().json()["data"]["gateway_id"]})
+        ready_path.write_text(json.dumps(receipt), encoding="utf-8")
         deadline = time.monotonic() + 480
         while not stop_path.exists():
             if time.monotonic() >= deadline:
                 raise TimeoutError("Linux Gateway federation acceptance did not close the Windows Gateway server")
             time.sleep(0.5)
     finally:
-        if gateway is not None:
-            close_gateway_process(gateway)
         ready_path.unlink(missing_ok=True)
-        lease.release()
 
 
 @pytest.fixture
 def remote_gateway_clients(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
-) -> Iterator[tuple[httpx.Client, httpx.Client, TestRunContext, str, str, str, int]]:
-    if not all((_REMOTE_ALIAS, _REMOTE_HOME, _REMOTE_REPOSITORY, _REMOTE_PYTHON)):
-        pytest.skip("需要显式配置已启动的隔离 Windows Gateway SSH 目标")
+) -> Iterator[tuple[httpx.Client, httpx.Client, TestRunContext, str, str, str, int, _RemoteDistribution]]:
+    if not _REMOTE_ALIAS or not _REMOTE_RECEIPT:
+        pytest.skip("需要显式配置已启动的隔离 Windows 发行 Gateway SSH 目标及就绪回执")
     assert _REMOTE_ALIAS is not None
-    assert _REMOTE_HOME is not None
-    assert _REMOTE_REPOSITORY is not None
-    assert _REMOTE_PYTHON is not None
     remote_alias = _REMOTE_ALIAS
-    remote_home = _REMOTE_HOME
-    remote_repository = _REMOTE_REPOSITORY
-    remote_python = _REMOTE_PYTHON
+    receipt = json.loads(_remote_file_contents(alias=remote_alias, path=_REMOTE_RECEIPT))
+    distribution = _RemoteDistribution(home=receipt["home"], application=receipt["application"],
+        python=receipt["python"], port=receipt["port"], target=PluginPackageTarget.model_validate(receipt["target"]),
+        sha256=receipt["sha256"])
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     workspace = Path(integration_workspace_root_path)
     prepare_default_test_workspace(
@@ -377,9 +403,9 @@ def remote_gateway_clients(
     from app.gateway.ssh_config import resolve_user_ssh_host
 
     remote = resolve_user_ssh_host(remote_alias)
-    escaped_remote_home = remote_home.replace("'", "''")
-    escaped_remote_repository = remote_repository.replace("'", "''")
-    escaped_remote_python = remote_python.replace("'", "''")
+    escaped_remote_home = distribution.home.replace("'", "''")
+    escaped_remote_repository = distribution.application.replace("'", "''")
+    escaped_remote_python = distribution.python.replace("'", "''")
     remote_command = (
         "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \""
         f"$env:BOXTEAM_HOME='{escaped_remote_home}'; "
@@ -396,7 +422,7 @@ def remote_gateway_clients(
         "username": remote.username,
         "ssh_config_host": remote_alias,
         "remote_pair_command": remote_command,
-        "remote_gateway_port": _REMOTE_PORT,
+        "remote_gateway_port": distribution.port,
         "activate": False,
     }]
     from tests.support.e2e_control.harness import E2EProcessLease
@@ -427,14 +453,14 @@ def remote_gateway_clients(
             port=remote.port,
             username=remote.username,
             private_key_path=None,
-        ssh_config_host=remote_alias,
+            ssh_config_host=remote_alias,
             forwards=(LocalForwardSpec(
                 name="workspace_api", local_port=ports.port(1),
-                remote_host="127.0.0.1", remote_port=_REMOTE_PORT,
+                remote_host="127.0.0.1", remote_port=distribution.port,
             ),),
             log_dir=context.artifacts_dir / "gateway-b-direct-ssh",
         )
-        token_path = remote_home.rstrip("/\\") + "/state/gateway/credentials/local-token"
+        token_path = distribution.home.rstrip("/\\") + "/state/gateway/credentials/local-token"
         token = _remote_file_contents(alias=remote_alias, path=token_path).splitlines()[-1].strip()
         if not token:
             raise RuntimeError("隔离 Windows Gateway 缺少本机认证令牌")
@@ -466,7 +492,7 @@ def remote_gateway_clients(
         gateway_b_health.raise_for_status()
         yield client_a, client_b, context, str(health.json()["data"]["gateway_id"]), str(
             gateway_b_health.json()["data"]["gateway_id"]
-        ), local_route_address, ports.port(2)
+        ), local_route_address, ports.port(2), distribution
     finally:
         if client_b is not None:
             client_b.close()
@@ -479,14 +505,17 @@ def remote_gateway_clients(
         lease.release()
 
 
+@pytest.mark.parametrize("runtime", ["python", "node"])
 def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
-    remote_gateway_clients: tuple[httpx.Client, httpx.Client, TestRunContext, str, str, str, int],
+    remote_gateway_clients: tuple[httpx.Client, httpx.Client, TestRunContext, str, str, str, int, _RemoteDistribution],
+    runtime: Literal["python", "node"],
 ) -> None:
-    client_a, client_b, context, gateway_a, gateway_b, local_ip, source_port = remote_gateway_clients
-    assert _REMOTE_ALIAS is not None and _REMOTE_HOME is not None
+    client_a, client_b, context, gateway_a, gateway_b, local_ip, source_port, distribution = remote_gateway_clients
+    assert _REMOTE_ALIAS is not None
     remote_alias = _REMOTE_ALIAS
-    remote_home = _REMOTE_HOME
-    catalog = _PluginCatalog(local_ip, source_port, {version: _plugin_archive(version) for version in ("1.0.0", "1.1.0")})
+    remote_home = distribution.home
+    catalog = _PluginCatalog(local_ip, source_port, {
+        version: _plugin_archive(version, target=distribution.target, runtime=runtime) for version in ("1.0.0", "1.1.0")})
     evidence: list[dict[str, object]] = []
     connection_id: str | None = None
 
@@ -831,10 +860,22 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
         assert old.status_code == 409
         assert echo(client_a, remote=True, instance_id=replacement_id, version="1.1.0")["package_version"] == "1.1.0"
 
+        restarted = PluginSlotStatusDTO.model_validate(relay("POST", "/api/gateway/service-plugins/restart", {
+            "gateway_id": gateway_b, "package_id": _PACKAGE_ID, "package_version": "1.1.0",
+            "plugin_id": _PLUGIN_ID, "revision": switched.revision,
+        }).json()["data"])
+        assert restarted.state == "ready" and restarted.instance is not None
+        restarted_id, restarted_pid = restarted.instance.instance_id, restarted.instance.process_id
+        assert restarted_id != replacement_id and restarted_pid != replacement_pid
+        assert not _remote_process_alive(remote_alias, replacement_pid)
+        assert echo(client_a, remote=True, instance_id=restarted_id, version="1.1.0")["process_id"] == restarted_pid
+        relay("GET", f"/api/gateway/service-plugins/{_PACKAGE_ID}/{_PLUGIN_ID}/instances/"
+            f"{replacement_id}/services/echo/?package_version=1.1.0", expected_status=409)
+
         bind("1.1.0", enabled=False)
         stopped, = [item for item in relayed_status().plugins if item.binding.package_id == _PACKAGE_ID]
         assert stopped.state == "stopped" and stopped.instance is None
-        assert not _remote_process_alive(remote_alias, replacement_pid)
+        assert not _remote_process_alive(remote_alias, restarted_pid)
         refused = relay("POST", "/api/gateway/service-plugins/uninstall", {
             "gateway_id": gateway_b, "package_id": _PACKAGE_ID, "package_version": "1.1.0",
         }, expected_status=409)
@@ -856,10 +897,13 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
             assert not _remote_path_exists(remote_alias, package_path)
         (context.artifacts_dir / "remote-plugin-ssh-lifecycle.json").write_text(json.dumps({
             "gateway_ids": [gateway_a, gateway_b],
+            "runtime": runtime,
+            "distribution_sha256": distribution.sha256,
             "connection_id": connection_id,
             "original_instance_id": instance_id,
             "replacement_instance_id": replacement_id,
-            "closed_process_ids": [original_pid, replacement_pid],
+            "restarted_instance_id": restarted_id,
+            "closed_process_ids": [original_pid, replacement_pid, restarted_pid],
             "source_transport": "Windows B fetched the catalog and ZIP from Linux over the test network",
             "federation_transport": "OpenSSH remote pairing and local TCP forwarding to Windows B",
             "direct_and_relay_same_instance": True,
