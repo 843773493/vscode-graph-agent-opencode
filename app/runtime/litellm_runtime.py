@@ -72,16 +72,15 @@ class ModelMetadataRuntime:
     """每个进程持有一个刷新任务；后台只发布缓存，后续请求才采用结果。"""
 
     def __init__(
-        self, *, cache_root: Path, startup_wait_seconds: float = 1,
+        self, *, cache_root: Path,
         refresh_timeout_seconds: float = 30, freshness_seconds: float = 86400,
         retry_interval_seconds: float = 300,
     ) -> None:
-        if startup_wait_seconds < 0 or min(
+        if min(
             refresh_timeout_seconds, freshness_seconds, retry_interval_seconds,
         ) <= 0:
-            raise ValueError("模型目录等待预算必须非负，其余期限必须为正数")
+            raise ValueError("模型目录刷新期限和缓存期限必须为正数")
         self._cache_root = cache_root
-        self._startup_wait = startup_wait_seconds
         self._refresh_timeout = refresh_timeout_seconds
         self._freshness = freshness_seconds
         self._retry_interval = retry_interval_seconds
@@ -96,11 +95,9 @@ class ModelMetadataRuntime:
 
     def load(self) -> ModuleType:
         local_only = _local_only_mode()
-        first_load = False
         with self._lock:
             if self._sdk is None:
                 self._sdk = _import_litellm()
-                first_load = True
             sdk = self._sdk
             if local_only:
                 return sdk
@@ -116,11 +113,7 @@ class ModelMetadataRuntime:
                 self._next_refresh = time.monotonic() + self._retry_interval
                 self._worker = Thread(target=self._refresh, name="model-metadata-refresh", daemon=True)
                 self._worker.start()
-        if first_load and self._worker is not None and not self._finished.wait(self._startup_wait):
-            logger.info("模型目录前台等待已结束，继续使用旧目录；后台刷新仍在进行")
-        with self._lock:
-            self._adopt_pending()
-        return sdk
+            return sdk
 
     def _adopt_pending(self) -> None:
         if self._pending is not None:

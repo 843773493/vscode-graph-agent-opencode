@@ -43,7 +43,7 @@ def sdk(monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
 def pending_refresh(
     sdk: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[tuple[ModelMetadataRuntime, threading.Event, dict[str, object]]]:
-    runtime = ModelMetadataRuntime(cache_root=tmp_path / "cache", startup_wait_seconds=0)
+    runtime = ModelMetadataRuntime(cache_root=tmp_path / "cache")
     release = threading.Event()
     catalog = dict(sdk.model_cost)
     catalog["metadata-refresh-test"] = {"litellm_provider": "openai", "mode": "chat", "supports_vision": True}
@@ -60,6 +60,18 @@ def pending_refresh(
         if runtime._worker is not None:
             runtime._worker.join(timeout=6)
             assert not runtime._worker.is_alive()
+
+
+def test_initial_load_returns_before_pending_refresh(
+    sdk: ModuleType, pending_refresh: tuple[ModelMetadataRuntime, threading.Event, dict[str, object]],
+) -> None:
+    runtime, release, _catalog = pending_refresh
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            assert executor.submit(runtime.load).result(timeout=0.5) is sdk
+            assert not runtime._finished.is_set()
+        finally:
+            release.set()
 
 
 def test_late_refresh_is_adopted_only_on_next_use_and_keeps_registrations(
@@ -104,7 +116,7 @@ def test_successful_cache_is_available_without_starting_refresh(
     runtime.load()
     release.set()
     assert runtime._finished.wait(5)
-    restored = ModelMetadataRuntime(cache_root=tmp_path / "cache", startup_wait_seconds=0)
+    restored = ModelMetadataRuntime(cache_root=tmp_path / "cache")
     restored.load()
     assert sdk.model_cost["metadata-refresh-test"]["supports_vision"] is True
     assert restored._worker is None
@@ -121,7 +133,7 @@ def test_corrupt_cache_is_reported_and_retains_catalog(
     assert runtime._cache_path is not None
     runtime._cache_path.write_text("{invalid", encoding="utf-8")
     original = sdk.model_cost
-    restored = ModelMetadataRuntime(cache_root=runtime._cache_root, startup_wait_seconds=0)
+    restored = ModelMetadataRuntime(cache_root=runtime._cache_root)
     restored._sdk = sdk
     restored._source_url = runtime._source_url
     restored._cache_path = runtime._cache_path
@@ -163,7 +175,7 @@ def test_background_total_deadline_cancels_transport_and_keeps_old_table(
 
     client_type = httpx.AsyncClient
     monkeypatch.setattr(litellm_runtime.httpx, "AsyncClient", lambda: client_type(transport=httpx.MockTransport(hanging)))
-    runtime = ModelMetadataRuntime(cache_root=tmp_path / "cache", startup_wait_seconds=0, refresh_timeout_seconds=0.05)
+    runtime = ModelMetadataRuntime(cache_root=tmp_path / "cache", refresh_timeout_seconds=0.05)
     original = sdk.model_cost
     runtime.load()
     assert runtime._finished.wait(5)
