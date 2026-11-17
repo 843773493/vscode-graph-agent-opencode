@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Never, cast
+from typing import TYPE_CHECKING, Any, Never
 
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import InterruptOnConfig
@@ -28,13 +28,6 @@ from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.agents.custom_tools import CustomToolFactoryContext, build_custom_tools
 from app.agents.default_tools import build_default_tools
-from app.agents.graph_binding import (
-    DEEP_AGENT_GRAPH_BINDING,
-    GRAPH_FACTORY_REGISTRY,
-    GraphBindingOwnerKey,
-    GraphBindingStorePort,
-    resolve_graph_binding,
-)
 from app.agents.instruction_producers import (
     InstructionProducerSpec,
     InstructionUpdateBinding,
@@ -55,7 +48,6 @@ from app.agents.policy import (
     ParsedCustomToolSpec,
     ToolCapabilityPolicy,
     ToolMetadata,
-    parse_custom_tool_specs,
     validate_tool_dependencies,
 )
 from app.agents.policy.tool_capability import (
@@ -101,7 +93,6 @@ from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.runtime.agent_runtime import (
     AGENT_GRAPH_RECURSION_LIMIT,
     AgentAssemblyMode,
-    prepare_agent_model,
 )
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
@@ -840,161 +831,3 @@ def assemble_deep_agent(
         "scope_object_id": id(reactor_lifetime_scope) if reactor_lifetime_scope is not None else None,
     })
     return runtime_agent
-
-
-def assemble_configured_agent(
-    *,
-    session_id: str,
-    thread_id: str,
-    agent_id: str,
-    tool_selection_reader: ToolSelectionReader,
-    config_service: ConfigService | None = None,
-    background_task_registry: BackgroundTaskRegistry | None = None,
-    background_mailbox: BackgroundMailbox | None = None,
-    job_event_bus: JobEventBusProtocol | None = None,
-    job_service: JobServiceProtocol | None = None,
-    goal_service: SessionGoalService | None = None,
-    message_service: MessageService | None = None,
-    session_service: SessionService | None = None,
-    session_orchestrator: object | None = None,
-    session_subagent_service: SessionSubagentProtocol | None = None,
-    team_service: TeamCoordinationProtocol | None = None,
-    sender_agent_id: str | None = None,
-    enabled_tool_names: set[str] | None = None,
-    enabled_runtime_middleware_names: set[str] | None = None,
-    tool_denylist: set[str] | None = None,
-    execution_overrides: Mapping[str, bool] | None = None,
-    model_visibility_overrides: Mapping[str, bool] | None = None,
-    checkpointer: BaseCheckpointSaver | None = None,
-    terminal_resource_owner: TerminalResourceOwner | None = None,
-    browser_resource_owner: BrowserResourceOwner | None = None,
-    node_debug_service: NodeDebugService | None = None,
-    session_context_query_service: SessionContextQueryProtocol | None = None,
-    workspace_session_context_client: WorkspaceSessionContextClientProtocol
-    | None = None,
-    session_communication_service: SessionCommunicationProtocol | None = None,
-    mcp_tools: Sequence[BaseTool] | None = None,
-    mcp_catalog_owner: McpCatalogOwner | None = None,
-    mcp_connection_service: McpConnectionService | None = None,
-    name: str | None = None,
-    override_model: Any = None,
-    response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
-    model_routing_enabled: bool = True,
-    preferred_provider_id: str | None = None,
-    tool_timeout_seconds: float | None = None,
-    workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
-    reactor_lifetime_scope: LifetimeScope | None = None,
-    skill_catalog: PublishedSkillCatalog | None = None,
-    resource_registry: ResourceRegistry,
-    resource_activation: ResourceActivationCoordinator | None,
-    workspace_root: Path,
-    include_team_tools: bool = False,
-    graph_binding_store: GraphBindingStorePort,
-    resource_navigation: ResourceNavigation,
-    text_mutations: WorkspaceTextMutationOwner,
-    assembly_mode: AgentAssemblyMode = "execution",
-) -> AgentEventSource | list[ToolDefinitionLike]:
-    """读取 Agent 配置；execution 按冻结 selector 装配图，tool_catalog 仅装配工具。"""
-    if config_service is None:
-        raise RuntimeError("assemble_configured_agent 需要显式传入 ConfigService")
-    service = config_service
-    model_setup = (
-        prepare_agent_model(
-            agent_id=agent_id,
-            config_service=service,
-            prompt_cache_key=session_id,
-            preferred_provider_id=preferred_provider_id,
-        )
-        if assembly_mode == "execution" else None
-    )
-    tool_config = service.get_agent_tool_config(agent_id)
-    tool_policy = service.resolve_agent_tool_policy(agent_id)
-    confirmation_tool_names = (
-        service.resolve_agent_confirmation_tool_names(agent_id)
-        & tool_policy.enabled_names
-    )
-    custom_tool_specs = parse_custom_tool_specs(
-        list(tool_config.get("custom", [])),
-        context=f"agent {agent_id} 的 tools.custom",
-    )
-    configured_custom_tool_names = {spec.name for spec in custom_tool_specs}
-    custom_tool_confirmation_names = (
-        confirmation_tool_names & configured_custom_tool_names
-    )
-    direct_confirmation_tool_names = (
-        confirmation_tool_names - configured_custom_tool_names
-    )
-    if session_service is None:
-        raise RuntimeError(
-            "assemble_configured_agent 需要显式传入 SessionService"
-        )
-
-    model = override_model if override_model is not None else (model_setup.model if model_setup is not None else None)
-
-    # 真实 thread 只由 creation 冻结的精确 selector 分派；合成工具面没有 durable owner。
-    binding = (
-        resolve_graph_binding(
-            store=graph_binding_store,
-            owner=GraphBindingOwnerKey(session_id, thread_id),
-        )
-        if assembly_mode == "execution"
-        else DEEP_AGENT_GRAPH_BINDING
-    )
-    builder = cast(
-        "Callable[..., AgentEventSource | list[ToolDefinitionLike]]",
-        GRAPH_FACTORY_REGISTRY.resolve(binding),
-    )
-    return builder(
-        model=model,
-        response_format=response_format,
-        instruction_producers=model_setup.instruction_producers if model_setup is not None else (),
-        tool_selection_reader=tool_selection_reader,
-        checkpointer=checkpointer,
-        session_id=session_id,
-        thread_id=thread_id,
-        agent_id=agent_id,
-        model_routing_middleware=model_setup.routing_middleware
-        if model_setup is not None and model_routing_enabled and override_model is None
-        else None,
-        sender_agent_id=sender_agent_id,
-        enabled_tool_names=enabled_tool_names,
-        enabled_runtime_middleware_names=enabled_runtime_middleware_names,
-        tool_denylist=set(tool_denylist or set()),
-        execution_overrides=execution_overrides,
-        model_visibility_overrides=model_visibility_overrides,
-        custom_tool_specs=custom_tool_specs,
-        name=name or agent_id,
-        background_task_registry=background_task_registry,
-        background_mailbox=background_mailbox,
-        job_event_bus=job_event_bus,
-        job_service=job_service,
-        goal_service=goal_service,
-        message_service=message_service,
-        session_service=session_service,
-        session_orchestrator=session_orchestrator,
-        session_subagent_service=session_subagent_service,
-        team_service=team_service,
-        terminal_resource_owner=terminal_resource_owner,
-        browser_resource_owner=browser_resource_owner,
-        node_debug_service=node_debug_service,
-        session_context_query_service=session_context_query_service,
-        workspace_session_context_client=workspace_session_context_client,
-        session_communication_service=session_communication_service,
-        mcp_tools=mcp_tools,
-        mcp_catalog_owner=mcp_catalog_owner,
-        mcp_connection_service=mcp_connection_service,
-        tool_timeout_seconds=tool_timeout_seconds,
-        workspace_file_resource_registry=workspace_file_resource_registry,
-        reactor_lifetime_scope=reactor_lifetime_scope,
-        skill_catalog=skill_catalog,
-        resource_registry=resource_registry,
-        resource_activation=resource_activation,
-        include_team_tools=include_team_tools,
-        resource_navigation=resource_navigation,
-        text_mutations=text_mutations,
-        interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
-        custom_tool_confirmation_names=custom_tool_confirmation_names,
-        config_service=service,
-        workspace_root=workspace_root,
-        assembly_mode=assembly_mode,
-    )

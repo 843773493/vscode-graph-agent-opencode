@@ -101,7 +101,6 @@ def test_agent_factory_keeps_empty_extension_envelope_after_tool_filter(
         patch.object(
             agent_factory, "create_model_call_agent", return_value=built_agent
         ) as create_agent,
-        patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
         patch.object(
             agent_factory,
             "create_extension_tool_invoker_tool",
@@ -199,7 +198,6 @@ def test_agent_factory_omits_all_csm_ports_without_durable_owner(
         patch.object(agent_factory, "ContextSourceReactor") as reactor,
         patch.object(agent_factory, "ModelCallExecution"),
         patch.object(agent_factory, "create_model_call_agent", side_effect=AssertionError("目录不编译图")),
-        patch.object(agent_factory.GRAPH_FACTORY_REGISTRY, "resolve"),
     ):
         gateway_token = set_current_gateway_id("gateway_ed824856cf39565635b0e5a6bf8e08da")
         try:

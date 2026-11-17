@@ -72,6 +72,6 @@ app/runtime/
 
 - `http_server.py` 是 Gateway 与受管 Backend 共用的 Uvicorn 入口；lifespan 可交付 listener-ready 启动回调与关闭前钩子，不在 runner 构造业务 owner。请求退出只改变原 server 状态，实际排空和 lifespan 仍由 Uvicorn 完成，不能将 ACK 当作进程退出。
 
-- `agent_runtime.py::assemble_agent` 注入依赖，`assemble_configured_agent` 读取配置并选择冻结 selector，`graph_factory.py::assemble_deep_agent` 在调用时加载实际装配实现。`AgentAssemblyMode` 区分 `execution` 的执行图与 `tool_catalog` 的工具注册列表；`load_agent_assembly_factory` 只预加载工厂，不构建模型、Thread 或自定义工具。闭集 selector 注册不得触发 SDK 导入。
+- `agent_runtime.py::assemble_agent` 统一读取配置、注入依赖并选择冻结 selector，`graph_factory.py::assemble_deep_agent` 在调用时加载实际装配实现。`AgentAssemblyMode` 区分 `execution` 的执行图与 `tool_catalog` 的工具注册列表；`preload_agent_dependencies` 只预加载固定依赖，不构建模型、Thread 或自定义工具。闭集 selector 注册不得触发 SDK 导入。
 - `agent_runtime.py::prepare_agent_model` 只准备模型候选、路由和指令来源，返回具名字段的 `AgentModelSetup`，供 Agent 构建与压缩预览共用；它不创建 Thread、工具或图。模型实现与路由依赖在该函数内加载，不能为读取声明导入 SDK。
 - 工具管理目录的纯转换归 `services/mapping/tool_catalog.py::tools_to_catalog_definitions`；runtime 只负责装配，不导出目录 DTO。

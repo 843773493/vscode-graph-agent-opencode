@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
@@ -176,15 +176,13 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_node_debug_service(self) -> NodeDebugService: ...
 
 
-def load_agent_assembly_factory() -> Callable[..., AgentEventSource | list[ToolDefinitionLike]]:
-    """加载内置执行依赖，不构建模型、Thread 或配置中的自定义工具。"""
+def preload_agent_dependencies() -> None:
+    """预加载固定执行依赖，不构建模型、Thread 或配置中的自定义工具。"""
     from importlib import import_module
 
-    from app.agents.agent_factory import assemble_configured_agent
-
-    # SDK 首次访问 chat/responses 会同步加载整套资源模块，统一在就绪前的 worker 中完成。
+    import_module("app.agents.agent_factory")
+    # SDK 首次访问会同步加载资源模块，统一在就绪前的 worker 中完成。
     import_module("openai.resources")
-    return assemble_configured_agent
 
 
 def assemble_agent(
@@ -203,7 +201,7 @@ def assemble_agent(
     resource_registry: ResourceRegistry,
     resource_activation: ResourceActivationCoordinator | None,
     name: str | None = None,
-    override_model: Any = None,
+    override_model: BaseChatModel | None = None,
     model_routing_enabled: bool = True,
     tool_denylist: set[str] | None = None,
     execution_overrides: Mapping[str, bool] | None = None,
@@ -218,61 +216,124 @@ def assemble_agent(
     include_team_tools: bool = False,
     assembly_mode: AgentAssemblyMode = "execution",
 ) -> AgentEventSource | list[ToolDefinitionLike]:
-    """按明确模式装配：execution 返回图，tool_catalog 返回工具注册列表。"""
-    assemble_configured_agent = load_agent_assembly_factory()
+    """统一读取配置、注入依赖并选择冻结工厂；按模式返回执行图或工具目录。"""
+    from app.agents.graph_binding import (
+        DEEP_AGENT_GRAPH_BINDING,
+        GRAPH_FACTORY_REGISTRY,
+        GraphBindingOwnerKey,
+        resolve_graph_binding,
+    )
+    from app.agents.policy import parse_custom_tool_specs
+
+    preload_agent_dependencies()
     resolved_agent_id = config_service.resolve_agent_id(agent_id)
     checkpointer = dependency_provider.get_checkpointer()
     if checkpointer is None:
         raise RuntimeError("AgentRuntimeDependencyProvider 必须显式提供 checkpointer")
-    return assemble_configured_agent(
+    job_service = dependency_provider.get_job_service()
+    goal_service = dependency_provider.get_goal_service()
+    message_service = dependency_provider.get_message_service()
+    session_service = dependency_provider.get_session_service()
+    session_orchestrator = dependency_provider.get_session_orchestrator()
+    session_subagent_service = dependency_provider.get_session_subagent_service()
+    team_service = dependency_provider.get_team_service()
+    terminal_resource_owner = dependency_provider.get_terminal_resource_owner()
+    browser_resource_owner = dependency_provider.get_browser_resource_owner()
+    session_context_query_service = dependency_provider.get_session_context_query_service()
+    workspace_session_context_client = dependency_provider.get_workspace_session_context_client()
+    session_communication_service = dependency_provider.get_session_communication_service()
+    mcp_connection_service = dependency_provider.get_mcp_connection_service()
+    node_debug_service = dependency_provider.get_node_debug_service()
+    resource_navigation = dependency_provider.get_resource_navigation()
+    text_mutations = dependency_provider.get_text_mutations()
+    model_setup = (
+        prepare_agent_model(
+            agent_id=resolved_agent_id,
+            config_service=config_service,
+            prompt_cache_key=session_id,
+            preferred_provider_id=preferred_provider_id,
+        )
+        if assembly_mode == "execution" else None
+    )
+    tool_config = config_service.get_agent_tool_config(resolved_agent_id)
+    tool_policy = config_service.resolve_agent_tool_policy(resolved_agent_id)
+    confirmation_tool_names = (
+        config_service.resolve_agent_confirmation_tool_names(resolved_agent_id)
+        & tool_policy.enabled_names
+    )
+    custom_tool_specs = parse_custom_tool_specs(
+        list(tool_config.get("custom", [])),
+        context=f"agent {resolved_agent_id} 的 tools.custom",
+    )
+    configured_custom_tool_names = {spec.name for spec in custom_tool_specs}
+    custom_tool_confirmation_names = confirmation_tool_names & configured_custom_tool_names
+    direct_confirmation_tool_names = confirmation_tool_names - configured_custom_tool_names
+    if session_service is None:
+        raise RuntimeError("assemble_agent 需要显式传入 SessionService")
+    model = override_model if override_model is not None else (model_setup.model if model_setup is not None else None)
+    # 执行只用 Thread 创建时冻结的 selector；工具目录没有持久 Thread owner。
+    binding = (
+        resolve_graph_binding(
+            store=graph_binding_store,
+            owner=GraphBindingOwnerKey(session_id, thread_id),
+        )
+        if assembly_mode == "execution" else DEEP_AGENT_GRAPH_BINDING
+    )
+    builder = cast(
+        "Callable[..., AgentEventSource | list[ToolDefinitionLike]]",
+        GRAPH_FACTORY_REGISTRY.resolve(binding),
+    )
+    return builder(
+        model=model,
+        response_format=None,
+        instruction_producers=model_setup.instruction_producers if model_setup is not None else (),
+        tool_selection_reader=tool_selection_reader,
+        checkpointer=checkpointer,
         session_id=session_id,
         thread_id=thread_id,
         agent_id=resolved_agent_id,
-        tool_selection_reader=tool_selection_reader,
-        config_service=config_service,
+        model_routing_middleware=model_setup.routing_middleware
+        if model_setup is not None and model_routing_enabled and override_model is None
+        else None,
+        sender_agent_id=None,
+        enabled_tool_names=None,
+        enabled_runtime_middleware_names=None,
+        tool_denylist=set(tool_denylist or set()),
+        execution_overrides=execution_overrides,
+        model_visibility_overrides=model_visibility_overrides,
+        custom_tool_specs=custom_tool_specs,
+        name=name or resolved_agent_id,
         background_task_registry=background_task_registry,
         background_mailbox=background_mailbox,
         job_event_bus=job_event_bus,
-        job_service=dependency_provider.get_job_service(),
-        goal_service=dependency_provider.get_goal_service(),
-        message_service=dependency_provider.get_message_service(),
-        session_service=dependency_provider.get_session_service(),
-        session_orchestrator=dependency_provider.get_session_orchestrator(),
-        session_subagent_service=dependency_provider.get_session_subagent_service(),
-        team_service=dependency_provider.get_team_service(),
-        terminal_resource_owner=dependency_provider.get_terminal_resource_owner(),
-        browser_resource_owner=dependency_provider.get_browser_resource_owner(),
-        session_context_query_service=(
-            dependency_provider.get_session_context_query_service()
-        ),
-        workspace_session_context_client=(
-            dependency_provider.get_workspace_session_context_client()
-        ),
-        session_communication_service=(
-            dependency_provider.get_session_communication_service()
-        ),
+        job_service=job_service,
+        goal_service=goal_service,
+        message_service=message_service,
+        session_service=session_service,
+        session_orchestrator=session_orchestrator,
+        session_subagent_service=session_subagent_service,
+        team_service=team_service,
+        terminal_resource_owner=terminal_resource_owner,
+        browser_resource_owner=browser_resource_owner,
+        node_debug_service=node_debug_service,
+        session_context_query_service=session_context_query_service,
+        workspace_session_context_client=workspace_session_context_client,
+        session_communication_service=session_communication_service,
         mcp_tools=mcp_tools,
         mcp_catalog_owner=mcp_catalog_owner,
-        mcp_connection_service=dependency_provider.get_mcp_connection_service(),
-        resource_registry=resource_registry,
-        resource_activation=resource_activation,
-        node_debug_service=dependency_provider.get_node_debug_service(),
-        checkpointer=checkpointer,
-        resource_navigation=dependency_provider.get_resource_navigation(),
-        text_mutations=dependency_provider.get_text_mutations(),
-        name=name or resolved_agent_id,
-        override_model=override_model,
-        model_routing_enabled=model_routing_enabled,
-        tool_denylist=tool_denylist,
-        execution_overrides=execution_overrides,
-        model_visibility_overrides=model_visibility_overrides,
-        preferred_provider_id=preferred_provider_id,
+        mcp_connection_service=mcp_connection_service,
         tool_timeout_seconds=tool_timeout_seconds,
         workspace_file_resource_registry=workspace_file_resource_registry,
         reactor_lifetime_scope=reactor_lifetime_scope,
         skill_catalog=skill_catalog,
-        graph_binding_store=graph_binding_store,
+        resource_registry=resource_registry,
+        resource_activation=resource_activation,
         include_team_tools=include_team_tools,
-        assembly_mode=assembly_mode,
+        resource_navigation=resource_navigation,
+        text_mutations=text_mutations,
+        interrupt_on={tool_name: True for tool_name in direct_confirmation_tool_names},
+        custom_tool_confirmation_names=custom_tool_confirmation_names,
+        config_service=config_service,
         workspace_root=workspace_root,
+        assembly_mode=assembly_mode,
     )

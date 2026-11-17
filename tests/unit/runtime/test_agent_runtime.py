@@ -1,12 +1,15 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from app.agents.graph_binding import DEEP_AGENT_GRAPH_BINDING
 from app.runtime.agent_runtime import assemble_agent
 
 
 def test_assemble_agent_injects_job_service() -> None:
     config_service = MagicMock()
     config_service.resolve_agent_id.return_value = "default"
+    config_service.get_agent_tool_config.return_value = {"custom": []}
+    config_service.resolve_agent_confirmation_tool_names.return_value = set()
     dependency_provider = MagicMock()
     job_service = MagicMock()
     dependency_provider.get_job_service.return_value = job_service
@@ -18,9 +21,13 @@ def test_assemble_agent_injects_job_service() -> None:
     resource_activation = MagicMock()
     skill_catalog = MagicMock()
 
-    with patch(
-        "app.agents.agent_factory.assemble_configured_agent"
-    ) as create_runtime:
+    graph_binding_store = MagicMock()
+    graph_binding_store.load_graph_binding.return_value = DEEP_AGENT_GRAPH_BINDING
+    with (
+        patch("app.runtime.agent_runtime.prepare_agent_model"),
+        patch("app.agents.graph_binding.GRAPH_FACTORY_REGISTRY.resolve") as resolve_factory,
+    ):
+        create_runtime = resolve_factory.return_value
         assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
@@ -33,7 +40,7 @@ def test_assemble_agent_injects_job_service() -> None:
             job_event_bus=MagicMock(),
             dependency_provider=dependency_provider,
             mcp_tools=mcp_tools,
-            graph_binding_store=MagicMock(),
+            graph_binding_store=graph_binding_store,
             model_visibility_overrides=visibility_overrides,
             resource_registry=resource_registry,
             resource_activation=resource_activation,

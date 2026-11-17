@@ -19,7 +19,7 @@ from app.core.path_utils import workspace_context
 from app.core.session_lifecycle_gate import NavigationTopologyGate
 from app.core.shielded_cleanup import run_sync_shielded
 from app.gateway.auth import get_gateway_local_token
-from app.runtime.agent_runtime import load_agent_assembly_factory
+from app.runtime.agent_runtime import preload_agent_dependencies
 from app.schemas.event import Event
 from app.schemas.gateway.service_plugin import WorkspacePluginConfigurationDTO
 from app.schemas.internal_v2.common import APIResponse
@@ -469,7 +469,7 @@ class WorkspaceLifespan:
                 await container.agent_execution_service.start()
             # 固定执行依赖在就绪前加载；自定义工具仍按原目录／执行入口构建和报错。
             with _workspace_startup_stage(container, "agent_runtime.load_factory"):
-                await run_sync_shielded(load_agent_assembly_factory)
+                await run_sync_shielded(preload_agent_dependencies)
             with _workspace_startup_stage(container, "team_fanout_service.start"):
                 await container.team_fanout_service.start()
             with _workspace_startup_stage(container, "background_mailbox.reconcile"):
