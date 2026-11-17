@@ -25,4 +25,5 @@
 
 - `agents_md_context.py` 只将冻结 AGENTS.md 指令链交给 CSM；文件登记和实时发布归 `app/agents/agents_md_publication.py`，纯原文与有序拼接归 `business/resource_derivations/agents.py`。不构造 Agent 实例、不重新读取工作区文件。
 - `tool_definitions.py` 只从实际 canonical 发现与已封存来源派生活动定义 batch；原 activation 是正文来源，提交与校验仍归 Saver，不登记第二个 CSM 控制 owner。
+- `RestoredToolDefinition.resource_payload` 保留原冻结定义正文，包括存在的 Skill 关联；它与只供搜索内联核对的 `contract_payload` 不同。恢复时不得裁掉字段后仍沿用完整资源正文的 revision。
 - `runtime_state.py`只编码显式状态发布intent；原canonical item保留每次发布事实，CSM按同一source/revision合并未封存变化，applied只由seal推进。冷恢复及rebuild从原owner冻结正文，不回读任务定义。

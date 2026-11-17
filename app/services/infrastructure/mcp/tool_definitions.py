@@ -144,6 +144,8 @@ def definition_resource_id(tool_id: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
+    """工具契约与发布资源：后者还包含参与资源 revision 的 Skill 关联。"""
+
     metadata: ToolMetadata
     schema_hash: str
     description: str
@@ -154,14 +156,15 @@ class ToolDefinition:
     product_tool_contract: tuple[str, int] | None = field(default=None, kw_only=True, repr=False)
 
     @property
-    def payload(self) -> dict[str, object]:
+    def contract_payload(self) -> dict[str, object]:
         return {
             "description": self.description, "input_schema": self.input_schema,
             "kind": self.metadata.kind, "group_id": self.metadata.group_id,
         }
 
-    def activation_payload(self) -> dict[str, object]:
-        return {**self.payload, "skill_associations": [item.to_dict() for item in self.skill_associations]}
+    @property
+    def resource_payload(self) -> dict[str, object]:
+        return {**self.contract_payload, "skill_associations": [item.to_dict() for item in self.skill_associations]}
 
     @property
     def input_schema(self) -> dict[str, object]:
@@ -265,6 +268,15 @@ def _tool_skill_associations(
 class FrozenToolDefinition(ToolDefinition):
     server_id: str | None
     provenance: ResourceProvenanceRef
+    _resource_includes_skill_associations: bool = field(default=True, kw_only=True, repr=False)
+
+    @property
+    def resource_payload(self) -> dict[str, object]:
+        payload = super(FrozenToolDefinition, self).resource_payload
+        # 保留读取器既有的四字段冻结正文；补上空关联也会改变其原 revision。
+        if not self._resource_includes_skill_associations:
+            del payload["skill_associations"]
+        return payload
 
 
 def plugin_tool_source_from_tool(tool: BaseTool) -> PluginToolSource | None:
@@ -338,6 +350,7 @@ def tool_catalog_from_activation(
             schema_hash=member.schema_hash, server_id=member.server_id, provenance=binding,
             description=payload["description"], _input_schema_json=canonical_json_bytes(payload["input_schema"]),
             skill_associations=associations,
+            _resource_includes_skill_associations="skill_associations" in payload,
             # TODO: 历史 v2 没有连接身份，只沿原合同恢复定义；v3 执行入口仍拒绝其 lineage。
             readiness=member_readiness(member) if lineage_id == EXTENSION_CATALOG_SOURCE_ID else "ready",
         ))

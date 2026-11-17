@@ -179,7 +179,7 @@ def _validate_definition_sources(
             provenance = definition.provenance
             require_definition(provenance.activation_snapshot_id, provenance.resource_id, provenance.revision)
             if (definition.provenance.resource_id != discovered.resource_id
-                    or sha256_jcs(definition.payload()) != definition.provenance.revision
+                    or sha256_jcs(definition.resource_payload) != definition.provenance.revision
                     or extension_schema_hash(definition.input_schema) != definition.schema_hash):
                 raise ItemSchemaError("definition-source-conflict: 完整定义正文与冻结身份不一致")
         current[discovered.resource_id] = revision

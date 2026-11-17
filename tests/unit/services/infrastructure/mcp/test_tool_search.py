@@ -103,6 +103,8 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, 
         if getattr(request, "param", None) == "v2":
             from app.services.infrastructure.mcp import catalog_activation
             historical_writer.setattr(catalog_activation, "EXTENSION_CATALOG_SOURCE_ID", "extension-catalog:v2")
+        if getattr(request, "param", None) == "four-field-resource":
+            historical_writer.setattr(ToolDefinition, "resource_payload", property(lambda definition: definition.contract_payload))
         policies_for = extension_catalog_policy_resolver
         if isinstance(getattr(request, "param", None), dict):
             resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions=request.param)
@@ -111,7 +113,15 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, 
                 return {entry.tool_id: resolver.resolve(entry) for entry in metadata}
 
             policies_for = configured_policies
-        publisher = McpCatalogResourcePublisher(registry=registry, custom_tools=custom, policy_resolver=policies_for)
+        skill_sources = (SkillToolSource(
+            name="CI Guide", source_id="workspace-skills:v1", entry_identity="workspace-skill:ci-guide:v1",
+            display_uri="boxteam://workspace/test/resources/skills/CI%20Guide/SKILL.md",
+        ),) if getattr(request, "param", None) == "with-skill-association" else ()
+        publisher = McpCatalogResourcePublisher(
+            registry=registry, custom_tools=custom, policy_resolver=policies_for,
+            skill_sources=skill_sources,
+            custom_skill_bindings={name: ("CI Guide",) for name in ("ci_logs", "huge")} if skill_sources else {},
+        )
         scope.register(owner.subscribe_publication(publisher.publish), label="discovery-publication")
     try:
         yield owner, factory, registry, scope
@@ -548,8 +558,8 @@ async def test_model_call_boundary_replaces_full_schema_without_changing_provide
     updated = catalog(after)
     old_definition, = (entry for entry in first.definitions if entry.metadata.origin == "mcp")
     new_definition, = (entry for entry in updated.definitions if entry.metadata.origin == "mcp")
-    assert old_definition.payload["input_schema"]["properties"]["text"]["minLength"] == 1
-    assert new_definition.payload["input_schema"]["properties"]["text"]["minLength"] == 8
+    assert old_definition.contract_payload["input_schema"]["properties"]["text"]["minLength"] == 1
+    assert new_definition.contract_payload["input_schema"]["properties"]["text"]["minLength"] == 8
     assert old_definition.schema_hash != new_definition.schema_hash
     assert catalog(before) == first
     assert before_wire["tools"] == after_wire["tools"]
@@ -585,7 +595,7 @@ async def test_known_unready_definition_is_frozen_without_execution_qualificatio
     definition, = [item for item in catalog.definitions if item.metadata.origin == "mcp"]
     original, = [item for item in previous.definitions if item.metadata.origin == "mcp"]
     assert definition.readiness == readiness and original.readiness == "ready"
-    assert definition.payload == original.payload and definition.schema_hash == original.schema_hash
+    assert definition.contract_payload == original.contract_payload and definition.schema_hash == original.schema_hash
     assert catalog.catalog_revision == previous.catalog_revision
     assert disconnected_binding.binding_hash != original_binding.binding_hash
     resolver = ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={})

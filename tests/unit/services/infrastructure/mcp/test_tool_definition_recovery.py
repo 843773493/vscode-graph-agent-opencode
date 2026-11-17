@@ -13,6 +13,7 @@ from app.agents.policy import ToolPolicyResolver
 from app.core.checkpoint_config import build_checkpoint_config
 from app.core.execution_admission_context import execution_admission_scope
 from app.core.session_thread_context import session_thread_owner_scope
+from app.domain.itemized.hashing import sha256_jcs
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.rollout_context.runtime.context_sources.tool_definitions import (
     definition_source_values,
@@ -75,8 +76,11 @@ def discovery_history(guidance_prepare, registry_db, discovery_tool_factory):
 
 
 @pytest.mark.parametrize("target", ["ci_logs", "huge"])
+@pytest.mark.parametrize(("catalog_runtime", "expected_skill_names"), [
+    (None, []), ("four-field-resource", None), ("with-skill-association", ["CI Guide"]),
+], indirect=["catalog_runtime"])
 async def test_immediate_compaction_restores_definition_not_present_in_previous_assembly(
-    discovery_history, guidance_prepare, target,
+    discovery_history, guidance_prepare, target, catalog_runtime, registry_db, expected_skill_names,
 ):
     entry, _scope, connection = await discovery_history(target=target, compact=True)
     assert entry["schema_state"] == ("needs_read" if target == "huge" else "inline_complete")
@@ -85,6 +89,19 @@ async def test_immediate_compaction_restores_definition_not_present_in_previous_
     assert restored.tool_id == target and restored.status == "available"
     assert restored.definition is not None
     assert restored.definition.provenance.model_dump() == entry["provenance"]
+    saver, session, _connection, _accepted = registry_db
+    thread = saver._storage.storage.main_thread_id(session)
+    frozen = saver.read_resource_activation_snapshot(
+        session, thread_id=thread, activation_snapshot_id=entry["provenance"]["activation_snapshot_id"],
+    )
+    binding = next(binding for binding in frozen.bindings if binding.resource_id == entry["provenance"]["resource_id"])
+    original = saver.read_resource_activation_payload(frozen, binding, storage_owner=(session, thread))
+    assert restored.definition.resource_payload == original
+    assert sha256_jcs(restored.definition.resource_payload) == binding.revision
+    assert restored.definition.skill_associations == original.get("skill_associations")
+    assert (None if restored.definition.skill_associations is None else [
+        item["skill_name"] for item in restored.definition.skill_associations
+    ]) == expected_skill_names
     if target == "huge":
         definitions = restored.definition.input_schema["$defs"]
         assert isinstance(definitions, dict)

@@ -106,7 +106,7 @@ class McpCatalogResourcePublisher:
             self._custom_definitions[tool.name] = definition_from_tool(tool, metadata[tool.name])
         self._definition_ids: set[str] = set()
         self._custom_revision = payload_digest(
-            [[name, definition.payload] for name, definition in self._custom_definitions.items()],
+            [[name, definition.contract_payload] for name, definition in self._custom_definitions.items()],
             context="工作区 custom extension typed members",
             error_type=ExtensionCatalogBindingError,
         )
@@ -221,7 +221,7 @@ class McpCatalogResourcePublisher:
         definitions = []
         if publication.status == "available":
             for member in members:
-                body = definitions_by_id[member.member_id].activation_payload()
+                body = definitions_by_id[member.member_id].resource_payload
                 definitions.append(ResourceSnapshot(
                     resource_id=definition_resource_id(member.member_id), resource_kind="mcp_tool_catalog",
                     facet=DEFINITION_FACET, display_uri=None, revision=sha256_jcs(body), payload=body,

@@ -86,7 +86,7 @@ def _definition_result(
     return {
         "tool_id": metadata.tool_id, "status": "available", "schema_state": "inline_complete", "origin": metadata.origin,
         "server_id": definition.server_id,
-        "group_id": metadata.group_id, **definition.payload,
+        "group_id": metadata.group_id, **definition.contract_payload,
         "schema_hash": definition.schema_hash, "catalog_revision": catalog.catalog_revision,
         "match_reasons": reasons, "effective_policy": asdict(policy),
         "readiness": definition.readiness,
