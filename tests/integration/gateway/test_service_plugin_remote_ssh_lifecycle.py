@@ -382,6 +382,14 @@ def remote_gateway_clients(
     assert _REMOTE_ALIAS is not None
     remote_alias = _REMOTE_ALIAS
     receipt = json.loads(_remote_file_contents(alias=remote_alias, path=_REMOTE_RECEIPT))
+    # 自带开发工具包只声明 Node；Python 探针必须取得同一发行物的真实解释器版本。
+    python_code = "import json,platform,sys;print(json.dumps(dict(version=platform.python_version(),abi='cp%d%d'%sys.version_info[:2])))"
+    escaped_python = receipt["python"].replace("'", "''")
+    escaped_code = python_code.replace("'", "''")
+    script = f"& '{escaped_python}' -c '{escaped_code}'"
+    receipt["target"]["python"] = json.loads(_ssh_output(alias=remote_alias,
+        remote_command="powershell.exe -NoProfile -NonInteractive -EncodedCommand "
+            + base64.b64encode(script.encode("utf-16le")).decode("ascii")))
     distribution = _RemoteDistribution(home=receipt["home"], application=receipt["application"],
         python=receipt["python"], port=receipt["port"], target=PluginPackageTarget.model_validate(receipt["target"]),
         sha256=receipt["sha256"])
@@ -400,6 +408,8 @@ def remote_gateway_clients(
     install_user_configuration(config_root=home / "config", profile="default", project_root=Path.cwd())
     gateway_config_path = home / "config/gateway.jsonc"
     gateway_config = commentjson.loads(gateway_config_path.read_text(encoding="utf-8"))
+    # A 只中继远端插件，不在未安装开发工具包的本机创建默认插件绑定。
+    gateway_config["plugins"]["workspace_defaults"] = {"entries": []}
     from app.gateway.ssh_config import resolve_user_ssh_host
 
     remote = resolve_user_ssh_host(remote_alias)
@@ -898,6 +908,7 @@ def test_real_ssh_remote_plugin_install_update_switch_unbind_and_revoke(
         (context.artifacts_dir / "remote-plugin-ssh-lifecycle.json").write_text(json.dumps({
             "gateway_ids": [gateway_a, gateway_b],
             "runtime": runtime,
+            "target": distribution.target.model_dump(mode="json", exclude_none=True),
             "distribution_sha256": distribution.sha256,
             "connection_id": connection_id,
             "original_instance_id": instance_id,

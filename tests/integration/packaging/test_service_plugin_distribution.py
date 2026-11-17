@@ -145,7 +145,8 @@ def distribution_gateway(request: pytest.FixtureRequest,
     runtime_path = os.pathsep.join((str(python.parent), str(python.parent / "DLLs"),
         str(Path(os.environ["SystemRoot"]) / "System32"), str(empty_path))) if sys.platform == "win32" else str(empty_path)
     environment.update({"BOXTEAM_HOME": str(home), "HOME": str(runtime / "user-home"),
-        "BOXTEAM_PROJECT_ROOT": str(application), "BOXTEAM_RUNTIME_MANIFEST": str(manifest_path),
+        # Launcher 从 manifest 重建解释器路径，Windows 原生 DLL 也须沿同一短路径加载。
+        "BOXTEAM_PROJECT_ROOT": str(application), "BOXTEAM_RUNTIME_MANIFEST": _process_path(manifest_path),
         "BOXTEAM_DISTRIBUTION": manifest["distribution"], "BOXTEAM_NODE_BIN": str(node),
         "BOXTEAM_PYTHON_BIN": _process_path(python), "BOXTEAM_WEB_ASSETS": str(package / manifest["web_assets"]),
         "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": str(package / manifest["chromium_executable"]),
@@ -509,7 +510,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         browser_create = exchange("POST", "/api/v1/resources/browsers", {**owner,
             "retention_scope": "workspace", "title": "源码外发行 Browser", "url": "about:blank"})
         if browser_create.status_code == 503 and "browser_creation_paused_memory_pressure" in browser_create.text:
-            rejection = {"incident_observed_at_unix_ns": time.time_ns()}
+            rejection: dict[str, object] = {"incident_observed_at_unix_ns": time.time_ns()}
             try:
                 browser_process = psutil.Process(browser_plugin["instance"]["process_id"])
                 browser_port = int(browser_process.environ()["BOXTEAM_PLUGIN_PORT"])
