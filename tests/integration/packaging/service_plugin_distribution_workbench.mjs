@@ -156,11 +156,11 @@ try {
     await page.waitForFunction(() => typeof globalThis.workbench?.commands?.executeCommand === 'function');
     await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.view.extensions'));
     await expect(page.locator('.service-plugin-packages-view')).toBeVisible();
+    await selectPluginScope(page, 'gateway');
   };
   await openManagement();
-  await selectPluginScope(page, 'gateway');
   let view = page.locator('.service-plugin-packages-view');
-  const details = page.locator('.service-plugin-editor:visible');
+  const details = () => page.locator('.service-plugin-editor:visible');
   let quick = page.locator('.quick-input-widget');
   const pick = async label => {
     await expect(quick).toBeVisible();
@@ -181,11 +181,11 @@ try {
     await expect(page.locator('.service-plugin-editor:visible')).toBeVisible();
   };
   const saveBinding = async (action, expected) => {
-    await details.getByRole('button', { name: action, exact: true }).click();
+    await details().getByRole('button', { name: action, exact: true }).click();
     await pick('gateway_mutable_override');
-    await pick('确认保存 Gateway 插件绑定');
+    await pick('确认保存Gateway插件绑定');
     await expect(quick).not.toBeVisible();
-    await expect(details.getByLabel('插件配置与运行版本')).toContainText(expected);
+    await expect(details().getByLabel('插件配置与运行版本')).toContainText(expected);
   };
   result.phase = 'install-and-bind';
   await install('1.0.0', input.packages[0]);
@@ -282,7 +282,7 @@ try {
   await open('2.0.0', 'python');
   const restarted = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/api/gateway/service-plugins/restart');
-  await details.getByRole('button', { name: '重启实例', exact: true }).click();
+  await details().getByRole('button', { name: '重启实例', exact: true }).click();
   assert.equal((await restarted).status(), 200);
   const current = await slots();
   assert.notEqual(current.python.instance.instance_id, beforeRestart.python.instance.instance_id);

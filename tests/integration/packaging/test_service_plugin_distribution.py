@@ -13,6 +13,7 @@ import time
 from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlencode
 from zipfile import ZipFile
 
@@ -246,16 +247,21 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         evidence.append({"method": method, "path": path, "status": response.status_code, "body": payload})
         return response
 
-    def states() -> dict[str, dict]:
+    def states(*, workspace: bool = False) -> dict[str, dict]:
         result = exchange("POST", "/api/gateway/service-plugins/status", {"gateway_id": gateway_id}).raise_for_status()
-        return {item["binding"]["plugin_id"]: item for item in result.json()["data"]["plugins"]}
+        owner_id = workspace_id if workspace else None
+        return {item["binding"]["plugin_id"]: item for item in result.json()["data"]["plugins"]
+            if item["binding"].get("workspace_id") == owner_id}
 
-    def bind(entries: list[dict[str, object]], *, workspace: bool = False) -> dict[str, dict]:
+    def bind(entries: list[dict[str, object]], *,
+        scope: Literal["gateway", "workspace", "defaults"] = "gateway",
+    ) -> dict[str, dict]:
+        workspace = scope == "workspace"
         source_key = "workspace_root_mutable_override" if workspace else "gateway_mutable_override"
         path = f"/api/v1/workspaces/{workspace_id}/config/sources/{source_key}" if workspace else f"/api/gateway/config/sources/{source_key}"
         document = exchange("GET", path).raise_for_status().json()["data"]
         source = commentjson.loads(document["jsonc"])
-        source.setdefault("plugins", {})["runtime"] = {"entries": entries}
+        source.setdefault("plugins", {})["workspace_defaults" if scope == "defaults" else "runtime"] = {"entries": entries}
         reply = exchange("PUT", path, {"gateway_id": gateway_id,
             **({"workspace_id": workspace_id} if workspace else {}), "source_key": source_key,
             "jsonc": json.dumps(source), "base_file_digest": document["file_digest"],
@@ -263,7 +269,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             "expected_active_revision": document["active_revision"], "expected_active_digest": document["active_digest"],
             "idempotency_key": f"distribution-bind-{len(evidence)}"}).raise_for_status()
         assert reply.json()["data"]["edit"]["state"] == "active"
-        return states()
+        return states(workspace=workspace)
 
     def install(path: Path) -> None:
         with path.open("rb") as stream:
@@ -413,7 +419,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
         developer_tools = distribution / "application/resources/plugins/developer-tools.zip"
         install(developer_tools)
         bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
-            "plugin_id": "terminal", "enabled": True}], workspace=True)
+            "plugin_id": "terminal", "enabled": True}], scope="workspace")
         terminal = _wait_for_plugin(client, gateway_id=gateway_id, workspace_id=workspace_id, state="ready")
         assert terminal["state"] == "ready"
         session = exchange("POST", "/api/v1/sessions", {"title": "源码外发行 PTY"}).raise_for_status().json()["data"]
@@ -442,7 +448,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             {"expected_revision": latest["owner_revision"]}).raise_for_status()
         # 同一发行包的 Debug 插件也必须在空 PATH 下真实启动目标，不能只验管理 ready。
         bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
-            "plugin_id": "debugging", "enabled": True}], workspace=True)
+            "plugin_id": "debugging", "enabled": True}], scope="workspace")
         require_exited({"terminal": terminal})
         debug_plugin: dict | None = None
         deadline = time.monotonic() + 30
@@ -450,7 +456,7 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             assert debug_plugin is None or debug_plugin["state"] != "failed", debug_plugin
             assert time.monotonic() < deadline, debug_plugin
             time.sleep(0.1)
-            debug_plugin = states().get("debugging")
+            debug_plugin = states(workspace=True).get("debugging")
         assert debug_plugin is not None
         owner = {"session_id": session["session_id"], "thread_id": session["thread_id"]}
         configured = exchange("POST", "/api/v1/debug/node/configurations", {**owner,
@@ -491,11 +497,11 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             "debug_pids_exited": [run["pid"], second_run["pid"]],
             "debug_instances": [debug_plugin["instance"]["instance_id"], restarted["instance"]["instance_id"]]})
         bind([{"package_id": "boxteam.developer-tools", "package_version": "0.1.0",
-            "plugin_id": "browser", "enabled": True}], workspace=True)
+            "plugin_id": "browser", "enabled": True}], scope="workspace")
         require_exited({"debugging": restarted})
         deadline = time.monotonic() + 30
         while True:
-            browser_plugin = states().get("browser")
+            browser_plugin = states(workspace=True).get("browser")
             if browser_plugin is not None and browser_plugin["state"] == "ready":
                 break
             assert (browser_plugin is None or browser_plugin["state"] != "failed") and time.monotonic() < deadline, browser_plugin
@@ -574,8 +580,12 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             "expected_revision": latest_browser["owner_revision"],
         }).raise_for_status().json()["data"]
         assert stopped_browser["status"] == "closed"
-        bind([], workspace=True)
+        bind([], scope="workspace")
         require_exited({"browser": browser_plugin})
+        blocked = exchange("POST", "/api/gateway/service-plugins/uninstall", {"gateway_id": gateway_id,
+            "package_id": "boxteam.developer-tools", "package_version": "0.1.0"})
+        assert blocked.status_code == 409, "新建工作区模板仍引用自带包，不能卸载"
+        bind([], scope="defaults")
         uninstall("boxteam.developer-tools", "0.1.0")
         context.write_result("passed", {"target": target, "exchanges": len(evidence)})
     finally:
