@@ -654,7 +654,7 @@ def test_tool_catalog_cache_is_keyed_without_session(
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             side_effect=[object(), object()],
         ) as build_runtime,
         patch(
@@ -688,18 +688,18 @@ def test_tool_catalog_cache_is_keyed_without_session(
     assert service._tool_catalog_cache[key] == [{"id": "read_file", "name": "read_file"}]
 
 
-def test_tool_catalog_resolves_default_agent_before_owns_thread_false_assembly(
+def test_tool_catalog_resolves_default_agent_before_catalog_assembly(
     agent_execution_dependencies,
 ):
     service = _build_agent_execution_service(agent_execution_dependencies)
-    assembled: list[tuple[str, bool]] = []
+    assembled: list[tuple[str, str]] = []
 
     def build_agent(**kwargs):
-        assembled.append((kwargs["agent_id"], kwargs["owns_thread"]))
+        assembled.append((kwargs["agent_id"], kwargs["assembly_mode"]))
         return []
 
     with (
-        patch.object(service, "_build_agent", side_effect=build_agent),
+        patch.object(service, "_assemble_agent", side_effect=build_agent),
         patch(
             "app.services.orchestration.agent_execution_service.tools_to_catalog_definitions",
             return_value=[],
@@ -708,7 +708,7 @@ def test_tool_catalog_resolves_default_agent_before_owns_thread_false_assembly(
         assert service.list_tool_definitions() == []
 
     assert agent_execution_dependencies["config_service"].validate_agent_id.call_args.args == (None,)
-    assert assembled == [("test_agent", False)]
+    assert assembled == [("test_agent", "tool_catalog")]
 
 
 @pytest.mark.asyncio
@@ -762,7 +762,7 @@ async def test_run_step_pins_snapshot_through_async_tool_stage(
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             side_effect=fake_build_agent,
         ) as build_agent,
         patch(
@@ -853,7 +853,7 @@ async def test_delegated_report_is_not_enforced_by_default(agent_execution_depen
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -899,7 +899,7 @@ async def test_delegated_first_turn_fails_after_two_missing_tool_reports(
 
     with (  # noqa: SIM117 - 保持异常断言的作用域清晰。
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -954,7 +954,7 @@ async def test_delegated_progress_only_cannot_replace_final_result(
 
     with (  # noqa: SIM117 - 保持异常断言的作用域清晰。
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -1014,7 +1014,7 @@ async def test_cross_session_question_retries_until_correlated_tool_reply(
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -1057,7 +1057,7 @@ async def test_primary_success_no_fallback(stream_agent, agent_execution_depende
     service = _build_agent_execution_service(deps)
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
 
         async def mock_events(*args, **kwargs):
@@ -1119,7 +1119,7 @@ async def test_reasoning_stream_not_mixed_into_final_text(stream_agent, agent_ex
     service = _build_agent_execution_service(deps)
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
 
         async def mock_events(*args, **kwargs):
@@ -1191,7 +1191,7 @@ async def test_model_event_stream_does_not_recreate_legacy_text_events(
     service = _build_agent_execution_service(deps)
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
 
         async def mock_events(*args, **kwargs):
@@ -1267,7 +1267,7 @@ async def test_reasoning_only_response_retries_with_system_reminder(stream_agent
     input_messages: list[object] = []
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
 
         async def mock_events(input_payload, *args, **kwargs):
@@ -1413,7 +1413,7 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+            "app.services.orchestration.agent_execution_service.assemble_agent"
         ) as mock_build,
         patch(
             "app.services.orchestration.execution_step.retry.process_agent_event_stream"
@@ -1481,7 +1481,7 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
     ]
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
 
         async def mock_events(*args, **kwargs):
@@ -1541,7 +1541,7 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
     tool_arguments = {"code": "print('LC_BLOCK_OK_2')"}
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
 
         async def mock_events(*args, **kwargs):
@@ -1716,9 +1716,9 @@ async def test_execution_builds_single_agent_runtime_without_model_override(
     service = _build_agent_execution_service(deps)
 
     with patch(  # noqa: SIM117 - 两个运行时入口必须共享同一个 mock。
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
-        with patch("app.runtime.agent_runtime.build_session_agent_runtime", mock_build):
+        with patch("app.runtime.agent_runtime.assemble_agent", mock_build):
 
             def create_mock_agent(*args, **kwargs):
                 mock_agent = stream_agent
@@ -1766,7 +1766,7 @@ async def test_agent_runtime_build_exception_propagates(agent_execution_dependen
     service = _build_agent_execution_service(deps)
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
         mock_build.side_effect = Exception("Agent runtime 构建失败")
 
@@ -1790,9 +1790,9 @@ async def test_successful_agent_stream_publishes_agent_start_once(stream_agent, 
     service = _build_agent_execution_service(deps)
 
     with patch(  # noqa: SIM117 - 两个运行时入口必须共享同一个 mock。
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as mock_build:
-        with patch("app.runtime.agent_runtime.build_session_agent_runtime", mock_build):
+        with patch("app.runtime.agent_runtime.assemble_agent", mock_build):
 
             def create_mock_agent(*args, **kwargs):
                 mock_agent = stream_agent
@@ -1872,7 +1872,7 @@ async def test_agent_loop_retry_keeps_model_attempt_boundaries(
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -1940,7 +1940,7 @@ async def test_interrupt_wins_when_completion_races_with_persisted_request(
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -1975,7 +1975,7 @@ async def test_cancelled_without_user_interrupt_persists_checkpoint_and_closes_a
 
     with (  # noqa: SIM117 - 取消异常需要单独断言原始 CancelledError。
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -2019,7 +2019,7 @@ async def test_scope_job_timeout_cancelled_error_keeps_job_timeout_code(
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -2061,7 +2061,7 @@ async def test_scope_deadline_failure_persists_checkpoint_without_user_interrupt
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -2123,7 +2123,7 @@ async def test_cancelled_with_complete_tool_call_closes_as_dispatch_timeout(
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -2168,7 +2168,7 @@ async def test_job_timeout_cancel_closes_stream_as_timed_out(
 
     with (
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -2213,7 +2213,7 @@ async def test_cancelled_after_user_interrupt_closes_as_interrupted(
 
     with (  # noqa: SIM117 - 取消异常需要单独断言原始 CancelledError。
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -2250,7 +2250,7 @@ async def test_agent_exception_persists_stream_failure_before_rethrow(
 
     with (  # noqa: SIM117 - 异常路径需要单独断言原始执行异常。
         patch(
-            "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+            "app.services.orchestration.agent_execution_service.assemble_agent",
             return_value=MagicMock(),
         ),
         patch(
@@ -2333,7 +2333,7 @@ async def test_generation_reactor_release_is_isolated_per_thread(agent_execution
         )
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime",
+        "app.services.orchestration.agent_execution_service.assemble_agent",
         side_effect=fake_build,
     ):
         first, active = await asyncio.gather(
@@ -2396,7 +2396,7 @@ async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_r
         )
 
     try:
-        with patch("app.services.orchestration.agent_execution_service.build_session_agent_runtime", side_effect=build) as builder:
+        with patch("app.services.orchestration.agent_execution_service.assemble_agent", side_effect=build) as builder:
             first = await acquire("job_empty")
             async with first:
                 original = first.runtime

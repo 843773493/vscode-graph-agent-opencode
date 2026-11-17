@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Never
+from typing import TYPE_CHECKING, Any, Never, cast
 
 from deepagents.middleware.permissions import FilesystemPermission
 from langchain.agents.middleware import InterruptOnConfig
@@ -98,7 +98,11 @@ from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
 from app.core.turn_execution_scope import get_current_turn_execution_scope
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.runtime.agent_runtime import AGENT_GRAPH_RECURSION_LIMIT, prepare_agent_model
+from app.runtime.agent_runtime import (
+    AGENT_GRAPH_RECURSION_LIMIT,
+    AgentAssemblyMode,
+    prepare_agent_model,
+)
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
@@ -169,9 +173,10 @@ if TYPE_CHECKING:
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
+    from app.services.orchestration.event_stream.contracts import AgentEventSource
 
 
-def build_deep_agent(
+def assemble_deep_agent(
     *,
     model: BaseChatModel | None,
     instruction_producers: Sequence[InstructionProducerSpec],
@@ -227,15 +232,15 @@ def build_deep_agent(
     resource_navigation: ResourceNavigation,
     text_mutations: WorkspaceTextMutationOwner,
     include_team_tools: bool = False,
-    owns_thread: bool = True,
-) -> Any:
-    """装配工具与单代图；无 Thread owner 时仅返回工具，不构建执行图。"""
+    assembly_mode: AgentAssemblyMode = "execution",
+) -> AgentEventSource | list[ToolDefinitionLike]:
+    """按 assembly_mode 装配执行图或管理目录工具；目录模式不创建 Thread owner。"""
     if checkpointer is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 checkpointer")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 checkpointer")
     if config_service is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 ConfigService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 ConfigService")
     if session_service is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 SessionService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 SessionService")
 
     resolved_sender_agent_id = sender_agent_id or agent_id
     resolved_tool_denylist = set(tool_denylist or set())
@@ -248,7 +253,7 @@ def build_deep_agent(
             session_id=session_id,
             thread_id=thread_id,
         )
-        if owns_thread
+        if assembly_mode == "execution"
         else None
     )
     tool_invocation_context = ToolInvocationContext(
@@ -257,31 +262,31 @@ def build_deep_agent(
     )
 
     if background_task_registry is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 BackgroundTaskRegistry")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 BackgroundTaskRegistry")
     if background_mailbox is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 BackgroundMailbox")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 BackgroundMailbox")
     if job_event_bus is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 JobEventBus")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 JobEventBus")
     if message_service is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 MessageService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 MessageService")
     if session_orchestrator is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 SessionMessageOrchestrator")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 SessionMessageOrchestrator")
     if session_subagent_service is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 SessionSubagentService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 SessionSubagentService")
     if include_team_tools and team_service is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 TeamCoordinationService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 TeamCoordinationService")
     if job_service is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 JobService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 JobService")
     if session_context_query_service is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 SessionContextQueryService")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 SessionContextQueryService")
     if workspace_session_context_client is None:
-        raise RuntimeError("build_deep_agent 需要显式传入 WorkspaceSessionContextClient")
+        raise RuntimeError("assemble_deep_agent 需要显式传入 WorkspaceSessionContextClient")
 
     workspace_root = workspace_root.resolve()
 
     # 合成工具目录只构建固定 schema；只有真实 thread 消费 Skill catalog。
     resolved_skills = None
-    if owns_thread:
+    if assembly_mode == "execution":
         resolved_skills = (
             build_workspace_skill_catalog(
                 workspace_root,
@@ -299,7 +304,7 @@ def build_deep_agent(
 
     def read_artifact(file_id: str, max_bytes: int) -> ResourceFileContent:
         binding = tool_invocation_context.thread_binding
-        if not owns_thread or binding is None:
+        if assembly_mode == "tool_catalog" or binding is None:
             error = PermissionError("产物读取缺少当前 Agent SessionThread")
             raise mark_public_failure(error, str(error))
         parsed = parse_session_artifact_uri(file_id)
@@ -346,7 +351,7 @@ def build_deep_agent(
     # channel 服务（ResourcePlatformBootstrap 落地后应由 bootstrap 持有并注入）。
     # 来源确认事件只在真实 Saver seal 成功后发布。
     context_source_event_sink: Callable[[ContextSourceEvent], None] | None = None
-    if owns_thread and workspace_file_resource_registry is not None:
+    if assembly_mode == "execution" and workspace_file_resource_registry is not None:
         context_source_event_sink = ContextSourceEventPublisher(
             event_service=(
                 workspace_file_resource_registry.observation_channel.event_service
@@ -364,7 +369,7 @@ def build_deep_agent(
     # 订阅必须随 agent 生命周期释放；调用方没有提供 scope 时在代码内留 TODO，
     # 不允许在这里新建第二套 dispose 抽象。
     context_source_reactor: ContextSourceReactor | None = None
-    if owns_thread and workspace_file_resource_registry is not None:
+    if assembly_mode == "execution" and workspace_file_resource_registry is not None:
         if reactor_lifetime_scope is None:
             raise RuntimeError(
                 "启用事件驱动 context source reaction 时必须提供 "
@@ -415,7 +420,7 @@ def build_deep_agent(
     else:
         if browser_resource_owner is None:
             raise RuntimeError(
-                "build_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
+                "assemble_deep_agent 构建默认工具集时需要显式传入 BrowserResourceOwner"
             )
         visible_tools = build_default_tools(
             session_id=session_id,
@@ -699,7 +704,7 @@ def build_deep_agent(
         resolved_tool_names,
         context=f"agent {agent_id} 的运行时工具策略",
     )
-    if not owns_thread:
+    if assembly_mode == "tool_catalog":
         # 目录到工具注册即结束；不创建模型、压缩引擎或编译执行图。
         def require_execution_context(*_args: object) -> Never:
             raise RuntimeError("工具目录没有 SessionThread 执行上下文")
@@ -760,9 +765,7 @@ def build_deep_agent(
         execution_owned_skill_catalog=resource_activation is not None,
         compaction_preflight=compaction_preflight,
         context_source_manager=context_source_manager,
-        source_registry=(
-            workspace_file_resource_registry if owns_thread else None
-        ),
+        source_registry=workspace_file_resource_registry,
         context_source_reactor=context_source_reactor,
         resolved_tool_denylist=resolved_tool_denylist,
         interrupt_on=resolved_interrupt_on,
@@ -830,7 +833,7 @@ def build_deep_agent(
 
     # 仅记录真实构建对象的进程内身份；compiled graph 不进入业务库或 trace。
     observe_phase_sync(thread_id, "agent.graph.compiled", details={
-        "session_id": session_id, "thread_id": thread_id, "owns_thread": owns_thread,
+        "session_id": session_id, "thread_id": thread_id, "owns_thread": assembly_mode == "execution",
         "compiled_graph_object_id": id(agent),
         "compiled_graph_type": f"{type(agent).__module__}.{type(agent).__qualname__}",
         "agent_object_id": id(runtime_agent),
@@ -839,7 +842,7 @@ def build_deep_agent(
     return runtime_agent
 
 
-def build_configured_agent(
+def assemble_configured_agent(
     *,
     session_id: str,
     thread_id: str,
@@ -889,11 +892,11 @@ def build_configured_agent(
     graph_binding_store: GraphBindingStorePort,
     resource_navigation: ResourceNavigation,
     text_mutations: WorkspaceTextMutationOwner,
-    owns_thread: bool = True,
-):
-    """读取 Agent 配置并按冻结 selector 装配；无 Thread owner 时仅返回工具。"""
+    assembly_mode: AgentAssemblyMode = "execution",
+) -> AgentEventSource | list[ToolDefinitionLike]:
+    """读取 Agent 配置；execution 按冻结 selector 装配图，tool_catalog 仅装配工具。"""
     if config_service is None:
-        raise RuntimeError("build_configured_agent 需要显式传入 ConfigService")
+        raise RuntimeError("assemble_configured_agent 需要显式传入 ConfigService")
     service = config_service
     model_setup = (
         prepare_agent_model(
@@ -902,7 +905,7 @@ def build_configured_agent(
             prompt_cache_key=session_id,
             preferred_provider_id=preferred_provider_id,
         )
-        if owns_thread else None
+        if assembly_mode == "execution" else None
     )
     tool_config = service.get_agent_tool_config(agent_id)
     tool_policy = service.resolve_agent_tool_policy(agent_id)
@@ -923,7 +926,7 @@ def build_configured_agent(
     )
     if session_service is None:
         raise RuntimeError(
-            "build_configured_agent 需要显式传入 SessionService"
+            "assemble_configured_agent 需要显式传入 SessionService"
         )
 
     model = override_model if override_model is not None else (model_setup.model if model_setup is not None else None)
@@ -934,10 +937,13 @@ def build_configured_agent(
             store=graph_binding_store,
             owner=GraphBindingOwnerKey(session_id, thread_id),
         )
-        if owns_thread
+        if assembly_mode == "execution"
         else DEEP_AGENT_GRAPH_BINDING
     )
-    builder = GRAPH_FACTORY_REGISTRY.resolve(binding)
+    builder = cast(
+        "Callable[..., AgentEventSource | list[ToolDefinitionLike]]",
+        GRAPH_FACTORY_REGISTRY.resolve(binding),
+    )
     return builder(
         model=model,
         response_format=response_format,
@@ -990,5 +996,5 @@ def build_configured_agent(
         custom_tool_confirmation_names=custom_tool_confirmation_names,
         config_service=service,
         workspace_root=workspace_root,
-        owns_thread=owns_thread,
+        assembly_mode=assembly_mode,
     )

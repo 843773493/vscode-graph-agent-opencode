@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from app.abstractions.communication import SessionCommunicationProtocol
 from app.abstractions.job_event_bus import JobEventBusProtocol
@@ -46,17 +46,20 @@ if TYPE_CHECKING:
     from app.agents.instruction_producers import InstructionProducerSpec
     from app.agents.model_capability_routing import CapabilityRoutingMiddleware
     from app.agents.skill_catalog import PublishedSkillCatalog
+    from app.agents.tool_identity import ToolDefinitionLike
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
     from app.services.infrastructure.rollout_context.checkpoint.saver import (
         RolloutCheckpointSaver,
     )
+    from app.services.orchestration.event_stream.contracts import AgentEventSource
     from app.services.orchestration.resource_activation import (
         ResourceActivationCoordinator,
     )
 
 
+AgentAssemblyMode = Literal["execution", "tool_catalog"]
 AGENT_GRAPH_RECURSION_LIMIT = 9999
 
 
@@ -173,18 +176,18 @@ class AgentRuntimeDependencyProvider(Protocol):
     def get_node_debug_service(self) -> NodeDebugService: ...
 
 
-def load_session_agent_factory() -> Callable[..., Any]:
+def load_agent_assembly_factory() -> Callable[..., AgentEventSource | list[ToolDefinitionLike]]:
     """加载内置执行依赖，不构建模型、Thread 或配置中的自定义工具。"""
     from importlib import import_module
 
-    from app.agents.agent_factory import build_configured_agent
+    from app.agents.agent_factory import assemble_configured_agent
 
     # SDK 首次访问 chat/responses 会同步加载整套资源模块，统一在就绪前的 worker 中完成。
     import_module("openai.resources")
-    return build_configured_agent
+    return assemble_configured_agent
 
 
-def build_session_agent_runtime(
+def assemble_agent(
     *,
     session_id: str,
     thread_id: str,
@@ -213,14 +216,15 @@ def build_session_agent_runtime(
     graph_binding_store: GraphBindingStorePort,
     workspace_root: Path,
     include_team_tools: bool = False,
-    owns_thread: bool = True,
-) -> Any:
-    build_configured_agent = load_session_agent_factory()
+    assembly_mode: AgentAssemblyMode = "execution",
+) -> AgentEventSource | list[ToolDefinitionLike]:
+    """按明确模式装配：execution 返回图，tool_catalog 返回工具注册列表。"""
+    assemble_configured_agent = load_agent_assembly_factory()
     resolved_agent_id = config_service.resolve_agent_id(agent_id)
     checkpointer = dependency_provider.get_checkpointer()
     if checkpointer is None:
         raise RuntimeError("AgentRuntimeDependencyProvider 必须显式提供 checkpointer")
-    return build_configured_agent(
+    return assemble_configured_agent(
         session_id=session_id,
         thread_id=thread_id,
         agent_id=resolved_agent_id,
@@ -269,6 +273,6 @@ def build_session_agent_runtime(
         skill_catalog=skill_catalog,
         graph_binding_store=graph_binding_store,
         include_team_tools=include_team_tools,
-        owns_thread=owns_thread,
+        assembly_mode=assembly_mode,
         workspace_root=workspace_root,
     )

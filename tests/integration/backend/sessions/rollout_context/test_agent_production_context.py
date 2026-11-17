@@ -143,7 +143,7 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
     ) for name in ("create_team", "send_session_message")]
     sessions = MagicMock()
     sessions.session_context_control_admission.side_effect = lambda *_args, **_kwargs: nullcontext()
-    graph = agent_factory.build_deep_agent(
+    graph = agent_factory.assemble_deep_agent(
         model=model, instruction_producers=model_setup.instruction_producers,
         tool_selection_reader=selection, checkpointer=saver,
         session_id=session, thread_id=thread, agent_id="default", tools=tools,

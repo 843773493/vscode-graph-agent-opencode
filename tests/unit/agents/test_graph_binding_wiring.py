@@ -16,7 +16,7 @@ from app.agents.graph_binding import (
     GraphFactoryRegistry,
     resolve_graph_binding,
 )
-from app.runtime.agent_runtime import build_session_agent_runtime
+from app.runtime.agent_runtime import assemble_agent
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -34,9 +34,9 @@ def test_runtime_layer_passes_graph_binding_store_through() -> None:
     skill_catalog = MagicMock()
 
     with patch(
-        "app.agents.agent_factory.build_configured_agent"
+        "app.agents.agent_factory.assemble_configured_agent"
     ) as create_runtime:
-        build_session_agent_runtime(
+        assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
             agent_id="default",
@@ -70,9 +70,9 @@ def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> Non
     skill_catalog = MagicMock()
 
     with patch(
-        "app.agents.agent_factory.build_configured_agent"
+        "app.agents.agent_factory.assemble_configured_agent"
     ) as create_runtime:
-        build_session_agent_runtime(
+        assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
             agent_id="default",
@@ -88,10 +88,10 @@ def test_runtime_layer_passes_explicit_store_and_synthetic_owner_policy() -> Non
             resource_activation=resource_activation,
             skill_catalog=skill_catalog,
             graph_binding_store=MagicMock(spec=GraphBindingStorePort),
-            owns_thread=False,
+            assembly_mode="tool_catalog",
         )
 
-    assert create_runtime.call_args.kwargs["owns_thread"] is False
+    assert create_runtime.call_args.kwargs["assembly_mode"] == "tool_catalog"
     assert create_runtime.call_args.kwargs["resource_registry"] is resource_registry
     assert create_runtime.call_args.kwargs["resource_activation"] is resource_activation
     assert create_runtime.call_args.kwargs["skill_catalog"] is skill_catalog
@@ -123,9 +123,9 @@ def test_execution_service_passes_store_to_runtime() -> None:
     )
 
     with patch(
-        "app.services.orchestration.agent_execution_service.build_session_agent_runtime"
+        "app.services.orchestration.agent_execution_service.assemble_agent"
     ) as build_runtime:
-        service._build_agent(
+        service._assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
             agent_id="default",

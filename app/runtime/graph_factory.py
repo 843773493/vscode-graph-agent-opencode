@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.agents.tool_identity import ToolDefinitionLike
+    from app.services.orchestration.event_stream.contracts import AgentEventSource
 
 
-def build_deep_agent_graph(**kwargs: Any) -> object:
-    """按注册的精确 selector 构建图，原样传递 thread generation 依赖。"""
-    from app.agents.agent_factory import build_deep_agent
+def assemble_deep_agent(**kwargs: Any) -> AgentEventSource | list[ToolDefinitionLike]:
+    """懒加载单一装配实现，原样传递产出模式与 thread generation 依赖。"""
+    from app.agents.agent_factory import assemble_deep_agent
 
-    return build_deep_agent(**kwargs)
+    return assemble_deep_agent(**kwargs)

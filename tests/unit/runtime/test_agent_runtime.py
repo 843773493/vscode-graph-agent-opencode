@@ -1,10 +1,10 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from app.runtime.agent_runtime import build_session_agent_runtime
+from app.runtime.agent_runtime import assemble_agent
 
 
-def test_build_session_agent_runtime_injects_job_service() -> None:
+def test_assemble_agent_injects_job_service() -> None:
     config_service = MagicMock()
     config_service.resolve_agent_id.return_value = "default"
     dependency_provider = MagicMock()
@@ -19,9 +19,9 @@ def test_build_session_agent_runtime_injects_job_service() -> None:
     skill_catalog = MagicMock()
 
     with patch(
-        "app.agents.agent_factory.build_configured_agent"
+        "app.agents.agent_factory.assemble_configured_agent"
     ) as create_runtime:
-        build_session_agent_runtime(
+        assemble_agent(
             session_id="session_test",
             thread_id="thread_test",
             agent_id="default",

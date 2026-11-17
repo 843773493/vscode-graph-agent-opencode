@@ -45,7 +45,7 @@ from types import MappingProxyType
 from typing import Final, Protocol
 
 from app.core.session_control_store import SessionControlStore
-from app.runtime.graph_factory import build_deep_agent_graph
+from app.runtime.graph_factory import assemble_deep_agent
 
 # 摘要形状与 channel_events.py 同一标准：完整 ``sha256:`` + 64 位小写 hex。
 # 只查前缀会让「sha256: + 任意正文」走私，因此必须 fullmatch 全匹配。
@@ -405,7 +405,7 @@ DEEP_AGENT_GRAPH_BINDING: Final[GraphBinding] = GraphBinding(
 
 GRAPH_FACTORY_REGISTRY: Final[GraphFactoryRegistry] = GraphFactoryRegistry()
 """进程级 graph factory 注册表；只允许代码内注册（闭集，无运行时扩展点）。"""
-GRAPH_FACTORY_REGISTRY.register(DEEP_AGENT_GRAPH_BINDING, build_deep_agent_graph)
+GRAPH_FACTORY_REGISTRY.register(DEEP_AGENT_GRAPH_BINDING, assemble_deep_agent)
 
 
 @dataclass(frozen=True, slots=True)

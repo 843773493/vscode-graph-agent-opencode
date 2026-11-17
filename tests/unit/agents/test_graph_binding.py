@@ -30,7 +30,7 @@ from app.agents.graph_binding import (
     resolve_graph_binding,
 )
 from app.core.session_control_store import SessionControlStore, ThreadGraphBindingRecord
-from app.runtime.graph_factory import build_deep_agent_graph
+from app.runtime.graph_factory import assemble_deep_agent
 from tests.support.canonical_id_at import thread_id_at
 
 _DIGEST_A = "sha256:" + "a" * 64
@@ -416,7 +416,7 @@ def test_deep_agent_graph_binding_is_registered_in_process_registry() -> None:
     assert "deep-agent" in GRAPH_FACTORY_REGISTRY.registered_graph_ids()
     assert (
         GRAPH_FACTORY_REGISTRY.resolve(DEEP_AGENT_GRAPH_BINDING)
-        is build_deep_agent_graph
+        is assemble_deep_agent
     )
 
 

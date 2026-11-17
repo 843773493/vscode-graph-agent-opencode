@@ -94,6 +94,10 @@ from app.schemas.internal_v2.session_navigation.operations import (
 from app.services.business.session_navigation.operations_service import (
     local_navigation_scope,
 )
+from app.services.infrastructure.mcp.catalog_activation import (
+    MCP_OWNER_CATALOG_SOURCE_ID,
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+)
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
 )
@@ -1621,7 +1625,7 @@ async def test_real_job_cancel_waits_for_pending_compile_and_releases_returned_l
     service = case.runner.container.agent_execution_service
     session_id, thread_id = await _session(case.runner)
     entered, release = threading.Event(), threading.Event()
-    build = service._build_agent
+    build = service._assemble_agent
 
     def held_build(**kwargs):
         assert current_execution_admission() is None
@@ -1630,7 +1634,7 @@ async def test_real_job_cancel_waits_for_pending_compile_and_releases_returned_l
             raise TimeoutError("真实 compiler 屏障未释放")
         return build(**kwargs)
 
-    monkeypatch.setattr(service, "_build_agent", held_build)
+    monkeypatch.setattr(service, "_assemble_agent", held_build)
     job = await _start_job(case.runner, origin, session_id, thread_id)
     try:
         assert await asyncio.to_thread(entered.wait, 3), job.error_message
@@ -2002,7 +2006,7 @@ async def test_real_turn_close_failure_releases_lease_after_error_and_shutdown_e
 
 
 @pytest.mark.asyncio
-async def test_real_compiler_uses_the_same_mcp_tool_snapshot_as_generation_key(
+async def test_real_compiler_uses_mcp_publication_for_tools_and_resource_context(
     runtime_case: RuntimeCase,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2010,32 +2014,22 @@ async def test_real_compiler_uses_the_same_mcp_tool_snapshot_as_generation_key(
     service = case.runner.container.agent_execution_service
     owner = service._dependency_provider.get_mcp_catalog_owner()
     publication = owner.publication_snapshot()
-    publications = []
-    read_publication = owner.publication_snapshot
-    build_agent = service._build_agent
-
-    def record_publication():
-        current = read_publication()
-        publications.append(current)
-        return current
+    assemble_agent = service._assemble_agent
 
     def compile_same_publication(**kwargs):
         assert kwargs["mcp_catalog_owner"] is owner
         assert tuple(kwargs["mcp_tools"]) == tuple(publication.tools.values())
-        return build_agent(**kwargs)
+        return assemble_agent(**kwargs)
 
-    monkeypatch.setattr(owner, "publication_snapshot", record_publication)
-    monkeypatch.setattr(service, "_build_agent", compile_same_publication)
+    monkeypatch.setattr(service, "_assemble_agent", compile_same_publication)
     session_id, thread_id = await _session(case.runner)
     lease = await _lease(case, _admit(case.runner, session_id, thread_id, "user"))
     try:
-        # 准入和 generation 订阅各读取一次同一原子 publication；不再走旧 get_mcp_tools。
-        assert len(publications) == 2 and all(value is publication for value in publications)
         assert len(case.compiled) == 1
-        runtime = case.tracker._states[(session_id, thread_id)].runtime
-        assert runtime.generation_key[-2:] == (
-            publication.binding_ref.catalog_revision, publication.binding_ref.generation,
-        )
+        # MCP 版本属于资源上下文；固定执行图的 generation 不随目录发布变化。
+        catalog = case.resource_registries[0].snapshot(MCP_TOOL_CATALOG_RESOURCE_ID)
+        assert dict(catalog.source_lineage)[MCP_OWNER_CATALOG_SOURCE_ID] == publication.binding_ref.catalog_revision
+        assert catalog.generation == publication.binding_ref.generation
     finally:
         lease.release()
 

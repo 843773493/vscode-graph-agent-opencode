@@ -66,7 +66,7 @@ app/agents/
 - `tool_identity.py` 单点定义注册工具的 `ToolDefinitionLike` 和名称提取；策略身份由 `policy/tool_capability.py` 推导，中间件和 ToolSet 注册不再声明同形类型或各自重算分组。
 - `default_tools.py::build_default_tools` 只装配固定默认工具，协作子集归 `tools/collaboration.py`；仅传递实际消费的依赖，不转导出领域工厂。策略过滤、扩展工具和执行图仍由 `agent_factory.py` 装配。
 - `middleware_assembly.py` 统一维护工具、Skill、压缩、路由和校验中间件的构造顺序；Skill 上下文登记、冻结目录安装与来源变化消费归 `skill_context.py`，压缩实例构造归 `summarization/factory.py`。工厂不再额外尝试装入空 Skill 中间件。
-- `agent_factory.py::build_configured_agent` 在配置入口将 `tools.custom` 解析为 `ParsedCustomToolSpec`，图装配和 `custom_tools.py::build_custom_tools` 直接消费该类型，不重复解析原始配置。工具构造器只负责逐工具 options 注入、factory 结果及公开 schema 校验，不再包装单字段 Bundle。
+- `agent_factory.py::assemble_configured_agent` 在配置入口将 `tools.custom` 解析为 `ParsedCustomToolSpec`，图装配和 `custom_tools.py::build_custom_tools` 直接消费该类型，不重复解析原始配置。工具构造器只负责逐工具 options 注入、factory 结果及公开 schema 校验，不再包装单字段 Bundle。
 - `tool_node_adapter.py` 的 `AgentToolNode` 统一适配 LangGraph 工具节点：在执行边界应用审批覆盖，结果仍配对原模型调用，并保留完整媒体内容；`model_call_graph.py` 调用 `adapt_agent_tool_node` 装入该节点。工具确认决策归 `tool_confirmation_middleware.py`，事件消费只通过适配器读取已注册工具。
 - `tool_result_text.py` 统一提取工具输出文本和判定显式状态；Agent step 最终回答的匹配引号还原归 `execution_step/retry.py`。
 - 产品级 Skill 源码统一位于 `resources/skills/`；自动目录只展示 Skill 的 `name`/`description`，显式文件导航只公布规范资源 URI，不暴露 DeepAgents 虚拟挂载或宿主路径。`skill_load(name=...)` 独占正文激活与来源追踪；普通目录导航与文件读取不产生这些副作用，Skill 文件可按公布的 URI 显式读取。
@@ -77,7 +77,7 @@ app/agents/
 - `manual_compaction_checkpoint.py` 是手动压缩的 LangGraph 检查点适配边界：读取快照并登记 `_force_cache_compaction` 请求。实际摘要生成归 `summarization/` 中间件，检查点持久化归注入的 checkpointer；不在此增加消息副本或另一套存储。
 
 - `agents_md_publication.py` 登记工作区 AGENTS.md 文件并发布已接受版本的有序指令链，不管理 Agent 实例；`skill_catalog.py` 在目录构建与来源通知中调用它，冻结链的 CSM 安装归 `rollout_context/runtime/context_sources/agents_md_context.py`。
-- `agent_factory.py` 的 `build_configured_agent` 读取 Agent 配置并按冻结 selector 选择工厂；`build_deep_agent` 装配工具并构建单代图，无 Thread owner 的目录模式仅返回工具。模型候选、路由中间件与指令来源由 `runtime/agent_runtime.py::prepare_agent_model` 准备为 `AgentModelSetup`；执行依赖收集也归该 runtime 模块，图复用与释放归 Thread tracker。
+- `agent_factory.py` 的 `assemble_configured_agent` 读取 Agent 配置并按冻结 selector 选择工厂；`assemble_deep_agent` 装配工具并构建单代图，`assembly_mode="execution"` 返回单代图，`"tool_catalog"` 只返回工具注册列表且不绑定 Thread owner。模型候选、路由中间件与指令来源由 `runtime/agent_runtime.py::prepare_agent_model` 准备为 `AgentModelSetup`；执行依赖收集也归该 runtime 模块，图复用与释放归 Thread tracker。
 - `graph_binding.py` 只声明、校验和解析持久化的图 factory selector；真实线程归属由 `tool_invocation_context.py::ThreadRuntimeBinding` 在执行装配时绑定，两者不再包装成另一种 invocation binding。读取 selector 或注册 factory 不应加载工具执行和 Agent SDK。
 - `instruction_producers.py` 定义指令来源及其发布绑定，生产入口 `register_instruction_producer` 将声明登记到唯一 CSM；base/delta、激活和待处理决策由 CSM 的来源生命周期链路生成。
 - `tool_set_producer.py` 保存注册工具与结构化输出工具的冻结 schema，按原子 selection 生成模型可见的 ToolSet；结构化输出 schema 的 `None` 表示尚未绑定，空 tuple 表示已绑定为空，实际请求工具列表不参与反向构建。

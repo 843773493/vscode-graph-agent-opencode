@@ -28,6 +28,7 @@ from app.agents.skill_catalog import (
     build_workspace_skill_catalog,
     start_workspace_skill_catalog_publication,
 )
+from app.agents.tool_identity import ToolDefinitionLike
 from app.agents.tools.extension_invocation import (
     create_extension_catalog_resolver_from_tools,
 )
@@ -55,8 +56,9 @@ from app.domain.itemized.execution_admission import (
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord
 from app.runtime.agent_runtime import (
+    AgentAssemblyMode,
     AgentRuntimeDependencyProvider,
-    build_session_agent_runtime,
+    assemble_agent,
 )
 from app.schemas.internal_v2.message import AttachmentRef
 from app.services.business.job.service import JobState
@@ -208,7 +210,7 @@ class AgentExecutionService(JobStepExecutor):
             / f"{turn_stream_id}.json"
         )
 
-    def _build_agent(
+    def _assemble_agent(
         self,
         *,
         session_id: str,
@@ -222,21 +224,16 @@ class AgentExecutionService(JobStepExecutor):
         mcp_catalog_owner: McpCatalogOwner | None = None,
         resource_registry: ResourceRegistry,
         resource_activation: ResourceActivationCoordinator | None,
-        owns_thread: bool = True,
+        assembly_mode: AgentAssemblyMode = "execution",
         lifetime_scope: LifetimeScope | None = None,
         skill_catalog: PublishedSkillCatalog | None = None,
-    ) -> AgentEventSource | list[BaseTool]:
-        """构建 thread runtime，或只返回管理目录需要的工具注册。
+    ) -> AgentEventSource | list[ToolDefinitionLike]:
+        """装配执行事件源或管理工具目录；Thread 归属由显式 binding 注入。
 
-        session/thread 由 ``ThreadRuntimeBinding`` 显式注入，编译时不携带 invocation。
-
-        ``owns_thread=False`` 只注册并返回工具集合，不创建模型或图，也不
-        代表任何 durable thread，因此既不建立捕获会话身份的 workspace source
-        reactor/CSM 订阅，也不为合成会话持久化 GraphBinding。Provider 可见工具面
-        （信封 + ``skill_load`` + 内置/自定义工具）由同一工厂规则产出，与是否
-        拥有 thread 无关。
+        目录模式不构建模型、执行图、CSM 订阅或持久化 GraphBinding；
+        两种模式沿用同一工具注册规则。
         """
-        return build_session_agent_runtime(
+        return assemble_agent(
             session_id=session_id,
             thread_id=thread_id,
             agent_id=agent_id,
@@ -255,12 +252,12 @@ class AgentExecutionService(JobStepExecutor):
             preferred_provider_id=preferred_provider_id,
             tool_timeout_seconds=self._tool_timeout_seconds,
             workspace_file_resource_registry=self._workspace_file_resource_registry,
-            reactor_lifetime_scope=lifetime_scope if owns_thread else None,
+            reactor_lifetime_scope=lifetime_scope if assembly_mode == "execution" else None,
             skill_catalog=skill_catalog,
             graph_binding_store=self._graph_binding_store,
             workspace_root=self._workspace_root,
             include_team_tools=include_team_tools,
-            owns_thread=owns_thread,
+            assembly_mode=assembly_mode,
         )
 
     async def _acquire_step_agent(
@@ -341,7 +338,7 @@ class AgentExecutionService(JobStepExecutor):
                         gateway_sources=self._gateway_skill_sources if gateway_id is not None else None,
                         configured_sources=self._configured_skill_sources,
                     )
-                    agent = self._build_agent(
+                    agent = self._assemble_agent(
                         session_id=session_id,
                         thread_id=thread_id,
                         agent_id=agent_id,
@@ -576,7 +573,7 @@ class AgentExecutionService(JobStepExecutor):
             if cached is not None:
                 return cached
 
-            registered_tools = self._build_agent(
+            registered_tools = self._assemble_agent(
                 session_id=_TOOL_INSPECTION_SESSION_ID,
                 thread_id=create_prefixed_id("thr"),
                 agent_id=resolved_agent_id,
@@ -587,7 +584,7 @@ class AgentExecutionService(JobStepExecutor):
                 mcp_tools=mcp_tools,
                 resource_registry=ResourceRegistry(),
                 resource_activation=None,
-                owns_thread=False,
+                assembly_mode="tool_catalog",
             )
             definitions = tools_to_catalog_definitions(
                 cast(list[BaseTool], registered_tools),
