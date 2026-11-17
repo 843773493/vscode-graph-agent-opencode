@@ -315,15 +315,18 @@ def test_log_close_failure_does_not_replace_startup_failure(
 
 @pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows CreateProcess")
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("directory_units", [258, 259, 260, 280])
 async def test_long_working_directory_starts_in_the_original_directory(
-    tmp_path: Path, asynchronous: bool,
+    tmp_path: Path, asynchronous: bool, directory_units: int,
 ) -> None:
     from app.core.atomic_fs import native_io_path
     from app.runtime.windows_process import open_windows_process
 
-    directory = tmp_path
-    while len(str(directory)) < 280:
-        directory /= "插件工作目录 with spaces"
+    directory = tmp_path / "插件工作目录 🚀 with spaces"
+    padding = directory_units - len(str(directory).encode("utf-16-le")) // 2 - 1
+    assert padding > 0, "测试根目录过长，无法覆盖 CreateProcess 的精确长度边界"
+    directory /= "d" * padding
+    assert len(str(directory).encode("utf-16-le")) == directory_units * 2
     native_io_path(directory).mkdir(parents=True)
     command = [sys.executable, "-c",
         "from pathlib import Path; Path('relative-output.txt').write_text('same-directory', encoding='utf-8')"]

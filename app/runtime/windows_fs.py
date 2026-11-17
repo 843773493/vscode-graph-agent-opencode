@@ -17,9 +17,10 @@ def process_working_directory(directory: str | Path | None) -> str | None:
     if directory is None:
         return None
     value = os.path.abspath(directory)
-    if len(value.encode("utf-16-le")) < 520:
+    # cwd 的末尾分隔符和 NUL 各占一个 UTF-16 单元，原目录最多为 258 单元。
+    if len(value.encode("utf-16-le")) < 518:
         return value
-    return _native_short_path(value, "Windows 进程工作目录超出 MAX_PATH，且没有可用的短路径")
+    return _native_short_path(value, "Windows 进程工作目录超出 MAX_PATH，且没有可用的短路径", max_path_units=259)
 
 
 def native_process_path(path: str | Path) -> str:
@@ -27,13 +28,13 @@ def native_process_path(path: str | Path) -> str:
     return _native_short_path(path, "Windows 进程路径超出 MAX_PATH，且没有可用的短路径")
 
 
-def _native_short_path(path: str | Path, error_message: str) -> str:
+def _native_short_path(path: str | Path, error_message: str, *, max_path_units: int = 260) -> str:
     value = os.path.abspath(path)
     import win32api
 
     with _native_errors(Path(value)):
         shortened = win32api.GetShortPathName(value)
-    if len(shortened.encode("utf-16-le")) >= 520:
+    if len(shortened.encode("utf-16-le")) >= max_path_units * 2:
         raise OSError(errno.ENAMETOOLONG, error_message, value)
     return shortened
 

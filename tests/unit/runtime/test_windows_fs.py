@@ -52,8 +52,9 @@ def test_readonly_handle_denial_remains_a_permission_error(tmp_path: Path) -> No
         path.chmod(0o600)
 
 
+@pytest.mark.parametrize("shortened_units", [259, 280])
 def test_long_process_directory_without_short_names_is_explicitly_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shortened_units: int,
 ) -> None:
     import errno
 
@@ -62,7 +63,8 @@ def test_long_process_directory_without_short_names_is_explicitly_rejected(
     directory = tmp_path
     while len(str(directory)) < 280:
         directory /= "long-directory"
-    monkeypatch.setattr(win32api, "GetShortPathName", lambda value: value)
+    shortened = str(directory)[:shortened_units]
+    monkeypatch.setattr(win32api, "GetShortPathName", lambda value: shortened)
     with pytest.raises(OSError) as raised:
         windows_fs.process_working_directory(directory)
     assert raised.value.errno == errno.ENAMETOOLONG
