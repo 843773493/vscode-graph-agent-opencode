@@ -9,7 +9,7 @@
 ```text
 app/agents/
 ├── [Agent 装配与模型调用]
-│   ├── agent_factory.py          配置与绑定选择、单代图编译
+│   ├── agent_factory.py          工具与中间件装配、单代图编译
 │   ├── middleware_assembly.py    共享工具与执行中间件装配
 │   ├── graph_binding.py、tool_node_adapter.py、model_call_graph.py
 │   └── model_call_execution.py、sealed_assembly_dispatch.py

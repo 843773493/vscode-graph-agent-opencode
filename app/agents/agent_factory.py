@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import replace
@@ -89,7 +88,7 @@ from app.core.lifecycle import LifetimeScope
 from app.core.phase_observer import observe_phase_sync
 from app.core.resource_uri import parse_session_artifact_uri
 from app.core.turn_execution_scope import get_current_turn_execution_scope
-from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
+from app.domain.itemized.hashing import sha256_jcs
 from app.runtime.agent_runtime import (
     AGENT_GRAPH_RECURSION_LIMIT,
     AgentAssemblyMode,
@@ -119,7 +118,6 @@ from app.services.infrastructure.mcp.invocation import (
 )
 from app.services.infrastructure.mcp.tool_definitions import (
     FrozenToolCatalog,
-    FrozenToolDefinition,
     SkillToolSource,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
@@ -643,17 +641,10 @@ def assemble_deep_agent(
     def resolve_discovery_capabilities(catalog: FrozenToolCatalog) -> dict[str, ToolCapabilityPolicy]:
         return resolve_extension_capabilities(tuple(definition.metadata for definition in catalog.definitions))
 
-    async def write_discovered_definition(definition: FrozenToolDefinition, entry: dict[str, object]):
-        call_id = tool_invocation_context.require_tool_call_id()
-        return await asyncio.to_thread(
-            tool_output_store.materialize, session_id=session_id, tool_name=TOOL_DISCOVERY_NAME,
-            tool_call_id=call_id, text=canonical_json_bytes(entry).decode("utf-8"),
-            output_key=f"{call_id}:{definition.provenance.resource_id}:{definition.provenance.revision}",
-        )
-
     discovery_tool = create_search_tools_tool(
         catalog_resolver=discovery_catalog_resolver, policy_resolver=resolve_discovery_capabilities,
-        definition_writer=write_discovered_definition,
+        tool_output_store=tool_output_store, session_id=session_id,
+        invocation_context=tool_invocation_context,
         response_byte_limit=min(tool_output_store.inline_byte_limit, capability_resolver.resolve(
             ToolMetadata(TOOL_DISCOVERY_NAME, "builtin", "default", "default"),
         ).max_result_bytes),

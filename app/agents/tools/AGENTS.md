@@ -32,4 +32,5 @@ app/agents/tools/
 - `create_extension_catalog_resolver_from_tools` 从工具注册快照构造固定目录解析器，返回可调用对象；活动执行按原 tool call 通过 Saver 解析持久封存目录，不能用当前工具列表替代。
 - `invoke_extension_tool` 有意只作为固定扩展工具入口暴露给模型，不得把所有扩展工具名称和参数 schema 展开到该入口描述或模型 tools 列表中；这样可避免扩展工具数量增长时持续膨胀每次 LLM 请求。
 - `search_tools` 是统一的只读扩展发现入口，按任务或精确 ID 读取调用所属的冻结完整定义。它与信封的 Provider schema 固定，不枚举动态目标，也不通过当前同名工具补齐历史定义；参数和策略身份与信封共用。扩展可由发现结果、Skill 或明确文档提供调用契约；使用 Skill 的流程仍须通过 `skill_load(name=...)` 激活正文。
+- `tool_discovery.py` 负责 `search_tools` 的工具入口及超预算定义的编码、调用归属和结果物化；Agent 工厂只注入目录、策略、调用上下文和原 `ToolOutputStore`。匹配与分页算法仍归 `mcp/tool_search.py`，不在装配层复制物化回调。
 - 动态工具文档的规范格式是每个目标工具的 `tool_name` + `arguments_schema` JSON 对象；不需要重复写固定入口的完整调用示例。参数 schema 应由工具的模型可见 schema 生成或校验，不能只维护一份口语化表格。

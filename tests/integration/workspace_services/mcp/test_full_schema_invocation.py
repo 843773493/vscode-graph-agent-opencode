@@ -14,6 +14,7 @@ from langchain_core.messages import ToolMessage
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import ToolPolicyResolver
+from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tools.extension_invocation import (
     create_extension_tool_invoker_tool,
     sealed_extension_catalog_binding_resolver,
@@ -23,7 +24,6 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.identifier import create_uuid_hex
 from app.core.lifecycle import LifetimeScope
 from app.core.session_thread_context import session_thread_owner_scope
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.identity.tool_call_identity import software_tool_operation_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.events.event_channel_service import EventChannelService
@@ -345,22 +345,21 @@ async def test_search_frozen_full_definition_then_execute_real_bridge(
             resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
             store = ToolOutputStore(workspace_root=case.workspace_root)
 
-            async def materialize(definition, entry):
-                return store.materialize(
-                    session_id=session, tool_name="search_tools", tool_call_id="search-stdio",
-                    text=canonical_json_bytes(entry).decode(),
-                    output_key=f"search-stdio:{definition.provenance.resource_id}:{definition.provenance.revision}",
-                )
-
+            invocation_context = ToolInvocationContext()
             search = create_search_tools_tool(
                 catalog_resolver=lambda: catalog(saver),
                 policy_resolver=lambda frozen_catalog: {
                     definition.metadata.tool_id: resolver.resolve(definition.metadata) for definition in frozen_catalog.definitions
                 },
-                definition_writer=materialize, response_byte_limit=store.inline_byte_limit,
+                tool_output_store=store, session_id=session,
+                invocation_context=invocation_context, response_byte_limit=store.inline_byte_limit,
             )
-            found = await search.ainvoke({"type": "tool_call", "id": "search-stdio", "name": search.name,
-                                         "args": {"query": "probe"}})
+            token = invocation_context.set_tool_call_id("search-stdio")
+            try:
+                found = await search.ainvoke({"type": "tool_call", "id": "search-stdio", "name": search.name,
+                                             "args": {"query": "probe"}})
+            finally:
+                invocation_context.reset_tool_call_id(token)
             assert isinstance(found, ToolMessage) and found.tool_call_id == "search-stdio"
             assert isinstance(found.content, str)
             entry, = json.loads(found.content)["results"]

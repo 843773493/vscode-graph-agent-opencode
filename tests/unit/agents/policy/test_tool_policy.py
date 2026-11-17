@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from deepagents.backends.state import StateBackend
@@ -164,7 +164,8 @@ def test_policy_default_names_match_actual_agent_graph_tools(
     # 发现入口由 Agent factory 在基础工具之后注册；本测试只组合工具面，不读取目录。
     direct_tools.append(create_search_tools_tool(
         catalog_resolver=MagicMock(), policy_resolver=MagicMock(),
-        definition_writer=AsyncMock(), response_byte_limit=32768,
+        tool_output_store=MagicMock(), session_id="ses_policy_consistency",
+        invocation_context=invocation_context, response_byte_limit=32768,
     ))
     model = FakeListChatModel(responses=["ok"])
     middleware = build_deep_agent_middleware(text_mutations=text_mutations_factory(workspace_root),

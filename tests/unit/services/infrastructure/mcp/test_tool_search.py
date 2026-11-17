@@ -17,10 +17,10 @@ from pydantic import ValidationError
 
 from app.agents.model_tool_schema import export_model_tool_json_schema
 from app.agents.policy.tool_capability import ToolPolicyResolver
+from app.agents.tool_invocation_context import ToolInvocationContext
 from app.agents.tool_output_middleware import ToolOutputMiddleware
 from app.agents.tools.tool_discovery import SearchToolsInput, create_search_tools_tool
 from app.core.lifecycle import LifetimeScope
-from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.events.event_channel_service import EventChannelService
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
@@ -129,24 +129,23 @@ def discovery_store(request: pytest.FixtureRequest):
 
 
 @pytest.fixture
-def discovery_tool_factory(discovery_store, registry_db):
+async def discovery_tool_factory(discovery_store, registry_db):
     _saver, session, _connection, _accepted = registry_db
+    invocation_context = ToolInvocationContext()
+    token = invocation_context.set_tool_call_id("discovery-fixture")
 
-    async def materialize(definition, entry):
-        return discovery_store.materialize(
-            session_id=session, tool_name="search_tools", tool_call_id="discovery-fixture",
-            text=canonical_json_bytes(entry).decode(),
-            output_key=f"discovery-fixture:{definition.provenance.resource_id}:{definition.provenance.revision}",
-        )
-
-    def build(*, catalog_resolver, policy_resolver, definition_writer=materialize, response_byte_limit=None):
+    def build(*, catalog_resolver, policy_resolver, response_byte_limit=None):
         return create_search_tools_tool(
             catalog_resolver=catalog_resolver, policy_resolver=policy_resolver,
-            definition_writer=definition_writer,
+            tool_output_store=discovery_store, session_id=session,
+            invocation_context=invocation_context,
             response_byte_limit=discovery_store.inline_byte_limit if response_byte_limit is None else response_byte_limit,
         )
 
-    return build
+    try:
+        yield build
+    finally:
+        invocation_context.reset_tool_call_id(token)
 
 
 @pytest.fixture
@@ -471,21 +470,21 @@ async def test_actual_output_middleware_keeps_schema_reference_complete(discover
 ], ids=["posix", "windows-drive", "windows-unc", "body-conflict"])
 @pytest.mark.parametrize("log_fails", [False, True], ids=["log-ok", "log-failed"])
 async def test_materialization_failure_is_paired_and_never_forges_reference(
-    discovery_case, discovery_tool_factory, discovery_store, registry_db, caplog, failure,
+    discovery_case, discovery_store, registry_db, caplog, failure, monkeypatch,
     diagnostic_sink: DiagnosticFailure, log_fails: bool,
 ):
-    recovered_tool, catalog, policies, frozen, read = discovery_case
+    tool, catalog, _policies, frozen, read = discovery_case
     original_args = failure.args
     if log_fails:
         diagnostic_sink.primary = failure
 
-    async def failed(_definition, _entry):
+    def failed(**_arguments):
         raise failure
 
-    tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda _: policies, definition_writer=failed)
     call = {"type": "tool_call", "id": "write-failure", "name": tool.name,
             "args": {"tool_ids": ["huge"], "max_response_bytes": 4096}}
-    with caplog.at_level(logging.ERROR, logger="app.services.infrastructure.mcp.tool_search"):
+    with monkeypatch.context() as failed_store, caplog.at_level(logging.ERROR, logger="app.services.infrastructure.mcp.tool_search"):
+        failed_store.setattr(discovery_store, "materialize", failed)
         message = await tool.ainvoke(call)
     assert message.tool_call_id == "write-failure" and message.status == "error"
     assert message.content == f"definition-materialization-failed: error_type={type(failure).__name__}" + (
@@ -506,7 +505,7 @@ async def test_materialization_failure_is_paired_and_never_forges_reference(
         assert not diagnostic_sink.errors
     # 显式重试复用原冻结正文，失败不生成可读取引用或改写目录。
     assert tool_catalog_from_activation(frozen, read) == catalog
-    recovered = await recovered_tool.ainvoke(call)
+    recovered = await tool.ainvoke(call)
     assert recovered.tool_call_id == "write-failure" and recovered.status == "success"
     entry, = json.loads(recovered.content)["results"]
     assert entry["schema_state"] == "needs_read"
