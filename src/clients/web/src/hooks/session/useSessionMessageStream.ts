@@ -39,6 +39,7 @@ export function useSessionMessageStream({
   workspaceId,
   sessionCacheKey,
   setState,
+  reloadNonce = 0,
 }: {
   apiPort: number | null;
   sessionId: string | null;
@@ -47,6 +48,7 @@ export function useSessionMessageStream({
   workspaceId: string | null;
   sessionCacheKey: string | null;
   setState: SetAppState;
+  reloadNonce?: number;
 }) {
   const observationState = useWorkspaceObservationState(workspaceId);
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -358,7 +360,7 @@ export function useSessionMessageStream({
       controller.abort();
       if (streamAbortRef.current === controller) streamAbortRef.current = null;
     };
-  }, [apiPort, sessionId, threadId, turnId, workspaceId, sessionCacheKey, observationState, setState]);
+  }, [apiPort, sessionId, threadId, turnId, workspaceId, sessionCacheKey, observationState, setState, reloadNonce]);
 }
 
 type TerminalStreamStatus = Extract<

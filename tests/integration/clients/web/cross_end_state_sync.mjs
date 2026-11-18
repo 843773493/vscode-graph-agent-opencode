@@ -69,6 +69,13 @@ async function slash(pane, command) {
   await expect(input).toHaveValue("");
 }
 
+async function showTasks(pane) {
+  const trigger = pane.locator('button[data-status-section="tasks"]');
+  await expect(trigger).toBeVisible({ timeout: 35_000 });
+  if (await trigger.getAttribute("aria-expanded") === "false") await trigger.click();
+  return pane.locator('.composer-task-list [role="listitem"]');
+}
+
 async function navigation(page, kind, fields) {
   const snapshot = (await api(page, "/api/v1/session-catalog/snapshot")).body.data;
   const intent = { client_operation_id: `op_${crypto.randomUUID().replaceAll("-", "")}`, client_sequence: 1, kind,
@@ -112,29 +119,33 @@ try {
     result.phase = "goal-sync";
     // 暂停 Goal 经产品入口创建，后续真实编辑不会启动不属于本用例的自主执行。
     const goalPath = `/api/v1/sessions/${owner.sessionId}/goal`;
-    const empty = (await api(pages[0], goalPath)).body.data;
+    const goalReadPath = `/api/v1/persistent-tasks?session_id=${encodeURIComponent(owner.sessionId)}`;
+    const readGoal = async page => (await api(page, goalReadPath)).body.data.session_goal;
+    const empty = await readGoal(pages[0]);
     await api(pages[0], goalPath, { method: "PUT", body: JSON.stringify({
       operation_id: `op_${crypto.randomUUID().replaceAll("-", "")}`, expected_control_revision: empty.control_revision,
       objective: "待编辑的暂停目标", status: "paused",
     }) });
-    await expect(first.getByTestId("composer-current-goal")).toContainText("待编辑的暂停目标", { timeout: 35_000 });
+    const firstGoal = await showTasks(first);
+    const secondGoal = await showTasks(second);
+    await expect(firstGoal).toContainText("待编辑的暂停目标", { timeout: 35_000 });
     await slash(first, "/goal edit");
     const editor = pages[0].getByRole("dialog", { name: "编辑 Goal", exact: true });
     await editor.getByRole("textbox").fill("跨 Gateway 同步目标");
     await editor.getByRole("button", { name: "保存 Goal", exact: true }).click();
     await expect(editor).toHaveCount(0);
-    for (const pane of [first, second]) await expect(pane.getByTestId("composer-current-goal")).toContainText("跨 Gateway 同步目标", { timeout: 35_000 });
-    await expect(second.getByTestId("composer-current-goal")).toContainText("暂停", { timeout: 35_000 });
-    const before = (await api(pages[0], goalPath)).body.data;
+    for (const row of [firstGoal, secondGoal]) await expect(row).toContainText("跨 Gateway 同步目标", { timeout: 35_000 });
+    await expect(secondGoal).toContainText("暂停", { timeout: 35_000 });
+    const before = (await readGoal(pages[0]));
     const operation = { operation_id: `op_${crypto.randomUUID().replaceAll("-", "")}`, expected_control_revision: before.control_revision, objective: "CAS 已应用目标", status: "paused" };
     const applied = (await api(pages[0], goalPath, { method: "PUT", body: JSON.stringify(operation) })).body.data;
     await api(pages[1], goalPath, { method: "PUT", body: JSON.stringify({ ...operation, operation_id: `op_${crypto.randomUUID().replaceAll("-", "")}`, objective: "不得覆盖的旧版本" }) }, 409);
     const retried = (await api(pages[1], goalPath, { method: "PUT", body: JSON.stringify(operation) })).body.data;
     assert.equal(retried.control_revision, applied.control_revision);
-    for (const pane of [first, second]) await expect(pane.getByTestId("composer-current-goal")).toContainText("CAS 已应用目标", { timeout: 35_000 });
+    for (const row of [firstGoal, secondGoal]) await expect(row).toContainText("CAS 已应用目标", { timeout: 35_000 });
     await slash(first, "/goal clear");
-    for (const pane of [first, second]) await expect(pane.getByTestId("composer-current-goal")).toHaveCount(0, { timeout: 35_000 });
-    result.goal = { original: before.control_revision, applied: applied.control_revision, final: (await api(pages[1], goalPath)).body.data };
+    for (const row of [firstGoal, secondGoal]) await expect(row).toHaveCount(0, { timeout: 35_000 });
+    result.goal = { original: before.control_revision, applied: applied.control_revision, final: (await readGoal(pages[1])) };
 
     result.phase = "observer-reconnect";
     await pages[1].context().setOffline(true);
@@ -143,15 +154,15 @@ try {
       catch { return true; }
     });
     assert(disconnected, "第二观察者必须确实断网");
-    const disconnectedVersion = (await api(pages[0], goalPath)).body.data.control_revision;
+    const disconnectedVersion = (await readGoal(pages[0])).control_revision;
     await api(pages[0], goalPath, { method: "PUT", body: JSON.stringify({
       operation_id: `op_${crypto.randomUUID().replaceAll("-", "")}`, expected_control_revision: disconnectedVersion,
       objective: "断网期间提交的目标", status: "paused",
     }) });
     await pages[1].context().setOffline(false);
-    await expect(second.getByTestId("composer-current-goal")).toContainText("断网期间提交的目标", { timeout: 35_000 });
+    await expect(await showTasks(second)).toContainText("断网期间提交的目标", { timeout: 35_000 });
     await slash(first, "/goal clear");
-    for (const pane of [first, second]) await expect(pane.getByTestId("composer-current-goal")).toHaveCount(0, { timeout: 35_000 });
+    for (const row of [firstGoal, secondGoal]) await expect(row).toHaveCount(0, { timeout: 35_000 });
     result.reconnect = { actualNetworkFailure: disconnected, converged: true };
 
     result.phase = "catalog-mutations";
@@ -175,7 +186,7 @@ try {
 
     result.phase = "warm-measurements";
     result.samples = {};
-    for (const endpoint of [goalPath, `/api/v1/sessions/${owner.sessionId}/pending-requests?thread_id=${owner.threadId}`, `/api/v1/session-catalog/children?parent_node_id=${folderId}`]) {
+    for (const endpoint of [goalReadPath, `/api/v1/sessions/${owner.sessionId}/pending-requests?thread_id=${owner.threadId}`, `/api/v1/session-catalog/children?parent_node_id=${folderId}`]) {
       const samples = [];
       for (let index = 0; index < 21; index++) samples.push(await perf.stage("sync.warm-api", { path: endpoint, sample: index }, () => api(pages[0], endpoint)));
       result.samples[endpoint] = { first: samples[0], warm: samples.slice(1) };

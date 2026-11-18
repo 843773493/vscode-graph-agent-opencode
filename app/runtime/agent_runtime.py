@@ -17,6 +17,7 @@ from app.abstractions.session_subagent import SessionSubagentProtocol
 from app.abstractions.team import TeamCoordinationProtocol
 from app.abstractions.tool_selection import ToolSelectionReader
 from app.core.lifecycle import LifetimeScope
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.browser_resources.owner import BrowserResourceOwner
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from app.agents.model_capability_routing import CapabilityRoutingMiddleware
     from app.agents.skill_catalog import PublishedSkillCatalog
     from app.agents.tool_identity import ToolDefinitionLike
+    from app.services.business.communication.user_questions import UserQuestionService
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
@@ -77,7 +79,8 @@ def prepare_agent_model(
     config_service: ConfigService | None = None,
     *,
     prompt_cache_key: str | None = None,
-    preferred_provider_id: str | None = None,
+    preferred_model: ModelReferenceDTO | None = None,
+    gateway_id: str | None = None,
 ) -> AgentModelSetup:
     """准备配置中的模型候选、路由和指令来源，供执行与压缩预览共用。"""
     from app.agents.instruction_producers import runtime_instruction_producers
@@ -94,9 +97,9 @@ def prepare_agent_model(
         raise RuntimeError("prepare_agent_model 需要显式传入 ConfigService")
     runtime_config = config_service.get_agent_runtime_config(
         agent_id,
-        preferred_provider_id=preferred_provider_id,
+        preferred_model=preferred_model,
     )
-    providers = runtime_config["providers"]
+    providers = runtime_config["models"]
     candidates = []
     for index, provider in enumerate(providers):
         try:
@@ -104,13 +107,14 @@ def prepare_agent_model(
                 provider,
                 runtime_config,
                 prompt_cache_key=prompt_cache_key,
+                gateway_id=gateway_id,
             )
         except Exception as error:
-            provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
+            provider_id = provider["provider_id"]
             detail = provider_build_failure(provider, error)
             if index == 0:
                 raise RuntimeError(
-                    f"当前选择的模型配置不可用: provider_id={provider_id}; {detail}"
+                    f"当前选择的模型配置不可用: provider_id={provider_id}, model_id={provider['model_id']}; {detail}"
                 ) from error
             continue
         candidates.append(
@@ -135,6 +139,8 @@ def prepare_agent_model(
 
 class AgentRuntimeDependencyProvider(Protocol):
     def get_goal_service(self) -> SessionGoalService: ...
+
+    def get_user_question_service(self) -> UserQuestionService: ...
     def get_message_service(self) -> MessageService: ...
 
     def get_session_service(self) -> SessionService: ...
@@ -206,7 +212,7 @@ def assemble_agent(
     tool_denylist: set[str] | None = None,
     execution_overrides: Mapping[str, bool] | None = None,
     model_visibility_overrides: Mapping[str, bool] | None = None,
-    preferred_provider_id: str | None = None,
+    preferred_model: ModelReferenceDTO | None = None,
     tool_timeout_seconds: float | None = None,
     workspace_file_resource_registry: WorkspaceFileResourceRegistry | None = None,
     reactor_lifetime_scope: LifetimeScope | None = None,
@@ -251,7 +257,8 @@ def assemble_agent(
             agent_id=resolved_agent_id,
             config_service=config_service,
             prompt_cache_key=session_id,
-            preferred_provider_id=preferred_provider_id,
+            preferred_model=preferred_model,
+            gateway_id=skill_catalog.gateway_id if skill_catalog is not None else None,
         )
         if assembly_mode == "execution" else None
     )
@@ -308,6 +315,7 @@ def assemble_agent(
         job_event_bus=job_event_bus,
         job_service=job_service,
         goal_service=goal_service,
+        user_question_service=dependency_provider.get_user_question_service(),
         message_service=message_service,
         session_service=session_service,
         session_orchestrator=session_orchestrator,

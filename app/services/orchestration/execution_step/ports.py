@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.orchestration.event_stream.contracts import AgentEventSource
 from app.services.orchestration.thread_residency import ThreadRuntimeLease
 
@@ -49,7 +50,7 @@ class StepAgentFactory(Protocol):
         agent_id: str,
         execution_overrides: Mapping[str, bool],
         model_visibility_overrides: Mapping[str, bool],
-        preferred_provider_id: str | None,
+        preferred_model: ModelReferenceDTO | None,
         include_team_tools: bool,
     ) -> ThreadRuntimeLease[StepAgentRuntime]: ...
 

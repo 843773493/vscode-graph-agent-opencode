@@ -75,7 +75,7 @@ async def test_failure_publishes_facts_and_preserves_recovery(
     # 只注入 handler 外部执行边界；registry、领取、SQL、资源投影和 API 均用产品实现。
     monkeypatch.setattr(container_module, "SystemTimeEmitterHandler", lambda: handler)
 
-    async def no_native_resources(_client: object) -> list[dict[str, object]]:
+    async def no_native_resources(_client: object, **_query: object) -> list[dict[str, object]]:
         return []
 
     # 此片不创建终端或浏览器；只替代两个辅助服务的清单响应，保留真实 owner/聚合/投影。

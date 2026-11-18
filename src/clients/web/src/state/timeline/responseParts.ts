@@ -213,5 +213,23 @@ export function responsePartsToTimelineItems(
       });
     }
   }
+  const noticesByCall = new Map<string, TurnResponsePart[]>();
+  for (const part of parts) {
+    if (part.kind !== "context_notice") continue;
+    const key = part.context_model_call_id ?? part.part_id;
+    const group = noticesByCall.get(key);
+    if (group) group.push(part); else noticesByCall.set(key, [part]);
+  }
+  for (const [call, notices] of noticesByCall) {
+    const beforeId = notices[0].context_before_item_id;
+    let index = beforeId ? items.findIndex(item => item.responseSources?.some(source => source.source.item_id === beforeId)) : -1;
+    if (index < 0) index = items.findIndex(item => item.responseSources?.some(source => source.source.model_call_id === call));
+    if (index < 0) {
+      const ordinal = notices[0].source.logical_item_ordinal;
+      index = items.findIndex(item => item.responseSources?.some(source => ordinal !== undefined
+        && source.source.logical_item_ordinal !== undefined && source.source.logical_item_ordinal >= ordinal));
+    }
+    items.splice(index < 0 ? items.length : index, 0, { kind: "context_event", id: `context:${call}`, notices });
+  }
   return items;
 }

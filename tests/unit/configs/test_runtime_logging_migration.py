@@ -443,18 +443,24 @@ def _legacy_payload() -> dict[str, object]:
     return {**payload, "config_version": 1, "logger": {"level": "info", "pretty": True}}
 
 
+@pytest.mark.parametrize("old_models", [False, True])
 def test_migration_preserves_active_business_state_and_source_cas(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+    old_models: bool, legacy_model_configuration: dict[str, object],
 ) -> None:
     from app.services.infrastructure.config_service import ConfigService
 
     first = migration_workspaces[0]
     path = first / ".boxteam/workspace.jsonc"
     active = _legacy_payload()
+    expected = {key: (3 if key == "config_version" else value) for key, value in active.items() if key != "logger"}
+    if old_models:
+        # 同一个旧来源同时出现在文件、来源账本和 active 中，必须一起转换。
+        active.update(legacy_model_configuration)
     _write(path, active)
     original_digest = hashlib.sha256(path.read_bytes()).hexdigest()
     source = workspace_store.sync_config_source(
-        config_key="workspace_root_mutable_override", uri=None, config_version=1,
+        config_key="workspace_root_mutable_override", uri=None, config_version=cast(int, active["config_version"]),
         presence="present", payload=active, layer_digest=original_digest,
     )
     baseline: dict[str, object] = {source.config_key: {"uri": None, "presence": "present", "layer_revision": source.layer_revision,
@@ -462,7 +468,7 @@ def test_migration_preserves_active_business_state_and_source_cas(
     original = workspace_store.ensure_active_config_snapshot(
         config_domain="workspace", payload=active, source_baseline=baseline, source_generation=source.source_generation,
         layer_revisions={source.config_key: source.layer_revision}, layer_digests={source.config_key: source.layer_digest},
-        effective_digest=config_revision(active), secret_bindings={}, schema_version=1,
+        effective_digest=config_revision(active), secret_bindings={}, schema_version=cast(int, active["config_version"]),
     )
     changed = {**active, "development": {"test_tools": True}}
     _write(path, changed)
@@ -471,15 +477,30 @@ def test_migration_preserves_active_business_state_and_source_cas(
 
     result = commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(first,))
     assert result["state"] == "completed"
+    published = path.read_bytes()
     with WorkspaceStateStore(workspace_root=first) as restored:
         migrated = restored.get_active_config_snapshot("workspace")
         assert migrated is not None
-        assert migrated.payload == {key: (3 if key == "config_version" else value) for key, value in active.items() if key != "logger"}
+        if old_models:
+            converted = read_jsonc_object(path)
+            for provider_id, provider in converted["llm"]["providers"].items():
+                assert migrated.payload["llm"]["providers"][provider_id] == provider
+            assert migrated.payload["agents"]["default"]["model"] == converted["agents"]["default"]["model"]
+            assert "primary_provider" not in migrated.payload["agents"]["default"]["model"]
+        else:
+            assert migrated.payload == expected
         assert migrated.active_revision > original.active_revision
         assert migrated.effective_digest == config_revision(migrated.payload)
         assert migrated.schema_version == 3
         layer = restored.get_source_layer(source.config_key)
         assert layer is not None
+        if old_models:
+            from app.services.infrastructure.config.state import (
+                restore_environment_secret_references,
+            )
+
+            assert restore_environment_secret_references(layer.payload)["llm"] == converted["llm"]
+            assert layer.payload["agents"] == converted["agents"]
         assert layer.layer_revision == source.layer_revision + 1
         assert migrated.layer_revisions[source.config_key] == layer.layer_revision
         assert migrated.layer_digests[source.config_key] == layer.layer_digest
@@ -497,7 +518,7 @@ def test_migration_preserves_active_business_state_and_source_cas(
     with pytest.raises(RuntimeError, match="配置被外部修改"):
         commit_runtime_logging_migration(boxteam_home=migration_home, restore=True)
     assert _database_dump(workspace_store.path) == after
-    assert json.loads(path.read_text()) == {key: (3 if key == "config_version" else value) for key, value in changed.items() if key != "logger"}
+    assert path.read_bytes() == published
 
 
 def test_restore_database_before_restart_returns_exact_original(

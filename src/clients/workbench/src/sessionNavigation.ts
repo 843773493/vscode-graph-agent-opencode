@@ -15,17 +15,11 @@ import { IStorageService } from '../upstream/src/vs/platform/storage/common/stor
 import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { NavigationSurface } from './react/navigationView.js';
 import type { GatewayWorkspaceRequestTarget } from '../../web/src/api/workspaceIdentity.js';
-import type { GatewayDiagnosticLogLocateRequest } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import type { WorkspaceAction } from './search/workspaceActions.js';
 import type { SessionAction } from './search/sessionActions.js';
 import type { SessionForkSourceSelection } from '../../web/src/hooks/shell/useSessionForkDialog.js';
 import { t } from '../../shared/core/i18n/index.js';
-import { Action2, MenuId, registerAction2 } from '../upstream/src/vs/platform/actions/common/actions.js';
-import { IViewsService } from '../upstream/src/vs/workbench/services/views/common/viewsService.js';
-import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
-import type { GatewayControlRequest } from '../../web/src/components/workspace/gateway/GatewayControlCenter.js';
-import { createManagementTargetLifecycle } from './managementTarget.js';
-import actionTitles from '../../shared/core/i18n/actionTitles.en.json';
+import type { AddRemoteGatewayConnectionRequest, GatewayRuntimeGroupRequest } from '../../web/src/types/backend.js';
 
 /** 原版视图只管理布局；完整导航及菜单复用既有 React 产品。 */
 export class SessionNavigation extends ViewPane {
@@ -45,23 +39,22 @@ export class SessionNavigation extends ViewPane {
     @INotificationService private readonly notifications: INotificationService,
     @IStorageService private readonly storage: IStorageService,
     @ICommandService private readonly commands: ICommandService,
-  ) { super(options, keybindings, menus, configuration, contexts, views, instantiation, opener, themes, hover); }
+  ) {
+    super(options, keybindings, menus, configuration, contexts, views, instantiation, opener, themes, hover);
+    this._register(this.onDidChangeBodyVisibility(visible => this.surface?.setVisible(visible)));
+  }
   protected override renderBody(container: HTMLElement): void {
     super.renderBody(container);
-    this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage, this.commands, this.configurationService);
+    this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage, this.commands, this.isBodyVisible());
   }
   override focus(): void { this.surface?.focus(); }
-  runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void): Promise<void> {
+  runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void, request?: GatewayRuntimeGroupRequest): Promise<void> {
     if (!this.surface) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
-    return this.surface.runWorkspaceAction(action, workspaceKey, assertAccess);
+    return this.surface.runWorkspaceAction(action, workspaceKey, assertAccess, request);
   }
-  revealDiagnosticLog(request: GatewayDiagnosticLogLocateRequest): void {
-    if (!this.surface) throw new Error(t('quickAccess.gatewayDiagnosticsUnavailable'));
-    this.surface.revealDiagnosticLog(request);
-  }
-  openGatewayControl(request: GatewayControlRequest): void {
+  runGatewayAction(action: 'refresh' | AddRemoteGatewayConnectionRequest, assertAccess: () => void): Promise<void> {
     if (!this.surface) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
-    this.surface.openGatewayControl(request);
+    return this.surface.runGatewayAction(action, assertAccess);
   }
   runSessionAction(action: SessionAction, sessionId: string, title: string, workspaceKey: string, assertAccess: () => void, source?: SessionForkSourceSelection): Promise<void> {
     if (!this.surface) throw new Error(t('workbench.sessionAction.navigationUnavailable'));
@@ -73,22 +66,3 @@ export class SessionNavigation extends ViewPane {
   }
   override dispose(): void { this.surface?.dispose(); super.dispose(); }
 }
-
-for (const [page, id, titleKey] of [
-  ['connections', 'boxteam.gateway.connections', 'gateway.control.connections'],
-  ['credentials', 'boxteam.gateway.credentials', 'gateway.control.connectionsAndCredentials'],
-] as const) registerAction2(class extends Action2 {
-  constructor() { super({ id, title: { value: t(titleKey), original: actionTitles[titleKey] }, f1: true,
-    menu: [{ id: MenuId.GlobalActivity, group: '2_boxteam', order: page === 'connections' ? 1 : 2 },
-      ...(page === 'credentials' ? [{ id: MenuId.AccountsContext, group: '2_boxteam', order: 1 }] : [])] }); }
-  async run(accessor: ServicesAccessor, gatewayId?: string): Promise<void> {
-    const views = accessor.get(IViewsService);
-    const lifecycle = createManagementTargetLifecycle(t('workbench.workspaceAction.identityChanged'), gatewayId);
-    try {
-      const view = await views.openView<SessionNavigation>('boxteam.sessions', false);
-      lifecycle.check();
-      if (!view) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
-      view.openGatewayControl({ page });
-    } finally { lifecycle.dispose(); }
-  }
-});

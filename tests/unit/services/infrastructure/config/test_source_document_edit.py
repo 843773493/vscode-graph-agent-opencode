@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.services.infrastructure.config.source_document import (
@@ -38,13 +40,13 @@ def test_replace_only_exact_member_preserves_other_server_and_secret_tokens() ->
                 "headers": {"Authorization": "${TARGET_KEY}"}}
     result = set_source_value(original, ("mcp", "servers", "target"), expected)
     assert result.startswith(prefix) and result.endswith(suffix)
-    public = redact_source_text(result, provider_scope="test-source")
+    public = redact_source_text(result)
     synthetic = set_source_value(public, ("mcp", "servers", "target"), expected)
-    restored_candidate = restore_source_text(public, synthetic, provider_scope="test-source")
+    restored_candidate = restore_source_text(public, synthetic)
     assert '${TARGET_KEY}' in restored_candidate and 'boxteam-redacted:/mcp/servers/other/headers/X-Secret' in restored_candidate
-    assert restore_source_text(restored_candidate, original, provider_scope="test-source") == result
+    assert restore_source_text(restored_candidate, original) == result
     with pytest.raises(ValueError, match="地址已改变"):
-        restore_source_text(public.replace('https://mcp.example/target', 'https://mcp.example/other'), synthetic, provider_scope="test-source")
+        restore_source_text(public.replace('https://mcp.example/target', 'https://mcp.example/other'), synthetic)
 
 
 def test_replace_existing_server_keeps_crlf_and_member_indentation() -> None:
@@ -65,3 +67,27 @@ def test_replace_existing_server_keeps_crlf_and_member_indentation() -> None:
 def test_ambiguous_or_non_object_ancestor_is_rejected(text: str) -> None:
     with pytest.raises(ValueError):
         set_source_value(text, ("mcp", "servers", "target"), {})
+
+
+@pytest.mark.parametrize("reference", ["${TARGET_MODEL_KEY}", "secret:sec_00000000000040008000000000000001", ""])
+@pytest.mark.parametrize("scope", ["defaults", "model"])
+def test_model_key_reference_stays_visible_when_connection_is_edited(reference: str, scope: str) -> None:
+    options = {"endpoint": "https://model.example/old", "api_key": reference}
+    provider = {"defaults": options} if scope == "defaults" else {"models": {"main": {"overrides": options}}}
+    original = json.dumps({"llm": {"providers": {"team": provider}}})
+    public = redact_source_text(original)
+    assert public == original, "公开引用和无认证不能变成绑定旧地址的秘密占位"
+    edited = public.replace("https://model.example/old", "https://model.example/new")
+    assert restore_source_text(edited, original) == edited
+
+
+def test_literal_model_key_and_arbitrary_headers_remain_secret() -> None:
+    original = json.dumps({"llm": {"providers": {"team": {"defaults": {
+        "api_key": "literal-key-must-stay-hidden", "endpoint": "https://model.example/old",
+        "request_options": {"default_headers": {"X-Custom": "header-must-stay-hidden"}},
+    }}}}})
+    public = redact_source_text(original)
+    assert "literal-key-must-stay-hidden" not in public and "header-must-stay-hidden" not in public
+    assert restore_source_text(public, original) == original
+    with pytest.raises(ValueError, match="地址已改变"):
+        restore_source_text(public.replace("https://model.example/old", "https://model.example/new"), original)

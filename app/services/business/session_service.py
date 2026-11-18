@@ -46,6 +46,7 @@ from app.core.shielded_cleanup import run_sync_shielded
 from app.core.workspace_identity import validate_workspace_id
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.common import CursorPage
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.session import (
     ChildThreadListDTO,
     ChildThreadSummaryDTO,
@@ -375,16 +376,17 @@ class SessionService:
             thread_id=node.main_thread_id,
             kind=node.session_kind,
             current_agent_id=node.current_agent_id,
-            current_provider_id=node.current_provider_id,
+            current_model=(ModelReferenceDTO.model_validate_json(node.current_model_json)
+                           if node.current_model_json is not None else None),
             context_source_session_id=node.context_source_session_id,
             generation_origin=node.generation_origin,
             created_at=node.created_at,
             updated_at=node.updated_at,
         )
         self._assert_workspace_binding(session)
-        if session.current_provider_id is None:
-            session.current_provider_id = (
-                self._config_service.resolve_agent_provider_id(session.current_agent_id)
+        if session.current_model is None:
+            session.current_model = (
+                self._config_service.resolve_agent_model(session.current_agent_id)
             )
         return session
 
@@ -462,8 +464,8 @@ class SessionService:
         with closing(SessionControlStore(control_database)) as control, control.read_transaction():
             threads = control.list_child_thread_rows()
             members = {
-                member.child_thread_id: member
-                for member in control.list_collaboration_members(
+                member["child_thread_id"]: member
+                for member in control.list_collaboration_member_summaries(
                     coordinator_session_id=session_id
                 )
             }
@@ -486,25 +488,25 @@ class SessionService:
                     thread_id=thread.thread_id,
                     created_at=thread.created_at,
                     delegation_id=(
-                        member.delegation_id if member is not None else None
+                        member["delegation_id"] if member is not None else None
                     ),
-                    role=member.role if member is not None else None,
+                    role=member["role"] if member is not None else None,
                     subagent_type=(
-                        member.subagent_type if member is not None else None
+                        member["subagent_type"] if member is not None else None
                     ),
                     title=(
-                        member.title if member is not None else
+                        member["title"] if member is not None else
                         json.loads(fork.request_intent_json)["display_title"]
                         if fork is not None and fork.request_intent_json is not None else None
                     ),
-                    collaboration_state=(member.state if member is not None else None),
+                    collaboration_state=(member["state"] if member is not None else None),
                     admission_state=(intent.state if intent is not None else None),
                     report_execution_id=intent.execution_binding_id if intent is not None else None,
                     status=(
                         "running"
                         if intent is not None and intent.state == "bound"
                         else "failed"
-                        if member is not None and member.state == "cancelled"
+                        if member is not None and member["state"] == "cancelled"
                         else "idle" if fork is not None else "pending"
                     ),
                 )
@@ -714,7 +716,7 @@ class SessionService:
             raise RuntimeError("SessionService 未绑定 ConfigService")
         config_service = self._config_service
         resolved_agent_id = config_service.resolve_new_session_agent_id(agent_id)
-        resolved_provider_id = config_service.resolve_new_session_provider_id(
+        resolved_model = config_service.resolve_new_session_model(
             resolved_agent_id
         )
         await self._validate_parent_session(
@@ -761,7 +763,7 @@ class SessionService:
                     else None
                 ),
                 "current_agent_id": resolved_agent_id,
-                "current_provider_id": resolved_provider_id,
+                "current_model_json": resolved_model.canonical_json(),
                 "context_source_session_id": context_source_session_id,
             },
         )
@@ -796,7 +798,7 @@ class SessionService:
             title=record.display_name,
             title_source=record.title_source,
             current_agent_id=metadata["current_agent_id"],
-            current_provider_id=metadata["current_provider_id"],
+            current_model=ModelReferenceDTO.model_validate_json(metadata["current_model_json"]),
             parent_session_id=self._path_resolver.nearest_session_ancestor(
                 record.parent_node_id
             ),
@@ -812,7 +814,7 @@ class SessionService:
     async def update(
         self, session_id: str, session: SessionUpdateRequest
     ) -> SessionDTO:
-        """在 catalog 原事务内更新 Agent/Provider，返回完整权威投影。"""
+        """在 catalog 原事务内更新 Agent/ModelReference，返回完整权威投影。"""
         async with self.session_write_admission(session_id):
             existing = await self.get(session_id)
 
@@ -823,23 +825,18 @@ class SessionService:
 
             update_data = session.model_dump(exclude_unset=True)
             target_agent_id = update_data.get("agent_id", existing.current_agent_id)
-            requested_provider_id = update_data.get("provider_id")
-            if "agent_id" in update_data and "provider_id" not in update_data:
-                requested_provider_id = None
-            if "agent_id" in update_data or "provider_id" in update_data:
-                update_data["current_provider_id"] = (
-                    self._config_service.resolve_agent_provider_id(
+            selected_model_json = self._path_resolver.get_node(session_id).current_model_json
+            if "agent_id" in update_data or "model" in update_data:
+                selected_model_json = (
+                    self._config_service.resolve_agent_model(
                         target_agent_id,
-                        requested_provider_id,
+                        session.model,
                     )
-                )
+                ).canonical_json()
             self._path_resolver.catalog_store.update_session_configuration(
                 session_id,
                 current_agent_id=target_agent_id,
-                current_provider_id=update_data.get(
-                    "current_provider_id",
-                    self._path_resolver.get_node(session_id).current_provider_id,
-                ),
+                current_model_json=selected_model_json,
                 updated_at=datetime.now(UTC),
             )
             updated = await self.get(session_id)

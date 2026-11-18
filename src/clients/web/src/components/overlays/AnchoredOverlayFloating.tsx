@@ -3,6 +3,7 @@ import { OverlayRootContext } from "./OverlayRootContext";
 import {
   autoUpdate,
   flip,
+  FloatingFocusManager,
   FloatingPortal,
   offset as floatingOffset,
   shift,
@@ -47,6 +48,7 @@ export default function AnchoredOverlayFloating({
   offset = 6,
   viewportPadding = 8,
   dismissible = true,
+  manageFocus = false,
   onClose,
   children,
 }: AnchoredOverlayProps): React.ReactNode {
@@ -112,17 +114,19 @@ export default function AnchoredOverlayFloating({
 
   return (
     <FloatingPortal root={overlayRoot ?? undefined}>
-      <div
-        ref={refs.setFloating}
-        className="anchored-overlay-positioner"
-        style={{
-          ...floatingStyles,
-          visibility: isPositioned ? "visible" : "hidden",
-        }}
-        {...getFloatingProps()}
-      >
-        {children}
-      </div>
+      <FloatingFocusManager context={context} modal={false} disabled={!manageFocus || !isPositioned}>
+        <div
+          ref={refs.setFloating}
+          className="anchored-overlay-positioner"
+          style={{
+            ...floatingStyles,
+            visibility: isPositioned ? "visible" : "hidden",
+          }}
+          {...getFloatingProps()}
+        >
+          {children}
+        </div>
+      </FloatingFocusManager>
     </FloatingPortal>
   );
 }

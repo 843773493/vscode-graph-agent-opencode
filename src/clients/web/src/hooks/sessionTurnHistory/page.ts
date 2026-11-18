@@ -497,7 +497,7 @@ export function useAroundTurnLoader({
 }: Omit<Parameters<typeof useDirectionalTurnLoader>[0], "direction">):
   LoadAroundTurn {
   const activeRequestRef = useRef<AbortController | null>(null);
-  return useCallback<LoadAroundTurn>(async (anchorTurnId, navigationSignal, anchorMessage, toolResultId) => {
+  return useCallback<LoadAroundTurn>(async (anchorTurnId, navigationSignal, anchorMessage, toolResultId, item) => {
     if (apiPort === null || !sessionId || !sessionCacheKey || !anchorTurnId) {
       throw new Error("当前会话尚未就绪，无法定位轮次");
     }
@@ -556,6 +556,7 @@ export function useAroundTurnLoader({
           anchor_turn_id: anchorTurnId,
           ...(anchorMessage ? { anchor_message: anchorMessage } : {}),
           ...(toolResultId ? { anchor_tool_result: toolResultId } : {}),
+          ...(item ? { include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_summary", "tool_call"] as const } : {}),
           before_turns: CURSOR_HISTORY_TURNS,
           after_turns: CURSOR_HISTORY_TURNS,
         },

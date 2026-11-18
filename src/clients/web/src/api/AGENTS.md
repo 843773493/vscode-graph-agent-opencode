@@ -29,7 +29,7 @@ api/
 │   ├── sessionApiFetchMock.ts          会话 API 单测共用 fetch 桩
 │   ├── sessionTurnHistory.ts         Turn 历史与分页请求
 │   ├── sessionContext.ts             会话上下文读取
-│   ├── sessionGoals.ts               会话目标读写
+│   ├── sessionGoals.ts               会话目标控制及原操作回执
 │   ├── sessionResources.ts           会话资源读取和控制
 │   ├── sessionSkillTracking.ts       会话技能跟踪请求
 │   └── *.test.ts                     各会话 API 的就近契约测试

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from itertools import chain
-
 from app.abstractions.background_task_registry import BackgroundTaskRegistryProtocol
 from app.abstractions.browser_resources import BrowserPluginDisabled
 from app.abstractions.terminal.resources import TerminalPluginDisabled
+from app.core.exceptions import NotFoundError
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.background_work import (
     ACTIVE_BACKGROUND_TASK_STATUSES,
     BackgroundTaskHandle,
+    BackgroundTaskSummary,
 )
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
@@ -37,19 +38,14 @@ class BackgroundTaskResourceProvider:
         *,
         include_history: bool = True,
     ) -> list[SessionResourceDTO]:
-        task_handles = self._task_registry.list_handles(session_id)
-        closed_task_handles = (
-            self._task_registry.list_closed_handles(session_id)
-            if include_history
-            else ()
-        )
-        return [
-            self._to_resource(handle)
-            for handle in chain(
-                task_handles,
-                (handle for handle in closed_task_handles if handle.status != "deleted"),
-            )
-        ]
+        summaries = await run_sync_shielded(self._task_registry.list_summaries, session_id, include_history=include_history)
+        return [self._to_resource(summary) for summary in summaries]
+
+    async def get_resource(self, session_id: str, resource_id: str) -> SessionResourceDTO:
+        handle = await run_sync_shielded(self._task_registry.get_handle, session_id, resource_id)
+        if handle is None:
+            raise NotFoundError(f"后台任务不存在: session_id={session_id}, task_id={resource_id}")
+        return self._to_resource(handle)
 
     async def control(
         self,
@@ -92,7 +88,7 @@ class BackgroundTaskResourceProvider:
     async def cleanup_session(self, session_id: str) -> int:
         return await self._task_registry.delete_session(session_id)
 
-    def _to_resource(self, handle: BackgroundTaskHandle) -> SessionResourceDTO:
+    def _to_resource(self, handle: BackgroundTaskHandle | BackgroundTaskSummary) -> SessionResourceDTO:
         actions: list[SessionResourceAction]
         if handle.status == "reconcile_required":
             actions = ["reconcile"]
@@ -113,6 +109,12 @@ class TerminalResourceProvider:
 
     def __init__(self, *, terminal_owner: TerminalResourceOwner) -> None:
         self._owner = terminal_owner
+
+    async def get_resource(self, session_id: str, resource_id: str) -> SessionResourceDTO:
+        resource = await self._owner.get_resource(resource_id)
+        if not any(ref["session_id"] == session_id for ref in resource["thread_associations"]):
+            raise NotFoundError(f"Terminal 不属于当前 Session: {resource_id}")
+        return self._to_resource(resource, session_id)
 
     async def list_resources(
         self,
@@ -198,6 +200,12 @@ class BrowserResourceProvider:
 
     def __init__(self, *, browser_owner: BrowserResourceOwner) -> None:
         self._owner = browser_owner
+
+    async def get_resource(self, session_id: str, resource_id: str) -> SessionResourceDTO:
+        resource = await self._owner.get_resource(resource_id)
+        if not any(ref["session_id"] == session_id for ref in resource["thread_associations"]):
+            raise NotFoundError(f"Browser 不属于当前 Session: {resource_id}")
+        return self._to_resource(resource, session_id)
 
     async def list_resources(
         self,

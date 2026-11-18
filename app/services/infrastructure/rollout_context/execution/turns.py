@@ -522,7 +522,7 @@ class RolloutTurnsMixin:
                 turn_scope=TurnScope.TURN_ROOT,
                 wire_role="user",
             )
-            notice_selection = freeze_runtime_notice_selection(
+            notice_selection = None if queue_input is not None else freeze_runtime_notice_selection(
                 connection, storage=self._storage, session_id=session_id,
                 thread_id=owner_thread_id, checkpoint_ns=checkpoint_ns,
                 branch_id=branch_value, execution_id=execution_id,
@@ -614,7 +614,7 @@ class RolloutTurnsMixin:
                 "SELECT head_view_id FROM branches WHERE branch_id = ? AND status = 'active'",
                 (branch_value,),
             ).fetchone()
-            if active_view is not None and active_view[0] is not None:
+            if queue_input is None and active_view is not None and active_view[0] is not None:
                 self._storage._append_context_view_items(
                     connection,
                     checkpoint_ns=checkpoint_ns,
@@ -660,13 +660,9 @@ class RolloutTurnsMixin:
             connection.execute(
                 "UPDATE turns SET status='accepted' WHERE turn_id=?", (turn_value,),
             )
-            # acceptance-time 可能早于第一个 LangGraph checkpoint。除了
-            # canonical item membership，还必须立即登记 active view 的
-            # Turn logical ordinal；否则 replay_as_new_turn/新输入虽然
-            # 已经有 root，却会在即时 history/root lookup 中暂时消失，
-            # 直到下一次 checkpoint 偶然重建派生索引。
+            # 排队输入在领取时激活；直接历史导入在此登记 logical ordinal。
             view_id = self._storage._active_context_view_id(connection, checkpoint_ns, branch_value)
-            if view_id is not None:
+            if queue_input is None and view_id is not None:
                 existing_view_turn = connection.execute(
                     "SELECT logical_turn_ordinal, root_input_item_id FROM context_view_turns WHERE view_id = ? AND turn_id = ?",
                     (view_id, turn_value),

@@ -50,7 +50,7 @@ def internal_input() -> tuple[InternalExecutionIntent, HumanMessage, ExecutionQu
     )
     queue_input = ExecutionQueueInput(
         execution_binding=intent, message_id=intent.message_id,
-        agent_id="default", provider_id=None, delivery_policy="after_turn",
+        agent_id="default", model=None, delivery_policy="after_turn",
         gateway_id=None, request_id=None, created_at="2026-10-29T00:00:00+00:00",
     )
     return intent, message, queue_input

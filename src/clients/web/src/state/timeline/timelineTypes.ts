@@ -3,6 +3,7 @@ import type { AttachmentRef, Message, TurnResponsePart } from "../../types/backe
 export type TimelineItem = {
   responseSources?: Array<{ part_id: string; kind: string; source: TurnResponsePart["source"] }>;
 } & (
+  | { kind: "context_event"; id: string; notices: TurnResponsePart[] }
   | {
       kind: "message";
       id: string;

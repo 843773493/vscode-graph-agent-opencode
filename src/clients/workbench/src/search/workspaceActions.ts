@@ -8,20 +8,22 @@ import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { gatewayWorkspaceKey, gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
 import { listGatewayWorkspaces } from '../../../web/src/gatewayApi.js';
 import { workspaceContext } from '../workspaceContext.js';
+import type { GatewayRuntimeGroupRequest } from '../../../web/src/types/backend.js';
 import type { SessionNavigation } from '../sessionNavigation.js';
 import { captureSearchOwner } from './target.js';
 import { t } from '../../../shared/core/i18n/index.js';
-import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
+import messages from '../../../shared/core/i18n/messages/en.json';
 
 export const workspaceActionCommands = {
   activate: 'boxteam.workspace.activate', reconnect: 'boxteam.workspace.reconnect', start: 'boxteam.workspace.start',
   details: 'boxteam.workspace.details',
+  stop: 'boxteam.workspace.stop', safeRestart: 'boxteam.workspace.safeRestart', forceRestart: 'boxteam.workspace.forceRestart',
 } as const;
 export type WorkspaceAction = keyof typeof workspaceActionCommands;
-export type WorkspaceActionHandlers = Record<WorkspaceAction, (workspaceKey: string) => Promise<void>>;
+export type WorkspaceActionHandlers = Record<WorkspaceAction, (workspaceKey: string, request?: GatewayRuntimeGroupRequest) => Promise<void>>;
 
 /** 命令只把冻结目标交给原导航 owner；确认、队列与权威回读仍由原 hooks 负责。 */
-async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceAction, explicit?: WorkspaceOwner): Promise<void> {
+async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceAction, explicit?: WorkspaceOwner, request?: GatewayRuntimeGroupRequest): Promise<void> {
   // ServiceAccessor 只在同步命令入口有效，异步阶段仅使用已取得的服务句柄。
   const editors = accessor.get(IEditorService), quickInput = accessor.get(IQuickInputService), views = accessor.get(IViewsService);
   const initial = workspaceContext.getSnapshot();
@@ -56,12 +58,12 @@ async function runWorkspaceAction(accessor: ServicesAccessor, action: WorkspaceA
     const latest = await listGatewayWorkspaces(0, { checkHealth: false });
     assertAccess();
     const target = requireGatewayWorkspaceRequestTarget(latest.items, targetOwner);
-    if (action === 'start' && !target.managed) throw new Error(t('workbench.workspaceAction.notManaged'));
+    if (['start', 'stop', 'safeRestart', 'forceRestart'].includes(action) && !target.managed) throw new Error(t('workbench.workspaceAction.notManaged'));
     if (action === 'reconnect' && target.connection_kind !== 'remote_gateway') throw new Error(t('workbench.workspaceAction.notRemote'));
     const view = await views.openView<SessionNavigation>('boxteam.sessions', false);
     assertAccess();
     if (!view) throw new Error(t('workbench.workspaceAction.navigationUnavailable'));
-    await view.runWorkspaceAction(action, gatewayWorkspaceKey(targetOwner), assertAccess);
+    await view.runWorkspaceAction(action, gatewayWorkspaceKey(targetOwner), assertAccess, request);
   } finally { release(); releaseContext(); }
 }
 
@@ -70,7 +72,10 @@ for (const [action, titleKey] of [
   ['reconnect', 'workbench.workspaceAction.reconnect'],
   ['start', 'workbench.workspaceAction.start'],
   ['details', 'workbench.workspaceAction.details'],
+  ['stop', 'gateway.workspace.stopAction'],
+  ['safeRestart', 'gateway.workspace.safeRestartAction'],
+  ['forceRestart', 'gateway.workspace.forceRestartAction'],
 ] as const) registerAction2(class extends Action2 {
-  constructor() { super({ id: workspaceActionCommands[action], title: { value: t(titleKey), original: actionTitles[titleKey] }, f1: true }); }
-  run(accessor: ServicesAccessor, owner?: WorkspaceOwner): Promise<void> { return runWorkspaceAction(accessor, action, owner); }
+  constructor() { super({ id: workspaceActionCommands[action], title: { value: t(titleKey), original: messages[titleKey] }, f1: true }); }
+  run(accessor: ServicesAccessor, owner?: WorkspaceOwner, request?: GatewayRuntimeGroupRequest): Promise<void> { return runWorkspaceAction(accessor, action, owner, request); }
 });

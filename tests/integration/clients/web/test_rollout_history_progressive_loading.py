@@ -24,6 +24,7 @@ from app.domain.itemized.enums import (
 )
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -198,7 +199,8 @@ def seed_long_rollout_history(workspace_root: Path) -> None:
     manifest = json.loads((workspace_root / "rollout-fixture.json").read_text())
     session = next(item for item in manifest["sessions"] if item["session_id"] == STATIC_LONG_SESSION_ID)
     assert session["turn_count"] == 128
-    seed_catalog_session_bundle(sessions_dir, STATIC_LONG_SESSION_ID, title=session["title"], current_provider_id="primary")
+    seed_catalog_session_bundle(sessions_dir, STATIC_LONG_SESSION_ID, title=session["title"],
+                                current_model=ModelReferenceDTO(provider_id="primary", model_id="main"))
     saver = RolloutCheckpointSaver(sessions_dir)
     owner = saver.forks.source.resolve_main_thread_owner(STATIC_LONG_SESSION_ID)
     pending = []

@@ -49,12 +49,18 @@ export const transformedSourcePaths = [...new Set([
   'src/vs/workbench/contrib/search/browser/searchTreeModel/searchModel.ts',
   'src/vs/workbench/contrib/search/browser/searchTreeModel/match.ts',
   'src/vs/workbench/contrib/search/browser/searchView.ts',
+  'src/vs/workbench/contrib/output/browser/outputView.ts',
+  'src/vs/workbench/contrib/output/browser/output.contribution.ts',
   'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
+  'src/vs/workbench/contrib/remote/browser/remote.contribution.ts',
+  'src/vs/workbench/contrib/preferences/browser/keyboardLayoutPicker.ts',
   'src/vs/workbench/contrib/chat/common/plugins/agentPluginServiceImpl.ts',
   'src/vs/workbench/contrib/chat/browser/chat.view.contribution.ts',
   'src/vs/workbench/contrib/chat/browser/chatSlashCommands.ts',
   'src/vs/workbench/contrib/chat/browser/actions/chatPluginActions.ts',
   'src/vs/workbench/browser/parts/views/viewPaneContainer.ts',
+  'src/vs/workbench/browser/parts/compositePart.ts',
+  'src/vs/workbench/browser/parts/panel/panelActions.ts',
   'src/vs/workbench/contrib/files/browser/editors/fileEditorInput.ts',
   'src/vs/workbench/services/textfile/common/textEditorService.ts',
   'src/vs/workbench/services/textfile/common/textFileEditorModel.ts',
@@ -132,6 +138,30 @@ export function sourceTransform(root, productConfiguration, extensions, nlsMessa
     // 严格文本锚点使用统一行尾，不改写固定上游的检出原件。
     let contents = source.replace(/\r\n/g, '\n');
     for (const [marker, value] of Object.entries(replacements)) contents = contents.replace(marker, () => value);
+    if (path === join(upstream, 'src/vs/workbench/browser/parts/panel/panelActions.ts')) {
+      // 最大化保留原动作及键盘入口，仅收入原生“更多操作”菜单。
+      contents = replaceOnce(contents,
+        "id: MenuId.PanelTitle,\n\t\t\t\tgroup: 'navigation',\n\t\t\t\torder: 1,\n\t\t\t\twhen: panelMaximizationSupportedWhen",
+        "id: MenuId.PanelTitle,\n\t\t\t\tgroup: '3_layout',\n\t\t\t\torder: 1,\n\t\t\t\twhen: panelMaximizationSupportedWhen");
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/output/browser/output.contribution.ts')) {
+      // 低频输出操作进入原生更多菜单，通道选择继续留在标题栏。
+      contents = replaceOnce(contents,
+        "group: 'navigation',\n\t\t\t\t\t\torder: 2",
+        "group: '3_output',\n\t\t\t\t\t\torder: 2");
+      contents = replaceOnce(contents,
+        "group: 'navigation',\n\t\t\t\t\t\torder: 3,",
+        "group: '3_output',\n\t\t\t\t\t\torder: 3,");
+      contents = replaceOnce(contents,
+        "group: 'navigation',\n\t\t\twhen: ContextKeyExpr.and(ContextKeyExpr.equals('view', OUTPUT_VIEW_ID), CONTEXT_ACTIVE_OUTPUT_LEVEL_SETTABLE)",
+        "group: '3_output',\n\t\t\twhen: ContextKeyExpr.and(ContextKeyExpr.equals('view', OUTPUT_VIEW_ID), CONTEXT_ACTIVE_OUTPUT_LEVEL_SETTABLE)");
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/output/browser/outputView.ts')) {
+      // Monaco 不允许隐藏全部行；原始进程输出保留结尾空行承载“无匹配”状态。
+      contents = replaceOnce(contents,
+        'const lineCount = model.getLineCount();\n\t\tfor (let lineNumber = fromLineNumber; lineNumber <= lineCount; lineNumber++) {',
+        'const lineCount = model.getLineCount();\n\t\tconst lastContentLine = model.getLineMaxColumn(lineCount) === 1 ? lineCount - 1 : lineCount;\n\t\tfor (let lineNumber = fromLineNumber; lineNumber <= lastContentLine; lineNumber++) {');
+    }
     if (path === join(upstream, 'src/vs/workbench/browser/parts/dialogs/dialog.ts')) {
       // 只将本产品身份交给原 About；内置扩展宿主仍使用固定上游的 API 版本。
       const entry = 'export function createBrowserAboutDialogDetails(productService: IProductService): { title: string; details: string; detailsToCopy: string } {';
@@ -462,7 +492,24 @@ export class WebLanguagePacksService extends LanguagePackBaseService {
 \t\tawait lifecycle.prepareToClose();
 \t\tawait this.handleExpectedShutdown(ShutdownReason.RELOAD);`);
     }
+    if (path === join(upstream, 'src/vs/workbench/contrib/remote/browser/remote.contribution.ts')) {
+      // 运行目标由 Gateway 管理，入口由产品状态栏贡献提供。
+      contents = replaceOnce(contents, "import { RemoteStatusIndicator } from './remoteIndicator.js';\n", '');
+      contents = replaceOnce(contents, 'registerWorkbenchContribution2(RemoteStatusIndicator.ID, RemoteStatusIndicator, WorkbenchPhase.BlockStartup);\n', '');
+    }
+    if (path === join(upstream, 'src/vs/workbench/contrib/preferences/browser/keyboardLayoutPicker.ts')) {
+      // 保留原键盘布局命令与服务，取消每个会话都常驻的 US 布局提示。
+      contents = replaceOnce(contents, 'registerWorkbenchContribution2(KeyboardLayoutPickerContribution.ID, KeyboardLayoutPickerContribution, WorkbenchPhase.BlockStartup);\n', '');
+      const start = contents.indexOf('export class KeyboardLayoutPickerContribution');
+      const end = contents.indexOf('interface LayoutQuickPickItem');
+      if (start < 0 || end < start) throw new Error('缺少键盘布局状态栏贡献边界');
+      contents = contents.slice(0, start) + contents.slice(end);
+      contents = pruneUnusedImportsAndConstants(path, contents);
+    }
     if (path === join(upstream, 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts')) {
+      // 本产品的 Agent 状态来自工作区，不能展示独立 Copilot 账号的状态。
+      contents = replaceOnce(contents, "import { ChatStatusBarEntry } from './chatStatus/chatStatusEntry.js';\n", '');
+      contents = replaceOnce(contents, 'registerWorkbenchContribution2(ChatStatusBarEntry.ID, ChatStatusBarEntry, WorkbenchPhase.BlockRestore);\n', '');
       contents = replaceOnce(contents, "import { CodexStatusBarEntry } from './chatStatus/codexStatusEntry.js';\n", '');
       contents = replaceOnce(contents, 'registerWorkbenchContribution2(CodexStatusBarEntry.ID, CodexStatusBarEntry, WorkbenchPhase.BlockRestore);\n', '');
       contents = replaceOnce(contents, "import { EditorChatUsageContribution } from './editorChatUsage.contribution.js';\n", '');
@@ -883,6 +930,14 @@ if (this._cache.peek(textModel.id) === data) this._cache.delete(textModel.id);`)
       contents = replaceOnce(contents, "commandId: 'workbench.action.showAllSymbols' }]\n});", "commandId: 'workbench.action.showAllSymbols' }]\n}));");
       contents = `import { selectDefaultSearchDescriptor } from ${JSON.stringify(join(root, 'src/search/quickAccess.js'))};\nimport { selectSymbolSearchDescriptor } from ${JSON.stringify(join(root, 'src/search/symbolsQuickAccess.js'))};\n` + contents;
     }
+    if (path === join(upstream, 'src/vs/workbench/browser/parts/compositePart.ts')) {
+      contents = replaceOnce(contents,
+        'this.toolBar?.setActions(prepareActions(primaryActions), prepareActions(secondaryActions), menuIds);',
+        `// 标题动作刷新会重挂载原筛选框；保留仍存活的输入焦点，已删除的按钮不恢复。
+const focused = this.toolBar?.getElement().querySelector<HTMLElement>(':focus');
+this.toolBar?.setActions(prepareActions(primaryActions), prepareActions(secondaryActions), menuIds);
+if (focused?.isConnected) focused.focus();`);
+    }
     if (path === join(upstream, 'src/vs/workbench/browser/parts/views/viewPaneContainer.ts')) {
       contents = replaceOnce(contents, 'return this.instantiationService.createInstance(viewDescriptor.ctorDescriptor.ctor, ...(viewDescriptor.ctorDescriptor.staticArguments || []), options);',
         'return createSearchView(this.instantiationService, viewDescriptor, options);');
@@ -968,6 +1023,8 @@ export function buildSourcePlugin(root, transformSource) {
       builder.onResolve({ filter: /\.css\?text$/ }, ({ path, resolveDir }) => ({ path: resolve(resolveDir, path.slice(0, -5)), namespace: 'session-stylesheet' }));
       builder.onLoad({ filter: /.*/, namespace: 'session-stylesheet' }, async ({ path }) => ({ contents: await readFile(path, 'utf8'), loader: 'text' }));
       builder.onResolve({ filter: /^\.\/codicon\.ttf$/ }, () => ({ path: join(root, 'node_modules/@vscode/codicons/dist/codicon.ttf') }));
+      // 产品品牌替换只发生在资源解析阶段，保留上游图标与样式原件。
+      builder.onResolve({ filter: /(^|\/)code-icon\.svg$/ }, () => ({ path: resolve(root, '../../../resources/branding/icon.png') }));
       builder.onLoad({ filter: /\.ts$/ }, async ({ path }) => {
         if (path.endsWith('.d.ts')) return;
         const source = await readFile(path, 'utf8');

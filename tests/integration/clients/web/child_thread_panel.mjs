@@ -4,6 +4,7 @@ import process from "node:process";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
+import { openSessionThreads } from "../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -185,14 +186,9 @@ async function waitForTurnFinalText(page, prompt, finalText) {
   return finalMessage.innerText();
 }
 
-/** 在精确 Thread 的资源区域进入运行与连接。 */
-async function openResourcesTab() {
-  const toggle = parentThread.getByRole("button", { name: "切换会话资源", exact: true });
-  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-  await parentThread.getByRole("tab", { name: "运行与连接", exact: true }).click();
-  const panel = parentThread.locator(".child-thread-panel");
-  await expect(panel).toBeVisible();
-  return panel;
+/** 通过当前 Session 的树节点进入 Thread 导航。 */
+async function openThreadNavigation() {
+  return openSessionThreads(page, { gatewayId: expectedGatewayId, workspaceId: expectedWorkspaceId, sessionId: result.sessionId });
 }
 
 /** 等待 ChildThreadPanel 渲染出委派 child 项（面板 5s 静默轮询，给足窗口）。 */
@@ -295,9 +291,9 @@ try {
   const updated = await api(page, `/api/v1/sessions/${result.sessionId}`, {
     method: "PATCH",
     headers: workspaceHeaders,
-    body: JSON.stringify({ provider_id: "primary" }),
+    body: JSON.stringify({ model: { provider_id: "primary", model_id: "default" } }),
   });
-  assert.equal(updated?.data?.current_provider_id, "primary", "Session 没有切换到 primary provider");
+  assert.deepEqual(updated?.data?.current_model, { provider_id: "primary", model_id: "default" }, "Session 没有切换到指定模型");
 
   await page.getByRole("button", { name: "刷新资源树", exact: true }).click();
   await selectSession(page, result.sessionId, 1);
@@ -345,8 +341,8 @@ try {
     toolText: await completedTaskToolRow.innerText(),
   };
 
-  // 打开右侧侧边栏「运行与连接」标签，等待子会话线程面板渲染 child 项。
-  const panel = await openResourcesTab(page);
+  // 展开左侧 Session 节点，等待 Thread 导航渲染 child 项。
+  const panel = await openThreadNavigation();
   const item = await waitForChildThreadItem(panel);
   const title = (await item.locator(".child-thread-copy strong").innerText()).trim();
   const statusText = (await item.locator(".child-thread-status").innerText()).trim();
@@ -388,7 +384,7 @@ try {
   // 再次打开已有 child 标签时，仍应选中调试，不能丢弃此次导航意图。
   await childThread.getByRole("tab", { name: "文件", exact: true }).click();
   await selectSession(page, result.sessionId, 1);
-  const reopenedPanel = await openResourcesTab();
+  const reopenedPanel = await openThreadNavigation();
   await reopenedPanel.getByRole("button", { name: `调试子线程：${childThreadId}`, exact: true }).click();
   await expect(childThread.getByRole("tab", { name: "调试", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(debugOwner).toBeVisible();
@@ -445,7 +441,7 @@ try {
   // 回报使用安全文案；子线程的私有结果正文不能当作父 Thread 的用户输入显示。
   await expect(parentThread.locator(".chat-user-text").filter({ hasText: childFinalText })).toHaveCount(0);
   await expect(parentThread.locator(".chat-internal-execution-display")).not.toContainText(childFinalText);
-  const reportsPanel = await openResourcesTab();
+  const reportsPanel = await openThreadNavigation();
   await reportsPanel.locator(`.child-thread-item[data-thread-id="${childThreadId}"] .child-thread-report-link`).click();
   const report = reportsPanel.locator(`.child-thread-conversation[data-thread-id="${childThreadId}"] .child-thread-report`);
   await expect(report.getByText(childFinalText, { exact: true })).toBeVisible();

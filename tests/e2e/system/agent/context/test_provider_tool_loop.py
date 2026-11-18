@@ -191,7 +191,8 @@ async def test_real_provider_follows_tool_results_and_preserves_cold_history(
     _save(artifacts / "input-chain.json", {"uris": uris, "bodies": bodies, "marker": marker, "prompt": prompt})
     session = _response(await client.post("/api/v1/sessions", json={"title": "真实 Provider 多次工具循环"}), artifacts / "created-session.json")["data"]
     session_id, thread_id = session["session_id"], session["thread_id"]
-    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "backup_3"}), artifacts / "selected-provider.json")["data"]
+    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"model": {"provider_id": "backup_3", "model_id": "default"}}), artifacts / "selected-model.json")["data"]
+    assert session["current_model"] == {"provider_id": "backup_3", "model_id": "default"}
     desired = ToolSelectionStore(boxteam_root=workspace / ".boxteam").snapshot("default")
     sent = _response(await client.post(f"/api/v1/sessions/{session_id}/messages", json=with_message_run_operation_id({
         "message": {"content": prompt}, "run": {"mode": "single_agent", "agent_id": "default"},

@@ -1,1 +1,4 @@
 .boxteam-thread{display:flex;flex-direction:column;box-sizing:border-box;color:var(--vscode-editor-foreground);background:var(--vscode-editor-background);overflow:hidden}
+
+/* 为目标、工作区和会话保留各自空间，完整名称仍由原生悬停展示。 */
+.monaco-workbench .part.statusbar > .items-container > [id^="boxteam.status."] { max-width: 25vw; }

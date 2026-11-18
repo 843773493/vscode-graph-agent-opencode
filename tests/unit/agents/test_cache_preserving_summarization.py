@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1113,6 +1114,11 @@ async def test_http_compaction_check_uses_emergency_replacement_partition() -> N
             return 0
 
     compactor = object.__new__(AgentSummarizationCompactor)
+    compactor._config_service = SimpleNamespace(
+        get_snapshot=lambda: object(), use_snapshot=lambda _: nullcontext(),
+        get_agent_runtime_config=lambda _: {"models": []}, prepare_llm_credentials=AsyncMock(return_value={}),
+        use_llm_credentials=lambda _: nullcontext(),
+    )
     compactor._build_summarization = lambda _: _SummarizationStub()  # type: ignore[method-assign]
 
     check = await compactor.check(

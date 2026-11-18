@@ -22,6 +22,7 @@ import {
 } from "../../state/messageSubmissions/storage";
 import type { MessageSubmissionResultDTO as GeneratedSubmissionResult } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import { getWorkspaceRawFileBlob } from "../workspaceFilesystem";
+import { truncateDisplayText } from "../../utils/displayText";
 type MessageSubmissionResult = Omit<GeneratedSubmissionResult, "accepted"> & { accepted?: MessageRunAccepted | null };
 import {
   DEFAULT_API_REQUEST_TIMEOUT_MS,
@@ -106,7 +107,7 @@ async function readSessionAttachmentTextPreview(
   const append = (decoded: string): boolean => {
     const remainingCodeUnits = maxCodeUnits - codeUnitCount;
     if (decoded.length > remainingCodeUnits) {
-      const visiblePart = decoded.slice(0, remainingCodeUnits);
+      const visiblePart = truncateDisplayText(decoded, remainingCodeUnits);
       if (visiblePart) textParts.push(visiblePart);
       codeUnitCount += visiblePart.length;
       return true;

@@ -2,6 +2,7 @@ import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import type { TraceNavigation } from "../../../hooks/runtime/useTraceNavigation";
 import { formatDateTime } from "../../../utils/format";
+import { truncateDisplayText } from "../../../utils/displayText";
 import {
   boundedDisplayString,
   LARGE_STRING_DISPLAY_LIMIT,
@@ -187,7 +188,8 @@ function summarizeTextDeltaGroup(items: FrontendReceivedEvent[]) {
   for (const item of items) {
     const text = textDeltaText(item);
     mergedTextLength += text.length;
-    const remainingPreviewLength = LARGE_STRING_DISPLAY_LIMIT - previewLength;
+    // 多留一个 code unit，合并后才能识别恰好跨事件／上限的代理对。
+    const remainingPreviewLength = LARGE_STRING_DISPLAY_LIMIT + 1 - previewLength;
     if (remainingPreviewLength > 0) {
       const previewPart = text.slice(0, remainingPreviewLength);
       previewParts.push(previewPart);
@@ -201,7 +203,7 @@ function summarizeTextDeltaGroup(items: FrontendReceivedEvent[]) {
     }
   }
 
-  const preview = previewParts.join("");
+  const preview = truncateDisplayText(previewParts.join(""), LARGE_STRING_DISPLAY_LIMIT);
   return {
     previewText: mergedTextLength > LARGE_STRING_DISPLAY_LIMIT
       ? t("inspection.event.truncated", preview, formatNumber(mergedTextLength))
@@ -392,7 +394,7 @@ export default function EventQueuePanel({
     navigation={navigation} onClose={onCloseNavigation} />;
 
   return (
-    <section className="panel-view event-queue-panel">
+    <section className="panel-view event-queue-panel" aria-busy={historyLoading || historyLoadingOlder}>
       <div className="panel-header">
         <div className="panel-title">{t("inspection.event.title")}</div>
         <div className="panel-header-meta">
@@ -407,7 +409,7 @@ export default function EventQueuePanel({
       </div>
 
       {historyError ? (
-        <div className="event-queue-history-error" role="alert">
+        <div className="panel-feedback" role="alert">
           <span>{historyError}</span>
           <button type="button" onClick={onRetryHistory}>{t("inspection.event.retry")}</button>
         </div>
@@ -472,20 +474,20 @@ function LocatedTrace({ navigation, onClose }: { navigation: TraceNavigation; on
   const location = navigation.location;
   React.useLayoutEffect(() => { mark.current?.scrollIntoView({ block: "center" }); }, [location]);
   const source = React.useMemo(() => {
-    if (!location?.reference) return null;
+    if (!location?.reference || navigation.recordOnly) return null;
     const characters = Array.from(location.text);
     const { start_codepoint: start, end_codepoint: end } = location.reference;
     return { before: characters.slice(Math.max(0, start - 1000), start).join(""),
       match: characters.slice(start, end).join(""), after: characters.slice(end, end + 1000).join(""),
       hasBefore: start > 1000, hasAfter: end + 1000 < characters.length };
-  }, [location]);
+  }, [location, navigation.recordOnly]);
   return <section className="panel-view event-queue-panel" aria-label={t("inspection.event.locatedAria")}>
     <div className="panel-header"><span>Thread Trace · {navigation.match.reference?.event_id}</span>
       <button type="button" onClick={onClose}>{t("inspection.event.closeLocation")}</button></div>
     {navigation.error ? <div className="empty-state error-state" role="alert">{t("inspection.event.matchFailed", navigation.error)}</div>
-      : location && source ? <div className="panel-list">
-        <section aria-label={t("inspection.event.originalAria")}><p>{t("inspection.match.original", formatNumber(location.reference!.start_codepoint), formatNumber(location.reference!.end_codepoint))}</p>
-          <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>
+      : location ? <div className="panel-list">
+        {source && <section aria-label={t("inspection.event.originalAria")}><p>{t("inspection.match.original", formatNumber(location.reference!.start_codepoint), formatNumber(location.reference!.end_codepoint))}</p>
+          <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>}
         <EventQueueCard index={0} item={{ kind: "trace", id: location.record.event_id,
           sessionId: location.record.session_id, receivedAt: new Date().toISOString(), source: "initial_load",
           event: location.record }} />

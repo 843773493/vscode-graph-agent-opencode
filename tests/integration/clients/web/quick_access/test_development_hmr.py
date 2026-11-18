@@ -115,6 +115,7 @@ async def test_source_update_reaches_real_workbench_without_manual_reload(
             browser = await asyncio.to_thread(subprocess.run, protected, cwd=context.project_root,
                 env={**os.environ, **temporary, "BOXTEAM_BROWSER_BASE_URL": base,
                      "BOXTEAM_HMR_SOURCE": str(development_snapshot / "src/clients/workbench/src/react/navigationView.tsx"),
+                     "BOXTEAM_HMR_SHARED_SOURCE": str(development_snapshot / "src/clients/web/src/api/http.ts"),
                      "BOXTEAM_HMR_TRANSLATIONS": str(development_snapshot / "src/clients/workbench/resources/localization/zh-cn-upstream-main.json"),
                      "BOXTEAM_HMR_SHARED_I18N_URL": shared_i18n_url,
                      "BOXTEAM_BROWSER_RESULT_PATH": str(context.artifacts_dir / "development-hmr.json"),

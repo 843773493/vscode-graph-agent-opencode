@@ -235,11 +235,9 @@ def build_provider_model_candidate(
     provider: dict[str, Any],
     model: BaseChatModel,
 ) -> ProviderModelCandidate:
-    provider_id = str(provider.get("id") or provider.get("model") or "<unknown>")
-    model_id = str(provider.get("model") or provider_id)
     return ProviderModelCandidate(
-        provider_id=provider_id,
-        model_id=model_id,
+        provider_id=provider["provider_id"],
+        model_id=provider["model_id"],
         model=model,
         capabilities=frozenset(parse_provider_capabilities(provider)),
     )

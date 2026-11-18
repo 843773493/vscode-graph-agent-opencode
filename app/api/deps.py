@@ -16,6 +16,7 @@ from app.core.workspace_identity import validate_workspace_id
 from app.services.business.agent_service import AgentService
 from app.services.business.agent_tool_settings.service import AgentToolSettingsService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
+from app.services.business.communication.user_questions import UserQuestionService
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.message_service import MessageService
 from app.services.business.persistent_task_service import PersistentTaskService
@@ -101,6 +102,7 @@ class _AppContainerProtocol(Protocol):
     job_service: JobServiceProtocol
     agent_execution_service: AgentExecutionService
     message_service: MessageService
+    user_question_service: UserQuestionService
     attachment_blob_store: AttachmentBlobStore
     runtime_service: WorkspaceRuntimeLifecycleService
     goal_service: SessionGoalService
@@ -279,6 +281,10 @@ def get_workspace_activity_service(request: Request) -> WorkspaceActivityService
 
 def get_node_debug_service(request: HTTPConnection) -> NodeDebugService:
     return _require_service(request, "node_debug_service", NodeDebugService, "NodeDebugService 尚未在应用启动阶段初始化")
+
+
+def get_user_question_service(request: Request) -> UserQuestionService:
+    return get_workspace_container(request).user_question_service
 
 
 def get_message_service(request: Request) -> MessageService:

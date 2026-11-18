@@ -297,9 +297,10 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
     config_service.get_agent_runtime_config.return_value = {
         "system_prompt": "base prompt",
         "runtime_identity_description": "测试身份说明",
-        "providers": [
+        "models": [
             {
-                "id": "backup_3",
+                "provider_id": "backup_3",
+                "model_id": "gpt-5.6-luna",
                 "model": "gpt-5.6-luna",
                 "api_mode": {
                     "protocol": "chat_completions",
@@ -309,7 +310,8 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
                 },
             },
             {
-                "id": "backup_4",
+                "provider_id": "backup_4",
+                "model_id": "gpt-5.6-luna",
                 "model": "gpt-5.6-luna",
                 "api_mode": {
                     "protocol": "chat_completions",
@@ -323,7 +325,7 @@ def test_build_runtime_injects_selected_provider_and_relative_workspace_scope(
     monkeypatch.setattr(
         provider_model,
         "build_model_from_provider",
-        lambda provider, runtime_config, prompt_cache_key=None: FakeListChatModel(
+        lambda provider, runtime_config, prompt_cache_key=None, gateway_id=None: FakeListChatModel(
             responses=["ok"]
         ),
     )

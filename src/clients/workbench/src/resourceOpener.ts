@@ -1,6 +1,5 @@
-import { gatewayWorkspaceKey } from "../../web/src/api/workspaceIdentity.js";
+import { gatewayWorkspaceKey, type GatewayRequestTarget, type WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
-import type { WorkspaceOwner } from '../../web/src/api/workspaceIdentity.js';
 import { Disposable, type IReference } from '../upstream/src/vs/base/common/lifecycle.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
 import { ITextModelService, type IResolvedTextEditorModel } from '../upstream/src/vs/editor/common/services/resolverService.js';
@@ -15,6 +14,8 @@ import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../upst
 import { IEditorResolverService } from '../upstream/src/vs/workbench/services/editor/common/editorResolverService.js';
 import type { GatewayResourceAddressDTO } from '../../web/src/types/protocol_generated/boxteam/gateway/v2/public.js';
 import { gateway } from './agentApi.js';
+import { inspectItem } from './react/itemActions.js';
+import { itemContentUri } from './itemDocuments.js';
 import { ThreadInput } from './threadInput.js';
 import { workspaceFileEditorInput, workspaceFileUri } from './workspaceFiles.js';
 import { workspaceContext } from './workspaceContext.js';
@@ -22,7 +23,7 @@ import { sourceDocumentUri } from './sourceDocuments.js';
 import { ChangeDocuments } from './changeFiles.js';
 import { changeFileUri } from './readonlyDocuments.js';
 import { captureSearchOwner } from './search/target.js';
-import { ConfigurationSourceOwner, type SourceTarget } from './settings/sourceOwner.js';
+import { ConfigurationSourceOwner } from './settings/sourceOwner.js';
 import { openConfigurationSourceCommand, type ConfigurationSourceOpenRequest } from './settings/commands.js';
 import type { ThreadEditorOptions } from './threadPane.js';
 import { t } from '../../shared/core/i18n/index.js';
@@ -54,7 +55,7 @@ export class ResourceOpener extends Disposable implements IOpener {
     if (!/^boxteam:/i.test(uri)) return false;
     const groupId = options.boxteamTargetGroup ?? this.groups.activeGroup.id;
     const openToSide = options.openToSide;
-    const editorOptions = options.editorOptions && { ...options.editorOptions };
+    let editorOptions = options.editorOptions && { ...options.editorOptions };
     const label = options.boxteamResourceLabel;
     const resourceOwner = options.boxteamResourceOwner && { ...options.boxteamResourceOwner };
     const gatewayId = workspaceContext.getSnapshot().gatewayId;
@@ -88,7 +89,7 @@ export class ResourceOpener extends Disposable implements IOpener {
         assertAccess();
       }
       if (address.kind === 'config') {
-        const targets: SourceTarget[] = address.scope === 'workspace'
+        const targets: GatewayRequestTarget[] = address.scope === 'workspace'
           ? [{ gateway_id: address.gateway_id, workspace_id: address.scope_id }]
           : [{ gateway_id: address.gateway_id }, ...(address.scope !== 'gateway' && sourceOwner?.gatewayId === address.gateway_id
             ? [{ gateway_id: sourceOwner.gatewayId, workspace_id: sourceOwner.workspaceId }] : [])];
@@ -158,6 +159,20 @@ export class ResourceOpener extends Disposable implements IOpener {
         input = { resource: sourceDocumentUri(owner, sourceUri), description: `${owner.workspaceId} · ${address.kind}` };
         // 沿原 resolver 先取得引用：一次重解路由及读取即可完成核验，失败时不创建空分屏。
         references.push(await this.models.createModelReference(input.resource));
+      }
+      if (address.item_id && input instanceof ThreadInput) {
+        const result = await inspectItem(input.owner, { item_id: address.item_id, operation: 'location' });
+        assertAccess();
+        if (result.location?.turn_id) {
+          Object.assign(editorOptions ??= {}, { boxteamMessage: { ...result.location, turn_id: result.location.turn_id } });
+        } else {
+          const content = await inspectItem(input.owner, { item_id: address.item_id, operation: 'content' });
+          assertAccess();
+          const part = content.contents[0];
+          if (!part) throw new Error(t('chat.itemMenu.contentMissing'));
+          if (part.uri) return this.open(part.uri, { ...options, boxteamTargetGroup: groupId, boxteamResourceOwner: input.owner });
+          input = { resource: itemContentUri(input.owner, address.item_id, 0, part) };
+        }
       }
       if (!(input instanceof ThreadInput)) input = await workspaceFileEditorInput({ ...input, options: editorOptions }, this.resolver);
       assertAccess();

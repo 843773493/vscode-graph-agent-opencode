@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import aclosing
 from urllib.error import URLError
 
 from app.abstractions.session_messages import SessionMessageOrchestratorProtocol
@@ -12,7 +13,10 @@ from app.abstractions.terminal.resources import (
     TerminalPluginDisabled,
     TerminalRequestError,
 )
-from app.abstractions.workspace_resources import ResourceAssociationMissing
+from app.abstractions.workspace_resources import (
+    ResourceAssociationMissing,
+    ResourceChanges,
+)
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
 from app.core.shielded_cleanup import run_cleanup_shielded
@@ -30,13 +34,15 @@ class TerminalSteeringService:
         *,
         terminal_client: TerminalExecutionMonitorClientProtocol,
         session_orchestrator: SessionMessageOrchestratorProtocol,
-        poll_interval_seconds: float = 0.5,
+        reconcile_interval_seconds: float = 60,
+        reconnect_delay_seconds: float = 5,
     ) -> None:
-        if poll_interval_seconds <= 0:
-            raise ValueError("poll_interval_seconds 必须大于 0")
+        if reconcile_interval_seconds <= 0 or reconnect_delay_seconds <= 0:
+            raise ValueError("终端对账与重连间隔必须大于 0")
         self._terminal_client = terminal_client
         self._session_orchestrator = session_orchestrator
-        self._poll_interval_seconds = poll_interval_seconds
+        self._reconcile_interval_seconds = reconcile_interval_seconds
+        self._reconnect_delay_seconds = reconnect_delay_seconds
         self._task: asyncio.Task[None] | None = None
         self._stop_requested = False
 
@@ -70,13 +76,14 @@ class TerminalSteeringService:
         if not task.cancelled():
             task.result()
 
-    async def scan_once(self) -> None:
+    async def scan_once(self, resource_ids: ResourceChanges = None) -> None:
         errors: list[Exception] = []
-        try:
-            await self._terminal_client.sweep_orphans()
-        except ExceptionGroup as error:
-            errors.append(error)
-        terminal_resources = await self._terminal_client.list_resources()
+        if resource_ids is None:
+            try:
+                await self._terminal_client.sweep_orphans()
+            except ExceptionGroup as error:
+                errors.append(error)
+        terminal_resources = await self._terminal_client.list_resources(resource_ids=resource_ids)
         for terminal_resource in terminal_resources:
             if not self._is_candidate(terminal_resource):
                 continue
@@ -160,7 +167,7 @@ class TerminalSteeringService:
     async def _run(self) -> None:
         while True:
             try:
-                await self.scan_once()
+                await self._observe()
             except asyncio.CancelledError:
                 raise
             except TerminalPluginDisabled:
@@ -174,7 +181,7 @@ class TerminalSteeringService:
                 ResourceConflict,
                 ExceptionGroup,
             ) as error:
-                if isinstance(error, TerminalRequestError) and error.status != 409:
+                if isinstance(error, TerminalRequestError) and error.status not in {409, 502, 503, 504}:
                     raise
                 # 关闭后没有下一轮；原扫描失败必须交回关闭方，不能按稍后重试结算成功。
                 if self._stop_requested:
@@ -186,7 +193,29 @@ class TerminalSteeringService:
             # 原owner可能保护收尾并消耗取消；关闭请求不能因此接纳下一轮扫描。
             if self._stop_requested:
                 return
-            await asyncio.sleep(self._poll_interval_seconds)
+            await asyncio.sleep(self._reconnect_delay_seconds)
+
+    async def _observe(self) -> None:
+        loop = asyncio.get_running_loop()
+        reconcile_at = loop.time() + self._reconcile_interval_seconds
+        async with aclosing(self._terminal_client.runtime_changes()) as changes:
+            pending = asyncio.create_task(anext(changes))
+            try:
+                while not self._stop_requested:
+                    done, _ = await asyncio.wait((pending,), timeout=max(0, reconcile_at - loop.time()))
+                    resource_ids = None
+                    if done:
+                        resource_ids = pending.result()
+                        pending = asyncio.create_task(anext(changes))
+                    # 连续变化不推迟全量对账；平时仅处理变化的摘要，不扫描其它终端或孤儿。
+                    if loop.time() >= reconcile_at:
+                        resource_ids = None
+                    await self.scan_once(resource_ids)
+                    if resource_ids is None:
+                        reconcile_at = loop.time() + self._reconcile_interval_seconds
+            finally:
+                pending.cancel()
+                await run_cleanup_shielded(lambda: asyncio.gather(pending, return_exceptions=True))
 
     @staticmethod
     def _is_candidate(terminal_resource: dict[str, object]) -> bool:

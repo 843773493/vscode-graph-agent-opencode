@@ -300,7 +300,7 @@ async def test_set_workspace_default_agent_maps_unknown_agent_to_404() -> None:
 def _start_request():
     from app.schemas.internal_v2.tool_test import ToolTestStartRequest
 
-    return ToolTestStartRequest(agent_id="default", provider_ids=[], repetitions=1)
+    return ToolTestStartRequest(agent_id="default", model_refs=[], repetitions=1)
 
 
 def _read_request():

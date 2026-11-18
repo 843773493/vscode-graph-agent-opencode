@@ -292,7 +292,7 @@ async def test_responses_failure_event_settles_attempt_before_outer_failure(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True])
-async def test_nonstream_chat_generation_keeps_existing_capture_scope(
+async def test_nonstream_chat_generation_records_request_and_response_in_existing_capture_scope(
     monkeypatch: pytest.MonkeyPatch, is_async: bool,
 ) -> None:
     requests: list[dict[str, object]] = []
@@ -317,7 +317,9 @@ async def test_nonstream_chat_generation_keeps_existing_capture_scope(
         attempts = end_upstream_capture(token)
     assert len(requests) == 1 and requests[0].get("stream") is not True
     assert result.generations[0].message.text == "done"
-    assert attempts == []
+    attempt, = attempts
+    assert attempt["request"]["messages"] == [{"role": "user", "content": "hello"}]
+    assert attempt["response"]["choices"][0]["message"]["content"] == "done"
 
 
 @pytest.mark.asyncio

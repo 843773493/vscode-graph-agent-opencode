@@ -23,6 +23,7 @@ from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
     ExecutionQueueRecord,
     ExecutionQueueSnapshot,
+    QueueOrderConflictError,
 )
 from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.schemas.internal_v2.message import MessageDTO
@@ -30,6 +31,7 @@ from app.schemas.internal_v2.pending_request import (
     DeliveryPolicy,
     PendingRequestControl,
     PendingRequestDTO,
+    PendingRequestListDTO,
     PendingRequestSummaryDTO,
     PendingRequestSummaryListDTO,
 )
@@ -164,8 +166,9 @@ class ExecutionQueueService:
             raise RuntimeError("canonical 输入与执行队列 owner 不一致")
         return PendingRequestDTO(
             **reference.model_dump(), content=message.content, attachments=message.attachments,
+            reorderable=record.priority == 0 and record.cursor.admission.execution_origin == "user_turn",
             message_created_at=message.created_at.isoformat(),
-            message_metadata={**message.metadata, "boxteam_session_provider_id": record.input.provider_id},
+            message_metadata={**message.metadata, "boxteam_session_model": record.input.model},
         )
 
     async def load(self, session_id: str) -> list[PendingRequestDTO]:
@@ -206,6 +209,20 @@ class ExecutionQueueService:
                                 reference.session_id, reference.thread_id, job_id=reference.job_id,
                                 policy=policy, expected_revision=revision)
 
+    async def snapshot(self, session_id: str, thread_id: str) -> PendingRequestListDTO:
+        snapshots = await asyncio.to_thread(self._snapshots, session_id)
+        version = sum(snapshot.revision for _owner, snapshot in snapshots)
+        selected = next((snapshot for owner, snapshot in snapshots if owner.thread_id == thread_id), ExecutionQueueSnapshot((), 0))
+        queued = [record for record in selected.records if record.phase == "queued"]
+        return PendingRequestListDTO(
+            session_id=session_id, thread_id=thread_id, thread_revision=selected.revision, snapshot_version=version,
+            active_job_id=next((record.cursor.admission.job_id for record in selected.records if record.phase in {"claimed", "started"}), None),
+            requests=[await self.project(record, position=position, snapshot_version=version) for position, record in enumerate(queued)],
+        )
+
+    async def reorder(self, session_id: str, thread_id: str, *, message_ids: tuple[str, ...], expected_revision: int) -> None:
+        await asyncio.to_thread(self._owner.reorder_execution_queue, session_id, thread_id, message_ids=message_ids, expected_revision=expected_revision)
+
     async def before_dispatch(self, record: ExecutionQueueRecord) -> bool:
         return await asyncio.to_thread(self._owner.execution_queue_before_dispatch, record)
 
@@ -224,6 +241,9 @@ class ExecutionQueueService:
                 "session_id": admission.session_id, "thread_id": admission.thread_id,
                 "execution_id": admission.execution_id, "claim_generation": claimed.claim_generation,
             })
+        except QueueOrderConflictError:
+            await holder.__aexit__(None, None, None)
+            return None
         except BaseException:
             await holder.__aexit__(None, None, None)
             raise
@@ -242,11 +262,16 @@ class ExecutionQueueService:
         _header, references = PendingQueueV5Migration._read_control_snapshot(session_id, path)
         groups: dict[str, list[tuple[str, ExecutionQueueInput]]] = {}
         for reference in references:
+            if reference.provider_id is not None:
+                raise ValueError(
+                    f"pending v5 缺少完整模型引用，无法迁移 Provider 选择: "
+                    f"session_id={session_id}, job_id={reference.job_id}, provider_id={reference.provider_id}"
+                )
             # 原 canonical reader 同时校验正文和 typed admission，不从旧 JSON 补正文。
             await asyncio.to_thread(self._input_reader, reference)
             groups.setdefault(reference.thread_id, []).append((reference.job_id, ExecutionQueueInput(
                 execution_binding=reference.execution_binding, message_id=reference.message_id,
-                agent_id=reference.agent_id, provider_id=reference.provider_id,
+                agent_id=reference.agent_id, model=None,
                 delivery_policy=reference.delivery_policy, gateway_id=reference.gateway_id,
                 request_id=reference.request_id, created_at=reference.created_at.isoformat(),
             )))

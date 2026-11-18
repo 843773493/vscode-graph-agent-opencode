@@ -1108,3 +1108,12 @@ tracked source 变化 MUST 继续由 Resource Observation Platform 异步观察�
 
 - **WHEN** 某本轮必做场景只有 helper、健康接口、文档校验或未经核对的历史收据
 - **THEN** 该场景保持未完成，补与行为及风险对应的产品验证；不以延期拆分放宽身份、顺序、授权、事务或恢复断言
+
+### Requirement: 可重排队列按首次领取冻结消费上下文
+
+用户输入 acceptance SHALL 先冻结稳定身份及正文；调度队列的首次领取 SHALL 在同一 rollout 写事务分配消费顺序、发布该用户 Turn 的活动上下文位置并冻结 runtime notice 消费选集。重排不修改准入提交，恢复同一 claim 不重新选取 notice。上下文因果边界 SHALL 排除尚未领取或后领取执行的输入和私有结果，包含已先执行的用户消息。未领取持久任务提示不提前消费。未执行就撤回的消息仍有可读的取消历史，但不因历史展示而被当作已领取执行。
+
+#### Scenario: 后接受消息先领取
+
+- **WHEN** B 后于 A 接受，但用户将 B 排在 A 前且 B 首先领取
+- **THEN** B 的 sealed request 不含未领取 A；之后 A 的 request 使用 B、A 的实际消费顺序，原 acceptance 身份、封存历史与已消费 notice 不被改写

@@ -64,17 +64,17 @@ def chat_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(
-        item for item in config["llm"]["providers"] if item["id"] == "primary"
-    )
-    provider.update(
+    provider = config["llm"]["providers"]["primary"]
+    provider["defaults"].update(
         {
             "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "browser-chat-tool-loop-stub",
             "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
             "custom_llm_provider": "openai",
         }
     )
+    provider["models"]["default"]["model"] = "browser-chat-tool-loop-stub"
+    for agent in config["agents"].values():
+        agent["model"]["fallbacks"] = []
     gateway_connection = config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})
     if gateway_connection.get("url") in {None, "http://127.0.0.1:8014"}:
         gateway_connection["url"] = f"http://127.0.0.1:{port_block.port(20)}"

@@ -299,7 +299,7 @@ async def test_factory_wired_service_end_to_end(factory_resolver) -> None:
     assert isinstance(resolver, SessionCatalogPathResolver)
     assert got.title == "工厂会话"
     assert got.workspace_id == workspace_id
-    assert got.current_provider_id is not None or got.current_agent_id
+    assert got.current_model is not None or got.current_agent_id
 
 
 # ----------------------------------------------------------------------

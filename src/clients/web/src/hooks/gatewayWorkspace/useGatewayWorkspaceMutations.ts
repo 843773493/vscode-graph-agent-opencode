@@ -4,7 +4,7 @@ import { useCallback, useRef, type MutableRefObject } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import {
   addManagedGatewayWorkspace as apiAddManagedGatewayWorkspace,
-  addSshGatewayWorkspace as apiAddSshGatewayWorkspace,
+  addRemoteGatewayConnection as apiAddRemoteGatewayConnection,
   listGatewayWorkspaces as apiListGatewayWorkspaces,
   removeGatewayWorkspace as apiRemoveGatewayWorkspace,
   renameGatewayWorkspace as apiRenameGatewayWorkspace,
@@ -12,7 +12,7 @@ import {
 } from "../../gatewayApi";
 import type {
   AddManagedGatewayWorkspaceRequest,
-  AddSshGatewayWorkspaceRequest,
+  AddRemoteGatewayConnectionRequest,
   GatewayRuntimeGroupRequest,
   WebUiSettings,
   WebUiSettingsUpdate,
@@ -209,8 +209,8 @@ export function useGatewayWorkspaceMutations({
       runGatewayWorkspaceListTask, selectionIntentRef, setState],
   );
 
-  const addSshGatewayWorkspace = useCallback(
-    async (payload: AddSshGatewayWorkspaceRequest) => {
+  const addRemoteGatewayConnection = useCallback(
+    async (payload: AddRemoteGatewayConnectionRequest) => {
       const selectionIntent = selectionIntentRef.current;
       const listRequest = ++gatewayListRequestRef.current;
       const resolvedApiPort = apiPort ?? DEFAULT_BACKEND_PORT;
@@ -220,7 +220,7 @@ export function useGatewayWorkspaceMutations({
         && selectionIntent === selectionIntentRef.current;
       await runGatewayWorkspaceListTask(async () => {
         try {
-          return await apiAddSshGatewayWorkspace(resolvedApiPort, payload);
+          return await apiAddRemoteGatewayConnection(resolvedApiPort, payload);
         } catch (error) {
           let message = errorMessage(error);
           if (requestIsCurrent()) {
@@ -568,7 +568,7 @@ export function useGatewayWorkspaceMutations({
 
   return {
     addManagedGatewayWorkspace,
-    addSshGatewayWorkspace,
+    addRemoteGatewayConnection,
     removeGatewayWorkspace,
     reorderGatewayWorkspaces,
     renameGatewayWorkspace,

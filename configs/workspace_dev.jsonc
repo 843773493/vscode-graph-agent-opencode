@@ -1,6 +1,6 @@
 {
   "$schema": "./workspace_schema.jsonc",
-  "config_version": 2,
+  "config_version": 3,
   "plugins": { "runtime": { "entries": [] } },
   "resources": {
     "skill_sources": {
@@ -23,155 +23,211 @@
     }
   },
   "llm": {
-    "providers": [
-      {
-        "id": "primary",
-        "endpoint": "https://opencode.ai/zen/v1",
-        "model": "big-pickle",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {"reasoning_content": true}
-        },
-        "api_key": "${OPENCODE_ZEN_API_KEY}",
-      },
-      {
-        "id": "backup_1",
-        "endpoint": "https://api.kilo.ai/api/gateway",
-        "model": "openrouter/free",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {"reasoning_content": true}
-        },
-        "api_key": "${KILO_API_KEY}"
-      },
-      {
-        "id": "backup_2",
-        "endpoint": "https://openrouter.ai/api/v1",
-        "model": "openrouter/free",
-        "custom_llm_provider": "openrouter",
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {"reasoning_content": true}
-        },
-        "api_key": "${OPENROUTER_API_KEY}"
-      },
-      {
-        "id": "backup_3",
-        "endpoint": "https://newapi.hyf2333.top/v1",
-        "model": "gpt-6-luna",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "responses",
-          "model_info": {
-            "supports_vision": true,
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {
-            "reasoning_items": {"summary": true, "encrypted_content": true}
-          },
-          "request_features": {"prompt_cache_key": true},
-          "replay_policy": {"encrypted_content": "same_source"}
-        },
-        "api_key": "${CCTQ_API_KEY}",
-        "request_options": {
-          "overrides": {
-            "reasoning": {
-              "effort": "max",
-              "summary": "auto"
+    "providers": {
+      "primary": {
+        "defaults": {
+          "endpoint": "https://opencode.ai/zen/v1",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
             }
+          },
+          "api_key": "${OPENCODE_ZEN_API_KEY}"
+        },
+        "models": {
+          "default": {
+            "model": "big-pickle"
           }
         }
       },
-      {
-        "id": "backup_4",
-        "endpoint": "https://chatgpt.com/backend-api/codex",
-        "model": "gpt-6-luna",
-        "custom_llm_provider": "chatgpt",
-        "api_mode": {
-          "protocol": "responses",
-          "model_info": {
-            "supports_vision": true,
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {
-            "reasoning_items": {"summary": true, "encrypted_content": true}
-          },
-          "replay_policy": {"encrypted_content": "same_source"}
-        },
-        "auth": {
-          "type": "oauth",
-          "method": "chatgpt"
-        },
-        "request_options": {
-          "overrides": {
-            "reasoning": {
-              "effort": "max",
-              "summary": "auto"
+      "backup_1": {
+        "defaults": {
+          "endpoint": "https://api.kilo.ai/api/gateway",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
             }
+          },
+          "api_key": "${KILO_API_KEY}"
+        },
+        "models": {
+          "default": {
+            "model": "openrouter/free"
           }
         }
       },
-      {
-        "id": "newapi_deepseek",
-        "endpoint": "https://newapi.hyf2333.top/v1",
-        "model": "deepseek-v4.1-flash-1017",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_reasoning": true,
-            "max_input_tokens": 400000
+      "backup_2": {
+        "defaults": {
+          "endpoint": "https://openrouter.ai/api/v1",
+          "custom_llm_provider": "openrouter",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
+            }
           },
-          "supports_reasoning": {"reasoning_content": true}
+          "api_key": "${OPENROUTER_API_KEY}"
         },
-        "api_key": "${CCTQ_API_KEY}",
-        "request_options": {
-          "overrides": {
-            "extra_body": {
+        "models": {
+          "default": {
+            "model": "openrouter/free"
+          }
+        }
+      },
+      "backup_3": {
+        "defaults": {
+          "endpoint": "https://newapi.hyf2333.top/v1",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "responses",
+            "model_info": {
+              "supports_vision": true,
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_items": {
+                "summary": true,
+                "encrypted_content": true
+              }
+            },
+            "request_features": {
+              "prompt_cache_key": true
+            },
+            "replay_policy": {
+              "encrypted_content": "same_source"
+            }
+          },
+          "api_key": "${CCTQ_API_KEY}",
+          "request_options": {
+            "parameters": {
+              "reasoning": {
+                "effort": "max",
+                "summary": "auto"
+              }
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "gpt-6-luna"
+          }
+        }
+      },
+      "backup_4": {
+        "defaults": {
+          "endpoint": "https://chatgpt.com/backend-api/codex",
+          "custom_llm_provider": "chatgpt",
+          "api_mode": {
+            "protocol": "responses",
+            "model_info": {
+              "supports_vision": true,
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_items": {
+                "summary": true,
+                "encrypted_content": true
+              }
+            },
+            "replay_policy": {
+              "encrypted_content": "same_source"
+            }
+          },
+          "auth": {
+            "type": "oauth",
+            "method": "chatgpt"
+          },
+          "request_options": {
+            "parameters": {
+              "reasoning": {
+                "effort": "max",
+                "summary": "auto"
+              }
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "gpt-6-luna"
+          }
+        }
+      },
+      "newapi_deepseek": {
+        "defaults": {
+          "endpoint": "https://newapi.hyf2333.top/v1",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true,
+              "max_input_tokens": 400000
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
+            }
+          },
+          "api_key": "${CCTQ_API_KEY}",
+          "request_options": {
+            "parameters": {
               "reasoning_effort": "xhigh"
             }
           }
+        },
+        "models": {
+          "default": {
+            "model": "deepseek-v4.1-flash-1017"
+          }
         }
       },
-      {
-        "id": "DeepSeek-V4.1-Flash",
-        "endpoint": "http://100.64.0.58:8079/v1/messages",
-        "model": "DeepSeek-V4.1-Flash",
-        "custom_llm_provider": "anthropic",
-        "api_mode": {
-          "protocol": "anthropic_messages",
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_vision": true,
-            "supports_reasoning": true
+      "DeepSeek-V4.1-Flash": {
+        "defaults": {
+          "endpoint": "http://100.64.0.58:8079/v1/messages",
+          "custom_llm_provider": "anthropic",
+          "api_mode": {
+            "protocol": "anthropic_messages",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_vision": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "thinking_blocks": {
+                "thinking": true,
+                "redacted_thinking": false
+              }
+            }
           },
-          "supports_reasoning": {
-            "thinking_blocks": {"thinking": true, "redacted_thinking": false}
+          "api_key": "${DEEPSEEK_V41_FLASH_API_KEY}",
+          "request_options": {
+            "no_proxy": true
           }
         },
-        "api_key": "${DEEPSEEK_V41_FLASH_API_KEY}",
-        "request_options": {
-          "no_proxy": true
+        "models": {
+          "default": {
+            "model": "DeepSeek-V4.1-Flash"
+          }
         }
       }
-    ]
+    }
   },
   "tooling": {
     "policy_defaults": {
@@ -215,14 +271,35 @@
         }
       },
       "model": {
-        "primary_provider": "primary",
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4",
-          "newapi_deepseek",
-          "DeepSeek-V4.1-Flash"
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "newapi_deepseek",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "DeepSeek-V4.1-Flash",
+            "model_id": "default"
+          }
         ]
       },
       "tools": {
@@ -251,7 +328,10 @@
             "tool_id": "fetch_webpage",
             "options": {
               "embedding": {
-                "provider_id": "backup_2",
+                "model_ref": {
+                  "provider_id": "backup_2",
+                  "model_id": "default"
+                },
                 "model": "openai/text-embedding-3-small"
               }
             }
@@ -425,14 +505,35 @@
         }
       },
       "model": {
-        "primary_provider": "primary",
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4",
-          "newapi_deepseek",
-          "DeepSeek-V4.1-Flash"
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "newapi_deepseek",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "DeepSeek-V4.1-Flash",
+            "model_id": "default"
+          }
         ]
       },
       "tools": {
@@ -455,14 +556,35 @@
         }
       },
       "model": {
-        "primary_provider": "primary",
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4",
-          "newapi_deepseek",
-          "DeepSeek-V4.1-Flash"
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "newapi_deepseek",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "DeepSeek-V4.1-Flash",
+            "model_id": "default"
+          }
         ]
       }
     },
@@ -479,14 +601,35 @@
         }
       },
       "model": {
-        "primary_provider": "primary",
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4",
-          "newapi_deepseek",
-          "DeepSeek-V4.1-Flash"
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "newapi_deepseek",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "DeepSeek-V4.1-Flash",
+            "model_id": "default"
+          }
         ]
       }
     }

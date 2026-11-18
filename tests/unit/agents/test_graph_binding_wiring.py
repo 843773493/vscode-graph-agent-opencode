@@ -144,7 +144,7 @@ def test_execution_service_passes_store_to_runtime() -> None:
             agent_id="default",
             execution_overrides={},
             model_visibility_overrides={},
-            preferred_provider_id=None,
+            preferred_model=None,
             include_team_tools=False,
             mcp_tools=[],
             resource_registry=resource_registry,

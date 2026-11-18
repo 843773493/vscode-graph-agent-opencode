@@ -95,6 +95,43 @@ afterEach(() => {
   restoreGlobalDescriptor("window", originalWindowDescriptor);
 });
 
+test("统一请求保留远端错误来源，转成文字仍能定位请求", async () => {
+  const port = 49_397;
+  const context = {
+    source: { component: "gateway", gateway_id: "gateway-B" },
+    target: { gateway_id: "gateway-B", workspace_id: "W2" },
+    stage: "upstream_request", error_type: "ConnectError",
+  };
+  globalThis.fetch = withFetchPreconnect(async (input) => {
+    if (resolveTestUrl(input, port).pathname === "/api/gateway/auth/local-credential") return tokenResponse();
+    return Response.json({ detail: "上游连接失败", request_id: "req-two-hop" }, {
+      status: 502,
+      headers: { "X-Request-ID": "req-two-hop", "X-BoxTeam-Error-Context": JSON.stringify(context) },
+    });
+  });
+  let failure: unknown;
+  try { await requestJson(port, "/api/v1/session-catalog/children"); }
+  catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(HttpRequestError);
+  const error = failure as HttpRequestError;
+  expect(error.context).toEqual(context);
+  expect(error.detail).toBe("上游连接失败");
+  expect(error.requestId).toBe("req-two-hop");
+  for (const fact of ["gateway-B", "W2", "upstream_request", "req-two-hop", "/api/v1/session-catalog/children"]) {
+    expect(error.message).toContain(fact);
+  }
+});
+
+test("错误来源响应头损坏时显式说明，仍保留原状态、正文和请求ID", () => {
+  const error = new HttpRequestError(409, "Conflict", "目录版本冲突", "/catalog", "req-conflict", "{");
+  expect(error.status).toBe(409);
+  expect(error.detail).toBe("目录版本冲突");
+  expect(error.context).toBeNull();
+  expect(error.message).toContain("错误来源元数据无效");
+  expect(error.message).toContain("目录版本冲突");
+  expect(error.message).toContain("req-conflict");
+});
+
 describe("requestJson 请求取消", () => {
 
   test("Gateway 重启轮换本地凭据后会刷新 token 并重试一次", async () => {
@@ -365,11 +402,32 @@ describe("HttpRequestError 错误体诊断", () => {
     expect(failure.requestId).toBe(requestId);
     expect(failure.path).toBe("/api/v1/session-catalog/snapshot");
     expect(failure.detail).toBe("目录读取失败");
-    expect(failure.message).toBe("请求失败 500 Internal Server Error: 目录读取失败");
+    expect(failure.message).toBe("请求失败 500 Internal Server Error: 目录读取失败"
+      + `；请求=/api/v1/session-catalog/snapshot${requestId ? `；request_id=${requestId}` : ""}`);
+    expect(failure.message).not.toContain("body-only");
   });
 });
 
 describe("2xx 非 JSON 响应体的可诊断错误", () => {
+  for (const status of [200, 500]) {
+    test(`${status} 非 JSON 错误摘要不能在 200 字符上限切坏 emoji`, async () => {
+      const port = 49_600 + status;
+      invalidateGatewayToken(port);
+      const prefix = "a".repeat(199);
+      globalThis.fetch = withFetchPreconnect(async input => (
+        resolveTestUrl(input, port).pathname === "/api/gateway/auth/local-credential"
+          ? tokenResponse()
+          : new Response(`${prefix}😀tail`, { status })
+      ));
+      let failure: unknown;
+      try { await requestJson(port, "/api/v1/unicode-diagnostic"); }
+      catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain(`${prefix}…`);
+      expect((failure as Error).message).not.toMatch(/[\uD800-\uDFFF]/u);
+    });
+  }
+
   function installSuccessResponse(
     port: number,
     body: BodyInit | null,

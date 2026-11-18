@@ -43,7 +43,7 @@ DEFAULT_SESSION_METADATA: dict[str, Any] = {
     "delegation": None,
     "generation_origin": None,
     "current_agent_id": "default",
-    "current_provider_id": None,
+    "current_model_json": None,
     "context_source_session_id": None,
 }
 

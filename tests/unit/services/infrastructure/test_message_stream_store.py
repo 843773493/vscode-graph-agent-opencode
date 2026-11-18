@@ -172,7 +172,7 @@ async def test_event_commit_is_idempotent_and_terminal_gate_is_strict(
         event_id="evt_idempotent",
     )
     assert duplicate == first
-    assert (await subscription.get()).event["event_id"] == "evt_idempotent"
+    assert (await subscription.get())["event_id"] == "evt_idempotent"
 
     await writer.commit(
         "block.completed",
@@ -424,7 +424,7 @@ async def test_slow_state_snapshot_keeps_fanout_live_and_coalesces_pending_versi
     try:
         await asyncio.wait_for(asyncio.to_thread(snapshot_started.wait, 1), 2)
         event = await asyncio.wait_for(subscription.get(), 0.2)
-        assert event.event["type"] == "block.delta"
+        assert event["type"] == "block.delta"
         assert not release_snapshot.is_set()
         assert commit_task.done()
         await commit_task
@@ -450,6 +450,73 @@ async def test_slow_state_snapshot_keeps_fanout_live_and_coalesces_pending_versi
     cold = MessageStreamStore(path_resolver=resolver)
     await cold.open_existing(session_id=session_id, thread_id=resolver.main_thread_id(session_id), turn_id=writer.turn_id)
     assert await cold.get_state(writer.turn_stream_id) == state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["completed", "cancelled", "snapshot_failed"])
+async def test_compaction_settles_pending_snapshot_before_recovery(
+    message_stream_store: MessageStreamStoreCase,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    store, resolver, session_id = message_stream_store
+    thread_id = resolver.main_thread_id(session_id)
+    writer = await store.open(session_id=session_id, thread_id=thread_id, turn_id="snapshot_order")
+    await asyncio.gather(*store._snapshot_tasks.values())
+    monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_SNAPSHOT_INTERVAL_EVENTS", 1)
+    started, release, appended = threading.Event(), threading.Event(), threading.Event()
+    original_snapshot, original_append = store._write_state_snapshot, store._append_durable_event
+
+    def blocked_snapshot(owner: str, stream: str, state: Mapping[str, Any]) -> None:
+        if state["snapshot_seq"] == 2:
+            started.set()
+            if not release.wait(5):
+                raise TimeoutError("旧快照未释放")
+        if state["snapshot_seq"] == 3 and outcome == "snapshot_failed":
+            raise OSError("裁剪前快照写入失败")
+        original_snapshot(owner, stream, state)
+
+    def observed_append(path: Path, record: MessageStreamRecord) -> bool:
+        result = original_append(path, record)
+        if record.event["event_seq"] == 3:
+            appended.set()
+        return result
+
+    monkeypatch.setattr(store, "_write_state_snapshot", blocked_snapshot)
+    monkeypatch.setattr(store, "_append_durable_event", observed_append)
+    payload = {"block_id": "text", "operation": "append", "text": "旧"}
+    await writer.commit("block.delta", payload)
+    pending = None
+    try:
+        assert await asyncio.to_thread(started.wait, 3)
+        monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_MAX_BYTES", 1)
+        monkeypatch.setattr(message_stream_store_module, "MESSAGE_STREAM_RETAINED_BYTES", 1)
+        pending = asyncio.create_task(writer.commit("block.delta", {**payload, "text": "新"}))
+        assert await asyncio.to_thread(appended.wait, 3)
+        if outcome == "cancelled":
+            pending.cancel()
+        assert not pending.done(), "裁剪提交必须等待旧快照结算"
+    finally:
+        release.set()
+        results = await asyncio.gather(*([pending] if pending else []), return_exceptions=True)
+        await asyncio.gather(*store._snapshot_tasks.values(), return_exceptions=True)
+    if outcome == "completed":
+        assert results[0]["event_seq"] == 3
+    else:
+        assert isinstance(results[0], asyncio.CancelledError if outcome == "cancelled" else OSError)
+    cold = MessageStreamStore(path_resolver=resolver)
+    await cold.open_existing(session_id=session_id, thread_id=thread_id, turn_id=writer.turn_id)
+    state = await cold.get_state(writer.turn_stream_id)
+    assert state["snapshot_seq"] == 3
+    assert state["blocks"][0]["text"] == "旧新"
+    if outcome == "snapshot_failed":
+        events = await cold.list_events(session_id=session_id, turn_stream_id=writer.turn_stream_id, after_seq=0)
+        assert [event["event_seq"] for event in events] == [1, 2, 3]
+    else:
+        assert json.loads(store._state_path(session_id, writer.turn_stream_id).read_text()) == state
+    following = await writer.commit("block.delta", {**payload, "text": "后"})
+    assert following["event_seq"] == 4
+    await asyncio.gather(*store._snapshot_tasks.values())
 
 
 @pytest.mark.asyncio
@@ -1117,7 +1184,7 @@ async def test_delta_boundary_interrupt_matrix_has_same_live_checkpoint_snapshot
     )
     await writer.close_interrupted(f"intr_{stage}")
     live_events = [
-        (await subscription.get()).event
+        await subscription.get()
         for _ in range(4 if stage in {"reasoning", "text"} else 3)
     ]
     live_types = [event["type"] for event in live_events]
@@ -1374,10 +1441,9 @@ async def test_tool_completion_writer_failure_reuses_original_completion(
     injected = False
     injected_error = RuntimeError(f"injected {failure_stage}")
 
-    def append_with_failure(*args: object) -> None:
+    def append_with_failure(path: Path, record: MessageStreamRecord) -> bool:
         nonlocal injected
-        record = args[-1]
-        event = record.event if isinstance(record, MessageStreamRecord) else None
+        event = record.event
         if (
             not injected
             and isinstance(event, Mapping)
@@ -1385,9 +1451,9 @@ async def test_tool_completion_writer_failure_reuses_original_completion(
         ):
             injected = True
             if failure_stage == "after_fsync":
-                original_append(*args)
+                original_append(path, record)
             raise injected_error
-        original_append(*args)
+        return original_append(path, record)
 
     monkeypatch.setattr(store, "_append_durable_event", append_with_failure)
     completion_calls: list[tuple[dict[str, object], str | None]] = []
@@ -1710,7 +1776,7 @@ async def test_fsync_failure_reloads_uncertain_append_before_next_commit(
     assert next_event["event_seq"] == seqs[-1]
 
     # 失败提交没有 live fanout；订阅者只能看到后续成功提交的事件。
-    assert subscription.queue.get_nowait().event["event_seq"] == next_event["event_seq"]
+    assert subscription.queue.get_nowait()["event_seq"] == next_event["event_seq"]
     with pytest.raises(asyncio.QueueEmpty):
         subscription.queue.get_nowait()
 
@@ -1806,10 +1872,10 @@ async def test_cancelled_commit_waits_for_fsync_before_next_commit(
     first_fsync = True
 
     def observed_append(
-        owner_session: str, path: Path, stream_id: str, record: MessageStreamRecord,
-    ) -> None:
+        path: Path, record: MessageStreamRecord,
+    ) -> bool:
         try:
-            original_append(owner_session, path, stream_id, record)
+            return original_append(path, record)
         finally:
             if record.event["event_id"] == "evt_cancelled_fsync":
                 append_finished.set()
@@ -1869,7 +1935,7 @@ async def test_cancelled_commit_waits_for_fsync_before_next_commit(
     assert isinstance(settled[0], expected_failure), settled[0]
     next_event = settled[1]
     assert isinstance(next_event, dict) and next_event["event_seq"] == 3
-    assert subscription.queue.get_nowait().event == next_event
+    assert subscription.queue.get_nowait() == next_event
     with pytest.raises(asyncio.QueueEmpty):
         subscription.queue.get_nowait()
     duplicate = await writer.commit(
@@ -2204,9 +2270,9 @@ async def test_completed_stream_closes_running_blocks_with_public_events(
 
     closed: list[dict[str, object]] = []
     while not subscription.queue.empty():
-        record = await subscription.get()
-        if record.event["type"] == "block.completed":
-            closed.append(record.event)
+        event = await subscription.get()
+        if event["type"] == "block.completed":
+            closed.append(event)
     assert [event["block_id"] for event in closed] == ["block_1", "block_late"]
     for event in closed:
         assert event["block_id"] == event["payload"]["block_id"]

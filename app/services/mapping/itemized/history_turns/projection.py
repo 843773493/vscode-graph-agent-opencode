@@ -167,7 +167,9 @@ def project_detail(
             "timed_out",
         }
         requested = (
-            "final_response"
+            "metadata"
+            if part.kind == "context_notice"
+            else "final_response"
             if part.kind == "final_text"
             or (part.partial is True and part.completion_reason == "user_interrupt")
             or terminal_without_final
@@ -317,7 +319,9 @@ def summary(detail: TurnDetailDTO) -> TurnSummaryDTO:
                     else part.text,
                 }
             )
-            for part in detail.response_parts[:128]
+            # 空正文的来源标记不挤占普通内容预算，也不能因附在详情末尾而被截掉。
+            for index, part in enumerate(detail.response_parts)
+            if index < 128 or part.kind == "context_notice"
         ],
         activity_stats=detail.activity_stats,
     )

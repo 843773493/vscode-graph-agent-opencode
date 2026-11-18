@@ -34,7 +34,6 @@ export default function WorkspaceAttachmentPreview({
   onDirectoryShortcutUpdated?: () => void;
 }): React.ReactNode {
   const [shortcutBusy, setShortcutBusy] = React.useState(false);
-  const [shortcutAdded, setShortcutAdded] = React.useState(false);
   const [shortcutError, setShortcutError] = React.useState<string | null>(null);
   const [source, setSource] = React.useState<string | null>(null);
   const [text, setText] = React.useState<string | null>(null);
@@ -98,12 +97,10 @@ export default function WorkspaceAttachmentPreview({
     if (!attachment.directory_uri) return;
     setShortcutBusy(true);
     setShortcutError(null);
-    setShortcutAdded(false);
     try {
       await addSessionFileTreeShortcut(apiPort, sessionId, {
         path: attachment.directory_uri, label: t("workspace.attachment.directoryShortcutLabel", name),
       }, workspaceId);
-      setShortcutAdded(true);
     } catch (reason: unknown) {
       setShortcutError(errorMessage(reason));
     } finally {
@@ -114,7 +111,7 @@ export default function WorkspaceAttachmentPreview({
   };
 
   return (
-    <section className="workspace-attachment-preview" aria-label={t("workspace.attachment.preview", name)}>
+    <section className="workspace-attachment-preview panel-feedback-host" aria-busy={loading} aria-label={t("workspace.attachment.preview", name)}>
       <header className="workspace-attachment-preview-header">
         <div>
           <strong title={name}>{name}</strong>
@@ -136,14 +133,11 @@ export default function WorkspaceAttachmentPreview({
           </a>
         ) : null}
       </header>
-      {shortcutAdded ? <div role="status">{t("workspace.attachment.directoryAdded")}</div> : null}
-      {shortcutError ? <div role="alert">{t("workspace.attachment.addDirectoryFailed", shortcutError)}</div> : null}
-      {loading ? <div className="workspace-attachment-preview-status" role="status">{t("workspace.attachment.loadingOriginal")}</div> : null}
-      {error ? (
-        <div className="workspace-attachment-preview-error" role="alert">
-          {t("workspace.attachment.readOriginalFailed", error)}
-        </div>
-      ) : null}
+
+      <div className="panel-feedback">
+        {shortcutError ? <p role="alert">{t("workspace.attachment.addDirectoryFailed", shortcutError)}</p> : null}
+        {error ? <p role="alert">{t("workspace.attachment.readOriginalFailed", error)}</p> : null}
+      </div>
       {!loading && !error && text !== null ? (
         <div className="workspace-attachment-text-preview">
           <pre>{text}</pre>

@@ -1,8 +1,9 @@
+import type { ModelReference } from "./backend";
 import type {
   ToolDTO,
   ToolSelectionChange as ToolSelectionChangeDTO,
   ToolTestAttemptDTO,
-  ToolTestProviderResultDTO,
+  ToolTestModelResultDTO,
   ToolTestRunDTO,
   ToolTestRunListDTO,
 } from "./protocol_generated/boxteam/workspace/v2/public";
@@ -41,11 +42,11 @@ export type ToolCatalogItem = Omit<
 };
 
 export type ToolSelectionChange = ToolSelectionChangeDTO;
-export type ToolTestAttempt = ToolTestAttemptDTO;
-export type ToolTestProviderResult = Required<ToolTestProviderResultDTO>;
-export type ToolTestRun = Omit<ToolTestRunDTO, "progress" | "providers" | "attempts"> & {
+export type ToolTestAttempt = Omit<ToolTestAttemptDTO, "model_ref"> & { model_ref: ModelReference };
+export type ToolTestModelResult = Omit<Required<ToolTestModelResultDTO>, "model_ref"> & { model_ref: ModelReference };
+export type ToolTestRun = Omit<ToolTestRunDTO, "progress" | "models" | "attempts"> & {
   progress: number;
-  providers: ToolTestProviderResult[];
+  models: ToolTestModelResult[];
   attempts: ToolTestAttempt[];
 };
 export type ToolTestRunList = Omit<ToolTestRunListDTO, "items"> & {

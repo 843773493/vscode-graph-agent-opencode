@@ -45,6 +45,7 @@ export function conversationFromTurn(turn: TurnRecord, threadId: string): Conver
             ? firstUserMessage.metadata ?? {}
             : {}),
           source: "turn_projection",
+          last_item_message_id: userMessages.at(-1)?.message_id,
           job_id: turn.job_id,
           turn_id: turn.turn_id,
           turn_revision: turn.revision,

@@ -1,10 +1,11 @@
 import { t } from "../../../../shared/core/i18n/index.js";
 import React from "react";
-import type { TurnMessageLocationDTO, TurnToolResultDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { TurnMessageLocationDTO, TurnToolResultDTO, ThreadItemLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 export const MessageSearchLocationContext = React.createContext<{
   message?: TurnMessageLocationDTO;
   tool?: TurnToolResultDTO;
+  item?: ThreadItemLocationDTO;
   close: () => void;
   onMount: () => void;
 }>({ close: () => {}, onMount: () => {} });

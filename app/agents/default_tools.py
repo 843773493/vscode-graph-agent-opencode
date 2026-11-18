@@ -25,6 +25,7 @@ from app.agents.tools.terminal import (
     create_write_stdin_tool,
 )
 from app.agents.tools.testing import create_test_tool
+from app.agents.tools.user_questions import create_ask_user_async_tool
 from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.workspace_files.text_owner import (
     WorkspaceTextMutationOwner,
@@ -32,6 +33,7 @@ from app.services.infrastructure.workspace_files.text_owner import (
 from app.services.orchestration.background_work.registry import BackgroundTaskRegistry
 
 if TYPE_CHECKING:
+    from app.services.business.communication.user_questions import UserQuestionService
     from app.services.business.session_goal_service import SessionGoalService
 
 
@@ -47,6 +49,8 @@ def build_default_tools(
     terminal_resource_owner: TerminalResourceOwner | None = None,
     invocation_context: ToolInvocationContext | None = None,
     goal_service: SessionGoalService | None = None,
+    user_question_service: UserQuestionService | None = None,
+    user_facing: bool = True,
     session_communication_service: SessionCommunicationProtocol | None = None,
     include_test_tools: bool = False,
     include_team_tools: bool = False,
@@ -111,6 +115,8 @@ def build_default_tools(
         tools.extend(
             create_goal_tools(session_id=session_id, goal_service=goal_service, invocation_context=invocation_context)
         )
+    if user_question_service is not None and user_facing:
+        tools.append(create_ask_user_async_tool(user_question_service, invocation_context))
     if include_test_tools:
         tools.insert(0, create_test_tool())
     return tools

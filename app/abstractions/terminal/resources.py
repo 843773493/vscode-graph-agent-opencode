@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Protocol
 
-from app.abstractions.workspace_resources import ResourceRequestError, ResourceTransport
+from app.abstractions.workspace_resources import (
+    ResourceChanges,
+    ResourceRequestError,
+    ResourceTransport,
+)
 
 TerminalSnapshot = dict[str, object]
 
@@ -39,6 +44,12 @@ class TerminalRequestError(ResourceRequestError):
 
 
 class TerminalTransport(ResourceTransport, Protocol):
+    async def list_resources(self, *, resource_ids: frozenset[str] | None = None) -> list[TerminalSnapshot]: ...
+
+    def changes(self) -> AsyncIterator[ResourceChanges]:
+        """连接就绪及资源状态改变时通知；正文仍从原 owner 读取。"""
+        ...
+
     async def create_terminal(
         self, *, terminal_id: str, owner_revision: int, title: str, cwd: str,
         agent_id: str | None = None,

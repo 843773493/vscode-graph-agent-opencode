@@ -98,6 +98,7 @@ def _project_wire_snapshot(
         include_runtime_notices=True, include_summaries=True,
         target_format=snapshot.target_format,
         include_native=isinstance(wire_profile, ResponsesWireProfile),
+        wire_profile=wire_profile,
     )
     preimage = normalize_wire_request(finalize_provider_wire(
         messages=projection.messages, tools=projection.tools,

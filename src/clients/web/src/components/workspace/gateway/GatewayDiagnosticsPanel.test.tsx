@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from "bun:test";
-import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { GatewayDiagnostics, GatewayWorkspace } from "../../../types/backend";
 import { restoreGlobalDescriptor } from "../../../tests/testGlobals";
@@ -144,7 +143,7 @@ test("非安全上下文下复制日志仍走兼容复制，而不是直接报�
 
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(<GatewayDiagnosticsPanel apiPort={8021} workspaces={[workspace]} />);
+    renderer = create(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8021} />);
   });
   await flush();
 
@@ -180,7 +179,7 @@ test("展示实际日志进程、stdout-only 与逐进程失败", async () => {
   installGatewayFetch(({ path }) => path === "/api/gateway/diagnostics"
     ? Response.json({ data: snapshot, request_id: "req_processes" }) : undefined, { token: "diag-token" });
   let renderer!: ReactTestRenderer;
-  act(() => { renderer = create(<GatewayDiagnosticsPanel apiPort={8021} workspaces={[workspace]} />); });
+  act(() => { renderer = create(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8021} />); });
   await flush();
   const output = JSON.stringify(renderer.toJSON());
   for (const value of ["gateway-instance", "backend-instance", "actual-revision", "stdout-only", "backend-log",
@@ -203,7 +202,7 @@ test("诊断摘要不复制日志、错误正文或未知扩展字段", async ()
   let copied = "";
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copied = text; } } });
   let renderer!: ReactTestRenderer;
-  act(() => { renderer = create(<GatewayDiagnosticsPanel apiPort={8021} workspaces={[workspace]} />); });
+  act(() => { renderer = create(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8021} />); });
   await flush();
   const copy = renderer.root.findAllByType("button").find(button => button.children.includes("复制诊断摘要"));
   expect(copy).toBeDefined();
@@ -217,20 +216,20 @@ test("诊断摘要不复制日志、错误正文或未知扩展字段", async ()
 
 test("存储位置只展示原诊断归属，保留设置失败携带原 request_id", async () => {
   const snapshot = { ...diagnostics(), control_directory: String.raw`C:\BoxTeam\control`, log_directory: String.raw`C:\BoxTeam\logs` };
-  const targets: Array<[string, string | null]> = [];
+  const targets: unknown[] = [];
   installGatewayFetch(({ path }) => path === "/api/gateway/diagnostics"
     ? Response.json({ data: snapshot, request_id: "req_storage" }) : undefined, { token: "diag-token" });
   let renderer!: ReactTestRenderer;
-  act(() => { renderer = create(<GatewayDiagnosticsPanel apiPort={8035} workspaces={[workspace]}
-    onOpenRetention={async (gatewayId, connectionId) => {
-      targets.push([gatewayId, connectionId]);
+  act(() => { renderer = create(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8035}
+    onOpenRetention={async target => {
+      targets.push(target);
       throw new HttpRequestError(403, "Forbidden", "configuration_read", "/api/gateway/config/sources", "req_retention_denied");
     }} />); });
   await flush();
   expect(JSON.stringify(renderer.toJSON())).toContain(JSON.stringify(snapshot.control_directory).slice(1, -1));
   const open = renderer.root.findAllByType("button").find(button => button.children.includes("打开 Gateway 日志保留设置"));
   await act(async () => { open!.props.onClick(); await Promise.resolve(); });
-  expect(targets).toEqual([[snapshot.gateway_id, null]]);
+  expect(targets).toEqual([{ gateway_id: snapshot.gateway_id, gateway_connection_id: undefined }]);
   expect(JSON.stringify(renderer.toJSON())).toContain("request_id=req_retention_denied");
   renderer.unmount();
 });
@@ -251,7 +250,7 @@ test("运行统计消费原诊断回执并区分未知与真实零值", async ()
     return Response.json({ data: snapshot, request_id: "req_observation" });
   }, { token: "diag-token" });
   let renderer!: ReactTestRenderer;
-  act(() => { renderer = create(<GatewayDiagnosticsPanel apiPort={8021} workspaces={[workspace]} />); });
+  act(() => { renderer = create(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8021} />); });
   await flush();
   const output = JSON.stringify(renderer.toJSON());
   for (const value of ["observed-gateway", "rev-observed", "遥测：已停用", "运行统计：已启用", "HTTP 请求：7", "累计耗时 42 ms",
@@ -260,7 +259,7 @@ test("运行统计消费原诊断回执并区分未知与真实零值", async ()
   renderer.unmount();
 });
 
-test("先发后到的旧诊断响应不得覆盖切换后的新范围", async () => {
+test("相同工作区 UUID 切换 Gateway，旧诊断响应不得覆盖新范围", async () => {
   // 诊断范围（Gateway/工作区/日志入口）可被连续切换，每次切换都会重发请求。
   // 慢的旧请求若在快的旧请求之后返回，必须被丢弃，否则展示态会回退到用户
   // 已经不看的那个范围，出现「选了 B 却显示 A 的日志」。
@@ -285,14 +284,14 @@ test("先发后到的旧诊断响应不得覆盖切换后的新范围", async ()
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <GatewayDiagnosticsPanel apiPort={8023} workspaces={[workspace, secondWorkspace()]} />,
+      <GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8023} target={{ gateway_id: "gateway-first", workspace_id: workspace.workspace_id }} />,
     );
   });
   await flush();
 
-  // 第一次请求仍在途时切换工作区，触发第二次请求。
-  const workspaceSelect = renderer.root.findAllByType("select")[1];
-  act(() => workspaceSelect.props.onChange({ target: { value: gatewayWorkspaceKey(secondWorkspace()) } }));
+  // 保持工作区 UUID 不变，只切换稳定 Gateway 身份，也必须发起新请求。
+  act(() => renderer.update(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8023}
+    target={{ gateway_id: "gateway-second", workspace_id: workspace.workspace_id }} />));
   await flush();
   expect(pending.length).toBe(2);
 
@@ -307,8 +306,8 @@ test("先发后到的旧诊断响应不得覆盖切换后的新范围", async ()
   });
 
   const text = JSON.stringify(renderer.toJSON());
-  expect(text).toContain("TAIL_second");
-  expect(text).not.toContain("TAIL_first");
+  expect(text).toContain("日志-second");
+  expect(text).not.toContain("日志-first");
   renderer.unmount();
 });
 
@@ -337,7 +336,7 @@ test("切换工作区后、新范围响应到达前不得继续渲染旧范围�
   let renderer!: ReactTestRenderer;
   act(() => {
     renderer = create(
-      <GatewayDiagnosticsPanel apiPort={8025} workspaces={[workspace, secondWorkspace()]} />,
+      <GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8025} />,
     );
   });
   await flush();
@@ -346,16 +345,16 @@ test("切换工作区后、新范围响应到达前不得继续渲染旧范围�
     await Promise.resolve();
   });
   await flush();
-  expect(JSON.stringify(renderer.toJSON())).toContain("TAIL_first");
+  expect(JSON.stringify(renderer.toJSON())).toContain("日志-first");
 
   // 切到 gw_second：该范围的诊断请求仍在途。
-  const workspaceSelect = renderer.root.findAllByType("select")[1];
-  act(() => workspaceSelect.props.onChange({ target: { value: gatewayWorkspaceKey(secondWorkspace()) } }));
+  act(() => renderer.update(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8025}
+    target={secondWorkspace()} />));
   await flush();
   expect(pending.length).toBe(2);
 
   const during = JSON.stringify(renderer.toJSON());
-  expect(during).not.toContain("TAIL_first");
+  expect(during).not.toContain("日志-first");
   expect(during).not.toContain("日志读取失败");
 
   // 新范围到达后正常渲染，证明上面是切换空窗而不是面板被卡死。
@@ -365,8 +364,8 @@ test("切换工作区后、新范围响应到达前不得继续渲染旧范围�
   });
   await flush();
   const after = JSON.stringify(renderer.toJSON());
-  expect(after).toContain("TAIL_second");
-  expect(after).not.toContain("TAIL_first");
+  expect(after).toContain("日志-second");
+  expect(after).not.toContain("日志-first");
   renderer.unmount();
 });
 
@@ -386,10 +385,10 @@ test("刷新失败保留上次诊断快照并使用固定反馈槽", async () =>
 
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(<GatewayDiagnosticsPanel apiPort={8027} workspaces={[workspace]} />);
+    renderer = create(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8027} />);
   });
   await flush();
-  expect(JSON.stringify(renderer.toJSON())).toContain("TAIL_gateway");
+  expect(JSON.stringify(renderer.toJSON())).toContain("日志-gateway");
   expect(renderer.root.findByProps({ className: "gateway-console-feedback-slot" }).children).toHaveLength(0);
 
   const refreshButton = renderer.root.findAllByType("button").find((button) => (
@@ -402,7 +401,7 @@ test("刷新失败保留上次诊断快照并使用固定反馈槽", async () =>
   });
 
   const rendered = JSON.stringify(renderer.toJSON());
-  expect(rendered).toContain("TAIL_gateway");
+  expect(rendered).toContain("日志-gateway");
   expect(rendered).toContain("刷新失败");
   expect(rendered).toContain("Gateway 诊断服务暂不可用");
   expect(rendered).not.toContain("正在读取 Gateway 诊断信息");
@@ -422,7 +421,7 @@ test("首次诊断读取失败展示空错误态并停止加载提示", async ()
 
   let renderer!: ReactTestRenderer;
   act(() => {
-    renderer = create(<GatewayDiagnosticsPanel apiPort={8029} workspaces={[workspace]} />);
+    renderer = create(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8029} />);
   });
   await act(async () => {
     await flush();
@@ -445,18 +444,42 @@ test("切换诊断范围及关闭后取消原读取，不发布迟到快照", as
     return new Promise<Response>(resolve => requests.push({ signal: init!.signal!, resolve }));
   }, { token: "diag-cancel-token" });
   let renderer!: ReactTestRenderer;
-  act(() => { renderer = create(<GatewayDiagnosticsPanel apiPort={8033} workspaces={[workspace, secondWorkspace()]} />); });
+  act(() => { renderer = create(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8033} />); });
   await flush();
   expect(requests).toHaveLength(1);
-  act(() => renderer.root.findAllByType("select")[1]!.props.onChange({ target: { value: JSON.stringify([workspace.gateway_id, "gw_second"]) } }));
+  act(() => renderer.update(<GatewayDiagnosticsPanel onOpenLog={async () => {}} apiPort={8033}
+    target={secondWorkspace()} />));
   await flush();
   expect(requests).toHaveLength(2);
   expect(requests[0]!.signal.aborted).toBe(true);
   requests[0]!.resolve(Response.json({ data: diagnosticsFor("stale"), request_id: "req_stale" }));
   await flush();
-  expect(JSON.stringify(renderer.toJSON())).not.toContain("TAIL_stale");
+  expect(JSON.stringify(renderer.toJSON())).not.toContain("日志-stale");
   act(() => renderer.unmount());
   expect(requests[1]!.signal.aborted).toBe(true);
   requests[1]!.resolve(Response.json({ data: diagnosticsFor("closed"), request_id: "req_closed" }));
   await flush();
+});
+
+
+test.each(["gateway", "workspace"] as const)("日志交原生输出，只为工作区日志携带工作区归属：%s", async source => {
+  const snapshot = diagnostics();
+  snapshot.gateway_connection_id = "rgw_remote";
+  snapshot.selected_workspace_id = "workspace-remote";
+  snapshot.logs[0].source = source;
+  if (source === "workspace") snapshot.logs[0].workspace_id = "workspace-log-owner";
+  installGatewayFetch(({ path }) => path === "/api/gateway/diagnostics"
+    ? Response.json({ data: snapshot, request_id: "req_output" }) : undefined, { token: "diag-output-token" });
+  const opened: unknown[] = [];
+  let renderer!: ReactTestRenderer;
+  act(() => { renderer = create(<GatewayDiagnosticsPanel apiPort={8021} onOpenLog={async target => { opened.push(target); }} />); });
+  await flush();
+  try {
+    expect(renderer.root.findAllByType("pre")).toHaveLength(0);
+    const button = renderer.root.findAllByType("button").find(button => button.children.includes("在输出中查看日志"));
+    expect(button).toBeDefined();
+    await act(async () => { button!.props.onClick(); await Promise.resolve(); });
+    expect(opened).toEqual([{ gateway_id: snapshot.gateway_id, gateway_connection_id: "rgw_remote",
+      workspace_id: source === "workspace" ? "workspace-log-owner" : undefined, log_id: snapshot.selected_log_id }]);
+  } finally { await act(async () => renderer.unmount()); }
 });

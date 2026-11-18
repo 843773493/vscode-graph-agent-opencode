@@ -4,14 +4,17 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from urllib.parse import quote
 
-from httpx import AsyncClient, HTTPStatusError, RequestError, TimeoutException
+from httpx import AsyncClient, HTTPStatusError, RequestError, Timeout, TimeoutException
+from httpx_sse import EventSource
 
 from app.abstractions.terminal.resources import (
     TerminalPluginDisabled,
     TerminalRequestError,
 )
+from app.abstractions.workspace_resources import ResourceChanges
 from app.core.failures import mark_public_failure
 from app.core.trace_middleware import get_current_request_id
 from app.core.workspace_identity import validate_workspace_id
@@ -99,9 +102,12 @@ class TerminalManagerClient:
         response = await self._json_request("GET", f"/api/terminals/{resource_id}")
         return self._require_normalized_terminal_record(response)
 
-    async def list_resources(self) -> list[dict[str, object]]:
+    async def list_resources(self, *, resource_ids: frozenset[str] | None = None) -> list[dict[str, object]]:
+        if resource_ids == frozenset():
+            return []
         path = "/api/terminals"
-        response = await self._json_request("GET", path)
+        response = (await self._json_request("GET", path) if resource_ids is None else
+                    await self._json_request("GET", path, query=[("resource_id", value) for value in sorted(resource_ids)]))
         data = response.get("data")
         if not isinstance(data, list):
             raise self._protocol_error("list.data", response)
@@ -111,6 +117,45 @@ class TerminalManagerClient:
                 raise self._protocol_error("list.item", response)
             result.append(self._normalize_terminal_record(item))
         return result
+
+    async def changes(self) -> AsyncIterator[ResourceChanges]:
+        binding = self._current_binding()
+        path = (f"/api/gateway/service-plugins/{quote(binding.package_id, safe='')}/"
+                f"{quote(binding.plugin_id, safe='')}/services/http/api/terminals/events")
+        if self._http_client is None:
+            self._http_client = AsyncClient(timeout=DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS,
+                trust_env=False, follow_redirects=False, verify=auxiliary_service_tls_context())
+        headers = {
+            "accept": "text/event-stream", "X-Local-Token": get_gateway_local_token(),
+            "X-BoxTeam-Workspace-Id": self._workspace_id, "X-BoxTeam-Resource-Owner": "workspace-terminal",
+        }
+        try:
+            async with self._http_client.stream("GET", self._connection.resolve_gateway_url() + path,
+                params={"package_version": binding.package_version, "workspace_id": self._workspace_id},
+                headers=headers, timeout=Timeout(45, connect=DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS),
+            ) as response:
+                if response.is_error:
+                    await response.aread()
+                response.raise_for_status()
+                if not response.headers.get("content-type", "").startswith("text/event-stream"):
+                    raise self._protocol_error("changes.content_type", response.headers.get("content-type"))
+                async for event in EventSource(response).aiter_sse():
+                    if event.event != "terminals_changed":
+                        raise self._protocol_error("changes.event", event.event)
+                    data = event.json()
+                    resource_ids = data.get("resource_ids", False) if isinstance(data, dict) else False
+                    if resource_ids is not None and (not isinstance(resource_ids, list)
+                        or not all(isinstance(value, str) and value for value in resource_ids)):
+                        raise self._protocol_error("changes.resource_ids", data)
+                    yield None if resource_ids is None else frozenset(resource_ids)
+        except HTTPStatusError as error:
+            raise TerminalRequestError(method="GET", path=path, status=error.response.status_code,
+                response_body=error.response.content.decode("utf-8", errors="replace")) from error
+        except TimeoutException as error:
+            raise TimeoutError("终端状态事件流超过心跳等待期限") from error
+        except RequestError as error:
+            raise ConnectionError("终端状态事件流断开；请查看工作区终端服务日志") from error
+        raise ConnectionError("终端状态事件流已结束")
 
     async def read_terminal(self, terminal_id: str) -> dict[str, object]:
         response = await self._json_request(
@@ -259,6 +304,7 @@ class TerminalManagerClient:
         path: str,
         payload: dict[str, object] | None = None,
         *, service: list[PluginServiceReference] | None = None,
+        query: list[tuple[str, str]] | None = None,
     ) -> dict[str, object]:
         binding = self._current_binding()
         base_path = (f"/api/gateway/service-plugins/{quote(binding.package_id, safe='')}/"
@@ -278,7 +324,7 @@ class TerminalManagerClient:
             async with asyncio.timeout(DEFAULT_TERMINAL_REQUEST_TIMEOUT_SECONDS):
                 response = await self._http_client.request(
                     method, self._connection.resolve_gateway_url() + base_path + path, content=body,
-                    params={"package_version": binding.package_version, "workspace_id": self._workspace_id},
+                    params=[("package_version", binding.package_version), ("workspace_id", self._workspace_id), *(query or [])],
                     headers=headers,
                 )
                 response.raise_for_status()

@@ -5,11 +5,13 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, cast
 
+from app.schemas.gateway.secrets import ResolvedSecret
 from app.schemas.internal_v2.config import (
     ConfigDTO,
     ConfigReloadStatusDTO,
     ConfigUpdateRequest,
 )
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config.policy import workspace_config_policy
 from app.services.infrastructure.config.state import (
     ConfigConflictError,
@@ -208,11 +210,37 @@ class ConfigPublicMixin:
             raise ValueError("ui 配置必须是对象")
         return {**raw_public_config, **self._runtime_config_overrides}
 
-    def get_llm_providers(self) -> list[dict]:
-        return self._llm_resolution.get_llm_providers(self._get_effective_config())
+    def list_llm_models(self) -> list[dict[str, Any]]:
+        return self._llm_resolution.list_models(self._get_effective_config())
 
-    def get_llm_provider(self, provider_id: str) -> dict[str, Any]:
-        return self._llm_resolution.get_llm_provider(provider_id)
+    def get_llm_model(self, model: ModelReferenceDTO) -> dict[str, Any]:
+        return self._llm_resolution.get_model(model)
+
+    async def prepare_llm_credentials(self, providers: list[dict[str, Any]]) -> dict[str, ResolvedSecret]:
+        from app.services.infrastructure.gateway_client_common import (
+            GatewayTransportConnection,
+        )
+        from app.services.infrastructure.gateway_secrets.client import (
+            GatewaySecretsClient,
+        )
+
+        references = list(dict.fromkeys(
+            provider["api_key"].removeprefix("secret:") for provider in providers
+            if isinstance(provider.get("api_key"), str) and provider["api_key"].startswith("secret:")
+        ))
+        if not references:
+            return {}
+        return await GatewaySecretsClient(GatewayTransportConnection(config_service=cast("ConfigService", self))).resolve(references)
+
+    def use_llm_credentials(self, credentials: dict[str, ResolvedSecret]):
+        """只在构建／执行作用域展开；配置快照始终保留引用。"""
+        return self._llm_resolution.use_secrets(credentials)
+
+    async def resolve_llm_model(self, model: ModelReferenceDTO) -> dict[str, Any]:
+        resolved = self.get_llm_model(model)
+        credentials = await self.prepare_llm_credentials([resolved])
+        with self.use_llm_credentials(credentials):
+            return self._llm_resolution.expand_model(resolved)
 
     def get_default_agent_runtime_config(self) -> dict[str, Any]:
         return self.get_agent_runtime_config(self.get_default_agent_id())

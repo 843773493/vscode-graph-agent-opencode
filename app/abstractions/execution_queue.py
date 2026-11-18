@@ -14,6 +14,7 @@ from app.schemas.internal_v2.pending_request import (
     DeliveryPolicy,
     PendingRequestControl,
     PendingRequestDTO,
+    PendingRequestListDTO,
     PendingRequestSummaryListDTO,
 )
 
@@ -26,6 +27,7 @@ class ExecutionQueueOwner(Protocol):
     def execution_queue_snapshot(self, session_id: str, thread_id: str) -> ExecutionQueueSnapshot: ...
     def claim_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
                               claim_owner: str, previous_generation: int) -> ExecutionQueueRecord: ...
+    def reorder_execution_queue(self, session_id: str, thread_id: str, *, message_ids: tuple[str, ...], expected_revision: int) -> ExecutionQueueSnapshot: ...
     def start_execution_queue(self, session_id: str, thread_id: str, *, job_id: str,
                               claim_owner: str, claim_generation: int) -> None: ...
     def update_execution_queue_policy(self, session_id: str, thread_id: str, *, job_id: str,
@@ -58,6 +60,10 @@ class ExecutionQueueProtocol(Protocol):
     async def update_policy(
         self, reference: PendingRequestControl, policy: DeliveryPolicy, *, expected_snapshot_version: int | None,
     ) -> None: ...
+
+    async def snapshot(self, session_id: str, thread_id: str) -> PendingRequestListDTO: ...
+
+    async def reorder(self, session_id: str, thread_id: str, *, message_ids: tuple[str, ...], expected_revision: int) -> None: ...
 
     async def before_dispatch(self, record: ExecutionQueueRecord) -> bool: ...
 

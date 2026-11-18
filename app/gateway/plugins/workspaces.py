@@ -142,18 +142,22 @@ class WorkspacePluginBindings:
             async with self.registry.backend_topology_lock:
                 targets = self._targets()
                 observed_signatures = {key: self._signature(target) for key, target in targets.items()}
-            failed_initializations: set[str] = set()
+            incomplete_initializations: set[str] = set()
             for workspace_id, target in targets.items():
                 if (target.plugin_creation is None or not target.desired_running
                     or (self._signatures.get(workspace_id) == self._signature(target)
                         and workspace_id not in self._pending)):
+                    continue
+                if target.managed and not self.registry.has_runtime(target.key):
+                    self._set_state(WorkspacePluginConfigurationDTO(workspace_id=workspace_id, state="waiting"))
+                    incomplete_initializations.add(workspace_id)
                     continue
                 try:
                     await self._initialize_creation(target, WorkspacePluginCreation.model_validate(target.plugin_creation))
                 except (httpx.HTTPError, LookupError, ValueError, RuntimeError) as error:
                     self._set_state(WorkspacePluginConfigurationDTO(
                         workspace_id=workspace_id, state="failed", error=str(error)))
-                    failed_initializations.add(workspace_id)
+                    incomplete_initializations.add(workspace_id)
                     logger.exception("新建工作区插件初始化失败: workspace_id=%s", workspace_id)
             async with self.registry.backend_topology_lock:
                 targets = self._targets()
@@ -176,7 +180,7 @@ class WorkspacePluginBindings:
                         continue
                     if self._signatures.get(workspace_id) != signature or workspace_id in self._pending:
                         self._pending.discard(workspace_id)
-                        if workspace_id not in failed_initializations:
+                        if workspace_id not in incomplete_initializations:
                             await self._refresh(targets[workspace_id])
                 self._signatures = {key: signature for key, signature in observed_signatures.items() if key in targets}
 

@@ -18,6 +18,7 @@ from app.domain.background_work import (
     BackgroundTaskHandle,
     BackgroundTaskStatus,
     BackgroundTaskStep,
+    BackgroundTaskSummary,
 )
 
 BACKGROUND_TASKS_DDL = load_sql(__package__, "migrations/background_tasks.sql")
@@ -25,6 +26,9 @@ BACKGROUND_TASKS_ACTIVE_DDL = load_sql(__package__, "migrations/idx_background_t
 
 
 def background_task_from_row(row: sqlite3.Row) -> BackgroundTaskHandle:
+    metadata = json.loads(row["metadata_json"])
+    if row["result_json"] is not None:
+        metadata["result"] = json.loads(row["result_json"])
     return BackgroundTaskHandle(
         task_id=row["task_id"], session_id=row["session_id"],
         thread_id=row["thread_id"], agent_id=row["agent_id"],
@@ -37,7 +41,7 @@ def background_task_from_row(row: sqlite3.Row) -> BackgroundTaskHandle:
         created_at=datetime.fromisoformat(row["created_at"]),
         started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
         ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
-        metadata=json.loads(row["metadata_json"]),
+        metadata=metadata,
     )
 
 
@@ -102,6 +106,31 @@ class BackgroundWorkMixin:
         ).fetchall()
         return [background_task_from_row(row) for row in rows]
 
+    def list_background_task_summaries(self, *, include_history: bool) -> list[BackgroundTaskSummary]:
+        self._ensure_open()
+        rows = self._connection.execute(
+            "SELECT task_id,session_id,thread_id,agent_id,json_extract(descriptor_json,'$.kind') AS task_name,"
+            "json_extract(descriptor_json,'$.version') AS descriptor_version,status,created_at,started_at,ended_at,metadata_json "
+            "FROM background_tasks WHERE "
+            + ("status<>'deleted'" if include_history else "status IN ('pending','running','reconcile_required')")
+            + " ORDER BY created_at,task_id"
+        )
+        return [BackgroundTaskSummary(
+            task_id=row["task_id"], session_id=row["session_id"], thread_id=row["thread_id"],
+            agent_id=row["agent_id"], task_name=row["task_name"], descriptor_version=row["descriptor_version"],
+            status=row["status"], created_at=datetime.fromisoformat(row["created_at"]),
+            started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+            ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+            metadata=json.loads(row["metadata_json"]),
+        ) for row in rows]
+
+    def list_unsettled_background_tasks(self) -> list[BackgroundTaskHandle]:
+        self._ensure_open()
+        return [background_task_from_row(row) for row in self._connection.execute(
+            "SELECT t.* FROM background_tasks t JOIN session_operation_leases l ON l.lease_id=t.lease_id "
+            "WHERE t.status NOT IN ('pending','running','reconcile_required') AND l.state IN ('active','settling')"
+        )]
+
     def claim_background_task(
         self, task_id: str, *, expected_token: int, runtime_generation: int,
         reconcile: bool = False,
@@ -156,7 +185,7 @@ class BackgroundWorkMixin:
                 ):
                     raise RuntimeError("后台任务消息不能越过精确 thread/agent 归属")
                 self._insert_background_message(connection, message)
-            metadata = json.loads(row["metadata_json"])
+            result_json = row["result_json"]
             if step.result is not None:
                 result = dict(step.result)
                 result_messages = []
@@ -171,14 +200,14 @@ class BackgroundWorkMixin:
                     result_messages.append(json.loads(message["message_json"]))
                 if step.result_message_ids:
                     result["messages"] = result_messages
-                metadata["result"] = result
+                result_json = json.dumps(result, ensure_ascii=False)
             connection.execute(
                 "UPDATE background_tasks SET checkpoint_json=?,external_effect_pending=0,"
-                "status=?,ended_at=?,metadata_json=? WHERE task_id=? AND fencing_token=?",
+                "status=?,ended_at=?,result_json=? WHERE task_id=? AND fencing_token=?",
                 (json.dumps(step.checkpoint, ensure_ascii=False),
                  "completed" if step.completed else "running",
                  datetime.now(UTC).isoformat() if step.completed else None,
-                 json.dumps(metadata, ensure_ascii=False), task_id, token),
+                 result_json, task_id, token),
             )
             return background_task_from_row(connection.execute(
                 "SELECT * FROM background_tasks WHERE task_id=?", (task_id,),

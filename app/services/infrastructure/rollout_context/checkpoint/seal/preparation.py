@@ -43,17 +43,15 @@ from app.services.business.resource_derivations.team import (
     TEAM_SOURCE_IDS,
     team_guidance_content,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     MCP_GUIDANCE_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
-    mcp_guidance_content,
-)
-from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolDefinition,
-    tool_catalog_from_activation,
+    mcp_guidance_content,
+    restore_frozen_tool_catalog,
 )
 from app.services.infrastructure.rollout_context.assembly.manifest import (
     _frozen_source_refs,
@@ -237,6 +235,7 @@ def prepare_registered_context(
             projection = owner.project_context_plan_for_dispatch(
                 session_id, thread_id, snapshot.as_sealed_plan(),
                 target_format=target_format, checkpoint_ns=checkpoint_ns,
+                wire_profile=wire_profile,
             )
         else:
             # 成功 SQL 行仅沿本次 prepare 传给 seal writer 重读，不跨请求保存。
@@ -385,7 +384,7 @@ def prepare_registered_context(
                                 raise ExtensionCatalogUnavailableError("发现结果与原工具调用 activation 不一致")
                             activations[activation_id] = original
                         definitions = {
-                            activation_id: {value.metadata.tool_id: value for value in tool_catalog_from_activation(
+                            activation_id: {value.metadata.tool_id: value for value in restore_frozen_tool_catalog(
                                 original, read_payload, tool_ids=frozenset(requested[activation_id]),
                             ).definitions}
                             for activation_id, original in activations.items()
@@ -403,7 +402,7 @@ def prepare_registered_context(
                                      if source.descriptor.source_id == MCP_GUIDANCE_SOURCE_ID), None)
                     automatic = frozenset(entry["tool_name"] for entry in json.loads(guidance)["automatic_definitions"]) if guidance else frozenset()
                     batch = tool_definition_batch(
-                        batch, catalog_supplier=lambda tool_ids: tool_catalog_from_activation(
+                        batch, catalog_supplier=lambda tool_ids: restore_frozen_tool_catalog(
                             activation_snapshot, read_payload, tool_ids=tool_ids,
                         ), current_items=items, retained_items=retained_items,
                         previous=previous, retained_assembly=retained if retained is not None else previous,

@@ -24,6 +24,7 @@ class GatewayThreadAddressRequest(BaseModel):
     workspace_id: CanonicalWorkspaceId
     session_id: CanonicalSessionId
     thread_id: CanonicalThreadId
+    item_id: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class GatewayChangeAddressRequest(BaseModel):
@@ -49,3 +50,4 @@ class GatewayResourceAddressDTO(BaseModel):
     thread_id: str | None = None
     changeset_id: str | None = None
     change_file_uri: str | None = None
+    item_id: str | None = None

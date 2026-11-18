@@ -494,7 +494,7 @@ async def test_activity_projection_failure_keeps_native_location_in_diagnostics(
         assert "private-activity" not in json.dumps(event)
         if error_type is PermissionError:
             assert "errno=13" in detail_error
-        assert (await subscription.get()).event == event
+        assert await subscription.get() == event
     await store.unsubscribe(subscription)
     assert len([record for record in caplog.records if record.exc_info and record.exc_info[1] is error]) == 3
 

@@ -1,0 +1,22 @@
+.settings-editor .settings-management-actions { flex: 0 0 auto; }
+.settings-editor .settings-tree-container { position: relative; }
+.settings-management-view { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0; background: var(--vscode-editor-background); }
+.settings-editor > .settings-body .settings-tree-container .settings-management-view > h2 { height: auto; flex: 0 0 auto; padding: 12px 24px; margin: 0; }
+.settings-management-body { flex: 1; min-height: 0; }
+.gateway-settings-content { box-sizing: border-box; height: 100%; overflow: auto; padding: 0 24px 24px; font-size: 13px; color: var(--vscode-foreground); }
+.gateway-settings-content h2, .gateway-settings-content h3 { font-size: 13px; font-weight: 600; margin: 8px 0; }
+.gateway-settings-content p, .gateway-settings-content small { color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+.gateway-settings-content :is(.gateway-connection-section,.gateway-device-section,.gateway-federation-peers,.gateway-runtime-group,.gateway-theme-section,.gateway-diagnostics-summary article) { background: transparent; border: 0; border-radius: 0; box-shadow: none; padding: 8px 0; }
+.gateway-settings-content :is(.gateway-connection-section > article,.gateway-device-list > article,.gateway-theme-assets > article) { border: 0; border-bottom: 1px solid var(--vscode-widget-border); border-radius: 0; background: transparent; box-shadow: none; padding: 10px 0; }
+.gateway-settings-content article:hover { background-color: var(--vscode-list-hoverBackground); }
+.gateway-settings-content button { border-radius: 2px; min-height: 24px; font-size: 12px; box-shadow: none; }
+.gateway-settings-content input, .gateway-settings-content select { border-radius: 2px; min-height: 24px; max-width: 100%; }
+.gateway-settings-content code { overflow-wrap: anywhere; }
+.gateway-settings-local { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--vscode-widget-border); }
+.gateway-settings-local small { flex-basis: 100%; }
+.gateway-settings-content .gateway-control-actions { gap: 6px; }
+.gateway-settings-content .gateway-connection-section-heading > span { flex: 0 0 auto; white-space: nowrap; }
+.gateway-settings-content .gateway-diagnostics-summary { display: flex; flex-wrap: wrap; gap: 16px; }
+.gateway-settings-content .gateway-theme-assets { grid-template-columns: repeat(auto-fit,minmax(min(100%,260px),1fr)); }
+
+.settings-editor.boxteam-settings-management .settings-tree-container > .no-results-message { display: none; }

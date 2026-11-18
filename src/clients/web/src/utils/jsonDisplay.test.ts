@@ -10,6 +10,17 @@ import {
 } from "./jsonDisplay";
 
 describe("超大展示文本的兜底截断", () => {
+  test("字符串上限和 JSON 展示预算均不能切坏代理对", () => {
+    const value = `${"a".repeat(LARGE_STRING_DISPLAY_LIMIT - 1)}😀tail`;
+    expect(boundedDisplayString(value)).toBe(`${"a".repeat(LARGE_STRING_DISPLAY_LIMIT - 1)}…（已截断展示，原文 ${value.length} 字符）`);
+    expect(JSON.parse(prettyJson({ result: value })).result).toBe(boundedDisplayString(value));
+    const budgeted = JSON.parse(prettyJson(Array.from({ length: 30 }, () => "😀".repeat(12_000))));
+    const strings = budgeted.filter((item: unknown): item is string => typeof item === "string");
+    for (const text of strings) {
+      expect(text).not.toMatch(/[\uD800-\uDFFF]/u);
+    }
+  });
+
   test("超长普通字符串在展示原语里截断并显式标注原文长度", () => {
     const huge = "a".repeat(LARGE_STRING_DISPLAY_LIMIT + 5000);
     const output = prettyJson({ result: huge });

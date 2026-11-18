@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 
-import { clearSessionGoal, getSessionGoal, getSessionGoalOperation } from "../../api";
+import { clearSessionGoal, getSessionGoalOperation } from "../../api";
+import { listPersistentTasks } from "../persistentTasks";
+import { parseSessionGoalSnapshot } from "../../protocol/sessionGoal";
 import { invalidateGatewayToken } from "../http";
 
 const originalFetch = globalThis.fetch;
@@ -45,58 +47,29 @@ function installGatewayBarrierFetch(
   );
 }
 
-test("Goal GET 返回带控制版本的空 Goal 快照", async () => {
+const target = { gateway_id: "gateway-goal", workspace_id: "workspace-goal" };
+
+test("持续任务查询返回空 Goal 槽位及清空版本，不再读取独立 Goal", async () => {
   let requestedUrl: URL | undefined;
   installGatewayBarrierFetch(49_101, (url, method) => {
     requestedUrl = url;
-    if (
-      method === "GET"
-      && url.pathname === "/api/v1/sessions/ses_without_goal/goal"
-    ) {
-      return Response.json({
-        code: 0,
-        message: "ok",
-        request_id: "req_goal_null",
-        data: { session_id: "ses_without_goal", thread_id: "thr_main", goal: null,
-          control_revision: 0, sync_version: 4 },
-      });
-    }
-    return undefined;
+    if (method !== "GET" || url.pathname !== "/api/v1/persistent-tasks") return undefined;
+    return Response.json({ code: 0, request_id: "req_goal_null", data: {
+      items: [], active_runs: [], runtime: { state: "running", recovering_tasks: 0 },
+      session_goal: { session_id: "ses_without_goal", thread_id: "thr_main", goal: null,
+        control_revision: 3, sync_version: 4 },
+    } });
   });
-
-  expect(await getSessionGoal(49_101, "ses_without_goal", null, undefined, 4)).toEqual({
-    session_id: "ses_without_goal", thread_id: "thr_main", goal: null,
-    control_revision: 0, sync_version: 4,
-  });
-  expect(requestedUrl?.searchParams.get("minimum_sync_version")).toBe("4");
+  const result = await listPersistentTasks(49_101, target, new AbortController().signal, "ses_without_goal");
+  expect(result.session_goal).toEqual({ session_id: "ses_without_goal", thread_id: "thr_main", goal: null,
+    control_revision: 3, sync_version: 4 });
+  expect(requestedUrl?.searchParams.get("session_id")).toBe("ses_without_goal");
 });
 
-test("Goal GET 拒绝低于请求最低版本的快照", async () => {
-  installGatewayBarrierFetch(49_104, (url, method) => method === "GET"
-    && url.pathname === "/api/v1/sessions/ses_stale/goal"
-    ? Response.json({ code: 0, data: { session_id: "ses_stale", thread_id: "thr_main", goal: null,
-      control_revision: 1, sync_version: 3 }, request_id: "req_goal_stale" }) : undefined);
-  await expect(getSessionGoal(49_104, "ses_stale", null, undefined, 4)).rejects.toThrow("sync version is stale");
-});
-
-test("Goal GET 缺少 data 字段时快速失败", async () => {
-  installGatewayBarrierFetch(49_102, (url, method) => {
-    if (
-      method === "GET"
-      && url.pathname === "/api/v1/sessions/ses_invalid_goal/goal"
-    ) {
-      return Response.json({
-        code: 0,
-        message: "ok",
-        request_id: "req_goal_missing_data",
-      });
-    }
-    return undefined;
-  });
-
-  await expect(getSessionGoal(49_102, "ses_invalid_goal")).rejects.toThrow(
-    "后端响应缺少 data 字段",
-  );
+test("持续任务查询缺少 data 字段时快速失败", async () => {
+  installGatewayBarrierFetch(49_102, () => Response.json({ code: 0, request_id: "req_missing_data" }));
+  await expect(listPersistentTasks(49_102, target, new AbortController().signal, "ses_invalid"))
+    .rejects.toThrow("后端响应缺少 data 字段");
 });
 
 test("Goal DELETE 返回权威 main Thread 身份与清除结果", async () => {
@@ -115,9 +88,8 @@ test.each([
   { session_id: "other", thread_id: "main", goal: null, control_revision: 1, sync_version: 1 },
   { session_id: "ses_invalid", thread_id: "main", goal: { goal_id: "partial" }, control_revision: 1, sync_version: 1 },
   { session_id: "ses_invalid", thread_id: "main", goal: null, control_revision: 1, sync_version: -1 },
-])("Goal GET 拒绝损坏快照，不能把无效协议当成空 Goal: %j", async (data) => {
-  installGatewayBarrierFetch(49_105, () => Response.json({ code: 0, data, request_id: "req_invalid_snapshot" }));
-  await expect(getSessionGoal(49_105, "ses_invalid")).rejects.toThrow();
+])("Goal 快照拒绝损坏协议，不能将其当作空 Goal: %j", (data) => {
+  expect(() => parseSessionGoalSnapshot(data, "ses_invalid")).toThrow();
 });
 
 test("Goal 原操作查询拒绝另一操作的回执", async () => {

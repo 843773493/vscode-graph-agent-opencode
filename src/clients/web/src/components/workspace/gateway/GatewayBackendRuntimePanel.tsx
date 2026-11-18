@@ -13,8 +13,8 @@ export interface GatewayBackendRuntimeActions {
 }
 
 export default function GatewayBackendRuntimePanel({
-  workspaces, onStart, onStop, onSafeRestart, onForceRestart,
-}: GatewayBackendRuntimeActions & { workspaces: GatewayWorkspace[] }) {
+  workspaces, workspaceKey, onStart, onStop, onSafeRestart, onForceRestart,
+}: GatewayBackendRuntimeActions & { workspaces: GatewayWorkspace[]; workspaceKey?: string }) {
   const [memberSelection, setMemberSelection] = useState<{
     backendGeneration: string;
     targetWorkspaceId: string;
@@ -65,6 +65,8 @@ export default function GatewayBackendRuntimePanel({
       };
     });
   }, [managedWorkspaces, workspaceById]);
+  const visibleGroups = runtimeGroups.filter(group => !workspaceKey || group.memberWorkspaceIds.some(id =>
+    gatewayWorkspaceKey({ gateway_id: group.groupTarget.gateway_id, workspace_id: id }) === workspaceKey));
   const runRuntimeAction = async (target: GatewayWorkspace, runtimeAction: () => Promise<void>) => {
     setActionBusy(true);
     setActionError(null);
@@ -79,7 +81,7 @@ export default function GatewayBackendRuntimePanel({
   return <section aria-label={t("gateway.runtime.section")}>
     <p>{t("gateway.runtime.lifecycleImpact")}</p>
     {actionError ? <div className="gateway-console-alert" role="alert">{actionError}</div> : null}
-    {runtimeGroups.map((runtimeGroup) => {
+    {visibleGroups.map((runtimeGroup) => {
       const {
         groupKey,
         groupTarget,
@@ -139,7 +141,7 @@ export default function GatewayBackendRuntimePanel({
         </fieldset> : null}
       </article>;
     })}
-    {managedWorkspaces.length === 0 ? <p>{t("gateway.runtime.noManagedWorkspaces")}</p> : null}
+    {visibleGroups.length === 0 ? <p>{t("gateway.runtime.noManagedWorkspaces")}</p> : null}
     {actionBusy ? <p role="status">{t("gateway.runtime.waitForGroup")}</p> : null}
   </section>;
 }

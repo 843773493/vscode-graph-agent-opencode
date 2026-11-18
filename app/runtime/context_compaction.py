@@ -35,7 +35,12 @@ class AgentSummarizationCompactor:
         event: object,
     ) -> ContextCompactionCheck:
         messages = self._as_any_messages(raw_messages)
-        summarization = await run_sync_shielded(self._build_summarization, agent_id)
+        snapshot = self._config_service.get_snapshot()
+        with self._config_service.use_snapshot(snapshot):
+            providers = self._config_service.get_agent_runtime_config(agent_id)["models"]
+            credentials = await self._config_service.prepare_llm_credentials(providers)
+            with self._config_service.use_llm_credentials(credentials):
+                summarization = await run_sync_shielded(self._build_summarization, agent_id)
 
         from app.agents.summarization.planning import build_safe_compaction_partition
         effective_messages = apply_summarization_event(messages, event)

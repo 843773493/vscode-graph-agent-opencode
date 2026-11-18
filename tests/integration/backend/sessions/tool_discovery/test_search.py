@@ -21,10 +21,12 @@ from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
     ExtensionTargetResolutionError,
 )
+from app.services.infrastructure.mcp.frozen_catalog import (
+    restore_frozen_tool_catalog,
+)
 from app.services.infrastructure.mcp.tool_definitions import (
     SkillToolSource,
     definition_resource_id,
-    tool_catalog_from_activation,
 )
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
@@ -80,7 +82,7 @@ async def test_custom_skill_association_is_published_frozen_and_returned_by_sear
     _wire, frozen = prepare_tool_context("skill-tool-association:freeze", boundary="turn")
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
-    restored = tool_catalog_from_activation(
+    restored = restore_frozen_tool_catalog(
         frozen,
         lambda snapshot, binding: saver.read_resource_activation_payload(
             snapshot, binding, storage_owner=(session, thread),
@@ -137,7 +139,7 @@ async def test_skill_associations_do_not_disclose_hidden_or_disabled_tool_names(
     _wire, frozen = prepare_tool_context("private-tool-association", boundary="turn")
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
-    catalog = tool_catalog_from_activation(frozen, lambda snapshot, binding: saver.read_resource_activation_payload(
+    catalog = restore_frozen_tool_catalog(frozen, lambda snapshot, binding: saver.read_resource_activation_payload(
         snapshot, binding, storage_owner=(session, thread)))
     resolver = ToolPolicyResolver(policy_defaults={}, policy_rules={}, restrictions={
         "execution_disabled": ["disabled_skill_tool"], "model_hidden": ["hidden_skill_tool"],
@@ -184,7 +186,7 @@ async def test_disabled_before_publication_remains_known_after_freeze_and_cold_r
             plan_hash=assembly.plan_hash, request_hash=assembly.request_hash,
         )
         assert restored == frozen
-        catalog = tool_catalog_from_activation(restored, lambda snapshot, binding: cold.read_resource_activation_payload(
+        catalog = restore_frozen_tool_catalog(restored, lambda snapshot, binding: cold.read_resource_activation_payload(
             snapshot, binding, storage_owner=(session, thread),
         ))
         tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda current: {
@@ -286,7 +288,7 @@ async def test_materialization_failure_is_paired_and_never_forges_reference(
     else:
         assert not diagnostic_sink.errors
     # 显式重试复用原冻结正文，失败不生成可读取引用或改写目录。
-    assert tool_catalog_from_activation(frozen, read) == catalog
+    assert restore_frozen_tool_catalog(frozen, read) == catalog
     recovered = await tool.ainvoke(call)
     assert recovered.tool_call_id == "write-failure" and recovered.status == "success"
     entry, = json.loads(recovered.content)["results"]
@@ -317,7 +319,7 @@ async def test_model_call_boundary_replaces_full_schema_without_changing_provide
     thread = saver._storage.storage.main_thread_id(session)
 
     def catalog(snapshot):
-        return tool_catalog_from_activation(
+        return restore_frozen_tool_catalog(
             snapshot, lambda frozen, binding: saver.read_resource_activation_payload(frozen, binding, storage_owner=(session, thread)),
         )
 
@@ -360,9 +362,9 @@ async def test_known_unready_definition_is_frozen_without_execution_qualificatio
         disconnected_binding.resolve("mcp__mini__echo")
     _wire, frozen = prepare_tool_context("known:unready")
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        catalog = tool_catalog_from_activation(frozen, lambda snapshot, binding: cold.read_resource_activation_payload(
+        catalog = restore_frozen_tool_catalog(frozen, lambda snapshot, binding: cold.read_resource_activation_payload(
             snapshot, binding, storage_owner=(session, thread)))
-        previous = tool_catalog_from_activation(ready, lambda snapshot, binding: cold.read_resource_activation_payload(
+        previous = restore_frozen_tool_catalog(ready, lambda snapshot, binding: cold.read_resource_activation_payload(
             snapshot, binding, storage_owner=(session, thread)))
     definition, = [item for item in catalog.definitions if item.metadata.origin == "mcp"]
     original, = [item for item in previous.definitions if item.metadata.origin == "mcp"]
@@ -435,11 +437,11 @@ async def test_full_definition_freeze_survives_owner_update_delete_and_cold_save
     assert definition_resource_id("mcp__mini__echo") not in {item.resource_id for item in registry.capture().snapshots}
     _wire, same_turn = prepare_tool_context("discovery:same-turn", boundary="turn")
     assert same_turn == frozen
-    assert tool_catalog_from_activation(same_turn, read) == original
+    assert restore_frozen_tool_catalog(same_turn, read) == original
     saver, session, _connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
-        restored = tool_catalog_from_activation(
+        restored = restore_frozen_tool_catalog(
             frozen, lambda snapshot, binding: cold.read_resource_activation_payload(
                 snapshot, binding, storage_owner=(session, thread),
             ),
@@ -451,7 +453,7 @@ async def test_full_definition_freeze_survives_owner_update_delete_and_cold_save
         binding for binding in frozen.bindings if binding.resource_id != definition_resource_id("ci_logs")
     ))
     with pytest.raises(ExtensionCatalogUnavailableError, match="完整定义"):
-        tool_catalog_from_activation(without_definition, read)
+        restore_frozen_tool_catalog(without_definition, read)
 
 
 async def test_snapshot_failure_remains_paired_tool_error(discovery_case, discovery_tool_factory):

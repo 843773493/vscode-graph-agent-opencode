@@ -228,7 +228,7 @@ async def test_accounting_continuation_and_clear_keep_main_owner(goal_service):
     async def dispatch(current):
         continued.append(current)
 
-    assert await goal_service.dispatch_continuation_if_active("sess_1", "job_1", dispatch)
+    assert await goal_service.dispatch_if_current("sess_1", "job_1", dispatch)
     assert [current.thread_id for current in continued] == [goal.thread_id]
     cleared = await goal_service.clear("sess_1", operation_id="clear-1", expected_control_revision=1)
     assert cleared.status == "applied" and cleared.goal is None and cleared.control_revision == 2
@@ -255,12 +255,12 @@ async def test_continuation_attempt_does_not_publish_a_marker_before_acceptance(
             raise RuntimeError("continuation-not-accepted")
 
     with pytest.raises(RuntimeError, match="continuation-not-accepted"):
-        await goal_service.dispatch_continuation_if_active("sess_1", "job_origin", dispatch)
+        await goal_service.dispatch_if_current("sess_1", "job_origin", dispatch)
     assert goal_store.goal == original
-    assert await goal_service.dispatch_continuation_if_active("sess_1", "job_origin", dispatch)
+    assert await goal_service.dispatch_if_current("sess_1", "job_origin", dispatch)
     accepted = goal_store.goal
     assert accepted.goal_id == original.goal_id and accepted.last_continued_job_id == "job_origin"
-    assert not await goal_service.dispatch_continuation_if_active("sess_1", "job_origin", dispatch)
+    assert not await goal_service.dispatch_if_current("sess_1", "job_origin", dispatch)
     assert attempts == [original.goal_id, original.goal_id] and goal_store.goal == accepted
 
 
@@ -289,6 +289,6 @@ async def test_late_accounting_and_continuation_cannot_mutate_replaced_goal(goal
     async def dispatch(goal):
         dispatched.append(goal)
 
-    assert not await goal_service.dispatch_continuation_if_active("sess_1", "old-job", dispatch, goal_id=old.goal_id)
+    assert not await goal_service.dispatch_if_current("sess_1", "old-job", dispatch, goal_id=old.goal_id)
     assert dispatched == []
     assert await goal_service.get("sess_1") == replacement

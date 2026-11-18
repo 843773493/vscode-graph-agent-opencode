@@ -9,7 +9,7 @@ import { expect } from 'playwright/test';
 const fixture = JSON.parse(process.env.BOXTEAM_ENTITIES_FIXTURE);
 const artifacts = process.env.BOXTEAM_BROWSER_ARTIFACTS;
 assert(artifacts, '必须设置正式测试产物目录');
-const result = { phase: 'initialization', pageErrors: [], consoleErrors: [], writes: [], saves: [], modelRequests: [], initialization: [] };
+const result = { phase: 'initialization', pageErrors: [], consoleErrors: [], writes: [], saves: [], secretOperations: [], modelRequests: [], initialization: [] };
 let browser, page;
 const secret = 'integration-secret-' + randomUUID();
 const safe = value => typeof value === 'string' ? value.replaceAll(secret, '[test-secret-redacted]') : JSON.parse(JSON.stringify(value).replaceAll(secret, '[test-secret-redacted]'));
@@ -21,6 +21,9 @@ try {
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push(message.text()); });
   page.on('request', request => {
     if (request.method() === 'PUT' && request.url().includes('/config/sources/')) result.writes.push(safe(request.postDataJSON()));
+    if (new URL(request.url()).pathname.startsWith('/api/gateway/secrets') && request.method() !== 'GET') {
+      result.secretOperations.push({ method: request.method(), path: new URL(request.url()).pathname });
+    }
     if (/\/messages(?:\?|$)|\/chat\/completions|\/responses(?:\?|$)/.test(new URL(request.url()).pathname)) result.modelRequests.push(request.url());
   });
   const command = (id, ...args) => page.evaluate(({ id, args }) => globalThis.workbench.commands.executeCommand(id, ...args), { id, args });
@@ -42,7 +45,6 @@ try {
     source_key: 'workspace_root_mutable_override', name: '定义管理工作区' };
   const sourceUrl = '/api/v1/config/sources/' + location.source_key;
   const original = (await api(sourceUrl, fixture)).data;
-  const hasProviderOverride = Array.isArray(parse(original.jsonc).llm?.providers);
   const quick = page.locator('.quick-input-widget');
   const modal = page.locator('.monaco-dialog-box[role="dialog"]');
   const form = kind => page.locator(`.configuration-entities[data-definition-kind="${kind}"]`);
@@ -51,7 +53,13 @@ try {
     const control = quick.locator('input').first();
     await expect(control).toBeFocused(); await control.fill(value); await control.press('Enter');
   };
+  const more = async (kind, label) => {
+    await command('notifications.hideToasts');
+    await form(kind).getByRole('button', { name: '更多操作...', exact: true }).click();
+    await page.locator('.monaco-menu-container:visible').getByText(label, { exact: true }).click({ delay: 150 });
+  };
   const save = async kind => {
+    await command('notifications.hideToasts');
     await form(kind).getByRole('button', { name: '保存来源', exact: true }).click();
     await expect(modal).toContainText('保存目标配置来源');
     const response = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === sourceUrl);
@@ -69,39 +77,57 @@ try {
   result.firstAvailableMs = performance.now() - started;
   assert(result.firstAvailableMs <= 3000, `定义管理首次可用 ${result.firstAvailableMs}ms`);
   await form('providers').getByRole('button', { name: '新增 Provider', exact: true }).click();
-  await input('entities-provider'); await input('entities-model'); await input('https://entities.example/v1'); await input('openai');
-  await expect(quick).toBeVisible(); await quick.locator('.monaco-list-row').filter({ hasText: 'chat_completions' }).click();
+  await input('entities-provider');
+  await quick.locator('.monaco-list-row').filter({ hasText: 'chat_completions' }).click();
+  await form('providers').getByRole('checkbox', { name: '连接编辑结束后自动获取一次模型', exact: true }).uncheck();
+  await form('providers').getByRole('textbox', { name: /^API 地址/ }).first().fill('https://entities.example/v1');
+  await form('providers').getByRole('button', { name: '添加模型', exact: true }).click();
+  await input('main'); await input('entities-model');
+  await form('providers').getByRole('button', { name: '设置 API 密钥', exact: true }).first().click();
+  await quick.locator('.monaco-list-row').filter({ hasText: '使用环境变量' }).click();
   await input('${ENTITIES_MISSING_KEY}');
-  if (!hasProviderOverride) {
-    await expect(modal).toContainText('在本层建立整组 Provider 覆盖');
-    await modal.getByRole('button', { name: '新增 Provider', exact: true }).click();
-  }
   await expect(form('providers').locator('[data-definition-id="entities-provider"]')).toBeVisible();
   assert.equal(result.writes.length, 0, '编辑表单不能自动保存');
   result.phase = 'same-jsonc-model';
-  await form('providers').getByRole('button', { name: '打开来源 JSONC', exact: true }).click();
+  await more('providers', '打开来源 JSONC');
   await expect(page.locator('.tabs-container .tab.active')).toContainText(location.source_key + '.jsonc');
   await expect(page.locator('.editor-instance:visible .monaco-editor .view-lines').last()).toContainText('entities-provider');
   await command('boxteam.settings.modelsProviders', location, 'entities-provider');
   await expect(form('providers').locator('[data-definition-id="entities-provider"]')).toBeVisible();
-  await form('providers').getByLabel('模型名称', { exact: true }).fill('entities-model-edited');
+  await form('providers').locator('[data-model-id="main"]').getByRole('textbox', { name: /^模型名称/ }).fill('entities-model-edited');
   await save('providers');
   const providerSaved = (await api(sourceUrl, fixture)).data;
-  const savedProvider = parse(providerSaved.jsonc).llm.providers.find(provider => provider.id === 'entities-provider');
-  assert.equal(savedProvider.model, 'entities-model-edited');
-  assert.equal(parse(result.writes.at(-1).jsonc).llm.providers.find(provider => provider.id === 'entities-provider').api_key, '${ENTITIES_MISSING_KEY}');
-  assert(savedProvider.api_key.startsWith('boxteam-redacted:'), '公开来源文档继续隐藏凭据输入');
+  const savedProvider = parse(providerSaved.jsonc).llm.providers['entities-provider'];
+  assert.equal(savedProvider.models.main.model, 'entities-model-edited');
+  assert.equal(parse(result.writes.at(-1).jsonc).llm.providers['entities-provider'].defaults.api_key, '${ENTITIES_MISSING_KEY}');
+  assert.equal(savedProvider.defaults.api_key, '${ENTITIES_MISSING_KEY}', '公开来源保留引用，不能展开凭据');
   result.phase = 'secret-cancel';
-  const setSecret = () => form('providers').getByRole('button', { name: '设置 API 密钥', exact: true }).click();
+  const setSecret = () => form('providers').getByRole('button', { name: '设置 API 密钥', exact: true }).first().click();
   let writeCount = result.writes.length;
   await setSecret();
+  await quick.locator('.monaco-list-row').filter({ hasText: '新建命名密钥' }).click();
+  await input('取消的密钥');
   await expect(quick.locator('input[type="password"]')).toBeFocused();
   await quick.locator('input[type="password"]').fill(secret);
   await quick.locator('input[type="password"]').press('Escape');
   await expect(quick).not.toBeVisible();
   assert.equal(result.writes.length, writeCount);
   await setSecret();
+  await quick.locator('.monaco-list-row').filter({ hasText: '新建命名密钥' }).click();
+  await input('可复用的测试密钥');
+  const createReceipt = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/gateway/secrets');
   await input(secret);
+  const createdResponse = await createReceipt;
+  const createdKey = await createdResponse.json();
+  assert.equal(createdKey.request_id, createdResponse.headers()['x-request-id']);
+  const secretId = createdKey.data.item.id, secretRef = 'secret:' + secretId;
+  assert(!JSON.stringify(createdKey).includes(secret));
+  const chooseSavedKey = async () => {
+    await expect(quick).toBeVisible();
+    await quick.locator('.monaco-list-row').filter({ hasText: secretRef }).click();
+  };
+  assert.equal(result.writes.length, writeCount, '新建密钥只编辑引用，不保存来源');
+  await form('providers').getByRole('button', { name: '保存来源', exact: true }).click();
   await expect(modal).toContainText('保存目标配置来源');
   assert(!(await modal.innerText()).includes(secret), '确认不能显示密码');
   await modal.getByRole('button', { name: '取消', exact: true }).click();
@@ -117,12 +143,18 @@ try {
   await api(sourceUrl + '/preflight', fixture, { method: 'POST', body: JSON.stringify(external) });
   await api(sourceUrl, fixture, { method: 'PUT', body: JSON.stringify(external) });
   writeCount = result.writes.length;
-  const conflicted = page.waitForResponse(response => response.request().method() === 'POST'
-    && new URL(response.url()).pathname === sourceUrl + '/preflight' && response.status() === 409);
-  await setSecret(); await input(secret); await conflicted;
+  await command('notifications.hideToasts');
+  await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === sourceUrl + '/preflight' && response.status() === 409),
+    form('providers').getByRole('button', { name: '保存来源', exact: true }).click(),
+  ]);
   await expect(page.locator('.notification-list-item-message').filter({ hasText: '草稿已保留' })).toBeVisible();
   assert.equal(result.writes.length, writeCount, '密码预检冲突不能发PUT');
-  // 冲突没有可保留的密码草稿，干净原模型重读后，下一次输入可沿新CAS正常提交。
+  // 冲突保留原引用草稿；用户明确放弃该草稿、重读后才接受新基线。
+  await more('providers', '打开来源 JSONC');
+  await command('workbench.action.files.revert');
+  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
   result.phase = 'secret-unknown-reload';
   let savedSecret, failedQueries = 0, dropQuery = true;
   const sourceRoute = async route => {
@@ -144,7 +176,8 @@ try {
     return route.continue();
   };
   await page.route('**/api/v1/config/sources/**', sourceRoute);
-  await setSecret(); await input(secret);
+  await setSecret(); await chooseSavedKey();
+  await form('providers').getByRole('button', { name: '保存来源', exact: true }).click();
   await expect(modal).toContainText('保存目标配置来源');
   await modal.getByRole('button', { name: '保存来源', exact: true }).click();
   await expect.poll(() => failedQueries).toBeGreaterThan(0);
@@ -153,29 +186,38 @@ try {
   assert.equal(result.writes.length, writeCount + 1);
   // 提交身份在PUT前已持久保存；重载时只让真实原键查询通过，不重放写入。
   dropQuery = false;
-  const queryAfterReload = page.waitForResponse(response => response.request().method() === 'GET'
-    && new URL(response.url()).pathname === sourceUrl
-    && new URL(response.url()).searchParams.get('idempotency_key') === savedSecret.idempotency_key);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  const reconciled = await queryAfterReload, envelope = await reconciled.json();
+  await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
+  await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
+  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
+  const originalQuery = form('providers').getByRole('button', { name: '查询原提交', exact: true });
+  await expect(originalQuery).toBeVisible();
+  const [reconciled] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'GET'
+      && new URL(response.url()).pathname === sourceUrl
+      && new URL(response.url()).searchParams.get('idempotency_key') === savedSecret.idempotency_key),
+    originalQuery.click(),
+  ]);
+  const envelope = await reconciled.json();
   assert.equal(reconciled.status(), 200);
   assert.equal(envelope.request_id, reconciled.headers()['x-request-id']);
   assert.equal(envelope.data.edit.idempotency_key, savedSecret.idempotency_key);
   assert.equal(envelope.data.edit.source_saved, true);
   assert.equal(envelope.data.edit.file_digest, envelope.data.file_digest);
-  await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
-  await command('boxteam.settings.modelsProviders', location, 'entities-provider');
-  await expect(form('providers').getByRole('button', { name: '设置 API 密钥', exact: true })).toBeEnabled();
+  await expect(form('providers').getByRole('button', { name: '设置 API 密钥', exact: true }).first()).toBeEnabled();
   assert.equal(result.writes.length, writeCount + 1, '重开只查询，不重放密码PUT');
   assert(!(await page.locator('body').innerText()).includes(secret));
   await page.unroute('**/api/v1/config/sources/**', sourceRoute);
   // 打开同一来源正文，再撤销；密码不能被放入原文本模型或撤销历史。
-  await form('providers').getByRole('button', { name: '打开来源 JSONC', exact: true }).click();
+  await more('providers', '打开来源 JSONC');
   const sourceText = page.locator('.editor-instance:visible .monaco-editor .view-lines').last();
   await expect(sourceText).toContainText('entities-provider');
   assert(!(await sourceText.innerText()).includes(secret));
   await command('undo');
   assert(!(await sourceText.innerText()).includes(secret));
+  await command('redo');
+  // 查询只确认原提交；继续编辑前，由用户显式重读来源取得新的 CAS 基线。
+  await command('workbench.action.files.revert');
   await command('boxteam.settings.modelsProviders', location, 'entities-provider');
   // 原Workbench存储与热退出备份只允许非秘密查询身份，不存密码正文。
   await command('boxteam.flushViewState');
@@ -199,34 +241,143 @@ try {
     return false;
   }, secret);
   assert.equal(leaked, false, '本机工作台存储不能包含密码');
+  const referenced = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers['entities-provider'];
+  assert.equal(referenced.defaults.api_key, secretRef, '原来源只保存命名引用');
+  assert(result.writes.every(write => !write.jsonc.includes(secret)), '密钥值不得进入来源 writer');
   result.secret = { cancelledBeforeInputSubmit: true, cancelledAfterPreflight: true, externalConflictRecovered: true,
     unknownRecoveredByOriginalKey: savedSecret.idempotency_key, puts: result.writes.length - writeCount, requestId: envelope.request_id };
+  result.phase = 'named-secret-reuse-and-management';
+  await form('providers').getByRole('button', { name: '新增 Provider', exact: true }).click();
+  await input('entities-provider-shared');
+  await quick.locator('.monaco-list-row').filter({ hasText: 'chat_completions' }).click();
+  await form('providers').getByRole('checkbox', { name: '连接编辑结束后自动获取一次模型', exact: true }).uncheck();
+  await form('providers').getByRole('textbox', { name: /^API 地址/ }).first().fill('https://entities.example/v1');
+  await form('providers').getByRole('button', { name: '添加模型', exact: true }).click();
+  await input('shared'); await input('shared-model');
+  await setSecret(); await chooseSavedKey();
+  await save('providers');
+  const sharedDefinitions = parse((await api(sourceUrl, fixture)).data.jsonc).llm.providers;
+  assert.equal(sharedDefinitions['entities-provider-shared'].defaults.api_key, secretRef);
+  assert.equal(sharedDefinitions['entities-provider'].defaults.api_key, secretRef);
+  await page.locator('.configuration-entities .monaco-toolbar').getByRole('button', { name: /更多/ }).click();
+  await page.getByRole('menuitem', { name: '管理 API 密钥', exact: true }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: secretRef }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: '重命名密钥' }).click();
+  await input('已重命名的共享密钥');
+  await expect(quick.locator('.monaco-list-row').filter({ hasText: '已重命名的共享密钥' })).toBeVisible();
+  await quick.locator('.monaco-list-row').filter({ hasText: secretRef }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: '替换密钥值' }).click();
+  await input(secret + '-rotated');
+  await expect(quick.locator('.monaco-list-row').filter({ hasText: secretRef })).toContainText('版本 3');
+  await page.screenshot({ path: path.join(artifacts, 'named-secrets.png'), animations: 'disabled' });
+  result.phase = 'named-secret-creation-response-lost';
+  // 只丢弃真实写入后的回执；刷新后仅按原 ID 读取，不能重新创建。
+  const beforeCreation = result.secretOperations.filter(item => item.method === 'POST').length;
+  let lostCreation;
+  const secretRoute = '**/api/gateway/secrets**';
+  const dropCreation = async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const response = await route.fetch();
+    assert.equal(response.status(), 200);
+    lostCreation = (await response.json()).data.item;
+    assert.equal(lostCreation.id, route.request().postDataJSON().id);
+    return route.abort('failed');
+  };
+  await page.route(secretRoute, dropCreation);
+  await quick.locator('.monaco-list-row').filter({ hasText: '新建命名密钥' }).click();
+  await input('待恢复的临时密钥'); await input(secret + '-disposable');
+  await expect(page.locator('.notification-list-item-message').filter({ hasText: '密钥创建结果未知' })).toBeVisible();
+  assert(lostCreation?.id);
+  await page.unroute(secretRoute, dropCreation);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
+  await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
+  await command('boxteam.settings.modelsProviders', location, 'entities-provider-shared');
+  await more('providers', '管理 API 密钥');
+  await quick.locator('.monaco-list-row').filter({ hasText: '查询未确认的创建' }).filter({ hasText: lostCreation.id }).click();
+  await expect(quick).toContainText('已确认密钥资源存在');
+  const recoveredKey = quick.locator('.monaco-list-row').filter({ hasText: lostCreation.id });
+  await expect(recoveredKey).toContainText('版本 1');
+  await recoveredKey.click();
+  await expect(quick.locator('.monaco-list-row').filter({ hasText: '查询未确认的创建' })).toHaveCount(0);
+  assert.equal(result.secretOperations.filter(item => item.method === 'POST').length, beforeCreation + 1);
+
+  result.phase = 'named-secret-update-response-lost';
+  const secretPath = '/api/gateway/secrets/' + lostCreation.id;
+  const beforeUpdate = result.secretOperations.filter(item => item.method === 'PUT' && item.path === secretPath).length;
+  let dropUpdate = true;
+  const loseUpdate = async route => {
+    if (route.request().method() !== 'PUT' || new URL(route.request().url()).pathname !== secretPath || !dropUpdate) return route.continue();
+    dropUpdate = false;
+    const response = await route.fetch();
+    assert.equal(response.status(), 200);
+    const updated = (await response.json()).data.items.find(item => item.id === lostCreation.id);
+    assert.equal(updated.revision, 2);
+    // 另一窗口的真实 CAS 更新不能作为原操作成功的证明。
+    await api(secretPath, fixture, { method: 'PUT', body: JSON.stringify({ expected_revision: 2, name: '并发修改的密钥' }) });
+    return route.abort('failed');
+  };
+  await page.route(secretRoute, loseUpdate);
+  await quick.locator('.monaco-list-row').filter({ hasText: lostCreation.id }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: '重命名密钥' }).click();
+  await input('原操作的重命名');
+  const unknownUpdate = page.locator('.notification-list-item-message').filter({ hasText: '原密钥操作未确认成功' });
+  await expect(unknownUpdate).toContainText('版本 3');
+  assert.equal(result.secretOperations.filter(item => item.method === 'PUT' && item.path === secretPath).length, beforeUpdate + 2);
+  await page.unroute(secretRoute, loseUpdate);
+
+  result.phase = 'named-secret-delete-response-lost';
+  const beforeDelete = result.secretOperations.filter(item => item.method === 'DELETE' && item.path === secretPath).length;
+  const loseDelete = async route => {
+    if (route.request().method() !== 'DELETE' || new URL(route.request().url()).pathname !== secretPath) return route.continue();
+    const response = await route.fetch();
+    assert.equal(response.status(), 200);
+    return route.abort('failed');
+  };
+  await more('providers', '管理 API 密钥');
+  await page.route(secretRoute, loseDelete);
+  await quick.locator('.monaco-list-row').filter({ hasText: lostCreation.id }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: '删除密钥' }).click();
+  await expect(modal).toContainText('并发修改的密钥');
+  await modal.getByRole('button', { name: '删除密钥', exact: true }).click();
+  await expect(page.locator('.notification-list-item-message').filter({ hasText: '原密钥操作未确认成功' })).toContainText('当前不存在');
+  assert.equal(result.secretOperations.filter(item => item.method === 'DELETE' && item.path === secretPath).length, beforeDelete + 1);
+  await page.unroute(secretRoute, loseDelete);
+  const keys = (await api('/api/gateway/secrets', fixture)).data;
+  assert(!keys.items.some(item => item.id === lostCreation.id));
+  result.secretRecovery = { id: lostCreation.id, createdOnce: true, recoveredAfterReload: true,
+    concurrentRevision: 3, updateRemainedUnknown: true, deleteRemainedUnknown: true,
+    interception: '仅丢弃真实密钥写入回执；并发修改沿同一真实 CAS API' };
+  result.namedSecret = keys.items.find(item => item.id === secretId);
+  assert.equal(result.namedSecret.name, '已重命名的共享密钥');
+  assert.equal(result.namedSecret.revision, 3);
+  assert(keys.items.every(item => !Object.hasOwn(item, 'value') && !Object.hasOwn(item, 'ciphertext')));
   result.phase = 'agent-create';
-  await page.locator('.settings-context-label').getByRole('link', { name: 'Agent 管理', exact: true }).click();
+  await page.locator('.settings-toc-container').getByText('Agent 管理', { exact: true }).click();
   await expect(form('agents')).toBeVisible();
   await form('agents').getByRole('button', { name: '新增 Agent', exact: true }).click();
   await input('entities-agent'); await input('定义管理 Agent'); await input('此提示词来自真实管理表单');
-  await expect(quick).toBeVisible(); await quick.locator('.monaco-list-row').filter({ hasText: 'entities-provider' }).click();
+  await expect(quick).toBeVisible(); await quick.getByRole('option', { name: 'entities-provider / main', exact: true }).click();
   await expect(form('agents').locator('[data-definition-id="entities-agent"]')).toBeVisible();
-  await form('agents').getByLabel('显示名', { exact: true }).fill('修改后的显示名');
+  await form('agents').getByRole('textbox', { name: /^显示名/ }).fill('修改后的显示名');
   await save('agents');
   const created = (await api(sourceUrl, fixture)).data;
   assert.equal(parse(created.jsonc).agents['entities-agent'].name, '修改后的显示名');
   assert.equal(created.source_effective.agents['entities-agent'].instructions.system_prompt, '此提示词来自真实管理表单');
-  assert.equal(created.source_effective.agents['entities-agent'].model.primary_provider, 'entities-provider');
+  assert.deepEqual(created.source_effective.agents['entities-agent'].model.primary, { provider_id: 'entities-provider', model_id: 'main' });
   // 来源保存与运行应用分开断言，不能把待重启的候选冒充当前生效值。
   if (created.status.restart_required) {
     assert.equal(created.effective.agents['entities-agent'], undefined);
     await expect(form('agents')).toContainText('当前生效配置中不存在');
     await expect(page.locator('.settings-context-label')).toContainText('需要重启');
   } else {
-    assert.equal(created.effective.agents['entities-agent'].model.primary_provider, 'entities-provider');
+    assert.deepEqual(created.effective.agents['entities-agent'].model.primary, { provider_id: 'entities-provider', model_id: 'main' });
   }
   result.phase = 'agent-reload-remove';
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
   await command('boxteam.settings.agents', location, 'entities-agent');
-  await expect(form('agents').getByLabel('显示名', { exact: true })).toHaveValue('修改后的显示名');
+  await expect(form('agents').getByRole('textbox', { name: /^显示名/ })).toHaveValue('修改后的显示名');
   await form('agents').getByRole('button', { name: '移除本层定义', exact: true }).click();
   await expect(modal).toContainText('entities-agent');
   await modal.getByRole('button', { name: '移除本层定义', exact: true }).click();
@@ -241,22 +392,33 @@ try {
   const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${session.session_id}"][data-thread-id="${mainThread.thread_id}"]`);
   await expect(thread.locator('.composer-model-pill')).toBeVisible({ timeout: 30000 });
   await thread.locator('.composer-model-pill').click();
-  const manage = thread.getByRole('menuitem', { name: '模型与 Provider', exact: true });
+  const manage = quick.getByRole('option').filter({ hasText: '模型与 Provider' });
+  const providerSourceRead = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === sourceUrl);
   await manage.click();
-  await expect(quick).toBeVisible();
-  await quick.locator('.monaco-list-row').filter({ hasText: location.source_key }).click();
+  // 会话入口现在直接打开所属工作区来源；核对实际回执，不再要求重复选择来源。
+  const providerSourceResponse = await providerSourceRead, providerSourceDocument = await providerSourceResponse.json();
+  assert.equal(providerSourceResponse.status(), 200);
+  assert.equal(providerSourceDocument.data.gateway_id, fixture.gatewayId);
+  assert.equal(providerSourceDocument.data.workspace_id, fixture.workspaceId);
+  assert.equal(providerSourceDocument.data.source_key, location.source_key);
+  assert.equal(providerSourceDocument.request_id, providerSourceResponse.headers()['x-request-id']);
   await expect(form('providers')).toBeVisible();
-  await form('providers').getByRole('button', { name: '前往会话选择 Agent／模型', exact: true }).click();
+  await more('providers', '前往会话选择 Agent／模型');
   await expect(quick).toBeVisible();
   await quick.locator('.monaco-list-row').filter({ hasText: '定义管理返回会话' }).click();
   await expect(thread.locator('.composer-model-pill')).toBeFocused();
   await thread.locator('.composer-model-pill').press('Escape');
   await thread.locator('.composer-agent-button').click();
+  const agentSourceRead = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === sourceUrl);
   await thread.getByRole('menuitem', { name: '管理 Agent 定义', exact: true }).click();
-  await expect(quick).toBeVisible();
-  await quick.locator('.monaco-list-row').filter({ hasText: location.source_key }).click();
+  const agentSourceResponse = await agentSourceRead, agentSourceDocument = await agentSourceResponse.json();
+  assert.equal(agentSourceResponse.status(), 200);
+  assert.equal(agentSourceDocument.data.gateway_id, fixture.gatewayId);
+  assert.equal(agentSourceDocument.data.workspace_id, fixture.workspaceId);
+  assert.equal(agentSourceDocument.data.source_key, location.source_key);
+  assert.equal(agentSourceDocument.request_id, agentSourceResponse.headers()['x-request-id']);
   await expect(form('agents')).toBeVisible();
-  await form('agents').getByRole('button', { name: '前往会话选择 Agent／模型', exact: true }).click();
+  await more('agents', '前往会话选择 Agent／模型');
   await expect(quick).toBeVisible();
   await quick.locator('.monaco-list-row').filter({ hasText: '定义管理返回会话' }).click();
   await expect(thread.locator('.composer-agent-button')).toBeFocused();
@@ -269,14 +431,14 @@ try {
   const activeAgents = (await api('/api/v1/agents', fixture)).data;
   const coder = activeAgents.find(agent => agent.agent_id === 'coder');
   assert(coder && !coder.workspace_default, 'fixture必须提供与原默认值不同的 coder');
-  const providerId = coder.providers[0].provider_id;
+  const modelRef = coder.models[0].model_ref;
   // 来源 default_agent 保留为未保存草稿；会话默认值仍使用当前 active 定义和独立 owner。
   await form('agents').getByRole('button', { name: '设为本来源的配置默认 Agent', exact: true }).click();
   await expect(page.locator('.tabs-container .tab.active')).toHaveClass(/\bdirty\b/);
   const sourceWritesBeforeDefaults = result.writes.length;
   const defaultsWrites = [];
   page.on('request', request => {
-    if (request.method() === 'PUT' && /\/api\/v1\/agents\/(?:workspace-default|[^/]+\/workspace-default-provider)$/.test(new URL(request.url()).pathname)) {
+    if (request.method() === 'PUT' && /\/api\/v1\/agents\/(?:workspace-default|[^/]+\/workspace-default-model)$/.test(new URL(request.url()).pathname)) {
       const headers = request.headers();
       defaultsWrites.push({ path: new URL(request.url()).pathname, body: request.postDataJSON(), headers: {
         'x-boxteam-target-gateway-id': headers['x-boxteam-target-gateway-id'],
@@ -285,7 +447,7 @@ try {
     }
   });
   const openDefaults = async () => {
-    await form('agents').getByRole('button', { name: '工作区新会话默认值', exact: true }).click();
+    await more('agents', '工作区新会话默认值');
     await expect(quick).toBeVisible();
     await quick.locator('.monaco-list-row').filter({ hasText: 'coder' }).click();
     await expect(quick).toBeVisible();
@@ -306,18 +468,18 @@ try {
   assert.equal(changedAgentEnvelope.data.length, activeAgents.length);
   assert.equal(changedAgentEnvelope.data.find(agent => agent.workspace_default).agent_id, 'coder');
   await openDefaults();
-  await quick.locator('.monaco-list-row').filter({ hasText: `设为 ${coder.agent_id} 的新会话默认 Provider` }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: `${modelRef.provider_id} / ${modelRef.model_id}` }).click();
   const providerDefaultResponse = page.waitForResponse(response => response.request().method() === 'PUT'
-    && new URL(response.url()).pathname === '/api/v1/agents/coder/workspace-default-provider');
+    && new URL(response.url()).pathname === '/api/v1/agents/coder/workspace-default-model');
   await modal.getByRole('button', { name: '保存新会话默认值', exact: true }).click();
   const changedProvider = await providerDefaultResponse, changedProviderEnvelope = await changedProvider.json();
   assert.equal(changedProvider.status(), 200);
   assert.equal(changedProviderEnvelope.request_id, changedProvider.headers()['x-request-id']);
   assert.equal(changedProviderEnvelope.data.length, activeAgents.length);
-  assert.equal(changedProviderEnvelope.data.find(agent => agent.agent_id === 'coder').providers.find(provider => provider.workspace_default).provider_id, providerId);
+  assert.deepEqual(changedProviderEnvelope.data.find(agent => agent.agent_id === 'coder').models.find(model => model.workspace_default).model_ref, modelRef);
   assert.equal(defaultsWrites.length, 2);
   assert.deepEqual(defaultsWrites.map(write => write.body), [
-    { agent_id: coder.agent_id }, { provider_id: providerId },
+    { agent_id: coder.agent_id }, { model: modelRef },
   ]);
   assert(defaultsWrites.every(write => write.headers['x-boxteam-target-gateway-id'] === fixture.gatewayId
     && write.headers['x-boxteam-workspace-id'] === fixture.workspaceId));
@@ -328,10 +490,10 @@ try {
   await expect(page.locator('.tabs-container .tab.active')).toHaveClass(/\bdirty\b/);
   const preserved = (await api('/api/v1/sessions/' + session.session_id, fixture)).data;
   assert.equal(preserved.current_agent_id, beforeSession.current_agent_id);
-  assert.equal(preserved.current_provider_id, beforeSession.current_provider_id);
+  assert.deepEqual(preserved.current_model, beforeSession.current_model);
   const nextSession = (await api('/api/v1/sessions', fixture, { method: 'POST', body: JSON.stringify({ title: '采用新默认值的会话' }) })).data;
   assert.equal(nextSession.current_agent_id, 'coder');
-  assert.equal(nextSession.current_provider_id, providerId);
+  assert.deepEqual(nextSession.current_model, modelRef);
   result.sessionDefaults = { cancelled: true, writes: defaultsWrites, agentReceipt: changedAgentEnvelope,
     providerReceipt: changedProviderEnvelope, originalSessionId: session.session_id, newSessionId: nextSession.session_id };
   // 本切片只采一个实际复用的列表 API；保存来源详情仍沿已有领域证据。
@@ -351,15 +513,17 @@ try {
   const lowerUrl = '/api/v1/config/sources/' + lowerKey;
   const lowerBefore = (await api(lowerUrl, fixture)).data;
   const lowerJsonc = parse(lowerBefore.jsonc);
-  const lowerProvider = { id: 'mcp-plugin-replay', model: 'inherited-model', endpoint: 'https://inherited.example/v1',
+  const lowerProviderId = 'mcp-plugin-replay';
+  const lowerProvider = { defaults: { endpoint: 'https://inherited.example/v1',
     api_key: '${INHERITED_MISSING_KEY}', custom_llm_provider: 'openai',
     api_mode: { protocol: 'chat_completions', model_info: { supports_function_calling: true, supports_reasoning: false },
-      supports_reasoning: { reasoning_content: false } } };
+      supports_reasoning: {} } }, models: { default: { model: 'inherited-model' } } };
   lowerJsonc.llm ??= {};
-  lowerJsonc.llm.providers = [...(lowerJsonc.llm.providers ?? []).filter(provider => provider.id !== lowerProvider.id), lowerProvider];
+  lowerJsonc.llm.providers ??= {};
+  lowerJsonc.llm.providers[lowerProviderId] = lowerProvider;
   lowerJsonc.agents ??= {};
   lowerJsonc.agents['inherited-agent'] = { name: '下层 Agent', instructions: { system_prompt: '提示词来自下层来源' },
-    model: { primary_provider: lowerProvider.id } };
+    model: { primary: { provider_id: lowerProviderId, model_id: 'default' }, fallbacks: [] } };
   const lowerIntent = { gateway_id: fixture.gatewayId, workspace_id: fixture.workspaceId, source_key: lowerKey,
     jsonc: JSON.stringify(lowerJsonc, null, 2), base_file_digest: lowerBefore.file_digest,
     base_layer_revision: lowerBefore.layer_revision, base_layer_digest: lowerBefore.layer_digest,
@@ -372,13 +536,13 @@ try {
   await expect(page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`)).toBeVisible({ timeout: 30000 });
   await page.waitForFunction(() => !!globalThis.workbench?.commands?.executeCommand);
   await command('boxteam.settings.agents', location, 'inherited-agent');
-  await expect(form('agents').getByLabel('显示名', { exact: true })).toHaveValue('下层 Agent');
+  await expect(form('agents').getByRole('textbox', { name: /^显示名/ })).toHaveValue('下层 Agent');
   await form('agents').getByRole('button', { name: '新增 Agent', exact: true }).click();
   await input('inherited-agent');
   await input('本层覆盖 Agent');
   await input('提示词来自本层覆盖');
   await expect(quick).toBeVisible();
-  await quick.locator('.monaco-list-row').filter({ hasText: lowerProvider.id }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: `${lowerProviderId} / default` }).click();
   await expect(modal).toContainText('覆盖继承的 Agent inherited-agent');
   await modal.getByRole('button', { name: '新增 Agent', exact: true }).click();
   await expect(form('agents').locator('[data-definition-id="inherited-agent"]')).toBeVisible();
@@ -396,25 +560,25 @@ try {
   assert.equal(agentRestored.source_effective.agents['inherited-agent'].instructions.system_prompt, '提示词来自下层来源');
 
   result.phase = 'provider-remove-and-restore-inheritance';
-  await page.locator('.settings-context-label').getByRole('link', { name: '模型与 Provider', exact: true }).click();
-  await form('providers').getByRole('button').filter({ hasText: 'entities-provider' }).click();
-  await form('providers').getByRole('button', { name: '移除本层定义', exact: true }).click();
+  await page.locator('.settings-toc-container').getByText('模型与 Provider', { exact: true }).click();
+  await form('providers').locator('nav').getByText('entities-provider', { exact: true }).click();
+  await form('providers').locator('article').getByRole('button', { name: '移除本层定义', exact: true }).last().click();
   await expect(modal).toContainText('entities-provider');
   await modal.getByRole('button', { name: '移除本层定义', exact: true }).click();
   await save('providers');
   const providerRemoved = (await api(sourceUrl, fixture)).data;
-  assert(!providerRemoved.source_effective.llm.providers.some(provider => provider.id === 'entities-provider'));
-  await form('providers').getByRole('button', { name: '恢复整组 Provider 继承', exact: true }).click();
+  assert.equal(providerRemoved.source_effective.llm.providers['entities-provider'], undefined);
+  await more('providers', '恢复整组 Provider 继承');
   await expect(modal).toContainText('恢复整组 Provider 继承');
   await modal.getByRole('button', { name: '恢复整组 Provider 继承', exact: true }).click();
   await save('providers');
   const providerRestored = (await api(sourceUrl, fixture)).data;
   const lowerAfterRestore = (await api(lowerUrl, fixture)).data;
-  assert.equal(parse(providerRestored.jsonc).llm?.providers, undefined, '当前层 Provider 数组覆盖必须整体移除');
+  assert.equal(parse(providerRestored.jsonc).llm?.providers, undefined, '仅移除当前层 Provider 对象，恢复下层定义');
   assert.deepEqual(providerRestored.source_effective.llm.providers, lowerAfterRestore.source_effective.llm.providers);
-  assert.equal(providerRestored.source_effective.llm.providers.find(provider => provider.id === lowerProvider.id)?.model, lowerProvider.model);
+  assert.equal(providerRestored.source_effective.llm.providers[lowerProviderId].models.default.model, lowerProvider.models.default.model);
   assert.equal(result.writes.length, writesBeforeInheritance + 4, '仅Agent覆盖/删除及Provider删除/整组恢复写入本层');
-  result.inheritance = { agentId: 'inherited-agent', providerId: lowerProvider.id, lowerSource: lowerKey };
+  result.inheritance = { agentId: 'inherited-agent', providerId: lowerProviderId, lowerSource: lowerKey };
   assert.equal(result.modelRequests.length, 0);
   assert(result.writes.every(write => write.gateway_id === fixture.gatewayId && write.workspace_id === fixture.workspaceId));
   assert.deepEqual(result.pageErrors, []);

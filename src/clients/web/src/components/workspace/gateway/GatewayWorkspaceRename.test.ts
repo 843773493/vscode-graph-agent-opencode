@@ -2,7 +2,7 @@ import { gatewayWorkspaceKey } from "../../../api/workspaceIdentity";
 import { renameGatewayWorkspace } from "../../../gatewayApi";
 import type { GatewayWorkspace } from "../../../types/backend";
 import { workspaceHoverTitle } from "../../agentSessions/agentSessionsUtils";
-import { groupGatewayWorkspaces } from "./GatewayControlCenter";
+import { groupGatewayWorkspaces } from "./gatewayWorkspacePresentation";
 
 const WORKSPACE_ID = "00000000-0000-4000-8000-000000000001";
 const WORKSPACE_KEY = gatewayWorkspaceKey({ gateway_id: "gateway_dev", workspace_id: WORKSPACE_ID });

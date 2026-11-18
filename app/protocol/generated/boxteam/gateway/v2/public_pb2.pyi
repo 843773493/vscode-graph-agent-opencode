@@ -22,18 +22,20 @@ class GatewayResourceAddressRequest(_message.Message):
     def __init__(self, uri: _Optional[str] = ..., local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ...) -> None: ...
 
 class GatewayThreadAddressRequest(_message.Message):
-    __slots__ = ("local_gateway_id", "resource_gateway_id", "workspace_id", "session_id", "thread_id")
+    __slots__ = ("local_gateway_id", "resource_gateway_id", "workspace_id", "session_id", "thread_id", "item_id")
     LOCAL_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     RESOURCE_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    ITEM_ID_FIELD_NUMBER: _ClassVar[int]
     local_gateway_id: str
     resource_gateway_id: str
     workspace_id: str
     session_id: str
     thread_id: str
-    def __init__(self, local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ...) -> None: ...
+    item_id: str
+    def __init__(self, local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., item_id: _Optional[str] = ...) -> None: ...
 
 class GatewayChangeAddressRequest(_message.Message):
     __slots__ = ("local_gateway_id", "resource_gateway_id", "workspace_id", "session_id", "changeset_id", "file_uri")
@@ -52,7 +54,7 @@ class GatewayChangeAddressRequest(_message.Message):
     def __init__(self, local_gateway_id: _Optional[str] = ..., resource_gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., session_id: _Optional[str] = ..., changeset_id: _Optional[str] = ..., file_uri: _Optional[str] = ...) -> None: ...
 
 class GatewayResourceAddressDTO(_message.Message):
-    __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id", "reference_uri", "changeset_id", "change_file_uri")
+    __slots__ = ("uri", "gateway_id", "scope", "scope_id", "kind", "file_root_uri", "session_id", "thread_id", "reference_uri", "changeset_id", "change_file_uri", "item_id")
     URI_FIELD_NUMBER: _ClassVar[int]
     GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     SCOPE_FIELD_NUMBER: _ClassVar[int]
@@ -64,6 +66,7 @@ class GatewayResourceAddressDTO(_message.Message):
     REFERENCE_URI_FIELD_NUMBER: _ClassVar[int]
     CHANGESET_ID_FIELD_NUMBER: _ClassVar[int]
     CHANGE_FILE_URI_FIELD_NUMBER: _ClassVar[int]
+    ITEM_ID_FIELD_NUMBER: _ClassVar[int]
     uri: str
     gateway_id: str
     scope: str
@@ -75,7 +78,8 @@ class GatewayResourceAddressDTO(_message.Message):
     reference_uri: str
     changeset_id: str
     change_file_uri: str
-    def __init__(self, uri: _Optional[str] = ..., gateway_id: _Optional[str] = ..., scope: _Optional[str] = ..., scope_id: _Optional[str] = ..., kind: _Optional[str] = ..., file_root_uri: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., reference_uri: _Optional[str] = ..., changeset_id: _Optional[str] = ..., change_file_uri: _Optional[str] = ...) -> None: ...
+    item_id: str
+    def __init__(self, uri: _Optional[str] = ..., gateway_id: _Optional[str] = ..., scope: _Optional[str] = ..., scope_id: _Optional[str] = ..., kind: _Optional[str] = ..., file_root_uri: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., reference_uri: _Optional[str] = ..., changeset_id: _Optional[str] = ..., change_file_uri: _Optional[str] = ..., item_id: _Optional[str] = ...) -> None: ...
 
 class NativeDirectoryBindRequest(_message.Message):
     __slots__ = ("native_root",)
@@ -133,18 +137,6 @@ class AddRemoteGatewayRequest(_message.Message):
     connection_id: str
     def __init__(self, name: _Optional[str] = ..., ssh_config_host: _Optional[str] = ..., host: _Optional[str] = ..., port: _Optional[int] = ..., username: _Optional[str] = ..., private_key_path: _Optional[str] = ..., remote_gateway_port: _Optional[int] = ..., connection_id: _Optional[str] = ...) -> None: ...
 
-class ChangePortForwardLabelRequest(_message.Message):
-    __slots__ = ("label",)
-    LABEL_FIELD_NUMBER: _ClassVar[int]
-    label: str
-    def __init__(self, label: _Optional[str] = ...) -> None: ...
-
-class ChangePortForwardLocalPortRequest(_message.Message):
-    __slots__ = ("local_port",)
-    LOCAL_PORT_FIELD_NUMBER: _ClassVar[int]
-    local_port: int
-    def __init__(self, local_port: _Optional[int] = ...) -> None: ...
-
 class CreateFederationManagedWorkspaceRequest(_message.Message):
     __slots__ = ("root_path", "name", "create_directory")
     ROOT_PATH_FIELD_NUMBER: _ClassVar[int]
@@ -167,17 +159,29 @@ class CreateGatewayManagedWorkspaceRequest(_message.Message):
     gateway_connection_id: str
     def __init__(self, root_path: _Optional[str] = ..., name: _Optional[str] = ..., create_directory: _Optional[bool] = ..., gateway_connection_id: _Optional[str] = ...) -> None: ...
 
+class PortForwardEndpoint(_message.Message):
+    __slots__ = ("host_id", "address", "port")
+    HOST_ID_FIELD_NUMBER: _ClassVar[int]
+    ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    PORT_FIELD_NUMBER: _ClassVar[int]
+    host_id: str
+    address: str
+    port: int
+    def __init__(self, host_id: _Optional[str] = ..., address: _Optional[str] = ..., port: _Optional[int] = ...) -> None: ...
+
 class CreatePortForwardRequest(_message.Message):
-    __slots__ = ("remote_port", "local_port", "protocol", "label")
-    REMOTE_PORT_FIELD_NUMBER: _ClassVar[int]
-    LOCAL_PORT_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("protocol", "label", "listener", "destination", "enabled")
     PROTOCOL_FIELD_NUMBER: _ClassVar[int]
     LABEL_FIELD_NUMBER: _ClassVar[int]
-    remote_port: int
-    local_port: int
+    LISTENER_FIELD_NUMBER: _ClassVar[int]
+    DESTINATION_FIELD_NUMBER: _ClassVar[int]
+    ENABLED_FIELD_NUMBER: _ClassVar[int]
     protocol: str
     label: str
-    def __init__(self, remote_port: _Optional[int] = ..., local_port: _Optional[int] = ..., protocol: _Optional[str] = ..., label: _Optional[str] = ...) -> None: ...
+    listener: PortForwardEndpoint
+    destination: PortForwardEndpoint
+    enabled: bool
+    def __init__(self, protocol: _Optional[str] = ..., label: _Optional[str] = ..., listener: _Optional[_Union[PortForwardEndpoint, _Mapping]] = ..., destination: _Optional[_Union[PortForwardEndpoint, _Mapping]] = ..., enabled: _Optional[bool] = ...) -> None: ...
 
 class DevelopmentRuntimeRestartDTO(_message.Message):
     __slots__ = ("status", "previous_process_id", "helper_process_id", "delay_ms")
@@ -917,6 +921,36 @@ class GatewayDirectoryListDTO(_message.Message):
     name: str
     def __init__(self, path: _Optional[str] = ..., parent_path: _Optional[str] = ..., home_path: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[GatewayDirectoryEntryDTO, _Mapping]]] = ..., truncated: _Optional[bool] = ..., limit: _Optional[int] = ..., name: _Optional[str] = ...) -> None: ...
 
+class WorkspaceIdentityMappingDTO(_message.Message):
+    __slots__ = ("legacy_workspace_id", "gateway_id", "workspace_id")
+    LEGACY_WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
+    legacy_workspace_id: str
+    gateway_id: str
+    workspace_id: str
+    def __init__(self, legacy_workspace_id: _Optional[str] = ..., gateway_id: _Optional[str] = ..., workspace_id: _Optional[str] = ...) -> None: ...
+
+class WorkspaceIdentityRecoveryDTO(_message.Message):
+    __slots__ = ("format_version", "migration_id", "registry_gateway_id", "mappings")
+    FORMAT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    MIGRATION_ID_FIELD_NUMBER: _ClassVar[int]
+    REGISTRY_GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    MAPPINGS_FIELD_NUMBER: _ClassVar[int]
+    format_version: int
+    migration_id: str
+    registry_gateway_id: str
+    mappings: _containers.RepeatedCompositeFieldContainer[WorkspaceIdentityMappingDTO]
+    def __init__(self, format_version: _Optional[int] = ..., migration_id: _Optional[str] = ..., registry_gateway_id: _Optional[str] = ..., mappings: _Optional[_Iterable[_Union[WorkspaceIdentityMappingDTO, _Mapping]]] = ...) -> None: ...
+
+class GatewayClientRecoveryDTO(_message.Message):
+    __slots__ = ("gateway_id", "workspace_identity")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    workspace_identity: WorkspaceIdentityRecoveryDTO
+    def __init__(self, gateway_id: _Optional[str] = ..., workspace_identity: _Optional[_Union[WorkspaceIdentityRecoveryDTO, _Mapping]] = ...) -> None: ...
+
 class GatewayHealthDTO(_message.Message):
     __slots__ = ("status", "process_id", "development_restart_available", "gateway_id", "active_workspace")
     STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -1356,40 +1390,54 @@ class GatewayWorkspaceListDTO(_message.Message):
     def __init__(self, items: _Optional[_Iterable[_Union[GatewayWorkspaceDTO, _Mapping]]] = ..., active_workspace: _Optional[_Union[GatewaySearchWorkspaceOwnerDTO, _Mapping]] = ...) -> None: ...
 
 class PortForwardDTO(_message.Message):
-    __slots__ = ("gateway_id", "forward_id", "workspace_id", "connection_id", "remote_host", "remote_port", "local_host", "local_port", "protocol", "label", "status", "error", "local_url")
-    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("forward_id", "protocol", "label", "status", "error", "gateway_id", "listener", "destination", "enabled")
     FORWARD_ID_FIELD_NUMBER: _ClassVar[int]
-    WORKSPACE_ID_FIELD_NUMBER: _ClassVar[int]
-    CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
-    REMOTE_HOST_FIELD_NUMBER: _ClassVar[int]
-    REMOTE_PORT_FIELD_NUMBER: _ClassVar[int]
-    LOCAL_HOST_FIELD_NUMBER: _ClassVar[int]
-    LOCAL_PORT_FIELD_NUMBER: _ClassVar[int]
     PROTOCOL_FIELD_NUMBER: _ClassVar[int]
     LABEL_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
-    LOCAL_URL_FIELD_NUMBER: _ClassVar[int]
-    gateway_id: str
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    LISTENER_FIELD_NUMBER: _ClassVar[int]
+    DESTINATION_FIELD_NUMBER: _ClassVar[int]
+    ENABLED_FIELD_NUMBER: _ClassVar[int]
     forward_id: str
-    workspace_id: str
-    connection_id: str
-    remote_host: str
-    remote_port: int
-    local_host: str
-    local_port: int
     protocol: str
     label: str
     status: str
     error: str
-    local_url: str
-    def __init__(self, gateway_id: _Optional[str] = ..., forward_id: _Optional[str] = ..., workspace_id: _Optional[str] = ..., connection_id: _Optional[str] = ..., remote_host: _Optional[str] = ..., remote_port: _Optional[int] = ..., local_host: _Optional[str] = ..., local_port: _Optional[int] = ..., protocol: _Optional[str] = ..., label: _Optional[str] = ..., status: _Optional[str] = ..., error: _Optional[str] = ..., local_url: _Optional[str] = ...) -> None: ...
+    gateway_id: str
+    listener: PortForwardEndpoint
+    destination: PortForwardEndpoint
+    enabled: bool
+    def __init__(self, forward_id: _Optional[str] = ..., protocol: _Optional[str] = ..., label: _Optional[str] = ..., status: _Optional[str] = ..., error: _Optional[str] = ..., gateway_id: _Optional[str] = ..., listener: _Optional[_Union[PortForwardEndpoint, _Mapping]] = ..., destination: _Optional[_Union[PortForwardEndpoint, _Mapping]] = ..., enabled: _Optional[bool] = ...) -> None: ...
 
 class PortForwardListDTO(_message.Message):
-    __slots__ = ("items",)
+    __slots__ = ("items", "gateway_id")
     ITEMS_FIELD_NUMBER: _ClassVar[int]
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
     items: _containers.RepeatedCompositeFieldContainer[PortForwardDTO]
-    def __init__(self, items: _Optional[_Iterable[_Union[PortForwardDTO, _Mapping]]] = ...) -> None: ...
+    gateway_id: str
+    def __init__(self, items: _Optional[_Iterable[_Union[PortForwardDTO, _Mapping]]] = ..., gateway_id: _Optional[str] = ...) -> None: ...
+
+class PortForwardHostDTO(_message.Message):
+    __slots__ = ("host_id", "label", "description", "kind")
+    HOST_ID_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    host_id: str
+    label: str
+    description: str
+    kind: str
+    def __init__(self, host_id: _Optional[str] = ..., label: _Optional[str] = ..., description: _Optional[str] = ..., kind: _Optional[str] = ...) -> None: ...
+
+class PortForwardHostsDTO(_message.Message):
+    __slots__ = ("gateway_id", "items")
+    GATEWAY_ID_FIELD_NUMBER: _ClassVar[int]
+    ITEMS_FIELD_NUMBER: _ClassVar[int]
+    gateway_id: str
+    items: _containers.RepeatedCompositeFieldContainer[PortForwardHostDTO]
+    def __init__(self, gateway_id: _Optional[str] = ..., items: _Optional[_Iterable[_Union[PortForwardHostDTO, _Mapping]]] = ...) -> None: ...
 
 class ReorderGatewayWorkspacesRequest(_message.Message):
     __slots__ = ("workspaces",)

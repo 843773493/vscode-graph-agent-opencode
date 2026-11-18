@@ -33,18 +33,29 @@ class BackgroundToolResultIdentity(BaseModel):
     tool_call_id: str = Field(min_length=1)
 
 
-class BackgroundMessageBatchDTO(BaseModel):
+class BackgroundMessageBatchMetadata(BaseModel):
     session_id: str
     thread_id: str
     agent_id: str
     consumption_id: str
     source_id: str | None = None
-    messages: list[BackgroundMessageDTO] = Field(default_factory=list)
     interrupted: bool = False
     timed_out: bool = False
     last_message_id: str | None = None
     collected_at: datetime
     tool_result_identity: BackgroundToolResultIdentity | None = None
+
+
+class BackgroundMessageBatchDTO(BackgroundMessageBatchMetadata):
+    messages: list[BackgroundMessageDTO] = Field(default_factory=list)
+
+
+class BackgroundConsumptionState(BackgroundMessageBatchMetadata):
+    """消费只冻结原邮箱的范围与完成事实，不复制消息正文。"""
+
+    after_sequence: int = Field(ge=0)
+    through_sequence: int = Field(ge=0)
+    message_count: int = Field(ge=0)
 
 
 ACTIVE_BACKGROUND_TASK_STATUSES = frozenset({"pending", "running", "reconcile_required"})
@@ -83,6 +94,10 @@ class BackgroundTaskHandle:
     def task_name(self) -> str:
         return self.descriptor.kind
 
+    @property
+    def descriptor_version(self) -> int:
+        return self.descriptor.version
+
     def to_dict(self) -> dict[str, object]:
         return {
             "task_id": self.task_id, "session_id": self.session_id,
@@ -98,6 +113,21 @@ class BackgroundTaskHandle:
             "lease_id": self.lease_id,
             "external_effect_pending": self.external_effect_pending,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class BackgroundTaskSummary:
+    task_id: str
+    session_id: str
+    thread_id: str
+    agent_id: str
+    task_name: str
+    descriptor_version: int
+    status: BackgroundTaskStatus
+    created_at: datetime
+    started_at: datetime | None
+    ended_at: datetime | None
+    metadata: dict[str, JsonValue]
 
 
 @dataclass(frozen=True, slots=True)

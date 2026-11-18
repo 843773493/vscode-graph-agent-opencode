@@ -18,6 +18,7 @@ from langchain_core.messages import (
 )
 
 from app.runtime.provider_model import build_model_from_provider
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config_service import ConfigService
 
 CONVERSATION_ROUNDS = 3
@@ -91,7 +92,7 @@ async def _run_three_rounds(
     model = build_model_from_provider(
         provider,
         {},
-        prompt_cache_key=f"boxteam-cache-test:{provider['id']}",
+        prompt_cache_key=f"boxteam-cache-test:{provider['provider_id']}:{provider['model_id']}",
         invocation_purpose="tool_test",
     )
     messages: list[BaseMessage] = [SystemMessage(content=_cacheable_system_prompt())]
@@ -151,7 +152,7 @@ def config_service() -> ConfigService:
 async def test_luna_responses_multiturn_prompt_cache_hit_rate(
     config_service: ConfigService,
 ) -> None:
-    provider = config_service.get_llm_provider("backup_3")
+    provider = await config_service.resolve_llm_model(ModelReferenceDTO(provider_id="backup_3", model_id="default"))
     assert provider["api_mode"]["protocol"] == "responses"
     statistics, responses = await _run_three_rounds(
         provider,
@@ -183,7 +184,7 @@ async def test_luna_responses_multiturn_prompt_cache_hit_rate(
 async def test_big_pickle_chat_completions_multiturn_prompt_cache_hit_rate(
     config_service: ConfigService,
 ) -> None:
-    provider = config_service.get_llm_provider("primary")
+    provider = await config_service.resolve_llm_model(ModelReferenceDTO(provider_id="primary", model_id="default"))
     assert provider["model"] == "big-pickle"
     assert provider["api_mode"]["protocol"] == "chat_completions"
     assert "prompt_cache_key" not in provider["api_mode"].get("request_features", {})

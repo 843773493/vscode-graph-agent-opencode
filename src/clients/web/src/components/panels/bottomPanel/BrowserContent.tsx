@@ -1,5 +1,6 @@
+import type { RenderPanelToolbar } from "./PanelToolbar";
 import { t } from "../../../../../shared/core/i18n/index.js";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import type { ResourceAction, ResourceThreadRef, WorkspaceResourceDTO } from "../../../api/workspaceResources";
 import type { WorkspaceResourcesController } from "../../../hooks/workspace/useWorkspaceResources";
 import { workspaceResourceDisplay } from "../../../state/display/workspaceResourceDisplay";
@@ -17,7 +18,7 @@ export function BrowserContent({ controller, workspaceId, currentThread, selecte
   currentThread: ResourceThreadRef | null;
   selectedId: string | null;
   onSelect: (resourceId: string | null) => void;
-  renderToolbar: (tools: ReactNode) => ReactNode;
+  renderToolbar: RenderPanelToolbar;
 }) {
   const confirm = useWarmConfirm();
   const [notice, setNotice] = useState<string | null>(null);
@@ -51,19 +52,22 @@ export function BrowserContent({ controller, workspaceId, currentThread, selecte
     catch { /* 控制器已显示创建错误并重读清单。 */ }
   };
 
-  return <section className="workspace-browser-panel native-workspace-panel-product" aria-label={t("bottom.browser.region")}>
-    {renderToolbar(<>
-      <span>{t("bottom.browser.count", controller.items.length)}</span>
-      <button type="button" disabled={controller.loading} aria-label={t("bottom.browser.refreshWorkspace")} onClick={() => void controller.refresh()}>{t("bottom.common.refresh")}</button>
-      <select aria-label={t("bottom.browser.retentionScope")} value={retention} onChange={event => setRetention(event.target.value as "thread" | "workspace")}>
-        <option value="workspace">{t("bottom.common.keepForWorkspace")}</option><option value="thread">{t("bottom.common.temporaryBrowser")}</option>
-      </select>
-      <button type="button" disabled={!currentThread || controller.mutating} onClick={() => void create()}>{t("bottom.browser.create")}</button>
-    </>)}
-    {controller.error || notice ? <p role="alert" className="resource-notice is-error">{controller.error ?? notice}</p> : null}
-    {selectedId && !selected && !controller.loading ? <p role="alert">{t("bottom.browser.selectedMissing", selectedId)}</p> : null}
-    {selected?.retention_scope === "thread" && selected.status === "running" && selected.reconciliation_status === "verified" && !preview
-      ? <p role="status">{t("bottom.browser.threadOnlyNotice")}</p> : null}
+  return <section className="workspace-browser-panel native-workspace-panel-product panel-feedback-host" aria-busy={controller.loading} aria-label={t("bottom.browser.region")}>
+    {renderToolbar([
+      { id: 'create', kind: 'action', primary: true, label: t("bottom.browser.create"), icon: 'add',
+        disabled: !currentThread || controller.mutating, run: create },
+      { id: 'refresh', kind: 'action', primary: true, label: t("bottom.browser.refreshWorkspace"), icon: 'refresh',
+        disabled: controller.loading, run: () => controller.refresh() },
+      { id: 'retention', kind: 'select', label: t("bottom.browser.retentionScope"), icon: 'pin', value: retention,
+        options: [{ value: 'workspace', label: t("bottom.common.keepForWorkspace") }, { value: 'thread', label: t("bottom.common.temporaryBrowser") }],
+        onChange: value => setRetention(value as 'thread' | 'workspace') },
+    ])}
+    <div className="panel-feedback">
+      {controller.error || notice ? <p role="alert">{[controller.error, notice].filter(Boolean).join("\n")}</p> : null}
+      {selectedId && !selected && !controller.loading ? <p role="alert">{t("bottom.browser.selectedMissing", selectedId)}</p> : null}
+      {selected?.retention_scope === "thread" && selected.status === "running" && selected.reconciliation_status === "verified" && !preview
+        ? <p role="status">{t("bottom.browser.threadOnlyNotice")}</p> : null}
+    </div>
     <div className="workspace-browser-content">
       <div className="resource-tree workspace-browser-list" role="tree" aria-label={t("bottom.browser.list")}>
         {controller.items.map(resource => <ResourceTreeRow key={resource.resource_id} resource={workspaceResourceDisplay(resource)}

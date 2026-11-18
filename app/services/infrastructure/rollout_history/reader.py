@@ -7,6 +7,7 @@ from time import monotonic
 
 from langchain_core.messages import BaseMessage
 
+from app.core.exceptions import NotFoundError
 from app.core.history_loading import (
     DEFAULT_INITIAL_INCLUDE,
     HistoryLoadingConfig,
@@ -19,6 +20,9 @@ from app.schemas.internal_v2.turn import (
     TurnSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    ThreadItemInspectionDTO,
+    ThreadItemInspectionRequest,
+    ThreadItemLocationDTO,
     ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
@@ -49,11 +53,18 @@ from app.services.infrastructure.rollout_history.snapshot import (
     IndexedHistorySnapshots,
     IndexedTurnSpan,
 )
+from app.services.infrastructure.rollout_history.tool_result import (
+    read_tool_result_output,
+)
 from app.services.infrastructure.tool_output_store import ToolOutputStore
+from app.services.mapping.itemized.history_turns.context_notices import (
+    context_notice_parts,
+)
 from app.services.mapping.itemized.history_turns.detail import build_detail
 from app.services.mapping.itemized.history_turns.internal_execution import (
     build_internal_execution_history,
 )
+from app.services.mapping.itemized.history_turns.item_content import item_contents
 from app.services.mapping.itemized.history_turns.projection import (
     HistoryProjectionBudget,
     project_detail,
@@ -89,6 +100,30 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             )
         try:
             return search_messages(self._context_reader, indexed, request, budget=budget, tool_outputs=self._tool_outputs)
+        finally:
+            indexed.snapshot.close()
+
+    def inspect_item(self, session_id: str, thread_id: str, request: ThreadItemInspectionRequest) -> ThreadItemInspectionDTO:
+        indexed = self._snapshots.read(session_id, thread_id)
+        if indexed is None:
+            raise NotFoundError("当前 Thread 尚无已提交 Item")
+        try:
+            row = self._context_reader.inspect_item_metadata(indexed.snapshot, indexed.chain,
+                item_id=request.item_id, message_id=request.message_id) if indexed.view_id else None
+            if row is None:
+                raise NotFoundError("Item 不存在或已不在当前 Thread 的可见历史中")
+            location = ThreadItemLocationDTO(**dict(zip(("item_id", "turn_id", "execution_id", "job_id",
+                "model_call_id", "message_id", "semantic_kind", "content_hash", "byte_length"), row, strict=True)))
+            result = ThreadItemInspectionDTO(location=location)
+            if request.operation == "content":
+                if location.byte_length > 8 * 1024 * 1024:
+                    raise ValueError("单个 Item 超过 8 MiB 内容读取上限，请打开其原始资源")
+                item, = self._context_reader.read_canonical_items(indexed.snapshot, item_ids=[location.item_id])
+                output = read_tool_result_output(item, self._tool_outputs, 8 * 1024 * 1024 - location.byte_length) if item.semantic_kind == "tool_result" else None
+                if output is not None and output[0] is None:
+                    raise ValueError("此工具结果超过 8 MiB 内容读取上限，请打开其原始输出资源")
+                result.contents = item_contents(item, tool_output=output[0] if output is not None else None)
+            return result
         finally:
             indexed.snapshot.close()
 
@@ -469,6 +504,9 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         )
         items: list[TurnDetailDTO] = []
         summaries: list[TurnSummaryDTO] = []
+        notices = context_notice_parts(self._context_reader.read_context_notices(snapshot, chain,
+            turn_ids=[span.turn_id for span in spans],
+            execution_ids=list(dict.fromkeys(entry.execution_id for entry in internal_entries))))
         for span in spans:
             detail = self._load_indexed_span(
                 session_id,
@@ -481,6 +519,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 include=include,
                 tool_call_ids=selected_tool_call_ids,
             )
+            detail.response_parts.extend(notices.get(span.turn_id, ()))
             summaries.append(
                 summary(
                     project_detail(
@@ -491,15 +530,15 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 )
             )
             items.append(project_detail(detail, include, budget))
+        internal_executions = build_internal_execution_history(internal_entries, include=include)
+        for execution in internal_executions:
+            execution.response_parts.extend(notices.get(execution.execution_id, ()))
         return TurnHistoryPageDTO(
             items=items,
             source_view_id=self._context_reader.context_view_id(chain),
             source_view_revision=snapshot.manifest.history_view_revision,
             summaries=summaries,
-            internal_executions=build_internal_execution_history(
-                internal_entries,
-                include=include,
-            ),
+            internal_executions=internal_executions,
             next_cursor=next_cursor,
             has_more=has_more,
             before_cursor=before_cursor,

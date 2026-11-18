@@ -5,24 +5,26 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION = 1
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
+
+WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION = 2
 
 
 class SessionDefaults:
-    """持久化并解析 Workspace 会话默认 Agent/provider 设置。"""
+    """持久化并解析 Workspace 会话默认 Agent 和完整模型引用。"""
 
     def __init__(
         self,
         *,
         workspace_root: Path | None,
         validate_agent_id: Callable[[str | None], str],
-        resolve_agent_provider_id: Callable[[str | None, str | None], str],
+        resolve_agent_model: Callable[[str | None, ModelReferenceDTO | None], ModelReferenceDTO],
         default_agent_id_provider: Callable[[], str],
     ) -> None:
         self._workspace_root = workspace_root
         self._schema_version = WORKSPACE_SESSION_DEFAULTS_SCHEMA_VERSION
         self._validate_agent_id = validate_agent_id
-        self._resolve_agent_provider_id = resolve_agent_provider_id
+        self._resolve_agent_model = resolve_agent_model
         self._default_agent_id_provider = default_agent_id_provider
 
     def get_workspace_default_agent_id(self) -> str:
@@ -37,23 +39,19 @@ class SessionDefaults:
         except ValueError as error:
             raise ValueError("工作区默认 Agent 无效: artifact=session_defaults, field=default_agent_id") from error
 
-    def get_workspace_default_provider_id(self, agent_id: str) -> str:
+    def get_workspace_default_model(self, agent_id: str) -> ModelReferenceDTO:
         resolved_agent_id = self._validate_agent_id(agent_id)
         payload = self.read_workspace_session_defaults()
-        raw_providers = payload.get("provider_by_agent", {})
-        if not isinstance(raw_providers, dict):
-            raise TypeError("工作区默认 provider 映射必须是对象: artifact=session_defaults")
-        configured = raw_providers.get(resolved_agent_id)
+        raw_models = payload.get("model_by_agent", {})
+        if not isinstance(raw_models, dict):
+            raise TypeError("工作区默认模型映射必须是对象: artifact=session_defaults")
+        configured = raw_models.get(resolved_agent_id)
         if configured is None:
-            return self._resolve_agent_provider_id(resolved_agent_id)
-        if not isinstance(configured, str) or not configured:
-            raise TypeError(
-                "工作区默认 provider 必须是非空字符串: artifact=session_defaults"
-            )
+            return self._resolve_agent_model(resolved_agent_id, None)
         try:
-            return self._resolve_agent_provider_id(resolved_agent_id, configured)
+            return self._resolve_agent_model(resolved_agent_id, ModelReferenceDTO.model_validate(configured))
         except ValueError as error:
-            raise ValueError("工作区默认 provider 无效: artifact=session_defaults, field=provider_by_agent") from error
+            raise ValueError("工作区默认模型无效: artifact=session_defaults, field=model_by_agent") from error
 
     def set_workspace_default_agent(self, agent_id: str) -> None:
         resolved_agent_id = self._validate_agent_id(agent_id)
@@ -61,23 +59,23 @@ class SessionDefaults:
         payload["default_agent_id"] = resolved_agent_id
         self.write_workspace_session_defaults(payload)
 
-    def set_workspace_default_provider(
+    def set_workspace_default_model(
         self,
         agent_id: str,
-        provider_id: str,
+        model: ModelReferenceDTO,
     ) -> None:
         resolved_agent_id = self._validate_agent_id(agent_id)
-        resolved_provider_id = self._resolve_agent_provider_id(
+        resolved_model = self._resolve_agent_model(
             resolved_agent_id,
-            provider_id,
+            model,
         )
         payload = self.read_workspace_session_defaults()
-        raw_providers = payload.get("provider_by_agent", {})
-        if not isinstance(raw_providers, dict):
-            raise TypeError("工作区默认 provider 映射必须是对象: artifact=session_defaults")
-        payload["provider_by_agent"] = {
-            **raw_providers,
-            resolved_agent_id: resolved_provider_id,
+        raw_models = payload.get("model_by_agent", {})
+        if not isinstance(raw_models, dict):
+            raise TypeError("工作区默认模型映射必须是对象: artifact=session_defaults")
+        payload["model_by_agent"] = {
+            **raw_models,
+            resolved_agent_id: resolved_model.model_dump(mode="json"),
         }
         self.write_workspace_session_defaults(payload)
 
@@ -85,9 +83,6 @@ class SessionDefaults:
         if agent_id is not None:
             return self._validate_agent_id(agent_id)
         return self.get_workspace_default_agent_id()
-
-    def resolve_new_session_provider_id(self, agent_id: str) -> str:
-        return self.get_workspace_default_provider_id(agent_id)
 
     def workspace_session_defaults_path(self) -> Path:
         if self._workspace_root is None:
@@ -98,14 +93,14 @@ class SessionDefaults:
         if self._workspace_root is None:
             return {
                 "schema_version": self._schema_version,
-                "provider_by_agent": {},
+                "model_by_agent": {},
             }
         path = self.workspace_session_defaults_path()
         with self._access("read"):
             if not path.exists():
                 return {
                     "schema_version": self._schema_version,
-                    "provider_by_agent": {},
+                    "model_by_agent": {},
                 }
             payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):

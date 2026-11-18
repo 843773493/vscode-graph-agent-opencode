@@ -19,7 +19,8 @@ import type {
   ToolSelectionChange,
   ToolTestRun,
 } from "../../types/toolTesting";
-import type { Agent } from "../../types/backend";
+import type { Agent, ModelReference } from "../../types/backend";
+import { sameModel } from "../../utils/modelReference";
 import ComposerToolTree, { type ToolGroup } from "./ComposerToolTree";
 import AnchoredOverlay from "../overlays/AnchoredOverlay";
 import {
@@ -51,7 +52,7 @@ export default function ComposerToolControl({
   workspaceId,
   onStatus,
   inline = false,
-  providers,
+  models,
   active = true,
 }: {
   apiPort: number;
@@ -59,7 +60,7 @@ export default function ComposerToolControl({
   workspaceId: string | null;
   onStatus: (text: string) => void;
   inline?: boolean;
-  providers: Agent["providers"];
+  models: Agent["models"];
   active?: boolean;
 }): React.ReactNode {
   const [open, setOpen] = useState(inline);
@@ -72,7 +73,7 @@ export default function ComposerToolControl({
   const [testingTools, setTestingTools] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [testDialog, setTestDialog] = useState<ToolCatalogItem | null>(null);
-  const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] = useState<ModelReference[]>([]);
   const [repetitions, setRepetitions] = useState(0);
   const [testCostAcknowledged, setTestCostAcknowledged] = useState(false);
   const controlRef = useRef<HTMLDivElement | null>(null);
@@ -334,7 +335,7 @@ export default function ComposerToolControl({
   };
 
   const runTest = (tool: ToolCatalogItem) => {
-    setSelectedProviders([]);
+    setSelectedModels([]);
     setRepetitions(0);
     setTestCostAcknowledged(false);
     setTestDialog(tool);
@@ -342,12 +343,12 @@ export default function ComposerToolControl({
 
   const confirmTest = () => {
     const tool = testDialog;
-    if (!tool || selectedProviders.length === 0 || repetitions < 1 || !testCostAcknowledged) return;
+    if (!tool || selectedModels.length === 0 || repetitions < 1 || !testCostAcknowledged) return;
     const requestScopeKey = pollScopeKey;
     setError(null);
     setTestingTools((current) => new Set(current).add(tool.tool_id));
     setTestDialog(null);
-    void startToolTest(apiPort, tool.tool_id, agentId, workspaceId, selectedProviders, repetitions)
+    void startToolTest(apiPort, tool.tool_id, agentId, workspaceId, selectedModels, repetitions)
       .then((run) => {
         if (!mountedRef.current || !observeRunsRef.current || pollScopeKeyRef.current !== requestScopeKey) return;
         const nextRuns = new Map(runsRef.current).set(tool.tool_id, run);
@@ -376,7 +377,7 @@ export default function ComposerToolControl({
 
   const executionCount = tools.filter((tool) => tool.execution_enabled).length;
   const modelVisibleCount = tools.filter((tool) => tool.model_visible).length;
-  const availableProviders = providers.filter((provider) => provider.available && !provider.configuration_error?.trim());
+  const availableModels = models.filter((model) => model.available && !model.configuration_error?.trim());
 
   const menu = (
         <section className={`composer-tool-menu${inline ? " composer-tool-menu-inline" : ""}`} aria-label={t("composer.tools.menu")}>
@@ -418,7 +419,7 @@ export default function ComposerToolControl({
             savingToolIds={savingToolIds}
             runs={runs}
             testingTools={testingTools}
-            canRunTests={availableProviders.length > 0}
+            canRunTests={availableModels.length > 0}
             collapsedGroups={collapsedGroups}
             onToggleCollapsed={(groupId) => setCollapsedGroups((current) => {
               const next = new Set(current);
@@ -436,18 +437,18 @@ export default function ComposerToolControl({
             <section>
               <strong>{t("composer.tools.testNamed", testDialog.name)}</strong>
               <p>{t("composer.tools.testCostNotice")}</p>
-              {availableProviders.map((provider) => <label key={provider.provider_id}>
-                <input type="checkbox" checked={selectedProviders.includes(provider.provider_id)}
-                  onChange={(event) => setSelectedProviders((current) => event.target.checked
-                    ? [...current, provider.provider_id] : current.filter((id) => id !== provider.provider_id))} />
-                {provider.provider_id} · {provider.model}
+              {availableModels.map((model) => <label key={JSON.stringify(model.model_ref)}>
+                <input type="checkbox" checked={selectedModels.some(ref => sameModel(ref, model.model_ref))}
+                  onChange={(event) => setSelectedModels((current) => event.target.checked
+                    ? [...current, model.model_ref] : current.filter(ref => !sameModel(ref, model.model_ref)))} />
+                {model.model_ref.provider_id} / {model.model_ref.model_id} · {model.model}
               </label>)}
               <label>{t("composer.tools.testRepetitions")}
                 <input type="number" min={1} max={20} value={repetitions || ""} onChange={(event) => setRepetitions(Math.min(20, Number(event.target.value) || 0))} />
               </label>
               <label><input type="checkbox" checked={testCostAcknowledged} onChange={(event) => setTestCostAcknowledged(event.target.checked)} />{t("composer.tools.testCostAcknowledge")}</label>
               <button type="button" onClick={() => setTestDialog(null)}>{t("composer.tools.close")}</button>
-              <button type="button" disabled={selectedProviders.length === 0 || repetitions < 1 || !testCostAcknowledged} onClick={confirmTest}>{t("composer.tools.testConfirm")}</button>
+              <button type="button" disabled={selectedModels.length === 0 || repetitions < 1 || !testCostAcknowledged} onClick={confirmTest}>{t("composer.tools.testConfirm")}</button>
             </section>
           </div> : null}
         </section>

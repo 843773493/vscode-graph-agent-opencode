@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Annotated
 
 from fastapi import (
@@ -11,6 +12,8 @@ from fastapi import (
     Request,
 )
 
+from app.core.path_utils import get_gateway_root
+from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import verify_gateway_token
 from app.gateway.registry import GatewayWorkspaceRegistry
@@ -22,10 +25,25 @@ from app.schemas.gateway.management_targets import (
     GatewayManagementDirectoryDTO,
     GatewayManagementTargetDTO,
 )
-from app.schemas.gateway.workspaces import GatewayWorkspaceListDTO
+from app.schemas.gateway.workspaces import (
+    GatewayClientRecoveryDTO,
+    GatewayWorkspaceListDTO,
+)
 from app.schemas.internal_v2.common import APIResponse
+from configs.maintenance.workspace_identity_commit import read_completed_client_recovery
 
 router = APIRouter()
+
+
+@router.get("/api/gateway/client-recovery", response_model=APIResponse[GatewayClientRecoveryDTO])
+async def get_client_recovery(
+    _: Annotated[str, Depends(verify_gateway_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    registry: Annotated[GatewayWorkspaceRegistry, Depends(get_registry)],
+) -> APIResponse[GatewayClientRecoveryDTO]:
+    recovery = await run_sync_shielded(partial(read_completed_client_recovery,
+        gateway_root=get_gateway_root(), gateway_id=registry.gateway_id))
+    return APIResponse(data=GatewayClientRecoveryDTO(gateway_id=registry.gateway_id, workspace_identity=recovery), request_id=request_id)
 
 
 @router.get("/api/gateway/management/gateways", response_model=APIResponse[GatewayManagementDirectoryDTO])

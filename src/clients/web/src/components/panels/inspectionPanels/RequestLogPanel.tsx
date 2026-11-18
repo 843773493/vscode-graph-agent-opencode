@@ -131,7 +131,7 @@ export default function RequestLogPanel({
   // 大体积 Prompt、工具 schema 与 JSON 必须按层级懒展开；不要恢复成默认渲染全部内容，
   // 否则历史中的大量 text_delta 会创建过多 DOM，并再次拖慢会话切换和滚动。
   return (
-    <section className="panel-view request-log-panel">
+    <section className="panel-view request-log-panel" aria-busy={loading}>
       <div className="panel-header">
         <div className="panel-title">{t("inspection.request.title")}</div>
         <div className="panel-header-meta">
@@ -143,9 +143,9 @@ export default function RequestLogPanel({
         </div>
       </div>
 
-      {loading ? <div className="empty-state">{t("inspection.request.loading")}</div> : null}
+
       {error ? (
-        <div className="empty-state error-state" role="alert">
+        <div className="panel-feedback" role="alert">
           <div className="error-title">{t("inspection.request.loadFailed")}</div>
           <div className="error-message">{error}</div>
           <button
@@ -159,7 +159,7 @@ export default function RequestLogPanel({
         </div>
       ) : null}
 
-      {!error && logs.length > 0 ? (
+      {logs.length > 0 ? (
         <div
           className="panel-list"
           ref={listRef}
@@ -232,20 +232,20 @@ function LocatedRequestLog({ navigation, onClose }: { navigation: RequestLogNavi
   const location = navigation.location;
   useLayoutEffect(() => { mark.current?.scrollIntoView({ block: "center" }); }, [location]);
   const source = useMemo(() => {
-    if (!location?.reference) return null;
+    if (!location?.reference || navigation.recordOnly) return null;
     const characters = Array.from(location.text);
     const { start_codepoint: start, end_codepoint: end } = location.reference;
     return { before: characters.slice(Math.max(0, start - 1000), start).join(""),
       match: characters.slice(start, end).join(""), after: characters.slice(end, end + 1000).join(""),
       hasBefore: start > 1000, hasAfter: end + 1000 < characters.length };
-  }, [location]);
+  }, [location, navigation.recordOnly]);
   return <section className="panel-view request-log-panel" aria-label={t("inspection.request.locatedAria")}>
     <div className="panel-header"><span>{t("inspection.request.sessionRecord", navigation.match.reference?.file_name)}</span>
       <button type="button" onClick={onClose}>{t("inspection.request.closeLocation")}</button></div>
     {navigation.error ? <div className="empty-state error-state" role="alert">{t("inspection.request.matchFailed", navigation.error)}</div>
-      : location && source ? <div className="panel-list">
-        <section aria-label={t("inspection.request.originalAria")}><p>{t("inspection.match.original", formatNumber(location.reference!.start_codepoint), formatNumber(location.reference!.end_codepoint))}</p>
-          <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>
+      : location ? <div className="panel-list">
+        {source && <section aria-label={t("inspection.request.originalAria")}><p>{t("inspection.match.original", formatNumber(location.reference!.start_codepoint), formatNumber(location.reference!.end_codepoint))}</p>
+          <pre>{source.hasBefore ? "…" : ""}{source.before}<mark ref={mark}>{source.match}</mark>{source.after}{source.hasAfter ? "…" : ""}</pre></section>}
         <RequestLogCard key={location.record!.file_name} log={location.record!} initiallyOpen />
       </div> : <div className="empty-state" role="status">{t("inspection.request.locating")}</div>}
   </section>;

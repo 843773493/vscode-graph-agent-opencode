@@ -10,13 +10,16 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import (
     get_config_service,
+    get_persistent_task_service,
     get_session_catalog_service,
     get_session_service,
+    get_terminal_resource_owner,
     get_workspace_activity_service,
     get_workspace_file_watch_service,
     get_workspace_service,
     verify_local_token,
 )
+from app.api.persistent_tasks import open_persistent_task_sse
 from app.api.session_activity import _stream_session_activity_sse
 from app.api.sessions import open_session_trace_sse
 from app.api.sse_heartbeat import (
@@ -33,8 +36,10 @@ from app.schemas.internal_v2.workspace_observation import (
     WorkspaceObservationRequest,
     WorkspaceObservationSubscription,
 )
+from app.services.business.persistent_task_service import PersistentTaskService
 from app.services.business.session_navigation.service import SessionCatalogService
 from app.services.business.session_service import SessionService
+from app.services.business.terminal_resources.owner import TerminalResourceOwner
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
@@ -68,6 +73,8 @@ async def stream_workspace_observation(
     config_service: Annotated[ConfigService, Depends(get_config_service)],
     watch_service: Annotated[WorkspaceFileWatchService, Depends(get_workspace_file_watch_service)],
     workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
+    terminal_owner: Annotated[TerminalResourceOwner, Depends(get_terminal_resource_owner)],
+    task_service: Annotated[PersistentTaskService, Depends(get_persistent_task_service)],
 ):
     async def open_source(subscription: WorkspaceObservationSubscription) -> OpenedWorkspaceObservation:
         try:
@@ -83,6 +90,13 @@ async def stream_workspace_observation(
                 ))
             if subscription.kind == "session_navigation":
                 return OpenedWorkspaceObservation(_stream_navigation_changes(catalog_service))
+            if subscription.kind == "terminal_resources":
+                return OpenedWorkspaceObservation(_stream_terminal_changes(terminal_owner))
+            if subscription.kind == "persistent_tasks":
+                return OpenedWorkspaceObservation(stream_sse_with_heartbeat(
+                    open_persistent_task_sse(task_service, subscription.session_id),
+                    heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS, close_source_on_exit=True,
+                ))
             cursor = subscription.files_after
             if cursor is None:
                 cursor = await run_sync_shielded(workspace_service.file_operations.store.latest_event_id)
@@ -117,6 +131,18 @@ async def stream_workspace_observation(
                 yield f"event: observation\ndata: {data}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+
+
+async def _stream_terminal_changes(owner: TerminalResourceOwner):
+    async with aclosing(stream_sse_with_heartbeat(
+        owner.changes(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS, close_source_on_exit=True,
+    )) as changes:
+        async for item in changes:
+            if isinstance(item, str):
+                yield item
+            else:
+                payload = json.dumps({"resource_ids": None if item is None else sorted(item)}, separators=(",", ":"))
+                yield f'event: resources_changed\ndata: {payload}\n\n'
 
 
 async def _stream_navigation_changes(service: SessionCatalogService):

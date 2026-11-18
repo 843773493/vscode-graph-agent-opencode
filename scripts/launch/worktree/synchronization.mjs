@@ -46,12 +46,13 @@ export function synchronize(context, target, metadata, inputFiles) {
   if (gitText(target, ["diff", "--cached", "--name-only", "--", ...files])) throw new Error("目标选中文件已有暂存改动，请先处理");
   if (metadata.sync_source && metadata.sync_source !== context.root) throw new Error("同步来源与已有记录不一致");
   const sourceHead = gitText(context.root, ["rev-parse", "HEAD"]);
+  const targetHead = gitText(target, ["rev-parse", "HEAD"]);
   const sourceTree = snapshot(context.root, files);
   const targetTree = snapshot(target, files);
   const expected = {};
   const desired = {};
   for (const file of files) {
-    expected[file] = Object.hasOwn(metadata.synced_files ?? {}, file) ? metadata.synced_files[file] : entry(context.root, sourceHead, file);
+    expected[file] = Object.hasOwn(metadata.synced_files ?? {}, file) ? metadata.synced_files[file] : entry(target, targetHead, file);
     desired[file] = entry(context.root, sourceTree, file);
     const actual = entry(target, targetTree, file);
     if (!same(actual, expected[file]) && !same(actual, desired[file])) throw new Error(`目标存在重叠修改或基础不兼容: ${file}`);

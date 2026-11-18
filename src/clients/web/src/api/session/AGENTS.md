@@ -20,7 +20,7 @@ api/session/
 ├── sessionMessages.ts              消息操作与附件内容读取
 ├── sessionTurnHistory.ts            Turn 历史读取与分页
 ├── sessionContext.ts                会话上下文投影读取
-├── sessionGoals.ts                  会话目标读写
+├── sessionGoals.ts                  会话目标控制及原操作回执
 ├── sessionResources.ts              会话资源读取
 ├── sessionSkillTracking.ts          会话技能跟踪操作
 ├── sessionApiFetchMock.ts            API 单测共用 fetch 桩与 Gateway 屏障响应
@@ -49,3 +49,5 @@ API 测试共享 fetch 桩按会话 API 域命名，不按某一个具体端点�
 - 导入上级共享模块使用显式相对路径（如 `../http`），禁止任何指向旧平铺路径的转发层。
 - 代码注释使用中文，专业术语除外。
 - 模板示例；在整理 `AGENTS.md` 时请保留此行。
+
+Goal 展示读取归 `api/persistentTasks.ts` 的会话范围快照与事件流，本目录只保留目标、预算及幂等回执所需的专用写入；不重新导出独立 Goal GET。

@@ -36,6 +36,8 @@ from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.identity.item_projection import ItemProjectionIdentity
 from app.domain.itemized.records import CanonicalItemRecord
+from app.schemas.gateway.secrets import ResolvedSecret
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.resource_derivations.agents import (
     WORKSPACE_AGENTS_RESOURCE_ID,
 )
@@ -44,15 +46,15 @@ from app.services.infrastructure.events.event_channel_service import EventChanne
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
-    MCP_TOOL_CATALOG_RESOURCE_ID,
-    McpCatalogResourcePublisher,
-)
 from app.services.infrastructure.mcp.catalog_owner import (
     McpCatalogOwner,
     McpCatalogPublication,
 )
+from app.services.infrastructure.mcp.catalog_publication import (
+    McpCatalogResourcePublisher,
+)
 from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
     build_extension_catalog_binding,
 )
 from app.services.infrastructure.mcp.tool_guidance import extension_tool_guidance
@@ -260,28 +262,31 @@ def agent_execution_dependencies(
     config_service.get_revision.return_value = config_service.get_snapshot.return_value.revision
     config_service.use_snapshot.side_effect = lambda _snapshot: nullcontext()
     config_service.resolve_agent_id.return_value = "test_agent"
+    config_service.resolve_agent_model.return_value = ModelReferenceDTO(
+        provider_id="test-service", model_id="primary",
+    )
     config_service.validate_agent_id.side_effect = lambda agent_id: (
         "test_agent" if agent_id is None else agent_id
     )
     config_service.get_agent_runtime_config.return_value = {
-        "providers": [
+        "models": [
             {
                 "custom_llm_provider": "openai",
+                "provider_id": "test-service",
+                "model_id": "primary",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
-                "temperature": 0.7,
-                "top_p": 1.0,
-                "max_output_tokens": 1024,
+                "request_options": {"parameters": {"temperature": 0.7, "top_p": 1.0, "max_output_tokens": 1024}},
             },
             {
                 "custom_llm_provider": "openai",
+                "provider_id": "test-service",
+                "model_id": "fallback",
                 "model": "fallback",
                 "api_key": "k",
                 "endpoint": "e",
-                "temperature": 0.7,
-                "top_p": 1.0,
-                "max_output_tokens": 1024,
+                "request_options": {"parameters": {"temperature": 0.7, "top_p": 1.0, "max_output_tokens": 1024}},
             },
         ],
         "temperature": 0.7,
@@ -1102,9 +1107,11 @@ async def test_reasoning_stream_not_mixed_into_final_text(stream_agent, agent_ex
     """reasoning 流只参与最终聚合，不应污染正式回复或旧实时事件。"""
     deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
-        "providers": [
+        "models": [
             {
                 "custom_llm_provider": "openai",
+                "provider_id": "test-service",
+                "model_id": "primary",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -1248,9 +1255,11 @@ async def test_reasoning_only_response_retries_with_system_reminder(stream_agent
     """reasoning-only 空响应应继续请求模型产生工具调用或最终正文。"""
     deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
-        "providers": [
+        "models": [
             {
                 "custom_llm_provider": "openai",
+                "provider_id": "test-service",
+                "model_id": "primary",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -1341,9 +1350,11 @@ async def test_requested_custom_tool_missing_result_retries_with_system_reminder
     """点名工具按静态策略和持久禁用项筛选，缺少真实调用结果时重试。"""
     deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
-        "providers": [
+        "models": [
             {
                 "custom_llm_provider": "openai",
+                "provider_id": "test-service",
+                "model_id": "primary",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -1454,9 +1465,11 @@ async def test_standard_content_blocks_stream_split_reasoning_and_text(
     """标准 content blocks 流应拆分为 reasoning/text 两种事件。"""
     deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
-        "providers": [
+        "models": [
             {
                 "custom_llm_provider": "openai",
+                "provider_id": "test-service",
+                "model_id": "primary",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -1523,9 +1536,11 @@ async def test_tool_events_use_tool_start_input_and_tool_message_content(
     """工具卡片应使用 on_tool_start 的完整参数和 ToolMessage.content。"""
     deps = agent_execution_dependencies
     deps["config_service"].get_agent_runtime_config.return_value = {
-        "providers": [
+        "models": [
             {
                 "custom_llm_provider": "openai",
+                "provider_id": "test-service",
+                "model_id": "primary",
                 "model": "primary",
                 "api_key": "k",
                 "endpoint": "e",
@@ -2328,7 +2343,7 @@ async def test_generation_reactor_release_is_isolated_per_thread(agent_execution
             agent_id="test_agent",
             execution_overrides={},
             model_visibility_overrides={},
-            preferred_provider_id=None,
+            preferred_model=None,
             include_team_tools=False,
         )
 
@@ -2392,7 +2407,7 @@ async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_r
             agent_id="test_agent",
             execution_overrides={} if mcp_enabled is None else {"mcp__mini__echo": mcp_enabled},
             model_visibility_overrides={} if mcp_enabled is None else {"mcp__mini__echo": mcp_enabled},
-            preferred_provider_id=None, include_team_tools=False,
+            preferred_model=None, include_team_tools=False,
         )
 
     try:
@@ -2424,3 +2439,85 @@ async def test_mcp_catalog_change_updates_resident_registry_without_rebuilding_r
     finally:
         await service.shutdown()
         await owner.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_named_secret_rotation_rebuilds_resident_model_on_next_turn(agent_execution_dependencies):
+    dependencies = agent_execution_dependencies
+    config = dependencies["config_service"]
+    secret_id = "sec_00000000000040008000000000000001"
+    config.get_agent_runtime_config.return_value["models"][0]["api_key"] = "secret:" + secret_id
+    resolved_new_revision = asyncio.Event()
+    prepared = ContextVar("prepared-test-key", default=None)
+    revision = 1
+    deleted = False
+
+    async def resolve_credentials(models):
+        assert models == config.get_agent_runtime_config.return_value["models"]
+        if deleted:
+            raise KeyError(secret_id)
+        if revision == 2:
+            resolved_new_revision.set()
+        return {secret_id: ResolvedSecret(revision=revision, value="before" if revision == 1 else "after")}
+
+    config.prepare_llm_credentials = AsyncMock(side_effect=resolve_credentials)
+
+    @contextmanager
+    def use_credentials(values):
+        token = prepared.set(values)
+        try:
+            yield
+        finally:
+            prepared.reset(token)
+
+    config.use_llm_credentials.side_effect = use_credentials
+    released = []
+
+    def build(*, reactor_lifetime_scope, **_kwargs):
+        value = prepared.get()[secret_id].value.get_secret_value()
+        close = AsyncMock()
+        released.append(close)
+        reactor_lifetime_scope.register(close, label="compiled model")
+        return value
+
+    service = _build_agent_execution_service(dependencies)
+
+    async def acquire(job_id):
+        return await service._acquire_step_agent(admission=ExecutionAdmission(
+            session_id="ses_named_secret", thread_id="thr_test", execution_id=f"exec_{job_id}", job_id=job_id,
+            admission_idempotency_key=f"adm_{job_id}", execution_origin="user_turn", turn_id=f"turn_{job_id}"),
+            agent_id="test_agent", execution_overrides={}, model_visibility_overrides={},
+            preferred_model=None, include_team_tools=False)
+
+    try:
+        with patch("app.services.orchestration.agent_execution_service.assemble_agent", side_effect=build) as builder:
+            async with await acquire("first") as first:
+                original = first.runtime
+                assert original.agent == "before"
+                async with await acquire("second") as second:
+                    assert second.runtime is original
+                revision = 2
+                third_task = asyncio.create_task(acquire("third"))
+                try:
+                    async with asyncio.timeout(5):
+                        await resolved_new_revision.wait()
+                    # 换代等待真实 lease 排空；不能关闭仍在使用的旧模型。
+                    assert not third_task.done()
+                    assert first.runtime.agent == "before"
+                    released[0].assert_not_awaited()
+                finally:
+                    first.release()
+                    third = await third_task
+            async with third:
+                assert third.runtime is not original
+                assert third.runtime.agent == "after"
+                assert third.generation > first.generation
+            released[0].assert_awaited_once()
+            assert builder.call_count == 2
+            deleted = True
+            with pytest.raises(KeyError, match=secret_id):
+                await acquire("deleted")
+            assert builder.call_count == 2
+            assert config.prepare_llm_credentials.await_count == 4
+    finally:
+        await service.shutdown()

@@ -44,7 +44,7 @@ import {
   type SessionCatalogOutboxSnapshot,
 } from "./sessionCatalogOutboxRuntime";
 import { CatalogReadSupersededError } from "../sessionResourceExplorer/resourceTreeSync";
-import { errorMessage } from "../../utils/errorMessage";
+import { errorMessage, isErrorReported } from "../../utils/errorMessage";
 import { trackInFlightRequest } from "../runtime/inFlightRequests";
 import { HttpRequestError, isTransientNetworkError } from "../../api/http";
 import { isNavigationBackpressureStatus } from "../../api/session/sessionCatalogOperations";
@@ -415,6 +415,7 @@ export function useSessionResourceExplorer({
     confirmedRead.signal?.throwIfAborted();
     if (sessionCatalogOutboxRuntime) {
       void openCatalogOutbox(workspaceId).catch((error: unknown) => {
+        if (isErrorReported(error)) return;
         sessionCatalogOutboxRuntime.reportError(
           t('navigation.catalog.restoreOutboxFailed', workspaceId, errorMessage(error)),
         );
@@ -978,6 +979,7 @@ export function useSessionResourceExplorer({
   const refreshResourceTree = useCallback(async () => {
     if (activeWorkspaceId && sessionCatalogOutboxRuntime) {
       void openCatalogOutbox(activeWorkspaceId).catch((error: unknown) => {
+        if (isErrorReported(error)) return;
         sessionCatalogOutboxRuntime.reportError(
           t('navigation.catalog.restoreOutboxFailed', activeWorkspaceId, errorMessage(error)),
         );

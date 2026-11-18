@@ -45,10 +45,10 @@ try {
     }
     return { status: response.status, requestId, data: envelope.data };
   }, { url, method, expectedStatus });
-  const control = page.locator('.gateway-control-shell');
+  const control = page.locator('.settings-editor:visible');
   const close = async () => {
-    await page.getByRole('button', { name: '关闭 Gateway 控制中心', exact: true }).click();
-    await expect(control).toBeHidden();
+    await command('workbench.action.closeActiveEditor');
+    await expect(page.locator('.settings-management-view:visible')).toHaveCount(0);
   };
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible({ timeout: 30000 });
@@ -74,17 +74,13 @@ try {
   await expect(configRow.getByRole('button', { name: '编辑显示名', exact: true })).toHaveCount(0);
   await expect(configRow.getByRole('button', { name: '移除连接', exact: true })).toHaveCount(0);
   result.configManualDelete = await api('/api/gateway/remote-gateways/' + fixture.configConnectionId, 'DELETE', 403);
-  const opening = configRow.getByRole('button', { name: '打开 Gateway 来源设置', exact: true }).click();
-  const quick = page.locator('.quick-input-widget');
-  await expect(quick).toContainText(`Gateway ${fixture.gatewayA}`);
-  await quick.locator('.monaco-list-row').filter({ hasText: 'Gateway 配置' }).first().click();
-  await quick.locator('.monaco-list-row').filter({ hasText: 'gateway_mutable_override' }).first().click();
-  await opening;
-  await expect(control).toBeHidden();
+  await configRow.getByRole('button', { name: '打开 Gateway 来源设置', exact: true }).click();
+  await expect(control.locator('.settings-management-view')).toBeHidden();
   const settingsHeader = page.locator('.settings-context-label:visible');
-  await expect(settingsHeader.getByRole('combobox', { name: '设置所属 Gateway', exact: true }).locator('option:checked')).toContainText(fixture.gatewayA);
-  await expect(settingsHeader.getByRole('combobox', { name: '设置范围／工作区', exact: true }).locator('option:checked')).toHaveText('Gateway 配置');
-  await expect(settingsHeader.getByRole('combobox', { name: '配置来源', exact: true }).locator('option:checked')).toHaveText('gateway_mutable_override · user');
+  await expect(settingsHeader).toContainText(fixture.gatewayA);
+  await expect(page.locator('.settings-category-context:visible select[aria-label="配置范围"] option:checked')).toHaveText('Gateway 设置');
+  await settingsHeader.locator('summary').click();
+  await expect(settingsHeader.getByRole('combobox', { name: '配置来源', exact: true }).locator('option:checked')).toHaveText('目标设置');
   result.configSettingsOwner = fixture.gatewayA;
 
   result.phase = 'manual-create-cancel';
@@ -171,7 +167,7 @@ try {
   await expect(control.getByRole('alert')).toContainText(connectionId);
   await expect(row).toHaveCount(0);
   result.conflict = { requestId: conflict.headers()['x-request-id'], status: conflict.status() };
-  await control.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await control.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(control.getByRole('alert')).toHaveCount(0);
 
   result.phase = 'manual-remove';

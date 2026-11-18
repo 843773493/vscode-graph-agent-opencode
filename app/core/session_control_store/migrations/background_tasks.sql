@@ -16,5 +16,6 @@ CREATE TABLE IF NOT EXISTS background_tasks (
     created_at TEXT NOT NULL,
     started_at TEXT,
     ended_at TEXT,
-    metadata_json TEXT NOT NULL
+    metadata_json TEXT NOT NULL,
+    result_json TEXT
 )

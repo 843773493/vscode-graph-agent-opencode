@@ -86,9 +86,9 @@ const composerActions: Omit<ComposerContextType, "state"> = {
   interruptSession: async () => undefined,
   switchAgent: async () => undefined,
   switchModel: async () => undefined,
-  refreshAgents: async () => undefined,
+  refreshAgents: async () => [],
   setWorkspaceDefaultAgent: async () => undefined,
-  setWorkspaceDefaultProvider: async () => undefined,
+  setWorkspaceDefaultModel: async () => undefined,
   switchContentView: () => undefined,
   createSession: async () => {
     throw new Error("测试不调用 createSession");

@@ -60,7 +60,7 @@ def require_catalog_schema(
         ).fetchall()
     }
     if (
-        not {"title_source", "session_kind", "current_agent_id", "current_provider_id",
+        not {"title_source", "session_kind", "current_agent_id", "current_model_json",
              "context_source_session_id", "generation_origin_json", "updated_at"}
         <= node_columns
         or not {"title_source", "purpose", "session_metadata_json", "request_intent_json",
@@ -68,13 +68,13 @@ def require_catalog_schema(
         <= creation_columns
     ):
         error = CatalogMaintenanceRequiredError(
-            f"{database_label} v8 缺少权威会话字段，拒绝自动修复: "
+            f"{database_label} 缺少权威会话字段，拒绝自动修复: "
             f"path={database_path}, nodes={sorted(node_columns)}, "
             f"creation_records={sorted(creation_columns)}"
         )
         raise CatalogMaintenanceRequiredError(catalog_failure(
             error, database_path=database_path, stage="catalog-schema",
-            reason=f"{database_label} v8 缺少权威会话字段，拒绝自动修复",
+            reason=f"{database_label} 缺少权威会话字段，拒绝自动修复",
         )) from error
     metadata_columns = {
         str(row[1])

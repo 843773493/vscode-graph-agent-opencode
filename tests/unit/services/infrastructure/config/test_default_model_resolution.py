@@ -12,7 +12,7 @@ def test_default_model_resolution_rejects_missing_agent_instead_of_using_first_p
     )
     config = {
         "agents": {},
-        "llm": {"providers": [{"id": "first", "model": "first-provider-model"}]},
+        "llm": {"providers": {"first": {"models": {"general": {"model": "first-provider-model"}}}}},
     }
 
     with pytest.raises(

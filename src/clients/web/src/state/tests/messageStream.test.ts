@@ -25,6 +25,20 @@ function applyMessageStreamEvent(current: MessageStreamState, message: MessageSt
   return reduceMessageStreamEvent(current, message);
 }
 
+test("工具参数增量保留旧快照，完整空对象替换未完成参数", () => {
+  const initial = createMessageStreamState("ses_1", "turn_1", "", "test-workspace::ses_1", "thr_00000000400070008000000000000002");
+  const first = applyMessageStreamEvent(initial, event(1, "tool_call.delta", {
+    tool_call_id: "call", tool_name: "read_file", arguments_delta: "{", arguments_complete: false,
+  }));
+  const second = applyMessageStreamEvent(first, event(2, "tool_call.delta", {
+    tool_call_id: "call", arguments_delta: "}", arguments: {}, arguments_complete: true,
+  }));
+  expect(first.toolCalls.call?.arguments).toEqual({ raw: "{" });
+  expect(second.toolCalls.call?.arguments).toEqual({});
+  expect(second.toolCalls.call?.tool_name).toBe("read_file");
+  expect(second.toolCalls.call).not.toHaveProperty("arguments_delta");
+});
+
 function event(
   seq: number,
   type: MessageStreamEvent["type"],

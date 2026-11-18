@@ -54,9 +54,9 @@ async def test_empty_listing_preserves_cold_check_without_repeating_transport(
     listing = bundle.transport.list_resources
     calls = []
 
-    async def observed() -> list[dict[str, object]]:
+    async def observed(**query) -> list[dict[str, object]]:
         calls.append(True)
-        return await listing()
+        return await listing(**query)
 
     with monkeypatch.context() as patch:
         patch.setattr(bundle.transport, "list_resources", observed)
@@ -78,7 +78,7 @@ async def test_empty_owner_does_not_mask_initial_transport_failure(
     owner = bundle.restart()
     failure = ConnectionError("首次资源清单未取得回执")
 
-    async def failed() -> list[dict[str, object]]:
+    async def failed(**query) -> list[dict[str, object]]:
         raise failure
 
     with monkeypatch.context() as patch:

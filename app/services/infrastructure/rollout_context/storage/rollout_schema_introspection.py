@@ -292,7 +292,7 @@ class RolloutSchemaIntrospectionMixin:
         if schema_version < expected_version:
             raise RuntimeError(
                 "schema-incompatible: rollout SQLite 不符合当前 typed item/source binding 合同；"
-                "18/19/20/21/22/23/24/25版须通过显式 migrate_schema 顺序升级18→19→20→21→22→23→24→25→26；其余旧实验库不支持转换，原始数据保留；"
+                "旧版本须显式迁移；当前协作投递回执使用 facet hash，禁止仅修改版本号，原始数据保留；"
                 f"current={schema_version}, target={expected_version}"
             )
         if message_format_version != storage_version.MESSAGE_FORMAT_VERSION:
@@ -300,6 +300,10 @@ class RolloutSchemaIntrospectionMixin:
                 "rollout JSONL message format 版本不受支持: "
                 f"database={row[1]}, supported={storage_version.MESSAGE_FORMAT_VERSION}"
             )
+        if schema_version >= 28 and connection.execute(
+            "SELECT 1 FROM pragma_table_info('team_source_observations') WHERE name='facet_hashes_json'"
+        ).fetchone() is None:
+            raise RuntimeError("schema-incompatible: rollout 缺少团队 facet 投递回执结构")
         if connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='index' "
             "AND name='item_catalog_background_result_identity'"

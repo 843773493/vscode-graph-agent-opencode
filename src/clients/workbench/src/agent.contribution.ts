@@ -8,6 +8,8 @@ import { SessionNavigation } from './sessionNavigation.js';
 import { ViewPaneContainer } from '../upstream/src/vs/workbench/browser/parts/views/viewPaneContainer.js';
 import { Codicon } from '../upstream/src/vs/base/common/codicons.js';
 import { WorkspacePanel } from './workspacePanel.js';
+import { PortsView } from './ports/view.js';
+import './workspaceOutput.js';
 import { registerAction2, Action2 } from '../upstream/src/vs/platform/actions/common/actions.js';
 import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { IViewsService } from '../upstream/src/vs/workbench/services/views/common/viewsService.js';
@@ -51,6 +53,7 @@ registerAction2(class RevealAgentTools extends Action2 {
 import { McpServersListView } from '../upstream/src/vs/workbench/contrib/mcp/browser/mcpServersView.js';
 import './workspacePanelState.js';
 import './workspaceIdentityRecovery.js';
+import './localData.js';
 import './search/searchService.js';
 import './settings/commands.js';
 
@@ -78,26 +81,34 @@ views.registerViews([{
   openCommandActionDescriptor: { id: 'boxteam.automation.focus', title: { value: t('workbench.view.openAutomation'), original: actionTitles['workbench.view.openAutomation'] } },
 }], automation);
 
-// 保留原版 Terminal/Output 视图和服务，在同一原生容器内贡献工作区业务内容。
+// 终端沿用原生容器与打开动作；输出直接使用原生视图及通道注册。
 const containers = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry);
-for (const [kind, containerId, titleKey, openKey] of [
-  ['terminal', 'terminal', 'workbench.view.workspaceTerminal', 'workbench.view.openWorkspaceTerminal'],
-  ['output', 'workbench.panel.output', 'workbench.view.workspaceOutput', 'workbench.view.openWorkspaceOutput'],
+for (const [kind, containerId, titleKey] of [
+  ['terminal', 'terminal', 'workbench.view.workspaceTerminal'],
 ] as const) {
   const container = containers.get(containerId);
   if (!container) throw new Error(t('workbench.view.upstreamPanelMissing', containerId));
   const original = views.getView(containerId);
   if (original) {
-    // 初次进入 Agent 工作台以工作区内容为主；原版视图仍可由其命令和视图菜单打开。
     views.deregisterViews([original], container);
-    views.registerViews([{ ...original, hideByDefault: true }], container);
   }
   views.registerViews([{
     id: `boxteam.workspace.${kind}`, name: { value: t(titleKey), original: actionTitles[titleKey] }, order: -1,
-    canToggleVisibility: true, canMoveView: true, ctorDescriptor: new SyncDescriptor(WorkspacePanel),
-    openCommandActionDescriptor: { id: `boxteam.${kind}.focus`, title: { value: t(openKey), original: actionTitles[openKey] } },
+    canToggleVisibility: true, canMoveView: true,
+    ctorDescriptor: new SyncDescriptor(WorkspacePanel),
+    openCommandActionDescriptor: original?.openCommandActionDescriptor,
   }], container);
 }
+registerAction2(class FocusWorkspaceTerminal extends Action2 {
+  constructor() { super({ id: 'boxteam.terminal.focus', title: { value: t('workbench.view.openWorkspaceTerminal'), original: actionTitles['workbench.view.openWorkspaceTerminal'] }, f1: false }); }
+  async run(accessor: ServicesAccessor): Promise<void> {
+    await accessor.get(IViewsService).openView('boxteam.workspace.terminal', true);
+  }
+});
+registerAction2(class FocusOutput extends Action2 {
+  constructor() { super({ id: 'boxteam.output.focus', title: { value: t('workbench.view.openWorkspaceOutput'), original: actionTitles['workbench.view.openWorkspaceOutput'] }, f1: false }); }
+  async run(accessor: ServicesAccessor): Promise<void> { await accessor.get(IViewsService).openView('workbench.panel.output', true); }
+});
 for (const [kind, titleKey, openKey, icon, order] of [
   ['ports', 'workbench.view.ports', 'workbench.view.openPorts', Codicon.serverEnvironment, 4],
   ['mcp', 'workbench.view.mcp', 'workbench.view.openMcp', Codicon.plug, 7],
@@ -112,7 +123,7 @@ for (const [kind, titleKey, openKey, icon, order] of [
   views.registerViews([{
     id: `${id}.view`, name: { value: t(titleKey), original: actionTitles[titleKey] },
     canToggleVisibility: true, canMoveView: true,
-    ctorDescriptor: kind === 'mcp' ? new SyncDescriptor(McpServersListView) : new SyncDescriptor(WorkspacePanel),
+    ctorDescriptor: kind === 'ports' ? new SyncDescriptor(PortsView) : kind === 'mcp' ? new SyncDescriptor(McpServersListView) : new SyncDescriptor(WorkspacePanel),
     openCommandActionDescriptor: { id: `${id}.focus`, title: { value: t(openKey), original: actionTitles[openKey] } },
   }], container);
 }

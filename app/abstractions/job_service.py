@@ -104,6 +104,8 @@ class JobServiceProtocol(Protocol):
         """在调用方持有的 Session 读准入内查询；不建立写入或执行准入。"""
         ...
 
+    async def reorder_pending(self, session_id: str, thread_id: str, *, message_ids: tuple[str, ...], expected_thread_revision: int) -> PendingRequestListDTO: ...
+
     async def update_pending_policy(
         self,
         session_id: str,

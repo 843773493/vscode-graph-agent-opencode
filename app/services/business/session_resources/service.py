@@ -4,6 +4,7 @@ from app.abstractions.job_service import JobServiceProtocol
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceControlResultDTO,
+    SessionResourceDTO,
     SessionResourceKind,
     SessionResourceListDTO,
 )
@@ -59,6 +60,11 @@ class SessionResourceService:
             action=action,
             operation_id=operation_id,
         )
+
+    async def get_resource(self, session_id: str, kind: SessionResourceKind, resource_id: str) -> SessionResourceDTO:
+        async with self._session_service.session_read_admission(session_id):
+            await self._session_service.get(session_id)
+            return await self._provider_registry.get(kind).get_resource(session_id, resource_id)
 
     async def cleanup_session(self, session_id: str) -> None:
         await self._session_service.get(session_id)

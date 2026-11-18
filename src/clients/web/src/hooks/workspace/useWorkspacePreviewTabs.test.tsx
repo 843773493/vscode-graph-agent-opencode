@@ -227,3 +227,17 @@ describe("useWorkspacePreviewTabs 预览页签切换的在途归属", () => {
     expect(current().activePath).toBe("boxteam://workspace/workspace-preview/resources/files/root/b.txt");
   });
 });
+
+test("Markdown 锚点通过同一文件打开入口传到新文件和已加载页签", async () => {
+  const getContent = spyOn(api, "getWorkspaceFileContent").mockImplementation(async (_port, path) => fileContent(path));
+  restores.push(() => getContent.mockRestore());
+  const { current } = await mountPreviewTabs();
+  await flush();
+  const path = "boxteam://workspace/workspace-preview/resources/files/root/guide.md";
+  await act(async () => { await current().openWorkspaceFilePath(path, "#安装"); });
+  expect(current().tabs.find(tab => tab.path === path)).toMatchObject({ previewType: "file", fragment: "#安装", selection: null });
+  const reads = getContent.mock.calls.length;
+  await act(async () => { await current().openWorkspaceFilePath(path, "#下一节"); });
+  expect(getContent.mock.calls.length).toBe(reads);
+  expect(current().tabs.find(tab => tab.path === path)).toMatchObject({ fragment: "#下一节" });
+});

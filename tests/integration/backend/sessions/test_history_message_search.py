@@ -16,6 +16,9 @@ from tests.integration.backend.sessions.test_thread_runtime_runner import (
     _session,
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
+    recording_runtime_case as recording_runtime_case,  # noqa: PLC0414
+)
+from tests.integration.backend.sessions.test_thread_runtime_runner import (
     runner_case as runner_case,  # noqa: PLC0414
 )
 from tests.integration.backend.sessions.test_thread_runtime_runner import (
@@ -25,8 +28,8 @@ from tests.support.api_helpers import with_message_run_operation_id
 
 
 @pytest.fixture
-async def search_history(runtime_case: RuntimeCase, history_client: httpx.AsyncClient):
-    case = runtime_case
+async def search_history(recording_runtime_case: RuntimeCase, history_client: httpx.AsyncClient):
+    case = recording_runtime_case
     container = case.runner.container
     session_id, main = await _session(case.runner)
     child = await _child(case, session_id)
@@ -161,3 +164,56 @@ async def test_message_search_limits_and_stale_references_are_explicit(
     stale = await history_client.post(f"{base}/{child}/history/search", json={**query, "cursor": cursor})
     assert stale.status_code == 409, stale.text
     assert stale.json()["detail"]["code"] == "stale_turn_cursor"
+
+
+async def test_item_inspection_uses_exact_owner_and_reads_only_selected_body(
+    runtime_case: RuntimeCase, history_client: httpx.AsyncClient, search_history, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.deps import get_llm_request_log_reader
+
+    _session_id, base, main, child, _cold, contents, accepted = search_history
+    case = runtime_case
+    container = case.runner.container
+    history_client._transport.app.dependency_overrides[get_llm_request_log_reader] = lambda: container.llm_request_log_reader
+    reader = case.runner.saver._context_reader
+    original = reader.read_canonical_items
+    reads = []
+
+    def read_selected(snapshot, *, item_ids=None):
+        assert item_ids is not None, "Item 操作不得物化整段历史"
+        reads.append(tuple(item_ids))
+        return original(snapshot, item_ids=item_ids)
+
+    monkeypatch.setattr(reader, "read_canonical_items", read_selected)
+    with workspace_context(container.workspace_id, case.runner.workspace, session_catalog=container.session_catalog):
+        endpoint = f"{base}/{child}/items/inspect"
+        response = await history_client.post(endpoint, json={
+            "operation": "location", "message_id": accepted[child, 0]["message_id"],
+        })
+        assert response.status_code == 200, response.text
+        location = response.json()["data"]["location"]
+        assert location["item_id"] and location["turn_id"]
+        assert location["semantic_kind"] == "user_input"
+        assert reads == [], "复制定位地址只查身份索引"
+        response = await history_client.post(endpoint, json={"operation": "content", "item_id": location["item_id"]})
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["contents"][0]["content"] == contents[child][0]
+        assert reads == [(location["item_id"],)]
+        wrong = await history_client.post(f"{base}/{main}/items/inspect", json={"operation": "content", "item_id": location["item_id"]})
+        assert wrong.status_code == 404, wrong.text
+        assert reads == [(location["item_id"],)]
+        both = await history_client.post(endpoint, json={"operation": "location", "item_id": location["item_id"], "message_id": "wrong"})
+        assert both.status_code == 422
+        request = await history_client.post(endpoint, json={"operation": "request", "item_id": location["item_id"]})
+        assert request.status_code == 200, request.text
+        from app.schemas.internal_v2.llm_request_log import LLMRequestLogReferenceDTO
+        reference = LLMRequestLogReferenceDTO.model_validate(request.json()["data"]["request_log"]["reference"])
+        assert container.llm_request_log_reader.locate(reference).record.job_id == location["job_id"]
+        trace = await history_client.post(endpoint, json={"operation": "trace", "item_id": location["item_id"]})
+        assert trace.status_code == 200, trace.text
+        from app.schemas.internal_v2.trace_search import TraceReferenceDTO
+        reference = TraceReferenceDTO.model_validate(trace.json()["data"]["trace"]["reference"])
+        located = container.trace_event_store.locate(reference)
+        assert located.record.thread_id == child and located.record.type == "job_started"
+        assert reads == [(location["item_id"],)], "请求和 Trace 定位不补读 Item 正文"

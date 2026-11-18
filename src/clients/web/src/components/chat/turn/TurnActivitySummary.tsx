@@ -4,31 +4,27 @@ import { MessageSearchLocationContext } from "../messageSearchLocation";
 import type { ConversationView } from "../../../types/frontend";
 import type { RenderGroup, WorkItem, ToolTimelineItem } from "../../../state/timeline/chatResponseGroups";
 import { historicalBoundaryStatus } from "../../../state/timeline/chatResponseGroups";
-import { buildPendingStatusItem } from "../../../state/trace/traceAggregation";
 import MarkdownContent from "../MarkdownContent";
 import ToolRow from "../ToolRow";
 import { errorMessage } from "../../../utils/errorMessage";
 import type { LoadToolDetails, LoadTurnDetails } from "./types";
-import type { TimelineItem } from "../../../state/timeline/timelineTypes";
 import { ResponsePart } from "./responseStatusParts";
+import { responseItemMenuActions, responseItemTarget, useChatItemMenu } from "../itemContextMenu";
 
-export function ForkItemButtons({ item, onForkItem }: {
-  item: TimelineItem;
+function ActivityItem({ item, showRawDetails, onLoadToolDetails, onForkItem }: {
+  item: WorkItem;
+  showRawDetails: boolean;
+  onLoadToolDetails?: (toolCallId: string) => Promise<void>;
   onForkItem?: (itemId: string) => void;
 }): React.ReactNode {
-  if (!onForkItem) return null;
-  const itemIds = [...new Set((item.responseSources ?? []).flatMap((part) =>
-    part.source.item_id ? [part.source.item_id] : [],
-  ))];
-  return itemIds.map((itemId, index) => (
-    <button key={itemId} type="button" className="chat-user-action-menu-item"
-      data-fork-item-id={itemId}
-      title={itemIds.length > 1 ? t("chat.activity.forkNumber", index + 1) : t("chat.turn.fork")}
-      aria-label={itemIds.length > 1 ? t("chat.activity.forkNumber", index + 1) : t("chat.turn.fork")}
-      onClick={() => onForkItem(itemId)}>
-      <span className="codicon codicon-git-pull-request" aria-hidden="true" />
-    </button>
-  ));
+  const menu = useChatItemMenu(() => responseItemMenuActions(item, onForkItem), true, () => responseItemTarget(item));
+  return <div className="chat-activity-item" data-chat-item-id={item.id} {...menu}>
+    {item.kind === "aggregated_tool" ? (
+      <ToolRow item={item} showRawDetails={showRawDetails} onLoadDetails={onLoadToolDetails} />
+    ) : (
+      <MarkdownContent value={item.text} responseSources={item.responseSources ? JSON.stringify(item.responseSources) : undefined} />
+    )}
+  </div>;
 }
 
 export function formatActivityDuration(durationMs: number | null | undefined): string {
@@ -83,25 +79,10 @@ export function activityPreviewForItems(
 export function ConversationWorkSummary({
   conversation,
   items,
-  running,
 }: {
   conversation: ConversationView;
   items: WorkItem[];
-  running: boolean;
 }): React.ReactNode {
-  if (running) {
-    if (!conversation.messageStream) return null;
-    const status = buildPendingStatusItem(conversation);
-    if (!status) return null;
-    return (
-      <div className="chat-working" role="status" data-status-kind="work-summary">
-        <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
-        <span>{status.title}</span>
-        <span className="chat-working-detail">{status.detail}</span>
-      </div>
-    );
-  }
-
   const preview = activityPreviewForItems(items, conversation.activityStats);
   return (
     <section className="chat-thinking chat-turn-activity is-complete" data-status-kind="work-summary">
@@ -142,16 +123,8 @@ export function ActivityDetails({
           <span>{t("chat.thinking.redacted")}</span>
         </div>
       ) : null}
-      {items.map((item) => <div key={item.id} className="chat-activity-item">{item.kind === "aggregated_tool" ? (
-        <ToolRow
-          key={item.id}
-          item={item}
-          showRawDetails={showRawDetails}
-          onLoadDetails={onLoadToolDetails}
-        />
-      ) : (
-        <MarkdownContent key={item.id} value={item.text} responseSources={item.responseSources ? JSON.stringify(item.responseSources) : undefined} />
-      )}<ForkItemButtons item={item} onForkItem={onForkItem} /></div>)}
+      {items.map((item) => <ActivityItem key={item.id} item={item} showRawDetails={showRawDetails}
+        onLoadToolDetails={onLoadToolDetails} onForkItem={onForkItem} />)}
     </>
   );
 }
@@ -175,10 +148,10 @@ export function TurnActivitySummary({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const turnId = conversation.turnId;
-  const { message, tool } = React.useContext(MessageSearchLocationContext);
+  const { message, tool, item: locatedItem } = React.useContext(MessageSearchLocationContext);
   React.useEffect(() => {
-    if (message?.role === "tool" && message.turn_id === turnId || tool?.turn_id === turnId) { setOpen(true); setError(null); }
-  }, [message, tool, turnId]);
+    if (message?.role === "tool" && message.turn_id === turnId || tool?.turn_id === turnId || locatedItem?.turn_id === turnId) { setOpen(true); setError(null); }
+  }, [message, tool, locatedItem, turnId]);
   const boundaryStatus = historicalBoundaryStatus(conversation);
   const activityPreview = activityStatsPreview(conversation.activityStats);
   const displayPreview = boundaryStatus
@@ -285,7 +258,7 @@ export function TurnActivitySummary({
         ) : null}
       </section>
       {groups.map((group) => group.kind === "response" ? (
-        <ResponsePart key={group.id} item={group.item} />
+        <ResponsePart key={group.id} item={group.item} onForkItem={onForkItem} />
       ) : open && !error ? (
         <div key={group.id} className="chat-thinking-body">
           <ActivityDetails

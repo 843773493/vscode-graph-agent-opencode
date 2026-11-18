@@ -66,7 +66,7 @@ def public_session_data(session: SessionDTO) -> dict[str, object]:
         "workspace_id",
         "title",
         "current_agent_id",
-        "current_provider_id",
+        "current_model",
         "parent_session_id",
         "kind",
         "created_at",

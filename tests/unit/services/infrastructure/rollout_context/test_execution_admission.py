@@ -246,11 +246,14 @@ def test_pending_runtime_wakeups_keep_admission_order_after_restart(
         remaining, = restarted.execution_queue_snapshot(SESSION_ID, thread_id).records
         assert remaining.cursor.admission.job_id == accepted[1].job_id
         assert remaining.cursor.commit_id == cursors[1]
-        assert restarted.runtime_execution_progress(cancelled).outcome == "cancelled"
-        progress = restarted.runtime_execution_progress(accepted[1])
+        assert restarted.execution_progress(cancelled.session_id, cancelled.thread_id, job_id=cancelled.job_id,
+                                             execution_id=cancelled.execution_id).outcome == "cancelled"
+        progress = restarted.execution_progress(accepted[1].session_id, accepted[1].thread_id,
+                                                job_id=accepted[1].job_id, execution_id=accepted[1].execution_id)
         assert progress.outcome == "unknown" and progress.total_tokens == 0
         with pytest.raises(RuntimeError, match="原准入 identity"):
-            restarted.runtime_execution_progress(replace(accepted[1], execution_id="another-execution"))
+            restarted.execution_progress(accepted[1].session_id, accepted[1].thread_id,
+                                         job_id=accepted[1].job_id, execution_id="another-execution")
 
 
 def test_internal_admission_creates_turnless_execution_and_reuses_exact_identity(

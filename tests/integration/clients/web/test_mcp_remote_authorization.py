@@ -52,17 +52,17 @@ def product_case(request: pytest.FixtureRequest):
             workspace = _prepare_workspace(node_context, model_port, gateway_port)
             path = workspace / ".boxteam/workspace.jsonc"
             payload = read_jsonc_object(path)
-            payload["llm"] = {"providers": [{
-                "id": "control-replay", "endpoint": "https://opencode.ai/zen/v1", "model": "control-replay-model",
-                "api_key": "control-replay-key", "custom_llm_provider": "openai",
-                "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True},
-                             "supports_reasoning": {"reasoning_content": False}},
-            }]}
+            payload["llm"] = {"providers": {"control-replay": {
+                "defaults": {"endpoint": "https://opencode.ai/zen/v1", "api_key": "", "custom_llm_provider": "openai",
+                    "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True},
+                                 "supports_reasoning": {"reasoning_content": False}}},
+                "models": {"default": {"model": "control-replay-model"}},
+            }}}
             agents = payload["agents"]
             assert isinstance(agents, dict)
             for agent in agents.values():
                 assert isinstance(agent, dict)
-                agent["model"] = {"primary_provider": "control-replay", "fallback_providers": []}
+                agent["model"] = {"primary": {"provider_id": "control-replay", "model_id": "default"}, "fallbacks": []}
             tools = agents["default"].setdefault("tools", {})
             tools["custom"] = [{"tool_id": "connections.manage"}]
             payload["mcp"] = {"servers": {"schema": {

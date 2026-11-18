@@ -112,8 +112,8 @@ async def test_resource_publication_failure_keeps_same_pty_and_owner_facts(
 
     # 原生清单也必须拒绝 file URL；不能先发布该观察或改变持久资源状态。
     listing = owner._transport.list_resources
-    async def damaged_listing() -> list[dict[str, object]]:
-        result = await listing()
+    async def damaged_listing(**query) -> list[dict[str, object]]:
+        result = await listing(**query)
         result[0]["cwd_relative"] = directory.resolve().as_uri()
         return result
 

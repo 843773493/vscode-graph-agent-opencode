@@ -67,8 +67,8 @@ async def test_rejected_identity_and_correction_survive_workbench_refresh(
             session = created.json()["data"]
             assert session["workspace_id"] == active_owner["workspace_id"]
             session_id = session["session_id"]
-            selected = await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "primary"})
-            assert selected.status_code == 200 and selected.json()["data"]["current_provider_id"] == "primary"
+            selected = await client.patch(f"/api/v1/sessions/{session_id}", json={"model": {"provider_id": "primary", "model_id": "default"}})
+            assert selected.status_code == 200 and selected.json()["data"]["current_model"] == {"provider_id": "primary", "model_id": "default"}
             main = await client.get(f"/api/v1/sessions/{session_id}/main-thread")
             assert main.status_code == 200, main.text
             thread_id = main.json()["data"]["thread_id"]

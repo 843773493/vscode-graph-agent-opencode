@@ -103,6 +103,7 @@ class PersistentTaskService:
         items = self.list(session_id)
         return PersistentTaskListDTO(
             items=items, runtime=self.runtime.status(),
+            session_goal=self._store.goal_snapshot(session_id) if session_id is not None else None,
             active_runs=[run for task in items if task.application_type == "automation"
                          for run in self._store.active_run_summaries(task.task_id)],
         )

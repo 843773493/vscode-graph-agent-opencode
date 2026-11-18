@@ -61,6 +61,7 @@ from app.runtime.agent_runtime import (
     assemble_agent,
 )
 from app.schemas.internal_v2.message import AttachmentRef
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.job.service import JobState
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.external_resource_leases import (
@@ -218,7 +219,7 @@ class AgentExecutionService(JobStepExecutor):
         agent_id: str,
         execution_overrides: Mapping[str, bool],
         model_visibility_overrides: Mapping[str, bool],
-        preferred_provider_id: str | None,
+        preferred_model: ModelReferenceDTO | None,
         include_team_tools: bool,
         mcp_tools: Sequence[BaseTool],
         mcp_catalog_owner: McpCatalogOwner | None = None,
@@ -249,7 +250,7 @@ class AgentExecutionService(JobStepExecutor):
             resource_activation=resource_activation,
             execution_overrides=execution_overrides,
             model_visibility_overrides=model_visibility_overrides,
-            preferred_provider_id=preferred_provider_id,
+            preferred_model=preferred_model,
             tool_timeout_seconds=self._tool_timeout_seconds,
             workspace_file_resource_registry=self._workspace_file_resource_registry,
             reactor_lifetime_scope=lifetime_scope if assembly_mode == "execution" else None,
@@ -267,7 +268,7 @@ class AgentExecutionService(JobStepExecutor):
         agent_id: str,
         execution_overrides: Mapping[str, bool],
         model_visibility_overrides: Mapping[str, bool],
-        preferred_provider_id: str | None,
+        preferred_model: ModelReferenceDTO | None,
         include_team_tools: bool,
     ) -> ThreadRuntimeLease[StepAgentRuntime]:
         """只有真实准入可物化 runtime；代 key 与 builder 均不保留该 admission。"""
@@ -280,9 +281,13 @@ class AgentExecutionService(JobStepExecutor):
         snapshot = self._config_service.get_snapshot()
         # 默认选择与同一显式选择属于同一个已冻结 Provider，不应更换 thread generation。
         with self._config_service.use_snapshot(snapshot):
-            provider_id = self._config_service.resolve_agent_provider_id(
-                agent_id, preferred_provider_id
+            selected_model = self._config_service.resolve_agent_model(
+                agent_id, preferred_model
             )
+            runtime_providers = self._config_service.get_agent_runtime_config(agent_id, preferred_model=selected_model)["models"]
+            credentials = await self._config_service.prepare_llm_credentials(runtime_providers) if any(
+                str(provider.get("api_key", "")).startswith("secret:") for provider in runtime_providers
+            ) else {}
         mcp_owner = self._dependency_provider.get_mcp_catalog_owner()
         publication = mcp_owner.publication_snapshot()
         mcp_tools = tuple(publication.tools.values())
@@ -295,11 +300,12 @@ class AgentExecutionService(JobStepExecutor):
         generation_key = (
             binding.selector_fields(),
             snapshot.revision,
+            tuple(sorted((key, value.revision) for key, value in credentials.items())),
             agent_id,
             # MCP target 的开关由 dispatch 读取，固定信封不因此重新编译。
             tuple(sorted((name, enabled) for name, enabled in execution_overrides.items() if not name.startswith("mcp__"))),
             tuple(sorted((name, visible) for name, visible in model_visibility_overrides.items() if not name.startswith("mcp__"))),
-            provider_id,
+            selected_model,
             include_team_tools,
             gateway_id,
         )
@@ -320,6 +326,7 @@ class AgentExecutionService(JobStepExecutor):
                         session_catalog=self._session_catalog,
                     ),
                     self._config_service.use_snapshot(snapshot),
+                    self._config_service.use_llm_credentials(credentials),
                     session_thread_owner_scope(
                         MutationIntentOwner(session_id, thread_id),
                         langgraph_thread_id=thread_id,
@@ -344,7 +351,7 @@ class AgentExecutionService(JobStepExecutor):
                         agent_id=agent_id,
                         execution_overrides=execution_overrides,
                         model_visibility_overrides=model_visibility_overrides,
-                        preferred_provider_id=provider_id,
+                        preferred_model=selected_model,
                         include_team_tools=include_team_tools,
                         mcp_tools=mcp_tools,
                         mcp_catalog_owner=mcp_owner,
@@ -579,7 +586,7 @@ class AgentExecutionService(JobStepExecutor):
                 agent_id=resolved_agent_id,
                 execution_overrides={},
                 model_visibility_overrides={},
-                preferred_provider_id=None,
+                preferred_model=None,
                 include_team_tools=include_team_tools,
                 mcp_tools=mcp_tools,
                 resource_registry=ResourceRegistry(),

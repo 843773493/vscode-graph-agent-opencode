@@ -162,6 +162,7 @@ async function observeBuilderDependencyCall(builderUrl, mode) {
   }
   for (const relative of ["node_modules/@xterm/xterm/css/xterm.css", "node_modules/@xterm/xterm/lib/xterm.js",
     "node_modules/@xterm/addon-fit/lib/addon-fit.js", "node_modules/@xterm/addon-search/lib/addon-search.js",
+    "node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js",
     "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css", "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf"]) {
     const file = path.join(projectRoot, relative);
     fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, relative);

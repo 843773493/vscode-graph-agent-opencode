@@ -28,6 +28,7 @@ const baseManifest = {
     workspace_schema: "../../configs/workspace_schema.jsonc",
   },
   skill_resources: "../../resources/skills",
+  bundled_plugins: [{ package_id: "boxteam.developer-tools", package_version: "0.1.0", archive: "plugins/developer-tools.zip" }],
   web_assets: null,
   chromium_executable: null,
   node: {
@@ -54,12 +55,20 @@ describe("runtime manifest", () => {
     expect(manifest.skillResources).toBe(
       path.resolve(runtimeDirectory, "../../resources/skills"),
     );
+    expect(manifest.bundledPlugins[0].archive).toBe(path.resolve(runtimeDirectory, "plugins/developer-tools.zip"));
   });
 
   test("拒绝未知 schema", () => {
     expect(() =>
       validateRuntimeManifest({ ...baseManifest, schema_version: 2 }),
     ).toThrow("不支持的 runtime manifest");
+  });
+
+  test("内置插件清单必须完整，空清单可显式用于隔离测试", () => {
+    expect(validateRuntimeManifest({...baseManifest, bundled_plugins: []}).bundledPlugins).toEqual([]);
+    for (const bundled_plugins of [undefined, null, {}, [{package_id: "probe"}], [{package_id: "probe", package_version: "1.0.0", archive: ""}]]) {
+      expect(() => validateRuntimeManifest({...baseManifest, bundled_plugins})).toThrow();
+    }
   });
 
   test("拒绝未声明的配置资源域", () => {

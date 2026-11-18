@@ -20,7 +20,7 @@ import { Registry } from '../../upstream/src/vs/platform/registry/common/platfor
 import { IEditorGroupsService, preferredSideBySideGroupDirection } from '../../upstream/src/vs/workbench/services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { HttpRequestError, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
-import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner, type GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import type { ResourceNavigationResultDTO, SessionChangesetListDTO, ThreadAttachmentListDTO, ThreadToolResultListDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { LocalSkillsMetadataDTO, SkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/skill_sources.js';
 import type { GatewaySkillSourcesMetadataDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/skill_sources.js';
@@ -39,7 +39,7 @@ import type { ComposerResourceTarget } from '../composerActions.js';
 import { sourceDocumentUri } from '../sourceDocuments.js';
 import { resourceActionCommand, resourceFocusCommand } from './runtimeActions.js';
 import { openWorkspaceMcpServerCommand } from '../mcp/commands.js';
-import { ConfigurationSourceOwner, type SourceTarget } from '../settings/sourceOwner.js';
+import { ConfigurationSourceOwner } from '../settings/sourceOwner.js';
 import { openConfigurationSourceCommand, type ConfigurationSourceOpenRequest } from '../settings/commands.js';
 
 interface SourcePick extends IPickerQuickAccessItem { id: string; filterLabel?: string; resourceId?: string; resource?: URI; resourceOwner?: ResourceReferenceOwner }
@@ -174,7 +174,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
       const highlights = matchesFuzzy(filter, item.filterLabel);
       return filter && !highlights && !item.resourceId?.includes(filter) ? [] : [{ ...candidate, highlights: { label: highlights ?? undefined } }];
     });
-    if (run.loading) picks.push({ id: 'source-pending', label: t('quickAccess.sources.loading'), disabled: true });
+
     return picks.length ? picks : [{ id: 'no-sources', label: t('quickAccess.sources.noResults') }];
   }
 
@@ -269,7 +269,7 @@ export class ResourceQuickAccess extends PickerQuickAccessProvider<SourcePick> {
         }, destination.id);
       })());
     };
-    const configurationPicks = async (target: SourceTarget, name: string): Promise<SourcePick[]> => {
+    const configurationPicks = async (target: GatewayRequestTarget, name: string): Promise<SourcePick[]> => {
       run.signal.throwIfAborted();
       const owner = new ConfigurationSourceOwner(target), result = await owner.list(run.signal);
       return result.sources.flatMap(source => {

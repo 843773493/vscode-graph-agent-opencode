@@ -29,7 +29,7 @@ export function useComposerStateProjection({
   latestStateRef,
   setStatus, sendMessage, refreshTurnHistory, compactSession, refreshGoal, updateGoal, clearGoal,
   interruptSession, switchAgent, switchModel, refreshAgents, switchContentView,
-  setWorkspaceDefaultAgent, setWorkspaceDefaultProvider,
+  setWorkspaceDefaultAgent, setWorkspaceDefaultModel,
   createSession, renameSession, updateUiSettings,
 }: ComposerStateProjectionInput): ComposerStateProjection {
   const composerStateRef = useRef<ComposerStateSnapshot | null>(null);
@@ -70,13 +70,13 @@ export function useComposerStateProjection({
     getLatestAssistantContent,
     setStatus, sendMessage, refreshTurnHistory, compactSession, refreshGoal, updateGoal, clearGoal,
     interruptSession, switchAgent, switchModel, refreshAgents, switchContentView,
-    setWorkspaceDefaultAgent, setWorkspaceDefaultProvider,
+    setWorkspaceDefaultAgent, setWorkspaceDefaultModel,
     createSession, renameSession, updateUiSettings,
   }), [
     composerState, getLatestAssistantContent, setStatus, sendMessage, refreshTurnHistory,
     compactSession, refreshGoal, updateGoal, clearGoal, interruptSession,
     switchAgent, switchModel, refreshAgents, switchContentView, createSession,
-    setWorkspaceDefaultAgent, setWorkspaceDefaultProvider, renameSession,
+    setWorkspaceDefaultAgent, setWorkspaceDefaultModel, renameSession,
     updateUiSettings,
   ]);
 

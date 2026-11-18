@@ -5,6 +5,7 @@ import { chromium } from 'playwright';
 import { expect } from 'playwright/test';
 
 const fixture = JSON.parse(process.env.BOXTEAM_TOOL_TEST_FIXTURE);
+const modelRef = { provider_id: fixture.providerId, model_id: fixture.modelId };
 const result = { phase: 'initialization', pageErrors: [], starts: [] };
 let browser;
 try {
@@ -40,15 +41,16 @@ try {
   const panel = page.locator('[data-panel-kind="tools"]');
   const row = panel.locator('.composer-tool-item').filter({ has: page.locator('strong', { hasText: /^edit_file$/ }) });
   await expect(row).toBeVisible();
-  const agentId = await panel.getByLabel('Agent', { exact: true }).inputValue();
+  const agentId = await panel.locator('.native-workspace-tools').getAttribute('data-agent-id');
   assert(agentId);
-  result.phase = 'explicit-provider-and-repetitions';
+  result.phase = 'explicit-model-and-repetitions';
   await row.getByRole('button', { name: '测试', exact: true }).click();
   const dialog = panel.getByRole('dialog');
   await expect(dialog).toContainText('可能产生真实费用');
   const confirm = dialog.getByRole('button', { name: '开始测试', exact: true });
   await expect(confirm).toBeDisabled();
-  await dialog.getByText(`${fixture.providerId} · tool-test-replay-model`, { exact: true }).locator('input').check();
+  await expect(dialog.getByText(`${fixture.providerId} / catalog-only · tool-test-replay-model`, { exact: true })).toHaveCount(0);
+  await dialog.getByText(`${fixture.providerId} / ${fixture.modelId} · tool-test-replay-model`, { exact: true }).locator('input').check();
   await dialog.getByLabel('我了解这次测试可能产生模型费用', { exact: true }).check();
   await expect(confirm).toBeDisabled();
   await dialog.getByLabel('运行次数', { exact: true }).fill('2');
@@ -64,7 +66,7 @@ try {
   const runId = receipt.data.run_id;
   assert(runId);
   assert.deepEqual(result.starts, [{ gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId,
-    body: { agent_id: agentId, provider_ids: [fixture.providerId], repetitions: 2 } }]);
+    body: { agent_id: agentId, model_refs: [modelRef], repetitions: 2 } }]);
   result.phase = 'reload-original-run';
   await page.reload({ waitUntil: 'domcontentloaded' });
   await ready();
@@ -77,10 +79,10 @@ try {
   assert.equal(run.progress, 100);
   assert.equal(run.attempts.length, 20);
   assert.equal(new Set(run.attempts.map(item => item.attempt_id)).size, 20);
-  assert.deepEqual(run.providers.map(item => [item.provider_id, item.status, item.completed, item.total, item.passed, item.failed]),
-    [[fixture.providerId, 'completed', 20, 20, 2, 18]]);
+  assert.deepEqual(run.models.map(item => [item.model_ref, item.status, item.completed, item.total, item.passed, item.failed]),
+    [[modelRef, 'completed', 20, 20, 2, 18]]);
   for (const attempt of run.attempts) {
-    assert.equal(attempt.provider_id, fixture.providerId);
+    assert.deepEqual(attempt.model_ref, modelRef);
     assert.equal(attempt.model_calls, 1);
     assert.equal(attempt.transient_retries, 0);
     assert.equal(attempt.tool_called, true);

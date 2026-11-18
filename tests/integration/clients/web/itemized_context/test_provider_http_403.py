@@ -31,6 +31,8 @@ from tests.support.processes.workspace import (
 
 PROVIDER_API_KEY = "provider-403-integration-key"
 PROVIDER_ERROR_MARKER = "provider-403-fixed-denial"
+PUBLIC_PROVIDER_ERROR = "模型执行失败: stage=execution-provider, error=APIError"
+PUBLIC_CANDIDATE_ERROR = "模型候选调用失败: provider_id=primary, model=default: stage=model-provider, error=APIError"
 
 
 @dataclass
@@ -126,36 +128,25 @@ def provider_403_runtime(
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     endpoint = f"http://127.0.0.1:{provider_port}/v1"
-    primary = next(
-        provider
-        for provider in config["llm"]["providers"]
-        if provider["id"] == "primary"
-    )
-    primary.update(
-        {
-            "endpoint": endpoint,
-            "model": "provider-403-integration-model",
-            "api_key": PROVIDER_API_KEY,
-            "custom_llm_provider": "openai",
-        }
-    )
-    for provider in config["llm"]["providers"]:
-        if provider["id"] == "primary":
+    primary = config["llm"]["providers"]["primary"]
+    api_mode = primary["defaults"]["api_mode"]
+    model_environment = {}
+    for provider_id, provider in config["llm"]["providers"].items():
+        if provider_id == "backup_4":
+            provider["defaults"]["endpoint"] = endpoint
+            provider["models"]["default"]["model"] = "provider-403-unexpected-backup_4"
             continue
-        provider.update(
-            {
-                "endpoint": endpoint,
-                "model": f"provider-403-unexpected-{provider['id']}",
-                "api_key": f"provider-403-unexpected-{provider['id']}-key",
-                "custom_llm_provider": "openai",
-                "api_mode": dict(primary["api_mode"]),
-            }
+        key_name = f"BOXTEAM_TEST_PROVIDER_403_{provider_id.upper()}_KEY"
+        model_environment[key_name] = PROVIDER_API_KEY if provider_id == "primary" else f"provider-403-unexpected-{provider_id}-key"
+        provider["defaults"] = {
+            "endpoint": endpoint, "api_key": "${" + key_name + "}",
+            "custom_llm_provider": "openai", "api_mode": api_mode,
+        }
+        provider["models"]["default"]["model"] = (
+            "provider-403-integration-model" if provider_id == "primary" else f"provider-403-unexpected-{provider_id}"
         )
-        provider.pop("auth", None)
-        provider.pop("request_options", None)
     for agent in config["agents"].values():
-        agent["model"]["primary_provider"] = "primary"
-        agent["model"]["fallback_providers"] = []
+        agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -167,6 +158,7 @@ def provider_403_runtime(
         port=backend_port,
         log_name="provider-http-403-backend",
         env_overrides={
+            **model_environment,
             "BOXTEAM_HOME": str(runtime_home),
             "BOXTEAM_GATEWAY_URL": f"http://127.0.0.1:{gateway_port}",
         },
@@ -350,13 +342,14 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
         assert all(isinstance(value, str) and value for value in (job_id, turn_id, thread_id))
 
         job = await _wait_for_failed_job(client, job_id, workspace_headers)
-        assert PROVIDER_ERROR_MARKER in job["error_message"]
+        assert job["error_message"] == PUBLIC_PROVIDER_ERROR
 
         job_events = await read_job_trace(client, session_id, job_id, headers=workspace_headers)
         model_failures = [event for event in job_events if event["type"] == "model_failed"]
         assert len(model_failures) == 1
         assert model_failures[0]["payload"]["provider_id"] == "primary"
-        assert PROVIDER_ERROR_MARKER in model_failures[0]["payload"]["error"]
+        assert model_failures[0]["payload"]["error"] == PUBLIC_CANDIDATE_ERROR
+        assert model_failures[0]["payload"]["error_type"] == "APIError"
         failed_jobs = [event for event in job_events if event["type"] == "job_failed"]
         assert len(failed_jobs) == 1
 
@@ -374,7 +367,7 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
         assert stream_failure["type"] == stream_type
         assert isinstance(stream_failure["event_id"], str) and stream_failure["event_id"]
         assert stream_event_seq == str(stream_failure["event_seq"])
-        assert PROVIDER_ERROR_MARKER in stream_failure["payload"]["message"]
+        assert stream_failure["payload"]["message"] == PUBLIC_PROVIDER_ERROR
 
         snapshot = _assert_request_envelope(
             await client.get(
@@ -384,7 +377,12 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
             )
         )["data"]
         assert snapshot["stream_status"] == "failed"
-        assert PROVIDER_ERROR_MARKER in snapshot["failure"]["message"]
+        assert snapshot["failure"]["message"] == PUBLIC_PROVIDER_ERROR
+
+    diagnostics = (workspace / ".boxteam/logs/provider-http-403-backend.stderr.log").read_text(encoding="utf-8")
+    assert any(send_request_id in line and PROVIDER_ERROR_MARKER in line for line in diagnostics.splitlines())
+    assert "openai.PermissionDeniedError: Error code: 403" in diagnostics
+    assert PROVIDER_API_KEY not in diagnostics
 
     with state.lock:
         requests = list(state.requests)
@@ -404,10 +402,10 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
         (workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8")
     )
     assert all(
-        agent["model"]["fallback_providers"] == []
+        agent["model"]["fallbacks"] == []
         for agent in config["agents"].values()
     )
-    assert [provider["id"] for provider in config["llm"]["providers"]] == [
+    assert list(config["llm"]["providers"]) == [
         "primary",
         "backup_1",
         "backup_2",
@@ -429,7 +427,7 @@ async def test_real_gateway_provider_http_403_is_visible_and_has_no_fallback(
                 "message_stream_status": snapshot["stream_status"],
                 "provider_request_count": len(requests),
                 "provider_http_status": provider_request["response_status"],
-                "fallback_providers": [],
+                "fallbacks": [],
             },
             ensure_ascii=False,
             indent=2,

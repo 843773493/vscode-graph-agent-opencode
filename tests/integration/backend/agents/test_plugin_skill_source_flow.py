@@ -99,15 +99,27 @@ def plugin_model(request: pytest.FixtureRequest) -> Iterator[ModelCase]:
 
 def _configure_model(path: Path, gateway_url: str) -> None:
     config = commentjson.loads(path.read_text())
-    config["llm"]["providers"] = [{
-        "id": "plugin-skill", "endpoint": ENDPOINT, "model": MODEL, "api_key": "plugin-skill-test-key",
-        "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True,
-            "supports_reasoning": False}, "supports_reasoning": {"reasoning_content": False}},
-    }]
+    config["llm"]["providers"] = {
+        "plugin-skill": {
+            "defaults": {
+                "endpoint": ENDPOINT,
+                "api_key": "",
+                "custom_llm_provider": "openai",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {
+                        "supports_function_calling": True,
+                        "supports_reasoning": False,
+                    },
+                    "supports_reasoning": {"reasoning_content": False},
+                },
+            },
+            "models": {"default": {"model": MODEL}},
+        }
+    }
     for agent in config["agents"].values():
         if "model" in agent:
-            agent["model"] = {"primary_provider": "plugin-skill", "fallback_providers": []}
+            agent["model"] = {'primary': {'provider_id': 'plugin-skill', 'model_id': 'default'}, 'fallbacks': []}
         agent["tools"]["custom"] = [{"tool_id": "test_tool_2", "skills": [NAME]}]
     config.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {
         "url": gateway_url, "timeout_seconds": 5,

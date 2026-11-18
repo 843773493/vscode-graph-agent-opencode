@@ -58,6 +58,9 @@ from app.services.business.message_service import MessageService
 from app.services.infrastructure.attachment_blob_catalog.store import (
     AttachmentBlobStore,
 )
+from app.services.infrastructure.external_resource_leases import (
+    ExternalResourceLeaseLedger,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -116,7 +119,7 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
         attachments=message.attachments, message_metadata=message.metadata,
         message_created_at=message.created_at.isoformat(),
     )
-    case.messages.accept_job_input(job, queue_input=ExecutionQueueInput(execution_binding=job.execution_binding, message_id=job.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=job.message_created_at))
+    case.messages.accept_job_input(job, queue_input=ExecutionQueueInput(execution_binding=job.execution_binding, message_id=job.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=job.message_created_at))
     (notice,) = case.saver.read_canonical_items(owner.session_id, owner.thread_id)
     payload = RuntimeNoticePayload.from_dict(notice.payload)
     assert payload.prompt == prepared.content
@@ -147,21 +150,25 @@ async def test_internal_attachment_admission_cold_read_and_provider_request(
     with monkeypatch.context() as patch:
         patch.setattr("app.services.business.message_service.UserContentBuilder.build", refuse_rebuild)
         queued_input = SimpleNamespace(**{**vars(job), "message_metadata": frozen.response_metadata})
-        case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+        case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         with pytest.raises(ValueError, match="附件.*不一致"):
             queued_input = SimpleNamespace(**{
                 **vars(job), "message_metadata": frozen.response_metadata, "attachments": [],
             })
-            case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+            case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         with pytest.raises(ValueError):
             queued_input = SimpleNamespace(**{
                 **vars(job), "message_metadata": frozen.response_metadata, "message": prepared.content + "漂移",
             })
-            case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+            case.messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
     assert case.saver.read_canonical_items(owner.session_id, owner.thread_id) == (notice,)
     with RolloutCheckpointSaver(
         Path(integration_workspace_root_path) / ".boxteam" / "sessions", attachment_store=case.store,
     ) as cold:
+        cold.claim_execution_queue(
+            owner.session_id, owner.thread_id, job_id=job_id,
+            claim_owner="attachment-test", previous_generation=0,
+        )
         assert cold.accepted_internal_message(
             owner.session_id, thread_id=owner.thread_id, job_id=job_id,
             message_id=message.message_id, intent=intent,
@@ -270,7 +277,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
     sessions = root / ".boxteam" / "sessions"
     session_id = create_prefixed_id("ses")
     session_bundle_factory(sessions, session_id)
-    store = AttachmentBlobStore(root)
+    store = AttachmentBlobStore(root, leases=ExternalResourceLeaseLedger(state_path=root / ".boxteam/resources.sqlite"))
     resolver = store._path_resolver
     thread_id = resolver.main_thread_id(session_id)
     identity = UserExecutionIdentity(
@@ -280,7 +287,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
     started_jobs = []
 
     async def get_session(_session_id):
-        return SimpleNamespace(current_agent_id="default", current_provider_id=None)
+        return SimpleNamespace(current_agent_id="default", current_model=None)
 
     async def resolve_main_thread(_session_id):
         return thread_id
@@ -293,7 +300,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
             session_id=_session_id, message=_content, job_id=identity.job_id,
             **kwargs,
         )
-        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         started_jobs.append(kwargs["message_id"])
         return JobDispatchSnapshotDTO(
             session_id=session_id, thread_id=thread_id, job_id=identity.job_id,
@@ -313,7 +320,7 @@ def message_lifetime_case(integration_workspace_root_path, session_bundle_factor
             ),
             config_service=SimpleNamespace(
                 resolve_agent_id=lambda agent_id: agent_id,
-                validate_agent_id=lambda agent_id: None,
+                validate_agent_id=lambda agent_id: agent_id,
             ),
             job_service=SimpleNamespace(
                 thread_input_admission=ThreadInputAdmission().hold,
@@ -453,13 +460,14 @@ async def test_thread_delete_drains_message_before_releasing_real_attachment(
         if pause_at == "acceptance":
             paused.set()
             assert release.wait(5), "测试未释放真实 acceptance worker"
-        accept(message, execution_identity=execution_identity, queue_input=queue_input)
+        record = accept(message, execution_identity=execution_identity, queue_input=queue_input)
         canonical = case.saver.accepted_user_message(
             session_id, thread_id=thread_id,
             job_id=execution_identity.job_id, message_id=message.message_id,
         )
         data = case.store.read(session_id, message.attachments[0].file_id).data
         accepted.append((message, canonical, data))
+        return record
 
     if pause_at == "after_upload":
         monkeypatch.setattr(case.messages, "create", paused_create)

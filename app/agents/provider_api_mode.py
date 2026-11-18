@@ -61,7 +61,7 @@ class ProviderRequestFeatures:
 
 @dataclass(frozen=True)
 class ProviderReplayPolicy:
-    """历史思考块回放策略。当前密文只允许同一 provider 实例回放。"""
+    """历史私有思考块只允许在完整模型及连接／认证来源相同时回放。"""
 
     encrypted_content: EncryptedContentReplayPolicy = "same_source"
 
@@ -75,6 +75,7 @@ class ProviderApiMode:
     supports_reasoning: ProviderReasoningSupport
     request_features: ProviderRequestFeatures
     replay_policy: ProviderReplayPolicy
+    streaming: bool = True
 
 
 def _require_object(value: object, field_name: str) -> Mapping[str, object]:
@@ -192,16 +193,18 @@ def _parse_reasoning_support(
         frozenset({"thinking", "redacted_thinking"}),
         "provider.api_mode.supports_reasoning.thinking_blocks",
     )
+    thinking = _require_bool(
+        blocks.get("thinking", False),
+        "provider.api_mode.supports_reasoning.thinking_blocks.thinking",
+    )
+    redacted = _require_bool(
+        blocks.get("redacted_thinking", False),
+        "provider.api_mode.supports_reasoning.thinking_blocks.redacted_thinking",
+    )
     return ProviderReasoningSupport(
-        thinking_blocks=True,
-        thinking_blocks_thinking=_require_bool(
-            blocks.get("thinking", False),
-            "provider.api_mode.supports_reasoning.thinking_blocks.thinking",
-        ),
-        thinking_blocks_redacted_thinking=_require_bool(
-            blocks.get("redacted_thinking", False),
-            "provider.api_mode.supports_reasoning.thinking_blocks.redacted_thinking",
-        ),
+        thinking_blocks=thinking or redacted,
+        thinking_blocks_thinking=thinking,
+        thinking_blocks_redacted_thinking=redacted,
     )
 
 
@@ -271,6 +274,7 @@ def parse_provider_api_mode(provider: Mapping[str, object]) -> ProviderApiMode:
                 "supports_reasoning",
                 "request_features",
                 "replay_policy",
+                "streaming",
             }
         ),
         "provider.api_mode",
@@ -281,4 +285,5 @@ def parse_provider_api_mode(provider: Mapping[str, object]) -> ProviderApiMode:
         supports_reasoning=reasoning,
         request_features=_parse_request_features(raw.get("request_features", {})),
         replay_policy=_parse_replay_policy(raw.get("replay_policy", {})),
+        streaming=_require_bool(raw.get("streaming", True), "provider.api_mode.streaming"),
     )

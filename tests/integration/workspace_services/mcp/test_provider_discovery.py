@@ -91,10 +91,10 @@ async def provider_case(
     _save(definitions, {"probe": _SCHEMA})
     config_path = Path(integration_workspace_config_path)
     config = cast(dict, read_jsonc_object(config_path))
-    provider = next(value for value in config["llm"]["providers"] if value["id"] == "backup_3")
-    config["llm"]["providers"] = [provider]
+    provider = config["llm"]["providers"]["backup_3"]
+    config["llm"]["providers"] = {"backup_3": provider}
     for agent in config["agents"].values():
-        agent["model"] = {"primary_provider": "backup_3", "fallback_providers": []}
+        agent["model"] = {"primary": {"provider_id": "backup_3", "model_id": "default"}, "fallbacks": []}
     # 保留既有 Provider 请求设置；测试不增加采样、reasoning 或输出限制。
     config["agents"]["default"]["tools"]["custom"] = [{"tool_id": "connections.manage"}]
     config["agents"]["default"]["tools"]["confirmation_required"] = []

@@ -366,6 +366,32 @@ describe("真实 runtime 的删除修复提示", () => {
 });
 
 describe("会话目录 outbox runtime", () => {
+  test("存储首次打开失败后，同一 runtime 重新打开可恢复既有操作", async () => {
+    let attempts = 0;
+    const { record } = persistedOperation();
+    const runtime = createSessionCatalogOutboxRuntime({
+      apiPort: API_PORT, observeChanges: async () => {},
+      openPersistence: async () => {
+        if (++attempts === 1) throw new Error("注入临时存储故障");
+        return {
+          load: async () => [record],
+          insert: async () => { throw new Error("恢复不应插入命令"); },
+          applyReceipts: async () => [record], delete: async () => {},
+        };
+      },
+      adapter: {
+        enqueue: async () => { throw new Error("恢复不得提交新命令"); },
+        queryStatus: async () => ({ workspace_id: WORKSPACE_ID, catalog_revision: 7, items: [], unknown_operation_ids: [] }),
+      },
+    });
+    try {
+      await expect(runtime.openWorkspace(WORKSPACE_TARGET)).rejects.toThrow("注入临时存储故障");
+      const handle = await runtime.openWorkspace(WORKSPACE_TARGET);
+      expect(attempts).toBe(2);
+      expect(handle.driver.current().operations.map(operation => operation.client_operation_id)).toEqual([OPERATION_ID]);
+    } finally { runtime.dispose(); }
+  });
+
   test("本机分区不接管或重放旧账户和游客待办", async () => {
     const records = ["guest", "user:retired"].map(principal => persistedOperation({
       gatewayId: GATEWAY_ID, workspaceId: WORKSPACE_ID, principal,

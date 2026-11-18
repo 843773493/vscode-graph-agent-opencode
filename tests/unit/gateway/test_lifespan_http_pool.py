@@ -94,7 +94,7 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     )
     channel_owner = service("channel")
     port_forward = Mock(
-        reconcile_workspaces=AsyncMock(), restore=AsyncMock(),
+        restore=AsyncMock(),
         close=AsyncMock(side_effect=lambda: drain("ssh")),
     )
     for name in ("configure_application_logging", "load_boxteam_env", "get_gateway_local_token"):
@@ -126,7 +126,7 @@ def lifespan_case(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _LifespanC
     monkeypatch.setattr(gateway_lifespan, "FederationRpcService", lambda **kwargs: SimpleNamespace(session_main=kwargs["session_main"]))
     monkeypatch.setattr(gateway_lifespan, "FederationChannelOwner", Mock(return_value=channel_owner))
     monkeypatch.setattr(gateway_lifespan, "_refresh_federation_workspace_ports", Mock())
-    monkeypatch.setattr(gateway_lifespan, "SshPortForwardManager", Mock(return_value=port_forward))
+    monkeypatch.setattr(gateway_lifespan, "PortForwardManager", Mock(return_value=port_forward))
     for name in (
         "FederationCredentialStore",
         "GatewayWorkspaceRuntimeController", "WorkspaceNavigationStore",

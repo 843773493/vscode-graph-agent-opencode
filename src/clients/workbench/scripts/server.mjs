@@ -5,13 +5,22 @@ import { resolve, extname, sep, join, relative } from 'node:path';
 import httpProxy from 'http-proxy';
 
 /** @type {Record<string, string>} */
-const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.ttf': 'font/ttf' };
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.ttf': 'font/ttf' };
 function acceptsGzip(header = '') {
   const encodings = new Map(header.toLowerCase().split(',').map(value => {
     const [coding, ...parameters] = value.split(';');
     return [coding.trim(), !parameters.some(parameter => /^\s*q\s*=\s*0(?:\.0*)?\s*$/.test(parameter))];
   }));
   return encodings.get('gzip') ?? encodings.get('*') ?? false;
+}
+
+/** Gateway 未返回响应时只标记本机传输边界，沿用已有请求 ID，不创建另一个。 */
+export function gatewayProxyFailureHeaders(cause, request, component) {
+  const context = { source: { component }, stage: 'gateway_connect',
+    target: { component: 'gateway' }, error_type: cause.code ?? cause.name };
+  return { 'X-BoxTeam-Error-Context': JSON.stringify(context),
+    ...(request.headers['x-request-id'] ? { 'X-Request-ID': request.headers['x-request-id'] } : {}),
+  };
 }
 /** @param {{ root: string; gateway?: string }} options */
 export function createWorkbenchServer({ root: directory, gateway }) {
@@ -31,7 +40,10 @@ export function createWorkbenchServer({ root: directory, gateway }) {
     const message = `Gateway 代理失败：${path}，${cause.message}`;
     console.error(message);
     if ('writeHead' in response) {
-      if (!response.headersSent) response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
+      if (response.headersSent) { response.destroy(cause); return; }
+      response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8',
+        ...gatewayProxyFailureHeaders(cause, request, 'workbench_host'),
+      });
       response.end(message);
     } else {
       response.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');

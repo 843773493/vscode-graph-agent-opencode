@@ -5,6 +5,7 @@ import type {
   SessionResourceKind,
 } from "../../types/backend";
 import { formatDateTime } from "../../utils/format";
+import { truncateDisplayText } from "../../utils/displayText";
 
 const ACTION_LABELS: Record<SessionResourceAction, string> = {
   pause: t("resources.action.pause"),
@@ -359,7 +360,7 @@ function resourceUrlSummary(resource: SessionResource): string {
     const parsed = new URL(url);
     return parsed.hostname || parsed.protocol.replace(":", "");
   } catch {
-    return url.length > 44 ? `${url.slice(0, 41)}…` : url;
+    return url.length > 44 ? `${truncateDisplayText(url, 41)}…` : url;
   }
 }
 

@@ -8,11 +8,11 @@ import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/di
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import type { PluginBinding, PluginTarget, PluginPrivateInputReference, PluginPrivateInputWriteRequest } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 import { gatewayWorkspaceRequestHeaders } from '../../../web/src/api/http.js';
-import type { GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import type { GatewayRequestTarget, GatewayWorkspaceRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { gateway } from '../agentApi.js';
 import { createManagementTargetLifecycle, managementGateway, managementTargetDisplayName } from '../managementTarget.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument, type SourceTarget } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, type SourceDocument } from './sourceOwner.js';
 
 export type Scope = 'gateway' | 'workspace' | 'defaults';
 export interface PluginConfigurationTarget extends PluginTarget {
@@ -23,7 +23,7 @@ export interface PluginConfigurationTarget extends PluginTarget {
 }
 type ConfigDocument = SourceDocument;
 type ConfigurationBinding = Omit<PluginBinding, 'workspace_id'>;
-type Source = { source_key?: string | null; layer: string; presence: string; uri?: string | null; writable?: boolean };
+type Source = Awaited<ReturnType<ConfigurationSourceOwner['list']>>['sources'][number];
 type PrivateParameter = { pointer: string; schema: Record<string, unknown> };
 
 const targetHeader = (gatewayId: string) => ({ 'X-BoxTeam-Target-Gateway-Id': gatewayId });
@@ -110,11 +110,18 @@ function privateParameterStatus(document: ConfigDocument, binding: Configuration
     + t('plugins.privateRevisionsStatus', document.active_revision ?? t('plugins.none'), document.status?.pending_revision ?? t('plugins.none'));
 }
 
-async function chooseSource(quickInput: IQuickInputService, sources: Source[], title: string,
+async function chooseSource(quickInput: IQuickInputService, sources: Source[], scope: Scope, title: string,
   token?: CancellationToken): Promise<Source | undefined> {
-  const selected = await quickInput.pick(sources.filter(item => item.source_key).map(source => ({
-    label: source.source_key!, description: `${source.layer} · ${source.presence}${source.writable === false ? t('plugins.readOnlySuffix') : ''}`,
-    detail: source.uri ?? undefined, source,
+  // 范围开关只能修改该范围；跨工作区的用户配置仍从正式设置来源编辑器管理。
+  // 目录只公布来源层；是否可写仍读取所选文档的权威 writable，不猜测缺失字段。
+  const candidates = sources.filter(source => source.source_key
+    && (scope === 'workspace' ? source.layer === 'workspace' : source.layer === 'user' || source.layer === 'user_local'));
+  if (!candidates.length) throw new Error(t('plugins.noWritableScopeSource'));
+  if (candidates.length === 1) return candidates[0];
+  const selected = await quickInput.pick(candidates.map(source => ({
+    label: source.layer === 'user_local' ? t('plugins.source.localOverride') : t('plugins.source.gateway'),
+    description: source.presence === 'absent' ? t('plugins.source.createOnSave') : undefined,
+    detail: source.uri ?? source.source_key!, source,
   })), { title, placeHolder: t('plugins.chooseConfigurationSource'), canPickMany: false }, token);
   return selected?.source;
 }
@@ -138,7 +145,7 @@ async function saveSourceEdit(owner: ConfigurationSourceOwner,
   }
 }
 
-export async function readPluginBindings(scope: Scope, target: SourceTarget): Promise<PluginBinding[]> {
+export async function readPluginBindings(scope: Scope, target: GatewayRequestTarget): Promise<PluginBinding[]> {
   const owner = new ConfigurationSourceOwner(target);
   // 任一正式来源文档都返回完整的来源合并值；无需先列目录再猜选最高层。
   const document = await owner.read(target.workspace_id ? 'inline' : 'inline:0');
@@ -156,7 +163,7 @@ export async function setPluginBindings(scope: Scope, target: ReturnType<typeof 
   try {
     const listed = await owner.list(signal);
     check();
-    selected = await chooseSource(quickInput, listed.sources,
+    selected = await chooseSource(quickInput, listed.sources, scope,
       scope === 'workspace' ? t('plugins.chooseWorkspaceSource') : t('plugins.chooseGatewaySource'), token);
     check();
   } catch (error) {
@@ -206,7 +213,7 @@ export async function manageConfig(scope: Scope, gatewayTarget: PluginTarget, wo
   const owner = new ConfigurationSourceOwner(scope === 'workspace' ? workspaceTarget! : gatewayTarget);
   const listed = await owner.list(signal);
   check();
-  const selected = await chooseSource(quickInput, listed.sources, scope === 'workspace' ? t('plugins.chooseWorkspaceSource') : t('plugins.chooseGatewaySource'), token);
+  const selected = await chooseSource(quickInput, listed.sources, scope, scope === 'workspace' ? t('plugins.chooseWorkspaceSource') : t('plugins.chooseGatewaySource'), token);
   check();
   if (!selected) return;
   const source = selected;

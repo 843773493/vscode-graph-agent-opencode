@@ -1,4 +1,4 @@
-/* 主窗口右侧侧边栏「运行与连接」标签：子会话线程面板样式。
+/* 主窗口左侧会话节点的 Thread 导航及选定报告样式。
    面板骨架（.panel-view/.panel-header/.empty-state）复用 panelShared.css。 */
 
 .child-thread-panel {

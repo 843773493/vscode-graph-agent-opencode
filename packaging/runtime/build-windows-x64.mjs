@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { parse as parseJsonc } from "jsonc-parser";
 import crossSpawn from "cross-spawn";
 import { extract as extractTar } from "tar";
 import { createZipArchive, extractZipArchive } from "./archives/zip.mjs";
@@ -216,6 +217,7 @@ function writeRuntimeMetadata({
   chromiumExecutableRelative,
   distribution = "npm",
 }) {
+  const plugin = parseJsonc(readFileSync(path.join(projectRoot, "resources/plugins/developer-tools/plugin.jsonc"), "utf8"));
   const manifest = {
     schema_version: 1,
     distribution,
@@ -230,6 +232,8 @@ function writeRuntimeMetadata({
       workspace_schema: "application/configs/workspace_schema.jsonc",
     },
     skill_resources: "application/resources/skills",
+    bundled_plugins: [{ package_id: plugin.package_id, package_version: plugin.version,
+      archive: "application/resources/plugins/developer-tools.zip" }],
     web_assets: "web",
     chromium_executable:
       chromiumExecutableRelative ?? path.relative(runtimeRoot, chromiumExecutable),

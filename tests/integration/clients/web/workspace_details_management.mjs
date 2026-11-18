@@ -163,9 +163,10 @@ try {
   await quick.locator('.monaco-list-row').filter({ hasText: 'workspace_root_mutable_override' }).click();
   await expect(details).toBeHidden();
   const header = page.locator('.settings-context-label:visible');
-  await expect(header.getByRole('combobox', { name: '设置所属 Gateway', exact: true }).locator('option:checked')).toContainText(fixture.gatewayA);
-  await expect(header.getByRole('combobox', { name: '设置范围／工作区', exact: true }).locator('option:checked')).toContainText('详情注册工作区');
-  await expect(header.getByRole('combobox', { name: '配置来源', exact: true }).locator('option:checked')).toHaveText('workspace_root_mutable_override · workspace');
+  await expect(header).toContainText(fixture.gatewayA);
+  await expect(page.locator('.settings-category-context:visible select[aria-label="配置范围"] option:checked')).toHaveText('工作区');
+  await header.locator('summary').click();
+  await expect(header.getByRole('combobox', { name: '配置来源', exact: true }).locator('option:checked')).toHaveText('工作区设置');
   result.phase = 'frozen-workspace-logs';
   await showDetails(fixture.gatewayA, registered.workspace_id);
   const diagnosticsResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/gateway/diagnostics' && new URL(response.url()).searchParams.get('workspace_id') === registered.workspace_id);
@@ -173,9 +174,9 @@ try {
   const diagnostics = await diagnosticsResponse;
   assert.equal(diagnostics.status(), 200, await diagnostics.text());
   assert.equal(diagnostics.request().headers()['x-boxteam-target-gateway-id'], fixture.gatewayA);
-  const diagnosticPanel = page.getByRole('dialog', { name: 'Gateway 控制中心', exact: true });
-  await expect(diagnosticPanel.getByRole('combobox', { name: '工作区', exact: true })).toHaveValue(key(fixture.gatewayA, registered.workspace_id));
-  await page.getByRole('button', { name: '关闭 Gateway 控制中心', exact: true }).click();
+  const diagnosticPanel = page.locator('.settings-editor:visible');
+  await expect(diagnosticPanel.locator('.settings-category-context select[aria-label="配置工作区"] option:checked')).toHaveText(registered.name);
+  await command('workbench.action.closeActiveEditor');
 
   result.phase = 'open-original-workspace-action';
   await showDetails(fixture.gatewayA, registered.workspace_id);

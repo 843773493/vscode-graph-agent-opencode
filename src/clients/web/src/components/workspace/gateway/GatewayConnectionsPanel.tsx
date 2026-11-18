@@ -6,7 +6,7 @@ import {
   reconnectRemoteGatewayConnection,
   removeRemoteGatewayConnection,
 } from "../../../gatewayApi";
-import type { AddSshGatewayWorkspaceRequest, GatewayWorkspace } from "../../../types/backend";
+import type { AddRemoteGatewayConnectionRequest, GatewayWorkspace } from "../../../types/backend";
 import type { GatewayManagementDirectoryDTO, GatewayManagementTargetDTO } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
 import { errorMessage } from "../../../utils/errorMessage";
 import { useWarmConfirm } from "../../shell/WarmConfirmProvider";
@@ -16,11 +16,11 @@ interface GatewayConnectionsPanelProps {
   gatewayId: string | null;
   workspaces: GatewayWorkspace[];
   revision: number;
-  onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
+  onAddRemoteGatewayConnection: (payload: AddRemoteGatewayConnectionRequest) => Promise<void>;
   onRefresh: () => Promise<void>;
-  onRemoteGatewayReconnected: (connectionId: string) => void;
+  onRemoteGatewayReconnected: (gatewayConnectionId: string) => void;
   onOpenConfiguration: () => Promise<void>;
-  onOpenLogs: (connectionId: string) => void;
+  onOpenLogs: (gatewayConnectionId: string) => void;
 }
 
 function connectionFailure(error: unknown): string {
@@ -29,14 +29,14 @@ function connectionFailure(error: unknown): string {
 }
 
 export default function GatewayConnectionsPanel({ apiPort, gatewayId, workspaces, revision,
-  onAddSsh, onRefresh, onRemoteGatewayReconnected, onOpenConfiguration, onOpenLogs,
+  onAddRemoteGatewayConnection, onRefresh, onRemoteGatewayReconnected, onOpenConfiguration, onOpenLogs,
 }: GatewayConnectionsPanelProps) {
   const confirm = useWarmConfirm();
   const [directory, setDirectory] = useState<GatewayManagementDirectoryDTO>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string>();
-  const [editing, setEditing] = useState<{ connectionId: string; name: string }>();
+  const [editing, setEditing] = useState<{ gatewayConnectionId: string; name: string }>();
   const scope = useMemo(() => new AbortController(), [apiPort, gatewayId]);
   const readVersion = useRef(0);
   const load = useCallback(async (signal: AbortSignal) => {
@@ -107,47 +107,47 @@ export default function GatewayConnectionsPanel({ apiPort, gatewayId, workspaces
   };
   const targets = directory?.local_gateway_id === gatewayId
     ? directory.items.filter(target => target.connection_kind === "remote_gateway") : undefined;
-  return <section className="gateway-connection-section" aria-labelledby="remote-gateway-connections-title">
+  return <section className="gateway-connection-section panel-feedback-host" aria-busy={loading} aria-labelledby="remote-gateway-connections-title">
     <div className="gateway-connection-section-heading">
       <div><h2 id="remote-gateway-connections-title">{t("gateway.control.remoteGateways")}</h2><p>{t("gateway.connections.ownerDetail", gatewayId ?? t("gateway.connections.ownerUnavailable"))}</p></div>
       {targets ? <span>{t("gateway.control.connectionCount", targets.length)}</span> : null}
     </div>
-    {error ? <p className="gateway-console-feedback error" role="alert">{error}</p> : null}
-    {loading ? <p role="status">{t("gateway.connections.loading")}</p> : null}
+    {error ? <p className="panel-feedback" role="alert">{error}</p> : null}
+
     {targets?.map(target => {
       if (!target.gateway_connection_id || !target.remote_gateway_port || !["config", "manual"].includes(target.source_owner ?? "")) {
         throw new Error(t("gateway.connections.invalidTarget", target.gateway_id));
       }
-      const connectionId = target.gateway_connection_id;
-      const members = workspaces.filter(workspace => workspace.remote_gateways.some(remote => remote.gateway_connection_id === connectionId));
-      const remote = members.flatMap(workspace => workspace.remote_gateways).find(item => item.gateway_connection_id === connectionId);
-      const editingName = editing?.connectionId === connectionId;
-      return <article key={connectionId} className="gateway-connection-section" aria-label={target.name}>
+      const gatewayConnectionId = target.gateway_connection_id;
+      const members = workspaces.filter(workspace => workspace.remote_gateways.some(remote => remote.gateway_connection_id === gatewayConnectionId));
+      const remote = members.flatMap(workspace => workspace.remote_gateways).find(item => item.gateway_connection_id === gatewayConnectionId);
+      const editingName = editing?.gatewayConnectionId === gatewayConnectionId;
+      return <article key={gatewayConnectionId} className="gateway-connection-section" aria-label={target.name}>
         <h3>{target.name}</h3>
-        <p><code>{target.gateway_id}</code> · <code>{connectionId}</code></p>
+        <p><code>{target.gateway_id}</code> · <code>{gatewayConnectionId}</code></p>
         <p>{t(target.source_owner === "config" ? "gateway.connections.configOwner" : "gateway.connections.manualOwner")}</p>
         <p>{target.connection_error ?? t("gateway.control.connected")}</p>
         {remote ? <p>{remote.username}@{remote.host}:{remote.port} → Gateway :{target.remote_gateway_port}</p> : <p>{t("gateway.connections.noWorkspaceProjection")}</p>}
         <details><summary>{t("gateway.control.workspaceCount", members.length)}</summary><ul>{members.map(workspace => <li key={workspace.workspace_id}>{workspace.name} <code>{workspace.workspace_id}</code></li>)}</ul></details>
         <div className="gateway-control-actions">
-          <button type="button" disabled={!!busy || loading} onClick={() => void reconnect(target)}>{busy === connectionId ? t("gateway.control.connecting") : t("gateway.control.reconnect")}</button>
-          <button type="button" onClick={() => onOpenLogs(connectionId)}>{t("gateway.connections.openLogs")}</button>
+          <button type="button" disabled={!!busy || loading} onClick={() => void reconnect(target)}>{busy === gatewayConnectionId ? t("gateway.control.connecting") : t("gateway.control.reconnect")}</button>
+          <button type="button" onClick={() => onOpenLogs(gatewayConnectionId)}>{t("gateway.connections.openLogs")}</button>
           {target.source_owner === "manual" ? <>
-            <button type="button" disabled={!!busy || loading} onClick={() => setEditing({ connectionId, name: target.name })}>{t("gateway.connections.editName")}</button>
+            <button type="button" disabled={!!busy || loading} onClick={() => setEditing({ gatewayConnectionId, name: target.name })}>{t("gateway.connections.editName")}</button>
             <button type="button" className="danger-soft" disabled={!!busy || loading} onClick={() => void remove(target)}>{t("gateway.connections.remove")}</button>
           </> : <button type="button" onClick={() => void onOpenConfiguration().catch(cause => {
             if (!scope.signal.aborted) setError(t("gateway.connections.actionFailure", gatewayId!, target.gateway_id,
-              connectionId, connectionFailure(cause)));
+              gatewayConnectionId, connectionFailure(cause)));
           })}>{t("gateway.connections.openConfiguration")}</button>}
         </div>
         {editingName ? <form onSubmit={event => {
           event.preventDefault();
           if (!editing.name.trim()) { setError(t("gateway.connections.nameRequired")); return; }
-          void run(target, () => onAddSsh({ connection_id: connectionId, name: editing.name.trim(), remote_gateway_port: target.remote_gateway_port! }));
+          void run(target, () => onAddRemoteGatewayConnection({ connection_id: gatewayConnectionId, name: editing.name.trim(), remote_gateway_port: target.remote_gateway_port! }));
         }}>
           <p>{t("gateway.connections.editBoundary")}</p>
           <label>{t("gateway.connection.connectionName")}<input autoFocus value={editing.name} disabled={!!busy}
-            onChange={event => setEditing({ connectionId, name: event.target.value })} /></label>
+            onChange={event => setEditing({ gatewayConnectionId, name: event.target.value })} /></label>
           <button type="submit" disabled={!!busy}>{t("gateway.connections.saveName")}</button>
           <button type="button" disabled={!!busy} onClick={() => setEditing(undefined)}>{t("gateway.connections.cancel")}</button>
         </form> : null}

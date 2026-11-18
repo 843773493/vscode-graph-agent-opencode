@@ -217,7 +217,7 @@ async def test_queued_input_retains_previous_runtime_then_old_release_cannot_det
     result = await container.job_service.start_job(
         sid, queued.content, thread_id=tid, message_id=queued.message_id,
         message_created_at=queued.created_at.isoformat(),
-        message_metadata={"boxteam_session_provider_id": record.input.provider_id},
+        message_metadata={"boxteam_session_model": record.input.model},
         execution_binding=record.input.execution_binding, agent_id=record.input.agent_id,
     )
     assert isinstance(container.job_service, JobService)

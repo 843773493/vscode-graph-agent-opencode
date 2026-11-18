@@ -43,6 +43,7 @@
   display: flex;
   flex: 1;
   min-height: 0;
+  min-width: 0;
 }
 
 .native-workspace-tools {
@@ -50,10 +51,12 @@
   flex-direction: column;
   min-width: 0;
   overflow: auto;
+  container: tools-panel / inline-size;
 }
 
 .native-workspace-tools > header {
   display: flex;
+  flex-wrap: wrap;
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
@@ -70,7 +73,8 @@
 }
 
 .native-workspace-tools select {
-  min-width: 180px;
+  min-width: 0;
+  max-width: 100%;
   padding: 4px 8px;
 }
 
@@ -283,6 +287,12 @@
   padding: 6px 9px 6px 39px;
 }
 
+@container tools-panel (width < 450px) {
+  .composer-tool-item { grid-template-columns: minmax(0, 1fr); padding-left: 12px; }
+  .composer-tool-test-summary { justify-self: end; }
+  .composer-tool-menu-header { flex-wrap: wrap; }
+}
+
 .composer-tool-item:hover {
   background: var(--bt-hover-background);
 }
@@ -449,4 +459,21 @@
     justify-content: flex-start;
     padding-left: 22px;
   }
+}
+
+/* 依实际输入区宽度紧凑化；发送和停止不参与压缩。 */
+.new-chat-input-container { container: composer / inline-size; }
+.composer-actions-left { flex: 1 1 0; }
+.composer-actions-right { flex: 0 0 auto; }
+.composer-more-control { display: inline-flex; flex: 0 0 auto; }
+@container composer (width < 600px) {
+  .composer-hint { display: none; }
+}
+@container composer (width < 400px) {
+  .sessions-chat-config-toolbar .composer-agent-control,
+  .sessions-chat-config-toolbar .composer-model-control { flex: 0 0 22px; width: 22px; min-width: 0; }
+  .composer-agent-button,
+  .composer-model-pill { width: 22px !important; min-width: 22px !important; padding: 0 !important; justify-content: center !important; }
+  .composer-agent-label,
+  .composer-model-label { display: none; }
 }

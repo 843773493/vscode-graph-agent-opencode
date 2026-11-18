@@ -10,8 +10,11 @@ from typing import Protocol
 from pydantic import JsonValue
 
 from app.core.session_lifecycle_gate import OperationHolderGate
+from app.core.shielded_cleanup import run_sync_shielded
 from app.domain.background_work import (
+    BackgroundConsumptionState,
     BackgroundMessageBatchDTO,
+    BackgroundMessageBatchMetadata,
     BackgroundMessageDTO,
     BackgroundMessageKind,
     BackgroundToolResultIdentity,
@@ -56,10 +59,12 @@ class BackgroundMailbox:
             kind=BackgroundMessageKind(kind), content=content, payload=payload or {},
             timestamp=datetime.now(UTC),
         )
-        async with self._store.admission(session_id):
+        def emit() -> BackgroundMessageDTO:
             self._store.resolve_thread(session_id, thread_id)
             with self._store.control(session_id) as control:
-                message = control.emit_background_message(message)
+                return control.emit_background_message(message)
+        async with self._store.admission(session_id):
+            message = await run_sync_shielded(emit)
         for waiter in self._waiters.get((session_id, thread_id, agent_id), ()):
             waiter.set()
         return message
@@ -68,11 +73,13 @@ class BackgroundMailbox:
         self, session_id: str, thread_id: str, agent_id: str, *,
         source_id: str | None = None, after_message_id: str | None = None, limit: int = 100,
     ) -> list[BackgroundMessageDTO]:
-        async with self._store.admission(session_id):
+        def read() -> list[BackgroundMessageDTO]:
             self._store.resolve_thread(session_id, thread_id)
             with self._store.control(session_id, read_only=True) as control:
                 return control.list_background_messages(thread_id, agent_id, source_id=source_id,
                                                         after_message_id=after_message_id, limit=limit)
+        async with self._store.admission(session_id):
+            return await run_sync_shielded(read)
 
     async def collect(
         self, session_id: str, thread_id: str, agent_id: str, *, consumption_id: str,
@@ -105,46 +112,47 @@ class BackgroundMailbox:
             "stop_on_interrupt": stop_on_interrupt,
             "tool_result_identity": tool_result_identity.model_dump() if tool_result_identity else None,
         })
-        async with self._store.admission(session_id):
+        def open_consumption() -> BackgroundConsumptionState:
             self._store.resolve_thread(session_id, thread_id)
             with self._store.control(session_id) as control:
-                batch = control.get_background_consumption(consumption_id, preimage_hash=preimage_hash)
-                if batch is None:
-                    batch = BackgroundMessageBatchDTO(
+                return control.open_background_consumption(
+                    BackgroundMessageBatchMetadata(
                         session_id=session_id, thread_id=thread_id, agent_id=agent_id,
                         consumption_id=consumption_id, source_id=source_id,
                         last_message_id=after_message_id, collected_at=datetime.now(UTC),
                         tool_result_identity=tool_result_identity,
-                    )
-                    control.checkpoint_background_consumption(batch, preimage_hash=preimage_hash)
-                if batch.interrupted or batch.timed_out:
-                    return batch
+                    ), preimage_hash=preimage_hash,
+                )
+        async with self._store.admission(session_id):
+            state = await run_sync_shielded(open_consumption)
+
+        def advance() -> tuple[BackgroundMessageBatchDTO | None, bool]:
+            with self._store.control(session_id) as control:
+                current, caught_up = control.advance_background_consumption(
+                    consumption_id, preimage_hash=preimage_hash, deadline_at=deadline,
+                    stop_on_interrupt=stop_on_interrupt,
+                )
+                batch = (
+                    control.get_background_consumption(consumption_id, preimage_hash=preimage_hash)
+                    if current.interrupted or current.timed_out else None
+                )
+                return batch, caught_up
         key = (session_id, thread_id, agent_id)
         waiter = asyncio.Event()
         self._waiters.setdefault(key, set()).add(waiter)
         # 重启继续原 durable 消费窗口，不能每次重新延长超时。
-        remaining_window = timeout_seconds - (datetime.now(UTC) - batch.collected_at).total_seconds()
+        remaining_window = timeout_seconds - (datetime.now(UTC) - state.collected_at).total_seconds()
         deadline = asyncio.get_running_loop().time() + max(0, remaining_window)
         try:
             while True:
                 waiter.clear()
-                messages = await self.list_messages(session_id, thread_id, agent_id, source_id=source_id,
-                                                     after_message_id=batch.last_message_id, limit=1000)
-                for message in messages:
-                    batch.messages.append(message)
-                    batch.last_message_id = message.message_id
-                    if stop_on_interrupt and message.kind == BackgroundMessageKind.interrupt:
-                        batch.interrupted = True
-                        break
-                remaining = deadline - asyncio.get_running_loop().time()
-                batch.timed_out = remaining <= 0 and not batch.interrupted
                 async with self._store.admission(session_id):
-                    with self._store.control(session_id) as control:
-                        batch = control.checkpoint_background_consumption(batch, preimage_hash=preimage_hash)
-                if batch.interrupted or batch.timed_out:
+                    batch, caught_up = await run_sync_shielded(advance)
+                if batch is not None:
                     return batch
-                if len(messages) == 1000:
+                if not caught_up:
                     continue
+                remaining = max(0, deadline - asyncio.get_running_loop().time())
                 try:
                     await asyncio.wait_for(waiter.wait(), timeout=min(remaining, poll_interval_seconds))
                 except TimeoutError:

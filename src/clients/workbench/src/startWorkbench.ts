@@ -1,3 +1,4 @@
+import './itemDocuments.js';
 import { create, URI, commands } from '../upstream/src/vs/workbench/workbench.web.main.internal.js';
 import { workspaceFolder } from './filesystem.js';
 import './thread.contribution.js';
@@ -16,6 +17,9 @@ import './extensions/pluginCommands.js';
 import './debug/contribution.js';
 import './managementTarget.js';
 import './theme.js';
+import './statusbar.js';
+import './layout.js';
+import './panelToolbar.js';
 
 declare const __BOXTEAM_PRODUCT__: { nameShort: string; nameLong: string; version: string; commit: string; date: string };
 

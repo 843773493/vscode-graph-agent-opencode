@@ -4,6 +4,10 @@
 
 `session.trace` 按 Session 或 Thread 交付已落盘事件，仅保留每个订阅者至多 64 条待消费记录；无订阅者不创建通道。溢出立即失败并断流，客户端使用最后收到的 Trace 游标从 SQLite 补读。正文合同仍归 Trace owner，本目录不定义第二份正文协议。
 
+`user.questions/{session_id}:{thread_id}` 只通知留言失效；SSE 初始／重连读取当前数量及 revision，正文沿原有界分页读取，无订阅者不建通道、最后订阅断开后回收。
+
+`workspace.resources/{kind}` 由工作区资源 owner 持有，只通知清单失效，不携带正文、输出或第二份资源事实；每个订阅者最多64条待处理通知，消费时合并资源ID，溢出后整范围失效；首次／重连通过原 owner 补读。
+
 `job.events` 仅承载实时订阅，不保留历史。Job owner 在最后一个订阅解除或溢出后显式回收通道；无人订阅时发布只执行持久化监听器。其它 channel 的历史与生命周期由各自 owner 决定，不自动回收。
 
 # 可修改内容

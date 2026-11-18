@@ -1,5 +1,5 @@
 import { t } from "../../../../shared/core/i18n/index.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { loadSessionHistory } from "../../api/session/sessionTurnHistory";
 import { MessageSubmissionRejectedError, MessageSubmissionUnknownError, reconcileMessageSubmissions, sendUserMessage } from "../../api/session/sessionMessages";
 import type { ResourceThreadRef } from "../../api/workspaceResources";
@@ -24,6 +24,18 @@ const EMPTY: ChildThreadConversationSnapshot = {
   sending: false, error: null, accepted: null, paged: false,
 };
 const INCLUDE = ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] as const;
+
+// 导航列表与 Thread 内来源报告共享已读展示态；最后一个视图释放时清空，不增加持久化。
+let readReports: Readonly<Record<string, string>> = {};
+const reportReadListeners = new Set<() => void>();
+const reportReadSnapshot = () => readReports;
+function subscribeReportReads(listener: () => void) {
+  reportReadListeners.add(listener);
+  return () => {
+    reportReadListeners.delete(listener);
+    if (reportReadListeners.size === 0) readReports = {};
+  };
+}
 
 function sameHistoryRevision(previous: TurnHistoryPage | null, next: TurnHistoryPage): boolean {
   return previous !== null
@@ -81,7 +93,7 @@ export function useChildThreadConversation({
   const scope = JSON.stringify([workspaceId, sessionId]);
   const [selection, setSelection] = useState<(Omit<ChildThreadSelectionIntent, "workspaceId" | "sessionId"> & { scope: string }) | null>(null);
   const [snapshots, setSnapshots] = useState<Record<string, ChildThreadConversationSnapshot>>({});
-  const [seen, setSeen] = useState<Record<string, string>>({});
+  const seen = useSyncExternalStore(subscribeReportReads, reportReadSnapshot, reportReadSnapshot);
   const readRef = useRef<AbortController | null>(null);
   const sendingRef = useRef(new Set<string>());
   const selectionIntent: ChildThreadSelectionIntent | null = selection?.scope === scope && workspaceId && sessionId
@@ -158,13 +170,18 @@ export function useChildThreadConversation({
         }));
       }
       if (view === "report" && reportExecutionId === selectedThread?.report_execution_id && selectedThread?.report_status) {
-        setSeen((prior) => ({ ...prior, [key]: `${selectedThread.report_execution_id}:${selectedThread.report_status}` }));
+        const reportKey = JSON.stringify([apiPort, scope, threadId]);
+        const revision = `${selectedThread.report_execution_id}:${selectedThread.report_status}`;
+        if (readReports[reportKey] !== revision) {
+          readReports = { ...readReports, [reportKey]: revision };
+          for (const listener of reportReadListeners) listener();
+        }
       }
     } catch (error) {
       if (controller.signal.aborted || readRef.current !== controller || selectionTokenRef.current !== selectionToken) return;
       update(key, (prior) => ({ ...prior, loading: false, error: errorMessage(error) }));
     }
-  }, [apiPort, key, reportExecutionId, selectionToken, selectedThread?.report_execution_id, selectedThread?.report_status, sessionId, threadId, update, workspaceId]);
+  }, [apiPort, key, scope, reportExecutionId, selectionToken, selectedThread?.report_execution_id, selectedThread?.report_status, sessionId, threadId, update, workspaceId]);
 
   useEffect(() => {
     readRef.current?.abort();
@@ -245,6 +262,7 @@ export function useChildThreadConversation({
 
   return {
     selectedThread, selectionIntent, snapshot,
+    owner: sessionId && threadId ? { sessionId, threadId } : null,
     submissionRecovery: enabled && workspaceId && sessionId && threadId
       ? { port: apiPort, owner: { workspaceKey: workspaceId, sessionId, threadId } } : null,
     selectThread,
@@ -257,6 +275,6 @@ export function useChildThreadConversation({
     send,
     isUnread: (thread: ChildThreadSummary) => Boolean(thread.report_execution_id && thread.report_status
       && thread.report_status !== "unknown"
-      && seen[JSON.stringify([scope, thread.thread_id])] !== `${thread.report_execution_id}:${thread.report_status}`),
+      && seen[JSON.stringify([apiPort, scope, thread.thread_id])] !== `${thread.report_execution_id}:${thread.report_status}`),
   };
 }

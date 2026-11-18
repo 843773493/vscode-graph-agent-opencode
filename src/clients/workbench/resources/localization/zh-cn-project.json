@@ -1,5 +1,8 @@
 {
   "contents": {
+    "vs/workbench/api/common/extHostLogService": {
+      "worker": "扩展宿主（Web Worker）"
+    },
     "vs/editor/contrib/find/browser/findWidget": {
       "findSearching": "正在搜索…"
     },
@@ -27,8 +30,6 @@
       "errorSearchFile": "无法使用 Web Worker 搜索文件"
     },
     "vs/workbench/contrib/preferences/browser/keyboardLayoutPicker": {
-      "status.workbench.keyboardLayout": "键盘布局",
-      "keyboardLayout": "布局：{0}",
       "displayLanguage": "定义浏览器环境中 VS Code 使用的键盘布局。",
       "doc": "打开 VS Code，在命令面板中运行“开发人员: 检查按键映射(JSON)”。",
       "keyboard.chooseLayout": "更改键盘布局",

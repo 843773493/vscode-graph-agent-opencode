@@ -447,9 +447,7 @@ export default function WorkspaceAddDialogContent({
               {!loading && !error && filteredDirectories.length === 0 ? (
                 <div className="workspace-add-state">{t("gateway.workspaceAdd.noSubdirectories")}</div>
               ) : null}
-              {loading && listing ? (
-                <div className="workspace-add-state">{t("gateway.workspaceAdd.directoryLoading")}</div>
-              ) : null}
+
             </>
           )}
         </div>

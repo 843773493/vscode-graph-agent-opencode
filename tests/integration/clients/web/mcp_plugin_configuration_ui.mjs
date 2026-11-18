@@ -63,11 +63,11 @@ try {
     await field.press('Enter');
   };
   const start = async id => {
-    await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('workbench.mcp.addConfiguration'); });
-    await pick(workspace.name);
+    await page.locator('.part.panel').getByRole('button', { name: '添加 MCP 连接…', exact: true }).click();
     await input(id);
     await expect(page.getByRole('textbox', { name: '选择 MCP 服务来源', exact: true })).toBeVisible();
   };
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('boxteam.mcp.focus', { preserveFocus: true }));
   result.phase = 'cancel-add';
   await start('ui-cancelled');
   const sourcePicker = page.getByRole('textbox', { name: '选择 MCP 服务来源', exact: true });
@@ -115,6 +115,75 @@ try {
   await expect(panel).toBeVisible();
   await expect(panel.getByRole('listitem', { name: 'ui-plugin', exact: true })).toBeVisible();
   await expect(panel.getByRole('listitem', { name: 'ui-http', exact: true })).toBeVisible();
+  result.phase = 'service-source-and-runtime';
+  const pluginRow = panel.getByRole('listitem', { name: 'ui-plugin', exact: true });
+  await expect(pluginRow).toContainText(fixture.scope === 'workspace' ? '工作区插件' : 'Gateway 共享插件');
+  await expect(pluginRow).toContainText('就绪');
+  await expect(panel.getByRole('listitem', { name: 'ui-http', exact: true })).toContainText('外部 MCP');
+  const rowsBeforeFailure = await pluginRow.boundingBox();
+  const unavailableMessage = 'MCP 目录暂不可用 · mcp-retained-catalog';
+  const catalogRoute = url => url.pathname === '/api/v1/mcp/servers';
+  await page.route(catalogRoute, route => route.fulfill({ status: 503, contentType: 'application/json',
+    headers: { 'X-Request-ID': 'mcp-retained-catalog' }, body: JSON.stringify({ code: 503,
+      message: unavailableMessage, request_id: 'mcp-retained-catalog' }) }));
+  await page.locator('.part.panel').getByRole('button', { name: '刷新 MCP 状态', exact: true }).click();
+  const feedback = page.locator('.boxteam-mcp-connections .message-container');
+  await expect(feedback).toContainText(unavailableMessage);
+  await expect(pluginRow).toBeVisible();
+  const rowsDuringFailure = await pluginRow.boundingBox();
+  assert.equal(rowsDuringFailure.y, rowsBeforeFailure.y, '读取失败不移动已有列表');
+  await pluginRow.click();
+  const failedDetails = page.locator('.mcp-server-editor:visible');
+  await failedDetails.getByRole('button', { name: '管理所属插件', exact: true }).click();
+  const pluginEditor = page.locator('.service-plugin-editor:visible');
+  await expect(pluginEditor).toHaveAttribute('data-package-id', 'boxteam.mcp-stdio');
+  await expect(pluginEditor).toHaveAttribute('data-scope', fixture.scope);
+  await expect(pluginEditor).toHaveAttribute('data-workspace-id', fixture.scope === 'workspace' ? fixture.workspaceId : '');
+  await expect(pluginEditor.locator('.subtitle-entry.last-non-empty')).toHaveAttribute('title', `${fixture.gatewayId} · ${fixture.scope === 'workspace' ? fixture.workspaceId : 'gateway'}`);
+  const originalRuntimeIdentity = await pluginEditor.locator('.service-plugin-owner').innerText();
+  await page.screenshot({ path: path.join(artifacts, 'mcp-plugin-management.png') });
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.closeActiveEditor'));
+  await page.unroute(catalogRoute);
+  await page.locator('.part.panel').getByRole('button', { name: '刷新 MCP 状态', exact: true }).click();
+  await expect(feedback).not.toBeVisible();
+  await expect(pluginRow).toContainText('连接可用');
+  result.mcpServiceManagement = { source: fixture.scope, retainedOnError: true, stableLayout: true, pluginEntryWhileUnavailable: true };
+  await page.screenshot({ path: path.join(artifacts, 'mcp-connections.png') });
+  if (fixture.managementOnly) {
+    // 此场景独立验收连接与实例边界；完整来源搜索／设置验收仍由下方原场景负责。
+    const editor = page.locator('.mcp-server-editor:visible');
+    for (const [label, action] of [['断开连接', 'disconnect'], ['连接', 'connect']]) {
+      const operationResponse = page.waitForResponse(response => response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/v1/mcp/connection-operations');
+      await editor.getByRole('button', { name: label, exact: true }).click();
+      const response = await operationResponse;
+      assert.equal(response.status(), 200, await response.text());
+      const envelope = await response.json();
+      assert.equal(envelope.request_id, response.headers()['x-request-id']);
+      assert.equal(envelope.target.gateway_id, fixture.gatewayId);
+      assert.equal(envelope.target.workspace_id, fixture.workspaceId);
+      assert.equal(envelope.data.action, action);
+      result.mcpOperations.push(envelope.data);
+      if (action === 'disconnect') {
+        await expect(editor.getByRole('button', { name: '连接', exact: true })).toBeEnabled();
+        await expect(pluginRow).toContainText('已就绪');
+        await editor.getByRole('button', { name: '管理所属插件', exact: true }).click();
+        await expect(pluginEditor.locator('.service-plugin-owner')).toHaveText(originalRuntimeIdentity);
+        await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.closeActiveEditor'));
+      } else await expect(pluginRow).toContainText('连接可用');
+    }
+    result.mcpServiceManagement.runtimeSurvivesDisconnect = true;
+    await editor.getByRole('button', { name: '配置来源', exact: true }).click();
+    const connectionSettings = page.locator('.settings-editor:visible');
+    await expect(connectionSettings.locator('.settings-context-label')).toContainText(fixture.gatewayId);
+    await expect(connectionSettings.locator('.settings-context-label')).toContainText(fixture.workspaceId);
+    assert(result.managementReads.some(item => item.kind === 'source' && item.gatewayId === fixture.gatewayId
+      && item.workspaceId === fixture.workspaceId && item.path.endsWith('/workspace_root_mutable_override')));
+    result.mcpServiceManagement.connectionSettingsOwner = { gatewayId: fixture.gatewayId, workspaceId: fixture.workspaceId };
+    await page.screenshot({ path: path.join(artifacts, 'mcp-connection-settings.png') });
+    await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.closeActiveEditor'));
+    await page.screenshot({ path: path.join(artifacts, 'mcp-connections-final.png') });
+  } else {
   result.phase = 'resource-quick-access';
   const resourceOwnerReads = [];
   page.on('request', request => {
@@ -270,15 +339,15 @@ try {
     await expect.poll(readmeText, { timeout: 30000 }).toContain('操作已完成');
     await expect(panel.getByRole('listitem', { name: 'ui-http', exact: true })).toContainText('连接可用');
   };
-  await submit('disconnect', '停止服务');
+  await submit('disconnect', '断开连接');
   await expect.poll(readmeText, { timeout: 30000 }).not.toContain('连接可用');
   await manage();
-  await expect(quick.getByText('启动服务', { exact: true })).toBeVisible();
-  await expect(quick.getByText('停止服务', { exact: true })).toHaveCount(0);
+  await expect(quick.getByText('连接', { exact: true })).toBeVisible();
+  await expect(quick.getByText('断开连接', { exact: true })).toHaveCount(0);
   await quick.locator('input').first().press('Escape');
   await expect(quick).not.toBeVisible();
   assert.equal(mcpWrites.length, 1, '取消已停止服务的动作选择不能提交连接');
-  await submit('connect', '启动服务');
+  await submit('connect', '连接');
   await expect.poll(readmeText, { timeout: 30000 }).toContain('连接可用');
   assert.equal(mcpWrites.length, 2, '每次接受只提交一次原连接操作，关闭浮层不重放');
   assert.equal(result.writes.length, 2, '连接操作不另写MCP配置');
@@ -301,12 +370,12 @@ try {
   }]);
   const sourceStart = result.managementReads.length;
   await details.getByRole('button', { name: '配置来源', exact: true }).click();
-  await pick('workspace_root_mutable_override');
   const settings = page.locator('.settings-editor:visible');
-  await expect(settings.getByRole('combobox', { name: '设置所属 Gateway', exact: true })).toHaveValue(new RegExp(fixture.gatewayId));
-  await expect(settings.getByRole('combobox', { name: '设置范围／工作区', exact: true })).toHaveValue(new RegExp(fixture.workspaceId));
+  await expect(settings.locator('.settings-context-label')).toContainText(fixture.gatewayId);
+  await expect(settings.locator('.settings-context-label')).toContainText(fixture.workspaceId);
+  await settings.locator('.settings-context-label summary').click();
   await expect(settings.locator('.settings-context-label').getByRole('combobox', { name: '配置来源', exact: true }))
-    .toHaveValue(/workspace_root_mutable_override/);
+    .toHaveValue('工作区设置');
   assert(result.managementReads.slice(sourceStart).some(item => item.kind === 'source' && item.gatewayId === fixture.gatewayId
     && item.workspaceId === fixture.workspaceId && item.path.endsWith('/workspace_root_mutable_override')));
   await page.evaluate(() => globalThis.workbench.commands.executeCommand('workbench.action.closeActiveEditor'));
@@ -340,9 +409,8 @@ try {
   await sourceAction.click({ delay: 150 });
   await pick('gateway_mutable_override');
   await expect(settings).toBeVisible();
-  await expect(settings.getByRole('combobox', { name: '设置所属 Gateway', exact: true })).toHaveValue(new RegExp(fixture.gatewayId));
-  const scopeSelector = settings.locator('.settings-context-label').getByRole('combobox', { name: '设置范围／工作区', exact: true });
-  await expect(scopeSelector).toHaveValue('Gateway 配置');
+  await expect(settings.locator('.settings-context-label')).toContainText(fixture.gatewayId);
+  await expect(settings.locator('.settings-category-context select[aria-label="配置范围"] option:checked')).toHaveText('Gateway 设置');
   await expect(settings.locator('.search-container .view-lines')).toHaveText('plugins.sources.entries');
   await expect(settings.locator('[data-key="plugins.sources.entries"]')).toBeVisible();
   const api = (url, options = {}) => page.evaluate(async ({ url, options, gatewayId }) => {
@@ -385,6 +453,7 @@ try {
   result.downloadSourceManagement = { owner: { gatewayId: fixture.gatewayId }, sourceKey: sourceWrite.source_key,
     persistedEntries: entries, originalWriter: true, emptySourceCatalogRequests: 0, emptySourceExternalRequests: 0 };
   await page.screenshot({ path: path.join(artifacts, 'plugin-mcp-management.png'), fullPage: true });
+  }
   assert.deepEqual(result.pageErrors, []);
   result.phase = 'completed';
 } finally {

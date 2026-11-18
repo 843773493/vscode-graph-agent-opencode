@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS collaboration_members (
     subagent_type TEXT NOT NULL,
     title TEXT NOT NULL,
     task_seed TEXT NOT NULL,
+    team_id TEXT,
+    work_mode TEXT CHECK (work_mode IN ('write','read_only')),
     state TEXT NOT NULL CHECK (state IN ('registering', 'published', 'cancelled')),
     registered_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

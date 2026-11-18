@@ -96,15 +96,24 @@ export async function buildWorkbenchDependencies(root, transformSource, outdir, 
   });
 
   return {
+    needsRebuild(source, file) {
+      return ts.preProcessFile(source).importedFiles.some(({ fileName }) => {
+        const path = sourceFileFor(resolve(dirname(file), fileName.split('?', 1)[0]));
+        return isWithin(upstreamSource, path) && /\.tsx?$/.test(path)
+          && !path.endsWith('.d.ts') && !entries.has(path);
+      });
+    },
     transform(source, file) {
       const sourceFile = file.split('?', 1)[0];
       if (!isWithin(appSource, sourceFile) || !/\.tsx?$/.test(sourceFile)) return source;
       for (const { fileName } of ts.preProcessFile(source).importedFiles) {
-        const path = sourceFileFor(resolve(dirname(sourceFile), fileName));
+        const [specifier, ...query] = fileName.split('?');
+        const path = sourceFileFor(resolve(dirname(sourceFile), specifier));
         if (!isWithin(upstreamSource, path)) continue;
         // 样式继续由 Vite 处理；脚本指向同一次 split build 的 entry，共享模块身份。
-        const upstreamUrl = viteSourceUrl(root, path)
-          ?? '/out/dev-upstream/' + relative(upstreamSource, path).replaceAll('\\', '/').replace(/\.tsx?$/, '.js');
+        const upstreamUrl = (viteSourceUrl(root, path)
+          ?? '/out/dev-upstream/' + relative(upstreamSource, path).replaceAll('\\', '/').replace(/\.tsx?$/, '.js'))
+          + (query.length ? '?' + query.join('?') : '');
         source = source.replaceAll("'" + fileName + "'", JSON.stringify(upstreamUrl))
           .replaceAll(JSON.stringify(fileName), JSON.stringify(upstreamUrl));
       }

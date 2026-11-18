@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
-from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Any, cast
+from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping
+from typing import Any, ClassVar, cast
 from uuid import UUID
 
 from langchain_core.callbacks import (
@@ -65,9 +66,10 @@ from app.agents.providers.output_normalization import (
     build_ai_message_content,
 )
 from app.agents.providers.provider_http_client import (
-    build_no_proxy_handler,
-    build_no_proxy_openai_client,
+    build_provider_http_handler,
+    build_provider_openai_client,
 )
+from app.agents.providers.request_parameters import merge_request_parameters
 from app.agents.providers.response_normalization import canonicalize_ai_message
 from app.agents.providers.wire_finalize import (
     chat_send_params,
@@ -87,7 +89,7 @@ from app.agents.upstream_request_trace import (
     record_upstream_request,
     record_upstream_response,
 )
-from app.core.cancelable_stream import CancelableStream
+from app.core.cancelable_stream import CancelableStream, close_async_stream
 from app.core.failures import mark_provider_failure
 from app.core.model_delta_context import (
     get_current_model_delta_sink,
@@ -97,6 +99,7 @@ from app.core.turn_execution_scope import (
     ScopeCancelledError,
     get_current_turn_execution_scope,
 )
+from app.domain.itemized.identity.model_source import ModelSource
 from app.runtime.litellm_runtime import ChatLiteLLM, prepare_model_request
 
 logger = logging.getLogger(__name__)
@@ -107,47 +110,64 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
 
     invocation_purpose: ProviderInvocationPurpose = "agent"
     provider_id: str | None = None
+    model_source: ModelSource | None = None
+    redacted_thinking_replay: bool = False
     reasoning_content_replay: bool = False
     thinking_blocks_replay: bool = False
     image_input_replay: bool = False
     # Provider 级免代理开关：为该 Provider 注入 trust_env=False 的 HTTP client。
     no_proxy: bool = False
 
-    _no_proxy_sync_client: Any = PrivateAttr(default=None)
-    _no_proxy_async_client: Any = PrivateAttr(default=None)
+    _uses_http_handler: ClassVar[bool] = False
+    _owned_sync_client: Any = PrivateAttr(default=None)
+    _owned_async_client: Any = PrivateAttr(default=None)
 
     def _provider_http_client(self, *, is_async: bool) -> Any:
-        """返回本 Provider 的免代理 HTTP client；未启用时返回 None。
+        """显式免代理、无认证或单次模型测试使用本实例持有的 HTTP client。
 
         Anthropic Messages 适配族要求 LiteLLM 的 HTTPHandler，Chat
-        Completions / Responses 适配族要求 OpenAI SDK client，因此按协议分别
+        Completions 适配族要求 OpenAI SDK client，因此按协议分别
         构造。client 在本实例内缓存复用，避免每次请求重建连接池。
         """
-        if not self.no_proxy:
+        anonymous = self.api_key == "" and self.custom_llm_provider in {"openai", "anthropic"}
+        if not self.no_proxy and self.invocation_purpose != "model_test" and not anonymous:
             return None
+        use_handler = self._uses_http_handler or self.custom_llm_provider == "anthropic"
         if is_async:
-            if self._no_proxy_async_client is None:
-                self._no_proxy_async_client = (
-                    build_no_proxy_handler(is_async=True)
-                    if self.custom_llm_provider == "anthropic"
-                    else build_no_proxy_openai_client(
+            if self._owned_async_client is None:
+                self._owned_async_client = (
+                    build_provider_http_handler(is_async=True, trust_env=not self.no_proxy, no_auth=anonymous)
+                    if use_handler
+                    else build_provider_openai_client(
                         is_async=True,
                         base_url=self.api_base,
                         api_key=self.api_key,
+                        trust_env=not self.no_proxy,
                     )
                 )
-            return self._no_proxy_async_client
-        if self._no_proxy_sync_client is None:
-            self._no_proxy_sync_client = (
-                build_no_proxy_handler(is_async=False)
-                if self.custom_llm_provider == "anthropic"
-                else build_no_proxy_openai_client(
+            return self._owned_async_client
+        if self._owned_sync_client is None:
+            self._owned_sync_client = (
+                build_provider_http_handler(is_async=False, trust_env=not self.no_proxy, no_auth=anonymous)
+                if use_handler
+                else build_provider_openai_client(
                     is_async=False,
                     base_url=self.api_base,
                     api_key=self.api_key,
+                    trust_env=not self.no_proxy,
                 )
             )
-        return self._no_proxy_sync_client
+        return self._owned_sync_client
+
+    async def aclose(self) -> None:
+        """关闭本实例创建的连接池；不触碰 LiteLLM 的共享连接。"""
+        use_handler = self._uses_http_handler or self.custom_llm_provider == "anthropic"
+        if self._owned_async_client is not None:
+            client, self._owned_async_client = self._owned_async_client, None
+            await close_async_stream(client.client if use_handler else client)
+        if self._owned_sync_client is not None:
+            client, self._owned_sync_client = self._owned_sync_client, None
+            (client.client if use_handler else client).close()
 
     def _dispatch_run_config(self, config: RunnableConfig | None) -> RunnableConfig:
         """真实 callback run_id 使用 Bridge 为本次 handler 分配的 UUID。"""
@@ -178,6 +198,10 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         self, input: LanguageModelInput, config: RunnableConfig | None = None,
         *, stop: list[str] | None = None, **kwargs: Any,
     ) -> Iterator[AIMessageChunk]:
+        if self.disable_streaming:
+            message = self.invoke(input, config=config, stop=stop, **kwargs)
+            yield AIMessageChunk(**message.model_dump(exclude={"type"}))
+            return
         yield from super().stream(input, config=self._dispatch_run_config(config), stop=stop, **kwargs)
 
     async def astream(
@@ -196,10 +220,9 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         只复制上游生命周期编排，唯一的行为差异是显式传递 ``run_manager``。
         """
         if not self._should_stream(async_api=True, **{**kwargs, "stream": True}):
-            yield cast(
-                AIMessageChunk,
-                await self.ainvoke(input, config=config, stop=stop, **kwargs),
-            )
+            message = await self.ainvoke(input, config=config, stop=stop, **kwargs)
+            chunk = AIMessageChunk(**message.model_dump(exclude={"type"}))
+            yield chunk
             return
 
         config = ensure_config(self._dispatch_run_config(config))
@@ -323,6 +346,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         )
         wire_request = finalize_chat_wire(
             messages=messages, tools=payload.get("tools"), params=params,
+            custom_llm_provider=self.custom_llm_provider,
         )
         validate_sealed_assembly_dispatch(
             invocation_purpose=self.invocation_purpose,
@@ -338,20 +362,24 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         self._validate_completion_dispatch(kwargs)
         prepare_model_request()
         client = self._provider_http_client(is_async=False)
-        # 非流调用由父类 _generate/_agenerate 消费，不属于流式 attempt 采集。
-        if kwargs.get("stream") is True:
-            binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
-            record_upstream_request(
-                request=kwargs,
-                model=self.model_name or self.model,
-                provider=self.custom_llm_provider,
-                api_base=self.api_base,
-                call_type="completion",
-                dispatch_ref=binding.reference if binding is not None else None,
-                resource_refs=binding.resource_refs if binding is not None else (),
-            )
+        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
+        record_upstream_request(
+            request=kwargs,
+            model=self.model_name or self.model,
+            provider=self.custom_llm_provider,
+            api_base=self.api_base,
+            call_type="completion",
+            dispatch_ref=binding.reference if binding is not None else None,
+            resource_refs=binding.resource_refs if binding is not None else (),
+        )
         if client is not None:
             kwargs.setdefault("client", client)
+        if self.api_key == "" and self.custom_llm_provider == "openai" and not self._uses_http_handler:
+            from openai import Omit
+
+            kwargs["extra_headers"] = {**kwargs.get("extra_headers", {}), "Authorization": Omit()}
+        if self.invocation_purpose == "model_test":
+            kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
             return super().completion_with_retry(run_manager=run_manager, **kwargs)
         except ScopeCancelledError:
@@ -369,19 +397,24 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         self._validate_completion_dispatch(kwargs)
         prepare_model_request()
         client = self._provider_http_client(is_async=True)
-        if kwargs.get("stream") is True:
-            binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
-            record_upstream_request(
-                request=kwargs,
-                model=self.model_name or self.model,
-                provider=self.custom_llm_provider,
-                api_base=self.api_base,
-                call_type="acompletion",
-                dispatch_ref=binding.reference if binding is not None else None,
-                resource_refs=binding.resource_refs if binding is not None else (),
-            )
+        binding = read_sealed_assembly_dispatch(invocation_purpose=self.invocation_purpose)
+        record_upstream_request(
+            request=kwargs,
+            model=self.model_name or self.model,
+            provider=self.custom_llm_provider,
+            api_base=self.api_base,
+            call_type="acompletion",
+            dispatch_ref=binding.reference if binding is not None else None,
+            resource_refs=binding.resource_refs if binding is not None else (),
+        )
         if client is not None:
             kwargs.setdefault("client", client)
+        if self.api_key == "" and self.custom_llm_provider == "openai" and not self._uses_http_handler:
+            from openai import Omit
+
+            kwargs["extra_headers"] = {**kwargs.get("extra_headers", {}), "Authorization": Omit()}
+        if self.invocation_purpose == "model_test":
+            kwargs["max_retries"] = kwargs["num_retries"] = 0
         try:
             return await super().acompletion_with_retry(
                 run_manager=run_manager, **kwargs
@@ -444,7 +477,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             finalize_chat_messages(messages, profile=chat_wire_profile(self)),
             chat_send_params(
                 self, stop=stop, kwargs=kwargs,
-                stream=True if stream else None,
+                stream=stream,
             ),
         )
 
@@ -842,6 +875,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                     "model_provider": "litellm",
                     "custom_llm_provider": self.custom_llm_provider,
                     "provider_id": self.provider_id,
+                    "model_source": self.model_source.to_dict() if self.model_source is not None else None,
                 }
                 first_chunk_yielded = True
             result.append(ChatGenerationChunk(message=message_chunk))
@@ -856,7 +890,10 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             )
         return result
 
-    def _canonicalize_chat_result(self, result: ChatResult) -> ChatResult:
+    def _canonicalize_chat_result(
+        self, result: ChatResult,
+        run_manager: CallbackManagerForLLMRun | AsyncCallbackManagerForLLMRun | None = None,
+    ) -> ChatResult:
         generations: list[ChatGeneration] = []
         for generation in result.generations:
             message = generation.message
@@ -865,6 +902,16 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                     message,
                     source_provider=self.provider_id,
                 )
+                metadata = dict(message.response_metadata)
+                if self.model_source is not None:
+                    metadata["model_source"] = self.model_source.to_dict()
+                if run_manager is not None:
+                    # 消息 ID 可带 generation 后缀；调用身份只取实际 callback owner。
+                    model_call_id = str(run_manager.run_id)
+                    if metadata.get("model_call_id") not in (None, model_call_id):
+                        raise ValueError("source-mismatch: Provider response 的 callback 身份冲突")
+                    metadata["model_call_id"] = model_call_id
+                message = message.model_copy(update={"response_metadata": metadata})
             generations.append(
                 ChatGeneration(
                     message=message,
@@ -887,7 +934,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             run_manager=run_manager,
             **kwargs,
         )
-        return self._canonicalize_chat_result(result)
+        return self._canonicalize_chat_result(result, run_manager)
 
     async def _agenerate_with_cache(
         self,
@@ -903,7 +950,7 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
             run_manager=run_manager,
             **kwargs,
         )
-        return self._canonicalize_chat_result(result)
+        return self._canonicalize_chat_result(result, run_manager)
 
     def _generate(
         self,
@@ -913,13 +960,16 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         stream: bool | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        result = super()._generate(
-            messages,
-            stop=stop,
-            run_manager=run_manager,
-            stream=stream,
-            **kwargs,
-        )
+        if stream is not None and stream != self.streaming:
+            raise ValueError("stream 不能改写已配置的 api_mode.streaming")
+        if self.streaming:
+            return self._canonicalize_chat_result(super()._generate(
+                messages, stop=stop, run_manager=run_manager, stream=True, **kwargs,
+            ))
+        message_dicts, params = self._create_message_dicts(messages, stop, stream=False, **kwargs)
+        response = self.completion_with_retry(messages=message_dicts, run_manager=run_manager, **params)
+        record_upstream_response(_as_dict(response))
+        result = self._create_chat_result(response)
         return self._canonicalize_chat_result(result)
 
     async def _agenerate(
@@ -930,16 +980,61 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
         stream: bool | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        result = await super()._agenerate(
-            messages,
-            stop=stop,
-            run_manager=run_manager,
-            stream=stream,
-            **kwargs,
+        if stream is not None and stream != self.streaming:
+            raise ValueError("stream 不能改写已配置的 api_mode.streaming")
+        if self.streaming:
+            return self._canonicalize_chat_result(await super()._agenerate(
+                messages, stop=stop, run_manager=run_manager, stream=True, **kwargs,
+            ))
+        message_dicts, params = self._create_message_dicts(messages, stop, stream=False, **kwargs)
+        response = await self._await_nonstream_response(
+            self.acompletion_with_retry(messages=message_dicts, run_manager=run_manager, **params),
         )
-        return self._canonicalize_chat_result(result)
+        record_upstream_response(_as_dict(response))
+        result = self._create_chat_result(response)
+        result = self._canonicalize_chat_result(result)
+        await self._publish_nonstream_result(result, run_manager)
+        return result
+
+    async def _await_nonstream_response(self, response: Awaitable[Any]) -> Any:
+        """等待完整正文时仍响应原 Turn 取消，并结清实际的 SDK 请求。"""
+        scope = get_current_turn_execution_scope()
+        if scope is None:
+            return await response
+        signal = scope.effective_cancellation_signal
+        task = asyncio.ensure_future(response)
+
+        def cancel(_reason: str) -> None:
+            task.cancel()
+
+        hook = signal.add_hook(cancel)
+        try:
+            signal.raise_if_cancelled()
+            return await task
+        except asyncio.CancelledError:
+            signal.raise_if_cancelled()
+            raise
+        finally:
+            signal.remove_hook(hook)
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def _publish_nonstream_result(
+        self, result: ChatResult, run_manager: AsyncCallbackManagerForLLMRun | None,
+    ) -> None:
+        """完整回复也沿原 delta bridge 发布一次，保持 model-call 身份和工具配对。"""
+        sink = get_current_model_delta_sink()
+        if sink is not None:
+            model_call_id = resolve_model_run_id(sink, run_manager)
+            for generation in result.generations:
+                chunk = AIMessageChunk(**generation.message.model_dump(exclude={"type"}))
+                await sink.accept_message_chunk(chunk, model_call_id=model_call_id)
 
     def _create_chat_result(self, response: Mapping[str, Any]) -> ChatResult:
+        # SDK Usage 只在协议边界存在；LangChain 会把 llm_output 合入消息 metadata。
+        response = _as_dict(response)
+        response["usage"] = _as_dict(response.get("usage"))
         result = super()._create_chat_result(response)
         generations: list[ChatGeneration] = []
         raw_choices = response.get("choices") or []
@@ -986,6 +1081,10 @@ class BoxteamLiteLLMChatModel(LiteLLMHistoryProjectionMixin, ChatLiteLLM):
                     update={
                         "content": canonical_content,
                         "additional_kwargs": additional_kwargs,
+                        "response_metadata": {
+                            **message.response_metadata,
+                            "model_source": self.model_source.to_dict() if self.model_source is not None else None,
+                        },
                     }
                 )
             generations.append(
@@ -1116,40 +1215,29 @@ def build_litellm_chat_model(
 ) -> BoxteamLiteLLMChatModel:
     model_name = provider["model"]
 
-    request_parameters: dict[str, Any] = {}
-    runtime_parameter_names = {
-        "temperature": "temperature",
-        "top_p": "top_p",
-        "max_output_tokens": "max_tokens",
-    }
-    for runtime_name, request_name in runtime_parameter_names.items():
-        if runtime_name in runtime_config:
-            request_parameters[request_name] = runtime_config[runtime_name]
-    request_parameters.update(request_options.get("overrides") or {})
     api_mode = parse_provider_api_mode(provider)
+    request_parameters = merge_request_parameters(
+        request_options.get("parameters", {}),
+        {key: runtime_config[key] for key in ("temperature", "top_p", "max_output_tokens") if key in runtime_config},
+        protocol=api_mode.protocol,
+    )
     capabilities = parse_provider_capabilities(provider)
     if prompt_cache_key is not None and PROMPT_CACHE_KEY in capabilities:
-        extra_body = request_parameters.get("extra_body") or {}
-        if not isinstance(extra_body, dict):
-            raise TypeError(
-                "Chat Completions request_options.overrides.extra_body 必须是对象"
-            )
-        request_parameters["extra_body"] = {
-            **extra_body,
-            "prompt_cache_key": prompt_cache_key,
-        }
+        request_parameters["prompt_cache_key"] = prompt_cache_key
 
     kwargs: dict[str, Any] = {
         "invocation_purpose": invocation_purpose,
         "model": model_name,
         "api_key": provider["api_key"],
         "custom_llm_provider": provider["custom_llm_provider"],
-        "max_retries": 3,
-        "streaming": True,
+        "max_retries": 0 if invocation_purpose == "model_test" else 3,
+        "streaming": api_mode.streaming,
+        "disable_streaming": not api_mode.streaming,
         "model_kwargs": request_parameters,
-        "provider_id": provider.get("id"),
+        "provider_id": provider.get("provider_id"),
         "reasoning_content_replay": api_mode.supports_reasoning.reasoning_content,
         "thinking_blocks_replay": api_mode.supports_reasoning.thinking_blocks,
+        "redacted_thinking_replay": api_mode.supports_reasoning.thinking_blocks_redacted_thinking,
         "image_input_replay": "image_input" in capabilities,
         "no_proxy": bool(request_options.get("no_proxy")),
     }

@@ -24,7 +24,7 @@ import { TaskView } from './taskView.js';
 import NodeDebugWorkbench from '../../../web/src/components/nodeDebug/NodeDebugWorkbench.js';
 import { useNodeDebugController } from '../../../web/src/hooks/nodeDebug/useNodeDebugController.js';
 import { revealWorkspaceFileEntry } from '../../../web/src/api/workspaceFilesystem.js';
-import ChildThreadPanel from '../../../web/src/components/panels/sessionPanels/ChildThreadPanel.js';
+import ChildThreadConversation from '../../../web/src/components/panels/sessionPanels/ChildThreadConversation.js';
 import { useChildThreadLoader } from '../../../web/src/hooks/session/useChildThreadLoader.js';
 import { useChildThreadConversation } from '../../../web/src/hooks/sessionTurnHistory/useChildThreadConversation.js';
 import WorkspaceFilePreviewArea from '../../../web/src/components/workspace/WorkspaceFilePreviewArea.js';
@@ -65,9 +65,10 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
   const filePreviewVisible = tab === 'files' && filePreview.visible;
   const debug = useNodeDebugController({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId,
     threadId: owner.threadId, enabled: visible && tab === 'debug', onStatusChange: reportResourceStatus });
-  const children = useChildThreadLoader({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId, enabled: visible && tab === 'resources' });
+  const reportVisible = visible && tab === 'resources' && reportRequest !== null;
+  const children = useChildThreadLoader({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId, enabled: reportVisible });
   const childConversation = useChildThreadConversation({ apiPort: 0, workspaceId: owner.workspaceKey, sessionId: owner.sessionId,
-    threads: children.threads, enabled: visible && tab === 'resources' });
+    threads: children.threads, enabled: reportVisible });
   const { selectThreadForOwner } = childConversation;
   useEffect(() => {
     if (!reportRequest) return;
@@ -108,6 +109,9 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
       input.resourceTab = value === 'goal' ? 'tasks' : value === 'resources' ? 'connections' : value;
       onUpdate();
     }} />
+    {filePreviewVisible ? <button type="button" className="native-file-tree-back" onClick={() => filePreview.setVisible(false)}>
+      <span className="codicon codicon-arrow-left" aria-hidden="true" />{t('workspace.preview.backToTree')}
+    </button> : null}
     <div className={`workspace-editor-body${filePreviewVisible ? ' has-shared-preview' : ''}`}>
     {filePreviewVisible ? <WorkspaceFilePreviewArea context="files" visible flexRatio={1} apiPort={0}
       workspaceId={owner.workspaceKey} workspaceName={state.gatewayWorkspaces.find(item => gatewayWorkspaceKey(item) === owner.workspaceKey)?.name ?? ''}
@@ -117,7 +121,10 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
       markdownSourceVisible={markdownSource} onMarkdownSourceChange={setMarkdownSource}
       onBeginEdit={filePreview.beginWorkspaceFileEdit} onDraftChange={filePreview.setDraftContent}
       onCancelEdit={() => void filePreview.cancelWorkspaceFileEdit()} onSaveEdit={filePreview.saveWorkspaceFileEdit}
-      onOpenWorkspacePath={filePreview.openWorkspaceFilePath}
+      onOpenWorkspacePath={async (path, fragment) => {
+        if (fragment) setMarkdownSource(false);
+        await filePreview.openWorkspaceFilePath(path, fragment);
+      }}
       onClose={() => { if (filePreview.activePath) void filePreview.closeWorkspaceFilePreview(filePreview.activePath); }} /> : null}
     <WorkspaceAuxiliaryPanel visible={input.resourcesVisible} flexRatio={1} tab={tab} apiPort={0} workspaceId={owner.workspaceKey}
       workspaceFileTreeReady={visible} workspaceName={state.gatewayWorkspaces.find(item => gatewayWorkspaceKey(item) === owner.workspaceKey)?.name ?? ''}
@@ -168,13 +175,12 @@ export function ResourceView({ input, runtime, editors, commands, active, attach
           if (result !== 'loaded') throw new Error(t('thread.resources.connectionRefreshIncomplete'));
           openRuntime(created.kind, created.resourceId);
         }} />
-        <ChildThreadPanel {...children} sessionId={owner.sessionId} ownerLabel={state.currentSession?.title ?? owner.title}
-          mainThreadId={state.currentSession?.thread_id ?? null} activeThreadId={owner.threadId}
-          onRefresh={() => { void children.refresh(); }} conversation={childConversation}
-          onForkFromThread={onForkThread}
-          onOpenThread={child => { void editors.openEditor(new ThreadInput({ ...owner, threadId: child.thread_id,
-            title: child.title ?? child.thread_id }), { pinned: true }).catch((cause: unknown) => onError(t('thread.resources.openChildFailed', String(cause)))); }}
-          onSelectThread={openDebugThread} />
+        {reportRequest && children.error ? <p role="alert">{t('child.loadFailed', children.error)}
+          <button type="button" onClick={() => { void children.refresh(); }}>{t('child.refresh')}</button></p> : null}
+        {reportRequest && !children.error && !children.loadedAt ? <p role="status">{t('child.loadingReport')}</p> : null}
+        {reportRequest && children.loadedAt && !children.error && !childConversation.selectedThread ? <p role="alert">{t('child.unavailable')}</p> : null}
+        {childConversation.selectedThread ? <ChildThreadConversation thread={childConversation.selectedThread} conversation={childConversation}
+          onFork={point => onForkThread(childConversation.selectedThread!.thread_id, point)} /> : null}
       </>} />
     </div>
   </div>;

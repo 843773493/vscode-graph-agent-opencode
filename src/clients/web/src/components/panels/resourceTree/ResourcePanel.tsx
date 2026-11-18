@@ -413,9 +413,9 @@ function ResourcePanelForOwner({
       </div>
 
       {/* 这里只承载可重新 attach 的持久资源；一次性 Agent job 仍属于对话或事件视图。 */}
-      {notice ? (
+      {notice || (error && !waitingForFirstMessage) ? (
         <div className="resource-panel-notifications">
-          <div className="resource-notice" role="status">
+          {notice ? <div className="resource-notice" role="status">
             <span>{notice}</span>
             {noticeTechnicalDetails ? (
               <details>
@@ -423,18 +423,15 @@ function ResourcePanelForOwner({
                 <code>{noticeTechnicalDetails}</code>
               </details>
             ) : null}
-          </div>
+          </div> : null}
+          {error && !waitingForFirstMessage ? <div className="resource-notice is-error" role="alert">{t("resources.panel.loadFailed", error)}</div> : null}
         </div>
-      ) : null}
-      {loading ? <div className="empty-state">{t("resources.panel.loading")}</div> : null}
-      {error && !waitingForFirstMessage ? (
-        <div className="empty-state">{t("resources.panel.loadFailed", error)}</div>
       ) : null}
       {waitingForFirstMessage && !loading ? (
         <div className="empty-state">{t("resources.panel.firstMessage")}</div>
       ) : null}
 
-      {!loading && !error && resourceGroups.length > 0 ? (
+      {resourceGroups.length > 0 ? (
         <div className="resource-tree" role="tree" aria-label={t("resources.panel.connections")}>
           {resourceGroups.map((group) => {
             const isOpen = openGroups[group.key];

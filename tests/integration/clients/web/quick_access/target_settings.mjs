@@ -248,7 +248,7 @@ try {
   await expect(sourceLabel).toHaveCount(1);
   await sourceLabel.click();
   await expect(form).toBeVisible();
-  await expect(form).toContainText(inline.source_key);
+  await expect(form.locator('h2').first()).toHaveAttribute('title', `当前编辑来源：${inline.source_key}。更改通过原来源写入流程显式保存。`);
   await expect(form.getByRole('button', { name: '保存来源', exact: true })).toBeDisabled();
   await expect(form.locator('article').first().getByRole('button', { name: '设为本来源的配置默认 Agent', exact: true })).toBeDisabled();
   expect(phaseWrites('readonly')).toEqual([]);

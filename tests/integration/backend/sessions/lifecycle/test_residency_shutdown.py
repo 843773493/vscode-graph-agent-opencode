@@ -71,7 +71,7 @@ def residency_scan_boundary(
         else:
             await original_sleep(delay)
 
-    async def empty_snapshot(_client: TerminalManagerClient | BrowserManagerClient) -> list[dict[str, object]]:
+    async def empty_snapshot(_client: TerminalManagerClient | BrowserManagerClient, **query) -> list[dict[str, object]]:
         return []
 
     monkeypatch.setattr(ThreadResidencyTracker, "sweep", sweep)

@@ -47,6 +47,7 @@ const SessionResourceExplorer = React.lazy(
 );
 
 interface AgentSessionsPanelProps {
+  renderSessionThreads?: (workspaceId: string, session: Session) => React.ReactNode;
   catalogReveal?: CatalogRevealRequest;
   apiPort: number;
   sessions: Session[];
@@ -132,6 +133,7 @@ interface AgentSessionsPanelProps {
 }
 
 export default function AgentSessionsPanel({
+  renderSessionThreads,
   catalogReveal,
   apiPort,
   sessions,
@@ -502,6 +504,7 @@ export default function AgentSessionsPanel({
           {gatewayWorkspaces.length > 0 ? (
             <React.Suspense fallback={null}>
               <SessionResourceExplorer
+                renderSessionThreads={renderSessionThreads}
                 catalogReveal={catalogReveal}
                 apiPort={apiPort}
                 workspaces={gatewayWorkspaces}

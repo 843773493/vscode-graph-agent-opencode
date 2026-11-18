@@ -78,7 +78,7 @@ class FakeTraceEventStore:
     def __init__(self, events: list[object] | None = None) -> None:
         self.events = events or []
 
-    def iter_message_events(self, session_id: str) -> list[object]:
+    def iter_message_job_events(self, session_id: str, message_id: str) -> list[object]:
         return self.events
 
 

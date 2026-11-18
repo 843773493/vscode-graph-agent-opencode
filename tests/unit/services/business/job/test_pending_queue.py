@@ -70,33 +70,13 @@ def test_take_head_removes_message_before_execution() -> None:
         queue.entry("job")
 
 
-@pytest.mark.parametrize(
-    ("entries", "message"),
-    [
-        (
-            [
-                QueueEntry("job_1", "thread", 1, "after_turn"),
-                QueueEntry("job_1_duplicate", "thread", 1, "after_turn"),
-            ],
-            "同 Thread 准入顺序错误",
-        ),
-        (
-            [
-                QueueEntry("job_2", "thread", 2, "after_turn"),
-                QueueEntry("job_1", "thread", 1, "after_turn"),
-            ],
-            "同 Thread 准入顺序错误",
-        ),
-    ],
-)
-def test_restore_rejects_invalid_sequence(entries: list[QueueEntry], message: str) -> None:
-    with pytest.raises(RuntimeError, match=message):
-        JobPendingQueue().restore("session", entries)
-
-
-def test_reorder_and_promotion_are_explicitly_rejected() -> None:
-    with pytest.raises(ValueError, match="不支持重排"):
-        JobPendingQueue().reject_reorder("session")
+def test_restore_preserves_authoritative_order_and_acceptance_identity() -> None:
+    queue = JobPendingQueue()
+    queue.restore("session", [QueueEntry("job_2", "thread", 2, "after_interrupt"),
+                              QueueEntry("job_1", "thread", 1, "after_turn")])
+    assert queue.queued_job_ids("session", "thread") == ("job_2", "job_1")
+    assert queue.peek_head("session", "thread").enqueue_sequence == 2
+    assert queue.peek_head("session", "thread").delivery_policy == "after_interrupt"
 
 
 def test_restore_only_restores_still_queued_messages() -> None:

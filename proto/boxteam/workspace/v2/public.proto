@@ -24,17 +24,26 @@ message AgentDTO {
   string model = 4;
   repeated string tools = 5;
   repeated string capabilities = 6;
-  repeated AgentProviderDTO providers = 7;
+  reserved 7;
+  repeated AgentModelDTO models = 9;
   optional bool workspace_default = 8;
 }
 
-message AgentProviderDTO {
+message ModelReferenceDTO {
   string provider_id = 1;
+  string model_id = 2;
+}
+
+message AgentModelDTO {
+  reserved 1;
+  ModelReferenceDTO model_ref = 7;
   string model = 2;
   string custom_llm_provider = 3;
   optional bool workspace_default = 4;
   bool available = 5;
   optional string configuration_error = 6;
+  optional string name = 8;
+  optional string provider_name = 9;
 }
 
 message AgentStateMessagesDTO {
@@ -106,6 +115,17 @@ message ConfigSourceLayerViewDTO {
   google.protobuf.Struct payload = 5;
 }
 
+// 文件事实也参与临时探测准入，不能仅依赖尚未追赶磁盘变化的物化层。
+message ConfigSourceBaselineDTO {
+  google.protobuf.Value uri = 1;
+  string presence = 2;
+  google.protobuf.Value layer_revision = 3;
+  google.protobuf.Value layer_digest = 4;
+  google.protobuf.Value source_generation = 5;
+  google.protobuf.Value file_presence = 6;
+  google.protobuf.Value file_digest = 7;
+}
+
 message ConfigSourceOriginDTO {
   string path = 1;
   string source_key = 2;
@@ -160,6 +180,116 @@ message ConfigSourceDocumentDTO {
   ConfigReloadStatusDTO status = 19;
   optional ConfigSourceEditDTO edit = 20;
   optional ConfigSourceFanoutDTO fanout = 21;
+  map<string, ConfigSourceBaselineDTO> source_baseline = 22;
+  repeated ConfigSourceOriginDTO active_origins = 23;
+}
+
+message LlmCredentialInput {
+  string scope = 1;
+  string provider_id = 2;
+  optional string model_id = 3;
+  string value = 4;
+}
+
+// active 与 draft 是互斥输入，业务校验拒绝混用。
+message LlmDiscoverRequest {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  string mode = 3;
+  string provider_id = 4;
+  int64 edit_version = 5;
+  optional string source_key = 6;
+  optional string jsonc = 7;
+  map<string, ConfigSourceBaselineDTO> expected_source_baseline = 8;
+  optional int64 expected_active_revision = 9;
+  optional string expected_active_digest = 10;
+  optional LlmCredentialInput credential_input = 11;
+}
+
+message LlmCredentialObservationDTO {
+  string source = 1;
+  optional string secret_id = 2;
+  optional int64 revision = 3;
+  optional string scope = 4;
+}
+
+message LlmProbeObservationDTO {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  string mode = 3;
+  string provider_id = 4;
+  int64 edit_version = 5;
+  optional string source_key = 6;
+  map<string, ConfigSourceBaselineDTO> source_baseline = 7;
+  optional int64 active_revision = 8;
+  optional string active_digest = 9;
+  LlmCredentialObservationDTO credential = 10;
+  string protocol = 11;
+  string endpoint = 12;
+  string observed_at = 13;
+}
+
+message LlmDiscoveredModelDTO {
+  string model = 1;
+  optional string name = 2;
+}
+
+message LlmProbeErrorDTO {
+  string category = 1;
+  string message = 2;
+  optional int64 status_code = 3;
+  optional string field = 4;
+}
+
+message LlmDiscoverResultDTO {
+  LlmProbeObservationDTO observation = 1;
+  string source = 2;
+  repeated LlmDiscoveredModelDTO models = 3;
+  bool complete = 4;
+  optional LlmProbeErrorDTO error = 5;
+}
+
+message LlmTestRequest {
+  string gateway_id = 1;
+  string workspace_id = 2;
+  string mode = 3;
+  string provider_id = 4;
+  int64 edit_version = 5;
+  optional string source_key = 6;
+  optional string jsonc = 7;
+  map<string, ConfigSourceBaselineDTO> expected_source_baseline = 8;
+  optional int64 expected_active_revision = 9;
+  optional string expected_active_digest = 10;
+  optional LlmCredentialInput credential_input = 11;
+  string model_id = 12;
+  optional bool streaming = 13;
+  double timeout_seconds = 14;
+}
+
+message LlmTestStartDTO {
+  string request_id = 1;
+  LlmProbeObservationDTO observation = 2;
+  ModelReferenceDTO model_ref = 3;
+  bool streaming = 4;
+}
+
+message LlmTestDeltaDTO {
+  string request_id = 1;
+  string text = 2;
+}
+
+message LlmTestResultDTO {
+  string request_id = 1;
+  LlmProbeObservationDTO observation = 2;
+  ModelReferenceDTO model_ref = 3;
+  bool streaming = 4;
+  string status = 5;
+  optional double first_content_ms = 6;
+  double elapsed_ms = 7;
+  string preview = 8;
+  bool preview_truncated = 9;
+  optional google.protobuf.Struct usage = 10;
+  optional LlmProbeErrorDTO error = 11;
 }
 
 message ConfigSourcePreflightDTO {
@@ -167,6 +297,24 @@ message ConfigSourcePreflightDTO {
   google.protobuf.Struct candidate = 2;
   string candidate_digest = 3;
   repeated string changed_paths = 4;
+  optional ConfigModelInspectionDTO model_options = 5;
+  optional ConfigModelInspectionDTO active_model_options = 6;
+}
+
+message ConfigModelOptionOriginDTO {
+  string path = 1;
+  string source_key = 2;
+  string definition = 3;
+  string definition_path = 4;
+}
+
+message ConfigModelInspectionDTO {
+  ModelReferenceDTO model_ref = 1;
+  string model = 2;
+  google.protobuf.Struct options = 3;
+  repeated ConfigModelOptionOriginDTO origins = 4;
+  string request_url = 5;
+  optional string catalog_url = 6;
 }
 
 message ConfigEventDTO {
@@ -240,7 +388,35 @@ message ChildThreadListDTO {
   string parent_session_id = 1;
   repeated ChildThreadSummaryDTO items = 2;
   int64 total = 3;
-  repeated TeamBoardDTO teams = 4;
+  reserved 4;
+  repeated TeamBoardSummaryDTO teams = 5;
+}
+
+message TeamMemberSummaryDTO {
+  string thread_id = 1;
+  string role = 2;
+  string work_mode = 3;
+}
+
+message TeamTaskSummaryDTO {
+  string task_id = 1;
+  string title = 2;
+  string status = 3;
+  string assignee_thread_id = 4;
+  string phase = 5;
+  int64 cycle = 6;
+  optional string summary = 7;
+  optional string error = 8;
+}
+
+message TeamBoardSummaryDTO {
+  string team_id = 1;
+  string name = 2;
+  string session_id = 3;
+  string coordinator_thread_id = 4;
+  int64 version = 5;
+  repeated TeamMemberSummaryDTO members = 6;
+  repeated TeamTaskSummaryDTO tasks = 7;
 }
 
 // 有界名称查询；不加载执行运行态，cursor 显式续查尚未覆盖的目录。
@@ -1176,6 +1352,7 @@ message PendingRequestDTO {
   string thread_id = 19;
   optional string turn_id = 20;
   google.protobuf.Struct execution_binding = 21;
+  bool reorderable = 22;
 }
 
 message PendingRequestListDTO {
@@ -1185,6 +1362,36 @@ message PendingRequestListDTO {
   optional int64 snapshot_version = 4;
   // 精确 thread 读取的范围；Session 聚合快照不设置。
   optional string thread_id = 5;
+  optional int64 thread_revision = 6;
+}
+
+message PendingRequestReorderRequest {
+  repeated string message_ids = 1;
+  int64 expected_thread_revision = 2;
+}
+
+message UserQuestionDTO {
+  string question_id = 1;
+  int64 sequence = 2;
+  string markdown = 3;
+  optional string turn_id = 4;
+  string created_at = 5;
+}
+
+message UserQuestionSummaryDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  int64 count = 3;
+  int64 revision = 4;
+}
+
+message UserQuestionPageDTO {
+  string session_id = 1;
+  string thread_id = 2;
+  int64 count = 3;
+  int64 revision = 4;
+  repeated UserQuestionDTO items = 5;
+  optional int64 next_before = 6;
 }
 
 message PendingRequestPolicyUpdateRequest {
@@ -1523,7 +1730,8 @@ message SessionDTO {
   string title = 5;
   optional string title_source = 6;
   string current_agent_id = 7;
-  optional string current_provider_id = 8;
+  reserved 8;
+  reserved "current_provider_id";
   // catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。
   optional string parent_session_id = 9;
   // 创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。
@@ -1534,6 +1742,7 @@ message SessionDTO {
   string uri = 15;
   string scope = 16;
   optional string thread_id = 17;
+  optional ModelReferenceDTO current_model = 18;
 }
 
 message SessionExecutionSnapshotDTO {
@@ -1810,7 +2019,8 @@ message SessionInformationSessionDTO {
   string workspace_id = 2;
   string title = 3;
   string current_agent_id = 4;
-  optional string current_provider_id = 5;
+  reserved 5;
+  reserved "current_provider_id";
   // catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。
   optional string parent_session_id = 6;
   // 创建 metadata 冻结的 fork 来源 Session 稳定 ID；独立于导航祖先，普通 Session 可为空。
@@ -1821,6 +2031,7 @@ message SessionInformationSessionDTO {
   // catalog 记录的 Session 配置最近一次更新 UTC 时刻；初建等于 created_at，导航改名和移动不推进。
   google.protobuf.Timestamp updated_at = 10;
   optional bool title_truncated = 11;
+  optional ModelReferenceDTO current_model = 12;
 }
 
 message SessionInformationResourceSummaryDTO {
@@ -2303,7 +2514,9 @@ message SessionUpdateRequest {
   reserved "title_source";
 
   optional string agent_id = 2;
-  optional string provider_id = 3;
+  reserved 3;
+  reserved "provider_id";
+  optional ModelReferenceDTO model = 5;
 }
 
 message StaleTurnCursorErrorDTO {
@@ -2451,7 +2664,8 @@ message ToolSelectionPatchRequest {
 message ToolTestAttemptDTO {
   string attempt_id = 1;
   string case_id = 2;
-  string provider_id = 3;
+  reserved 3;
+  ModelReferenceDTO model_ref = 15;
   string model = 4;
   string status = 5;
   bool passed = 6;
@@ -2465,8 +2679,9 @@ message ToolTestAttemptDTO {
   optional string error = 14;
 }
 
-message ToolTestProviderResultDTO {
-  string provider_id = 1;
+message ToolTestModelResultDTO {
+  reserved 1;
+  ModelReferenceDTO model_ref = 12;
   string model = 2;
   string status = 3;
   optional int64 completed = 4;
@@ -2487,7 +2702,8 @@ message ToolTestRunDTO {
   google.protobuf.Timestamp created_at = 5;
   google.protobuf.Timestamp updated_at = 6;
   int64 repetitions = 7;
-  repeated ToolTestProviderResultDTO providers = 8;
+  reserved 8;
+  repeated ToolTestModelResultDTO models = 11;
   repeated ToolTestAttemptDTO attempts = 9;
   optional string error = 10;
 }
@@ -2498,8 +2714,10 @@ message ToolTestRunListDTO {
 
 message ToolTestStartRequest {
   optional string agent_id = 1;
-  repeated string provider_ids = 2;
+  reserved 2;
+  reserved "provider_ids";
   optional int64 repetitions = 3;
+  repeated ModelReferenceDTO model_refs = 4;
 }
 
 message TraceEventDTO {
@@ -2834,6 +3052,11 @@ message TurnResponsePartDTO {
   optional bool outcome_unknown = 14;
   optional string completion_reason = 15;
   optional bool partial = 16;
+  // 内部上下文标记只携带来源；正文沿 Item inspect 按需读取。
+  optional string context_kind = 17;
+  optional string context_source_id = 18;
+  optional string context_model_call_id = 19;
+  optional string context_before_item_id = 20;
 }
 
 message TurnResponseSourceDTO {
@@ -2851,6 +3074,7 @@ message TurnResponseSourceDTO {
   // 历史 activity 首项从 Turn projection.created_at 起算，后续按逻辑 activity 顺序计算相邻 item 的整数毫秒差；final 固定为零；standalone internal 首项从 execution.created_at 起算，后续沿同 view、同 execution 的前一 visible/display_only 逻辑成员计算，runtime notice 自身固定为零。历史时间缺少时区或倒退时明确拒绝；streaming 可缺省。
   optional int64 elapsed_ms = 11;
   optional int64 logical_item_ordinal = 12;
+  optional string model_call_id = 13;
 }
 
 message TurnSummaryDTO {
@@ -2958,8 +3182,9 @@ message WorkspaceDefaultAgentUpdateRequest {
   string agent_id = 1;
 }
 
-message WorkspaceDefaultProviderUpdateRequest {
-  string provider_id = 1;
+message WorkspaceDefaultModelUpdateRequest {
+  reserved 1;
+  ModelReferenceDTO model = 2;
 }
 
 message WorkspaceFileChangeBatchDTO {
@@ -3109,6 +3334,7 @@ message WorkspaceFileWatchRequest {
 // 每个逻辑观察者保留独立的 source、恢复游标和生命周期。
 message WorkspaceObservationSubscription {
   string subscription_id = 1;
+  // 持久任务使用 persistent_tasks；session_id 省略时观察整个工作区。
   string kind = 2;
   optional string session_id = 3;
   optional int64 activity_after = 4;
@@ -3298,6 +3524,8 @@ message PersistentTaskConfigurationDTO {
   TaskContextDTO context = 4;
   TaskActionDTO action = 5;
   TaskPoliciesDTO policies = 6;
+  // 累计执行预算，缺省不限制；不覆盖模型单次输出参数。
+  optional int64 token_budget = 7;
 }
 
 message PersistentTaskDTO {
@@ -3317,6 +3545,9 @@ message PersistentTaskDTO {
   string application_type = 13;
   string application_version = 14;
   optional SessionGoalDTO goal = 15;
+  int64 tokens_used = 16;
+  int64 time_used_seconds = 17;
+  int64 sync_version = 18;
 }
 
 message TaskDecisionDTO {
@@ -3423,6 +3654,10 @@ message PersistentTaskListDTO {
   repeated PersistentTaskDTO items = 1;
   TaskRuntimeStatusDTO runtime = 2;
   repeated PersistentTaskRunSummaryDTO active_runs = 3;
+  // 会话范围包含空槽位版本；清空后也不能让迟到响应复活旧 Goal。
+  optional SessionGoalSnapshotDTO session_goal = 4;
+  // 首次连接和事件缺口需补读历史；单纯 Goal 状态通知不使运行历史失效。
+  optional bool history_invalidated = 5;
 }
 
 message PersistentTaskRunListDTO {
@@ -3610,4 +3845,39 @@ message LLMRequestLogSummaryDTO {
   // 文件名记录的 epoch 纳秒换算为毫秒，与正文的 handler timestamp 分开。
   int64 recorded_at = 3;
   int64 size_bytes = 4;
+}
+
+// 卡片操作只在用户接受后读取；稳定 Item 引用不冻结正文版本。
+message ThreadItemInspectionRequest {
+  optional string item_id = 1;
+  optional string message_id = 2;
+  string operation = 3;
+}
+
+message ThreadItemLocationDTO {
+  string item_id = 1;
+  optional string turn_id = 2;
+  optional string execution_id = 3;
+  optional string job_id = 4;
+  optional string model_call_id = 5;
+  optional string message_id = 6;
+  string semantic_kind = 7;
+  string content_hash = 8;
+  int64 byte_length = 9;
+}
+
+message ThreadItemContentDTO {
+  string name = 1;
+  string language = 2;
+  optional string content = 3;
+  optional string uri = 4;
+  optional string mime_type = 5;
+  optional string encoding = 6;
+}
+
+message ThreadItemInspectionDTO {
+  ThreadItemLocationDTO location = 1;
+  repeated ThreadItemContentDTO contents = 2;
+  optional LLMRequestLogMatchDTO request_log = 3;
+  optional TraceMatchDTO trace = 4;
 }

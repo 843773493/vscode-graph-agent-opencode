@@ -48,19 +48,20 @@ def tool_test_run_environment(request: pytest.FixtureRequest) -> Iterator[dict[s
     configuration = install_test_workspace_config(workspace_root=workspace,
         config_path=root / "configs/tests/workspace/default.jsonc", schema_path=root / "configs/workspace_schema.jsonc")
     payload = commentjson.loads(configuration.read_text())
-    model, provider_id = "tool-test-replay-model", "tool-test-replay"
+    model, provider_id, model_id = "tool-test-replay-model", "tool-test-replay", "file-tools"
+    model_ref = {"provider_id": provider_id, "model_id": model_id}
     endpoint = "https://tool-test.invalid/v1"
-    payload["llm"]["providers"] = [{
-        "id": provider_id, "model": model, "endpoint": endpoint, "api_key": "tool-test-unused-key",
-        "custom_llm_provider": "openai", "api_mode": {"protocol": "chat_completions",
-            "supports_reasoning": {"reasoning_content": False}, "model_info": {"supports_function_calling": True}},
-    }]
+    payload["llm"]["providers"] = {provider_id: {
+        "defaults": {"endpoint": endpoint, "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
+            "custom_llm_provider": "openai", "api_mode": {"protocol": "chat_completions",
+                "supports_reasoning": {"reasoning_content": False}, "model_info": {"supports_function_calling": True}}},
+        "models": {model_id: {"model": model}, "catalog-only": {"model": model}},
+    }}
     for agent in payload["agents"].values():
-        agent["model"] = {"primary_provider": provider_id, "fallback_providers": []}
+        agent["model"] = {"primary": model_ref, "fallbacks": []}
     for tool in payload["agents"]["default"]["tools"]["custom"]:
         if tool.get("tool_id") == "fetch_webpage":
-            tool["options"]["embedding"]["provider_id"] = provider_id
-    payload["mcp"] = {"servers": {}}
+            tool["options"]["embedding"]["model_ref"] = model_ref
     configuration.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     fixture_root = runtime / "model-stream-fixture"
     (fixture_root / "scenarios").mkdir(parents=True, exist_ok=True)
@@ -86,13 +87,14 @@ def tool_test_run_environment(request: pytest.FixtureRequest) -> Iterator[dict[s
     gateway = start_gateway_process(workspace_root=workspace, default_backend_url=None, port=ports.port(21),
         boxteam_home=context.boxteam_home_for_node(request.node.nodeid), artifacts_dir=context.artifacts_dir / "gateway",
         extra_env={"BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(20)), "BOXTEAM_WEB_ASSETS": str(assets),
-            "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(stream_config), "LITELLM_LOCAL_MODEL_COST_MAP": "true"})
+            "BOXTEAM_TEST_MODEL_STREAM_CONFIG": str(stream_config), "LITELLM_LOCAL_MODEL_COST_MAP": "true",
+            "BOXTEAM_TEST_MODEL_API_KEY": "tool-test-unused-key"})
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS,
                 timeout=90, trust_env=False) as client:
             active = client.get("/api/gateway/workspaces").raise_for_status().json()["data"]["active_workspace"]
         yield {"baseUrl": f"http://127.0.0.1:{gateway.port}", "gatewayId": active["gateway_id"],
-            "workspaceId": active["workspace_id"], "providerId": provider_id,
+            "workspaceId": active["workspace_id"], "providerId": provider_id, "modelId": model_id,
             "artifacts": str(context.artifacts_dir), "runtime": str(runtime), "workspace": str(workspace),
             "mainSha256": hashlib.sha256((assets / "out/main.js").read_bytes()).hexdigest()}
     finally:
@@ -102,10 +104,10 @@ def tool_test_run_environment(request: pytest.FixtureRequest) -> Iterator[dict[s
 def test_workspace_tool_model_run_restores_original_run_after_reload(tool_test_run_environment: dict[str, str]) -> None:
     fixture = tool_test_run_environment
     artifacts = Path(fixture["artifacts"])
-    node = shutil.which("node")
+    bun = shutil.which("bun")
     chromium = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
-    assert node and chromium, "工具测试界面验收需要目标 Node 和 Chromium"
-    command = [node, "tests/integration/clients/web/workspace_tool_test_run.mjs"]
+    assert bun and chromium, "工具测试界面验收需要 Bun 和 Chromium"
+    command = [bun, "tests/integration/clients/web/workspace_tool_test_run.mjs"]
     with chromium_temporary_environment(Path(fixture["runtime"]) / "chromium-tmp") as temporary:
         run = subprocess.run(command, cwd=Path.cwd(), capture_output=True, text=True, check=False, timeout=150,
             env={**os.environ, **temporary, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH": chromium,

@@ -1230,7 +1230,7 @@ async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *
         initial_execution_id="execution-turn-1",
         queue_input=ExecutionQueueInput(
             execution_binding=UserExecutionIdentity("job-turn-1", "turn-1", "admission-turn-1"),
-            message_id="u1", agent_id="default", provider_id=None, delivery_policy="after_turn",
+            message_id="u1", agent_id="default", model=None, delivery_policy="after_turn",
             gateway_id=get_current_gateway_id(), request_id=get_current_request_id(),
             created_at=datetime.now(UTC).isoformat(),
         ),
@@ -1298,7 +1298,7 @@ async def _seed_source(context: ForkIntegrationContext, fork_provider_prepare, *
         initial_execution_id="execution-turn-2",
         queue_input=ExecutionQueueInput(
             execution_binding=UserExecutionIdentity("job-turn-2", "turn-2", "admission-turn-2"),
-            message_id="u2", agent_id="default", provider_id=None, delivery_policy="after_turn",
+            message_id="u2", agent_id="default", model=None, delivery_policy="after_turn",
             gateway_id=get_current_gateway_id(), request_id=get_current_request_id(),
             created_at=datetime.now(UTC).isoformat(),
         ),
@@ -1568,7 +1568,7 @@ async def test_child_message_ingest_keeps_exact_attachment_owner_through_source_
     identity = container.job_service.reserve_user_execution_identity()
     container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
         execution_binding=identity, message_id=message.message_id, agent_id="default",
-        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
         created_at=message.created_at.isoformat(),
     ))
     admission = container.message_service.execution_admission_for_job(
@@ -1624,7 +1624,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
         identity = production_fork_container.job_service.reserve_user_execution_identity()
         messages.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
             execution_binding=identity, message_id=message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=message.created_at.isoformat(),
         ))
         job_id = identity.job_id
@@ -1643,7 +1643,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
             attachments=message.attachments, message_metadata=message.metadata,
             message_created_at=message.created_at.isoformat(),
         )
-        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
+        messages.accept_job_input(queued_input, queue_input=ExecutionQueueInput(execution_binding=queued_input.execution_binding, message_id=queued_input.message_id, agent_id="default", model=None, delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=queued_input.message_created_at))
         frozen = context.saver.accepted_internal_message(
             source.session_id, thread_id=source_thread, job_id=job_id, message_id=message.message_id, intent=intent,
         )
@@ -1707,7 +1707,7 @@ async def test_fork_attachment_retention_uses_real_owner_and_cold_target_tool(
                 MessageCreateRequest(content="读取继承附件"), thread_id=result.thread_id)
             target_identity = production_fork_container.job_service.reserve_user_execution_identity()
             target_messages.accept_user_message(target_message, execution_identity=target_identity, queue_input=ExecutionQueueInput(
-                execution_binding=target_identity, message_id=target_message.message_id, agent_id="default", provider_id=None,
+                execution_binding=target_identity, message_id=target_message.message_id, agent_id="default", model=None,
                 delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=target_message.created_at.isoformat(),
             ))
             new_turn = {"turn_id": target_identity.turn_id}
@@ -1786,7 +1786,7 @@ async def test_fork_settlement_retries_retained_upload_pin_without_restart(
     identity = container.job_service.reserve_user_execution_identity()
     container.message_service.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
         execution_binding=identity, message_id=message.message_id, agent_id="default",
-        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
         created_at=message.created_at.isoformat(),
     ))
     admission = container.message_service.execution_admission_for_job(source.session_id, thread_id=source_thread, job_id=identity.job_id)

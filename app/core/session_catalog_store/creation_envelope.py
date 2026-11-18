@@ -19,7 +19,7 @@ _METADATA_CALLER_KEYS = frozenset(
         "delegation",
         "generation_origin",
         "current_agent_id",
-        "current_provider_id",
+        "current_model_json",
         "context_source_session_id",
     }
 )

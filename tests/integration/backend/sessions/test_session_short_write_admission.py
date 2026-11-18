@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -32,6 +34,7 @@ from app.schemas.internal_v2.goal import GoalStatus, SessionGoalDTO
 from app.schemas.internal_v2.node_debug import (
     NodeDebugConfigurationCreateRequest,
     NodeDebugConfigurationUpdateRequest,
+    NodeDebugDebuggerContributionDTO,
 )
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.job.service import JobService, JobState
@@ -57,7 +60,10 @@ from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from app.services.orchestration.persistent_tasks.goal import sample_goal_progress
 from tests.harness.python.run_context import TestRunContext
-from tests.support.node_debug_dependencies import node_debug_file_paths
+from tests.support.node_debug_dependencies import (
+    node_debug_binding_snapshot,
+    node_debug_file_paths,
+)
 from tests.support.workspaces import prepare_test_workspace
 from tests.unit.core.catalog_workspace_helper import (
     CatalogWorkspaceContext,
@@ -141,7 +147,6 @@ class _RuntimeProbe:
         self._session_service = session_service
         self.probe_sample_admission = True
         self.calls: list[str] = []
-        self._goal_job_owners: dict[str, str] = {}
         self.items: list[SimpleNamespace] = []
         self.jobs = SimpleNamespace(list=self.list_jobs)
 
@@ -208,6 +213,7 @@ async def harness(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Harness]:
         job_event_bus=JobEventBus(),
     )
     runtime = _RuntimeProbe(session_service)
+    runtime.goals = goal_service
 
     async def sample_probe(_runtime, session_id):
         assert _runtime is runtime
@@ -261,7 +267,7 @@ async def test_active_short_write_endpoints_keep_their_contracts(
 ) -> None:
     session_id = await harness.workspace.create_session(
         "原始标题",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
 
     update = await harness.client.patch(
@@ -312,7 +318,10 @@ async def test_stale_goal_control_request_cannot_freeze_current_job_time(harness
     session_id = await harness.workspace.create_session("CAS 前只读采样")
     goal = await harness.goal_service.set(session_id, objective="继续累计当前目标用时")
     await harness.goal_service.account_job(session_id, job_id="job-running", tokens=5, elapsed_seconds=3)
-    harness.runtime._goal_job_owners["job-running"] = goal.goal_id
+    from app.schemas.internal_v2.task_usage import TaskExecutionReferenceDTO
+    harness.goal_service._store.bind_execution(goal.goal_id, "job-running", TaskExecutionReferenceDTO(
+        session_id=session_id, thread_id=goal.thread_id, execution_id="execution-running",
+        started_at=datetime.now(UTC) - timedelta(seconds=10), control_revision=goal.control_revision), datetime.now(UTC))
     harness.runtime.items = [SimpleNamespace(job_id="job-running", status=SimpleNamespace(value="running"),
         created_at=datetime.now(UTC) - timedelta(seconds=10))]
 
@@ -378,7 +387,7 @@ async def test_admitted_session_update_finishes_before_delete_drain(
 ) -> None:
     session_id = await harness.workspace.create_session(
         "删除前标题",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     initial_updated_at = harness.workspace.node(session_id).updated_at.isoformat()
     write_admitted = asyncio.Event()
@@ -497,7 +506,7 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
 ) -> None:
     session_id = await harness.workspace.create_session(
         "保持原状",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
 
     async def fail_drain(current_session_id: str) -> None:
@@ -542,8 +551,9 @@ async def test_deleting_session_rejects_all_new_short_write_endpoints(
     assert harness.workspace.session_dir(session_id).is_dir()
 
 
-def _node_debug_service(harness: _Harness) -> NodeDebugService:
-    return NodeDebugService(
+@pytest.fixture
+def node_debug(harness: _Harness, monkeypatch: pytest.MonkeyPatch) -> NodeDebugService:
+    service = NodeDebugService(
         workspace_root=harness.workspace.workspace_root,
         file_paths=node_debug_file_paths(harness.workspace.workspace_root),
         config_service=ConfigService(workspace_root=harness.workspace.workspace_root),
@@ -554,6 +564,12 @@ def _node_debug_service(harness: _Harness) -> NodeDebugService:
         ),
         external_resource_leases=ExternalResourceLeaseLedger(),
     )
+    # 本组验证 Session 准入／删除竞争；插件发现是明确替身，不访问开发 Gateway。
+    contribution = NodeDebugDebuggerContributionDTO(
+        **node_debug_binding_snapshot().model_dump(), label="Node Inspector", configuration_schema={},
+    )
+    monkeypatch.setattr(service, "resolve_node_debugger_binding", AsyncMock(return_value=contribution))
+    return service
 
 
 @pytest.mark.asyncio
@@ -561,16 +577,16 @@ def _node_debug_service(harness: _Harness) -> NodeDebugService:
 @pytest.mark.parametrize("blocked_stage", ["claim", "source"])
 async def test_node_debug_state_read_finishes_before_delete_drain(
     harness: _Harness,
+    node_debug: NodeDebugService,
     monkeypatch: pytest.MonkeyPatch,
     reader: str,
     blocked_stage: str,
 ) -> None:
     session_id = await harness.workspace.create_session(
-        "状态读取等待删除 drain", current_provider_id="test-provider"
+        "状态读取等待删除 drain", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     thread_id = harness.workspace.resolver.main_thread_id(session_id)
     session_path = harness.workspace.session_dir(session_id)
-    node_debug = _node_debug_service(harness)
     harness.workspace.resolver.bind_session_drain_callback(node_debug.drain_session)
     read_entered = asyncio.Event()
     release_read = asyncio.Event()
@@ -661,20 +677,20 @@ async def test_node_debug_state_read_finishes_before_delete_drain(
 @pytest.mark.asyncio
 async def test_cross_session_configuration_copy_releases_source_gate_after_snapshot(
     harness: _Harness,
+    node_debug: NodeDebugService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_session_id = await harness.workspace.create_session(
-        "复制来源", current_provider_id="test-provider"
+        "复制来源", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     target_session_id = await harness.workspace.create_session(
-        "复制目标", current_provider_id="test-provider"
+        "复制目标", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     source_thread_id = harness.workspace.resolver.main_thread_id(source_session_id)
     target_thread_id = harness.workspace.resolver.main_thread_id(target_session_id)
     (harness.workspace.workspace_root / "main.mjs").write_text(
         "console.log('copy');\n", encoding="utf-8"
     )
-    node_debug = _node_debug_service(harness)
     source_state = await node_debug.create_configuration(
         NodeDebugConfigurationCreateRequest(
             session_id=source_session_id,
@@ -774,13 +790,13 @@ async def test_cross_session_configuration_copy_releases_source_gate_after_snaps
 @pytest.mark.asyncio
 async def test_admitted_node_debug_start_finishes_before_delete_drain(
     harness: _Harness,
+    node_debug: NodeDebugService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = await harness.workspace.create_session(
-        "等待调试启动完成", current_provider_id="test-provider"
+        "等待调试启动完成", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     thread_id = harness.workspace.resolver.main_thread_id(session_id)
-    node_debug = _node_debug_service(harness)
     launch_entered = asyncio.Event()
     release_start = asyncio.Event()
     drain_attempted = asyncio.Event()
@@ -806,6 +822,8 @@ async def test_admitted_node_debug_start_finishes_before_delete_drain(
             path="main.mjs",
             args=[],
             breakpoints=[],
+            gateway_id="gateway_test",
+            request_id="request_admitted_start",
         )
     )
     delete_task: asyncio.Task[object] | None = None
@@ -841,13 +859,13 @@ async def test_admitted_node_debug_start_finishes_before_delete_drain(
 @pytest.mark.asyncio
 async def test_node_debug_start_after_drain_cannot_spawn_before_session_rename(
     harness: _Harness,
+    node_debug: NodeDebugService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = await harness.workspace.create_session(
-        "排空后的调试启动", current_provider_id="test-provider"
+        "排空后的调试启动", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"})
     )
     thread_id = harness.workspace.resolver.main_thread_id(session_id)
-    node_debug = _node_debug_service(harness)
     drain_finished = asyncio.Event()
     release_rename = asyncio.Event()
     admission_attempted = asyncio.Event()
@@ -896,6 +914,8 @@ async def test_node_debug_start_after_drain_cannot_spawn_before_session_rename(
                 path="main.mjs",
                 args=[],
                 breakpoints=[],
+                gateway_id="gateway_test",
+                request_id="request_after_drain",
             )
         )
         await asyncio.wait_for(admission_attempted.wait(), timeout=3)

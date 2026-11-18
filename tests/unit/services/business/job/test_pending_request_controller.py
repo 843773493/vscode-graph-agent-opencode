@@ -129,7 +129,7 @@ async def test_pending_controls_policy_remove_without_reordering(job_service_fac
             message_id=message_id, session_id=session_id, thread_id=thread_id, role=MessageRole.user,
             content=content, created_at=now, updated_at=now,
         ), execution_identity=binding, queue_input=ExecutionQueueInput(
-            execution_binding=binding, message_id=message_id, agent_id="default", provider_id=None,
+            execution_binding=binding, message_id=message_id, agent_id="default", model=None,
             delivery_policy=delivery_policy, gateway_id=None, request_id=None, created_at=now.isoformat(),
         ))
         return await service.start_job(
@@ -151,8 +151,12 @@ async def test_pending_controls_policy_remove_without_reordering(job_service_fac
     assert [(item.message_id, item.content, item.delivery_policy) for item in changed.requests] == [
         ("msg_queued", "queued", "after_turn"), ("msg_tail", "tail", "after_tool_result"),
     ]
-    with pytest.raises(ValueError, match="不支持重排"):
-        await service.reject_pending_reorder(session_id)
+    exact = await service.list_pending(session_id, thread_id=thread_id)
+    reordered = await service.reorder_pending(session_id, thread_id,
+        message_ids=("msg_tail", "msg_queued"), expected_thread_revision=exact.thread_revision)
+    assert [item.message_id for item in reordered.requests] == ["msg_tail", "msg_queued"]
+    assert [item.enqueue_sequence for item in reordered.requests] == [3, 2]
+    assert [item.delivery_policy for item in reordered.requests] == ["after_tool_result", "after_turn"]
     with saver._storage.storage.read_connection(session_id, thread_id, "") as connection:
         original = connection.execute("SELECT turn_id,turn_ordinal,root_input_item_id FROM turn_records ORDER BY turn_ordinal").fetchall()
     removed = await service.remove_pending(session_id, "msg_queued")
@@ -539,7 +543,7 @@ async def test_clear_thread_pending_preserves_sibling_fifo_active_jobs_and_durab
                 message_id=message_id, session_id=session_id, thread_id=thread,
                 role=MessageRole.user, content=message_id, created_at=now, updated_at=now,
             ), execution_identity=binding, queue_input=ExecutionQueueInput(
-                execution_binding=binding, message_id=message_id, agent_id="default", provider_id=None,
+                execution_binding=binding, message_id=message_id, agent_id="default", model=None,
                 delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=now.isoformat(),
             ))
             jobs[message_id] = await service.start_job(

@@ -113,6 +113,7 @@ class TurnResponseSourceDTO(BaseModel):
     item_id: str | None = Field(default=None, min_length=1, max_length=256)
     item_sequence: int | None = Field(default=None, ge=1)
     logical_item_ordinal: int | None = Field(default=None, ge=0)
+    model_call_id: str | None = None
     part_ordinal: int | None = Field(default=None, ge=0)
     created_at: datetime | None = None
     elapsed_ms: int | None = Field(default=None, ge=0)
@@ -131,6 +132,7 @@ class TurnResponsePartDTO(BaseModel):
         "tool_call",
         "tool_result",
         "final_text",
+        "context_notice",
     ]
     projection: Literal["summary", "detail", "streaming"]
     status: Literal["pending", "running", "completed", "failed", "cancelled"] = Field(default="completed", description="响应部件的归一化状态；历史值由 canonical/消息投影映射，streaming 值随部件更新。completed 仅表示该部件完成，可与工具拒绝、Job 或 Execution 失败并存，不证明工具执行成功。")
@@ -146,6 +148,10 @@ class TurnResponsePartDTO(BaseModel):
     final: bool = False
     completion_reason: str | None = Field(default=None, max_length=64)
     partial: bool = False
+    context_kind: str | None = None
+    context_source_id: str | None = None
+    context_model_call_id: str | None = None
+    context_before_item_id: str | None = None
 
     @model_validator(mode="after")
     def validate_source_identity(self) -> TurnResponsePartDTO:

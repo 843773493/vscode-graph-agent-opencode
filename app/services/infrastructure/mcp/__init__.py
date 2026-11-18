@@ -1,10 +1,3 @@
-from app.services.infrastructure.mcp.catalog_activation import (
-    MCP_GUIDANCE_SOURCE_ID,
-    MCP_TOOL_CATALOG_RESOURCE_ID,
-    McpCatalogResourcePublisher,
-    extension_dispatch_from_activation,
-    mcp_guidance_content,
-)
 from app.services.infrastructure.mcp.catalog_owner import (
     McpCatalogError,
     McpCatalogOwner,
@@ -13,12 +6,17 @@ from app.services.infrastructure.mcp.catalog_owner import (
     McpServerSnapshot,
     McpToolDescriptor,
 )
+from app.services.infrastructure.mcp.catalog_publication import (
+    McpCatalogResourcePublisher,
+)
 from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_BINDING_SCHEMA,
     EXTENSION_CATALOG_UNAVAILABLE_CODE,
     EXTENSION_DISPATCH_BINDING_MISMATCH_CODE,
     EXTENSION_DISPATCH_BINDING_SCHEMA,
     EXTENSION_TOOL_ENVELOPE_IDENTITY,
+    MCP_GUIDANCE_SOURCE_ID,
+    MCP_TOOL_CATALOG_RESOURCE_ID,
     ExtensionCatalogBindingError,
     ExtensionCatalogBindingRef,
     ExtensionCatalogUnavailableError,
@@ -31,6 +29,10 @@ from app.services.infrastructure.mcp.extension_catalog import (
     build_extension_catalog_binding,
     extension_schema_hash,
     sha256_token,
+)
+from app.services.infrastructure.mcp.frozen_catalog import (
+    mcp_guidance_content,
+    restore_frozen_extension_dispatch,
 )
 from app.services.infrastructure.mcp.session_runtime import (
     production_mcp_session_factory,
@@ -61,9 +63,9 @@ __all__ = [
     "McpServerSnapshot",
     "McpToolDescriptor",
     "build_extension_catalog_binding",
-    "extension_dispatch_from_activation",
     "extension_schema_hash",
     "mcp_guidance_content",
     "production_mcp_session_factory",
+    "restore_frozen_extension_dispatch",
     "sha256_token",
 ]

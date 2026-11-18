@@ -70,11 +70,13 @@ async def private_header_case(request: pytest.FixtureRequest, http_schema_endpoi
         config_path = install_test_workspace_config(workspace_root=workspace,
             config_path=Path.cwd() / "configs/tests/workspace/default.jsonc", schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
         config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-        config["llm"]["providers"] = [{"id": "primary", "endpoint": MODEL_ENDPOINT, "model": MODEL,
-            "api_key": "private-header-replay-key", "custom_llm_provider": "openai",
-            "api_mode": config["llm"]["providers"][0]["api_mode"]}]
+        config["llm"]["providers"] = {"primary": {
+            "defaults": {"endpoint": MODEL_ENDPOINT, "api_key": "", "custom_llm_provider": "openai",
+                "api_mode": config["llm"]["providers"]["primary"]["defaults"]["api_mode"]},
+            "models": {"default": {"model": MODEL}},
+        }}
         for agent_id in set(inline_agents) | set(config["agents"]):
-            config["agents"].setdefault(agent_id, {})["model"] = {"primary_provider": "primary", "fallback_providers": []}
+            config["agents"].setdefault(agent_id, {})["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
         config["agents"]["default"]["tools"]["custom"] = []
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         workspaces[label] = workspace

@@ -72,8 +72,9 @@ def mcp_ui_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.parametrize("scope", ["workspace", "gateway"])
+@pytest.mark.parametrize("scenario", ["full", "service-management"])
 async def test_add_plugin_service_and_http_from_original_workbench(
-    mcp_plugin_case: McpPluginCase, http_schema_endpoint_factory, prepared_mcp_stdio_package: Path, scope: str,
+    mcp_plugin_case: McpPluginCase, http_schema_endpoint_factory, prepared_mcp_stdio_package: Path, scope: str, scenario: str,
 ) -> None:
     case = mcp_plugin_case
     artifacts = case.context.artifacts_dir
@@ -112,10 +113,22 @@ async def test_add_plugin_service_and_http_from_original_workbench(
                      "BOXTEAM_BROWSER_ARTIFACTS": str(browser_artifacts), "BOXTEAM_BROWSER_FIXTURE": json.dumps({
                          "baseUrl": str(case.client.base_url), "gatewayId": case.gateway_id,
                          "workspaceId": case.workspace_id, "endpoint": external.url, "scope": scope,
+                         "managementOnly": scenario == "service-management",
                      })})
         (browser_artifacts / "browser.log").write_text(result.stdout + result.stderr, encoding="utf-8")
         assert result.returncode == 0, (browser_artifacts / "browser.log").read_text()
         observed = json.loads((browser_artifacts / "result.json").read_text(encoding="utf-8"))
+        if scenario == "service-management":
+            assert observed["phase"] == "completed"
+            assert observed["mcpServiceManagement"] == {
+                "source": scope, "retainedOnError": True, "stableLayout": True,
+                "pluginEntryWhileUnavailable": True, "runtimeSurvivesDisconnect": True,
+                "connectionSettingsOwner": {"gatewayId": case.gateway_id, "workspaceId": case.workspace_id},
+            }
+            assert [item["action"] for item in observed["mcpOperations"]] == ["disconnect", "connect"]
+            assert len(observed["writes"]) == 2
+            assert not receipts.exists() and not external.receipts.exists(), "连接管理不执行业务工具"
+            return
         assert observed["phase"] == "completed" and observed["mcpQuickAccessLifecycle"]
         assert [item["action"] for item in observed["mcpOperations"]] == ["disconnect", "connect"]
         assert len({item["operation_id"] for item in observed["mcpOperations"]}) == 2

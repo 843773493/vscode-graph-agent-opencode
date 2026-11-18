@@ -4,7 +4,11 @@
   "plugins": {
     "sources": {"entries": []}, // 显式配置自有 HTTP(S) 来源；空源不发网络请求。
     "runtime": {"entries": []}, // 当前 Gateway 的包内插件绑定，安装不自动启用。
-    "workspace_defaults": {"entries": []} // 仅新建工作区继承；已有工作区独立管理。
+    "workspace_defaults": {"entries": [ // 仅新建工作区继承；已有工作区独立管理。
+      {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "terminal", "enabled": true},
+      {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "browser", "enabled": true},
+      {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": "debugging", "enabled": true}
+    ]}
   },
   "logging": {
     "runtime": {

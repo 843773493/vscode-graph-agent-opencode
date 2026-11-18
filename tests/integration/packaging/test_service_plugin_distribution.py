@@ -120,14 +120,14 @@ def distribution_gateway(request: pytest.FixtureRequest,
         config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=application / "configs/workspace_schema.jsonc")
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
-    provider.update(endpoint="http://distribution-model.invalid/v1", model="distribution-session",
-        api_key="distribution-plugin-unused-key", custom_llm_provider="openai")
-    for item in config["llm"]["providers"]:
-        if "api_key" in item:
-            item["api_key"] = "distribution-plugin-unused-key"
+    provider = config["llm"]["providers"]["primary"]
+    provider["models"]["default"]["model"] = "distribution-session"
+    provider["defaults"].update(endpoint="http://distribution-model.invalid/v1", custom_llm_provider="openai")
+    for item in config["llm"]["providers"].values():
+        if "api_key" in item["defaults"]:
+            item["defaults"]["api_key"] = ""
     for agent in config["agents"].values():
-        agent["model"] = {"primary_provider": "primary", "fallback_providers": []}
+        agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
     config_path.write_text(json.dumps(config), encoding="utf-8")
     (workspace / "distribution-debug.mjs").write_text(

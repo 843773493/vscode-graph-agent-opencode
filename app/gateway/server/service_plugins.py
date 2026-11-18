@@ -20,6 +20,7 @@ from app.api.sse_heartbeat import (
     stream_sse_with_heartbeat,
 )
 from app.core.async_channel import run_channel
+from app.core.failures import HTTP_FAILURE_HEADER
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_request_id
 from app.gateway.auth import (
@@ -219,7 +220,9 @@ def relay_http_error(response: httpx.Response, *, gateway_id: str, request_id: s
     if upstream_request_id != request_id:
         detail = (f"远端 Gateway {gateway_id} 的错误响应 request_id 不匹配（本地 {request_id}，"
             f"远端 {upstream_request_id or '未提供'}）；原错误：{detail}")
-    return HTTPException(status_code=response.status_code, detail=detail)
+    context = response.headers.get(HTTP_FAILURE_HEADER)
+    return HTTPException(status_code=response.status_code, detail=detail,
+                         headers={HTTP_FAILURE_HEADER: context} if context is not None else None)
 
 
 @router.post("/api/gateway/service-plugins/private-inputs", response_model=APIResponse[PluginPrivateInputReference])

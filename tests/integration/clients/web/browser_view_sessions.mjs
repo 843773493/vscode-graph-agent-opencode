@@ -161,10 +161,12 @@ async function verifyHistoryBootstrap(page, expectCache, open) {
     let cachedControlCount = 0;
     if (expectCache) {
       await expect(cached).toBeVisible();
-      await expect(cached.locator(".native-thread-status")).toHaveText("已显示上次历史缓存，正在同步会话…");
+      await expect(cached.locator('[data-thread-history-sync]')).toBeVisible();
+      await expect(cached.locator('[data-thread-history-sync]')).toContainText("同步中");
+      assert.equal(await cached.locator(".native-thread-status").count(), 0, "同步状态不插入 transcript 顶部");
       // Playwright 的 disabled matcher 只识别表单控件，不识别 fieldset 自身。
       await expect(cached.locator("fieldset")).toHaveJSProperty("disabled", true);
-      const controls = await cached.locator("button, input, select, textarea").evaluateAll(nodes =>
+      const controls = await cached.locator("fieldset button, fieldset input, fieldset select, fieldset textarea").evaluateAll(nodes =>
         nodes.map(node => ({ tag: node.tagName, disabled: node.matches(":disabled") })));
       cachedControlCount = controls.length;
       assert.ok(cachedControlCount > 0, "缓存正文必须包含真实操作控件，不能用空集合证明只读");

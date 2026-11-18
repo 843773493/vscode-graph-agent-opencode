@@ -82,7 +82,7 @@ export function pendingSnapshotToConversations(
     throw new Error("主视图待处理快照包含范围之外的消息");
   }
   const orderedRequests = [...pendingRequests].sort(
-    (left, right) => left.enqueue_sequence - right.enqueue_sequence,
+    (left, right) => left.position - right.position,
   );
   const conversations: ConversationView[] = [];
   for (const request of orderedRequests) {
@@ -125,6 +125,8 @@ export function pendingSnapshotToConversations(
       enqueueSequence: request.enqueue_sequence,
       waitingReason: request.waiting_reason,
       queueSnapshotVersion: snapshot.snapshot_version,
+      queueThreadRevision: snapshot.thread_revision ?? undefined,
+      queueReorderable: request.reorderable,
       pendingPosition: request.position,
       source: "pending",
     });

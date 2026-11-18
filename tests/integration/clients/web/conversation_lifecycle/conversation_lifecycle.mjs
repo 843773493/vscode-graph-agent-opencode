@@ -14,6 +14,7 @@ import { readDiagnosticResponseBody, runDiagnosticResponseLifetimeSelfTest } fro
 import { WORKBENCH_LIFECYCLE_MARKER, classifyNativeShutdownLogs, observeNativeShutdown, originalConsoleLocation,
   runNativeShutdownClassifierSelfTest } from "./native_shutdown.mjs";
 import { canonicalizeJcsJson, digestJcsJson } from "../../../../fixtures/itemized/verify_hash_vectors.mjs";
+import { openSessionThreads } from "../../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -587,7 +588,8 @@ function sessionTargetFromUrl(url) {
   }
   const sessionPath = /^\/api\/v1\/sessions\/([^/]+)(?:\/|$)/.exec(parsed.pathname);
   const breadcrumbPath = /^\/api\/v1\/session-catalog\/breadcrumb\/([^/]+)$/.exec(parsed.pathname);
-  const sessionId = sessionPath?.[1] ?? breadcrumbPath?.[1];
+  const sessionTasks = parsed.pathname === "/api/v1/persistent-tasks" ? parsed.searchParams.get("session_id") : null;
+  const sessionId = sessionPath?.[1] ?? breadcrumbPath?.[1] ?? sessionTasks;
   return sessionId ?? null;
 }
 
@@ -626,13 +628,14 @@ function controlledRestartEndpoint(url, window, pageBinding) {
       && parsed.searchParams.get("session_id") === window.sourceSessionId
       && parsed.searchParams.get("thread_id") === window.sourceThreadId
       && pageBinding.sessionIds.includes(window.sourceSessionId)) return "tool-approvals";
+  if (["/api/v1/persistent-tasks", "/api/v1/persistent-tasks/events"].includes(parsed.pathname)
+      && parsed.searchParams.size === 1 && pageBinding.sessionIds.includes(parsed.searchParams.get("session_id"))) return "session-read";
   const sessionId = sessionTargetFromUrl(url);
   if (!sessionId || !pageBinding.sessionIds.includes(sessionId) || parsed.search) return null;
   if (parsed.pathname === `/api/v1/sessions/${sessionId}/history`) return "history";
   if (parsed.pathname === `/api/v1/sessions/${sessionId}`
       || parsed.pathname === `/api/v1/sessions/${sessionId}/main-thread`
       || parsed.pathname === `/api/v1/sessions/${sessionId}/file-tree-settings`
-      || parsed.pathname === `/api/v1/sessions/${sessionId}/goal`
       || parsed.pathname === `/api/v1/sessions/${sessionId}/bootstrap`
       || parsed.pathname === `/api/v1/session-catalog/breadcrumb/${sessionId}`) return "session-read";
   return null;
@@ -687,12 +690,14 @@ function validControlledRestartWindow(window) {
 function hasConnectedObservationTargets(response, subscriptions) {
   // subscription_id 属于一次登记；重建后核同一领域目标和过滤范围，并绑定新 ID 的 connected 回执。
   return subscriptions.length > 0 && subscriptions.every((original) => {
-    if (!["session_activity", "session_trace", "workspace_files"].includes(original.kind)) return false;
+    if (!["session_activity", "session_trace", "workspace_files", "persistent_tasks"].includes(original.kind)) return false;
     const recovered = response.subscriptions?.filter((candidate) => candidate.kind === original.kind
       && (candidate.session_id ?? null) === (original.session_id ?? null)
       && (candidate.thread_id ?? null) === (original.thread_id ?? null)
       && JSON.stringify(candidate.paths ?? []) === JSON.stringify(original.paths ?? [])) ?? [];
-    return recovered.length === 1 && response.connectedSubscriptions?.includes(recovered[0].subscription_id);
+    const expected = original.kind === "persistent_tasks" ? subscriptions.filter(candidate =>
+      candidate.kind === original.kind && (candidate.session_id ?? null) === (original.session_id ?? null)).length : 1;
+    return recovered.length === expected && recovered.every(candidate => response.connectedSubscriptions?.includes(candidate.subscription_id));
   });
 }
 
@@ -713,8 +718,8 @@ function hasRecoveredRestartObservations(response, request, window) {
     && proof.absentThreadIds?.includes(window.sourceThreadId)
     && proof.verifiedAt >= window.backendRestart.startedAt
     && (window.endedAt === null || proof.verifiedAt <= window.endedAt);
-  const sourceTrace = subscription => subscription.kind === "session_trace"
-    && subscription.session_id === window.sourceSessionId && subscription.thread_id === window.sourceThreadId;
+  const sourceTrace = subscription => subscription.session_id === window.sourceSessionId
+    && (subscription.kind === "persistent_tasks" || subscription.kind === "session_trace" && subscription.thread_id === window.sourceThreadId);
   const surviving = deleted ? original.filter(subscription => !sourceTrace(subscription)) : original;
   return hasConnectedObservationTargets(response, surviving)
     && (!deleted || !response.subscriptions.some(sourceTrace));
@@ -1388,7 +1393,7 @@ function runMessageStreamDiagnosticsSelfTest() {
     { windowIndex: 0, pageRole: "copy-request", paths: ["/api/v1/workspace/files?scope=workspace",
       `/api/v1/sessions/${pageRouteSessionId}/main-thread`, `/api/v1/session-catalog/breadcrumb/${pageRouteSessionId}`,
       `/api/v1/sessions/${pageRouteSessionId}/bootstrap`, "/api/v1/session-catalog/events?after=0&limit=1000",
-      `/api/v1/sessions/${pageRouteSessionId}/file-tree-settings`, `/api/v1/sessions/${pageRouteSessionId}/goal`,
+      `/api/v1/sessions/${pageRouteSessionId}/file-tree-settings`, `/api/v1/persistent-tasks?session_id=${pageRouteSessionId}`,
       "/api/v1/session-catalog/children?limit=100", "/api/v1/workspace", "/api/v1/session-catalog/snapshot"] },
     { windowIndex: 1, pageRole: "foreground-before-restart", paths: ["/api/v1/workspace/observations/stream"] },
     { windowIndex: 2, pageRole: "foreground-after-restart",
@@ -1457,7 +1462,7 @@ function runMessageStreamDiagnosticsSelfTest() {
     .map((fact) => fact.pageRole)), new Set(["copy-request", "foreground-before-restart", "foreground-after-restart"]),
   "502 必须能分别绑定实际 copy 请求页、重启前页面和恢复页面身份");
   const routedSessionErrors = classifiedRestart.handled.filter((fact) => fact.responseRequestId
-    && (fact.url.includes("/api/v1/sessions/") || fact.url.includes("/api/v1/session-catalog/breadcrumb/")));
+    && sessionTargetFromUrl(fact.url) !== null);
   assert.equal(routedSessionErrors.length, 6);
   assert.ok(routedSessionErrors.every((fact) => fact.url.includes(pageRouteSessionId)
     && !fact.url.includes("ses_active")),
@@ -1755,6 +1760,13 @@ function runMessageStreamDiagnosticsSelfTest() {
     subscriptions: [{ ...reRegisteredObservation.subscriptions[0], kind: "session_activity" }] });
   assertObservationRemainsUnhandled({ ...reRegisteredObservation,
     subscriptions: [{ ...reRegisteredObservation.subscriptions[0], paths: ["other/path"] }] });
+  const taskSubscriptions = ["composer", "sidebar"].map(subscription_id => ({ subscription_id,
+    kind: "persistent_tasks", session_id: "ses_task_owner" }));
+  const taskRecovery = { ...reRegisteredObservation, subscriptions: taskSubscriptions,
+    connectedSubscriptions: taskSubscriptions.map(item => item.subscription_id) };
+  assert(hasConnectedObservationTargets(taskRecovery, taskSubscriptions), "任务的两个逻辑入口均须有连接回执");
+  assert(!hasConnectedObservationTargets({ ...taskRecovery, connectedSubscriptions: ["composer"] }, taskSubscriptions));
+  assert(!hasConnectedObservationTargets({ ...taskRecovery, subscriptions: taskSubscriptions.slice(1) }, taskSubscriptions));
   const traceRequest = { ...restartRequests.at(-1), body: { subscriptions: [
     { subscription_id: "trace-before", kind: "session_trace", session_id: "ses_trace_owner", thread_id: "thr_trace_owner" },
   ] } };
@@ -1971,6 +1983,11 @@ async function openOwnerResources(owner) {
   return surface;
 }
 
+async function openOwnerThreads(owner) {
+  await activateOwnerTab(owner);
+  return openSessionThreads(owner.page, owner);
+}
+
 async function selectSession(owner) {
   const sessionButton = owner.page.locator(`button[data-session-id="${owner.sessionId}"]`);
   await sessionButton.waitFor({ state: "visible", timeout: 30_000 });
@@ -2130,6 +2147,7 @@ async function waitForCompletedTurn(owner, prompt, finalText, expectedReasoning)
 async function runGoalOwner(surface) {
   const owner = await createProductSession(surface, "Goal main Thread 身份");
   const path = `/api/v1/sessions/${owner.sessionId}/goal`;
+  const readPath = `/api/v1/persistent-tasks?session_id=${encodeURIComponent(owner.sessionId)}`;
   const expectedOwner = { session_id: owner.sessionId, thread_id: owner.threadId };
   const assertOwner = (goal) => {
     assert.deepEqual({ session_id: goal.session_id, thread_id: goal.thread_id }, expectedOwner);
@@ -2147,15 +2165,17 @@ async function runGoalOwner(surface) {
     await input.press("Enter");
   };
   const responseFor = (method) => owner.page.waitForResponse((response) =>
-    new URL(response.url()).pathname === path && response.request().method() === method);
+    (method === "GET" ? new URL(response.url()).pathname + new URL(response.url()).search === readPath
+      : new URL(response.url()).pathname === path) && response.request().method() === method);
   const readResponse = async (pending) => {
     const response = await pending;
     assert.equal(response.status(), 200);
     const envelope = await response.json();
     assert.equal(envelope.request_id, response.headers()["x-request-id"]);
-    assertOwner(envelope.data);
-    if (envelope.data.goal !== null) assertOwner(envelope.data.goal);
-    return response.request().method() === "DELETE" ? envelope.data : envelope.data.goal;
+    const data = response.request().method() === "GET" ? envelope.data.session_goal : envelope.data;
+    assertOwner(data);
+    if (data.goal != null) assertOwner(data.goal);
+    return response.request().method() === "DELETE" ? data : data.goal;
   };
   const refresh = responseFor("GET");
   await command("/goal");
@@ -2185,7 +2205,7 @@ async function runGoalOwner(surface) {
   const cleared = await readResponse(clear);
   assert.equal(cleared.status, "applied");
   assert.equal(cleared.goal, null);
-  assert.equal((await ownerApi(owner, path)).data.goal, null);
+  assert.equal((await ownerApi(owner, readPath)).data.session_goal.goal, null);
   await expect(threadSurface(owner).getByTestId("composer-input")).toBeVisible();
   await expect(threadSurface(owner).getByTestId("composer-current-goal")).toHaveCount(0);
   const clearedRead = responseFor("GET");
@@ -2594,12 +2614,8 @@ async function openOwner(owner) {
     throw error;
   }
   if (!owner.child) return;
-  const main = await ownerApi(owner, `/api/v1/sessions/${owner.sessionId}/main-thread`);
-  const mainSurface = threadSurface({ ...owner, threadId: main.data.thread_id });
-  const toggle = mainSurface.getByRole("button", { name: "切换会话资源", exact: true });
-  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-  await mainSurface.getByRole("tab", { name: "运行与连接", exact: true }).click();
-  await mainSurface.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click({ timeout: 30_000 });
+  const threads = await openSessionThreads(owner.page, owner);
+  await threads.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click({ timeout: 30_000 });
   await threadSurface(owner).getByTestId("composer-input").waitFor({ state: "visible" });
 }
 
@@ -3271,10 +3287,7 @@ async function assertInternalHistory(owner, history, stage) {
     assert.deepEqual(parts.map((part) => [part.logical_item_ordinal, part.part_ordinal]),
       parts.map((part) => [part.logical_item_ordinal, part.part_ordinal]).sort((left, right) => left[0] - right[0] || left[1] - right[1]));
     if (owner.child) {
-      const surface = threadSurface(owner);
-      const toggle = surface.getByRole("button", { name: "切换会话资源", exact: true });
-      if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
-      await surface.getByRole("tab", { name: "运行与连接", exact: true }).click();
+      const surface = await openOwnerThreads(owner);
       await surface.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-report-link`).click();
       const report = surface.locator(`.child-thread-conversation[data-thread-id="${owner.threadId}"] .child-thread-report[data-execution-id="${execution.execution_id}"]`);
       await report.waitFor({ state: "visible" });
@@ -6233,9 +6246,8 @@ async function startForkMenuObservation(page, article, turnId) {
     const timeline = [];
     const identities = new WeakMap();
     const articleSelector = `.chat-turn[data-turn-id="${CSS.escape(targetTurnId)}"]`;
-    const anchorSelector = ".chat-user-action-menu-anchor";
-    const triggerSelector = ".chat-user-action-menu-trigger";
-    const menuSelector = '.chat-user-action-menu[role="menu"][aria-label="用户消息操作"]';
+    const anchorSelector = ".chat-user-bubble";
+    const menuSelector = '.boxteam-chat-item-menu .monaco-menu';
     let nextIdentity = 1;
     let stopped = false;
     let observer;
@@ -6284,24 +6296,22 @@ async function startForkMenuObservation(page, article, turnId) {
     const currentState = () => {
       targetArticle = targetArticle?.isConnected ? targetArticle : root.querySelector(articleSelector);
       targetAnchor = targetArticle?.querySelector(anchorSelector) ?? null;
-      targetTrigger = targetAnchor?.querySelector(triggerSelector) ?? null;
-      targetMenu = targetTrigger?.getAttribute("aria-expanded") === "true"
-        ? root.querySelector(menuSelector)
-        : null;
-      targetPositioner = targetMenu?.closest(".anchored-overlay-positioner") ?? null;
+      targetTrigger = targetAnchor;
+      targetMenu = initialArticle.ownerDocument.querySelector(menuSelector);
+      targetPositioner = targetMenu?.closest(".context-view") ?? null;
       return {
         turnId: targetTurnId,
         article: elementInfo(targetArticle),
         initialArticleConnected: initialArticle.isConnected,
         anchor: targetAnchor ? { ...elementInfo(targetAnchor), rect: rect(targetAnchor) } : null,
         trigger: targetTrigger ? { ...elementInfo(targetTrigger), rect: rect(targetTrigger),
-          expanded: targetTrigger.getAttribute("aria-expanded") } : null,
+          expanded: Boolean(targetMenu) } : null,
         menu: targetMenu ? {
           ...elementInfo(targetMenu),
           visibility: visibility(targetMenu),
           itemCount: targetMenu.querySelectorAll('[role="menuitem"]').length,
           itemLabels: Array.from(targetMenu.querySelectorAll('[role="menuitem"]'))
-            .map((item) => item.getAttribute("aria-label")),
+            .map((item) => item.textContent),
         } : null,
         positioner: targetPositioner ? { ...elementInfo(targetPositioner), visibility: visibility(targetPositioner) } : null,
       };
@@ -6310,9 +6320,9 @@ async function startForkMenuObservation(page, article, turnId) {
       if (stopped) return;
       stopped = true;
       observer.disconnect();
-      root.removeEventListener("pointerdown", pointerListener, true);
-      root.removeEventListener("click", clickListener, true);
-      root.removeEventListener("keydown", keyListener, true);
+      initialArticle.ownerDocument.removeEventListener("pointerdown", pointerListener, true);
+      initialArticle.ownerDocument.removeEventListener("click", clickListener, true);
+      initialArticle.ownerDocument.removeEventListener("keydown", keyListener, true);
     };
     const append = (entry) => {
       if (stopped) return;
@@ -6327,9 +6337,8 @@ async function startForkMenuObservation(page, article, turnId) {
       || node === targetMenu || node === targetPositioner
       || node.matches(articleSelector)
       || node.matches(anchorSelector) && node.closest(articleSelector) !== null
-      || node.matches(triggerSelector) && node.closest(articleSelector) !== null
       || node.matches(menuSelector)
-      || node.matches(".anchored-overlay-positioner") && node.contains(targetMenu)
+      || node.matches(".context-view") && node.contains(targetMenu)
     );
     const isWithinTargetControl = (node) => node instanceof Element && (
       targetAnchor?.contains(node) || targetTrigger?.contains(node)
@@ -6357,7 +6366,7 @@ async function startForkMenuObservation(page, article, turnId) {
       currentState();
       const path = event.composedPath().filter((node) => node instanceof Element);
       const related = path.find((element) => targetArticle?.contains(element) || targetMenu?.contains(element));
-      const expanded = targetTrigger?.getAttribute("aria-expanded") === "true";
+      const expanded = Boolean(targetMenu);
       const escape = event.type === "keydown" && event.key === "Escape";
       if (!related && !(expanded && (event.type === "pointerdown" || escape))) return;
       append({ kind: "event", eventType: event.type, key: event.type === "keydown" ? event.key : null,
@@ -6375,10 +6384,12 @@ async function startForkMenuObservation(page, article, turnId) {
       attributeOldValue: true,
       attributeFilter: ["aria-expanded", "style"],
     });
+    observer.observe(initialArticle.ownerDocument.body, { subtree: true, childList: true, attributes: true,
+      attributeOldValue: true, attributeFilter: ["style"] });
     currentState();
-    root.addEventListener("pointerdown", pointerListener, true);
-    root.addEventListener("click", clickListener, true);
-    root.addEventListener("keydown", keyListener, true);
+    initialArticle.ownerDocument.addEventListener("pointerdown", pointerListener, true);
+    initialArticle.ownerDocument.addEventListener("click", clickListener, true);
+    initialArticle.ownerDocument.addEventListener("keydown", keyListener, true);
     const stop = () => {
       cleanup();
       return { timeline, truncated };
@@ -6699,9 +6710,10 @@ async function runDefaultChildForkUi(surface) {
   let actionError;
   try {
     try {
-      await targetArticle.getByRole("button", { name: "消息操作", exact: true }).click();
-      menuObservation.afterTriggerClick = await observer.capture("after-trigger-click");
-      await source.page.getByRole("menuitem", { name: "从此消息创建分支", exact: true }).click();
+      await targetArticle.locator(".chat-user-bubble").click({ button: "right" });
+      menuObservation.afterTriggerClick = await observer.capture("after-context-menu");
+      // 原生菜单保留 100ms 的防误触窗口，鼠标松开须晚于此窗口。
+      await source.page.getByRole("menuitem", { name: "从此处创建分支（包含此项）", exact: true }).click({ delay: 120 });
     } catch (error) {
       actionError = error;
     }
@@ -6848,12 +6860,12 @@ async function runDefaultChildForkUi(surface) {
   assert.equal(childFinalPart.status, "completed", "item 锚点必须来自已闭合最终回答");
   const childTurnElement = childContainer.locator(`.chat-turn[data-turn-id="${childSuccessorTurn.turn_id}"]`);
   await childTurnElement.waitFor({ state: "visible" });
-  await childTurnElement.getByRole("button", { name: "消息操作", exact: true }).click();
-  const childUserForkButton = childContainer.getByRole("menuitem", { name: "从此消息创建分支", exact: true });
-  const childFinalForkButton = childTurnElement.locator(`[data-fork-item-id="${childFinalPart.source.item_id}"]`);
+  await childTurnElement.locator(".chat-user-bubble").click({ button: "right" });
+  const childUserForkButton = child.page.getByRole("menuitem", { name: "从此处创建分支（包含此项）", exact: true });
+  const childFinalItem = childTurnElement.locator(`.chat-markdown[data-response-sources*="${childFinalPart.source.item_id}"]`);
   await childUserForkButton.waitFor({ state: "visible" });
   assert.equal(await childUserForkButton.count(), 1, "必须定位到后继 Turn 的用户消息按钮");
-  assert.equal(await childFinalForkButton.count(), 1, "必须唯一定位到实际展示的最终回答 item 按钮");
+  assert.equal(await childFinalItem.count(), 1, "必须唯一定位到实际展示的最终回答 item");
   const [childTurnPointResponse] = await Promise.all([
     child.page.waitForResponse((response) => {
       const url = new URL(response.url());
@@ -6861,7 +6873,7 @@ async function runDefaultChildForkUi(surface) {
         && url.searchParams.get("thread_id") === child.threadId
         && url.searchParams.get("turn_id") === childSuccessorTurn.turn_id;
     }, { timeout: 30_000 }),
-    childUserForkButton.click(),
+    childUserForkButton.click({ delay: 120 }),
   ]);
   assert.equal(childTurnPointResponse.status(), 200, await childTurnPointResponse.text());
   const childTurnQuery = new URL(childTurnPointResponse.url()).searchParams;
@@ -6877,8 +6889,9 @@ async function runDefaultChildForkUi(surface) {
   const childTurnDialog = child.page.getByRole("dialog", { name: "创建上下文分支", exact: true });
   await childTurnDialog.waitFor({ state: "visible" });
   await childTurnDialog.getByRole("button", { name: "取消", exact: true }).click();
-  await childTurnElement.hover();
-  await expect(childFinalForkButton).toBeVisible();
+  await childFinalItem.click({ button: "right" });
+  const childFinalForkAction = child.page.getByRole("menuitem", { name: "从此处创建分支（包含此项）", exact: true });
+  await expect(childFinalForkAction).toBeVisible();
   const [childItemPointResponse] = await Promise.all([
     child.page.waitForResponse((response) => {
       const url = new URL(response.url());
@@ -6886,7 +6899,7 @@ async function runDefaultChildForkUi(surface) {
         && url.searchParams.get("thread_id") === child.threadId
         && url.searchParams.get("item_id") === childFinalPart.source.item_id;
     }, { timeout: 30_000 }),
-    childFinalForkButton.click(),
+    childFinalForkAction.click({ delay: 120 }),
   ]);
   assert.equal(childItemPointResponse.status(), 200, await childItemPointResponse.text());
   const childItemQuery = new URL(childItemPointResponse.url()).searchParams;
@@ -6905,7 +6918,7 @@ async function runDefaultChildForkUi(surface) {
       && new URL(response.url()).pathname === sourcePath
       && new URL(response.url()).searchParams.get("thread_id") === child.threadId, { timeout: 30_000 }),
     (async () => {
-      const resources = await openOwnerResources(child);
+      const resources = await openOwnerThreads(child);
       await resources.locator(`.child-thread-item[data-thread-id="${child.threadId}"]`)
         .getByRole("button", { name: "从此线程创建分支", exact: true }).click();
     })(),
@@ -6984,7 +6997,7 @@ async function runDefaultChildForkUi(surface) {
       await tab.getByRole("button", { name: /^Close(?: \(|$)/ }).click();
       await expect(threadTab(owner)).toHaveCount(0);
       await expect(threadSurface(owner)).toHaveCount(0);
-      const resources = await openOwnerResources(source);
+      const resources = await openOwnerThreads(source);
       await resources.locator(`.child-thread-item[data-thread-id="${owner.threadId}"] .child-thread-main`).click();
       const conversation = await activateOwnerTab(owner);
       await conversation.locator(`.chat-turn[data-turn-id="${successor.turn.turn_id}"]`).waitFor({ state: "visible" });
@@ -8777,7 +8790,7 @@ async function runBackgroundMailboxRecovery(surface) {
   const blockedRuntime = await childRuntime();
   assert.equal(blockedRuntime.residency, "resident");
   assert.ok(blockedRuntime.blockers.some((blocker) => blocker.kind === "background_task"));
-  const blockerDisplay = (await openOwnerResources(child))
+  const blockerDisplay = (await openOwnerThreads(child))
     .locator(`.child-thread-item[data-thread-id="${childThread}"] .child-thread-runtime`);
   await waitUntil(async () => {
     const text = await blockerDisplay.innerText();
@@ -8843,7 +8856,21 @@ async function runBackgroundMailboxRecovery(surface) {
     "SELECT * FROM background_consumptions WHERE consumption_id=?", [consumptionId]);
   const [consumptionBefore] = await consumptionRows();
   assert.equal(consumptionBefore.acknowledged, 0, "工具返回但 canonical 未提交时禁止 ack");
-  const batch = JSON.parse(consumptionBefore.batch_json);
+  const storedMessages = await readFrozenControl(child, node,
+    "SELECT message_json FROM background_mailbox WHERE thread_id=? AND agent_id=? AND sequence>? AND sequence<=? AND (? IS NULL OR source_id=?) ORDER BY sequence",
+    [child.threadId, consumptionBefore.agent_id, consumptionBefore.after_sequence, consumptionBefore.through_sequence,
+      consumptionBefore.source_id, consumptionBefore.source_id]);
+  const messages = storedMessages.map(row => JSON.parse(row.message_json));
+  assert.equal(messages.length, consumptionBefore.message_count);
+  const batch = {
+    session_id: consumptionBefore.session_id, thread_id: consumptionBefore.thread_id,
+    agent_id: consumptionBefore.agent_id, consumption_id: consumptionBefore.consumption_id,
+    source_id: consumptionBefore.source_id, messages,
+    interrupted: Boolean(consumptionBefore.interrupted), timed_out: Boolean(consumptionBefore.timed_out),
+    last_message_id: messages.at(-1).message_id,
+    collected_at: consumptionBefore.collected_at.replace(/\+00:00$/, "Z"),
+    tool_result_identity: JSON.parse(consumptionBefore.tool_result_identity_json),
+  };
   assert.equal(batch.thread_id, child.threadId);
   assert.deepEqual(batch.messages.map((item) => item.message_id), messageIds);
   const canonicalResults = () => readRollout(child,
@@ -8858,7 +8885,7 @@ async function runBackgroundMailboxRecovery(surface) {
   assert.deepEqual(JSON.parse(collected.result), batch, "canonical ToolResult 必须保留原冻结 batch");
   const [consumptionAfter] = await consumptionRows();
   assert.equal(consumptionAfter.acknowledged, 1);
-  assert.equal(consumptionAfter.batch_json, consumptionBefore.batch_json);
+  assert.deepEqual(consumptionAfter, { ...consumptionBefore, acknowledged: 1 });
   const canonicalAfter = await canonicalResults();
   // stream attempt 与 checkpoint ToolMessage 是既有的两类载体；同类不能重复，公开投影只选一条。
   const carrierKinds = canonicalAfter.map((item) => {
@@ -9149,13 +9176,14 @@ async function runChildFifoAndResidency(surface) {
   for (const threadId of [child.threadId, sibling.threadId]) {
     assert.equal(await owner.page.locator(`button[data-session-id="${threadId}"]`).count(), 0, "child 不得进入左侧 Session 导航");
   }
-  let childRow = threadSurface(owner).locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
-  const siblingRow = threadSurface(owner).locator(`.child-thread-item[data-thread-id="${sibling.threadId}"]`);
+  const threadNavigation = await openOwnerThreads(owner);
+  let childRow = threadNavigation.locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
+  const siblingRow = threadNavigation.locator(`.child-thread-item[data-thread-id="${sibling.threadId}"]`);
   await waitUntil(async () => !(await childRow.locator(".child-thread-report-link").innerText()).includes("新报告"), "来源报告读取后取消精确 child 未读");
   assert.ok((await siblingRow.locator(".child-thread-report-link").innerText()).includes("新报告"), "读取一个 child 不得确认 sibling 报告");
   await childRow.locator(".child-thread-main").click();
   await (await activateOwnerTab(child)).getByTestId("composer-input").fill("child 独立草稿");
-  const childResources = await openOwnerResources(child);
+  const childResources = await openOwnerThreads(child);
   await childResources.locator(`.child-thread-item[data-thread-id="${sibling.threadId}"] .child-thread-main`).click();
   const siblingComposer = (await activateOwnerTab(sibling)).getByTestId("composer-input");
   assert.equal(await siblingComposer.inputValue(), "");
@@ -9209,7 +9237,7 @@ async function runChildFifoAndResidency(surface) {
   assert.equal(withBlocker.runtime.residency, "resident");
   assert.equal(withBlocker.runtime.execution_state, "active", "runtime lease 必须由权威 active 状态表达");
   assert.equal(withBlocker.runtime.cold_eligible, false, "active/queued lease 必须阻止卸载");
-  childRow = (await openOwnerResources(child)).locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
+  childRow = (await openOwnerThreads(child)).locator(`.child-thread-item[data-thread-id="${child.threadId}"]`);
   await waitUntil(async () => {
     const text = await childRow.locator(".child-thread-runtime").innerText();
     return withBlocker.runtime.blockers.every((blocker) => text.includes(blocker.reason));
@@ -11372,7 +11400,7 @@ async function runForkSuccessorRewind(surfaces) {
   assert.ok(index >= 0);
   await visitTranscriptIndex(main.owner, transcript, index);
   const article = threadSurface(main.owner).locator(`.chat-turn[data-turn-id="${main.first.sent.turnId}"]`);
-  await article.getByRole("button", { name: "消息操作", exact: true }).click();
+  await article.locator(".chat-user-bubble").click({ button: "right" });
   await main.owner.page.getByRole("menuitem", { name: "编辑并从此处继续", exact: true }).click();
   await article.getByRole("textbox", { name: "编辑用户消息", exact: true }).fill(replacement);
   const replayPath = `/api/v1/sessions/${main.owner.sessionId}/messages/${main.first.sent.accepted.message_id}/replay`;
@@ -12437,6 +12465,7 @@ page.on("response", (response) => {
   const session = /^\/api\/v1\/sessions\/([^/]+)$/.exec(url.pathname);
   const fileTreeSettings = /^\/api\/v1\/sessions\/([^/]+)\/file-tree-settings$/.exec(url.pathname);
   const goal = /^\/api\/v1\/sessions\/([^/]+)\/goal$/.exec(url.pathname);
+  const sessionTasks = url.pathname === "/api/v1/persistent-tasks" ? url.searchParams.get("session_id") : null;
   const resources = /^\/api\/v1\/sessions\/([^/]+)\/resources$/.exec(url.pathname);
   const attachmentContent = /^\/api\/v1\/sessions\/([^/]+)\/attachments\/content$/.exec(url.pathname);
   const job = /^\/api\/v1\/jobs\/([^/]+)$/.exec(url.pathname);
@@ -12444,7 +12473,7 @@ page.on("response", (response) => {
   const forkContext = /^\/api\/v1\/sessions\/([^/]+)\/fork-context$/.exec(url.pathname);
   if (response.status() === 409 || history && [200, 404].includes(response.status())
       || (pending || breadcrumb || catalogChildren || mainThread) && response.status() === 404
-      || (session || fileTreeSettings || goal || resources || attachmentContent) && response.status() === 404
+      || (session || fileTreeSettings || goal || sessionTasks || resources || attachmentContent) && response.status() === 404
       || job && [200, 404].includes(response.status())
       || admission && response.request().method() === "POST" && response.status() === 200) {
     const request = response.request();
@@ -12452,10 +12481,10 @@ page.on("response", (response) => {
       pageId: page.diagnosticId, ...requestDocuments.get(request),
       kind: historyKind ?? (pending ? "pending" : breadcrumb ? "breadcrumb" : catalogChildren ? "catalog_children"
         : mainThread ? "main_thread" : session ? "session" : fileTreeSettings ? "file_tree_settings"
-          : goal ? "goal" : resources ? "resources" : attachmentContent ? "attachment_content" : job ? "job"
+          : goal ? "goal" : sessionTasks ? "session_tasks" : resources ? "resources" : attachmentContent ? "attachment_content" : job ? "job"
             : admission ? "admission" : forkContext ? "fork_context" : null),
       sessionId: history?.[1] ?? pending?.[1] ?? mainThread?.[1] ?? session?.[1] ?? fileTreeSettings?.[1]
-        ?? goal?.[1] ?? resources?.[1] ?? attachmentContent?.[1] ?? admission?.[1] ?? forkContext?.[1] ?? null,
+        ?? goal?.[1] ?? sessionTasks ?? resources?.[1] ?? attachmentContent?.[1] ?? admission?.[1] ?? forkContext?.[1] ?? null,
       nodeId: breadcrumb?.[1] ?? (catalogChildren ? url.searchParams.get("parent_node_id") : null), jobId: job?.[1] ?? null,
       attachmentFileId: attachmentContent ? url.searchParams.get("file_id") : null,
       threadId: history?.[3] ?? admission?.[2] ?? null,

@@ -82,7 +82,7 @@ describe("ChatTurn response 展示", () => {
     expect(html).not.toContain("旧历史正文");
   });
 
-  test("默认主线流式 reasoning 只显示可信状态，不挂载原始正文", () => {
+  test("默认主线不重复状态栏的思考提示，也不挂载原始 reasoning", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -116,8 +116,8 @@ describe("ChatTurn response 展示", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain('data-status-kind="work-summary"');
-    expect(html).toContain("正在思考");
+    expect(html).not.toContain('data-status-kind="work-summary"');
+    expect(html).not.toContain("正在思考");
     expect(html).not.toContain(rawReasoning);
     expect(html).not.toContain("chat-thinking-body");
   });
@@ -148,7 +148,7 @@ describe("ChatTurn response 展示", () => {
     expect(html.match(/已由用户中断/g)?.length).toBe(1);
   });
 
-  test("压缩 Activity 的运行中和终态都显示在消息正文下方", () => {
+  test("压缩 Activity 的终态保留在消息正文下方", () => {
     const value = conversation("done");
     value.displayMode = "live";
     value.source = "pending";
@@ -207,7 +207,7 @@ describe("ChatTurn response 展示", () => {
     expect(value.messageStream.activeState?.kind).toBe("terminal");
   });
 
-  test("进行中的压缩 Activity 显示实时状态", () => {
+  test("进行中的 Activity 不再占用消息正文", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -244,9 +244,9 @@ describe("ChatTurn response 展示", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain("正在压缩上下文");
-    expect(html).toContain('class="chat-inline-activity is-running"');
-    expect(html).toContain('data-activity-id="compaction_running"');
+    expect(html).not.toContain("正在压缩上下文");
+    expect(html).not.toContain('class="chat-inline-activity is-running"');
+    expect(html).not.toContain('data-activity-id="compaction_running"');
   });
 
   test("终态消息流展示所有通用 Activity 的结果", () => {
@@ -295,7 +295,7 @@ describe("ChatTurn response 展示", () => {
     expect(html).toContain('data-activity-id="unknown_provider"');
   });
 
-  test("消息流进入 interrupting 时显示正在中断而不是已中断", () => {
+  test("正在中断提示移入状态栏，正文不提前显示已中断", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -311,9 +311,9 @@ describe("ChatTurn response 展示", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain('data-status-kind="interrupting"');
-    expect(html).toContain("正在中断本轮任务");
-    expect(html).toContain("正在等待模型、工具和 Activity 完成停止确认");
+    expect(html).not.toContain('data-status-kind="interrupting"');
+    expect(html).not.toContain("正在中断本轮任务");
+    expect(html).not.toContain("正在等待模型、工具和 Activity 完成停止确认");
     expect(html).not.toContain("已由用户中断");
   });
 
@@ -372,7 +372,7 @@ describe("ChatTurn response 展示", () => {
     expect(html).toContain('data-status-kind="turn-failed"');
   });
 
-  test("消息流连接缺口和协议诊断会对用户可见", () => {
+  test("连接缺口和协议诊断不重复到正文", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -389,11 +389,11 @@ describe("ChatTurn response 展示", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain("实时消息流出现缺口，正在读取权威快照补齐");
-    expect(html).toContain("诊断：消息流 event_seq 不连续: expected=8 actual=10");
+    expect(html).not.toContain("实时消息流出现缺口，正在读取权威快照补齐");
+    expect(html).not.toContain("诊断：消息流 event_seq 不连续: expected=8 actual=10");
   });
 
-  test("消息流断开时保留重连提示和协议诊断", () => {
+  test("消息流断开提示移入状态栏", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -410,11 +410,11 @@ describe("ChatTurn response 展示", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain("实时消息流已断开，正在重连");
-    expect(html).toContain("诊断：SSE 心跳超时");
+    expect(html).not.toContain("实时消息流已断开，正在重连");
+    expect(html).not.toContain("诊断：SSE 心跳超时");
   });
 
-  test("消息流耗尽重连上限时给出可见终态而不是继续显示重连", () => {
+  test("消息流耗尽重连上限不作为正文的执行终态", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -431,12 +431,12 @@ describe("ChatTurn response 展示", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain("已停止自动重连");
+    expect(html).not.toContain("已停止自动重连");
     expect(html).not.toContain("实时消息流已断开，正在重连");
-    expect(html).toContain("诊断：无法连接 Turn 消息流: 404 Not Found");
+    expect(html).not.toContain("诊断：无法连接 Turn 消息流: 404 Not Found");
   });
 
-  test("active_state 缺少 Activity 实体时显示通用回退", () => {
+  test("缺少 Activity 实体的实时状态不占用正文", () => {
     const value = conversation("running");
     value.displayMode = "live";
     value.source = "pending";
@@ -461,9 +461,9 @@ describe("ChatTurn response 展示", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain('data-status-kind="activity"');
-    expect(html).toContain("正在处理 Activity");
-    expect(html).toContain("provider.private 的详细状态暂不可用");
+    expect(html).not.toContain('data-status-kind="activity"');
+    expect(html).not.toContain("正在处理 Activity");
+    expect(html).not.toContain("provider.private 的详细状态暂不可用");
   });
 
   test("历史 snapshot 已提供中断事实时不重复显示历史取消行", () => {

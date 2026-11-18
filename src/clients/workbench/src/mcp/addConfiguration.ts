@@ -193,7 +193,7 @@ function httpDefinition(context: InputContext): Promise<{ definition: Extract<Ma
 }
 
 export async function addMcpConfiguration(target: ManagementTarget, label: string, quickInput: IQuickInputService,
-  notifications: INotificationService, assertAccess: () => void, signal: AbortSignal, configUri?: URI | string): Promise<void> {
+  notifications: INotificationService, assertAccess: () => void, signal: AbortSignal, configUri?: URI | string, workspaceId?: string): Promise<void> {
   const frozenTarget = Object.freeze({ ...target });
   const cancellation = new CancellationTokenSource();
   const abortInput = () => cancellation.cancel();
@@ -213,7 +213,7 @@ export async function addMcpConfiguration(target: ManagementTarget, label: strin
     if (folder && (folder.gatewayId !== frozenTarget.gateway_id || folder.path !== folder.root)) {
       throw new Error(t('workbench.mcp.exactRootRequired'));
     }
-    const workspace = await selectWorkspace(frozenTarget, label, quickInput, cancellation.token, check, folder?.workspaceId);
+    const workspace = await selectWorkspace(frozenTarget, label, quickInput, cancellation.token, check, folder?.workspaceId ?? workspaceId);
     if (!workspace) return;
     const route = { gateway_id: workspace.gateway_id, workspace_id: workspace.workspace_id,
       gateway_connection_id: workspace.gateway_connection_id };

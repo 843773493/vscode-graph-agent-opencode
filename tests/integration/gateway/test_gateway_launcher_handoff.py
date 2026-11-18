@@ -198,22 +198,18 @@ def test_launcher_handoff_keeps_public_listener_and_workspace_runtime(
     workspace_config = commentjson.loads(
         workspace_config_path.read_text(encoding="utf-8")
     )
-    primary_provider = next(
-        provider
-        for provider in workspace_config["llm"]["providers"]
-        if provider["id"] == "primary"
-    )
-    primary_provider.update(
+    primary_provider = workspace_config["llm"]["providers"]["primary"]
+    primary_provider["models"]["default"]["model"] = "big-pickle"
+    primary_provider["defaults"].update(
         {
             "endpoint": "https://opencode.ai/zen/v1",
-            "model": "big-pickle",
             "api_key": "${LAUNCHER_HANDOFF_MODEL_KEY}",
             "custom_llm_provider": "openai",
         }
     )
     workspace_config["agents"]["default"]["model"] = {
-        "primary_provider": "primary",
-        "fallback_providers": [],
+        "primary": {"provider_id": "primary", "model_id": "default"},
+        "fallbacks": [],
     }
     workspace_config_path.write_text(
         json.dumps(workspace_config, ensure_ascii=False, indent=2) + "\n",

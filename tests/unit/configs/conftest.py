@@ -15,6 +15,30 @@ from configs.maintenance.workspace_identity_migration import (
 )
 
 
+@pytest.fixture
+def legacy_model_configuration() -> dict[str, object]:
+    return {
+        "config_version": 2,
+        "llm": {"providers": [{
+            "id": provider_id, "model": model,
+            "endpoint": "https://example.invalid/v1", "custom_llm_provider": "openai",
+            "api_key": key,
+            "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True,
+                                                                        "supports_reasoning": True},
+                         "supports_reasoning": {"reasoning_content": True}},
+            "request_options": {"overrides": {"extra_body": {"reasoning_effort": "max", "custom": True}},
+                                "default_headers": {"X-Test": "kept"}, "no_proxy": True},
+        } for provider_id, model, key in (
+            ("primary", "user-model", "${USER_MODEL_KEY}"),
+            ("backup_1", "backup-model", "secret:sec_0123456789abcdef0123456789abcdef"),
+            ("backup_2", "second-backup", "${SECOND_MODEL_KEY}"),
+        )]},
+        "agents": {"default": {"model": {
+            "primary_provider": "primary", "fallback_providers": ["backup_2", "backup_1"], "temperature": 0.2,
+        }}},
+    }
+
+
 @dataclass
 class LegacyGateway:
     directory: Path

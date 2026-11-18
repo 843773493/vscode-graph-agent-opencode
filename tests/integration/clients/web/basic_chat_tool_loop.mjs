@@ -8,6 +8,7 @@ import { webSelectors } from "../../../clients/selectors/web-selectors.mjs";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
 import { Perf } from "../../../harness/js/performance.mjs";
 import { observePage } from "../../../harness/js/browser-performance.mjs";
+import { openSessionThreads } from "../../../support/workbench/session-navigation.mjs";
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -268,7 +269,8 @@ async function verifyParallelThreads(page, owner, initialJobId) {
   await right.getByRole("tab", { name: "运行与连接", exact: true }).click();
   await expect(mainResourceToggle).toHaveAttribute("aria-expanded", "false");
   await expect(main.getByRole("tab", { name: "运行与连接", exact: true })).toHaveCount(0);
-  await right.locator(`.child-thread-item[data-thread-id="${fork.thread_id}"] .child-thread-main`).click();
+  const threads = await openSessionThreads(page, owner);
+  await threads.locator(`.child-thread-item[data-thread-id="${fork.thread_id}"] .child-thread-main`).click();
   const child = groups.nth(1).locator(`${threadSelector}[data-thread-id="${fork.thread_id}"]`);
   await expect(main).toBeVisible();
   await expect(child).toBeVisible();
@@ -464,8 +466,9 @@ async function verifyReplayFailure(page, owner, turnId, messageId, jobId) {
   await page.route(replayUrl, rejectReplay);
   try {
     await composer.fill(draft);
-    await turn.getByRole("button", { name: "消息操作", exact: true }).click();
-    await thread.getByRole("menuitem", { name: "编辑并从此处继续", exact: true }).click();
+    await turn.locator(".chat-user-bubble").click({ button: "right" });
+    // 原生菜单保留 100ms 的防误触窗口，鼠标松开须晚于此窗口。
+    await page.getByRole("menuitem", { name: "编辑并从此处继续", exact: true }).click({ delay: 120 });
     const edit = turn.getByRole("textbox", { name: "编辑用户消息", exact: true });
     await expect(edit).toHaveValue(userMessage);
     await edit.fill(edited);
@@ -630,11 +633,9 @@ try {
   const updated = await api(page, `/api/v1/sessions/${sessionId}`, {
     method: "PATCH",
     headers: workspaceHeaders,
-    body: JSON.stringify({ provider_id: "primary" }),
+    body: JSON.stringify({ model: { provider_id: "primary", model_id: "default" } }),
   });
-  if (updated?.data?.current_provider_id !== "primary") {
-    throw new Error("浏览器工具循环会话没有切换到 primary provider");
-  }
+  expect(updated?.data?.current_model).toEqual({ provider_id: "primary", model_id: "default" });
   const mainThread = await api(page, `/api/v1/sessions/${sessionId}/main-thread`, { headers: workspaceHeaders });
   expect(mainThread.data.session_id).toBe(sessionId);
   const threadId = mainThread.data.thread_id;

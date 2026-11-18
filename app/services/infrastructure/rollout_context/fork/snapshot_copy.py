@@ -126,6 +126,8 @@ def prepare_target_snapshot(
         connection.execute(HISTORY_NAMESPACE_SCHEMA_SQL)
         connection.execute("BEGIN IMMEDIATE")
         # 队列/claim 属于当前执行控制，不能随历史复制到目标。
+        connection.execute("DELETE FROM user_questions")
+        connection.execute("UPDATE user_question_state SET revision=0 WHERE singleton_id=1")
         connection.execute("DELETE FROM execution_queue")
         connection.execute("UPDATE execution_queue_revision SET revision=0 WHERE singleton_id=1")
         connection.execute(load_sql(__package__, "migrations/drop_context_epoch_pending_namespace.sql"))

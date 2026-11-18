@@ -663,7 +663,8 @@ async def test_real_provider_provenance_survives_cold_history(
     session = _response(await client.post("/api/v1/sessions", json={"title": "真实 Provider provenance"}), artifacts / "created-session.json")["data"]
     session_id, thread_id = session["session_id"], session["thread_id"]
     # 只选择隔离 Session 已配置的真实 Responses Provider，不改全局配置或增加请求覆盖。
-    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "backup_3"}), artifacts / "selected-provider.json")["data"]
+    session = _response(await client.patch(f"/api/v1/sessions/{session_id}", json={"model": {"provider_id": "backup_3", "model_id": "default"}}), artifacts / "selected-model.json")["data"]
+    assert session["current_model"] == {"provider_id": "backup_3", "model_id": "default"}
     resolver = get_session_path_resolver(workspace / ".boxteam" / "sessions")
     session_node = resolver.resolve_session_node(session_id)
     thread_node = resolver.resolve_thread_node(session_id, thread_id)

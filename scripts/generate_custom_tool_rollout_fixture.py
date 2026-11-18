@@ -29,6 +29,7 @@ from app.core.session_catalog_resolver import SessionCatalogPathResolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -456,13 +457,9 @@ def _create_session(
     ):
         bundle = seed_catalog_session_bundle(
             sessions_dir, session_id, title=title,
-            current_agent_id="default", current_provider_id="primary",
+            current_agent_id="default", current_model=ModelReferenceDTO(provider_id="primary", model_id="default"),
             session_kind="context_fork" if fork_source else "normal",
             context_source_session_id=fork_source[0] if fork_source else None,
-            updated_at=datetime.fromisoformat(_stamp(0)),
-        )
-        _catalog_resolver(sessions_dir).catalog_store.update_session_configuration(
-            session_id, current_agent_id="default", current_provider_id="primary",
             updated_at=datetime.fromisoformat(_stamp(0)),
         )
     thread_id = bundle.main_thread_id

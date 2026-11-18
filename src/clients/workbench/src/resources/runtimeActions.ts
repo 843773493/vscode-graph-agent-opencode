@@ -5,10 +5,8 @@ import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/di
 import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
-import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
 import { IEditorService } from '../../upstream/src/vs/workbench/services/editor/common/editorService.js';
 import { IViewsService } from '../../upstream/src/vs/workbench/services/views/common/viewsService.js';
-import { getWorkbenchContribution } from '../../upstream/src/vs/workbench/common/contributions.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
 import { controlWorkspaceResource, getWorkspaceResource, listWorkspaceResources, type ResourceAction, type ResourceThreadRef, type WorkspaceResourceDTO } from '../../../web/src/api/workspaceResources.js';
 import { gatewayWorkspaceKey, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
@@ -18,9 +16,7 @@ import { captureSearchOwner, type SearchInvocationOptions } from '../search/targ
 import type { ResourcePick } from '../search/quickAccessPicks.js';
 import { ThreadInput } from '../threadInput.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { workspaceActionCommands } from '../search/workspaceActions.js';
 import type { WorkspacePanel } from '../workspacePanel.js';
-import { WorkspacePanelState } from '../workspacePanelState.js';
 
 export const resourceActionCommand = (action: ResourceAction) => `boxteam.resource.${action}`;
 export const resourceFocusCommand = 'boxteam.resource.focus';
@@ -142,7 +138,7 @@ async function runResourceAction(accessor: ServicesAccessor, action: ResourceAct
 registerAction2(class extends Action2 {
   constructor() { super({ id: resourceFocusCommand, title: { value: t('workbench.resource.focus'), original: actionTitles['workbench.resource.focus'] }, f1: false }); }
   async run(accessor: ServicesAccessor, supplied: RuntimeResourceCommandTarget & { resource: WorkspaceResourceDTO }): Promise<void> {
-    const commands = accessor.get(ICommandService), views = accessor.get(IViewsService);
+    const views = accessor.get(IViewsService);
     const owner = { ...supplied.owner }, resource = structuredClone(supplied.resource);
     const initialGateway = workspaceContext.getSnapshot().gatewayId;
     let invalidated = false;
@@ -158,19 +154,8 @@ registerAction2(class extends Action2 {
       if (resource.workspace_id !== owner.workspaceId) throw new Error(t('workbench.resource.ownerMismatch'));
       if (resource.kind !== 'terminal' && resource.kind !== 'browser') throw new Error(t('workbench.resource.unsupportedFocusKind'));
       if (resource.status === 'deleted') throw new Error(t('workbench.resource.deleted'));
-      const key = gatewayWorkspaceKey(owner);
-      if (workspaceContext.getSnapshot().activeId !== key) {
-        await commands.executeCommand(workspaceActionCommands.activate, owner);
-        assertAccess();
-        // 原导航的 React 发布可能尚未提交，沿已有镜像回读，不自行写入活动工作区。
-        await workspaceContext.refresh();
-      }
-      await getWorkbenchContribution<WorkspacePanelState>(WorkspacePanelState.ID).whenRestored(key);
-      assertAccess();
-      if (workspaceContext.getSnapshot().activeId !== key) throw new Error(t('workbench.resource.workspaceChanged'));
       const view = await views.openView<WorkspacePanel>(resource.kind === 'terminal' ? 'boxteam.workspace.terminal' : 'boxteam.browser.view', true);
       assertAccess();
-      if (workspaceContext.getSnapshot().activeId !== key) throw new Error(t('workbench.resource.workspaceChanged'));
       if (!view) throw new Error(t('workbench.resource.panelUnavailable'));
       view.revealResource(owner, resource.resource_id);
     } finally { release(); releaseGateway(); }

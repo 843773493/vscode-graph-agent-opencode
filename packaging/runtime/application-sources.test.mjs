@@ -75,6 +75,7 @@ test("复制清单保留内容与源树，并过滤全部 Python 字节码缓存
     ["node_modules/@xterm/xterm/lib/xterm.js", Buffer.from("static asset 1")],
     ["node_modules/@xterm/addon-fit/lib/addon-fit.js", Buffer.from("static asset 2")],
     ["node_modules/@xterm/addon-search/lib/addon-search.js", Buffer.from("static asset 3")],
+    ["node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js", Buffer.from("unicode11 addon")],
     ["src/clients/web/node_modules/@vscode/codicons/dist/codicon.css", Buffer.from("static asset 4")],
     ["src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf", Buffer.from("static asset 5")],
     ["pyproject.toml", Buffer.from("[project]\nname = 'fixture'\n")],

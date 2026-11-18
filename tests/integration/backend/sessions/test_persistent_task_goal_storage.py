@@ -24,7 +24,6 @@ from app.services.business.session_context_query.resources import (
     workspace_session_inventory_uri,
 )
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
-from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 from tests.integration.backend.sessions.test_persistent_tasks import (
     ROOT,
     _configuration,
@@ -63,8 +62,11 @@ async def _goal(case, session_id: str) -> dict | None:
 def _goal_state(case, session_id: str) -> dict:
     """内部记账只通过原任务 owner 读取，公开 Goal 不再携带 Job 明细。"""
     resolver = get_session_path_resolver(case.workspace / ".boxteam/sessions")
-    with WorkspaceStateStore(workspace_root=case.workspace) as state:
-        goal = PersistentTaskStore(state, workspace_id=resolver.workspace_id, paths=resolver).goal_read(session_id)
+    database = case.workspace / ".boxteam/state/workspace.sqlite"
+    # 真实服务持有写入所有权；观察原 owner 的读取转换，不另开写入实例。
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        goal = PersistentTaskStore._goal(connection, resolver.workspace_id, session_id, resolver.main_thread_id(session_id))
     assert goal is not None
     return goal.model_dump(mode="json")
 
@@ -799,10 +801,12 @@ async def test_goal_restart_after_execution_before_continuation_record_reconcile
         await _job(case, wakeups[1][1])
         assert case.call_count(session_id, thread_id) == 3
         async with asyncio.timeout(5):
-            while (goal := await _goal(case, session_id))["tokens_used"] != 22:
+            while (goal := await _goal(case, session_id))["tokens_used"] != 33:
                 await asyncio.sleep(0.05)
         assert set(_goal_state(case, session_id)["accounted_jobs"]) == {row[1] for row in wakeups}
-        assert all(account["tokens"] == 11 for account in _goal_state(case, session_id)["accounted_jobs"].values())
+        assert {job_id: account["tokens"] for job_id, account in _goal_state(case, session_id)["accounted_jobs"].items()} == {
+            wakeups[0][1]: 11, wakeups[1][1]: 22,
+        }
         assert _sql(case.workspace, session_id, thread_id, "SELECT COUNT(*) FROM turn_records") == [(0,)]
         await case.restart(hard=True)
         assert (await _goal(case, session_id))["status"] == "complete"

@@ -1,5 +1,6 @@
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
+import { truncateDisplayText } from "../../../utils/displayText";
 
 export const LARGE_USER_MESSAGE_RENDER_LIMIT = 20_000;
 
@@ -14,7 +15,7 @@ function ProgressiveUserMessage({
   React.useEffect(() => setExpanded(false), [content]);
   const truncated = content.length > LARGE_USER_MESSAGE_RENDER_LIMIT && !expanded;
   const visibleContent = truncated
-    ? `${content.slice(0, LARGE_USER_MESSAGE_RENDER_LIMIT)}\n\n…`
+    ? `${truncateDisplayText(content, LARGE_USER_MESSAGE_RENDER_LIMIT)}\n\n…`
     : content;
 
   return (

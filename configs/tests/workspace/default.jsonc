@@ -1,88 +1,150 @@
 {
   "$schema": "../../workspace_schema.jsonc",
   "llm": {
-    "providers": [
-      {
-        "id": "primary",
-        "endpoint": "https://opencode.ai/zen/v1",
-        "model": "big-pickle",
-        "api_key": "${OPENCODE_ZEN_API_KEY}",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {"supports_function_calling": true, "supports_reasoning": true},
-          "supports_reasoning": {"reasoning_content": true}
-        }
-      },
-      {
-        "id": "backup_1",
-        "endpoint": "https://api.kilo.ai/api/gateway",
-        "model": "openrouter/free",
-        "api_key": "${KILO_API_KEY}",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {"supports_function_calling": true, "supports_reasoning": true},
-          "supports_reasoning": {"reasoning_content": true}
-        }
-      },
-      {
-        "id": "backup_2",
-        "endpoint": "https://openrouter.ai/api/v1",
-        "model": "openrouter/free",
-        "api_key": "${OPENROUTER_API_KEY}",
-        "custom_llm_provider": "openrouter",
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {"supports_function_calling": true, "supports_reasoning": true},
-          "supports_reasoning": {"reasoning_content": true}
-        }
-      },
-      {
-        "id": "backup_3",
-        "endpoint": "https://newapi.hyf2333.top/v1",
-        "model": "gpt-6-luna",
-        "api_key": "${CCTQ_API_KEY}",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "responses",
-          "model_info": {"supports_vision": true, "supports_function_calling": true, "supports_reasoning": true},
-          "supports_reasoning": {"reasoning_items": {"summary": true, "encrypted_content": true}},
-          "replay_policy": {"encrypted_content": "same_source"}
-        },
-        "request_options": {
-          "overrides": {
-            "reasoning": {
-              "effort": "max",
-              "summary": "auto"
-            }
-          }
-        }
-      },
-      {
-        "id": "backup_4",
-        "endpoint": "https://chatgpt.com/backend-api/codex",
-        "model": "gpt-6-luna",
-        "custom_llm_provider": "chatgpt",
-        "api_mode": {
-          "protocol": "responses",
-          "model_info": {"supports_vision": true, "supports_function_calling": true, "supports_reasoning": true},
-          "supports_reasoning": {"reasoning_items": {"summary": true, "encrypted_content": true}},
-          "replay_policy": {"encrypted_content": "same_source"}
-        },
-        "auth": {
-          "type": "oauth",
-          "method": "chatgpt"
-        },
-        "request_options": {
-          "overrides": {
-            "reasoning": {
-              "effort": "max"
+    "providers": {
+      "primary": {
+        "defaults": {
+          "endpoint": "https://opencode.ai/zen/v1",
+          "api_key": "${OPENCODE_ZEN_API_KEY}",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
             }
           }
         },
+        "models": {
+          "default": {
+            "model": "big-pickle"
+          }
+        }
+      },
+      "backup_1": {
+        "defaults": {
+          "endpoint": "https://api.kilo.ai/api/gateway",
+          "api_key": "${KILO_API_KEY}",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "openrouter/free"
+          }
+        }
+      },
+      "backup_2": {
+        "defaults": {
+          "endpoint": "https://openrouter.ai/api/v1",
+          "api_key": "${OPENROUTER_API_KEY}",
+          "custom_llm_provider": "openrouter",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "openrouter/free"
+          }
+        }
+      },
+      "backup_3": {
+        "defaults": {
+          "endpoint": "https://newapi.hyf2333.top/v1",
+          "api_key": "${CCTQ_API_KEY}",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "responses",
+            "model_info": {
+              "supports_vision": true,
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_items": {
+                "summary": true,
+                "encrypted_content": true
+              }
+            },
+            "replay_policy": {
+              "encrypted_content": "same_source"
+            }
+          },
+          "request_options": {
+            "parameters": {
+              "reasoning": {
+                "effort": "max",
+                "summary": "auto"
+              }
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "gpt-6-luna"
+          }
+        }
+      },
+      "backup_4": {
+        "defaults": {
+          "endpoint": "https://chatgpt.com/backend-api/codex",
+          "custom_llm_provider": "chatgpt",
+          "api_mode": {
+            "protocol": "responses",
+            "model_info": {
+              "supports_vision": true,
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_items": {
+                "summary": true,
+                "encrypted_content": true
+              }
+            },
+            "replay_policy": {
+              "encrypted_content": "same_source"
+            }
+          },
+          "auth": {
+            "type": "oauth",
+            "method": "chatgpt"
+          },
+          "request_options": {
+            "parameters": {
+              "reasoning": {
+                "effort": "max"
+              }
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "gpt-6-luna"
+          }
+        }
       }
-    ]
+    }
   },
   "default_agent": "default",
   "agents": {
@@ -101,12 +163,27 @@
         "system_prompt": "你是一个面向工程团队的默认工作区助手：Workspace Assistant。优先提供准确、可执行、可验证的回答。涉及代码时，优先给出问题分析、修改建议和可以直接使用的示例。信息不足时不要编造，要明确说明缺失信息并给出下一步建议。"
       },
       "model": {
-        "primary_provider": "primary",
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4"
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          }
         ]
       },
       "tools": {
@@ -138,7 +215,10 @@
             "tool_id": "fetch_webpage",
             "options": {
               "embedding": {
-                "provider_id": "backup_2",
+                "model_ref": {
+                  "provider_id": "backup_2",
+                  "model_id": "default"
+                },
                 "model": "openai/text-embedding-3-small"
               }
             }
@@ -333,12 +413,27 @@
         "system_prompt": "你是一个偏工程实践的编程助手：Coding Assistant。输出代码时优先保证正确性、可读性、边界条件和异常处理。"
       },
       "model": {
-        "primary_provider": "primary",
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4"
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          }
         ]
       },
       "tools": {
@@ -393,12 +488,27 @@
         "fallback_prompt": "当信息不足时，请明确指出无法确认的部分，并给出建议的补充检查项。"
       },
       "model": {
-        "primary_provider": "primary",
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4"
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          }
         ]
       },
       "tools": {
@@ -456,12 +566,27 @@
         "fallback_prompt": "当检索结果不足时，先说明现有证据有限，再给出最稳妥的判断。"
       },
       "model": {
-        "primary_provider": "primary",
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4"
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          }
         ]
       },
       "tools": {
@@ -500,5 +625,5 @@
   "development": {
     "test_tools": true
   },
-  "config_version": 2
+  "config_version": 3
 }

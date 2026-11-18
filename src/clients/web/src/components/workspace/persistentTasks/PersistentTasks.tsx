@@ -82,18 +82,14 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
   }, [intent?.sequence, task?.task_id]);
   const back = () => { setEditor(null); state.select(""); };
 
-  return <section className={`persistent-tasks${sessionId ? " persistent-tasks-session" : ""}${detailOpen ? " has-detail" : ""}`} aria-label={sessionId ? t("tasks.list.sessionAria") : t("tasks.list.workspaceAria")}>
-    <header className="persistent-task-heading">
+  return <section className={`persistent-tasks panel-feedback-host${sessionId ? " persistent-tasks-session" : ""}${detailOpen ? " has-detail" : ""}`} aria-label={sessionId ? t("tasks.list.sessionAria") : t("tasks.list.workspaceAria")}>
+    <header className="persistent-task-heading" aria-busy={!state.loaded || preparing}>
       <div><h2>{sessionId ? t("tasks.list.sessionTitle") : t("tasks.list.title")}</h2><span className="persistent-task-hint">{sessionId ? t("tasks.list.sessionHint") : t("tasks.list.workspaceHint")}</span></div>
       <button type="button" disabled={state.busy || preparing} onClick={() => { state.select(""); setEditor({ task: null, key: crypto.randomUUID(), template: null }); }}>{t("tasks.list.create")}</button>
-      <button type="button" disabled={state.busy} onClick={() => void state.refresh()}>{t("tasks.list.refresh")}</button>
+      <button type="button" disabled={state.busy} onClick={() => void state.refresh()}><span className={`codicon codicon-refresh${!state.loaded ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />{t("tasks.list.refresh")}</button>
     </header>
-    {navigationError ? <div role="alert">{navigationError}</div> : null}
-    {activity.error ? <div role="alert">{activity.error}</div> : null}
-    {state.error ? <div role="alert">{state.error}</div> : null}
-    {!state.loaded && !state.error ? <p role="status">{t(sessionId ? "tasks.list.loadingSession" : "tasks.list.loadingWorkspace")}</p> : null}
-    <TaskRuntimeStatus runtime={state.runtime} />
-    {state.loaded ? <div className="persistent-task-overview"><span>{t("tasks.list.count", formatNumber(state.items.length))}</span><span>{t("tasks.list.activeCount", formatNumber(state.items.filter((item) => item.lifecycle === "active").length))}</span><span>{t("tasks.list.recoveringCount", formatNumber(state.items.filter((item) => item.recovering).length))}</span></div> : null}
+    {navigationError || activity.error || state.error || state.history?.error ? <div className="panel-feedback" role="alert">{[navigationError, activity.error, state.error, state.history?.error].filter(Boolean).join("\n")}</div> : null}
+    <div className="persistent-task-overview"><TaskRuntimeStatus runtime={state.runtime} /><span>{t("tasks.list.count", formatNumber(state.items.length))}</span><span>{t("tasks.list.activeCount", formatNumber(state.items.filter((item) => item.lifecycle === "active").length))}</span><span>{t("tasks.list.recoveringCount", formatNumber(state.items.filter((item) => item.recovering).length))}</span></div>
     <div className="persistent-task-layout">
       <div className="persistent-task-list" aria-label={t("tasks.list.aria")}>
         {state.loaded && !state.error && state.items.length === 0 ? <div className="persistent-task-empty"><span className="codicon codicon-checklist" aria-hidden="true" /><strong>{sessionId ? t("tasks.list.sessionEmpty") : t("tasks.list.empty")}</strong><p>{t("tasks.list.emptyHint")}</p></div> : null}
@@ -104,18 +100,18 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
           <span className="persistent-task-hint">{taskSchedule(item)}</span>
         </button>)}
       </div>
-      <div className="persistent-task-detail" aria-label={t("tasks.detail.aria")}>
+      <div className="persistent-task-detail" aria-busy={Boolean(state.history?.loading)} aria-label={t("tasks.detail.aria")}>
         {detailOpen ? <button className="persistent-task-back" type="button" disabled={preparing} onClick={back}>{t("tasks.detail.back")}</button> : null}
-        {editor?.template === null ? <section aria-label={t("tasks.template.aria")}>
+        {editor?.template === null ? <section aria-label={t("tasks.template.aria")} aria-busy={preparing}>
           <h3>{t("tasks.template.title")}</h3>
           <div className="persistent-task-templates">
             <button aria-label="Goal" disabled={!newGoalSessionId || preparing} onClick={() => setEditor({ ...editor, template: "goal" })}><strong>Goal</strong><span>{t("tasks.template.goalHint")}</span></button>
             {([['scheduled', t("tasks.template.scheduled"), t("tasks.template.scheduledHint")], ['script', t("tasks.type.script"), t("tasks.template.scriptHint")], ['model', t("tasks.type.model"), t("tasks.template.modelHint")], ['custom', t("tasks.template.custom"), t("tasks.template.customHint")]] as const).map(([template, title, hint]) => <button aria-label={title} disabled={preparing} key={template} onClick={() => void beginTemplate(template)}><strong>{title}</strong><span>{hint}</span></button>)}
           </div>
           {!newGoalSessionId ? <p className="persistent-task-hint">{t("tasks.template.selectSession")}</p> : null}
-          {preparing ? <p role="status">{t("tasks.template.preparing")}</p> : null}
+
           <button disabled={preparing} onClick={() => setEditor(null)}>{t("tasks.template.cancel")}</button>
-        </section> : editor?.template === "goal" && newGoalSessionId ? <TaskGoalDetail key={`${gatewayWorkspaceKey(target)}:${newGoalSessionId}`} apiPort={apiPort} workspaceId={gatewayWorkspaceKey(target)} sessionId={newGoalSessionId} revision={state.items.find((item) => item.goal?.session_id === newGoalSessionId)?.revision} />
+        </section> : editor?.template === "goal" && newGoalSessionId ? <TaskGoalDetail key={`${gatewayWorkspaceKey(target)}:${newGoalSessionId}`} apiPort={apiPort} workspaceId={gatewayWorkspaceKey(target)} sessionId={newGoalSessionId} snapshot={state.sessionGoal} goal={state.items.find((item) => item.goal?.session_id === newGoalSessionId)?.goal ?? undefined} />
         : editor && editor.template && editor.template !== "goal" ? <TaskEditor apiPort={apiPort} target={target} key={editor.key} template={editor.template} initialTargetUri={editor.targetUri} configuration={editor.task?.configuration ?? undefined} busy={state.busy}
           onCancel={() => setEditor(null)} onSave={async (configuration) => {
             // 首次提交冻结编辑开始时的版本；失败重读后，用户重试才采用最新版本，草稿不重建。
@@ -127,7 +123,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
           }} /> : task ? <>
           <h3>{taskName(task)}</h3>
           <p><span className={`persistent-task-badge is-${task.lifecycle}`}>{label(task.lifecycle)}</span> {label(task.phase)}</p>
-          {task.recovering ? <p role="status">{t("tasks.detail.recovering")}</p> : null}
+
           {task.reason ? <p className="persistent-task-reason">{task.reason}</p> : null}
           {editable ? <>
             <div className="persistent-task-actions">
@@ -141,7 +137,7 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
             <dl><dt>{t("tasks.editor.trigger")}</dt><dd>{taskSchedule(task)}</dd><dt>{t("tasks.detail.workTarget")}</dt><dd><code>{editable.action?.target_uri ?? editable.action?.generation?.session_strategy?.mode}</code></dd><dt>{t("tasks.detail.nextRun")}</dt><dd>{time(task.next_run_at)}</dd><dt>{t("tasks.detail.content")}</dt><dd><pre>{editable.context?.content || t("tasks.detail.generatedContent")}</pre></dd></dl>
             <details><summary>{t("tasks.detail.advanced")}</summary><p>{t("tasks.detail.dryRunHint")}</p><code>{t("tasks.detail.taskId", task.task_id)}</code><pre>{JSON.stringify(editable, null, 2)}</pre></details>
           </> : task.goal ? <>
-            <TaskGoalDetail key={`${gatewayWorkspaceKey(target)}:${task.goal.session_id}`} apiPort={apiPort} workspaceId={gatewayWorkspaceKey(target)} sessionId={task.goal.session_id} revision={task.revision} />
+            <TaskGoalDetail key={`${gatewayWorkspaceKey(target)}:${task.goal.session_id}`} apiPort={apiPort} workspaceId={gatewayWorkspaceKey(target)} sessionId={task.goal.session_id} goal={task.goal} />
             <p className="persistent-task-hint">{t("tasks.detail.goalTarget")}</p>
             <button type="button" onClick={() => {
               setNavigationError(null);
@@ -149,10 +145,9 @@ export default function PersistentTasks({ apiPort, target, sessionId, goalSessio
             }}>{t("tasks.detail.openSession")}</button>
           </> : <div role="alert">{t("tasks.detail.unsupported", task.application_type, task.application_version)}</div>}
           <h4 ref={historyHeading} tabIndex={-1}>{t("tasks.history.title")}</h4>
-          {state.history?.error ? <div role="alert">{state.history.error}</div> : null}
           {state.history?.nextBefore ? <button disabled={state.history.loading} onClick={state.loadOlder}>{t("tasks.history.older")}</button> : null}
           {state.history?.runs.length ? <TaskRunHistory apiPort={apiPort} target={target} runs={state.history.runs} onOpenSession={onOpenSession} onOpenThread={onOpenThread} /> : !state.history?.loading && !state.history?.error ? <p className="persistent-task-hint">{t("tasks.history.empty")}</p> : null}
-          {state.history?.loading ? <p role="status">{t("tasks.history.loading")}</p> : null}
+
         </> : <div className="persistent-task-empty"><span className="codicon codicon-checklist" aria-hidden="true" /><p>{t("tasks.detail.empty")}</p></div>}
       </div>
     </div>

@@ -140,7 +140,7 @@ async def recovery_case(request: pytest.FixtureRequest) -> AsyncIterator[Recover
             )
             input_owner.accept_user_message(message, execution_identity=binding, queue_input=ExecutionQueueInput(
                 execution_binding=binding, message_id=message.message_id, agent_id="default",
-                provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+                model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
                 created_at=message.created_at.isoformat(),
             ))
             dispatch = await jobs.start_job(

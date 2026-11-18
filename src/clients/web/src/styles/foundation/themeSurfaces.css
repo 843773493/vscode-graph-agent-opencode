@@ -5,8 +5,7 @@ body {
 }
 
 [data-bt-surface="chrome"],
-.agent-sessions-panel,
-.gateway-control-sidebar {
+.agent-sessions-panel {
   background: var(--bt-chrome-surface);
   backdrop-filter: var(--bt-chrome-backdrop-filter);
 }
@@ -24,15 +23,12 @@ body {
   backdrop-filter: none;
 }
 
-[data-bt-surface="layout"],
-.gateway-control-shell,
-.gateway-control-main {
+[data-bt-surface="layout"] {
   background: transparent;
 }
 
 [data-bt-surface="panel"],
 .resource-panel,
-.gateway-control-content,
 .gateway-local-connection-card,
 .gateway-remote-connection-list article,
 .gateway-theme-section,
@@ -48,11 +44,9 @@ body {
 .auxiliary-resources-body .empty-state {
   background: transparent;
 }
-
 .sessions-filter-menu,
 .composer-view-menu,
 .composer-agent-menu,
-.composer-model-menu,
 .composer-slash-menu,
 .agent-sessions-session-menu,
 .workspace-action-menu,
@@ -68,7 +62,6 @@ body {
 
 .workspace-preview-code-scroll,
 .workspace-preview-text-editor-shell,
-.workspace-preview-text-editor,
 .workspace-markdown-preview,
 .workspace-preview-code-table,
 .workspace-preview-terminal-frame,

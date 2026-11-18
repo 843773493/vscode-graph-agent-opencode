@@ -14,7 +14,7 @@ import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/co
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { ICommandService } from '../../upstream/src/vs/platform/commands/common/commands.js';
-import { IProgressService, ProgressLocation } from '../../upstream/src/vs/platform/progress/common/progress.js';
+import { IProgressService, ProgressLocation, type IProgressRunner } from '../../upstream/src/vs/platform/progress/common/progress.js';
 import { timeout } from '../../upstream/src/vs/base/common/async.js';
 import { generateUuid } from '../../upstream/src/vs/base/common/uuid.js';
 import type { InstallPluginRequest, PluginInstallOperationDTO, PluginInventoryResultDTO, PluginRuntimeStatusDTO, PluginSourceCatalogDTO, PluginTarget, PluginUninstallResultDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
@@ -66,8 +66,10 @@ function requireInstallationOwner(target: PluginTarget, operationId: string, ope
 export class ServicePluginPackagesView extends ViewPane {
   private scope: Scope = 'workspace';
   private content: HTMLElement | undefined;
+  private feedback: HTMLElement | undefined;
   private workspaceTarget: GatewayWorkspaceRequestTarget | undefined;
   private refreshRevision = 0;
+  private refreshProgress: IProgressRunner | undefined;
   private searchInput: InputBox | undefined;
   private query = '';
   private controls: HTMLElement | undefined;
@@ -98,11 +100,12 @@ export class ServicePluginPackagesView extends ViewPane {
       this.stopRuntimeStatus();
       this.refreshRevision++;
       this.workspaceTarget = undefined;
+      if (this.content) clearNode(this.content);
       void this.refresh();
     }));
     this._register(this.onDidChangeBodyVisibility(visible => {
       if (visible) void this.refresh();
-      else { this.refreshRevision++; this.stopRuntimeStatus(); }
+      else { this.refreshRevision++; this.stopRuntimeStatus(); this.refreshProgress?.done(); }
     }));
   }
 
@@ -126,6 +129,7 @@ export class ServicePluginPackagesView extends ViewPane {
       const target = managementGateway('extensions');
       this.rememberedWorkspaces.set(this.targetKey(target), this.selectorWorkspaces[index as number]);
       this.workspaceTarget = undefined;
+      if (this.content) clearNode(this.content);
       this.scope = 'workspace';
       void this.refresh();
     }));
@@ -141,7 +145,7 @@ export class ServicePluginPackagesView extends ViewPane {
       const target = { ...managementGateway('extensions') };
       const actions = (['workspace', 'gateway', 'defaults'] as const).map(scope => new Action(`plugins.scope.${scope}`,
         t(scope === 'workspace' ? 'plugins.scopeWorkspace' : scope === 'gateway' ? 'plugins.scopeGateway' : 'plugins.scopeDefaults'), undefined, true,
-        async () => { this.scope = scope; await this.refresh(); }));
+        async () => { if (scope !== this.scope && this.content) clearNode(this.content); this.scope = scope; await this.refresh(); }));
       actions.push(new Action('plugins.install', t('plugins.installPackage'), undefined, true,
         () => this.commands.executeCommand('boxteam.plugins.installPackage', target)));
       actions.push(new Action('plugins.sources', t('plugins.manageSources'), undefined, true,
@@ -151,6 +155,9 @@ export class ServicePluginPackagesView extends ViewPane {
     }));
     toolbar.push([gatewayAction, workspaceAction, moreAction], { icon: true, label: false });
     this.content = append(container, $('.service-plugin-packages-content'));
+    this.feedback = append(container, $('.service-plugin-feedback'));
+    this.feedback.setAttribute('role', 'alert');
+    this.feedback.hidden = true;
     void this.refresh();
   }
 
@@ -171,6 +178,7 @@ export class ServicePluginPackagesView extends ViewPane {
       }
     };
     checkTarget();
+    if (scope !== this.scope && this.content) clearNode(this.content);
     this.scope = scope;
     this.search('');
     await this.refresh();
@@ -186,7 +194,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const wasVisible = this.content !== undefined && !this.content.hidden;
     if (this.controls) this.controls.hidden = otherView;
     if (this.content) this.content.hidden = otherView;
-    if (otherView) { this.refreshRevision++; this.stopRuntimeStatus(); }
+    if (otherView) { this.refreshRevision++; this.stopRuntimeStatus(); this.refreshProgress?.done(); if (this.feedback) this.feedback.hidden = true; }
     else if (!otherView && !wasVisible && this.isBodyVisible()) void this.refresh();
     for (const section of this.content?.querySelectorAll<HTMLElement>('.service-plugin-package') ?? []) {
       section.hidden = !section.dataset.search?.includes(query.trim().toLocaleLowerCase());
@@ -199,31 +207,36 @@ export class ServicePluginPackagesView extends ViewPane {
     this.lists.length = 0;
     this.refreshRevision++;
     this.content = undefined;
+    this.refreshProgress?.done();
+    this.feedback = undefined;
     super.dispose();
   }
 
   async refresh(): Promise<void> {
     if (!this.content || !this.isBodyVisible() || this.content.hidden) return;
     this.stopRuntimeStatus();
-    this.packageActions.clear();
-    this.lists.length = 0;
     const revision = ++this.refreshRevision;
     const scope = this.scope;
     const container = this.content;
-    clearNode(container);
-    append(container, $('p')).textContent = t('plugins.loading');
+    container.inert = true;
+    if (this.feedback) this.feedback.hidden = true;
+    this.refreshProgress?.done();
+    const progress = this.refreshProgress = this.getProgressIndicator().show(true, 800);
     try {
       await this.renderPackages(container, revision, scope);
     } catch (error) {
       if (revision !== this.refreshRevision || this.content !== container) return;
       this.stopRuntimeStatus();
       if (!this.isBodyVisible() || container.hidden) return;
-      clearNode(container);
-      append(container, $('p')).textContent = errorsText(error);
-      const retry = append(container, $('button'));
+      const feedback = this.feedback!;
+      clearNode(feedback);
+      feedback.hidden = false;
+      append(feedback, $('span')).textContent = errorsText(error);
+      const retry = append(feedback, $('button'));
       retry.textContent = t('plugins.retry');
       retry.addEventListener('click', () => void this.refresh());
-      this.notifications.error(errorsText(error));
+    } finally {
+      if (this.refreshProgress === progress) { progress.done(); this.refreshProgress = undefined; }
     }
   }
 
@@ -306,7 +319,7 @@ export class ServicePluginPackagesView extends ViewPane {
     const workspace = scope === 'workspace' ? this.workspaceTarget : undefined;
     if (revision !== this.refreshRevision) return;
     this.workspaceTarget = workspace;
-    if (scope === 'workspace' && !workspace) { clearNode(container); append(container, $('p')).textContent = t('plugins.chooseWorkspaceFirst'); return; }
+    if (scope === 'workspace' && !workspace) { this.packageActions.clear(); this.lists.length = 0; clearNode(container); container.inert = false; append(container, $('p')).textContent = t('plugins.chooseWorkspaceFirst'); return; }
     const pluginTarget: PluginTarget = { gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id };
     const state = this.state = new PluginScope(scope, pluginTarget, workspace, this.notifications);
     state.onDidChange(() => { if (state === this.state) this.updateRuntimeStatusPresentation(); });
@@ -316,7 +329,11 @@ export class ServicePluginPackagesView extends ViewPane {
     ]);
     if (this.content !== container || revision !== this.refreshRevision) return;
     const runtime = state.runtime, scopeBindings = state.bindings;
+    const scrollTop = container.scrollTop;
+    this.packageActions.clear();
+    this.lists.length = 0;
     clearNode(container);
+    container.inert = false;
     append(container, $('p')).textContent = t(inventory.sources?.configured ? 'plugins.sourcesConfigured' : 'plugins.emptySources');
     if (scope === 'defaults') append(container, $('p')).textContent = t('plugins.defaultsFutureOnly');
     if (workspace) {
@@ -502,6 +519,7 @@ export class ServicePluginPackagesView extends ViewPane {
       });
     }
     this.search(this.query);
+    container.scrollTop = scrollTop;
     this.updateRuntimeStatusPresentation();
     if (!inventory.packages.length && !bindings.length) append(container, $('p')).textContent = t('plugins.noPackages', '');
   }

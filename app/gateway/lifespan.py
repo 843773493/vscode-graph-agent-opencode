@@ -73,7 +73,7 @@ from app.gateway.runtime.logging_consumer import (
     RuntimeLoggingConsumer,
     logging_progress_recorder,
 )
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import PortForwardManager
 from app.gateway.runtime.process_logs import ProcessLogStore
 from app.gateway.runtime.service_plugins.runtime import plugin_runtime_lifespan
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
@@ -88,6 +88,7 @@ from app.gateway.runtime_proof import (
     _should_preserve_gateway_generation_for_handoff,
 )
 from app.gateway.search.service import GatewaySearchService
+from app.gateway.secrets.vault import SecretVault
 from app.gateway.server.bootstrap import (
     _restore_managed_local_runtimes,
     create_registry,
@@ -134,6 +135,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
     gateway_id = load_or_create_gateway_id(_gateway_root() / "identity.json")
     app.state.gateway_state = gateway_state
     app.state.gateway_id = gateway_id
+    app.state.secret_vault = SecretVault(_gateway_root() / "credentials" / "secrets")
     startup_generation = (
         os.environ.get("BOXTEAM_CONFIG_GENERATION") or f"gateway_runtime_{os.getpid()}"
     )
@@ -344,15 +346,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[dict[str, Callable[[], Awaitab
             )
         )
         _refresh_federation_workspace_ports(app.state.federation_rpc_service, registry)
-        app.state.port_forward_manager = SshPortForwardManager(
+        app.state.port_forward_manager = PortForwardManager(
             registry=registry,
             storage_path=_gateway_root() / "port-forwards.json",
             log_dir=get_runtime_log_root(),
         )
-        await app.state.port_forward_manager.reconcile_workspaces()
         await app.state.port_forward_manager.restore()
         async def reconcile_runtime_dependents() -> None:
-            await app.state.port_forward_manager.reconcile_workspaces()
             await workspace_plugin_bindings.reconcile()
 
         app.state.workspace_runtime_controller = GatewayWorkspaceRuntimeController(

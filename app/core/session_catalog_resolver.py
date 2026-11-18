@@ -107,7 +107,7 @@ class SessionCatalogSessionProjection:
     main_thread_id: str
     session_kind: SessionKind
     current_agent_id: str
-    current_provider_id: str | None
+    current_model_json: str | None
     context_source_session_id: str | None
     generation_origin: SessionGenerationOriginDTO | None
     parent_session_id: str | None = None
@@ -278,7 +278,7 @@ class SessionCatalogPathResolver:
             main_thread_id=node.main_thread_id,
             session_kind=node.session_kind,
             current_agent_id=node.current_agent_id,
-            current_provider_id=node.current_provider_id,
+            current_model_json=node.current_model_json,
             context_source_session_id=node.context_source_session_id,
             generation_origin=generation_origin,
             parent_session_id=parent_session_id,

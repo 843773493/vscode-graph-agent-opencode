@@ -81,9 +81,10 @@ def history_target(
     ports = integration_port_block_for_file(Path(request.node.path))
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(p for p in config["llm"]["providers"] if p["id"] == "primary")
-    provider.update({"model": "e2e-stub-model", "api_key": "history-fixture-key"})
-    config["agents"]["default"]["model"] = {"primary_provider": "primary", "fallback_providers": []}
+    provider = config["llm"]["providers"]["primary"]
+    provider["models"]["default"]["model"] = "e2e-stub-model"
+    provider["defaults"]["api_key"] = ""
+    config["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with model_stream_replay(
         context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),

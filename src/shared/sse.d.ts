@@ -20,6 +20,7 @@ export interface ConsumeSseResponseOptions {
   idleTimeoutError?: (timeoutMs: number) => Error;
   readError?: (cause: unknown) => Error;
   onActivity?: () => void;
+  /** 帧间交接微任务，长批次按时间片让出主线程。 */
   yieldBetweenEvents?: boolean;
 }
 

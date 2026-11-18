@@ -20,7 +20,7 @@ from app.services.infrastructure.rollout_context.storage.schema_wakeup import (
     RUNTIME_WAKEUP_SCHEMA_SQL,
 )
 
-ROLLOUT_SCHEMA_VERSION = 26
+ROLLOUT_SCHEMA_VERSION = 28
 ITEM_CATALOG_LOCATOR_INDEX_SQL = load_sql(__package__, "migrations/item_catalog_locator_index.sql")
 COMMIT_IDEMPOTENCY_INDEX_SQL = load_sql(__package__, "migrations/commit_idempotency_index.sql")
 ITEM_CATALOG_MODEL_TOOL_INDEX_SQL = load_sql(__package__, "migrations/item_catalog_model_tool_index.sql")
@@ -30,6 +30,8 @@ CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL = load_sql(__package__, "migrations/cont
 SOURCE_OVERLAY_LOCATOR_INDEXES_SQL = load_sql(__package__, "migrations/source_overlay_locator_indexes.sql")
 TOOL_CALLS_MESSAGE_INDEX_SQL = load_sql(__package__, "migrations/tool_calls_message_index.sql")
 EXECUTION_QUEUE_SCHEMA_SQL = load_sql(__package__, "migrations/execution_queue.sql")
+EXECUTION_SCHEDULING_MIGRATION_SQL = load_sql(__package__, "migrations/execution_queue_026_027.sql")
+TEAM_OBSERVATIONS_MIGRATION_SQL = load_sql(__package__, "migrations/team_observations_027_028.sql")
 SKILL_SELECTION_MIGRATION_SQL = load_sql("app.services.infrastructure.rollout_context.storage", "migrations/skill_selection_024_025.sql")
 VIEW_CREATION_SCHEMA_SQL = load_sql(__package__, "migrations/view_creation.sql")
 VIEW_CREATION_MIGRATION_SQL = load_sql(__package__, "migrations/view_creation_025_026.sql") + VIEW_CREATION_SCHEMA_SQL
@@ -100,6 +102,7 @@ def initialize_rollout_schema(
         + ASSEMBLY_CONTENT_SCHEMA_SQL
         + VIEW_MEMBERSHIP_SCHEMA_SQL
         + EXECUTION_QUEUE_SCHEMA_SQL
+        + EXECUTION_SCHEDULING_MIGRATION_SQL
     )
 
     # 邮箱冷恢复按真实 ModelCall/ToolCall 定位，不能扫描全部已提交工具结果。

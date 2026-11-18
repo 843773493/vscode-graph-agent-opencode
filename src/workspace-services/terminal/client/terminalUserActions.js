@@ -125,4 +125,5 @@ export function installTerminalUserActions({
     searchInput.focus();
   });
   searchClose.addEventListener("click", closeSearch);
+  return { openSearch };
 }

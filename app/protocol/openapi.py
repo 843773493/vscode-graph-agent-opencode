@@ -8,6 +8,7 @@ from pydantic.json_schema import JsonSchemaValue
 
 from app.protocol.generated.boxteam.gateway.v2 import (
     plugin_commands_pb2,
+    secrets_pb2,
     service_plugin_pb2,
 )
 from app.protocol.generated.boxteam.gateway.v2 import public_pb2 as gateway_public_pb2
@@ -102,7 +103,8 @@ MESSAGE_STREAM_HTTP_JSON_DESCRIPTORS: dict[str, str] = {
 HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     name: f"{public_pb2.DESCRIPTOR.package}.{name}"
     for name in (
-        "AgentDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultProviderUpdateRequest",
+        "AgentDTO", "WorkspaceDefaultAgentUpdateRequest", "WorkspaceDefaultModelUpdateRequest",
+        "PendingRequestReorderRequest", "UserQuestionDTO", "UserQuestionSummaryDTO", "UserQuestionPageDTO",
         "ResourceNavigationRequest", "ResourceNavigationResultDTO",
         "WorkspaceDTO", "WorkspaceContextDTO", "WorkspaceIndexStatusDTO", "WorkspaceIndexRebuildDTO",
         "WorkspaceFileRootsDTO", "WorkspaceFileReferencesRequest", "WorkspaceFileReferencesDTO",
@@ -154,6 +156,8 @@ HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "SessionGenerationValidateRequest", "SessionGenerationValidationDTO",
         "RuntimeStatusDTO", "RuntimeDrainResultDTO", "UiSnapshotResultDTO",
         "ConfigSourceEditRequest", "ConfigSourceDocumentDTO", "ConfigSourcePreflightDTO", "ConfigEventDTO",
+        "LlmDiscoverRequest", "LlmDiscoverResultDTO",
+        "LlmTestRequest", "LlmTestStartDTO", "LlmTestDeltaDTO", "LlmTestResultDTO",
     )
 } | {
     name: f"{skill_sources_pb2.DESCRIPTOR.package}.{name}"
@@ -171,8 +175,8 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
         "CreateFederationManagedWorkspaceRequest",
         "SshConnectionOptionListDTO", "AddRemoteGatewayRequest",
         "PortForwardListDTO", "CreatePortForwardRequest",
-        "ChangePortForwardLocalPortRequest", "ChangePortForwardLabelRequest",
-        "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO",
+        "PortForwardHostsDTO",
+        "GatewayHealthDTO", "GatewayDiagnosticsDTO", "DevelopmentRuntimeRestartDTO", "GatewayClientRecoveryDTO",
         "GatewayDiagnosticLogQueryRequest", "GatewayDiagnosticLogQueryResultDTO",
         "GatewayDiagnosticLogLocateRequest", "GatewayDiagnosticLogLocationDTO",
         "GatewayServiceStatusDTO", "GatewayRuntimeBlockerDTO",
@@ -191,6 +195,12 @@ GATEWAY_HTTP_JSON_DESCRIPTORS: Mapping[str, str] = {
     )
 } | {name: f"{search_public_pb2.DESCRIPTOR.package}.{name}" for name in ("FederatedSearchRequest", "FederatedSearchEventDTO", "GatewayContextSearchRequest", "GatewayContextSearchResultDTO")}
 
+
+GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
+    name: f"{secrets_pb2.DESCRIPTOR.package}.{name}" for name in (
+        "SecretMetadataDTO", "GatewaySecretsDTO", "GatewaySecretDTO", "CreateSecretRequest", "UpdateSecretRequest",
+    )
+}
 
 # 插件合同从独立 proto 文件生成；Pydantic 只保留业务校验，不重复维护跨语言字段结构。
 GATEWAY_HTTP_JSON_DESCRIPTORS = dict(GATEWAY_HTTP_JSON_DESCRIPTORS) | {
@@ -224,6 +234,7 @@ HTTP_JSON_DESCRIPTORS = dict(HTTP_JSON_DESCRIPTORS) | {
 }
 
 SSE_JSON_DESCRIPTORS: Mapping[str, Descriptor] = {
+    "UserQuestionSummaryDTO": public_pb2.DESCRIPTOR.message_types_by_name["UserQuestionSummaryDTO"],
     "PluginCommandSnapshotDTO": plugin_commands_pb2.DESCRIPTOR.message_types_by_name["PluginCommandSnapshotDTO"],
     "PluginRuntimeStatusDTO": service_plugin_pb2.DESCRIPTOR.message_types_by_name["PluginRuntimeStatusDTO"],
     "ConfigEventDTO": public_pb2.DESCRIPTOR.message_types_by_name["ConfigEventDTO"],

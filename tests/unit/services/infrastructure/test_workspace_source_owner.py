@@ -39,13 +39,11 @@ def _write_config(path: Path, *, model_name: str) -> None:
     path.write_text(
         json.dumps(
             {
-                "config_version": 2,
+                "config_version": 3,
                 "llm": {
-                    "providers": [
-                        {
-                            "id": "primary",
+                    "providers": {
+                        "primary": {"defaults": {
                             "endpoint": "https://example.com/v1",
-                            "model": model_name,
                             "api_key": "${TEST_API_KEY}",
                             "custom_llm_provider": "openai",
                             "api_mode": {
@@ -56,19 +54,19 @@ def _write_config(path: Path, *, model_name: str) -> None:
                                 },
                                 "supports_reasoning": {"reasoning_content": True},
                             },
-                        }
-                    ]
+                        }, "models": {"default": {"model": model_name}}}
+                    }
                 },
                 "default_agent": "default",
                 "agents": {
-                    **{name: {"model": {"primary_provider": "primary", "fallback_providers": []}}
+                    **{name: {"model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}}
                        for name in ("coder", "reviewer", "researcher")},
                     "default": {
                         "name": "Default Agent",
                         "instructions": {"system_prompt": "hello"},
                         "model": {
-                            "primary_provider": "primary",
-                            "fallback_providers": [],
+                            "primary": {"provider_id": "primary", "model_id": "default"},
+                            "fallbacks": [],
                         },
                     }
                 },
@@ -156,7 +154,7 @@ async def test_user_source_writer_previews_saves_and_queries_original_generation
             saved = await service.save_source_edit(source_key=document.source_key, gateway_id=document.gateway_id, request=request)
             assert saved.edit is not None and saved.edit.source_saved and saved.edit.layer_imported
             assert saved.edit.state == "active"
-            mask = payload["llm"]["providers"][0]["api_key"]
+            mask = payload["llm"]["providers"]["primary"]["defaults"]["api_key"]
             assert config_path.read_text() == text.replace(mask, "${TEST_API_KEY}")
             assert saved.fanout is not None and saved.fanout.source_generation == 2
             assert saved.fanout.coverage == "observed_only" and saved.fanout.workspaces[0].result == "applied"
@@ -165,7 +163,7 @@ async def test_user_source_writer_previews_saves_and_queries_original_generation
                 await service.save_source_edit(source_key=document.source_key, gateway_id=document.gateway_id,
                     request=request.model_copy(update={"idempotency_key": "stale-source-save"}))
             payload["agents"]["default"]["instructions"]["system_prompt"] = "后续文件版本"
-            payload["llm"]["providers"][0]["api_key"] = "${TEST_API_KEY}"
+            payload["llm"]["providers"]["primary"]["defaults"]["api_key"] = "${TEST_API_KEY}"
             config_path.write_text(json.dumps(payload))
             await service.reload()
             queried = service.get_source_document(source_key=document.source_key, gateway_id=document.gateway_id,

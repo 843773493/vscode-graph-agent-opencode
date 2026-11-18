@@ -13,6 +13,7 @@ from app.domain.itemized.execution_admission import (
     InternalExecutionIntent,
     UserExecutionIdentity,
 )
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 
 DeliveryPolicy = Literal["after_turn", "after_tool_result", "after_interrupt"]
 DeliveryBoundary = Literal["idle", "after_turn", "after_tool_result", "after_interrupt"]
@@ -23,6 +24,10 @@ class MessageSubmissionConflictError(ValueError):
     """同一消息操作身份不能对应另一份输入。"""
 
 
+class QueueOrderConflictError(RuntimeError):
+    """领取或排序期间队列已被其他已提交操作推进。"""
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionQueueInput:
     """准入事务冻结的调度信息；后续 policy 更新不改写该输入。"""
@@ -30,13 +35,15 @@ class ExecutionQueueInput:
     execution_binding: ExecutionBinding
     message_id: str
     agent_id: str
-    provider_id: str | None
+    model: dict[str, str] | None
     delivery_policy: DeliveryPolicy
     gateway_id: str | None
     request_id: str | None
     created_at: str
     # 普通消息操作复用 admission key；hash 只校验同身份的原始请求，不复制正文。
     submission_hash: str | None = None
+    # 仅持久任务创建新执行的请求降为后台；控制与工具结果保持原调度语义。
+    background: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.execution_binding, (UserExecutionIdentity, InternalExecutionIntent)):
@@ -45,7 +52,9 @@ class ExecutionQueueInput:
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"队列输入 {name} 必须是非空字符串")
-        for name in ("provider_id", "gateway_id", "request_id"):
+        if self.model is not None:
+            ModelReferenceDTO.model_validate(self.model)
+        for name in ("gateway_id", "request_id"):
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(f"队列输入 {name} 必须是非空字符串或 None")
@@ -53,6 +62,8 @@ class ExecutionQueueInput:
             raise ValueError("队列输入 delivery_policy 非法")
         if isinstance(self.execution_binding, InternalExecutionIntent) and self.execution_binding.message_id != self.message_id:
             raise ValueError("队列输入与 internal message identity 不一致")
+        if not isinstance(self.background, bool):
+            raise TypeError("队列后台优先级必须是布尔值")
         datetime.fromisoformat(self.created_at)
 
     @classmethod
@@ -76,6 +87,8 @@ class ExecutionQueueRecord:
     claim_generation: int
     updated_at: str
     outcome: str
+    queue_position: int = 0
+    priority: int = 0
 
     def __post_init__(self) -> None:
         if self.delivery_policy not in {"after_turn", "after_tool_result", "after_interrupt"}:

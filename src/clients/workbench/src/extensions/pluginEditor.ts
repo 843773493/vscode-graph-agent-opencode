@@ -95,7 +95,6 @@ class PluginEditorPane extends EditorPane {
     // 原 Workbench 在打开操作结算时也取消 token，监听仅覆盖初始化阶段。
     const cancellation = token.onCancellationRequested(() => this.presentation.clear());
     try {
-      append(this.container, $('p')).textContent = t('plugins.loading');
       const targets = (await listManagementTargets(access.signal)).filter(target => target.gateway_id === input.target.gateway_id);
       access.check();
       if (token.isCancellationRequested || this.input !== input) return;

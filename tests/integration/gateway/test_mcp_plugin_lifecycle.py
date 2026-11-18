@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import socket
 import sys
 import zipfile
 from collections.abc import AsyncIterator, Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -30,12 +32,12 @@ from tests.integration.workspace_services.mcp.schema_server import (
 )
 from tests.support.api_helpers import create_session, with_message_run_operation_id
 from tests.support.api_waiters import wait_for_job_done
+from tests.support.e2e_control.harness import E2EProcessLease
 from tests.support.mcp.http_endpoint import (
     http_schema_endpoint_factory as http_schema_endpoint_factory,  # noqa: PLC0414 - 唯一真实 HTTP MCP 装具
 )
 from tests.support.model_stream.config import ModelStreamReplay, model_stream_replay
 from tests.support.plugin_package import install_plugin_async
-from tests.support.ports import integration_port_block_for_file
 from tests.support.processes.gateway import (
     LOCAL_TOKEN_HEADERS,
     close_gateway_process,
@@ -81,66 +83,77 @@ async def mcp_plugin_case(
     install_test_workspace_config(workspace_root=Path(integration_workspace_root_path),
         config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc")
-    ports = integration_port_block_for_file(Path(request.node.path))
-    gateway_url = f"http://127.0.0.1:{ports.port(21)}"
-    config_path = Path(integration_workspace_config_path)
-    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    config["llm"]["providers"] = [{
-        "id": "mcp-plugin-replay", "endpoint": "https://opencode.ai/zen/v1",
-        "model": "mcp-plugin-model", "api_key": "mcp-plugin-unused-key",
-        "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions", "supports_reasoning": {"reasoning_content": False}, "model_info": {
-            "supports_function_calling": True, "supports_vision": True,
-            "supports_audio_input": True,
-        }},
-    }]
-    for agent in config["agents"].values():
-        agent["model"] = {"primary_provider": "mcp-plugin-replay", "fallback_providers": []}
-        agent.setdefault("tools", {})["custom"] = []
-    if mcp_plugin_tool_restrictions:
-        config["agents"]["default"]["tools"].setdefault("policy", {})["restrictions"] = mcp_plugin_tool_restrictions
-    config["mcp"] = {"servers": {}}
-    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    with model_stream_replay(
-        context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
-        business_assertion="mcp-plugin-lifecycle",
-    ) as replay:
-        def start_gateway():
-            return start_gateway_process(
-                workspace_root=Path(integration_workspace_root_path), default_backend_url=None,
-                port=ports.port(21), boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
-                artifacts_dir=context.artifacts_dir / "gateway",
-                extra_env={"BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(20)), **replay.environment},
-                asgi_app="tests.support.e2e_control.gateway_app:app",
+    with ExitStack() as port_leases:
+        # 两个服务按本次节点持有实际端口，不随无关测试文件的数量改变布局。
+        selected_ports: list[int] = []
+        for role in ("backend", "gateway"):
+            with socket.socket() as candidate:
+                candidate.bind(("127.0.0.1", 0))
+                port = candidate.getsockname()[1]
+            lease, _ = E2EProcessLease.acquire_available(
+                context.runtime_root_for_node(request.node.nodeid) / f"{role}-port.json", [port],
             )
-
-        gateway = start_gateway()
-
-        def restart_gateway() -> None:
-            nonlocal gateway
-            close_gateway_process(gateway)
-            gateway = start_gateway()
-        try:
-            async with httpx.AsyncClient(
-                base_url=gateway_url, headers=LOCAL_TOKEN_HEADERS, timeout=90, trust_env=False,
-            ) as client:
-                (await client.get("/api/gateway/health")).raise_for_status()
-                response = await client.get("/api/gateway/workspaces")
-                response.raise_for_status()
-                active = response.json()["data"]["active_workspace"]
-                gateway_id, workspace_id = active["gateway_id"], active["workspace_id"]
-                client.headers.update({
-                    "X-BoxTeam-Target-Gateway-Id": gateway_id,
-                    "X-BoxTeam-Gateway-Id": gateway_id,
-                    "X-BoxTeam-Workspace-Id": workspace_id,
-                })
-                yield McpPluginCase(
-                    client, context, replay, gateway_id, workspace_id,
-                    Path(integration_workspace_root_path), restart_gateway,
+            port_leases.callback(lease.release)
+            selected_ports.append(port)
+        backend_port, gateway_port = selected_ports
+        gateway_url = f"http://127.0.0.1:{gateway_port}"
+        config_path = Path(integration_workspace_config_path)
+        config = commentjson.loads(config_path.read_text(encoding="utf-8"))
+        config["llm"]["providers"] = {"mcp-plugin-replay": {"defaults": {
+            "endpoint": "https://opencode.ai/zen/v1", "api_key": "",
+            "custom_llm_provider": "openai",
+            "api_mode": {"protocol": "chat_completions", "supports_reasoning": {"reasoning_content": False}, "model_info": {
+                "supports_function_calling": True, "supports_vision": True,
+                "supports_audio_input": True,
+            }},
+        }, "models": {"default": {"model": "mcp-plugin-model"}}}}
+        for agent in config["agents"].values():
+            agent["model"] = {"primary": {"provider_id": "mcp-plugin-replay", "model_id": "default"}, "fallbacks": []}
+            agent.setdefault("tools", {})["custom"] = []
+        if mcp_plugin_tool_restrictions:
+            config["agents"]["default"]["tools"].setdefault("policy", {})["restrictions"] = mcp_plugin_tool_restrictions
+        config["mcp"] = {"servers": {}}
+        config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = gateway_url
+        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        with model_stream_replay(
+            context.artifacts_dir, runtime_root=context.runtime_root_for_node(request.node.nodeid),
+            business_assertion="mcp-plugin-lifecycle",
+        ) as replay:
+            def start_gateway():
+                return start_gateway_process(
+                    workspace_root=Path(integration_workspace_root_path), default_backend_url=None,
+                    port=gateway_port, boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
+                    artifacts_dir=context.artifacts_dir / "gateway",
+                    extra_env={"BOXTEAM_DEFAULT_BACKEND_PORT": str(backend_port), **replay.environment},
+                    asgi_app="tests.support.e2e_control.gateway_app:app",
                 )
-        finally:
-            close_gateway_process(gateway)
+
+            gateway = start_gateway()
+
+            def restart_gateway() -> None:
+                nonlocal gateway
+                close_gateway_process(gateway)
+                gateway = start_gateway()
+            try:
+                async with httpx.AsyncClient(
+                    base_url=gateway_url, headers=LOCAL_TOKEN_HEADERS, timeout=90, trust_env=False,
+                ) as client:
+                    (await client.get("/api/gateway/health")).raise_for_status()
+                    response = await client.get("/api/gateway/workspaces")
+                    response.raise_for_status()
+                    active = response.json()["data"]["active_workspace"]
+                    gateway_id, workspace_id = active["gateway_id"], active["workspace_id"]
+                    client.headers.update({
+                        "X-BoxTeam-Target-Gateway-Id": gateway_id,
+                        "X-BoxTeam-Gateway-Id": gateway_id,
+                        "X-BoxTeam-Workspace-Id": workspace_id,
+                    })
+                    yield McpPluginCase(
+                        client, context, replay, gateway_id, workspace_id,
+                        Path(integration_workspace_root_path), restart_gateway,
+                    )
+            finally:
+                close_gateway_process(gateway)
 
 
 def _package(path: Path, prepared_package: Path) -> Path:

@@ -5,6 +5,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.config_sources import ConfigSourceLayer, ConfigSourceURI
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 
 
 class ConfigDTO(BaseModel):
@@ -147,6 +148,18 @@ class ConfigSourceOriginDTO(BaseModel):
     shadowed_sources: list[str]
 
 
+class ConfigSourceBaselineDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    uri: ConfigSourceURI
+    presence: Literal["present", "absent"]
+    layer_revision: int | None
+    layer_digest: str | None
+    source_generation: int | None
+    file_presence: Literal["present", "absent"] | None
+    file_digest: str | None
+
+
 class ConfigSourceEditDTO(BaseModel):
     idempotency_key: str
     candidate_id: str
@@ -192,9 +205,27 @@ class ConfigSourceDocumentDTO(BaseModel):
     source_effective: dict[str, object]
     layers: list[ConfigSourceLayerViewDTO]
     origins: list[ConfigSourceOriginDTO]
+    source_baseline: dict[str, ConfigSourceBaselineDTO]
+    active_origins: list[ConfigSourceOriginDTO]
     status: ConfigReloadStatusDTO
     edit: ConfigSourceEditDTO | None
     fanout: ConfigSourceFanoutDTO | None = None
+
+
+class ConfigModelOptionOriginDTO(BaseModel):
+    path: str
+    source_key: str
+    definition: Literal["defaults", "overrides"]
+    definition_path: str
+
+
+class ConfigModelInspectionDTO(BaseModel):
+    model_ref: ModelReferenceDTO
+    model: str
+    options: dict[str, object]
+    origins: list[ConfigModelOptionOriginDTO]
+    request_url: str
+    catalog_url: str | None = None
 
 
 class ConfigSourcePreflightDTO(BaseModel):
@@ -202,6 +233,8 @@ class ConfigSourcePreflightDTO(BaseModel):
     candidate: dict[str, object]
     candidate_digest: str
     changed_paths: list[str]
+    model_options: ConfigModelInspectionDTO | None = None
+    active_model_options: ConfigModelInspectionDTO | None = None
 
 
 class ConfigStartupContractDTO(BaseModel):

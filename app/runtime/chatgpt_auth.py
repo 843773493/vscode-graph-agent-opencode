@@ -51,7 +51,7 @@ def configure_litellm_chatgpt_auth_directory() -> Path:
     return token_directory
 
 
-def ensure_chatgpt_oauth_ready(token_directory: Path) -> None:
+def ensure_chatgpt_oauth_ready(token_directory: Path) -> str | None:
     """确保服务请求只使用现成凭据，绝不进入交互式 device-code 登录。"""
     auth_file = _resolve_litellm_auth_file(token_directory)
     if not auth_file.is_file():
@@ -74,7 +74,8 @@ def ensure_chatgpt_oauth_ready(token_directory: Path) -> None:
     if not isinstance(expires_at, int):
         expires_at = _jwt_exp(access_token)
     if time.time() < expires_at - TOKEN_EXPIRY_SKEW_SECONDS:
-        return
+        account_id = auth_data.get("account_id")
+        return account_id if isinstance(account_id, str) and account_id else None
 
     codex_auth_file = Path("~/.codex/auth.json").expanduser().resolve()
     if not codex_auth_file.is_file():
@@ -89,6 +90,7 @@ def ensure_chatgpt_oauth_ready(token_directory: Path) -> None:
             "ChatGPT OAuth 与 Codex 凭据均已过期。请先执行 codex login，再重试请求。"
         )
     _publish_auth_record(auth_file, source_record, replace_existing=True)
+    return source_record.get("account_id")
 
 
 def ensure_litellm_chatgpt_model_capabilities(model: str) -> bool:

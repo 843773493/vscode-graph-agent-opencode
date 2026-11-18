@@ -78,7 +78,7 @@ async def test_tool_catalog_selection_and_real_apply_patch_model_test(
         "/api/v1/tools/apply_patch/tests",
         json={
             "agent_id": "default",
-            "provider_ids": ["backup_3"],
+            "model_refs": [{"provider_id": "backup_3", "model_id": "default"}],
             "repetitions": 1,
         },
     )
@@ -95,7 +95,8 @@ async def test_tool_catalog_selection_and_real_apply_patch_model_test(
         attempt["execution_succeeded"] is True for attempt in run["attempts"]
     ), run
     assert all(attempt["passed"] is True for attempt in run["attempts"]), run
-    assert run["providers"][0]["success_rate"] == 100
+    assert run["models"][0]["model_ref"] == {"provider_id": "backup_3", "model_id": "default"}
+    assert run["models"][0]["success_rate"] == 100
 
     result_file = (
         Path(e2e_workspace_root_path)

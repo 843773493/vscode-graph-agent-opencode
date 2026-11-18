@@ -40,7 +40,9 @@ describe("会话变更树失败态与空态口径", () => {
   test("读取中不展示错误或空态", () => {
     const html = tree({ loading: true });
 
-    expect(html).toContain("正在读取会话变更...");
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain("codicon-refresh codicon-modifier-spin");
+    expect(html).not.toContain("正在读取会话变更...");
     expect(html).not.toContain("当前会话没有文件变更。");
     expect(html).not.toContain("没有可展示的会话文件变更。");
   });

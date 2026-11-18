@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import type { AddSshGatewayWorkspaceRequest } from "../../../types/backend";
+import type { AddRemoteGatewayConnectionRequest } from "../../../types/backend";
 import type { GatewayManagementDirectoryDTO } from "../../../types/protocol_generated/boxteam/gateway/v2/public";
 import { apiSuccessResponse, installGatewayFetch, restoreGatewayTestEnvironment } from "../../../tests/fixtures/session/gatewayEnvironment";
 import WarmConfirmProvider from "../../shell/WarmConfirmProvider";
@@ -19,7 +19,7 @@ function button(renderer: ReactTestRenderer, label: string) {
 
 test("原目录显示零工作区连接，manual改名保留原connection和端口，config不走manual写入", async () => {
   let reads = 0, settings = 0;
-  const writes: AddSshGatewayWorkspaceRequest[] = [];
+  const writes: AddRemoteGatewayConnectionRequest[] = [];
   installGatewayFetch(({ path }) => {
     if (path === "/api/gateway/management/gateways") { reads++; return apiSuccessResponse(directory); }
     return undefined;
@@ -28,7 +28,7 @@ test("原目录显示零工作区连接，manual改名保留原connection和端�
   try {
     await act(async () => {
       renderer = create(<WarmConfirmProvider><GatewayConnectionsPanel apiPort={8014} gatewayId="gateway_local" workspaces={[]}
-        revision={0} onAddSsh={async payload => { writes.push(payload); }} onRefresh={noop}
+        revision={0} onAddRemoteGatewayConnection={async payload => { writes.push(payload); }} onRefresh={noop}
         onRemoteGatewayReconnected={() => undefined} onOpenConfiguration={async () => { settings++; }} onOpenLogs={() => undefined} /></WarmConfirmProvider>);
       await flush();
     });
@@ -55,7 +55,7 @@ test("目录HTTP失败保留request_id，不显示空连接成功状态", async 
   try {
     await act(async () => {
       renderer = create(<WarmConfirmProvider><GatewayConnectionsPanel apiPort={8014} gatewayId="gateway_local" workspaces={[]}
-        revision={0} onAddSsh={noop} onRefresh={noop} onRemoteGatewayReconnected={() => undefined}
+        revision={0} onAddRemoteGatewayConnection={noop} onRefresh={noop} onRemoteGatewayReconnected={() => undefined}
         onOpenConfiguration={noop} onOpenLogs={() => undefined} /></WarmConfirmProvider>);
       await flush();
     });

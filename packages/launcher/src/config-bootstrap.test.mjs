@@ -21,13 +21,13 @@ describe("config bootstrap", () => {
   for (const required of [false, true]) {
     test(`升级预检${required ? "停旧实例" : "保留同版本实例"}`, async () => {
       const stopped = [];
-      const runtime = { distribution: "npm", pythonExecutable: fixturePythonExecutable,
+      const runtime = { distribution: "npm", pythonExecutable: fixturePythonExecutable, node: {source: "launcher", executable: null}, bundledPlugins: [],
         applicationRoot: fixtureApplicationRoot };
       const result = await stopLauncherForSupportedUpgrade({
         runtime, environment: { BOXTEAM_HOME: fixtureBoxteamHome },
         targetLock: { value: { token: "original-instance" } },
         spawnSyncImpl(_command, args) {
-          expect(args).toEqual(["-m", "configs.boxteam", "initialize", "--preview"]);
+          expect(args).toEqual(["-m", "configs.boxteam", "initialize", "--preview", "--bundled-plugins", "[]"]);
           return { status: 0, stdout: JSON.stringify({ upgrade_required: required }), stderr: "" };
         },
         async stopLauncherImpl({ boxteamHome, expectedToken }) {
@@ -42,7 +42,7 @@ describe("config bootstrap", () => {
   test("未知版本预检失败不停止原服务", async () => {
     let stopped = false;
     await expect(stopLauncherForSupportedUpgrade({
-      runtime: { distribution: "npm", pythonExecutable: fixturePythonExecutable,
+      runtime: { distribution: "npm", pythonExecutable: fixturePythonExecutable, node: {source: "launcher", executable: null}, bundledPlugins: [],
         applicationRoot: fixtureApplicationRoot }, environment: { BOXTEAM_HOME: fixtureBoxteamHome },
       targetLock: { value: { token: "original-instance" } },
       spawnSyncImpl() { return { status: 1, stderr: "unknown version" }; },
@@ -63,7 +63,8 @@ describe("config bootstrap", () => {
     const calls = [];
     const runtime = {
       distribution: "npm",
-      pythonExecutable: fixturePythonExecutable,
+      pythonExecutable: fixturePythonExecutable, node: {source: "bundled", executable: "/target/node"},
+      bundledPlugins: [{package_id: "boxteam.developer-tools", package_version: "0.1.0", archive: "/target/developer-tools.zip"}],
       applicationRoot: fixtureApplicationRoot,
     };
     const result = initializeUserConfiguration({
@@ -85,7 +86,8 @@ describe("config bootstrap", () => {
     });
 
     expect(calls[0].command).toBe(fixturePythonExecutable);
-    expect(calls[0].args).toEqual(["-m", "configs.boxteam"]);
+    expect(calls[0].args).toEqual(["-m", "configs.boxteam", "--bundled-plugins", JSON.stringify(runtime.bundledPlugins)]);
+    expect(calls[0].options.env.BOXTEAM_NODE_BIN).toBe("/target/node");
     expect(calls[0].options.cwd).toBe(fixtureApplicationRoot);
     expect(calls[0].options.env.BOXTEAM_HOME).toBe(fixtureBoxteamHome);
     expect(calls[0].options.env.PYTHONIOENCODING).toBe("utf-8");
@@ -99,7 +101,7 @@ describe("config bootstrap", () => {
     initializeUserConfiguration({
       runtime: {
         distribution: "source-development",
-        pythonExecutable: fixtureSourcePython,
+        pythonExecutable: fixtureSourcePython, node: {source: "launcher", executable: null}, bundledPlugins: [],
         applicationRoot: fixtureSourceRoot,
       },
       environment: {
@@ -114,7 +116,7 @@ describe("config bootstrap", () => {
 
     expect(calls[0].options.env.BOXTEAM_INSTALL_DEVELOPMENT_ASSETS).toBe("1");
     expect(calls[0].options.env.BOXTEAM_ENABLE_GATEWAY_E2E_WORKSPACE).toBe("1");
-    expect(calls[0].args).toEqual(["-m", "configs.boxteam"]);
+    expect(calls[0].args).toEqual(["-m", "configs.boxteam", "--bundled-plugins", "[]"]);
   });
 
   test("内置 Python 初始化失败不会静默继续", () => {
@@ -122,7 +124,7 @@ describe("config bootstrap", () => {
       initializeUserConfiguration({
         runtime: {
           distribution: "npm",
-          pythonExecutable: fixturePythonExecutable,
+          pythonExecutable: fixturePythonExecutable, node: {source: "launcher", executable: null}, bundledPlugins: [],
           applicationRoot: fixtureApplicationRoot,
         },
         environment: {},
@@ -147,7 +149,7 @@ describe("config bootstrap", () => {
         initializeUserConfiguration({
           runtime: {
             distribution: "npm",
-            pythonExecutable: fixturePythonExecutable,
+            pythonExecutable: fixturePythonExecutable, node: {source: "launcher", executable: null}, bundledPlugins: [],
             applicationRoot: fixtureApplicationRoot,
           },
           environment: { BOXTEAM_HOME: fixtureBoxteamHome },
@@ -171,7 +173,7 @@ describe("config bootstrap", () => {
     initializeUserConfiguration({
       runtime: {
         distribution: "npm",
-        pythonExecutable: fixturePythonExecutable,
+        pythonExecutable: fixturePythonExecutable, node: {source: "launcher", executable: null}, bundledPlugins: [],
         applicationRoot: fixtureApplicationRoot,
       },
       environment: {},
@@ -185,7 +187,7 @@ describe("config bootstrap", () => {
     expect(calls[0].args).toEqual([
       "-m",
       "configs.boxteam",
-      "--force",
+      "--force", "--bundled-plugins", "[]",
     ]);
   });
 });

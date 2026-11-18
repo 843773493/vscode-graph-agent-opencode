@@ -21,7 +21,7 @@ components/
 └── deliveryPolicyPresentation.ts 消息投递策略的纯展示文案
 ```
 
-先按聊天、输入、资源或工作区内容进入对应功能子树；原版工作台外壳位于 `src/clients/workbench/`。`agentSessions/` 提供会话树和 Gateway 工作区导航展示，所需数据由工作台导航控制器通过 props 传入。`workspace/gateway/` 放 Gateway 控制中心等专用面板。浮层放在 `overlays/`，不可停靠的嵌入卡片放在 `cards/`；诊断专用视图按功能放入 `contextInspection/`、`eventQueue/` 或 `nodeDebug/`。各目录的 `AGENTS.md` 负责更细的文件树与边界。
+先按聊天、输入、资源或工作区内容进入对应功能子树；原版工作台外壳位于 `src/clients/workbench/`。`agentSessions/` 提供会话树和 Gateway 工作区导航展示，所需数据由工作台导航控制器通过 props 传入。`workspace/gateway/` 放 原生设置内的 Gateway 管理内容。浮层放在 `overlays/`，不可停靠的嵌入卡片放在 `cards/`；诊断专用视图按功能放入 `contextInspection/`、`eventQueue/` 或 `nodeDebug/`。各目录的 `AGENTS.md` 负责更细的文件树与边界。
 
 # 可修改内容
 

@@ -79,9 +79,11 @@ from app.services.infrastructure.rollout_context.storage.catalog.history_scope i
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     EXECUTION_QUEUE_SCHEMA_SQL,
+    EXECUTION_SCHEDULING_MIGRATION_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
     ROLLOUT_SCHEMA_VERSION,
     SKILL_SELECTION_MIGRATION_SQL,
+    TEAM_OBSERVATIONS_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
@@ -753,6 +755,14 @@ def test_schema18_migration_rebuilds_unique_keys_and_backfills_snapshot_threads(
     case.saver._storage.storage.migrate_schema(
         case.thread_id, session_id=case.session_id, to_version=26,
         migration_name="view_creation_025_026", migration_sql=VIEW_CREATION_MIGRATION_SQL,
+    )
+    case.saver._storage.storage.migrate_schema(
+        case.thread_id, session_id=case.session_id, to_version=27,
+        migration_name="execution_queue_026_027", migration_sql=EXECUTION_SCHEDULING_MIGRATION_SQL,
+    )
+    case.saver._storage.storage.migrate_schema(
+        case.thread_id, session_id=case.session_id, to_version=28,
+        migration_name="team_observations_027_028", migration_sql=TEAM_OBSERVATIONS_MIGRATION_SQL,
     )
     cold = RolloutCheckpointSaver(case.sessions)
     assert cold.get_context_assembly(case.session_id, thread_id=case.thread_id, assembly_id=snapshot.assembly_id).to_dict() == snapshot.to_dict()

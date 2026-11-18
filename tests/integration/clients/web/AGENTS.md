@@ -51,17 +51,17 @@ web/
   - 会话右键复制失败只替换浏览器Clipboard API及既有兼容复制为显式拒绝；从真实会话树打开菜单，核原版通知完整错误及发起Gateway／工作区／Session身份、单次调用与输入草稿保持，随后恢复原浏览器方法并继续原聊天断言。没有业务HTTP替身，不能将浏览器能力拒绝称为系统剪贴板权限验收。
 
 - 历史边界及元数据初始化页面也使用正式 Workbench 产物；Thread 内正文通过可穿透 ShadowRoot 的作用域 locator 读取，不能以 document 全局查询的空结果证明成功。元数据在打开对应 Thread 后核对；边界状态、工具顺序及清理失败断言保持。
-  - 元数据场景同时覆盖 Gateway 静态产物和真实 Workbench Vite 源码入口；业务工作区与未注册目录按 run／测试节点隔离，两个参数不能共用目录。通过原版命令打开主窗口当前工作区的底部输出面板，按需读取工作区元数据，核原 metadata／owner／request_id，再关闭面板继续原文件操作；不依赖聊天前置的重复查询。Vite 与 Gateway 在本测试获分配的端口块内使用 E2EProcessLease 选择并持续保留空闲绑定，服务关闭后再释放，将探测写入同一 port-allocation.json，不终止未知进程或更改宿主端口设置。Vite 变体显式指定本用例 runtime 的静态资源输出及派生缓存，核 JSON health、Vite 客户端、源码首页和三条真实 Gateway 初始化接口，再复用相同的浏览器文件／设置／刷新／日志持久化断言。Vite 子进程组取得后立即登记回收，不允许以静态首页回退掩盖开发入口失败。
+  - 元数据场景同时覆盖 Gateway 静态产物和真实 Workbench Vite 源码入口；业务工作区与未注册目录按 run／测试节点隔离，两个参数不能共用目录。通过原版命令打开主窗口当前工作区的底部终端面板，按需读取工作区元数据，核原 metadata／owner／request_id，再通过 native_output.mjs 验收真实日志通道、owner／request_id、原生窗口日志、筛选和隐藏停止读取，然后关闭面板继续原文件操作；不依赖聊天前置的重复查询。Vite 与 Gateway 在本测试获分配的端口块内使用 E2EProcessLease 选择并持续保留空闲绑定，服务关闭后再释放，将探测写入同一 port-allocation.json，不终止未知进程或更改宿主端口设置。Vite 变体显式指定本用例 runtime 的静态资源输出及派生缓存，核 JSON health、Vite 客户端、源码首页和三条真实 Gateway 初始化接口，再复用相同的浏览器文件／设置／刷新／日志持久化断言。Vite 子进程组取得后立即登记回收，不允许以静态首页回退掩盖开发入口失败。
   - 元数据场景还通过原版工作区设置编辑器连续三次保存并直接刷新，核对 JSON 与实际编辑器字体恢复；不预写 IndexedDB，不提前调用关闭 flush。设置可能使用原版 modal editor，按对话框与可见代码行定位；存储关闭错误仍须审计，不能由已知原版关闭日志豁免。
   - Vite 场景直接启动产品 dev 命令指定的 Node／scripts/dev.mjs，让 PID 监听探针观察实际服务 owner；不把 bun run 包装进程冒充监听者，也不移除监听归属检查或放宽原期限。
-  - 主题迁移通过真实 Gateway 控制中心保存网络背景，使用隔离 Gateway 中不存在的合法资源摘要取得原始 404／request_id，核对原版通知 toast 和导航／精确 Thread 宿主的无图片主题；恢复默认背景后聊天仍可操作。没有图片 HTTP 替身或数据库预写，组件 collector 不能代替此接线验收。
+  - 主题迁移通过原生设置 JSON 编辑器保存网络背景，使用隔离 Gateway 中不存在的合法资源摘要取得原始 404／request_id，核对原版通知 toast 和导航／精确 Thread 宿主的无图片主题；恢复默认背景后聊天仍可操作。没有图片 HTTP 替身或数据库预写，组件 collector 不能代替此接线验收。
   - 元数据 Chromium／context 取得后立即交给既有 TestRunContext；执行、截图、结果写入和清理失败须同时保留，截图失败不能阻止 JSON 落盘或浏览器关闭。失败 JSON 包含未完成资源请求及原始页面／console 错误；准备和诊断故障验收复用 test_boundary_display_fixture_lifetime.py，不替代真实产品页面。
   - 元数据场景末尾显式合成 beforeunload/pagehide，使原文档继续存活到延迟日志写入完成；只读真实日志 store，核关闭日志计数增加且无存储错误。该受控检查用于稳定暴露提前关闭连接，不替代前面的真实刷新，也不宣称浏览器强杀时日志必然落盘。
 - MCP 授权、连接错误、工具审批及远端授权场景使用同一 Workbench 构建装具；底部原 `McpServersListView`、`McpServerEditor`、列表命令与授权链接打开的完整 Workbench 都经过真实 Gateway，共用项目 MCP owner。详情正文从实际双层 Webview 读取，未接入的原配置／凭据命令须明确拒绝。Thread 和请求按原生 Gateway／workspace UUID 核对，Relay 身份与操作目标分开；面板恢复使用原工作区展示态，保留回调秘密不泄漏、原 300 秒期限和封存请求的强断言。不得用旧 React 列表或手填连接事实替代原控件验收。
   - 授权管理窗口的目录首次加载使用明确的 503 响应替身，直到原列表实际展示错误；随后沿真实 Gateway 自动恢复同一列表并清除面板错误，再继续真实 OAuth、目录与工具调用。该检查证明原控件失败恢复，不称为真实服务离线验收。
   - MCP 专项在打开 Thread 前，经真实目标的 `/api/v1/agents` 等待 SDK 配置检查就绪并保存耗时／request_id；不改可用性语义，也不将它视作冷启动 Thread 的性能验收。首次 SDK 导入导致的冷初始化超时仍须单独处理。
 - 附件目录页面使用正式 Workbench，按精确 Session/Thread 进入附件预览及派生文件编辑；刷新后核对浏览器恢复的文件预览及真实文件 owner 的冷读。会话快捷目录仍由后端保存，原件不变和快捷目录不扩散的断言保持，不再等待旧服务端布局写入。
-- Backend 完整组管理从主侧栏进入 Gateway 控制中心，确认操作定位独立的业务确认对话框；公开错误与原始诊断按同一 request_id 核对。手动浏览器从所属 Thread 的运行与连接创建，在该 Thread 内预览，不等待旧扩展窗口。
+- Backend 完整组管理从原生设置的运行与高级设置分类进入服务管理，确认操作定位独立的业务确认对话框；公开错误与原始诊断按同一 request_id 核对。手动浏览器从所属 Thread 的运行与连接创建，在该 Thread 内预览，不等待旧扩展窗口。
 - 认证恢复和渐进历史场景加载正式 Workbench。资源页验证真实 401 恢复、可见性轮询及窄宽布局；历史滚动先确认精确 owner 和正文节点，再测分页、工具详情与渲染耗时，不能用全局 document 查询的空结果证明成功。
 - `navigation_mutation_measurements` 是显式独立组件量化 harness，保留其受控挂载边界；不因完整页面改用 ShadowRoot 就机械改写该 harness 的 document 查询。
 - 子 Thread 委派场景使用明确的模型回放与真实 Gateway/Agent/task 工具，属于 Integration；工作台按精确 main/child owner 操作，保留原三次父调用与一次子调用，并额外核验当前自动回报父 Thread 的一次内部调用（合计五次）。子请求必须包含完整冻结任务来源，父回报必须包含真实子结果；保留 SSE 断言，并验证首次与复用标签都展开 child 调试资源。

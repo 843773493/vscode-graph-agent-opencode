@@ -14,7 +14,7 @@ from app.core.identifier import create_uuid_hex
 from app.core.resource_uri import parse_resource_uri
 from app.core.sqlite_state import sqlite_file_uri
 from app.domain.itemized.resource_activation import ResourceActivationContractError
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
 )
 from app.services.infrastructure.rollout_context.activation.common import (

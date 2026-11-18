@@ -17,11 +17,13 @@ from app.core.path_utils import (
     get_workspace_config_path,
 )
 from app.schemas.gateway.service_plugin import PluginBinding
+from app.schemas.internal_v2.config import ConfigSourceOriginDTO
 from app.services.infrastructure.config import (
     ConfigReloadStatus,
     ConfigSnapshot,
     build_config_snapshot,
 )
+from app.services.infrastructure.config.source_document import source_origins
 from app.services.infrastructure.config.state import (
     ConfigActiveSnapshotRecord,
     ConfigConflictError,
@@ -62,10 +64,10 @@ class ConfigSnapshotMixin:
         validate_schema: bool = True,
         source_override: tuple[str, dict[str, object]] | None = None,
         import_sources: bool = True,
-        source_payloads: dict[str, dict[str, object]] | None = None,
     ) -> ConfigSnapshot:
+        layers: dict[str, dict[str, object]] = {}
         config, source_paths, source_details, schema_path = self._read_effective_config(
-            source_override=source_override, import_sources=import_sources, source_payloads=source_payloads,
+            source_override=source_override, import_sources=import_sources, source_payloads=layers,
         )
         try:
             require_current_workspace_config(config)
@@ -90,6 +92,7 @@ class ConfigSnapshotMixin:
                 source_paths=tuple(dict.fromkeys((*source_paths, *instruction_paths))),
                 source_details=source_details,
                 schema_path=schema_path,
+                origins=source_origins(layers, config),
             )
         except Exception as error:
             if import_sources:
@@ -104,6 +107,7 @@ class ConfigSnapshotMixin:
         snapshot = self._require_snapshot()
         try:
             validate_config_payload(snapshot.to_dict(), schema=self._load_schema())
+            self._validate_agent_definition_references(snapshot.to_dict())
             self._validate_agent_tool_policies(snapshot.to_dict())
         except Exception as error:
             if self._loaded_source == "source":
@@ -217,6 +221,9 @@ class ConfigSnapshotMixin:
             source_paths=source_paths,
             source_details=source_details,
             schema_path=self._resolve_schema_path(),
+            origins=[ConfigSourceOriginDTO(path=path, source_key=source_key, shadowed_sources=shadowed).model_dump()
+                for source_key, detail in record.source_baseline.items()
+                for path, shadowed in cast(dict[str, list[str]], cast(dict, detail).get("value_origins", {})).items()],
         )
         expected_digest = record.effective_digest
         if snapshot.revision != expected_digest:

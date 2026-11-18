@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
@@ -9,7 +11,7 @@ router = APIRouter()
 
 def _terminal_asset(path: str) -> FileResponse:
     """Gateway 直接发布产品 attach 资产，不再启动第二个静态服务。"""
-    root = get_project_root()
+    root = get_project_root(os.environ.get("BOXTEAM_FRONTEND_ROOT"))
     client = root / "src/workspace-services/terminal/client"
     fixed = {
         "": client / "index.html", "index.html": client / "index.html",
@@ -17,11 +19,15 @@ def _terminal_asset(path: str) -> FileResponse:
         "terminalUserActions.js": client / "terminalUserActions.js",
         "terminalShortcuts.js": client / "terminalShortcuts.js",
         "shared/commandText.js": root / "src/workspace-services/terminal/shared/commandText.js",
+        "shared/sse.js": root / "src/shared/sse.js",
+        "shared/sseRuntime.js": root / "src/shared/sseRuntime.js",
+        "shared/sseRuntimeValidators.js": root / "src/shared/sseRuntimeValidators.js",
         "protocol/messages.js": root / "src/workspace-services/terminal/protocol/messages.js",
         "vendor/xterm/xterm.css": root / "node_modules/@xterm/xterm/css/xterm.css",
         "vendor/xterm/xterm.js": root / "node_modules/@xterm/xterm/lib/xterm.js",
         "vendor/xterm/addon-fit.js": root / "node_modules/@xterm/addon-fit/lib/addon-fit.js",
         "vendor/xterm/addon-search.js": root / "node_modules/@xterm/addon-search/lib/addon-search.js",
+        "vendor/xterm/addon-unicode11.js": root / "node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js",
         "vendor/codicon/codicon.css": root / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.css",
         "vendor/codicon/codicon.ttf": root / "src/clients/web/node_modules/@vscode/codicons/dist/codicon.ttf",
     }
@@ -56,7 +62,7 @@ def _proxy_attach_frontend(*, kind: str, path: str):
 
 def _browser_asset(path: str) -> FileResponse:
     """Gateway 直接发布 Browser attach 页面及固定产品资源。"""
-    root = get_project_root()
+    root = get_project_root(os.environ.get("BOXTEAM_FRONTEND_ROOT"))
     client = root / "src/workspace-services/browser/client"
     fixed = {
         "": client / "index.html", "index.html": client / "index.html",

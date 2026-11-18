@@ -6,6 +6,44 @@ import { pinnedUpstreamCommit, sourceTransform, transformedSourcePaths } from '.
 import { pruneUnusedImportsAndConstants } from './extensions/extensionManagementTransform.mjs';
 import { parseUniqueJson } from './actionTitles.mjs';
 
+test('原生输出过滤原始进程日志时保留结尾空行，避免无匹配反而显示全部', async () => {
+  const root = resolve('src/clients/workbench');
+  const path = join(root, 'upstream/src/vs/workbench/contrib/output/browser/outputView.ts');
+  const output = await sourceTransform(root, { commit: pinnedUpstreamCommit }, [])(path, await readFile(path, 'utf8'));
+  const source = ts.createSourceFile(path, output, ts.ScriptTarget.Latest, true);
+  const controller = source.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'FilterController');
+  const compute = controller.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(source) === 'compute');
+  const js = ts.transpileModule(`class Subject { ${compute.getText(source)} }`, { compilerOptions: { target: ts.ScriptTarget.ES2024 } }).outputText;
+  const Subject = new Function('Range', `${js}; return Subject;`)(class { constructor(startLineNumber) { this.startLineNumber = startLineNumber; } });
+  const subject = new Subject();
+  subject.outputService = { filters: { includePatterns: ['missing'], excludePatterns: [] }, getActiveChannel: () => ({ getLogEntries: () => [] }) };
+  subject.shouldShowLine = () => ({ show: false, matches: [] });
+  for (const finalColumn of [1, 3]) {
+    const result = subject.compute({ getLineCount: () => 2, getLineMaxColumn: line => line === 2 ? finalColumn : 3 }, 1);
+    expect(result.hiddenAreas.map(range => range.startLineNumber)).toEqual(finalColumn === 1 ? [1] : [1, 2]);
+  }
+});
+
+test('原生标题动作重建保留存活筛选框焦点，不恢复已删除控件', async () => {
+  const root = resolve('src/clients/workbench');
+  const path = join(root, 'upstream/src/vs/workbench/browser/parts/compositePart.ts');
+  const output = await sourceTransform(root, { commit: pinnedUpstreamCommit }, [])(path, await readFile(path, 'utf8'));
+  const source = ts.createSourceFile(path, output, ts.ScriptTarget.Latest, true);
+  const declaration = source.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'CompositePart');
+  const method = declaration.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(source) === 'collectCompositeActions');
+  const js = ts.transpileModule(`class Subject { ${method.getText(source)} }`, { compilerOptions: { target: ts.ScriptTarget.ES2024 } }).outputText;
+  const Subject = new Function('prepareActions', `${js}; return Subject;`)(actions => actions);
+  for (const survives of [true, false]) {
+    let focused = 0;
+    const input = { isConnected: true, focus() { focused++; } };
+    const subject = new Subject();
+    subject.actionsContextProvider = () => undefined;
+    subject.toolBar = { getElement: () => ({ querySelector: () => input }), setActions() { input.isConnected = survives; } };
+    subject.collectCompositeActions()();
+    expect(focused).toBe(survives ? 1 : 0);
+  }
+});
+
 test('同一 sourceTransform 闭包只序列化一次内置扩展清单', async () => {
   let serializations = 0;
   const extensions = {

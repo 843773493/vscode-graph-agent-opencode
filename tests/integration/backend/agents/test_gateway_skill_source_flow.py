@@ -115,14 +115,27 @@ async def _wait_job(client: httpx.AsyncClient, job_id: str) -> dict:
 
 def _configure_model(config_path: Path, endpoint: str) -> None:
     config = commentjson.loads(config_path.read_text())
-    config["llm"]["providers"] = [{
-        "id": "gateway-skill-test", "endpoint": endpoint, "model": "gateway-skill-test-model",
-        "api_key": "gateway-skill-test-key", "custom_llm_provider": "openai",
-        "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True, "supports_reasoning": False}, "supports_reasoning": {"reasoning_content": False}},
-    }]
+    config["llm"]["providers"] = {
+        "gateway-skill-test": {
+            "defaults": {
+                "endpoint": endpoint,
+                "api_key": "",
+                "custom_llm_provider": "openai",
+                "api_mode": {
+                    "protocol": "chat_completions",
+                    "model_info": {
+                        "supports_function_calling": True,
+                        "supports_reasoning": False,
+                    },
+                    "supports_reasoning": {"reasoning_content": False},
+                },
+            },
+            "models": {"default": {"model": "gateway-skill-test-model"}},
+        }
+    }
     for agent in config["agents"].values():
         if "model" in agent:
-            agent["model"] = {"primary_provider": "gateway-skill-test", "fallback_providers": []}
+            agent["model"] = {'primary': {'provider_id': 'gateway-skill-test', 'model_id': 'default'}, 'fallbacks': []}
         # 只保留内置工具，移除与来源闭包无关的外部 Provider 引用。
         agent["tools"]["custom"] = []
     config.setdefault("runtime", {}).setdefault("gateway", {})["connection"] = {"timeout_seconds": 2}

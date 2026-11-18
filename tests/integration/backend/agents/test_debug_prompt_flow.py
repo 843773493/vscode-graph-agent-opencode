@@ -236,27 +236,26 @@ def scripted_gateway_process(
     config_path = Path(integration_workspace_config_path)
     config = _json_object(commentjson.loads(config_path.read_text(encoding="utf-8")))
     llm = _json_object(config["llm"])
-    providers = _json_array(llm["providers"])
-    llm["providers"] = [
-        *providers,
-        {
-            "id": "debug-e2e",
+    providers = _json_object(llm["providers"])
+    providers["debug-e2e"] = {
+        "defaults": {
             "endpoint": endpoint,
-            "model": "debug-e2e-model",
-            "api_key": "debug-e2e-key",
+            "api_key": "",
             "custom_llm_provider": "openai",
             "api_mode": {
                 "protocol": "chat_completions",
                 "model_info": scripted_model_info,
                 "supports_reasoning": {"reasoning_content": True},
             },
-        }
-    ]
+        },
+        "models": {"default": {"model": "debug-e2e-model"}},
+    }
     agents = _json_object(config["agents"])
     default_agent = _json_object(agents["default"])
-    model = _json_object(default_agent["model"])
-    model["primary_provider"] = "debug-e2e"
-    model["fallback_providers"] = []
+    default_agent["model"] = {
+        "primary": {"provider_id": "debug-e2e", "model_id": "default"},
+        "fallbacks": [],
+    }
     workspace_root = Path(integration_workspace_root_path)
     runtime = _json_object(config.setdefault("runtime", {}))
     debug = _json_object(runtime.setdefault("debug", {}))

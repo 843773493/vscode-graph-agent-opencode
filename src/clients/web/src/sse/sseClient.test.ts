@@ -208,6 +208,20 @@ describe("通用 SSE 传输层", () => {
     expect(order).toEqual(["event-1", "microtask", "event-2"]);
   });
 
+  test.each([false, true])("取消后停止当前批次并释放读取锁（让出=%s）", async (yieldBetweenEvents) => {
+    const abort = new AbortController(), received: string[] = [];
+    const response = streamResponse(["data: first\n\ndata: second\n\n"]);
+    await consumeSseResponse(response, {
+      signal: abort.signal, yieldBetweenEvents,
+      events: { message: defineSseEvent((value) => value, (value) => {
+        received.push(value);
+        abort.abort();
+      }) },
+    });
+    expect(received).toEqual(["first"]);
+    expect(response.body!.locked).toBe(false);
+  });
+
   test("保留 data 字段中协议允许的首尾空格", () => {
     expect(parseSseFrameBlock("data:  value ")).toEqual({
       event: "message",

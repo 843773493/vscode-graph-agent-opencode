@@ -310,6 +310,12 @@ test("终端落盘只保存一份原始输出，重启重建完整展示快照",
   assert.equal(Object.hasOwn(summary, "display_buffer"), false);
   assert.equal(summary.last_command, expectedSnapshot.last_command);
   assert.equal(summary.sequence, expectedSnapshot.sequence);
+  // 定点读取不触碰其它终端的摘要或输出，缺失仍沿原清单缺失语义交给领域 owner。
+  manager.terminalsById.set("term_other", { summary() { throw new Error("不应读取其它资源"); } });
+  try {
+    assert.deepEqual(manager.list([session.id, session.id, "term_missing"]), [summary]);
+    assert.deepEqual(manager.list([]), []);
+  } finally { manager.terminalsById.delete("term_other"); }
 
   await manager.persist();
   const [record] = await manager.stateStore.readRecords();
@@ -734,4 +740,41 @@ test("创建前目录拒绝回执绑定唯一 intent，重复身份不伪报未�
     assert.equal(error.creationReceipt, undefined);
     return true;
   });
+});
+
+
+test("状态订阅只在已提交的资源/命令状态变化时通知，输出不触发补读", async () => {
+  const manager = createManager({ workspaceRoot: createTerminalTestWorkspace(), workspaceId: "00000000-0000-4000-8000-000000000001" });
+  await manager.init();
+  const id = `term_${randomUUID().replaceAll("-", "")}`;
+  await manager.cancelCreation(id, 1);
+  const terminal = manager.get(id);
+  const frames = [];
+  let close;
+  const response = {
+    writeHead(status, headers) { assert.equal(status, 200); assert.equal(headers["content-type"], "text/event-stream"); },
+    write(frame) { frames.push(frame); return true; },
+    once(event, callback) { assert.equal(event, "close"); close = callback; },
+    end() { close(); },
+  };
+  const stop = manager.observe(response);
+  try {
+    assert.equal(frames.length, 1);
+    assert.deepEqual(JSON.parse(frames[0].split("data: ")[1]), { resource_ids: null });
+    terminal.buffer += "output";
+    terminal.outputSequence += 1;
+    terminal.touch();
+    await manager.persist();
+    assert.equal(frames.length, 1);
+    terminal.markModelBackgrounded();
+    await manager.persist();
+    assert.equal(frames.length, 2);
+    assert.deepEqual(JSON.parse(frames[1].split("data: ")[1]), { resource_ids: [id] });
+    await manager.persist();
+    assert.equal(frames.length, 2);
+    stop();
+    assert.equal(manager.stateObservers.size, 0);
+    manager.observe(response)();
+    assert.equal(frames.length, 3);
+  } finally { stop(); }
 });

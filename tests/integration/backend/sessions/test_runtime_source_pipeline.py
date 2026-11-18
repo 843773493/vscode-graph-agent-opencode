@@ -45,8 +45,10 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.gateway.credentials import load_or_create_gateway_id
 from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.routes.secrets import router as gateway_secrets_router
 from app.gateway.routes.skill_sources import router as gateway_skill_sources_router
 from app.gateway.runtime.skill_sources import GatewaySkillSourceOwner
+from app.gateway.secrets.vault import SecretVault
 from app.prompting import PromptSection, internal_message_factory
 from app.runtime.model_stream import configure_model_stream_from_environment
 from app.services.business.message_display import project_message_for_display
@@ -55,7 +57,9 @@ from app.services.business.runtime_reminder import (
     submit_runtime_reminder,
 )
 from app.services.infrastructure.config_service import ConfigService
-from app.services.infrastructure.mcp.catalog_activation import MCP_GUIDANCE_SOURCE_ID
+from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_GUIDANCE_SOURCE_ID,
+)
 from app.services.infrastructure.resource_platform.virtual_resources import (
     workspace_agent_spec_display_uri,
 )
@@ -143,7 +147,7 @@ class ModelReplayCase:
             assert main_thread.status_code == 200, main_thread.text
             thread_id = main_thread.json()["data"]["thread_id"]
         config = commentjson.loads((self.workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-        endpoint = next(provider["endpoint"] for provider in config["llm"]["providers"] if provider["id"] == "primary")
+        endpoint = config["llm"]["providers"]["primary"]["defaults"]["endpoint"]
         interactions = [build_cassette(
             asset_id="runtime-source-restart", model="e2e-stub-model", url=endpoint + "/chat/completions",
             frames=chat_completion_frames(
@@ -215,19 +219,20 @@ def _prepare_source_workspace(
         schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
     )
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        provider.update({
-            "endpoint": f"http://127.0.0.1:{port}/v1", "model": "e2e-stub-model",
-            "api_key": "e2e-local-model-key", "custom_llm_provider": "openai",
+    for provider in config["llm"]["providers"].values():
+        if "auth" in provider["defaults"]:
+            continue
+        provider["defaults"] = {
+            "endpoint": f"http://127.0.0.1:{port}/v1",
+            "api_key": "${BOXTEAM_E2E_MODEL_KEY}", "custom_llm_provider": "openai",
             "api_mode": {"protocol": "chat_completions", "model_info": {
                 "supports_function_calling": True, "supports_reasoning": True,
             }, "supports_reasoning": {"reasoning_content": True}},
-        })
-        provider.pop("auth", None)
-        provider.pop("request_options", None)
+        }
+        provider["models"] = {"default": {"model": "e2e-stub-model"}}
     config.setdefault("runtime", {}).setdefault("agent", {}).setdefault("run", {})["mode"] = "team"
     for agent in config["agents"].values():
-        agent["model"]["fallback_providers"] = []
+        agent["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
         agent.setdefault("execution", {})["require_delegated_report"] = delegated_report
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return workspace
@@ -260,9 +265,12 @@ async def _managed_gateway_skill_source(
     ))
     api = FastAPI()
     api.include_router(gateway_skill_sources_router)
+    api.include_router(gateway_secrets_router)
     api.add_middleware(TraceMiddleware)
+    api.state.gateway_id = gateway_id
     api.state.registry = registry
     api.state.skill_source_owner = owner
+    api.state.secret_vault = SecretVault(gateway_root / "credentials" / "secrets")
     server = uvicorn.Server(uvicorn.Config(
         api, host="127.0.0.1", port=port, log_level="error", access_log=False,
         log_config=None, lifespan="off",
@@ -306,6 +314,7 @@ async def source_case(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[RuntimeSourceCase]:
+    monkeypatch.setenv("BOXTEAM_E2E_MODEL_KEY", "e2e-local-model-key")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     port = integration_port_block_for_file(Path(request.node.path)).port(10)
     options = getattr(request, "param", {})
@@ -507,7 +516,7 @@ def _assert_generated_notice(
     assert private_result not in canonical_json_bytes(notice.extensions).decode()
     assert notice.content_hash == content_hash(notice.payload_kind, notice.payload)
     annotations = notice.extensions["boxteam.checkpoint.annotations"]["value"]
-    assert set(annotations) == {"structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_provider_id"}
+    assert set(annotations) == {"structured_prompt_kind", "structured_prompt_schema_version", "boxteam_session_model"}
     # 从权威持久 item 构造全新 codec 冷投影，再核对封存 selection 和 hash。
     assemblies = storage.assemblies.list_context_assemblies(session_id, thread_id)
     report_assemblies = tuple(a for a in assemblies if a.execution_id == notice.producer_ref["invocation_id"])
@@ -552,16 +561,16 @@ async def test_provider_build_failure_is_publicly_safe_and_same_session_recovers
         patch.setattr("app.runtime.provider_model.build_model_from_provider", build_failure)
         provider_response = await case.client.get("/api/v1/agents/default")
         assert provider_response.status_code == 200, provider_response.text
-        providers = provider_response.json()["data"]["providers"]
-        assert providers and all(not provider["available"] for provider in providers)
-        assert all("FileNotFoundError" in provider["configuration_error"] for provider in providers)
+        models = provider_response.json()["data"]["models"]
+        assert models and all(model["available"] and model["configuration_error"] is None for model in models)
+        assert errors == [], "模型定义读取不应构造 SDK"
         accepted = await _send(case, session_id, "验证模型构建错误")
         job_id = accepted["job_id"]
         assert isinstance(job_id, str)
         failed = await _job(case, job_id, "failed")
         message = failed["error_message"]
         assert isinstance(message, str)
-        assert "provider_id=primary" in message and "FileNotFoundError" in message
+        assert "provider_id=primary, model_id=default" in message and "FileNotFoundError" in message
         # Job先提交终态再发布事件，等原事件链完成，不把状态可见误当作事件已发布。
         async with asyncio.timeout(10):
             while True:
@@ -570,7 +579,9 @@ async def test_provider_build_failure_is_publicly_safe_and_same_session_recovers
                     break
                 await asyncio.sleep(0.05)
         assert len(terminal) == 1 and terminal[0]["payload"]["error"] == message
-        assert str(missing) not in provider_response.text + json.dumps(failed) + json.dumps(events)
+        assert str(missing) not in provider_response.text
+        # 诊断保留目标机器上的实际 I/O 位置；定义读取仍不执行模型构造。
+        assert str(missing) in message and "errno=2" in message
         assert case.requests() == []
         assert case.sql(session_id, thread_id, "SELECT outcome FROM executions") == [("failed",)]
         assert all(error.filename == str(missing) for error in errors)
@@ -587,10 +598,10 @@ async def test_provider_build_failure_is_publicly_safe_and_same_session_recovers
     assert sorted(case.sql(session_id, thread_id, "SELECT outcome FROM executions")) == [("completed",), ("failed",)]
     history = await case.client.get(f"/api/v1/sessions/{session_id}/bootstrap", params={"thread_id": thread_id})
     assert history.status_code == 200, history.text
-    assert "同一会话已恢复模型执行" in history.text and str(missing) not in history.text
+    assert "同一会话已恢复模型执行" in history.text
     case.write_actual("provider-build-recovery", {
         "provider": provider_response.json(), "failed_job": failed,
-        "events": events.json(), "completed_job": completed, "history": history.json(),
+        "events": events, "completed_job": completed, "history": history.json(),
     })
 
 
@@ -2042,7 +2053,9 @@ class RestartRuntimeSourceCase(ModelReplayCase):
 @pytest.fixture
 async def restart_source_case(
     request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[RestartRuntimeSourceCase]:
+    monkeypatch.setenv("BOXTEAM_E2E_MODEL_KEY", "e2e-local-model-key")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     ports = integration_port_block_for_file(Path(request.node.path))
     workspace = _prepare_source_workspace(context, ports.port(10))

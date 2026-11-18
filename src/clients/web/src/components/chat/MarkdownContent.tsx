@@ -13,6 +13,8 @@ import {
   remarkWorkspaceFileReferences,
 } from "../../utils/workspaceFileReferences";
 import WorkspaceFileReferenceLink from "./WorkspaceFileReferenceLink";
+import { truncateDisplayText } from "../../utils/displayText";
+import type { ChatItemMenuHandlers } from "./itemContextMenu";
 
 function isExternalHref(href: string): boolean {
   return /^(https?:|mailto:|tel:)/i.test(href);
@@ -212,6 +214,7 @@ export interface MarkdownContentProps {
   streaming?: boolean;
   renderMode?: MarkdownRenderMode;
   responseSources?: string;
+  contextMenu?: ChatItemMenuHandlers;
 }
 
 function MarkdownContent({
@@ -220,6 +223,7 @@ function MarkdownContent({
   streaming = false,
   renderMode = "progressive",
   responseSources,
+  contextMenu,
 }: MarkdownContentProps): React.ReactNode {
   const renderedValue = useStreamingMarkdownValue(value, streaming);
   const [fullyRenderedValue, setFullyRenderedValue] = useState<string | null>(null);
@@ -232,7 +236,7 @@ function MarkdownContent({
     && renderedValue.length >= LARGE_MARKDOWN_DEFER_THRESHOLD
     && fullyRenderedValue !== renderedValue;
   const markdownValue = boundedMarkdown
-    ? renderedValue.slice(0, LARGE_MARKDOWN_PREVIEW_LENGTH)
+    ? truncateDisplayText(renderedValue, LARGE_MARKDOWN_PREVIEW_LENGTH)
     : renderedValue;
   const markdown = <MemoizedMarkdown value={markdownValue} />;
   return (
@@ -241,6 +245,7 @@ function MarkdownContent({
       data-response-sources={responseSources}
       data-markdown-rendering={renderMarkdown ? "enhanced" : "lightweight"}
       aria-busy={!renderMarkdown}
+      {...contextMenu}
     >
       {renderMarkdown ? (
         boundedMarkdown ? (
@@ -267,5 +272,6 @@ export default React.memo(MarkdownContent, (previous, next) =>
   && previous.className === next.className
   && previous.streaming === next.streaming
   && previous.renderMode === next.renderMode
-  && previous.responseSources === next.responseSources,
+  && previous.responseSources === next.responseSources
+  && previous.contextMenu === next.contextMenu,
 );

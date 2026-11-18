@@ -350,9 +350,12 @@ export function createSessionCatalogOutboxRuntime(
   };
 
   const getPersistence = (): Promise<CatalogOutboxPersistencePort> => {
-    persistencePromise ??= options.openPersistence
-      ? options.openPersistence()
-      : openCatalogOutboxDatabase().then(createIndexedDbCatalogOutboxPort);
+    if (!persistencePromise) {
+      const opening = options.openPersistence ? options.openPersistence()
+        : openCatalogOutboxDatabase().then(createIndexedDbCatalogOutboxPort);
+      persistencePromise = opening;
+      void opening.catch(() => { if (persistencePromise === opening) persistencePromise = null; });
+    }
     return persistencePromise;
   };
 

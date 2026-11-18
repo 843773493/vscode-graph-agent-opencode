@@ -11,6 +11,7 @@ Gateway 的两个 httpx 客户端都不设读取超时：SSE 必须能长期占�
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable, Iterable
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -18,6 +19,7 @@ import httpx
 from fastapi import HTTPException, WebSocket
 from websockets.asyncio.client import ClientConnection
 
+from app.core.failures import HTTP_FAILURE_HEADER, mark_http_failure
 from app.core.identifier import validate_gateway_id
 from app.core.shielded_cleanup import run_cleanup_shielded
 
@@ -95,6 +97,7 @@ GATEWAY_PROXY_DROPPED_HEADERS = frozenset(
         "x-boxteam-gateway-connection-id",
         "x-boxteam-navigation-actor",
         "x-boxteam-extension-client-id",
+        HTTP_FAILURE_HEADER.lower(),
     }
 )
 
@@ -159,11 +162,33 @@ async def send_upstream_request(
     连接池并关闭已建立的上游连接，因此挂起的上游不会随代理任务一起泄漏。
     """
 
-    return await asyncio.wait_for(
-        client.send(request, stream=True),
-        timeout=(UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS
-                 if response_headers_timeout_seconds is None else response_headers_timeout_seconds),
-    )
+    try:
+        response = await asyncio.wait_for(
+            client.send(request, stream=True),
+            timeout=(UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS
+                     if response_headers_timeout_seconds is None else response_headers_timeout_seconds),
+        )
+    except (httpx.RequestError, TimeoutError) as error:
+        target = {
+            field: value for field, header in (
+                ("gateway_id", TARGET_GATEWAY_ID_HEADER),
+                ("workspace_id", "X-BoxTeam-Workspace-Id"),
+            ) if (value := request.headers.get(header)) is not None
+        }
+        mark_http_failure(error, {
+            "stage": "upstream_headers" if isinstance(error, TimeoutError) else "upstream_request",
+            "error_type": type(error).__name__,
+            "status_code": 504 if isinstance(error, TimeoutError) else 502,
+            "target": target,
+        })
+        raise
+    if response.is_error and HTTP_FAILURE_HEADER not in response.headers:
+        # 外部服务可能只返回普通 HTTP 错误；未知来源不能被末端 Gateway 冒认。
+        response.headers[HTTP_FAILURE_HEADER] = json.dumps({
+            "source": {"component": "unknown_upstream"},
+            "stage": "upstream_response",
+        }, separators=(",", ":"))
+    return response
 
 
 async def close_upstream_response(

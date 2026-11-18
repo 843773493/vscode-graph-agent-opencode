@@ -241,7 +241,7 @@ export function useWorkspaceFileTreeContextMenu({
   };
 
   const downloadEntry = async (target: FileTreeContextMenuTarget) => {
-    const request = await createWorkspaceFileDownloadRequest(
+    const request = createWorkspaceFileDownloadRequest(
       port,
       target.treePath,
       target.kind === "directory" ? `${target.label}.zip` : target.label,

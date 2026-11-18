@@ -5,12 +5,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from .model_reference import ModelReferenceDTO
+
 ToolTestStatus = Literal["queued", "running", "completed", "failed"]
 
 
 class ToolTestStartRequest(BaseModel):
     agent_id: str | None = None
-    provider_ids: list[str] = Field(default_factory=list)
+    model_refs: list[ModelReferenceDTO] = Field(default_factory=list)
     repetitions: int = Field(default=1, ge=1, le=20)
 
 
@@ -18,7 +20,7 @@ class ToolTestAttemptDTO(BaseModel):
     # 标识一轮 case/provider/model 工具测试样本，包含其内部重试；不是单次工具执行或重试 ID。
     attempt_id: str
     case_id: str
-    provider_id: str
+    model_ref: ModelReferenceDTO
     model: str
     status: ToolTestStatus
     passed: bool
@@ -32,8 +34,8 @@ class ToolTestAttemptDTO(BaseModel):
     error: str | None = None
 
 
-class ToolTestProviderResultDTO(BaseModel):
-    provider_id: str
+class ToolTestModelResultDTO(BaseModel):
+    model_ref: ModelReferenceDTO
     model: str
     status: ToolTestStatus
     completed: int = 0
@@ -54,7 +56,7 @@ class ToolTestRunDTO(BaseModel):
     created_at: datetime
     updated_at: datetime
     repetitions: int
-    providers: list[ToolTestProviderResultDTO] = Field(default_factory=list)
+    models: list[ToolTestModelResultDTO] = Field(default_factory=list)
     attempts: list[ToolTestAttemptDTO] = Field(default_factory=list)
     error: str | None = None
 

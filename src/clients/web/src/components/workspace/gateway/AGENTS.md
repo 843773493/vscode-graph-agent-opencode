@@ -1,6 +1,6 @@
 # 目录用途
 
-`components/workspace/gateway/` 存放 Gateway 控制面的专用组件：控制中心 GatewayControlCenter、连接对话框 GatewayConnectionDialog、入站访问面板 GatewayInboundAccessPanel、诊断面板 GatewayDiagnosticsPanel、主题设置 GatewayThemeSettings，以及工作区分组纯逻辑 gatewayWorkspacePresentation。
+`components/workspace/gateway/` 存放 Gateway 控制面的专用组件：原生设置内容 GatewaySettingsContent、连接对话框 GatewayConnectionDialog、入站访问面板 GatewayInboundAccessPanel、诊断面板 GatewayDiagnosticsPanel、背景资源 GatewayBackgroundAssets，以及工作区分组纯逻辑 gatewayWorkspacePresentation。
 
 `GatewayDiagnosticLogLocation` 是原诊断视图的临时原行定位展示，只调用具名精确读取；切换或关闭释放原文，不读取整份日志、不改变工作区或会话状态。
 
@@ -14,7 +14,7 @@
 
 # 可修改内容
 
-- Gateway 控制中心、连接、入站访问、诊断与主题设置的布局与交互。
+- 原生设置内的连接、入站访问、运行、诊断与背景资源的布局与交互。
 - Gateway 工作区分组的纯展示逻辑与相关组件测试。
 
 # 不可修改内容
@@ -29,3 +29,5 @@
 - 导入共享模块使用显式相对路径，禁止任何指向旧平铺路径的转发层。
 - 代码注释使用中文，专业术语除外。
 - 修改本目录后需要运行 `bun run --cwd src/clients/web build`。
+
+管理内容只嵌入原 Settings Pane；分类、范围及主工具栏由 Workbench 提供，不再挂载独立控制中心。连接与设备授权归入口 Gateway，运行管理按明确目标筛选；业务 writer 与原确认流程保持唯一。列表刷新只更新对应读取，不能按 revision 重建表单或一次性凭据展示；关闭连接信息后才释放该展示态。

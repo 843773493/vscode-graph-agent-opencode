@@ -22,13 +22,11 @@ function accessError(error: unknown): string {
 interface GatewayInboundAccessPanelProps {
   apiPort: number;
   revision?: number;
-  onAddDevice: () => void;
 }
 
 export default function GatewayInboundAccessPanel({
   apiPort,
   revision = 0,
-  onAddDevice,
 }: GatewayInboundAccessPanelProps) {
   const confirm = useWarmConfirm();
   const [inbound, setInbound] = useState<GatewayInboundAccessList | null>(null);
@@ -48,8 +46,6 @@ export default function GatewayInboundAccessPanel({
       setInbound(nextInbound);
       setDevices(nextDevices.items);
     } catch (loadError) {
-      setInbound(null);
-      setDevices([]);
       setError(accessError(loadError));
     } finally {
       setLoading(false);
@@ -88,25 +84,16 @@ export default function GatewayInboundAccessPanel({
   };
 
   return (
-    <section className="gateway-device-section" aria-labelledby="gateway-external-device-title">
+    <section className="gateway-device-section panel-feedback-host" aria-busy={loading} aria-labelledby="gateway-external-device-title">
       <div className="gateway-connection-section-heading">
         <div>
           <h2 id="gateway-external-device-title">{t("gateway.inbound.title")}</h2>
           <p>{t("gateway.inbound.description")}</p>
         </div>
-        <div className="gateway-section-actions">
-          <button type="button" className="gateway-compact-button" onClick={onAddDevice}>
-            <span className="codicon codicon-add" aria-hidden="true" />
-            {t("gateway.inbound.addDevice")}
-          </button>
-          <button type="button" className="gateway-compact-button" disabled={loading} onClick={() => void load()}>
-            <span className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
-            {t("gateway.common.refresh")}
-          </button>
-        </div>
+
       </div>
 
-      {error ? <div className="gateway-console-alert" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>{t("gateway.inbound.operationFailed")}</strong><span>{error}</span></div></div> : null}
+      {error ? <div className="panel-feedback" role="alert"><span className="codicon codicon-error" aria-hidden="true" /><div><strong>{t("gateway.inbound.operationFailed")}</strong><span>{error}</span></div></div> : null}
 
       {inbound ? <div className="gateway-federation-peers" aria-label={t("gateway.inbound.scope")}>
         <h3>{t("gateway.inbound.owner")}</h3>
@@ -119,9 +106,7 @@ export default function GatewayInboundAccessPanel({
         </li>)}</ul> : <p>{t("gateway.inbound.noAuthorizedWorkspaces")}</p>}
       </div> : null}
 
-      {loading ? (
-        <div className="gateway-connection-state"><span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />{t("gateway.inbound.loading")}</div>
-      ) : devices.length > 0 ? (
+      {devices.length > 0 ? (
         <div className="gateway-device-list">
           {devices.map((device) => (
             <article key={device.connection_id}>
@@ -137,7 +122,7 @@ export default function GatewayInboundAccessPanel({
             </article>
           ))}
         </div>
-      ) : !error ? (
+      ) : !loading && !error ? (
         <div className="gateway-connection-empty">
           <span className="codicon codicon-device-mobile" aria-hidden="true" />
           <strong>{t("gateway.inbound.noDevices")}</strong>

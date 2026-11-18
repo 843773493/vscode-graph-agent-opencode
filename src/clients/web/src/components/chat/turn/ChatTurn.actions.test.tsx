@@ -20,9 +20,9 @@ describe("ChatTurn 用户动作", () => {
 
     const html = renderToStaticMarkup(<ChatTurn {...chatTurnProps(value)} />);
 
-    expect(html).toContain('aria-label="空用户消息，右键展开原始消息"');
-    expect(html).toContain('aria-label="消息操作"');
-    expect(html).toContain("codicon-add");
+    expect(html).toContain('aria-label="空用户消息，右键菜单可查看原始消息"');
+    expect(html).not.toContain("chat-user-action-menu");
+    expect(html).not.toContain("codicon-add");
     expect(html).not.toContain("<system_reminder>原始消息</system_reminder>");
   });
 
@@ -40,8 +40,8 @@ describe("ChatTurn 用户动作", () => {
       />,
     );
 
-    expect(html).toContain('aria-label="消息操作"');
-    expect(html).toContain("codicon-add");
+    expect(html).toContain('aria-label="用户消息"');
+    expect(html).not.toContain("codicon-add");
     expect(html).toContain('aria-label="回复操作"');
     expect(html).toContain('aria-label="复制"');
     expect(html).not.toContain("重新生成最后回复");
@@ -61,7 +61,7 @@ describe("ChatTurn 用户动作", () => {
       />,
     );
 
-    expect(html).toContain('aria-label="消息操作"');
+    expect(html).toContain('aria-label="用户消息"');
     expect(html).not.toContain("重新生成最后回复");
   });
 

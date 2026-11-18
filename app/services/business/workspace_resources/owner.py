@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import Event
 
 from app.abstractions.workspace_resources import (
+    ResourceChanges,
     ResourceKind,
     ResourceSessionAccess,
     ResourceSnapshot,
@@ -45,6 +46,12 @@ from app.services.business.workspace_resources.records import (
     ThreadRef,
 )
 from app.services.business.workspace_resources.recovery import ResourceRecovery
+from app.services.infrastructure.events.event_channel_service import (
+    EventChannel,
+    EventChannelService,
+    EventChannelSpec,
+    channel_name,
+)
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
     ResourceLease,
@@ -86,8 +93,11 @@ class WorkspaceResourceOwner:
         self._leases = leases
         self._clock = clock
         self._thread_release_fence = thread_release_fence
+        self._observations: EventChannel[frozenset[str]] = EventChannelService().ensure_channel(EventChannelSpec(
+            name=channel_name("workspace.resources", self.kind), overflow_policy="gap", max_queue_size=64, history_size=0,
+        ))
         self._store = ResourceRecordStore(
-            workspace_root=workspace_root, workspace_id=workspace_id, kind=self.kind
+            workspace_root=workspace_root, workspace_id=workspace_id, kind=self.kind, on_changed=self.notify_changed,
         )
         self._resource_locks = {resource_id: asyncio.Lock() for resource_id in self._store.ids()}
         self._recovery = ResourceRecovery(self)
@@ -95,6 +105,23 @@ class WorkspaceResourceOwner:
         self.deletion_holder = OperationHolderGate(
             workspace_root / ".boxteam" / "sessions", namespace="workspace_resources",
         )
+
+    def notify_changed(self, resource_ids: ResourceChanges = None) -> None:
+        # EventChannel 的 None 专用于 gap；空集在本通道表示整个范围失效。
+        self._observations.publish(resource_ids or frozenset())
+
+    async def changes(self) -> AsyncIterator[ResourceChanges]:
+        subscription = self._observations.subscribe(label=f"workspace-{self.kind}")
+        try:
+            # 先订阅再触发首次读取；建连/重连期间发生的变化不会丢失。
+            yield None
+            while True:
+                changes = (await subscription.next(), *subscription.pending())
+                yield None if any(item.gap or not item.event for item in changes) else frozenset(
+                    resource_id for item in changes if item.event is not None for resource_id in item.event
+                )
+        finally:
+            self._observations.unsubscribe(subscription)
 
     @asynccontextmanager
     async def admit_thread(
@@ -142,6 +169,10 @@ class WorkspaceResourceOwner:
             for record in self._store.all()
         )
 
+    async def _list_runtime_resources(self, resource_ids: frozenset[str] | None = None) -> list[ResourceSnapshot]:
+        # Browser 仍读取原清单；Terminal 按传输能力覆盖为指定资源的摘要查询。
+        return await self._transport.list_resources()
+
     async def list_resources(
         self,
         *,
@@ -150,6 +181,7 @@ class WorkspaceResourceOwner:
         retention_scope: RetentionScope | None = None,
         source_session_id: str | None = None,
         source_thread_id: str | None = None,
+        resource_ids: frozenset[str] | None = None,
     ) -> list[ResourceSnapshot]:
         # 一次领域列表的恢复、清单和各资源锁共同消耗入口预算。
         # TODO(5.4)：同步存储与不合作取消仍须由原执行owner核实收敛。
@@ -172,14 +204,17 @@ class WorkspaceResourceOwner:
                         ))
                     )
 
-                records = tuple(record for record in self._store.all() if matches(record))
+                candidates = self._store.all() if resource_ids is None else (
+                    record for resource_id in resource_ids if (record := self._store.get(resource_id)) is not None
+                )
+                records = tuple(record for record in candidates if matches(record))
                 # 冷恢复仍核实完整外部清单；没有匹配的权威资源时，无需再次查询外设。
                 if not records:
                     return []
                 await self.recover(record.resource_id for record in records)
                 # 一次清单请求不占任何资源锁；合并观察时只持有当前小批次的锁。
                 records = tuple(self._require_owned_resource_record(record.resource_id) for record in records)
-                observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
+                observed = index_resources(await self._list_runtime_resources(resource_ids), self.workspace_id, self._store.ids(), self.kind)
                 result: list[ResourceSnapshot] = []
                 async def publish(batch: list[OwnedResourceRecord]) -> None:
                     # 两个 owner 按原顺序持久化；取消等待本批结算，不在解锁后补账。
@@ -233,7 +268,7 @@ class WorkspaceResourceOwner:
                 await self.recover((resource_id,))
                 async with self._resource_lock(resource_id):
                     record = self._require_owned_resource_record(resource_id)
-                    observed = index_resources(await self._transport.list_resources(), self.workspace_id, self._store.ids(), self.kind)
+                    observed = index_resources(await self._list_runtime_resources(frozenset({resource_id})), self.workspace_id, self._store.ids(), self.kind)
                     runtime = observed.get(resource_id)
                     # Terminal 清单只含摘要；保留清单缺失语义，正文仅向所选资源读取。
                     if runtime is not None and self.kind == "terminal" and include_output:

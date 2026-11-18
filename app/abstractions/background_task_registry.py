@@ -10,6 +10,7 @@ from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundTaskHandle,
     BackgroundTaskStep,
+    BackgroundTaskSummary,
 )
 
 
@@ -22,7 +23,7 @@ class BackgroundTaskRegistryProtocol(Protocol):
 
     def list_handles(self, session_id: str) -> list[BackgroundTaskHandle]: ...
 
-    def list_closed_handles(self, session_id: str) -> list[BackgroundTaskHandle]: ...
+    def list_summaries(self, session_id: str, *, include_history: bool) -> list[BackgroundTaskSummary]: ...
 
     def get_handle(self, session_id: str, task_id: str) -> BackgroundTaskHandle | None: ...
 

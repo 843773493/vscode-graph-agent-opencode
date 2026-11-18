@@ -16,6 +16,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import commentjson
+import httpx
 import pytest
 
 from tests.harness.python.run_context import TestRunContext
@@ -183,5 +184,27 @@ async def test_ports_create_open_and_stop_real_ssh_forward(
                 assert observed["phase"] == "completed" and observed["pageErrors"] == []
                 assert observed["draftPreservedAfterOwnerRefresh"] is True
                 assert observed["openedThroughSsh"] and observed["stoppedForwardOnly"]
+                # 同一装具持有真实 SSH，补验远端监听及两段中继，不用模拟命令代替数据传输。
+                assert source.client is not None
+                hosts = (await source.client.get("/api/gateway/port-forwards/hosts")).raise_for_status().json()["data"]["items"]
+                ssh_hosts = [item["host_id"] for item in hosts if item["host_id"] == "rgw_c3_b"]
+                assert len(ssh_hosts) == 1
+                directions = []
+                for destination_host in ["local", ssh_hosts[0]]:
+                    response = (await source.client.post("/api/gateway/port-forwards", json={
+                        "listener": {"host_id": ssh_hosts[0], "port": ports.port(62)},
+                        "destination": {"host_id": destination_host, "port": ports.port(61)},
+                    })).raise_for_status()
+                    forward = response.json()["data"]["items"][0]
+                    assert forward["status"] == "active", forward
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            transferred = await client.get(f"http://127.0.0.1:{ports.port(62)}")
+                            assert marker in transferred.raise_for_status().text
+                        directions.append({"listener": ssh_hosts[0], "destination": destination_host,
+                                           "request_id": response.json()["request_id"], "status": forward["status"]})
+                    finally:
+                        (await source.client.delete(f"/api/gateway/port-forwards/{forward['forward_id']}")).raise_for_status()
+                (context.artifacts_dir / "ssh-directions.json").write_text(json.dumps(directions, indent=2) + "\n")
     finally:
         lease.release()

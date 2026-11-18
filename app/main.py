@@ -35,6 +35,7 @@ from app.api.session_navigation import router as session_navigation_router
 from app.api.session_turns import router as session_turns_router
 from app.api.sessions import router as sessions_router
 from app.api.tools import router as tools_router
+from app.api.user_questions import router as user_questions_router
 from app.api.workspace import router as workspace_router
 from app.api.workspace_observation import router as workspace_observation_router
 from app.backend_lifecycle import BackendLifespan
@@ -50,7 +51,11 @@ from app.core.path_utils import (
     get_boxteam_home,
     initialize_directories,
 )
-from app.core.trace_middleware import TraceMiddleware, get_request_id
+from app.core.trace_middleware import (
+    TraceMiddleware,
+    get_request_id,
+    http_failure_headers,
+)
 from app.protocol.codecs.http_validation import request_validation_error_response
 from app.runtime.model_stream import configure_model_stream_from_environment
 from app.runtime.runtime_ports import DEFAULT_RUNTIME_CLOCK_PORTS
@@ -136,7 +141,7 @@ app.state.workspace_container_registry = None
 app.state.workspace_lifespan = None
 
 # Add trace middleware
-app.add_middleware(TraceMiddleware)
+app.add_middleware(TraceMiddleware, component="workspace_backend")
 app.add_middleware(NoStoreErrorsMiddleware, paths=(
     "/api/v1/workspace/files/raw", "/api/v1/workspaces/{workspace_id}/workspace/files/raw",
 ))
@@ -178,6 +183,7 @@ async def workspace_base_api_exception_handler(
         if key.lower() != "x-request-id"
     }
     response_headers["X-Request-ID"] = request_id
+    response_headers = {**http_failure_headers(request, error), **response_headers}
     return JSONResponse(
         status_code=error.status_code,
         headers=response_headers,
@@ -201,6 +207,7 @@ async def workspace_http_exception_handler(
         if key.lower() != "x-request-id"
     }
     response_headers["X-Request-ID"] = request_id
+    response_headers = {**http_failure_headers(request, error), **response_headers}
     return JSONResponse(
         status_code=error.status_code,
         headers=response_headers,
@@ -241,6 +248,7 @@ async def health(request: Request):
 
 
 workspace_routers = (
+    user_questions_router,
     workspace_health_router,
     workspace_router,
     persistent_tasks_router,

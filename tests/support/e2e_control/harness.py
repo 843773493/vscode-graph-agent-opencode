@@ -356,7 +356,7 @@ class E2ETestControlHarness:
             model = cast(str, request.get("model", "big-pickle"))
             interactions = [build_cassette(
                 asset_id="planned-chat", model=model,
-                url="https://opencode.ai/zen/v1/chat/completions",
+                url=cast(str, request.get("url", "https://opencode.ai/zen/v1/chat/completions")),
                 frames=chat_completion_frames(
                     response_id=cast(str, response["response_id"]), model=model,
                     deltas=cast(list[dict[str, object]], response["deltas"]),

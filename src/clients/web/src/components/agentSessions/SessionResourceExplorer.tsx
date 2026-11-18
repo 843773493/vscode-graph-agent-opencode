@@ -38,6 +38,7 @@ import { errorMessage } from "../../utils/errorMessage";
 import { useCatalogReveal, type CatalogRevealRequest } from "../../hooks/sessionResourceExplorer/useCatalogReveal";
 
 interface SessionResourceExplorerProps {
+  renderSessionThreads?: (workspaceId: string, session: Session) => ReactNode;
   catalogReveal?: CatalogRevealRequest;
   apiPort: number;
   workspaces: GatewayWorkspace[];
@@ -92,6 +93,7 @@ function Chevron({ expanded }: { expanded: boolean }) {
 }
 
 export default function SessionResourceExplorer({
+  renderSessionThreads,
   catalogReveal,
   apiPort,
   workspaces,
@@ -158,6 +160,8 @@ export default function SessionResourceExplorer({
   );
   const catalogTarget = useCatalogReveal(apiPort, catalogReveal, explorer);
   const navigationNodes = explorer.navigation?.nodes ?? [];
+  const catalogLoading = (!explorer.navigation && !explorer.navigationError)
+    || [...explorer.branches.values()].some(branch => branch.loading);
   // 导航已加载但没有任何节点（也没有内联编辑器在创建）时，空树会看起来像坏掉了。
   // 存在 navigationError 时优先展示错误卡：此时旧快照可能恰好是空的，
   // 不能再并列宣称「还没有工作区」，否则用户分不清是空目录还是加载失败。
@@ -444,7 +448,8 @@ export default function SessionResourceExplorer({
     const expansionId = `catalog:${workspaceId}:${node.node_id}`;
     const expanded = explorer.expandedIds.has(expansionId);
     const isFolder = node.kind === "folder";
-    const canExpand = node.state !== "deleting" && (isFolder || node.has_children);
+    const hasThreads = !isFolder && Boolean(node.session?.thread_id && renderSessionThreads);
+    const canExpand = node.state !== "deleting" && (isFolder || node.has_children || hasThreads);
     const isCurrent = node.session_id === currentSessionId && workspaceId === currentSessionWorkspaceId;
     const sessionCacheKey = node.session_id
       ? sessionScopeKey(workspaceId, node.session_id)
@@ -571,7 +576,7 @@ export default function SessionResourceExplorer({
               aria-label={t(isFolder
                 ? expanded ? 'navigation.catalog.collapseFolder' : 'navigation.catalog.expandFolder'
                 : expanded ? 'navigation.catalog.collapseSession' : 'navigation.catalog.expandSession', node.name)}
-              onClick={() => explorer.toggleExpanded(expansionId, workspaceId, node.node_id)}
+              onClick={() => explorer.toggleExpanded(expansionId, isFolder || node.has_children ? workspaceId : undefined, node.node_id)}
             >
               <Chevron expanded={expanded} />
             </button>
@@ -625,7 +630,10 @@ export default function SessionResourceExplorer({
             ) : null}
           </button>
         </div>
-        {canExpand && expanded ? renderCatalogBranch(workspaceId, node, depth + 1) : null}
+        {canExpand && expanded && hasThreads ? <div className="session-thread-navigation" style={{ paddingLeft: `${(depth + 1) * 14 + 8}px` }}>
+          {renderSessionThreads?.(workspaceId, node.session!)}
+        </div> : null}
+        {canExpand && expanded && (isFolder || node.has_children) ? renderCatalogBranch(workspaceId, node, depth + 1) : null}
       </li>
     );
   };
@@ -857,8 +865,8 @@ export default function SessionResourceExplorer({
 
   if (searchOpen && searchQuery.trim()) {
     return (
-      <section className="session-resource-search-results" aria-label={t('navigation.search.results')} aria-busy={explorer.searching}>
-        {explorer.searching ? <div className="session-resource-state">{t('navigation.search.searchingAll')}</div> : null}
+      <section className="session-resource-search-results panel-feedback-host" aria-label={t('navigation.search.results')} aria-busy={explorer.searching}>
+        <div className="panel-feedback">
         {actionErrorCard}
         {explorer.searchError ? (
           <div className="session-resource-error-card global" role="alert">
@@ -868,6 +876,7 @@ export default function SessionResourceExplorer({
             </div>
           </div>
         ) : null}
+        </div>
         {!explorer.searching && !explorer.searchError && explorer.searchResults.items.length === 0
           && !explorer.searchResults.workspaces.some((workspace) => workspace.status === "unavailable" || workspace.limited)
           ? <div className="session-resource-state">{t('navigation.search.empty')}</div> : null}
@@ -952,7 +961,7 @@ export default function SessionResourceExplorer({
 
   return (
     <>
-    <section className="session-resource-explorer" aria-label={t('navigation.explorer.title')}>
+    <section className="session-resource-explorer panel-feedback-host" aria-label={t('navigation.explorer.title')} aria-busy={catalogLoading}>
       <div className="session-resource-toolbar">
         <div
           className={`session-resource-root-drop-target${dropTargetClass("navigation_root")}`}
@@ -999,12 +1008,13 @@ export default function SessionResourceExplorer({
         >
           <span className="codicon codicon-folder" aria-hidden="true" /> {t('navigation.workspace.folder')}</div>
         <button type="button" title={t('navigation.catalog.refreshHint')} aria-label={t('navigation.catalog.refresh')} onClick={refreshResourceTreeInBackground}>
-          <span className="codicon codicon-refresh" aria-hidden="true" />
+          <span className={`codicon codicon-refresh${catalogLoading ? " codicon-modifier-spin" : ""}`} aria-hidden="true" />
         </button>
         <button type="button" title={t('navigation.workspace.add')} aria-label={t('navigation.workspace.add')} onClick={onRequestAddWorkspace}>
           <span className="codicon codicon-add" aria-hidden="true" />
         </button>
       </div>
+      <div className="panel-feedback">
       {actionErrorCard}
       {explorer.navigationError ? (
         <div className="session-resource-error-card global" role="alert">
@@ -1027,7 +1037,7 @@ export default function SessionResourceExplorer({
           </div>
         </div>
       ) : null}
-      {!explorer.navigation && !explorer.navigationError ? <div className="session-resource-state">{t('navigation.workspace.loadingCatalog')}</div> : null}
+      </div>
       {navigationEmpty ? (
         <div className="session-resource-state">
           {t('navigation.workspace.empty')}

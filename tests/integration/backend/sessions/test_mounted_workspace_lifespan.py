@@ -30,6 +30,7 @@ from app.runtime import provider_model
 from app.runtime.model_stream import ModelStreamTransportController
 from app.schemas.internal_v2.common import JobStatus
 from app.schemas.internal_v2.goal import GoalStatus
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.job.service import JobState
 from app.services.infrastructure.config import ConfigRestartRequiredError
 from app.services.infrastructure.config_service import ConfigService
@@ -57,8 +58,9 @@ def _plan_model_call(
     replay: ModelStreamReplay, container: AppContainer, session_id: str, thread_id: str,
     *, response_status: int = 200,
 ) -> str:
-    provider_id = container.config_service.get_workspace_default_provider_id("default")
-    provider = container.config_service.get_llm_provider(provider_id)
+    selected = container.session_service.path_resolver.get_node(session_id).current_model_json
+    assert selected is not None, "回放计划必须沿会话已保存的完整模型引用"
+    provider = container.config_service.get_llm_model(ModelReferenceDTO.model_validate_json(selected))
     interaction = build_cassette(
         asset_id="mounted-workspace", model=provider["model"],
         url=provider["endpoint"].rstrip("/") + "/chat/completions",
@@ -461,7 +463,7 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
         config_path = root / ".boxteam/workspace.jsonc"
         payload = read_jsonc_object(config_path) if config_path.exists() else {}
         model = payload.setdefault("agents", {}).setdefault("default", {}).setdefault("model", {})
-        model["fallback_providers"] = []
+        model["fallbacks"] = []
         config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     lifespan_ready = asyncio.Event()
     model_entered, model_release = asyncio.Event(), asyncio.Event()
@@ -510,7 +512,7 @@ async def test_shutdown_waits_for_real_goal_terminal_state_before_catalog_close(
                 job = await _start_job(case, "user", session_id, thread_id)
                 jobs.append(job)
                 await asyncio.wait_for(model_entered.wait(), 5)
-                assert runtime._goal_job_owners[job.job_id] == (await goals.get(session_id)).goal_id
+                assert (await goals.get(session_id)).goal_id in runtime.store.execution_owners(job.job_id)
                 await goals.set(session_id, status=user_status)
                 lock = goals.lock_for(session_id)
                 await lock.acquire()
@@ -796,8 +798,8 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
             assert b.background_task_registry.get_handle(session_b, handle_b.task_id).status == "running"
             finish_b.set()
             await asyncio.wait_for(task_b, 2)
-            assert [(handle.task_id, handle.status) for handle in a.background_task_registry.list_closed_handles(session_a)] == [(handle_a.task_id, "cancelled")]
-            assert [(handle.task_id, handle.status) for handle in b.background_task_registry.list_closed_handles(session_b)] == [(handle_b.task_id, "completed")]
+            assert [(handle.task_id, handle.status) for handle in a.background_task_registry.list_summaries(session_a, include_history=True)] == [(handle_a.task_id, "cancelled")]
+            assert [(handle.task_id, handle.status) for handle in b.background_task_registry.list_summaries(session_b, include_history=True)] == [(handle_b.task_id, "completed")]
             for container, session_id, expected in ((a, session_a, handle_a.task_id), (b, session_b, handle_b.task_id)):
                 with container.background_task_registry._store.control(session_id, read_only=True) as control:
                     assert [item.task_id for item in control.list_background_tasks()] == [expected]
@@ -838,6 +840,40 @@ async def test_double_mount_event_trace_message_background_and_catalog_isolation
                 await container.job_event_bus.unsubscribe(job_id, subscription, reason="double-mount-test-completed")
             for container, subscription in zip((a, b), message_subscriptions, strict=False):
                 await container.message_stream_store.unsubscribe(subscription)
+        trace_connections = [
+            container.trace_event_store._writers[container.trace_event_store._shard(session_id)]._writer
+            for container, session_id in zip((a, b), sessions, strict=True)
+        ]
+    for connection in trace_connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
+    assert_closed(mounted_case)
+
+
+@pytest.mark.asyncio
+async def test_subtree_delete_closes_trace_writer_before_directory_isolation(mounted_case: MountedCase) -> None:
+    from datetime import UTC, datetime
+
+    from app.schemas.event import AgentStartEvent, AgentStartPayload
+
+    async with main.lifespan(main.app) as lifespan_state:
+        await lifespan_state["after_http_startup"]()
+        container = mounted_case.containers[0]
+        with workspace_context(container.workspace_id, container.workspace_root, session_catalog=container.session_catalog):
+            session_id = (await _session(RunnerCase(container, container.workspace_root)))[0]
+            trace = container.trace_event_store
+            await trace.append(session_id, AgentStartEvent(
+                event_id="trace_before_delete", job_id="trace_delete", timestamp=datetime.now(UTC),
+                payload=AgentStartPayload(message="删除前已持久化", agent_id="default"),
+            ))
+            connection = trace._writers[trace._shard(session_id)]._writer
+            node = container.session_service.path_resolver.resolve_session_node(session_id)
+            await container.session_service.path_resolver.delete_subtree(
+                idempotency_key="delete-trace-writer", root_node_id=session_id,
+            )
+            assert not node.exists()
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                connection.execute("SELECT 1")
     assert_closed(mounted_case)
 
 

@@ -36,7 +36,7 @@ function agent(agentId: string): Agent {
     model: "model-test",
     tools: [],
     capabilities: [],
-    providers: [],
+    models: [],
   };
 }
 

@@ -7,6 +7,7 @@ Saver/storage 后，canonical item 才进入持久化事实源；本模块不读
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import cast
 
 from app.domain.itemized.enums import (
     CanonicalItemStatus,
@@ -88,7 +89,7 @@ class CanonicalBlockAccumulator:
                 "payload_kind": payload_kind,
                 "carrier_type": carrier,
                 "block_index": block_index,
-                "text": "",
+                "text_chunks": [],
                 "args": "",
                 "name": block.get("name"),
                 "tool_call_id": block.get("tool_call_id", block_id),
@@ -106,7 +107,7 @@ class CanonicalBlockAccumulator:
             )
         text = block.get("text", block.get("delta"))
         if isinstance(text, str):
-            draft["text"] = draft["text"] + text
+            cast(list[str], draft["text_chunks"]).append(text)
         args = block.get("args", block.get("arguments"))
         if isinstance(args, str):
             draft["args"] = draft["args"] + args
@@ -141,6 +142,7 @@ class CanonicalBlockAccumulator:
         result: list[CanonicalItemRecord] = []
         for index, block_id in enumerate(self._order):
             draft = self._drafts[block_id]
+            text = "".join(cast(list[str], draft["text_chunks"]))
             semantic = _required_text(draft["semantic_kind"], "draft.semantic_kind")
             payload_kind = _required_text(draft["payload_kind"], "draft.payload_kind")
             if semantic == SemanticKind.TOOL_CALL:
@@ -186,7 +188,7 @@ class CanonicalBlockAccumulator:
                     "tool_attempt_id": tool_attempt_id,
                     "result_id": _required_text(draft["item_id"], "draft.item_id"),
                     "name": name,
-                    "content": draft["text"],
+                    "content": text,
                     "tool_outcome": "success" if status == "completed" else "unknown",
                     "execution_confirmed": status == "completed",
                 }
@@ -194,7 +196,7 @@ class CanonicalBlockAccumulator:
                 payload = {
                     "summary_id": _required_text(draft["item_id"], "draft.item_id"),
                     "view_revision": str(draft["block_index"]),
-                    "content": list(draft["reasoning_items"]) or draft["text"],
+                    "content": list(draft["reasoning_items"]) or text,
                 }
             elif payload_kind == PayloadKind.OPAQUE:
                 payload = {
@@ -207,7 +209,7 @@ class CanonicalBlockAccumulator:
                     "protection": {"redacted": True},
                 }
             else:
-                payload = draft["text"]
+                payload = text
             result.append(
                 CanonicalItemRecord.create(
                     item_sequence=first_item_sequence + index,

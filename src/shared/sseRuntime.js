@@ -58,3 +58,13 @@ export function validateWorkspaceFileChangeBatch(value) {
 export function validateSseError(value) {
   return validateGenerated('SseErrorDTO', validateSseErrorDTO, value);
 }
+
+/** 轻量失效通知：null 为当前范围重读，其余只包含已变化资源身份，不含业务快照。 */
+export function validateResourceChanges(value) {
+  if (!value || typeof value !== 'object' || !Object.hasOwn(value, 'resource_ids')
+    || (value.resource_ids !== null && (!Array.isArray(value.resource_ids)
+      || !value.resource_ids.every(id => typeof id === 'string' && id.length > 0)))) {
+    throw new Error('资源变化通知缺少有效的 resource_ids');
+  }
+  return value.resource_ids;
+}

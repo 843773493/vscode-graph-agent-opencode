@@ -1,6 +1,8 @@
 import { stripCommandMarkerLines } from "./shared/commandText.js";
 import { installTerminalUserActions } from "./terminalUserActions.js";
 import { encodeTerminalClientMessage } from "./protocol/messages.js";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent, parseSseFrameBlock } from "./shared/sse.js";
+import { validateResourceChanges } from "./shared/sseRuntime.js";
 
 const params = new URLSearchParams(window.location.search);
 const terminalId = params.get("terminalId");
@@ -13,7 +15,7 @@ let resumeLoading = false;
 let lastActionError = null;
 let gatewayToken = null;
 let backendRequestHeaders = {};
-document.documentElement.classList.toggle("embedded-terminal", params.get("embedded") === "1");
+const embedded = params.get("embedded") === "1";
 
 const terminalIdElement = document.querySelector("#terminal-id");
 const statusLine = document.querySelector("#status-line");
@@ -32,35 +34,35 @@ const terminalSearchNext = document.querySelector("#terminal-search-next");
 const terminalSearchClose = document.querySelector("#terminal-search-close");
 
 function readHostThemeToken(token, fallback) {
-  if (window.parent === window) {
-    return fallback;
-  }
-  // TODO：跨域独立终端没有权限读取主窗口主题，保留终端自身的深色默认值。
+  if (window.parent === window) return fallback;
+  // 独立跨域嵌入不能读取宿主样式，使用终端自身的初始配色。
   try {
-    const value = window.parent.getComputedStyle(
-      window.parent.document.documentElement,
-    ).getPropertyValue(token).trim();
-    return value || fallback;
+    return window.parent.getComputedStyle(
+      window.parent.document.querySelector(".monaco-workbench") ?? window.parent.document.documentElement,
+    ).getPropertyValue(token).trim() || fallback;
   } catch {
     return fallback;
   }
 }
 
+// 首帧继承宿主样式；后续配色由 Workbench 的主题变更通知完整替换。
+const terminalTheme = {
+  background: readHostThemeToken("--vscode-terminal-background", readHostThemeToken("--vscode-panel-background", "#050607")),
+  foreground: readHostThemeToken("--vscode-terminal-foreground", readHostThemeToken("--vscode-foreground", "#f8fafc")),
+  cursor: readHostThemeToken("--vscode-terminalCursor-foreground", readHostThemeToken("--vscode-foreground", "#93c5fd")),
+  selectionBackground: readHostThemeToken("--vscode-terminal-selectionBackground", "#334155"),
+};
+document.documentElement.style.setProperty("--terminal-background", terminalTheme.background);
+
 const terminal = new window.Terminal({
+  // SearchAddon 的匹配装饰需要 xterm 的 marker／decoration API。
+  allowProposedApi: true,
   cursorBlink: true,
   convertEol: true,
   reflowRows: true,
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
   fontSize: 14,
-  theme: {
-    background: readHostThemeToken("--bt-terminal-background", "#050607"),
-    foreground: readHostThemeToken("--bt-terminal-foreground", "#f8fafc"),
-    cursor: readHostThemeToken("--bt-accent", "#93c5fd"),
-    selectionBackground: readHostThemeToken(
-      "--bt-selection-background",
-      "#334155",
-    ),
-  },
+  theme: terminalTheme,
 });
 const fitAddon = new window.FitAddon.FitAddon();
 const searchAddon = new window.SearchAddon.SearchAddon();
@@ -76,7 +78,11 @@ let visible = false;
 let deleted = false;
 let snapshotDisplay = "";
 let currentTerminalStatus = null;
-let statusPollTimer = null;
+let statusObservation = null;
+let statusRetryTimer = null;
+let statusSyncRetryTimer = null;
+let statusSyncPending = null;
+let statusDirty = false;
 let resizeFrame = null;
 let lastSentCols = null;
 let lastSentRows = null;
@@ -176,6 +182,7 @@ function updateTerminalTitle(snapshot) {
 
 function markDeleted(message = "终端已删除或不存在", snapshot = null) {
   deleted = true;
+  stopStatusObservation();
   desiredAttached = false;
   attached = false;
   currentTerminalStatus = "deleted";
@@ -205,10 +212,10 @@ function snapshotDisplayBuffer(snapshot) {
   return snapshot.display_buffer ?? stripCommandMarkerLines(String(snapshot.buffer || ""));
 }
 
-function renderSnapshot(display) {
+function renderSnapshot(display, onRendered) {
   snapshotDisplay = display;
-  terminal.clear();
-  terminal.write(display);
+  // clear() 会保留当前行和终端模式；RIS 与快照一起排队，避免旧输出污染重放。
+  terminal.write(`\x1bc${display}`, onRendered);
 }
 
 function rememberSequence(sequence) {
@@ -332,7 +339,7 @@ async function syncTerminalState() {
     socket = null;
     setAttachButtonMode("detached");
   }
-  if (!lastActionError && !attached) setStatus(describeSnapshot(snapshot));
+  if (!lastActionError) setStatus(describeSnapshot(snapshot));
 }
 
 async function ownerCommand(action) {
@@ -351,20 +358,97 @@ async function ownerCommand(action) {
   }
 }
 
-function startStatusPolling() {
-  if (statusPollTimer !== null || !visible || deleted) return;
-  const timer = window.setTimeout(async () => {
-    try { await syncTerminalState(); }
-    catch (error) { setStatus(error instanceof Error ? error.message : String(error), true); }
-    finally {
-      // 隐藏后旧请求可能才返回，不能覆盖重新显示时排好的轮询。
-      if (statusPollTimer === timer) {
-        statusPollTimer = null;
-        startStatusPolling();
-      }
+function requestStatusSync(attempt = 0) {
+  window.clearTimeout(statusSyncRetryTimer);
+  statusDirty = true;
+  return statusSyncPending ??= (async () => {
+    while (statusDirty && visible && !deleted) {
+      statusDirty = false;
+      await syncTerminalState();
     }
-  }, 2000);
-  statusPollTimer = timer;
+  })().catch(error => {
+    if (visible && !deleted && attempt < 2) {
+      statusSyncRetryTimer = window.setTimeout(() => {
+        void requestStatusSync(attempt + 1).catch(cause => setStatus(cause.message, true));
+      }, 1000 * 2 ** attempt);
+    }
+    throw error;
+  }).finally(() => { statusSyncPending = null; });
+}
+
+function stopStatusObservation() {
+  statusObservation?.abort();
+  statusObservation = null;
+  if (statusRetryTimer !== null) window.clearTimeout(statusRetryTimer);
+  statusRetryTimer = null;
+  window.clearTimeout(statusSyncRetryTimer);
+}
+
+function observeHostResources(controller) {
+  return new Promise(resolve => {
+    const subscriptionId = crypto.randomUUID();
+    const send = type => window.parent.postMessage({ type, terminalId, subscriptionId }, window.location.origin);
+    const receive = event => {
+      if (event.origin !== window.location.origin || event.source !== window.parent
+        || event.data?.type !== "boxteam.terminal.resources" || event.data.terminalId !== terminalId
+        || event.data.subscriptionId !== subscriptionId) return;
+      if (typeof event.data.error === "string") setStatus(event.data.error, true);
+      else void requestStatusSync().catch(error => setStatus(error.message, true));
+    };
+    window.addEventListener("message", receive);
+    controller.signal.addEventListener("abort", () => {
+      window.removeEventListener("message", receive);
+      send("boxteam.terminal.unobserve");
+      resolve();
+    }, { once: true });
+    send("boxteam.terminal.observe");
+  });
+}
+
+async function startStatusObservation() {
+  if (statusObservation || !visible || deleted) return;
+  const controller = new AbortController();
+  statusObservation = controller;
+  try {
+    if (embedded && window.parent !== window) {
+      await observeHostResources(controller);
+      return;
+    }
+    const response = await fetch(`${ownerApiBase}/api/v1/workspace/observations/stream`, {
+      method: "POST", signal: controller.signal,
+      headers: { ...backendRequestHeaders, accept: "text/event-stream", "Content-Type": "application/json" },
+      body: JSON.stringify({ subscriptions: [{ subscription_id: "terminal-state", kind: "terminal_resources" }] }),
+    });
+    if (!response.ok) throw new Error(`终端状态订阅失败: HTTP ${response.status}`);
+    await consumeSseResponse(response, {
+      signal: controller.signal, idleTimeoutMs: 45_000,
+      events: { observation: defineSseEvent(decodeJsonSseData, (envelope) => {
+        if (envelope.subscription_id !== "terminal-state") throw new Error("终端状态订阅身份不匹配");
+        if (envelope.state === "error" || envelope.state === "closed") {
+          throw new Error(`终端状态订阅结束: ${envelope.status ?? envelope.state}`);
+        }
+        if (envelope.state !== "frame") return;
+        const frame = parseSseFrameBlock(envelope.frame);
+        if (frame?.event === "resources_changed") {
+          const resourceIds = validateResourceChanges(decodeJsonSseData(frame.data, frame));
+          if (resourceIds === null || resourceIds.includes(terminalId)) {
+            void requestStatusSync().catch(error => setStatus(error.message, true));
+          }
+        }
+      }) },
+    });
+    if (!controller.signal.aborted) throw new Error("终端状态订阅已断开");
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      setStatus(error instanceof Error ? error.message : String(error), true);
+      statusRetryTimer = window.setTimeout(() => {
+        statusRetryTimer = null;
+        void startStatusObservation();
+      }, 5000);
+    }
+  } finally {
+    if (statusObservation === controller) statusObservation = null;
+  }
 }
 
 function detach({ preserveIntent = false } = {}) {
@@ -453,8 +537,7 @@ async function attach() {
       currentTerminalStatus = message.snapshot?.status || currentTerminalStatus;
       setAttachButtonMode("attached");
       if (message.replayMode !== "incremental") {
-        terminal.clear();
-        terminal.write(
+        renderSnapshot(
           message.snapshot ? snapshotDisplayBuffer(message.snapshot) : "",
           () => acknowledgeOutput(message.snapshot?.sequence || 0),
         );
@@ -486,8 +569,7 @@ async function attach() {
       return;
     }
     if (message.type === "resync") {
-      terminal.clear();
-      terminal.write(snapshotDisplayBuffer(message.snapshot), () => {
+      renderSnapshot(snapshotDisplayBuffer(message.snapshot), () => {
         acknowledgeOutput(message.snapshot.sequence || 0);
       });
       return;
@@ -547,7 +629,7 @@ terminal.onData((data) => {
   send({ type: "input", data });
 });
 
-installTerminalUserActions({
+const userActions = installTerminalUserActions({
   terminal,
   searchAddon,
   elements: {
@@ -564,6 +646,24 @@ installTerminalUserActions({
   resizeTerminal: resizeRemote,
 });
 
+// 嵌入时由工作台的终端行菜单发起；沿用本页唯一的连接、搜索与快照逻辑。
+window.addEventListener("message", event => {
+  if (!embedded || event.source !== window.parent || event.origin !== window.location.origin
+    || event.data?.terminalId !== terminalId) return;
+  if (event.data.type === "boxteam.terminal.theme") {
+    terminal.options.theme = event.data.theme;
+    document.documentElement.style.setProperty("--terminal-background", event.data.theme.background);
+    return;
+  }
+  if (event.data.type !== "boxteam.terminal.action") return;
+  switch (event.data.action) {
+    case "connect": void attach(); break;
+    case "disconnect": detach(); break;
+    case "search": userActions.openSearch(); break;
+    case "refresh": void loadSnapshot().catch(error => setStatus(error.message, true)); break;
+  }
+});
+
 async function resumeVisibleTerminal() {
   if (!visible || !gatewayToken || resumeLoading) return;
   // 首次正文尚未返回时切换工作区，仍由原恢复取得快照并检查最新可见性。
@@ -578,7 +678,7 @@ async function resumeVisibleTerminal() {
     if (!visible) return;
     resizeRemote();
     if (desiredAttached) void attach();
-    startStatusPolling();
+    void startStatusObservation();
   } finally {
     resumeLoading = false;
   }
@@ -591,8 +691,7 @@ function updateVisibility() {
   if (visible) {
     void resumeVisibleTerminal().catch(error => setStatus(error.message, true));
   } else {
-    if (statusPollTimer !== null) window.clearTimeout(statusPollTimer);
-    statusPollTimer = null;
+    stopStatusObservation();
     detach({ preserveIntent: true });
   }
 }
@@ -614,9 +713,7 @@ window.addEventListener("beforeunload", () => {
   if (resizeFrame !== null) {
     window.cancelAnimationFrame(resizeFrame);
   }
-  if (statusPollTimer !== null) {
-    window.clearTimeout(statusPollTimer);
-  }
+  stopStatusObservation();
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer);
   }

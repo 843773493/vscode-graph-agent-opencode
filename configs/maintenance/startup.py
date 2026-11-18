@@ -171,8 +171,10 @@ def prepare_startup_migrations(
                 and "session_generators" in item.payload["features"]
             ) for item in plan.inputs
         )
-        if needs_upgrade:
-            if plan.conflicts or plan.unsettled:
+        # 升级器在停旧前做只读预检；存活运行代仍由原停止流程结算，写入时必须重新取得 ownership。
+        blockers = tuple(item for item in plan.unsettled if not (preview and item["kind"] == "runtime"))
+        if needs_upgrade or plan.recoveries or blockers:
+            if plan.conflicts or blockers:
                 raise ValueError(
                     "自动升级需要用户决定配置取舍或结算未完成操作；请运行 "
                     "configs.boxteam migrate-runtime-config --preview 查看原来源，原件未改写"

@@ -1,10 +1,24 @@
 import { t, formatNumber } from "../../../../shared/core/i18n/index.js";
-import { useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { NodeDebugState } from "../../types/backend";
 import { formatLocalTime } from "../../utils/format";
 import { nodeDebugActionActor } from "./nodeDebugPresentation";
+
+/** 工作台注入原版调试渲染器；Web 产品不持有原生服务或第二套 ANSI 解析器。 */
+export type DebugOutputRenderer = (container: HTMLElement, text: string) => () => void;
+export const DebugOutputContext = createContext<DebugOutputRenderer | null>(null);
+
+function ProgramOutput({ text }: { text: string }) {
+  const render = useContext(DebugOutputContext);
+  const host = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!render) throw new Error("工作台未提供调试输出渲染器");
+    return render(host.current!, text);
+  }, [render, text]);
+  return <span ref={host}>{text}</span>;
+}
 
 export default function NodeDebugConsoleView({
   state,
@@ -63,7 +77,7 @@ export default function NodeDebugConsoleView({
       </section>
       <section className="node-debug-section">
         <div className="debug-section-title-row"><h3>{t("debug.console.title")}</h3><span>{t("debug.console.lines", formatNumber(state?.output?.length ?? 0))}</span></div>
-        <pre className="node-debug-output">{outputText || t("debug.console.noOutput")}</pre>
+        <pre className="node-debug-output">{outputText ? <ProgramOutput text={outputText} /> : t("debug.console.noOutput")}</pre>
       </section>
       <section className="node-debug-section">
         <div className="debug-section-title-row"><h3>{t("debug.console.actions")}</h3><span>{formatNumber(state?.actions?.length ?? 0)}</span></div>

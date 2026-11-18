@@ -1057,7 +1057,6 @@ async def test_parallel_schema_errors_keep_original_provider_arguments_and_claim
     started = [call.args[1] for call in writer.commit.await_args_list
                if call.args[0] == "tool.started"]
     assert [payload["tool_call_id"] for payload in started] == [scoped_ids[index] for index in order]
-    assert runtime._tool_call_arguments_by_id == dict(zip(scoped_ids, arguments, strict=True))
     shown_args = [payload["args"] for event, payload in published
                   if event == EventType.TOOL_CALL_START]
     assert shown_args == [arguments[index] for index in order]

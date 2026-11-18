@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import sys
-import threading
 import zlib
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
@@ -125,20 +124,20 @@ class MessageStreamRecord:
 class MessageStreamSubscription:
     def __init__(self, *, turn_stream_id: str, maxsize: int = 256) -> None:
         self.turn_stream_id = turn_stream_id
-        self.queue: asyncio.Queue[MessageStreamRecord] = asyncio.Queue(maxsize=maxsize)
+        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=maxsize)
         self.closed = False
 
-    def offer(self, record: MessageStreamRecord) -> bool:
+    def offer(self, event: dict[str, Any]) -> bool:
         if self.closed:
             return False
         try:
-            self.queue.put_nowait(record)
+            self.queue.put_nowait(event)
         except asyncio.QueueFull:
             self.closed = True
             return False
         return True
 
-    async def get(self) -> MessageStreamRecord:
+    async def get(self) -> dict[str, Any]:
         if self.closed and self.queue.empty():
             raise MessageStreamError(
                 f"消息流订阅已关闭: turn_stream_id={self.turn_stream_id}"
@@ -247,7 +246,6 @@ class MessageStreamStore:
         )
         self._pending_snapshots: dict[str, Mapping[str, Any]] = {}
         self._snapshot_tasks: dict[str, asyncio.Task[None]] = {}
-        self._snapshot_file_lock = threading.Lock()
         self._states: dict[str, dict[str, Any]] = {}
         # 终态统一核算快照与幂等/重放共用的事件正文，只在发布新版本时计费。
         self._terminal_state_sizes: dict[str, tuple[dict[str, Any], int]] = {}
@@ -389,12 +387,12 @@ class MessageStreamStore:
         session_id: str,
         turn_stream_id: str,
         state: Mapping[str, Any],
-    ) -> None:
+    ) -> asyncio.Task[None]:
         # 已提交状态只被整体替换；合并派生快照不改变事件日志的恢复边界。
         self._pending_snapshots[turn_stream_id] = state
         running = self._snapshot_tasks.get(turn_stream_id)
         if running is not None and not running.done():
-            return
+            return running
         task = asyncio.create_task(
             self._persist_state_snapshot(
                 session_id,
@@ -408,6 +406,7 @@ class MessageStreamStore:
                 finished,
             )
         )
+        return task
 
     def _stream_dir(self, session_id: str) -> Path:
         return (
@@ -497,10 +496,9 @@ class MessageStreamStore:
         entries: Mapping[str, Mapping[str, Any]],
     ) -> None:
         path = self._applied_event_ids_path(session_id, turn_stream_id)
-        with self._snapshot_file_lock:
-            atomic_write_bytes(path, json.dumps(
-                dict(entries), ensure_ascii=False, separators=(",", ":"),
-            ).encode("utf-8"))
+        atomic_write_bytes(path, json.dumps(
+            dict(entries), ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8"))
 
     def _event_ids_from_records(
         self,
@@ -840,19 +838,14 @@ class MessageStreamStore:
         turn_stream_id: str,
         state: Mapping[str, Any],
     ) -> None:
-        with self._snapshot_file_lock:
-            path = self._state_path(session_id, turn_stream_id)
-            snapshot_seq = int(state.get("snapshot_seq", 0))
-            existing = self._read_state_snapshot(session_id, turn_stream_id)
-            if existing is not None and int(existing.get("snapshot_seq", 0)) > snapshot_seq:
-                return
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = path.with_suffix(".state.tmp")
-            with temp_path.open("w", encoding="utf-8") as stream:
-                json.dump(dict(state), stream, ensure_ascii=False, separators=(",", ":"))
-                stream.flush()
-                os.fsync(stream.fileno())
-            temp_path.replace(path)
+        path = self._state_path(session_id, turn_stream_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix(".state.tmp")
+        with temp_path.open("w", encoding="utf-8") as stream:
+            json.dump(dict(state), stream, ensure_ascii=False, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temp_path.replace(path)
 
     def _write_index(self, session_id: str, mapping: Mapping[str, dict[str, str]]) -> None:
         index_path = self._index_path(session_id)
@@ -949,11 +942,9 @@ class MessageStreamStore:
 
     def _append_durable_event(
         self,
-        session_id: str,
         path: Path,
-        turn_stream_id: str,
         record: MessageStreamRecord,
-    ) -> None:
+    ) -> bool:
         """在线程中完成事件追加，确保 fsync 不阻塞消息流事件循环。"""
         encoded = self._encode_record(record)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -966,15 +957,25 @@ class MessageStreamStore:
             stream.flush()
             # 事件日志是消息流的崩溃恢复边界；fanout 必须在这里之后。
             os.fsync(stream.fileno())
-        if needs_compaction:
-            # 先让当前事件成为恢复事实，再写入同序号快照，最后才能裁剪旧
-            # 事件；否则后台快照尚未执行时，裁剪可能移除 stream.opened。
-            self._write_state_snapshot(session_id, turn_stream_id, record.checkpoint)
-            self._compact_stream_log(
-                session_id, path, turn_stream_id,
-                thread_id=str(record.checkpoint["thread_id"]),
-                turn_id=str(record.checkpoint["turn_id"]),
-            )
+        return needs_compaction
+
+    async def _persist_event(
+        self, session_id: str, turn_stream_id: str, record: MessageStreamRecord,
+    ) -> bool:
+        path = self._stream_path(session_id, turn_stream_id)
+        if not await asyncio.to_thread(self._append_durable_event, path, record):
+            return False
+        # 裁剪与后台快照共用同一 writer：先结算旧版本，再写当前版本，
+        # 才能移除旧事件。提交锁持有至整条链路结算，不会插入后续版本。
+        await self._schedule_state_snapshot(
+            session_id, turn_stream_id, record.checkpoint,
+        )
+        await asyncio.to_thread(
+            self._compact_stream_log, session_id, path, turn_stream_id,
+            thread_id=str(record.checkpoint["thread_id"]),
+            turn_id=str(record.checkpoint["turn_id"]),
+        )
+        return True
 
     @staticmethod
     def _should_write_state_snapshot(event_type: str, event_seq: int) -> bool:
@@ -1486,34 +1487,32 @@ class MessageStreamStore:
         if resolved_job_id is not None:
             next_state["job_id"] = resolved_job_id
         next_state["snapshot_seq"] = next_seq
-        # checkpoint 只供进程内订阅者使用；磁盘只追加 event，并把最新状态
-        # 原子写入单独快照，避免每个事件重复复制整个 blocks/tool_executions。
+        # checkpoint 仅供持久化和裁剪；实时队列只持有事件，不滞留历史状态。
         record = MessageStreamRecord(
             event=event, checkpoint=next_state,
             # 自动ID无需跨保留窗口记忆；显式ID随同一条日志提交，裁剪时再归档。
             applied_event=event if event_id is not None else None,
         )
         session_id = str(state["session_id"])
-        path = self._stream_path(session_id, turn_stream_id)
         try:
-            append_task = asyncio.create_task(asyncio.to_thread(
-                self._append_durable_event,
-                session_id,
-                path,
-                turn_stream_id,
-                record,
-            ))
+            append_task = asyncio.create_task(
+                self._persist_event(session_id, turn_stream_id, record)
+            )
+
+            async def settle_append() -> None:
+                await append_task
+
             try:
-                await asyncio.shield(append_task)
+                snapshot_persisted = await asyncio.shield(append_task)
                 size_bytes = (
                     await run_sync_shielded(self._cached_stream_size_bytes, next_state, {
                         **self._event_ids.get(turn_stream_id, {}), event["event_id"]: event,
                     }) if next_state["stream_status"] in TERMINAL_STREAM_STATUSES else None
                 )
             finally:
-                # 取消不能停止线程中的 append；持有 Turn 锁直到真实 worker
-                # 结算，重复取消也不能让下一提交复用旧 checkpoint 的序号。
-                await run_cleanup_shielded(lambda: append_task)
+                # 持有 Turn 锁直到追加、必要快照和裁剪全部结算；重复取消
+                # 也不能让下一提交复用旧 checkpoint 的序号。
+                await run_cleanup_shielded(settle_append)
         except (Exception, asyncio.CancelledError):
             # append/fsync 失败或取消后，磁盘可能已经包含完整记录，也可能只包含
             # 半条记录。重新扫描并截断未完成尾部，避免进程内继续沿用旧
@@ -1533,7 +1532,7 @@ class MessageStreamStore:
         overflowed: list[MessageStreamSubscription] = []
         for subscription in tuple(subscribers):
             try:
-                offered = subscription.offer(record)
+                offered = subscription.offer(event)
             except Exception:
                 subscription.closed = True
                 logger.exception(
@@ -1549,7 +1548,7 @@ class MessageStreamStore:
                 "消息流订阅队列溢出并关闭: turn_stream_id=%s",
                 turn_stream_id,
             )
-        if self._should_write_state_snapshot(event_type, next_seq):
+        if not snapshot_persisted and self._should_write_state_snapshot(event_type, next_seq):
             self._schedule_state_snapshot(
                 session_id,
                 turn_stream_id,
@@ -1922,8 +1921,8 @@ class MessageStreamStore:
                 yield snapshot_event
                 return
             while True:
-                record = await subscription.get()
-                event_seq = int(record.event["event_seq"])
+                event = await subscription.get()
+                event_seq = int(event["event_seq"])
                 if event_seq <= last_seq:
                     continue
                 if event_seq != last_seq + 1:
@@ -1936,8 +1935,8 @@ class MessageStreamStore:
                         return
                     continue
                 last_seq = event_seq
-                yield copy.deepcopy(record.event)
-                if self._is_terminal_event(record.event):
+                yield copy.deepcopy(event)
+                if self._is_terminal_event(event):
                     return
         finally:
             await self.unsubscribe(subscription)

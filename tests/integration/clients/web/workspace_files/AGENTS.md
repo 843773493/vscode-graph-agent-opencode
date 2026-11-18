@@ -35,3 +35,5 @@ workspace_files/
 - 测试使用进程外超时与数据段内存限制，记录真实退出码；生命周期 owner 回收 HTTP/SSE response、socket、Chromium 与全部测试子进程，失败不可被清理异常掩盖。
 - 断言按实际持久结果及浏览器行为，区分 durable acceptance、terminal 和未知效果，不以待确认意图伪报成功。
 - 完整页面由 `web_workbench_assets` 复用会话级构建并经真实 Gateway 提供，浏览器 profile 仍位于当前测试节点的独立 runtime；文件资源定位限定对应 Thread。预览与展开状态随原版 EditorInput 在浏览器持久化，使用同一 Chromium profile 经页面刷新、浏览器关闭及双 owner 重启核对，不再要求展示态写入 Gateway 用户档案；旧用户档案 API 已退役。
+
+- `workspace_file_stream.test.mjs` 在真实 Chromium 中使用原 FileService 与产品文件 Provider；受控 HTTP 正文只用于确定性分块，验证首块提前交付、完整 EOF 的原字节 CAS、Range 保留基线，以及取消、凭据撤销和目标切换。它不替代真实 Gateway／磁盘与完整工作台验收。

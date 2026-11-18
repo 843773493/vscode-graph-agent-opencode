@@ -80,7 +80,7 @@ def test_thread_identity_creates_reference_without_registry_or_history(
         "reference_uri": thread_resource_uri(workspace_id, SESSION, THREAD, gateway_authority=gateway_id),
         "gateway_id": gateway_id, "scope": "workspace", "scope_id": workspace_id,
         "kind": "session", "file_root_uri": None, "session_id": SESSION, "thread_id": THREAD,
-        "changeset_id": None, "change_file_uri": None,
+        "changeset_id": None, "change_file_uri": None, "item_id": None,
     }
 
 
@@ -207,3 +207,22 @@ def test_change_grammar_rejects_non_file_and_malformed_identity(address_client: 
     response = address_client.post("/api/gateway/resource-addresses/parse", json={"local_gateway_id": GATEWAY, "uri": uri})
     assert response.status_code == 400
     assert response.json()["detail"]["owner"] == "resource_uri_grammar"
+
+
+@pytest.mark.parametrize("gateway_id", [GATEWAY, REMOTE])
+@pytest.mark.parametrize("item_id", ["item-last-result", "item-execution-model-block:part-0", "item-中文 %😀"])
+def test_item_address_round_trip_preserves_thread_and_inclusive_boundary(address_client: TestClient, gateway_id: str, item_id: str) -> None:
+    workspace_id = "019a0000-0000-7000-8000-000000000001"
+    response = address_client.post("/api/gateway/resource-addresses/thread", json={
+        "local_gateway_id": GATEWAY, "resource_gateway_id": gateway_id, "workspace_id": workspace_id,
+        "session_id": SESSION, "thread_id": THREAD, "item_id": item_id,
+    })
+    assert response.status_code == 200, response.text
+    copied = response.json()["data"]
+    assert f"/threads/{THREAD}/items/" in copied["reference_uri"]
+    assert copied["reference_uri"].isascii() and " " not in copied["reference_uri"]
+    assert copied["item_id"] == item_id
+    parsed = address_client.post("/api/gateway/resource-addresses/parse", json={
+        "local_gateway_id": GATEWAY, "uri": copied["reference_uri"],
+    }).json()["data"]
+    assert parsed == copied

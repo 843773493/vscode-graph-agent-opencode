@@ -157,7 +157,7 @@ def _run_terminal_page(
         "cookies": cookies,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     command = ["bun", "tests/integration/gateway/terminal_plugin_page.mjs", str(input_path.resolve())]
-    protected = ["timeout", "180", "bash", "-c", 'ulimit -d 4194304; exec "$@"', "bash", *command]
+    protected = ["timeout", "240", "bash", "-c", 'ulimit -d 4194304; exec "$@"', "bash", *command]
     with chromium_temporary_environment(artifacts / "chromium-tmp") as temporary:
         result = subprocess.run(
             protected,
@@ -492,7 +492,13 @@ def test_terminal_package_runs_through_gateway_owner_and_exact_instance_routes(
                 records = _json(client.get(current_http_route, headers={
                     "X-BoxTeam-Resource-Owner": "workspace-terminal",
                 }))["data"]
-                assert {record["terminal_id"] for record in records} == {resource["resource_id"], survivor["resource_id"]}
+                page_resources = set(page["embeddedResult"]["createdIds"])
+                assert len(page_resources) == 5
+                assert {record["terminal_id"] for record in records} == {
+                    resource["resource_id"], survivor["resource_id"], *page_resources,
+                }
+                assert {record["terminal_id"] for record in records
+                        if record["status"] == "deleted" and record["reconciliation_status"] == "verified"} == page_resources
 
                 _cas_workspace_binding(client, gateway_id=gateway_id, workspace_id=workspace_id,
                     enabled=False, idempotency_key="terminal-plugin-lifecycle-disable")

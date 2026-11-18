@@ -55,17 +55,11 @@ function WorkspaceFileMarkdownImage({
     if (!isWithinPreloadMargin) return;
     const controller = new AbortController();
     let objectUrl: string | null = null;
+    let releaseIdentity: (() => void) | undefined;
     const releaseObjectUrl = () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       objectUrl = null;
     };
-    // 下载完成后仍由展示组件持有身份订阅，撤销已显示和等待浏览器解码的图片。
-    const releaseIdentity = onGatewayTokenInvalidated(apiPort, () => {
-      controller.abort();
-      releaseObjectUrl();
-      setResolvedSrc(null);
-      setError(t("workspace.markdown.image.identityChanged"));
-    });
     void getWorkspaceRawFileBlob(
       apiPort,
       target.path,
@@ -73,6 +67,13 @@ function WorkspaceFileMarkdownImage({
       controller.signal,
     ).then((blob) => {
       if (controller.signal.aborted) return;
+      // 下载期间由文件 API 处理刷新与撤销；展示后接管订阅，避免把正常 401 刷新取消。
+      releaseIdentity = onGatewayTokenInvalidated(apiPort, () => {
+        controller.abort();
+        releaseObjectUrl();
+        setResolvedSrc(null);
+        setError(t("workspace.markdown.image.identityChanged"));
+      });
       objectUrl = URL.createObjectURL(blob);
       setResolvedSrc(`${objectUrl}${target.fragment}`);
     }).catch((loadError: unknown) => {
@@ -82,7 +83,7 @@ function WorkspaceFileMarkdownImage({
     });
 
     return () => {
-      releaseIdentity();
+      releaseIdentity?.();
       controller.abort();
       releaseObjectUrl();
     };

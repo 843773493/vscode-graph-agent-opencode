@@ -33,12 +33,11 @@ try {
     if (!response.ok || !body.request_id || body.request_id !== response.headers.get('X-Request-ID')) throw new Error(text);
     return { data: body.data, elapsedMs, bytes: new TextEncoder().encode(text).length, requestId: body.request_id };
   }, url);
-  const control = page.locator('.gateway-control-shell');
+  const control = page.locator('.settings-editor:visible');
   const panel = control.getByTestId('gateway-diagnostics-panel');
-  const close = () => page.getByRole('button', { name: '关闭 Gateway 控制中心', exact: true }).click();
-  const openDiagnostics = async () => {
-    await command('boxteam.gateway.connections');
-    await control.getByRole('button', { name: '日志与诊断', exact: true }).click();
+  const close = () => command('workbench.action.closeActiveEditor');
+  const openDiagnostics = async workspaceId => {
+    await command('boxteam.gateway.diagnostics', undefined, workspaceId);
     await expect(panel.getByRole('button', { name: '复制诊断摘要', exact: true })).toBeEnabled();
   };
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
@@ -136,26 +135,28 @@ try {
   await expect(details).toContainText(fixture.workspaceData);
   assert.equal(result.initialization[2].data.data_directory, fixture.workspaceData);
   await details.getByRole('button', { name: '关闭工作区详情', exact: true }).first().click();
-  await openDiagnostics();
+  await openDiagnostics(fixture.workspaceId);
+  await expect(control.getByRole('combobox', { name: '配置范围', exact: true })).toHaveValue('后端默认设置');
+  const settingsTabs = await page.locator('.tabs-container .tab').count();
   await storage.locator('summary').click();
-  const retained = panel.getByRole('button', { name: '打开 Gateway 日志保留设置', exact: true }).click();
-  await expect(quick).toBeVisible();
-  await quick.locator('.monaco-list-row').filter({ hasText: sourceKey }).click();
-  await retained;
-  await expect(control).toBeHidden();
+  await panel.getByRole('button', { name: '打开 Gateway 日志保留设置', exact: true }).click();
+  await expect(control.locator('.settings-management-view')).toBeHidden();
   const header = page.locator('.settings-context-label:visible');
-  await expect(header.getByRole('combobox', { name: '设置所属 Gateway', exact: true }).locator('option:checked')).toContainText(fixture.gatewayId);
-  await expect(header.getByRole('combobox', { name: '设置范围／工作区', exact: true }).locator('option:checked')).toHaveText('Gateway 配置');
+  await expect(header).toContainText(fixture.gatewayId);
+  await expect(page.locator('.settings-category-context:visible select[aria-label="配置范围"] option:checked')).toHaveText('Gateway 设置');
   const sources = (await api('/api/gateway/config/sources')).data;
   const selectedSource = sources.sources.find(item => item.source_key === sourceKey);
   assert(selectedSource && sources.schema_uri);
+  await header.locator('summary').click();
   await header.getByRole('button', { name: '查看配置来源位置', exact: true }).click();
   await expect(quick).toContainText(selectedSource.uri ?? '原 owner 未提供');
   await expect(quick).toContainText(sources.schema_uri);
   await page.keyboard.press('Escape');
   result.storageLocations = { workspace: fixture.workspaceData, control: fixture.gatewayControl, logs: fixture.gatewayLogs,
     source: selectedSource.uri, schema: sources.schema_uri };
+  assert.equal(await page.locator('.tabs-container .tab').count(), settingsTabs, '配置范围跳转不能另开设置 Tab');
   result.retentionOwner = fixture.gatewayId;
+  result.retentionFromWorkspace = true;
   result.phase = 'original-product-about';
   const about = command('workbench.action.showAboutDialog');
   await expect(modal).toContainText(fixture.product.nameLong);

@@ -22,6 +22,7 @@ from app.core.trace_middleware import (
     set_current_request_id,
 )
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.session import SessionDTO
 from app.services.business.session_context_query.resources import (
     session_resource_identity,
@@ -110,7 +111,7 @@ async def parent_session(
             "delegation": None,
             "generation_origin": None,
             "current_agent_id": "default",
-            "current_provider_id": "default_provider",
+            "current_model_json": ModelReferenceDTO(provider_id="default_provider", model_id="default").canonical_json(),
             "context_source_session_id": None,
         },
     )
@@ -127,6 +128,7 @@ async def parent_session(
         scope="workspace",
         title="父会话",
         current_agent_id="default",
+        current_model=ModelReferenceDTO(provider_id="default_provider", model_id="default"),
         created_at=created_at,
         updated_at=created_at,
     )

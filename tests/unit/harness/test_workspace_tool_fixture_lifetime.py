@@ -11,10 +11,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import FastAPI
 
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from tests.support import workspace_tool_runtime as runtime_fixture
 
 CLEANUP_ORDER = [
-    "call-reset", "scope-reset", "scope-close", "browser", "terminal",
+    "steering", "call-reset", "scope-reset", "scope-close", "browser", "terminal",
     "execution-cancel", "holder-close", "lifespan-exit", "activity", "catalog",
 ]
 
@@ -69,7 +70,7 @@ def fixture_lifetime(monkeypatch: pytest.MonkeyPatch) -> FixtureLifetime:
 
     session = SimpleNamespace(
         session_id="sess_00000000000070008000000000000001",
-        current_agent_id="default", current_provider_id="fixture-provider",
+        current_agent_id="default", current_model=ModelReferenceDTO(provider_id="fixture-provider", model_id="general"),
     )
     admission = SimpleNamespace(execution_id="exec_00000000000070008000000000000002")
     claim = SimpleNamespace(
@@ -90,6 +91,7 @@ def fixture_lifetime(monkeypatch: pytest.MonkeyPatch) -> FixtureLifetime:
         execution_queue_service=SimpleNamespace(claim=AsyncMock(return_value=claim)),
         browser_resource_owner=SimpleNamespace(cleanup_session=AsyncMock(side_effect=lambda _id: cleanup("browser"))),
         terminal_resource_owner=SimpleNamespace(cleanup_session=AsyncMock(side_effect=lambda _id: cleanup("terminal"))),
+        terminal_steering_service=SimpleNamespace(shutdown=AsyncMock(side_effect=lambda: cleanup("steering"))),
         workspace_activity_service=SimpleNamespace(store=SimpleNamespace(close=Mock(side_effect=lambda: cleanup("activity")))),
     )
     registry = Mock()
@@ -119,12 +121,12 @@ async def test_successful_teardown_keeps_cleanup_order_and_releases_application_
         assert state.application.state.workspace_container_registry is state.registry
 
     assert state.events == CLEANUP_ORDER
-    assert state.cleanup_admissions == [True] * 7 + [False] * 3
+    assert state.cleanup_admissions == [True] * 8 + [False] * 3
     assert state.application.state.workspace_container_registry is None
     message = state.container.message_service.accept_user_message.call_args
     assert message.kwargs["queue_input"].execution_binding == message.kwargs["execution_identity"]
     assert message.kwargs["queue_input"].message_id == message.args[0].message_id
-    assert (message.kwargs["queue_input"].agent_id, message.kwargs["queue_input"].provider_id) == ("default", "fixture-provider")
+    assert (message.kwargs["queue_input"].agent_id, message.kwargs["queue_input"].model) == ("default", ModelReferenceDTO(provider_id="fixture-provider", model_id="general"))
     claim = state.container.execution_queue_service.claim.return_value
     claim.start.assert_awaited_once()
     assert state.container.checkpointer.mark_job_terminal_status.call_args.kwargs["job_id"] == message.kwargs["execution_identity"].job_id
@@ -161,7 +163,7 @@ async def test_cleanup_failure_or_cancellation_still_attempts_all_remaining_reso
 
     assert caught.value is failure
     assert state.events == CLEANUP_ORDER
-    assert state.cleanup_admissions == [True] * 7 + [False] * 3
+    assert state.cleanup_admissions == [True] * 8 + [False] * 3
     assert state.application.state.workspace_container_registry is None
 
 
@@ -236,5 +238,5 @@ async def test_missing_execution_settlement_is_reported_before_releasing_holder(
         async with runtime_fixture.workspace_tool_runtime(tmp_path, application=state.application):
             pass
     assert state.events == CLEANUP_ORDER
-    assert state.cleanup_admissions == [True] * 7 + [False] * 3
+    assert state.cleanup_admissions == [True] * 8 + [False] * 3
     assert state.application.state.workspace_container_registry is None

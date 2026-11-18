@@ -47,44 +47,22 @@ export function resolveMainAreaRatios(
   return { ...value };
 }
 
-export function resizeAdjacentMainAreas({
-  ratios,
-  left,
-  right,
-  grouped = [],
+/** 会话与资源的分隔线始终停在可用边界，越界拖动不跳回起点。 */
+export function resizeThreadResources({
   leftWidth,
   rightWidth,
   deltaX,
 }: {
-  ratios: WebUiMainAreaRatios;
-  left: MainAreaKey;
-  right: MainAreaKey;
-  grouped?: readonly MainAreaKey[];
   leftWidth: number;
   rightWidth: number;
   deltaX: number;
-}): WebUiMainAreaRatios {
+}): number {
   const combinedWidth = leftWidth + rightWidth;
-  if (combinedWidth <= 0) {
-    throw new Error(`无法调整没有宽度的主页区域: left=${left}, right=${right}`);
+  if (combinedWidth < 520) {
+    throw new Error(`会话与资源并排显示至少需要 520px，当前为 ${combinedWidth}px`);
   }
-  const nextLeftWidth = leftWidth + deltaX;
-  const nextRightWidth = rightWidth - deltaX;
-  if (nextLeftWidth <= 0 || nextRightWidth <= 0) {
-    return ratios;
-  }
-
-  const groupedRatio = grouped.reduce((total, key) => total + ratios[key], ratios[right]);
-  const combinedRatio = ratios[left] + groupedRatio;
-  const rightScale = combinedRatio * (nextRightWidth / combinedWidth) / groupedRatio;
-  const nextRatios = {
-    ...ratios,
-    [left]: combinedRatio * (nextLeftWidth / combinedWidth),
-  };
-  for (const key of [right, ...grouped]) {
-    nextRatios[key] = ratios[key] * rightScale;
-  }
-  return nextRatios;
+  const nextLeftWidth = Math.min(combinedWidth - 240, Math.max(280, leftWidth + deltaX));
+  return (combinedWidth - nextLeftWidth) / combinedWidth;
 }
 
 export function defaultAuxiliaryVisible(): boolean {

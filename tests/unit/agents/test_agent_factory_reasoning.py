@@ -47,12 +47,14 @@ def config_service():
     )
 
 
-@pytest.fixture(scope="module")
-def live_reasoning_model(config_service):
+@pytest_asyncio.fixture(scope="module")
+async def live_reasoning_model(config_service):
     """真实 Provider 直连测试由构建入口显式标记用途，不伪造 Agent binding。"""
     runtime_config = config_service.get_agent_runtime_config("default")
+    reference = config_service.resolve_agent_model("default")
+    provider = await config_service.resolve_llm_model(reference)
     return build_model_from_provider(
-        runtime_config["providers"][0], runtime_config, invocation_purpose="tool_test",
+        provider, runtime_config, invocation_purpose="tool_test",
     )
 
 

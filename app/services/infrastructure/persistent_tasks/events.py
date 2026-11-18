@@ -17,6 +17,7 @@ class PersistentTaskChanged:
     task_id: str | None = None
     revision: int | None = None
     run_id: str | None = None
+    history_invalidated: bool = True
 
 
 def task_channel(events: EventChannelService, workspace_id: str) -> EventChannel[PersistentTaskChanged]:

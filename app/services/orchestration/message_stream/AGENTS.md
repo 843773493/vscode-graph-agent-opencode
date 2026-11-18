@@ -24,4 +24,6 @@
 
 - 共享状态只在 Runtime 构造器初始化；组合类按 block、工具调用和终态划分，不能作为独立 service 装配。
 - block 观察统一经 Runtime 的 `_observe_normalized_block`；Trace observer 只做诊断投影，不拥有 Runtime 状态。
+- 高频文本按片段在内存累计，仅在读取完整正文或收口时拼接；不逐片段复制已有全文，不改变 canonical、消息流和 Trace 的既有提交顺序或可选 Turn 归属。
+- 工具参数流使用现有 `arguments_delta` 传递片段，完整对象由 `arguments` 替换；canonical 草稿只在封存边界取得完整参数，不逐片段提交整个前缀。
 - 修改命名或目录时迁齐生产、测试及动态模块引用，保留原消息、工具身份与提交顺序。

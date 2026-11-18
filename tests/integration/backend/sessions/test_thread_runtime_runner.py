@@ -94,11 +94,9 @@ from app.schemas.internal_v2.session_navigation.operations import (
 from app.services.business.session_navigation.operations_service import (
     local_navigation_scope,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     MCP_OWNER_CATALOG_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
-)
-from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
 )
 from app.services.infrastructure.message_stream_store import (
@@ -169,9 +167,9 @@ def runner_case(
     config = json.loads(render_test_workspace_config(
         (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "runtime-contract-unused-key"
-        provider.pop("auth", None)
+    for provider in config["llm"]["providers"].values():
+        if "auth" not in provider["defaults"]:
+            provider["defaults"]["api_key"] = ""
     config_path.write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
@@ -305,7 +303,7 @@ async def runtime_case(
         return RuntimeProtocolModel(
             name="BoxteamLiteLLMChatModel",
             model=provider["model"],
-            provider_id=provider["id"],
+            provider_id=provider["provider_id"],
             api_key="runtime-fixture-key",
             api_base="http://127.0.0.1:1/v1",
             custom_llm_provider="openai",
@@ -743,7 +741,7 @@ async def _lease(case: RuntimeCase, admission: ExecutionAdmission, **overrides):
         agent_id="default",
         execution_overrides=overrides,
         model_visibility_overrides={},
-        preferred_provider_id=None,
+        preferred_model=None,
         include_team_tools=False,
     )
 
@@ -913,7 +911,7 @@ async def test_real_initialized_child_file_tool_reaches_canonical_commit(
     assert (f"{call_id}:tool-call:runtime-file-read", "canonical.tool_result.before_commit") in phases, events
 
 
-async def test_real_child_runtime_default_and_explicit_same_provider_share_generation(
+async def test_real_child_runtime_default_and_explicit_same_model_share_generation(
     runtime_case: RuntimeCase,
 ) -> None:
     """initial 默认模型和直接 Turn 的同一显式模型不能重新编译 child。"""
@@ -921,13 +919,13 @@ async def test_real_child_runtime_default_and_explicit_same_provider_share_gener
     session_id, _main = await _session(case.runner)
     child_id = await _child(case, session_id)
     service = case.runner.container.agent_execution_service
-    provider_id = case.runner.container.config_service.resolve_agent_provider_id("default")
+    model = case.runner.container.config_service.resolve_agent_model("default")
     generations = []
-    for origin, preference in (("internal", None), ("user", provider_id)):
+    for origin, preference in (("internal", None), ("user", model)):
         lease = await service._acquire_step_agent(
             admission=_admit(case.runner, session_id, child_id, origin),
             agent_id="default", execution_overrides={}, model_visibility_overrides={},
-            preferred_provider_id=preference, include_team_tools=False,
+            preferred_model=preference, include_team_tools=False,
         )
         generations.append(lease.generation)
         lease.release()

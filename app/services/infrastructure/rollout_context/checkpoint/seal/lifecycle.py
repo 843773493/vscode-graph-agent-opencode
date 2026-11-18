@@ -151,6 +151,7 @@ def seal_registered_plan(
                 None if wire_profile is None else owner.project_context_plan_for_dispatch(
                     session_id, thread_id, retry.as_sealed_plan(),
                     target_format=retry.target_format, checkpoint_ns=checkpoint_ns,
+                    wire_profile=wire_profile,
                 ),
             )
         # activation 正文必须在 assemble 之前准备：正文写入失败不能留下已完成

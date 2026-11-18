@@ -29,6 +29,7 @@ from app.schemas.internal_v2.config import (
     ConfigSourceOriginDTO,
     ConfigSourcePreflightDTO,
 )
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config import (
     SHARED_USER_WORKSPACE_SOURCE_KEY,
     ConfigRestartRequiredError,
@@ -181,11 +182,10 @@ class ConfigSourceEditMixin:
         if not service._snapshot_store.has_snapshot():
             raise RuntimeError("来源读取要求工作区已完成初始化")
         workspace_id = read_workspace_id(root)
-        file = read_stable_config_file(path) if path is not None else None
+        source_effective, source_payloads, files, baseline = service._read_saved_source_view()
+        file = files.get(source_key)
         text = (file.raw_bytes.decode("utf-8") if file is not None and file.raw_bytes is not None
                 else json.dumps({"ui": service._runtime_config_overrides}) if path is None else "{}\n")
-        source_payloads: dict[str, dict[str, object]] = {}
-        source_effective, _, _, _ = service._read_effective_config(import_sources=False, source_payloads=source_payloads)
         record = store.get_source_layer(source_key)
         active = store.get_active_config_snapshot(service._CONFIG_DOMAIN)
         edit = None
@@ -213,7 +213,7 @@ class ConfigSourceEditMixin:
         return ConfigSourceDocumentDTO(
             gateway_id=gateway_id, workspace_id=workspace_id, source_key=source_key,
             layer=layer, writable=source_key in _WRITABLE_SOURCES,
-            jsonc=redact_source_text(text, provider_scope=f"{gateway_id}:{workspace_id}:{source_key}"),
+            jsonc=redact_source_text(text),
             file_presence=file.presence if file is not None else "absent",
             file_digest=file.digest if file is not None else None,
             layer_revision=record.layer_revision if record is not None else None,
@@ -230,6 +230,8 @@ class ConfigSourceEditMixin:
                 payload=cast(dict[str, object], redact_source_payload(payload)),
             ) for key, payload in source_payloads.items()],
             origins=[ConfigSourceOriginDTO.model_validate(origin) for origin in source_origins(source_payloads, source_effective)],
+            active_origins=[ConfigSourceOriginDTO.model_validate(origin) for origin in service._require_snapshot().source_origins()],
+            source_baseline=baseline,
             status=service.get_reload_status_dto(), edit=edit, fanout=self._source_fanout(source_key, fanout_generation),
         )
 
@@ -279,15 +281,17 @@ class ConfigSourceEditMixin:
         # 已接受的同一请求在 replace 后恢复时，原文件就是已保存正文；不再用旧下标重放草稿。
         text = (original if accepted is not None and accepted.source_edit is not None
                 and file.digest == accepted.source_edit["file_digest"] else restore_source_text(
-                    request.jsonc, original, provider_scope=f"{gateway_id}:{request.workspace_id}:{source_key}",
+                    request.jsonc, original,
                 ))
-        candidate = service._build_candidate_snapshot(source_override=(source_key, parse_source_text(text)), import_sources=False)
+        candidate = service._build_candidate_snapshot(source_override=(source_key, parse_source_text(text)),
+            import_sources=False)
         service._validate_agent_definition_references(candidate.to_dict())
         verify_stable_config_file(file)
         return text, candidate
 
     async def preflight_source_edit(
         self, *, source_key: str, gateway_id: str, request: ConfigSourceEditRequest,
+        model_ref: ModelReferenceDTO | None = None,
     ) -> ConfigSourcePreflightDTO:
         service = cast("ConfigService", self)
         _, candidate = self._preflight_source_edit(source_key, gateway_id, request)
@@ -297,11 +301,21 @@ class ConfigSourceEditMixin:
         )
         with service._mcp_configuration_guard(service._require_snapshot().to_dict(), candidate.to_dict()):
             pass
+        active = service._require_snapshot()
+        active_config = active.to_dict()
+        active_models = (active_config["llm"]["providers"].get(model_ref.provider_id, {}).get("models", {})
+                         if model_ref is not None else {})
         return ConfigSourcePreflightDTO(
             document=self.get_source_document(source_key=source_key, gateway_id=gateway_id),
             candidate=cast(dict[str, object], redact_source_payload(candidate.to_dict())),
             candidate_digest=candidate.revision,
             changed_paths=list(changed_json_paths(service._require_snapshot().to_dict(), candidate.to_dict())),
+            model_options=service._llm_resolution.inspect_model_reference(candidate.to_dict(), model_ref,
+                {str(origin["path"]): str(origin["source_key"]) for origin in candidate.source_origins()})
+                if model_ref is not None else None,
+            active_model_options=service._llm_resolution.inspect_model_reference(active_config, model_ref,
+                {str(origin["path"]): str(origin["source_key"]) for origin in active.source_origins()})
+                if model_ref is not None and model_ref.model_id in active_models else None,
         )
 
     async def save_source_edit(

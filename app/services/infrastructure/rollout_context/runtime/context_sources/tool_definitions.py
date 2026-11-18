@@ -18,9 +18,11 @@ from app.domain.itemized.records import CanonicalItemRecord
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolCatalog,
     FrozenToolDefinition,
+)
+from app.services.infrastructure.mcp.tool_definitions import (
     definition_resource_id,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.models import (

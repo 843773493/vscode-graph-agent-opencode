@@ -121,6 +121,7 @@ async function main() {
     workspaceId,
   });
   await manager.init();
+  const observations = new Set();
 
   const server = http.createServer(async (request, response) => {
     try {
@@ -136,9 +137,18 @@ async function main() {
       verifyRuntimeControlToken(request.headers["x-local-token"], token);
       requestWorkspaceId(request, url, workspaceId);
 
+      if (request.method === "GET" && businessPath === "/api/terminals/events") {
+        const close = manager.observe(response);
+        observations.add(close);
+        response.once("close", () => observations.delete(close));
+        return;
+      }
+
       if (request.method === "GET" && businessPath === "/api/terminals") {
+        const resourceIds = url.searchParams.getAll("resource_id");
+        if (resourceIds.some(id => !id)) throw new WorkspaceAddressError("resource_id 不能为空", 400);
         sendJson(response, 200, {
-          data: manager.list(),
+          data: manager.list(resourceIds.length ? resourceIds : undefined),
         });
         return;
       }
@@ -444,6 +454,7 @@ async function main() {
     // TODO(5.4)：同步阻塞的总期限、未知启动的原生进程接管仍需独立核实。
     try {
       wss.close();
+      for (const close of observations) close();
       await closeHttpServer(server);
     } catch (transportError) {
       finalExitCode = 1;

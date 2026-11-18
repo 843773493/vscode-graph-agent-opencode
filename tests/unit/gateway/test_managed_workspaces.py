@@ -135,6 +135,36 @@ def creation_app(creation_registry: GatewayWorkspaceRegistry, tmp_path: Path, mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("federated", [False, True], ids=["local", "federation"])
+async def test_duplicate_managed_workspace_explains_existing_target_without_mutation(
+    creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry,
+    creation_boundary: CreationBoundary, tmp_path: Path, federated: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "registered"
+    root.mkdir()
+    workspace_id = load_or_create_workspace_id(root)
+    monkeypatch.setattr("app.gateway.registry.runtime.resolve_backend_workspace_id", lambda *_, **__: workspace_id)
+    target = creation_registry.upsert(WorkspaceTarget(gateway_id=GATEWAY_ID,
+        workspace_id=workspace_id, name="已添加工作区", root_path=str(root),
+        backend_url="http://127.0.0.1:43001", connection_kind="local", managed=True,
+    ))
+    revision = creation_registry.registry_revision
+    original_identity = workspace_identity_path(root).read_bytes()
+    path = "/api/gateway/federation/managed-workspaces" if federated else "/api/gateway/managed-workspaces"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=creation_app), base_url="http://gateway") as client:
+        response = await client.post(path, json={"root_path": str(root)}, headers={"X-Request-ID": "duplicate-workspace"})
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "所选工作区已添加，请从资源管理器打开已有工作区。"
+    assert response.headers["X-Request-ID"] == "duplicate-workspace"
+    assert str(root) not in response.text
+    assert creation_registry.resolve(target.key) is target
+    assert creation_registry.registry_revision == revision
+    assert workspace_identity_path(root).read_bytes() == original_identity
+    assert creation_boundary.processes == []
+    assert creation_boundary.request_ids == []
+
+
+@pytest.mark.asyncio
 async def test_external_registration_confirms_health_installation_domain_without_rebinding(
     creation_app: FastAPI, creation_registry: GatewayWorkspaceRegistry, creation_boundary: CreationBoundary,
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

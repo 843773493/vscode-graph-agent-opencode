@@ -17,8 +17,6 @@ import type {
 import {
   BULK_FILE_OPERATION_TIMEOUT_MS,
   DEFAULT_API_REQUEST_TIMEOUT_MS,
-  getApiBaseUrl,
-  getGatewayToken,
   onGatewayTokenInvalidated,
   requestGatewayResponse,
   requestJson,
@@ -221,27 +219,23 @@ export async function getWorkspaceFileOperations(port: number, operationIds: rea
 }
 
 export interface WorkspaceFileDownloadRequest {
-  url: string;
+  port: number;
+  path: string;
   headers: Record<string, string>;
   suggestedName: string;
 }
 
-export async function createWorkspaceFileDownloadRequest(
+export function createWorkspaceFileDownloadRequest(
   port: number,
   path: string,
   suggestedName: string,
   workspaceId?: string | null,
-): Promise<WorkspaceFileDownloadRequest> {
-  // TODO: 下载由 FileTransferHost 以 anchor 触发浏览器原生导航，无法在本层包装成
-  // 带刷新重试的 fetch，只能沿用 getGatewayToken 取一次凭据并烘焙进 headers。降级
-  // 行为：若 Gateway 在本调用与 host 发起 fetch 之间轮换本地凭据，下载会以 host 的
-  // 普通 Error 失败且不会重试（非 HttpRequestError，调用方无法按状态码降级）；待把
-  // 下载改为经 requestGatewayResponse 由页面发起后即可与其余入口共享同一屏障。
-  const localToken = await getGatewayToken(port);
+): WorkspaceFileDownloadRequest {
   const { query } = fileTreeLocationQuery(path);
   return {
-    url: `${getApiBaseUrl(port)}/api/v1/workspace/files/download?${query.toString()}`,
-    headers: { "X-Local-Token": localToken, ...workspaceHeader(workspaceId) },
+    port,
+    path: `/api/v1/workspace/files/download?${query.toString()}`,
+    headers: workspaceHeader(workspaceId),
     suggestedName,
   };
 }
@@ -310,12 +304,26 @@ export async function getWorkspaceRawFileBlob(
   signal?: AbortSignal,
   range?: { start: number; end?: number },
 ): Promise<Blob> {
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  const mime = await readWorkspaceRawFile(port, path, workspaceId, chunk => {
+    chunks.push(new Uint8Array(chunk));
+  }, signal, range);
+  return new Blob(chunks, { type: mime });
+}
+
+/** Blob 和原生文件 Provider 共用正文读取；订阅凭据失效直到最后一块消费结束。 */
+export async function readWorkspaceRawFile(
+  port: number,
+  path: string,
+  workspaceId: string | null | undefined,
+  onChunk: (chunk: Uint8Array) => void | Promise<void>,
+  signal?: AbortSignal,
+  range?: { start: number; end?: number },
+): Promise<string> {
   const { query } = fileTreeLocationQuery(path);
   const controller = new AbortController();
   const reading = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-  const release = onGatewayTokenInvalidated(port, () => controller.abort(
-    new DOMException("Gateway 或访问凭据已改变，请重新读取文件", "AbortError"),
-  ));
+  let release: (() => void) | undefined;
   try {
     // 复用本机凭据刷新链；凭据撤销时取消整个正文读取。
     const response = await requestGatewayResponse(
@@ -326,13 +334,33 @@ export async function getWorkspaceRawFileBlob(
         signal: reading,
       },
     );
+    // 响应头前由统一请求屏障完成一次凭据刷新；成功建连后，撤销必须中止正文。
+    release = onGatewayTokenInvalidated(port, () => controller.abort(
+      new DOMException("Gateway 或访问凭据已改变，请重新读取文件", "AbortError"),
+    ));
     if (range && response.status !== 206) {
       const error = new Error("目标文件服务没有按请求返回字节范围");
       controller.abort(error);
       throw error;
     }
-    return await awaitWithAbort(response.blob(), reading);
-  } finally { release(); }
+    const reader = response.body?.getReader();
+    if (reader) {
+      let complete = false;
+      try {
+        while (true) {
+          const { done, value } = await awaitWithAbort(reader.read(), reading);
+          reading.throwIfAborted();
+          if (done) { complete = true; break; }
+          await awaitWithAbort(Promise.resolve(onChunk(value)), reading);
+        }
+      } finally {
+        try { if (!complete) await reader.cancel(reading.reason); }
+        finally { reader.releaseLock(); }
+      }
+    }
+    reading.throwIfAborted();
+    return response.headers.get("Content-Type") ?? "";
+  } finally { release?.(); }
 }
 
 /** 与原件 GET 共用 owner 和权限，仅取得 MIME，不下载正文。 */

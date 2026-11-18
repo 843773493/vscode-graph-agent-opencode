@@ -85,7 +85,7 @@ async def workspace_tool_runtime(
                         execution_identity=identity,
                         queue_input=ExecutionQueueInput(
                             execution_binding=identity, message_id=message_id,
-                            agent_id=session.current_agent_id, provider_id=session.current_provider_id,
+                            agent_id=session.current_agent_id, model=session.current_model,
                             delivery_policy="after_turn", gateway_id=None, request_id=None,
                             created_at=now.isoformat(),
                         ),

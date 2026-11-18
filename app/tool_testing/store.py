@@ -13,6 +13,7 @@ from typing import Any
 
 from app.core.failures import report_failure
 from app.core.trace_middleware import get_current_request_id
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.tool_testing.definitions import tool_test_failure_detail
 
 _SAFE_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -36,10 +37,11 @@ class ToolTestStore:
     def tool_dir(self, tool_name: str) -> Path:
         return self.root / _safe_segment(tool_name, label="工具名")
 
-    def case_dir(self, tool_name: str, provider_id: str, case_id: str) -> Path:
+    def case_dir(self, tool_name: str, model_ref: ModelReferenceDTO, case_id: str) -> Path:
         return (
             self.tool_dir(tool_name)
-            / _safe_segment(provider_id, label="provider ID")
+            / _safe_segment(model_ref.provider_id, label="provider ID")
+            / _safe_segment(model_ref.model_id, label="model ID")
             / _safe_segment(case_id, label="测试用例 ID")
         )
 
@@ -47,10 +49,10 @@ class ToolTestStore:
         self,
         *,
         tool_name: str,
-        provider_id: str,
+        model_ref: ModelReferenceDTO,
         case_id: str,
     ) -> Path:
-        target = self.case_dir(tool_name, provider_id, case_id)
+        target = self.case_dir(tool_name, model_ref, case_id)
         with _store_access("prepare_case"):
             if target.exists():
                 shutil.rmtree(target)
@@ -61,14 +63,14 @@ class ToolTestStore:
         self,
         *,
         tool_name: str,
-        provider_id: str,
+        model_ref: ModelReferenceDTO,
         case_id: str,
         file_name: str,
         payload: dict[str, Any],
     ) -> Path:
         if file_name not in {"request.json", "response.json", "result.json"}:
             raise ValueError("不允许写入未知的测试文件")
-        target = self.case_dir(tool_name, provider_id, case_id) / file_name
+        target = self.case_dir(tool_name, model_ref, case_id) / file_name
         with _store_access("write_case"):
             if not target.parent.is_dir():
                 raise FileNotFoundError(f"测试用例目录不存在: {target.parent}")

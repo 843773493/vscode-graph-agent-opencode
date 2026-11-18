@@ -15,7 +15,15 @@ const page = await context.newPage();
 let token;
 let panel;
 const writes = [];
+const legacyReads = [];
+const taskSubscriptions = [];
+const standaloneTaskStreams = [];
 page.on("request", (request) => {
+  if (new URL(request.url()).pathname === "/api/v1/persistent-tasks/events") standaloneTaskStreams.push(request.url());
+  if (new URL(request.url()).pathname === "/api/v1/workspace/observations/stream") {
+    taskSubscriptions.push(request.postDataJSON().subscriptions.filter(item => item.kind === "persistent_tasks"));
+  }
+  if (request.method() === "GET" && new URL(request.url()).pathname.endsWith("/goal")) legacyReads.push(request.url());
   if (request.method() === "PUT" && new URL(request.url()).pathname.endsWith("/goal")) {
     writes.push(request.postDataJSON());
   }
@@ -29,6 +37,13 @@ async function api(path, method = "GET", data) {
   const body = await response.json();
   assert.equal(body.request_id, response.headers()["x-request-id"]);
   return body.data;
+}
+
+async function goalSnapshot(session) {
+  const value = (await api(`/api/v1/persistent-tasks?session_id=${encodeURIComponent(session.session_id)}`)).session_goal;
+  assert.equal(value.session_id, session.session_id);
+  assert.equal(value.thread_id, session.thread_id);
+  return value;
 }
 
 async function selectSession(session) {
@@ -47,6 +62,10 @@ try {
   await api("/api/v1/workspace");
   const first = await api("/api/v1/sessions", "POST", { title: "Goal 管理验证" });
   const second = await api("/api/v1/sessions", "POST", { title: "无 Goal 的会话" });
+  const empty = await goalSnapshot(second);
+  assert.equal(empty.goal, null);
+  assert.equal(empty.control_revision, 0);
+  assert.equal(empty.sync_version, 0);
   // 保持暂停，验证管理界面时不触发模型调用。
   const original = (await api(`/api/v1/sessions/${first.session_id}/goal`, "PUT", {
     objective: "验证原始 Goal", status: "paused", token_budget: 1000,
@@ -68,7 +87,7 @@ try {
   await dialog.getByRole("button", { name: "保存 Goal", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(panel).toContainText("通过界面编辑的 Goal");
-  const edited = (await api(`/api/v1/sessions/${first.session_id}/goal`)).goal;
+  const edited = (await goalSnapshot(first)).goal;
   assert.equal(edited.goal_id, original.goal_id);
   assert.equal(edited.thread_id, first.thread_id);
   assert.equal(edited.status, "paused");
@@ -99,6 +118,8 @@ try {
   dialog = page.getByRole("dialog", { name: "新建 Goal", exact: true });
   await expect(dialog.getByRole("button", { name: "开始 Goal", exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  assert(taskSubscriptions.every(items => items.filter(item => item.session_id === second.session_id).length <= 2),
+    "空 Goal 详情必须复用父列表快照，不增加第三个任务观察者");
   await selectSession(first);
   await expect(panel).toContainText(edited.objective);
   await panel.getByRole("button", { name: edited.objective, exact: true }).click();
@@ -106,12 +127,15 @@ try {
   const confirmation = page.getByRole("dialog");
   await expect(confirmation).toContainText("会话消息保留");
   await confirmation.getByRole("button", { name: "取消", exact: true }).click();
-  assert.equal((await api(`/api/v1/sessions/${first.session_id}/goal`)).goal.goal_id, original.goal_id);
+  assert.equal((await goalSnapshot(first)).goal.goal_id, original.goal_id);
   await panel.getByRole("button", { name: "删除 Goal", exact: true }).click();
   await page.getByRole("dialog", { name: "删除当前 Goal？", exact: true })
     .getByRole("button", { name: "删除 Goal", exact: true }).click();
   await expect(panel).toContainText("当前会话没有关联任务。");
-  assert.equal((await api(`/api/v1/sessions/${first.session_id}/goal`)).goal, null);
+  const cleared = await goalSnapshot(first);
+  assert.equal(cleared.goal, null);
+  assert.equal(cleared.control_revision, edited.control_revision + 1);
+  assert(cleared.sync_version > edited.sync_version);
   // 从会话侧栏创建普通任务，验证默认目标、直接管理及两处完整镜像。
   await panel.getByRole("button", { name: "新建持久任务", exact: true }).click();
   await panel.getByRole("button", { name: "自定义", exact: true }).click();
@@ -150,11 +174,26 @@ try {
   await selectSession(first);
   await panel.getByRole("button", { name: persisted.configuration.name, exact: true }).click();
   await expect(panel.getByRole("button", { name: "暂停任务", exact: true })).toBeVisible();
+  // 超过逻辑观察者的 45 秒空闲期限后，仍应沿原连接接收其他客户端的更新。
+  const idleSubscriptions = taskSubscriptions.length;
+  const idleStarted = performance.now();
+  await page.waitForTimeout(46_000);
+  const idleElapsedMs = performance.now() - idleStarted;
+  assert.equal(taskSubscriptions.length, idleSubscriptions, "空闲任务不能靠重连掩盖缺少自身心跳");
+  await api(`/api/v1/persistent-tasks/${created.task_id}/control`, "POST", {
+    expected_revision: persisted.revision, action: "pause",
+  });
+  await expect(panel.getByRole("button", { name: "恢复任务", exact: true })).toBeVisible();
+  await expect(workspaceTasks.getByRole("button", { name: "恢复任务", exact: true })).toBeVisible();
+  assert.deepEqual(legacyReads, [], "会话及任务详情不能继续 GET 独立 Goal 接口");
+  assert.deepEqual(standaloneTaskStreams, [], "任务入口必须复用工作区聚合流");
   await page.screenshot({ path: join(artifacts, "session-tasks.png") });
   await writeFile(join(artifacts, "result.json"), JSON.stringify({
     sessionId: first.session_id, mainThreadId: first.thread_id,
     editorViewRestored: true, editedThroughUI: true, sessionSwitchIsolated: true,
+    legacyGoalReads: legacyReads, standaloneTaskStreams, emptySlot: empty, clearedSlot: cleared,
     deletedThroughUI: true, deletionCancelledThroughUI: true, taskId: created.task_id, sidebarCreateAndEdit: true, sharedState: true, modelCalls: 0,
+    idleElapsedMs, idleTaskStreamSurvived: true,
   }, null, 2));
 } catch (error) {
   await page.screenshot({ path: join(artifacts, "goal-sidebar-failure.png") });

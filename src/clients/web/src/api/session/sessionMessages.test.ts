@@ -144,6 +144,20 @@ describe("会话附件文本预览按需读取", () => {
       { maxCodeUnits: 2 },
     )).resolves.toEqual({ text: "你好", truncated: false });
   });
+
+  test.each([0, 1, 2, 3, 4])("按字节分块时，长度 %i 不截断代理对", async maxCodeUnits => {
+    const bytes = new TextEncoder().encode("a🙂尾");
+    let index = 0;
+    installSessionApiFetchMock(() => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (index === bytes.length) controller.close();
+        else controller.enqueue(bytes.slice(index, ++index));
+      },
+    })));
+    const expected = ["", "a", "a", "a🙂", "a🙂尾"][maxCodeUnits];
+    await expect(getSessionAttachmentTextPreview(48_317, "ses_preview", "file_preview", WORKSPACE_KEY,
+      { maxCodeUnits })).resolves.toEqual({ text: expected, truncated: maxCodeUnits < 4 });
+  });
 });
 
 describe("中断请求只作用于明确的 Thread", () => {

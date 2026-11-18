@@ -36,7 +36,6 @@ from app.core.trace_middleware import TraceMiddleware
 from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.execution_admission import InternalExecutionIntent
 from app.schemas.internal_v2.session import SessionCreateRequest
-from app.schemas.internal_v2.team import TeamListDTO
 from app.services.business.session_service import SessionService
 from app.services.business.team.service import TeamCoordinationService
 from app.services.infrastructure.config_service import ConfigService
@@ -88,7 +87,7 @@ def checkpoint_saver(catalog_workspace_context) -> RolloutCheckpointSaver:
 @pytest.fixture
 def team_coordination_service() -> AsyncMock:
     team_service_mock = AsyncMock(spec=TeamCoordinationService)
-    team_service_mock.list_teams.return_value = TeamListDTO(items=[])
+    team_service_mock.list_summaries.return_value = []
     return team_service_mock
 
 
@@ -239,7 +238,7 @@ async def test_child_threads_api_returns_thread_payload(
     assert data.parent_session_id == parent_session_id
     assert data.total == 1
     assert data.teams == []
-    team_coordination_service.list_teams.assert_awaited_once_with(
+    team_coordination_service.list_summaries.assert_awaited_once_with(
         requester_session_id=parent_session_id,
         requester_thread_id=await session_service.resolve_main_thread(
             parent_session_id
@@ -489,7 +488,7 @@ async def test_child_thread_report_read_blocks_real_delete_until_response_is_com
     async def pause_teams(**kwargs):
         query_paused.set()
         await continue_query.wait()
-        return TeamListDTO(items=[])
+        return []
 
     original_outcome = checkpoint_saver.runtime_execution_outcome
     report_reads = []
@@ -514,7 +513,7 @@ async def test_child_thread_report_read_blocks_real_delete_until_response_is_com
         observe_delete_admission,
     )
     monkeypatch.setattr(checkpoint_saver, "runtime_execution_outcome", read_report)
-    team_coordination_service.list_teams.side_effect = pause_teams
+    team_coordination_service.list_summaries.side_effect = pause_teams
     query = asyncio.create_task(
         list_session_child_threads(
             parent_id,

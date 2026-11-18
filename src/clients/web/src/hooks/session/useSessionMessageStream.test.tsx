@@ -274,6 +274,37 @@ async function flushReconnectRounds(
 }
 
 describe("useSessionMessageStream 有界重连", () => {
+  test("显式重新同步撤销旧订阅，只为原 Thread 建立一次新订阅", async () => {
+    installGatewayTestWindow(49_760);
+    const sessionId = "ses_reload_status";
+    const mirror = createAppStateMirror(minimalState());
+    mirror.current().sessionsByWorkspace.set(WORKSPACE_KEY, [
+      { session_id: sessionId, thread_id: "thr_00000000400070008000000000000002" } as NonNullable<AppState["currentSession"]>,
+    ]);
+    const signals: AbortSignal[] = [];
+    spyOn(messageStreamApi, "streamSessionMessageEvents").mockImplementation(async (_port, _session, _turn, options) => {
+      signals.push(options!.signal!);
+      await new Promise<void>(resolve => options!.signal!.addEventListener("abort", () => resolve(), { once: true }));
+    });
+    function Harness({ reloadNonce }: { reloadNonce: number }) {
+      useSessionMessageStream({ apiPort: 49_760, sessionId, threadId: "thr_00000000400070008000000000000002",
+        turnId: "turn_reload", workspaceId: WORKSPACE_KEY, sessionCacheKey: sessionScopeKey(WORKSPACE_KEY, sessionId),
+        setState: mirror.setState, reloadNonce });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness reloadNonce={0} />); await new Promise(resolve => setTimeout(resolve, 150)); });
+    expect(signals).toHaveLength(1);
+    await act(async () => { renderer.update(<Harness reloadNonce={1} />); await new Promise(resolve => setTimeout(resolve, 150)); });
+    expect(signals).toHaveLength(2);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
+    await act(async () => { renderer.update(<Harness reloadNonce={1} />); await new Promise(resolve => setTimeout(resolve, 150)); });
+    expect(signals).toHaveLength(2);
+    act(() => renderer.unmount());
+    expect(signals[1]!.aborted).toBe(true);
+  });
+
   test("child 列表切到同 Session ID 的另一 Gateway 时，新 render 不暴露旧 owner 列表", async () => {
     installGatewayTestWindow(49_761);
     const sessionId = "ses_same_children";

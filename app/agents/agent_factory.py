@@ -100,24 +100,26 @@ from app.services.infrastructure.events.channel_events import (
     ContextSourceEvent,
     ContextSourceEventPublisher,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
-    MCP_TOOL_CATALOG_RESOURCE_ID,
-    McpCatalogResourcePublisher,
-    extension_dispatch_from_activation,
-)
 from app.services.infrastructure.mcp.catalog_owner import McpCatalogOwner
+from app.services.infrastructure.mcp.catalog_publication import (
+    McpCatalogResourcePublisher,
+)
 from app.services.infrastructure.mcp.connection_service import McpConnectionService
 from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
     ExtensionCatalogUnavailableError,
     ExtensionTargetBinding,
     ExtensionTargetResolutionError,
+)
+from app.services.infrastructure.mcp.frozen_catalog import (
+    FrozenToolCatalog,
+    restore_frozen_extension_dispatch,
 )
 from app.services.infrastructure.mcp.invocation import (
     ExtensionExecutionTarget,
     McpResourceUse,
 )
 from app.services.infrastructure.mcp.tool_definitions import (
-    FrozenToolCatalog,
     SkillToolSource,
 )
 from app.services.infrastructure.node_debug.service import NodeDebugService
@@ -159,6 +161,7 @@ from app.services.orchestration.resource_activation import ResourceActivationCoo
 
 if TYPE_CHECKING:
     from app.domain.itemized.resource_activation import ResourceActivationSnapshotRef
+    from app.services.business.communication.user_questions import UserQuestionService
     from app.services.business.message_service import MessageService
     from app.services.business.session_goal_service import SessionGoalService
     from app.services.business.session_service import SessionService
@@ -196,6 +199,7 @@ def assemble_deep_agent(
     job_event_bus: JobEventBusProtocol | None = None,
     job_service: JobServiceProtocol | None = None,
     goal_service: SessionGoalService | None = None,
+    user_question_service: UserQuestionService | None = None,
     message_service: MessageService | None = None,
     session_service: SessionService | None = None,
     session_orchestrator: object | None = None,
@@ -417,6 +421,8 @@ def assemble_deep_agent(
             background_task_registry=background_task_registry,
             background_mailbox=background_mailbox,
             goal_service=goal_service,
+            user_question_service=user_question_service,
+            user_facing=assembly_mode == "tool_catalog" or session_service is not None and session_service.path_resolver.main_thread_id(session_id) == thread_id,
             session_subagent_service=session_subagent_service,
             team_service=team_service,
             terminal_resource_owner=terminal_resource_owner,
@@ -590,7 +596,7 @@ def assemble_deep_agent(
             parents = tuple(binding for binding in snapshot.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
             if len(parents) != 1:
                 raise ExtensionTargetResolutionError("MCP 封存资格缺少唯一冻结目录")
-            dispatch = extension_dispatch_from_activation(
+            dispatch = restore_frozen_extension_dispatch(
                 snapshot=snapshot, binding=parents[0], model_call_id=model_call_id,
                 payload=checkpointer.read_resource_activation_payload(
                     snapshot, parents[0], storage_owner=(session_id, thread_id), checkpoint_ns=checkpoint_ns,

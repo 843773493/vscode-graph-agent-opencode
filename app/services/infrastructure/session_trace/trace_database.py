@@ -14,21 +14,22 @@ from app.schemas.event import Event
 from .trace_cursor import TraceStreamRecord, encode_trace_cursor
 
 _OWNER_TYPES_SQL = "event_type IN ('job_created', 'job_started', 'message_created')"
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def _migrations() -> tuple[str, ...]:
     return tuple(load_sql(__package__, f"migrations/{name}") for name in (
-        "001_trace.sql", "002_thread_index.sql",
+        "001_trace.sql", "002_thread_index.sql", "003_job_lifecycle_index.sql",
     ))
 
 
 class TraceDatabase:
     def __init__(self, path: Path) -> None:
         self.path = path
+        # 写连接由 TraceEventStore 的分片锁串行使用，读取始终独立打开快照。
+        self._writer: sqlite3.Connection | None = None
 
-    @contextmanager
-    def connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection | None]:
+    def _connect(self, *, write: bool) -> sqlite3.Connection | None:
         if not self.path.exists():
             # 开发中间态不是迁移契约；明确拒绝旧格式，不把旧历史伪装为空库。
             for name in (
@@ -42,8 +43,7 @@ class TraceDatabase:
                         f"Trace 使用旧 JSONL 格式，须显式处理后再打开: {self.path.parent / name}"
                     )
             if not write:
-                yield None
-                return
+                return None
             # 先在同目录完成 schema，再发布主库；读者不会见到建库中的空表。
             native_io_path(self.path.parent).mkdir(parents=True, exist_ok=True)
             with TemporaryDirectory(
@@ -65,14 +65,14 @@ class TraceDatabase:
                     pass
                 fsync_directory(self.path.parent)
         mode = "rw" if write else "ro"
-        with closing(
-            sqlite3.connect(
-                sqlite_file_uri(self.path) + f"?mode={mode}",
-                uri=True,
-                timeout=5.0,
-                isolation_level=None,
-            )
-        ) as connection:
+        connection = sqlite3.connect(
+            sqlite_file_uri(self.path) + f"?mode={mode}",
+            uri=True,
+            timeout=5.0,
+            isolation_level=None,
+            check_same_thread=not write,
+        )
+        try:
             connection.row_factory = sqlite3.Row
             version = connection.execute(
                 "SELECT MAX(version) FROM schema_migrations"
@@ -83,6 +83,18 @@ class TraceDatabase:
                     "请停写后显式执行 uv run python -m "
                     "app.services.infrastructure.session_trace.trace_database <trace.sqlite>"
                 )
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
+    @contextmanager
+    def connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection | None]:
+        connection = self._connect(write=write)
+        if connection is None:
+            yield None
+            return
+        with closing(connection):
             # 所有多条读取共用一致快照；写入由 SQLite 原子提交，读取不占写锁。
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             with connection:
@@ -92,8 +104,12 @@ class TraceDatabase:
         # 提交与实时交付共用独立事件，后续调用方修改模型不会改变已提交事实。
         event = event.model_copy(deep=True)
         raw = event.__pydantic_serializer__.to_json(event) + b"\n"
-        with self.connection(write=True) as connection:
-            assert connection is not None
+        if self._writer is None:
+            self._writer = self._connect(write=True)
+        connection = self._writer
+        assert connection is not None
+        connection.execute("BEGIN IMMEDIATE")
+        with connection:
             tail = connection.execute(
                 "SELECT end FROM trace_events ORDER BY start DESC LIMIT 1"
             ).fetchone()
@@ -110,6 +126,11 @@ class TraceDatabase:
             cursor=encode_trace_cursor(event_id=event.event_id, start=start, end=start + len(raw), line=raw),
             start=start, end=start + len(raw), thread_id=thread_id,
         )
+
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
 
 
 def job_threads(

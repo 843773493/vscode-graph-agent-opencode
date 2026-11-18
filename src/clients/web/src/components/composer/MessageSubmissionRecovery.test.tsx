@@ -7,10 +7,12 @@ import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import type { MessageRunAccepted, MessageRunRequest } from "../../types/backend";
 import { installComposerTestGlobals } from "./composerTestFixtures";
 import MessageSubmissionRecovery from "./MessageSubmissionRecovery";
+import { ComposerDiagnosticsContext } from "./ComposerDiagnosticsContext";
 import {
   freezeMessageSubmission,
   loadMessageSubmissions,
   releaseMessageSubmission,
+  rejectMessageSubmission,
   type MessageSubmissionOwner,
 } from "../../state/messageSubmissions/storage";
 
@@ -67,7 +69,7 @@ async function settle(): Promise<void> {
 }
 
 function findButton(renderer: ReactTestRenderer, label: string) {
-  return renderer.root.findAllByType("button").find(button => button.children.includes(label));
+  return renderer.root.findAllByType("button").find(button => button.props["aria-label"] === label);
 }
 
 afterEach(async () => {
@@ -86,6 +88,7 @@ test("恢复控件按 workspace/session/thread 隔离，并以原 operation_id �
   await freezeMessageSubmission(OWNER_B, input("B 的其它工作区输入", "op_other_workspace"));
   let queryAttempt = 0;
   let acceptedRefreshes = 0;
+  const diagnostics: string[] = [];
   installSessionApiFetchMock(({ method, path, init }) => {
     const body = method === "POST" ? JSON.parse(String(init?.body)) as MessageRunRequest : undefined;
     requests.push({ method, path, ...(body ? { body } : {}) });
@@ -106,7 +109,9 @@ test("恢复控件按 workspace/session/thread 隔离，并以原 operation_id �
   try {
     expect(await loadMessageSubmissions(OWNER_A)).toEqual([frozen]);
     await act(async () => {
-      renderer = create(<MessageSubmissionRecovery owner={OWNER_A} port={PORT} onAccepted={() => { acceptedRefreshes += 1; }} />);
+      renderer = create(<ComposerDiagnosticsContext.Provider value={message => diagnostics.push(message)}>
+        <MessageSubmissionRecovery owner={OWNER_A} port={PORT} onAccepted={() => { acceptedRefreshes += 1; }} />
+      </ComposerDiagnosticsContext.Provider>);
       await settle();
       await settle();
     });
@@ -115,7 +120,7 @@ test("恢复控件按 workspace/session/thread 隔离，并以原 operation_id �
     expect(JSON.stringify(renderer.toJSON())).not.toContain("B 的其它工作区输入");
     expect(requests).toEqual([]);
 
-    const retry = findButton(renderer, "按原身份重试");
+    const retry = findButton(renderer, "重试发送");
     if (!retry) throw new Error("恢复控件缺少原身份重试按钮");
     await act(async () => { retry.props.onClick(); await settle(); await settle(); });
 
@@ -124,8 +129,13 @@ test("恢复控件按 workspace/session/thread 隔离，并以原 operation_id �
     expect(requests[0]?.body?.message.content).toBe("A 的冻结输入");
     expect(await loadMessageSubmissions(OWNER_A)).toEqual([frozen]);
     expect(JSON.stringify(renderer.toJSON())).toContain("消息接收结果待确认，原输入已保存");
+    expect(renderer.root.findAllByProps({ role: "listitem" })).toHaveLength(1);
+    expect(renderer.root.findByProps({ role: "alert" }).children).toEqual(["待确认"]);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain("发送响应未收到");
+    expect(diagnostics.some(message => message.includes("发送响应未收到"))).toBe(true);
 
-    const query = findButton(renderer, "查询接收结果");
+    act(() => findButton(renderer!, "更多操作")!.props.onClick({ currentTarget: null }));
+    const query = renderer.root.findByProps({ role: "menuitem" });
     if (!query) throw new Error("恢复控件缺少结果查询按钮");
     await act(async () => { query.props.onClick(); await settle(); await settle(); await settle(); });
 
@@ -137,4 +147,26 @@ test("恢复控件按 workspace/session/thread 隔离，并以原 operation_id �
   } finally {
     if (renderer) act(() => renderer?.unmount());
   }
+});
+
+
+test("状态摘要使用原提交存储，关闭详情后保留失败输入，切 Thread 后隔离", async () => {
+  restoreComposerGlobals = installComposerTestGlobals({ port: PORT });
+  const record = await freezeMessageSubmission(OWNER_A, input("原始输入", "op_status_recovery"));
+  await rejectMessageSubmission(record, "后端拒绝");
+  let summary: { count: number; attention: boolean } | undefined;
+  const draw = (open: boolean, owner = OWNER_A) => <MessageSubmissionRecovery owner={owner} port={PORT} onAccepted={() => {}}
+    render={state => { summary = state; return open ? state.content : <span>已折叠</span>; }} />;
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(draw(true)); await settle(); await settle(); });
+  expect(summary?.count).toBe(1);
+  expect(summary?.attention).toBe(true);
+  act(() => renderer.root.findByType("textarea").props.onChange({ target: { value: "重新编辑但不发送" } }));
+  act(() => renderer.update(draw(false)));
+  act(() => renderer.update(draw(true)));
+  expect(renderer.root.findByType("textarea").props.value).toBe("重新编辑但不发送");
+  await act(async () => { renderer.update(draw(true, OWNER_B)); await settle(); await settle(); });
+  expect(summary?.count).toBe(0);
+  expect(renderer.root.findAllByType("textarea")).toHaveLength(0);
+  act(() => renderer.unmount());
 });

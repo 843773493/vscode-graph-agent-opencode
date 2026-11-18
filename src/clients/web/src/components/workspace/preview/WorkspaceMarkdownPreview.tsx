@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from "react";
 import { t, formatNumber } from "../../../../../shared/core/i18n/index.js";
+import { truncateDisplayText } from "../../../utils/displayText";
 
 const WorkspaceMarkdownRenderer = lazy(() => import("./WorkspaceMarkdownRenderer"));
 
@@ -8,7 +9,8 @@ interface WorkspaceMarkdownPreviewProps {
   workspaceId: string | null;
   path: string;
   content: string;
-  onOpenWorkspacePath: (path: string) => Promise<void>;
+  fragment?: string;
+  onOpenWorkspacePath: (path: string, fragment?: string) => Promise<void>;
 }
 
 /**
@@ -30,6 +32,7 @@ export default function WorkspaceMarkdownPreview({
   workspaceId,
   path,
   content,
+  fragment,
   onOpenWorkspacePath,
 }: WorkspaceMarkdownPreviewProps) {
   const [renderFullDocument, setRenderFullDocument] = useState(false);
@@ -61,8 +64,9 @@ export default function WorkspaceMarkdownPreview({
           apiPort={apiPort}
           workspaceId={workspaceId}
           path={path}
+          fragment={fragment}
           content={documentBounded
-            ? content.slice(0, LARGE_MARKDOWN_PREVIEW_LENGTH)
+            ? truncateDisplayText(content, LARGE_MARKDOWN_PREVIEW_LENGTH)
             : content}
           onOpenWorkspacePath={onOpenWorkspacePath}
         />

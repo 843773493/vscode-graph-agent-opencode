@@ -30,7 +30,7 @@ def entity_assets(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("BOXTEAM_WEB_ASSETS", str(assets))
 
 
-async def test_configuration_entities_use_original_source_model(mcp_plugin_case: McpPluginCase) -> None:
+async def test_configuration_entities_use_original_source_model(mcp_plugin_case: McpPluginCase, request: pytest.FixtureRequest) -> None:
     case = mcp_plugin_case
     executable = os.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH") or shutil.which("chromium")
     assert executable, "管理表单验收需要 Chromium"
@@ -48,3 +48,20 @@ async def test_configuration_entities_use_original_source_model(mcp_plugin_case:
     observed = json.loads((case.context.artifacts_dir / "result.json").read_text())
     assert observed["phase"] == "completed"
     assert observed["pageErrors"] == []
+    secret = observed["namedSecret"]
+    home = case.context.boxteam_home_for_node(request.node.nodeid)
+    vault = home / "state/gateway/credentials/secrets/vault.json"
+    assert b"integration-secret-" not in vault.read_bytes()
+    # 重启真实 Gateway 和所属后端，再核对同一稳定 ID、修订和可解密性。
+    await asyncio.to_thread(case.restart_gateway)
+    keys = await case.client.get("/api/gateway/secrets")
+    keys.raise_for_status()
+    restored = next(item for item in keys.json()["data"]["items"] if item["id"] == secret["id"])
+    assert restored == secret
+    resolved = await case.client.post("/api/gateway/internal/secrets/resolve", json={"ids": [secret["id"]]})
+    resolved.raise_for_status()
+    value = resolved.json()["data"]["items"][secret["id"]]
+    assert value["revision"] == 3 and value["value"].endswith("-rotated")
+    (case.context.artifacts_dir / "secret-restart.json").write_text(json.dumps({
+        "metadata": restored, "decrypted_after_restart": True, "request_id": resolved.json()["request_id"],
+    }, ensure_ascii=False) + "\n")

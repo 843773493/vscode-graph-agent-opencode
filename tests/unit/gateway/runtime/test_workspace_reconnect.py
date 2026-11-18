@@ -53,7 +53,7 @@ from app.gateway.runtime.local_workspace import (
     wait_for_workspace_health,
     workspace_config_proof_expectation,
 )
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import PortForwardManager
 from app.gateway.runtime.process_lifecycle import ManagedProcess
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.gateway.server.port_forwarding import get_port_forward_manager
@@ -1401,7 +1401,7 @@ def deletion_http_application(workspace_runtime_controller_case, tmp_path, monke
     app.state.registry = registry
     app.state.gateway_id = registry.gateway_id
     app.state.workspace_runtime_controller = controller
-    app.state.port_forward_manager = SshPortForwardManager(
+    app.state.port_forward_manager = PortForwardManager(
         registry=registry, storage_path=tmp_path / "forwards.json", log_dir=tmp_path / "logs",
     )
     app.dependency_overrides[verify_gateway_token] = lambda: "local-test-token"

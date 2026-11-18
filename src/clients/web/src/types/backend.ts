@@ -28,6 +28,7 @@ export type {
   ToolApprovalSubmitRequest,
   ToolApprovalCommand,
   Agent,
+  ModelReference,
   AgentStateMessages,
   ConfigSourceDTO,
   ConfigSourcesDTO,
@@ -247,7 +248,7 @@ import type {
   WebUIWorkspaceBottomPanelSettingsDTO,
   WebUIWorkspaceFileTreeSettingsDTO,
 } from "./gatewayProtocol";
-export type { ActivateGatewayWorkspaceResultDTO } from "./gatewayProtocol";
+export type { ActivateGatewayWorkspaceResultDTO, GatewayClientRecoveryDTO } from "./gatewayProtocol";
 import type {
   GatewayResourceDTO,
   GatewayResourceListDTO,
@@ -411,10 +412,7 @@ export type GatewayPortForwardStatus = PortForwardDTO["status"];
 export type GatewayPortForward = PortForwardDTO;
 export type GatewayPortForwardList = PortForwardListDTO;
 export type CreateGatewayPortForwardRequest = import("./gatewayProtocol").CreatePortForwardRequest;
-export type ChangeGatewayPortForwardLocalPortRequest =
-  import("./gatewayProtocol").ChangePortForwardLocalPortRequest;
-export type ChangeGatewayPortForwardLabelRequest =
-  import("./gatewayProtocol").ChangePortForwardLabelRequest;
+
 
 export type GatewayManagedWorkspace = Required<GatewayManagedWorkspaceDTO>;
 export type GatewayManagedWorkspaceList = Omit<
@@ -494,33 +492,33 @@ export type GatewayRuntimeStateResult = Omit<
 export type GatewayHealth = GatewayHealthDTO;
 export type DevelopmentRuntimeRestartResult = DevelopmentRuntimeRestartDTO;
 
-interface AddSshGatewayWorkspaceRequestBase {
+interface AddRemoteGatewayConnectionRequestBase {
   name?: string | null;
   remote_gateway_port: number;
 }
 
-export interface AddSshGatewayWorkspaceFromConnectionRequest
-  extends AddSshGatewayWorkspaceRequestBase {
+export interface AddRemoteGatewayConnectionFromConnectionRequest
+  extends AddRemoteGatewayConnectionRequestBase {
   connection_id: string;
 }
 
-export interface AddSshGatewayWorkspaceFromConfigRequest
-  extends AddSshGatewayWorkspaceRequestBase {
+export interface AddRemoteGatewayConnectionFromConfigRequest
+  extends AddRemoteGatewayConnectionRequestBase {
   ssh_config_host: string;
 }
 
-export interface AddSshGatewayWorkspaceManualRequest
-  extends AddSshGatewayWorkspaceRequestBase {
+export interface AddRemoteGatewayConnectionManualRequest
+  extends AddRemoteGatewayConnectionRequestBase {
   host: string;
   port: number;
   username: string;
   private_key_path: string;
 }
 
-export type AddSshGatewayWorkspaceRequest =
-  | AddSshGatewayWorkspaceFromConnectionRequest
-  | AddSshGatewayWorkspaceFromConfigRequest
-  | AddSshGatewayWorkspaceManualRequest;
+export type AddRemoteGatewayConnectionRequest =
+  | AddRemoteGatewayConnectionFromConnectionRequest
+  | AddRemoteGatewayConnectionFromConfigRequest
+  | AddRemoteGatewayConnectionManualRequest;
 
 export type UpdateGatewayWorkspaceRequest = GeneratedUpdateGatewayWorkspaceRequest;
 export type ReorderGatewayWorkspacesRequest = GeneratedReorderGatewayWorkspacesRequest;

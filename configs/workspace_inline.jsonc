@@ -1,193 +1,228 @@
 {
   "$schema": "./workspace_schema.jsonc", // ConfigService._resolve_schema_path 读取 schema 引用。
-  "config_version": 2, // Workspace 配置结构版本，由 workspace_schema 校验。
+  "config_version": 3, // Workspace 配置结构版本，由 workspace_schema 校验。
   "plugins": { "runtime": { "entries": [] } }, // Workspace 插件绑定由此配置 owner 提交。
   "llm": {
-    "providers": [
-      {
-        "id": "primary", // agent.model.primary_provider 引用该稳定 Provider ID。
-        "endpoint": "https://opencode.ai/zen/v1", // LiteLLM Provider 请求端点。
-        "model": "big-pickle", // AgentFactory 创建模型时使用。
-        "custom_llm_provider": "openai", // LiteLLM Provider 适配器类型。
-        "api_mode": {
-          "protocol": "chat_completions", // AgentFactory 选择 Chat Completions 协议。
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {
-            "reasoning_content": true
-          },
-        },
-        "api_key": "${OPENCODE_ZEN_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
-        "request_options": {
-          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
-          "default_headers": {} // Provider 默认请求头默认为空。
-        }
-      },
-      {
-        "id": "backup_1", // Agent fallback_providers 引用该 Provider ID。
-        "endpoint": "https://api.kilo.ai/api/gateway", // LiteLLM Provider 请求端点。
-        "model": "openrouter/free", // AgentFactory 创建模型时使用。
-        "custom_llm_provider": "openai", // LiteLLM Provider 适配器类型。
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {
-            "reasoning_content": true
-          }
-        },
-        "api_key": "${KILO_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
-        "request_options": {
-          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
-          "default_headers": {} // Provider 默认请求头默认为空。
-        }
-      },
-      {
-        "id": "backup_2", // Agent fallback_providers 与 fetch_webpage embedding 引用该 Provider ID。
-        "endpoint": "https://openrouter.ai/api/v1", // LiteLLM Provider 请求端点。
-        "model": "openrouter/free", // AgentFactory 创建模型时使用。
-        "custom_llm_provider": "openrouter", // LiteLLM Provider 适配器类型。
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {
-            "reasoning_content": true
-          }
-        },
-        "api_key": "${OPENROUTER_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
-        "request_options": {
-          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
-          "default_headers": {} // Provider 默认请求头默认为空。
-        }
-      },
-      {
-        "id": "backup_3", // Agent fallback_providers 引用该 Provider ID。
-        "endpoint": "https://newapi.hyf2333.top/v1", // LiteLLM Provider 请求端点。
-        "model": "gpt-6-luna", // AgentFactory 创建模型时使用。
-        "custom_llm_provider": "openai", // LiteLLM Provider 适配器类型。
-        "api_mode": {
-          "protocol": "responses", // AgentFactory 选择 Responses API 协议。
-          "model_info": {
-            "supports_vision": true,
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {
-            "reasoning_items": {
-              "summary": true,
-              "encrypted_content": true
+    "providers": {
+      "primary": {
+        "defaults": {
+          "endpoint": "https://opencode.ai/zen/v1",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
             }
           },
-          "request_features": {
-            "prompt_cache_key": true
-          },
-          "replay_policy": {
-            "encrypted_content": "same_source"
+          "api_key": "${OPENCODE_ZEN_API_KEY}",
+          "request_options": {
+            "default_headers": {},
+            "parameters": {}
           }
         },
-        "api_key": "${CCTQ_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
-        "request_options": {
-          "overrides": {
-            "reasoning": {
-              "effort": "max", // Provider request_options 传给 LiteLLM。
-              "summary": "auto" // Provider request_options 传给 LiteLLM。
-            }
-          },
-          "default_headers": {} // Provider 默认请求头默认为空。
+        "models": {
+          "default": {
+            "model": "big-pickle"
+          }
         }
       },
-      {
-        "id": "backup_4", // Agent fallback_providers 引用该 Provider ID。
-        "endpoint": "https://chatgpt.com/backend-api/codex", // ChatGPT OAuth 请求端点。
-        "model": "gpt-6-luna", // AgentFactory 创建模型时使用。
-        "custom_llm_provider": "chatgpt", // ChatGPT OAuth Provider 适配器类型。
-        "api_mode": {
-          "protocol": "responses", // ChatGPT OAuth 使用 Responses API 协议。
-          "model_info": {
-            "supports_vision": true,
-            "supports_function_calling": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {
-            "reasoning_items": {
-              "summary": true,
-              "encrypted_content": true
+      "backup_1": {
+        "defaults": {
+          "endpoint": "https://api.kilo.ai/api/gateway",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
             }
           },
-          "replay_policy": {
-            "encrypted_content": "same_source"
+          "api_key": "${KILO_API_KEY}",
+          "request_options": {
+            "default_headers": {},
+            "parameters": {}
           }
         },
-        "auth": {
-          "type": "oauth", // ChatGPT OAuth 认证类型。
-          "method": "chatgpt" // ChatGPT OAuth 认证方法。
-        },
-        "request_options": {
-          "overrides": {
-            "reasoning": {
-              "effort": "max"
-            }
-          }, // 按用户要求覆盖模型请求参数。
-          "default_headers": {} // Provider 默认请求头默认为空。
+        "models": {
+          "default": {
+            "model": "openrouter/free"
+          }
         }
       },
-      {
-        "id": "newapi_deepseek", // New API 的 DeepSeek 通道，与原有 Sub2API 通道分别选择。
-        "endpoint": "https://newapi.hyf2333.top/v1",
-        "model": "deepseek-v4.1-flash-1017",
-        "custom_llm_provider": "openai",
-        "api_mode": {
-          "protocol": "chat_completions",
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_reasoning": true,
-            "max_input_tokens": 400000 // 输入上下文容量，不限制输出长度。
+      "backup_2": {
+        "defaults": {
+          "endpoint": "https://openrouter.ai/api/v1",
+          "custom_llm_provider": "openrouter",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
+            }
           },
-          "supports_reasoning": {"reasoning_content": true}
+          "api_key": "${OPENROUTER_API_KEY}",
+          "request_options": {
+            "default_headers": {},
+            "parameters": {}
+          }
         },
-        "api_key": "${CCTQ_API_KEY}",
-        "request_options": {
-          "overrides": {
-            "extra_body": {
+        "models": {
+          "default": {
+            "model": "openrouter/free"
+          }
+        }
+      },
+      "backup_3": {
+        "defaults": {
+          "endpoint": "https://newapi.hyf2333.top/v1",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "responses",
+            "model_info": {
+              "supports_vision": true,
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_items": {
+                "summary": true,
+                "encrypted_content": true
+              }
+            },
+            "request_features": {
+              "prompt_cache_key": true
+            },
+            "replay_policy": {
+              "encrypted_content": "same_source"
+            }
+          },
+          "api_key": "${CCTQ_API_KEY}",
+          "request_options": {
+            "default_headers": {},
+            "parameters": {
+              "reasoning": {
+                "effort": "max",
+                "summary": "auto"
+              }
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "gpt-6-luna"
+          }
+        }
+      },
+      "backup_4": {
+        "defaults": {
+          "endpoint": "https://chatgpt.com/backend-api/codex",
+          "custom_llm_provider": "chatgpt",
+          "api_mode": {
+            "protocol": "responses",
+            "model_info": {
+              "supports_vision": true,
+              "supports_function_calling": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "reasoning_items": {
+                "summary": true,
+                "encrypted_content": true
+              }
+            },
+            "replay_policy": {
+              "encrypted_content": "same_source"
+            }
+          },
+          "auth": {
+            "type": "oauth",
+            "method": "chatgpt"
+          },
+          "request_options": {
+            "default_headers": {},
+            "parameters": {
+              "reasoning": {
+                "effort": "max"
+              }
+            }
+          }
+        },
+        "models": {
+          "default": {
+            "model": "gpt-6-luna"
+          }
+        }
+      },
+      "newapi_deepseek": {
+        "defaults": {
+          "endpoint": "https://newapi.hyf2333.top/v1",
+          "custom_llm_provider": "openai",
+          "api_mode": {
+            "protocol": "chat_completions",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_reasoning": true,
+              "max_input_tokens": 400000
+            },
+            "supports_reasoning": {
+              "reasoning_content": true
+            }
+          },
+          "api_key": "${CCTQ_API_KEY}",
+          "request_options": {
+            "parameters": {
               "reasoning_effort": "xhigh"
             }
           }
-        } // 复用同一 New API 端点的本机凭据。
+        },
+        "models": {
+          "default": {
+            "model": "deepseek-v4.1-flash-1017"
+          }
+        }
       },
-      {
-        "id": "DeepSeek-V4.1-Flash", // 本地 Sub2API 网关模型。
-        "endpoint": "http://100.64.0.58:8079/v1/messages", // Anthropic Messages 协议端点。
-        "model": "DeepSeek-V4.1-Flash", // Sub2API 网关暴露的模型名。
-        "custom_llm_provider": "anthropic", // Anthropic Messages Provider 适配器类型。
-        "api_mode": {
-          "protocol": "anthropic_messages", // AgentFactory 选择 Anthropic Messages 协议。
-          "model_info": {
-            "supports_function_calling": true,
-            "supports_vision": true,
-            "supports_reasoning": true
-          },
-          "supports_reasoning": {
-            "thinking_blocks": {
-              "thinking": true,
-              "redacted_thinking": false
+      "DeepSeek-V4.1-Flash": {
+        "defaults": {
+          "endpoint": "http://100.64.0.58:8079/v1/messages",
+          "custom_llm_provider": "anthropic",
+          "api_mode": {
+            "protocol": "anthropic_messages",
+            "model_info": {
+              "supports_function_calling": true,
+              "supports_vision": true,
+              "supports_reasoning": true
+            },
+            "supports_reasoning": {
+              "thinking_blocks": {
+                "thinking": true,
+                "redacted_thinking": false
+              }
             }
+          },
+          "api_key": "${DEEPSEEK_V41_FLASH_API_KEY}",
+          "request_options": {
+            "default_headers": {},
+            "no_proxy": true,
+            "parameters": {}
           }
         },
-        "api_key": "${DEEPSEEK_V41_FLASH_API_KEY}", // .env/环境变量解析后由 LiteLLM 使用。
-        "request_options": {
-          "overrides": {}, // Provider 请求覆盖默认为空；交给上游模型默认值。
-          "default_headers": {}, // Provider 默认请求头默认为空。
-          "no_proxy": true // 本地 Sub2API 网关绕过全局代理，不修改全局 NO_PROXY。
+        "models": {
+          "default": {
+            "model": "DeepSeek-V4.1-Flash"
+          }
         }
       }
-    ]
+    }
   },
   "resources": {
     "skill_sources": {
@@ -265,16 +300,36 @@
         }
       },
       "model": {
-        "primary_provider": "primary", // AgentFactory 主模型 Provider。
-        // temperature、top_p、max_output_tokens 按项目约定省略，交给上游模型默认值。
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4",
-          "newapi_deepseek",
-          "DeepSeek-V4.1-Flash"
-        ] // AgentFactory 按顺序尝试 fallback Provider。
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "newapi_deepseek",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "DeepSeek-V4.1-Flash",
+            "model_id": "default"
+          }
+        ]
       },
       "tools": {
         "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
@@ -305,8 +360,11 @@
             "tool_id": "fetch_webpage", // builtin_tool_registry 稳定工具 ID。
             "options": {
               "embedding": {
-                "provider_id": "backup_2", // fetch_webpage embedding Provider。
-                "model": "openai/text-embedding-3-small" // fetch_webpage embedding 模型。
+                "model_ref": {
+                  "provider_id": "backup_2",
+                  "model_id": "default"
+                },
+                "model": "openai/text-embedding-3-small"
               }
             }
           },
@@ -499,15 +557,36 @@
         }
       },
       "model": {
-        "primary_provider": "primary", // AgentFactory 主模型 Provider。
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4",
-          "newapi_deepseek",
-          "DeepSeek-V4.1-Flash"
-        ] // AgentFactory 按顺序选择 fallback Provider。
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "newapi_deepseek",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "DeepSeek-V4.1-Flash",
+            "model_id": "default"
+          }
+        ]
       },
       "tools": {
         "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
@@ -542,15 +621,36 @@
         }
       },
       "model": {
-        "primary_provider": "primary", // AgentFactory 主模型 Provider。
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4",
-          "newapi_deepseek",
-          "DeepSeek-V4.1-Flash"
-        ] // AgentFactory 按顺序选择 fallback Provider。
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "newapi_deepseek",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "DeepSeek-V4.1-Flash",
+            "model_id": "default"
+          }
+        ]
       },
       "tools": {
         "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
@@ -583,15 +683,36 @@
         }
       },
       "model": {
-        "primary_provider": "primary", // AgentFactory 主模型 Provider。
-        "fallback_providers": [
-          "backup_1",
-          "backup_2",
-          "backup_3",
-          "backup_4",
-          "newapi_deepseek",
-          "DeepSeek-V4.1-Flash"
-        ] // AgentFactory 按顺序选择 fallback Provider。
+        "primary": {
+          "provider_id": "primary",
+          "model_id": "default"
+        },
+        "fallbacks": [
+          {
+            "provider_id": "backup_1",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_2",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_3",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "backup_4",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "newapi_deepseek",
+            "model_id": "default"
+          },
+          {
+            "provider_id": "DeepSeek-V4.1-Flash",
+            "model_id": "default"
+          }
+        ]
       },
       "tools": {
         "tool_choice": "auto", // 当前未接入；值等于 schema 默认，AgentFactory 不读取该键。
@@ -614,7 +735,7 @@
     "test_tools": false // ConfigService.include_development_test_tools 使用。
   },
   "ui": {
-    // default_model 故意不写入：ConfigService 根据 default_agent.primary_provider 动态解析。
+    // default_model 故意不写入：ConfigService 根据 default_agent.model.primary 动态解析。
     "default_orchestration": "single_agent", // ConfigService._load_public_runtime_config 使用。
     "max_concurrent_agents": 4, // ConfigService._load_public_runtime_config 使用。
     "allow_shell_tools": false, // ConfigService._load_public_runtime_config 使用。

@@ -145,7 +145,7 @@ class SessionInformationService:
             workspace_id=session.workspace_id,
             title=title,
             current_agent_id=session.current_agent_id,
-            current_provider_id=session.current_provider_id,
+            current_model=session.current_model,
             parent_session_id=session.parent_session_id,
             context_source_session_id=session.context_source_session_id,
             kind=session.kind,

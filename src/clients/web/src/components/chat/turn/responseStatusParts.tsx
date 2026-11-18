@@ -4,8 +4,10 @@ import type { ConversationView } from "../../../types/frontend";
 import type { MessageStreamActivity } from "../../../state/messageStream/index";
 import type { TimelineItem } from "../../../state/timeline/timelineTypes";
 import { historicalBoundaryStatus } from "../../../state/timeline/chatResponseGroups";
-import { activityKindLabel, activityRendererRegistry } from "./activityRenderers";
+import { activityRendererRegistry } from "./activityRenderers";
 import MarkdownContent from "../MarkdownContent";
+import ContextNotice from "../ContextNotice";
+import { responseItemMenuActions, responseItemTarget, useChatItemMenu } from "../itemContextMenu";
 import type { ChatTurnActions } from "./useChatTurnActions";
 
 export function ErrorPart({ item }: { item: Extract<TimelineItem, { kind: "trace" }> }) {
@@ -68,10 +70,6 @@ function activityRole(status: string): "status" | "alert" {
   return status === "failed" || status === "unknown" ? "alert" : "status";
 }
 
-function ProtocolErrorDetail({ message }: { message?: string | null }): React.ReactNode {
-  return message ? <span className="chat-working-detail">{t("chat.status.diagnostic", message)}</span> : null;
-}
-
 export function ActivityStatusPart({
   activity,
 }: {
@@ -91,13 +89,11 @@ export function ActivityStatusPart({
 
 export function ActivityHistory({
   activities,
-  excludeActivityId,
 }: {
   activities: MessageStreamActivity[] | undefined;
-  excludeActivityId?: string;
 }) {
   const visibleActivities = (activities ?? []).filter(
-    (activity) => activity.activity_id !== excludeActivityId,
+    (activity) => ["completed", "failed", "unknown"].includes(activity.status),
   );
   if (visibleActivities.length === 0) return null;
   return (
@@ -127,43 +123,8 @@ export function HistoricalBoundaryStatusPart({ conversation }: { conversation: C
 
 export function MessageStreamStatusPart({ conversation }: { conversation: ConversationView }) {
   const stream = conversation.messageStream;
-  if (!stream) {
-    if (
-      conversation.displayMode === "live"
-      && (conversation.status === "running" || conversation.status === "queued")
-    ) {
-      return (
-        <div className="chat-working" role="status">
-          <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
-          <span>{t("chat.status.connecting")}</span>
-        </div>
-      );
-    }
-    return null;
-  }
-  const activeActivity = stream.activeState?.kind === "activity"
-    ? (stream.activities ?? []).find(
-      (item) => item.activity_id === stream.activeState?.activity_id,
-    )
-    : undefined;
-  const activityHistory = (
-    <ActivityHistory
-      activities={stream.activities}
-      excludeActivityId={activeActivity?.activity_id}
-    />
-  );
-  if (stream.streamStatus === "interrupting") {
-    return (
-      <>
-        {activityHistory}
-        <div className="chat-working" role="status" data-status-kind="interrupting">
-          <span className="codicon codicon-debug-stop" aria-hidden="true" />
-          <span>{t("chat.status.interrupting")}</span>
-          <span className="chat-working-detail">{t("chat.status.stopWait")}</span>
-        </div>
-      </>
-    );
-  }
+  if (!stream) return null;
+  const activityHistory = <ActivityHistory activities={stream.activities} />;
   if (stream.streamStatus === "interrupted") {
     return historicalBoundaryStatus(conversation)
       ? activityHistory
@@ -211,57 +172,7 @@ export function MessageStreamStatusPart({ conversation }: { conversation: Conver
       </>
     );
   }
-  // 终态是后端权威事实；即使旧的连接镜像残留 gap，也不能继续向用户
-  // 展示“正在恢复”，否则完整结果会被误报为未完成。
-  if (stream.streamStatus === "completed") {
-    return activityHistory;
-  }
-  if (stream.connectionStatus === "retry_exhausted") {
-    return (
-      <div className="chat-inline-error" role="alert" data-status-kind="retry-exhausted">
-        <span className="codicon codicon-cloud-offline" aria-hidden="true" />
-        <span>{t("chat.status.reconnectExhausted")}</span>
-        <ProtocolErrorDetail message={stream.protocolError} />
-      </div>
-    );
-  }
-  if (stream.connectionStatus === "disconnected") {
-    return (
-      <div className="chat-working" role="status">
-        <span className="codicon codicon-cloud-offline" aria-hidden="true" />
-        <span>{t("chat.status.reconnecting")}</span>
-        <span className="chat-working-detail">{t("chat.status.reconnectFrom", stream.lastEventSeq)}</span>
-        <ProtocolErrorDetail message={stream.protocolError} />
-      </div>
-    );
-  }
-  if (stream.connectionStatus === "gap") {
-    return (
-      <div className="chat-inline-error" role="alert">
-        <span className="codicon codicon-warning" aria-hidden="true" />
-        <span>{t("chat.status.gap")}</span>
-        <ProtocolErrorDetail message={stream.protocolError} />
-      </div>
-    );
-  }
-  if (activeActivity) {
-    return <>{activityHistory}<ActivityStatusPart activity={activeActivity} /></>;
-  }
-  if (stream.activeState?.kind === "activity") {
-    const activityKind = stream.activeState.activity_kind ?? stream.activeState.entity_id;
-    return (
-      <>
-        {activityHistory}
-        <div className="chat-working" role="status" data-status-kind="activity">
-          <span className="codicon codicon-sync codicon-modifier-spin" aria-hidden="true" />
-          <span>{t("chat.status.processingActivity")}</span>
-          <span className="chat-working-detail">
-            {activityKind ? t("chat.status.activityUnavailableNamed", activityKindLabel(activityKind)) : t("chat.status.activityUnavailable")}
-          </span>
-        </div>
-      </>
-    );
-  }
+  // 实时连接及执行阶段统一由输入区状态栏展示，正文只保留本轮的终态结果。
   return activityHistory;
 }
 
@@ -326,9 +237,13 @@ export function ExecutionLostRecoveryPart({
 
 export function ResponsePart({
   item,
+  onForkItem,
 }: {
   item: TimelineItem;
+  onForkItem?: (itemId: string) => void;
 }): React.ReactNode {
+  const menu = useChatItemMenu(() => responseItemMenuActions(item, onForkItem), true, () => responseItemTarget(item));
+  if (item.kind === "context_event") return <ContextNotice notices={item.notices} />;
   if (item.kind === "aggregated_text" && item.partKind === "markdown") {
     return (
       <MarkdownContent
@@ -336,12 +251,13 @@ export function ResponsePart({
         className={item.active ? "is-streaming" : ""}
         streaming={item.active}
         responseSources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}
+        contextMenu={{ ...menu, "aria-label": t("chat.itemMenu.response") }}
       />
     );
   }
   if (item.kind === "aggregated_text" && item.partKind === "compaction") {
     return (
-      <details className="chat-compaction-summary" data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined}>
+      <details className="chat-compaction-summary" data-response-sources={item.responseSources ? JSON.stringify(item.responseSources) : undefined} {...menu}>
         <summary>{t("chat.status.compactionSummary")}</summary>
         {/* 摘要包含模型协议标签，按原文展示以免被 Markdown 当作 HTML 隐去正文。 */}
         <MarkdownContent value={item.text} renderMode="plain" />

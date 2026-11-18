@@ -147,7 +147,7 @@ async def pending_recovery_case(request: pytest.FixtureRequest, monkeypatch: pyt
                     created_at=now, updated_at=now,
                 )
                 messages.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
-                    execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
+                    execution_binding=identity, message_id=message.message_id, agent_id="default", model=None,
                     delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=now.isoformat(),
                 ))
                 dispatch = await source.start_job(

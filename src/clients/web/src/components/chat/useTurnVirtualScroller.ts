@@ -93,7 +93,7 @@ export function useTurnVirtualScroller({
   const streamRef = React.useRef<VirtuosoHandle | null>(null);
   const scrollerRef = React.useRef<HTMLElement | null>(null);
   const followsLatestRef = React.useRef(true);
-  const [showJumpToLatest, setShowJumpToLatest] = React.useState(false);
+  const [atBottom, setAtBottom] = React.useState(true);
   const [nativeScrollbarDragging, setNativeScrollbarDragging] = React.useState(false);
   const virtualIndexRef = React.useRef<TranscriptVirtualIndexState | null>(null);
   const renderedFirstItemIndexRef = React.useRef<number | null>(null);
@@ -144,19 +144,20 @@ export function useTurnVirtualScroller({
       item.conversation.turnItemsView ?? "pending",
       item.conversation.status,
     ].join(":")
-    : `${item.key}:${item.displayPart.text}`).join("|"), [items]);
+    : item.kind === "internal_execution" ? `${item.key}:${item.displayPart.text}` : item.key).join("|"), [items]);
 
   const {
-    anchorRef, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage, locatedTool,
+    anchorRef, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage, locatedTool, locatedItem,
     scheduleAnchorAlignment, scrollToLatest,
   } = useTurnAnchorNavigation({
     items, scopeKey, streamRef, scrollerRef, followsLatestRef,
-    setShowJumpToLatest, onLoadAroundTurn, historyLoading,
+    onLoadAroundTurn, historyLoading,
     messageNavigation,
     viewState, onViewStateChange: position => {
       if (!previewRef.current) onViewStateChange?.(position);
     }, onViewStateRestoreStatus,
   });
+  React.useLayoutEffect(() => { setAtBottom(true); }, [scopeKey]);
   React.useEffect(() => { previewRef.current = false; }, [messageNavigation]);
   const navigateFromUser = React.useCallback((...args: Parameters<typeof navigateToTurn>) => {
     previewRef.current = false;
@@ -215,7 +216,6 @@ export function useTurnVirtualScroller({
       if (event.deltaY >= 0) return;
       userRequestedOlderRef.current = true;
       followsLatestRef.current = false;
-      setShowJumpToLatest(true);
       if (scroller.scrollTop <= 2) {
         void loadOlderMessagesRef.current().catch((error: unknown) => {
           onViewStateRestoreStatus?.(t("chat.history.loadOlderFailed", errorMessage(error)));
@@ -260,7 +260,6 @@ export function useTurnVirtualScroller({
       previewRef.current = false;
       cancelAnchor();
       followsLatestRef.current = false;
-      setShowJumpToLatest(true);
     };
   }, [anchorRef, cancelAnchor, captureViewport, onViewStateChange, onViewStateRestoreStatus, scheduleAnchorAlignment, scopeKey]);
 
@@ -284,7 +283,6 @@ export function useTurnVirtualScroller({
       nativeScrollbarReleaseRef.current = null;
       cancelAnchor();
       followsLatestRef.current = false;
-      setShowJumpToLatest(true);
       nativeScrollbarDragRef.current = true;
       nativeScrollbarDragStartScrollTopRef.current = scroller.scrollTop;
       nativeScrollbarDragMovedRef.current = false;
@@ -303,7 +301,6 @@ export function useTurnVirtualScroller({
         }
       } else if (nativeScrollbarWasFollowingRef.current) {
         followsLatestRef.current = true;
-        setShowJumpToLatest(false);
       }
       nativeScrollbarDragRef.current = false;
       nativeScrollbarDragMovedRef.current = false;
@@ -431,12 +428,11 @@ export function useTurnVirtualScroller({
   }, [anchorRef, loadNewerMessages, onViewStateRestoreStatus]);
 
   const handleAtBottomChange = React.useCallback((atBottom: boolean) => {
+    // 按钮反映真实可见范围；定位和用户手势只决定跟随意图。
+    setAtBottom(atBottom);
     if (anchorRef.current || nativeScrollbarDragRef.current) return;
     if (atBottom) {
       followsLatestRef.current = true;
-      setShowJumpToLatest(false);
-    } else if (!followsLatestRef.current) {
-      setShowJumpToLatest(true);
     }
   }, [anchorRef]);
 
@@ -450,11 +446,12 @@ export function useTurnVirtualScroller({
     navigateToTurn: navigateFromUser,
     locatedMessage,
     locatedTool,
+    locatedItem,
     cancelMessageNavigation: closeMessageNavigation,
     navigation,
     scheduleAnchorAlignment,
     scrollToLatest: scrollFromUser,
-    showJumpToLatest,
+    showJumpToLatest: items.length > 0 && (hasNewerMessages || !atBottom),
     streamRef,
   };
 }

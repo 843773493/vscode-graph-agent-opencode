@@ -1,8 +1,10 @@
 // Integration：实际产品页面通过 Gateway 初始化；没有请求拦截或元数据替身。
 import { writeFile } from "node:fs/promises";
+import { applyEdits, modify } from "jsonc-parser";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
 import { TestRunContext } from "../../../harness/js/run-context.mjs";
+import { verifyNativeOutput } from "./native_output.mjs";
 
 function required(name) {
   const value = process.env[name];
@@ -61,15 +63,18 @@ async function verifyWorkspaceSettingsReload() {
 async function verifyThemeBackgroundWarning() {
   const missingAsset = "0".repeat(64);
   const missingUrl = new URL(`/api/gateway/ui-assets/${missingAsset}`, required("BOXTEAM_BROWSER_BASE_URL")).href;
-  await page.getByRole("button", { name: "添加工作区", exact: true }).click();
-  await page.getByRole("dialog", { name: "选择工作区所在设备", exact: true })
-    .getByRole("button", { name: "连接新的远程主机…", exact: true }).click();
-  const control = page.getByRole("dialog", { name: "Gateway 控制中心", exact: true });
-  await control.getByRole("button", { name: "主题设置", exact: true }).click();
-  const backgroundInput = control.getByPlaceholder("https://example.com/background.webp", { exact: true });
-  await backgroundInput.fill(missingUrl);
+  await page.evaluate(async () => { await globalThis.workbench.commands.executeCommand("workbench.action.openSettingsJson"); });
+  const editor = page.locator('.editor-group-container.active .monaco-editor:visible').last();
+  await editor.locator('.view-lines').click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.keyboard.press('ControlOrMeta+C');
+  const original = await page.evaluate(() => navigator.clipboard.readText());
+  const edited = applyEdits(original, modify(original, ['boxteam.appearance.background'], { image: missingUrl }, {}));
+  await page.evaluate(value => navigator.clipboard.writeText(value), edited);
+  await page.keyboard.press('ControlOrMeta+V');
   const missingReady = page.waitForResponse(response => response.url() === missingUrl && response.request().method() === "GET");
-  await control.getByRole("button", { name: "使用网络背景", exact: true }).click();
+  await page.keyboard.press('ControlOrMeta+S');
   const response = await missingReady;
   const payload = await response.json();
   check(response.status() === 404, `缺失背景图片没有返回真实 404: ${JSON.stringify(payload)}`);
@@ -78,16 +83,17 @@ async function verifyThemeBackgroundWarning() {
   const warning = `背景图加载失败，已清除展示图片，配置仍保留：背景图片加载失败: ${missingUrl}`;
   const toast = page.locator(".notifications-toasts").getByText(warning, { exact: true });
   await expect(toast).toBeVisible();
-  await expect(control.getByRole("status").filter({ hasText: "网络背景已保存。" })).toBeVisible();
   const hosts = page.locator(".boxteam-react-surface");
   check(await hosts.count() >= 2, "主题验收必须同时存在导航和会话宿主");
   await expect.poll(() => hosts.evaluateAll(nodes => nodes.every(node => getComputedStyle(node).getPropertyValue("--bt-background-image") === "none"))).toBe(true);
   result.theme_background_warning = { request_id: payload.request_id, asset_id: missingAsset, url: missingUrl,
     http_status: response.status(), notification: await toast.innerText(), hosts: await hosts.count() };
-  await control.getByRole("button", { name: "清除背景图片", exact: true }).click();
-  await expect(control.getByRole("status").filter({ hasText: "已清除背景图片。" })).toBeVisible();
-  await expect(backgroundInput).toHaveValue("");
-  await control.getByRole("button", { name: "关闭 Gateway 控制中心", exact: true }).click();
+  await editor.locator('.view-lines').click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.evaluate(value => navigator.clipboard.writeText(value), original);
+  await page.keyboard.press('ControlOrMeta+V');
+  await page.keyboard.press('ControlOrMeta+S');
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.closeActiveEditor"));
   const thread = page.locator(`section.boxteam-thread[data-workspace-id="${fixture.workspaceId}"][data-session-id="${fixture.nativeDirectory.sessionId}"][data-thread-id="${fixture.nativeDirectory.threadId}"]`);
   await expect(thread.getByTestId("composer-input")).toBeVisible();
 }
@@ -168,9 +174,9 @@ try {
     (async () => {
       await page.goto(new URL("/", required("BOXTEAM_BROWSER_BASE_URL")).href, { waitUntil: "domcontentloaded", timeout: 30_000 });
       await expect(page.locator("#workbench .monaco-workbench")).toBeVisible();
-      // 工作区元数据由真实底部输出面板按需读取，不依赖聊天前置的重复 owner 查询。
+      // 工作区元数据由真实底部终端面板按需读取；原生输出直接注册日志，不重复读取业务元数据。
       await page.locator(`button[data-session-id="${fixture.nativeDirectory.sessionId}"]`).dblclick();
-      await page.evaluate(() => globalThis.workbench.commands.executeCommand("boxteam.output.focus"));
+      await page.evaluate(() => globalThis.workbench.commands.executeCommand("boxteam.terminal.focus"));
     })(),
   ]);
   const payload = await response.json();
@@ -182,6 +188,7 @@ try {
     && metadataHeaders["x-boxteam-target-gateway-id"] === fixture.gatewayId, "页面初始化请求归属错误");
   check(!Object.hasOwn(payload.data, "root_path") && !Object.hasOwn(payload.data.git, "root"), "产品元数据仍包含重复路径");
   result.metadata = payload;
+  await verifyNativeOutput(page, fixture, result);
   await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.closePanel"));
   const workspace = page.getByTestId(`workspace-node-${JSON.stringify([fixture.gatewayId, fixture.workspaceId])}`);
   await workspace.waitFor({ state: "visible", timeout: 30_000 });

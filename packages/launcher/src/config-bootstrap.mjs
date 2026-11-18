@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { stopLauncher } from "./stop.mjs";
+import { resolveNodeExecutable } from "./configuration/runtime-manifest.mjs";
 
 export async function stopLauncherForSupportedUpgrade({
   runtime, environment, targetLock, spawnSyncImpl = spawnSync, stopLauncherImpl = stopLauncher,
@@ -35,6 +36,7 @@ export function initializeUserConfiguration({
   const childEnvironment = {
     ...environment,
     BOXTEAM_HOME: boxteamHome,
+    BOXTEAM_NODE_BIN: resolveNodeExecutable(runtime),
     // stdout JSON 与下方解码共用UTF-8，不依赖目标终端的默认代码页。
     PYTHONIOENCODING: "utf-8",
     PYTHONPATH: [
@@ -46,7 +48,7 @@ export function initializeUserConfiguration({
   };
   const result = spawnSyncImpl(
     runtime.pythonExecutable,
-    ["-m", "configs.boxteam", ...args],
+    ["-m", "configs.boxteam", ...args, "--bundled-plugins", JSON.stringify(runtime.bundledPlugins)],
     {
       cwd: runtime.applicationRoot,
       env: childEnvironment,

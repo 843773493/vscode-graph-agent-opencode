@@ -216,7 +216,7 @@ describe("工作区文件树快捷路径设置读取失败", () => {
     expect(settingsErrorCards(handle.renderer)).toBe(0);
   });
 
-  test("根目录仍在加载时设置错误优先显示，且加载提示仍可轮播查看", async () => {
+  test("根目录加载不挤占错误反馈，设置错误持续可见", async () => {
     const handle = await mountTree(49_804, true, false, true);
     await settle(300);
 
@@ -225,21 +225,8 @@ describe("工作区文件树快捷路径设置读取失败", () => {
     });
     expect(notificationRow.findByProps({ role: "alert" }).props.className)
       .toBe("files-tree-error files-tree-settings-error");
-    expect(handle.renderer.root.findByProps({
-      className: "files-tree-notification-next",
-    }).findAllByType("span")[0].children.join("")).toBe("1/2");
-
-    act(() => {
-      handle.renderer.root.findByProps({
-        className: "files-tree-notification-next",
-      }).props.onClick();
-    });
-    expect(handle.renderer.root.findByProps({
-      className: "files-tree-notification-loading",
-    }).props.role).toBe("status");
-    expect(handle.renderer.root.findByProps({
-      className: "files-tree-notification-next",
-    }).findAllByType("span")[0].children.join("")).toBe("2/2");
+    expect(handle.renderer.root.findAllByProps({ className: "files-tree-notification-next" })).toHaveLength(0);
+    expect(handle.renderer.root.findAllByProps({ className: "files-tree-notification-loading" })).toHaveLength(0);
 
     handle.releaseRoots?.();
     await settle();
@@ -247,22 +234,18 @@ describe("工作区文件树快捷路径设置读取失败", () => {
     expect(settingsErrorCards(handle.renderer)).toBe(1);
   });
 
-  test("工作区加载状态占用固定通知槽，加载结束不插入或移除树前提示行", async () => {
+  test("工作区加载仅更新 busy 状态，不插入树前提示行", async () => {
     const handle = await mountTree(49_805, false);
     await settle(50);
 
-    const loading = handle.renderer.root.findByProps({
-      className: "files-tree-notification-loading",
-    });
-    expect(loading.props.role).toBe("status");
-    expect(loading.findAllByType("span")[1].children.join(""))
-      .toBe("正在加载工作区文件…");
-    expect(loading.parent?.props.className).toBe("files-tree-notification-row");
+    expect(treeBusy(handle.renderer)).toBe(true);
+    expect(handle.renderer.root.findAllByProps({ className: "files-tree-notification-loading" })).toHaveLength(0);
     expect(handle.renderer.root.findByProps({ role: "tree" }).parent?.props.className)
       .toBe("workspace-file-tree");
 
     await settle(250);
 
+    expect(treeBusy(handle.renderer)).toBe(false);
     expect(handle.renderer.root.findAllByProps({
       className: "files-tree-notification-loading",
     })).toHaveLength(0);

@@ -19,12 +19,36 @@ from tests.harness.python.run_context import TestRunContext
 from tests.harness.python.web_workbench import (
     web_workbench_assets as web_workbench_assets,  # noqa: PLC0414
 )
-from tests.integration.backend.sessions.test_session_communication_pipeline import (
-    _prepare_workspace,
-)
 from tests.support.communication.federation import open_communication_triad
 from tests.support.model_stream.config import model_stream_replay
 from tests.support.paths import chromium_temporary_environment
+from tests.support.workspaces import (
+    install_test_workspace_config,
+    prepare_test_workspace,
+)
+
+
+def _prepare_workspace(context: TestRunContext, model_port: int, gateway_port: int) -> Path:
+    # 本场景只需要会话身份与模型回放，不复制通信场景的文件和工具配置。
+    workspace = prepare_test_workspace(
+        workspace_root=context.workspace_root,
+        template_root=Path.cwd() / "tests/fixtures/workspaces/default_test_workspace",
+        template_items=(".boxteam/workspace-identity.json",),
+    )
+    config_path = install_test_workspace_config(
+        workspace_root=workspace, config_path=Path.cwd() / "configs/tests/workspace/default.jsonc",
+        schema_path=Path.cwd() / "configs/workspace_schema.jsonc",
+    )
+    config = commentjson.loads(config_path.read_text(encoding="utf-8"))
+    config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{gateway_port}"
+    provider = config["llm"]["providers"]["primary"]
+    provider["defaults"].update({"endpoint": f"http://127.0.0.1:{model_port}/v1", "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}"})
+    provider["models"]["default"]["model"] = "e2e-stub-model"
+    for agent in config["agents"].values():
+        agent["model"]["primary"] = {"provider_id": "primary", "model_id": "default"}
+        agent["model"]["fallbacks"] = []
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return workspace
 
 
 @pytest.fixture
@@ -56,13 +80,13 @@ async def test_cross_end_state_sync_through_two_gateways(
         async with open_communication_triad(
             context, _prepare_workspace, same_backend_routes=True,
             backend_asgi_app="tests.support.e2e_control.backend_app:app",
-            backend_environment={**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
+            backend_environment={**replay.environment, "LITELLM_LOCAL_MODEL_COST_MAP": "true", "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key"},
             gateway_environment={"BOXTEAM_WEB_ASSETS": str(state_sync_web_assets)},
         ) as nodes:
             source, target = nodes["a"], nodes["b"]
             assert source.gateway is not None and target.gateway is not None
             configuration = commentjson.loads((target.workspace / ".boxteam/workspace.jsonc").read_text(encoding="utf-8"))
-            endpoint = next(provider["endpoint"] for provider in configuration["llm"]["providers"] if provider["id"] == "primary")
+            endpoint = configuration["llm"]["providers"]["primary"]["defaults"]["endpoint"]
             interactions = build_cassette(
                 asset_id="cross-end-state-sync", model="e2e-stub-model", url=endpoint + "/chat/completions",
                 frames=chat_completion_frames(

@@ -98,17 +98,16 @@ def shutdown_environment(
     config_path = Path(integration_workspace_config_path)
     before = config_path.read_bytes()
     config = read_jsonc_object(config_path)
-    primary = next(provider for provider in config["llm"]["providers"] if provider["id"] == "primary")
-    target = primary if model_protocol == "chat_completions" else next(
-        provider for provider in config["llm"]["providers"] if provider["id"] == "backup_3"
-    )
+    primary = config["llm"]["providers"]["primary"]
+    target = config["llm"]["providers"]["primary" if model_protocol == "chat_completions" else "backup_3"]
     endpoint_suffix = "/responses" if model_protocol == "responses" else "/chat/completions"
-    primary.update({
+    primary["defaults"].update({
         "endpoint": shutdown_cassette.interactions[0].request.url.removesuffix(endpoint_suffix),
-        "model": shutdown_cassette.metadata["model"], "api_key": "fixture-key",
-        "api_mode": target["api_mode"],
+        "api_key": "",
+        "api_mode": target["defaults"]["api_mode"],
     })
-    config["agents"]["default"]["model"]["fallback_providers"] = []
+    primary["models"] = {"default": {"model": shutdown_cassette.metadata["model"]}}
+    config["agents"]["default"]["model"]["fallbacks"] = []
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})[
         "url"
     ] = f"http://127.0.0.1:{integration_port_block_for_file(Path(request.node.path)).port(21)}"

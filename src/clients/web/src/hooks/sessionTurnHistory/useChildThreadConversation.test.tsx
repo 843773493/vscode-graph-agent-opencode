@@ -191,9 +191,21 @@ test("冷历史和报告请求冻结 child owner，草稿和未读按 child 独�
   await until(() => !current.snapshot.loading);
   expect(current.snapshot.draft).toBe("child A 的草稿");
   expect(current.isUnread(CHILDREN[0]!)).toBe(true);
-  await act(async () => { await current.openReport(); });
-  expect(current.isUnread(CHILDREN[0]!)).toBe(false);
-  expect(current.isUnread(CHILDREN[1]!)).toBe(true);
+  let navigation!: ReturnType<typeof useChildThreadConversation>;
+  function NavigationMirror() {
+    navigation = useChildThreadConversation({ apiPort: 49199, workspaceId: WORKSPACE_A,
+      sessionId: SESSION, threads: CHILDREN, enabled: false });
+    return null;
+  }
+  let mirror!: ReactTestRenderer;
+  act(() => { mirror = create(<NavigationMirror />); });
+  try {
+    expect(navigation.isUnread(CHILDREN[0]!)).toBe(true);
+    await act(async () => { await current.openReport(); });
+    expect(current.isUnread(CHILDREN[0]!)).toBe(false);
+    expect(navigation.isUnread(CHILDREN[0]!)).toBe(false);
+    expect(navigation.isUnread(CHILDREN[1]!)).toBe(true);
+  } finally { act(() => mirror.unmount()); }
   expect(requests.every((request) => request.owner.gatewayId === OWNER_A.gatewayId
     && request.owner.workspaceId === OWNER_A.workspaceId && request.path.includes("/threads/thr_"))).toBe(true);
   expect(requests[requests.length - 1]!.body).toEqual({ direction: "tail", execution_id: "execution-1", include: ["user", "metadata", "text", "reasoning_detail", "encrypted_reasoning_meta", "tool_call", "tool_result", "final_response", "internal"] });

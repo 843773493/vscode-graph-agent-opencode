@@ -405,9 +405,9 @@ async def test_real_list_total_deadline_preserves_live_resources_and_peer_access
                     deadlines.append(context)
                 return context
 
-            async def receiving():
+            async def receiving(**query):
                 nonlocal calls
-                result = await transport_list()
+                result = await transport_list(**query)
                 if is_listing():
                     calls += 1
                     entered.set()
@@ -485,8 +485,8 @@ async def test_real_aggregate_list_uses_one_budget_across_both_resource_owners(
                 return context
 
             def receiving(index: int, transport_list):
-                async def read():
-                    result = await transport_list()
+                async def read(**query):
+                    result = await transport_list(**query)
                     if asyncio.current_task().get_name() == "aggregate-list-under-test":
                         calls.append(index)
                         entered[index].set()

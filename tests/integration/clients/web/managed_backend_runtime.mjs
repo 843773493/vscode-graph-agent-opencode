@@ -64,8 +64,9 @@ try {
     await page.getByRole("button", { name: "添加工作区", exact: true }).click();
     await page.getByRole("dialog", { name: "选择工作区所在设备", exact: true })
       .getByRole("button", { name: "连接新的远程主机…", exact: true }).click();
-    const control = page.getByRole("dialog", { name: "Gateway 控制中心", exact: true });
+    const control = page.locator(".settings-editor:visible");
     const started = performance.now();
+    await control.getByRole("treeitem", { name: /运行与高级设置/ }).first().click();
     await control.getByRole("button", { name: "服务运行时", exact: true }).click();
     await expect(panel).toBeVisible();
     await expect(panel.getByLabel("当前完整成员", { exact: true }).filter({ hasText: fixture.primaryId })).toBeVisible();
@@ -272,7 +273,7 @@ try {
   // 真实主窗口删除入口提交最后成员的完整合同，成功后从权威列表收敛。
   phase = "delete-last-member";
   await api(`/api/gateway/workspaces/${fixture.secondaryId}/runtime/start`, { method: "POST" });
-  await page.getByRole("button", { name: "关闭 Gateway 控制中心", exact: true }).click();
+  await page.evaluate(() => globalThis.workbench.commands.executeCommand("workbench.action.closeActiveEditor"));
   const row = page.getByTestId(`workspace-node-${gatewayWorkspaceKey({ gatewayId: fixture.gatewayId, workspaceId: fixture.secondaryId })}`);
   await row.waitFor({ state: "visible", timeout: 30_000 });
   await row.click({ button: "right" });

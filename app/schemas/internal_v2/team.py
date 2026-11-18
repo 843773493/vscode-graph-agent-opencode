@@ -87,6 +87,33 @@ class TeamListDTO(BaseModel):
     items: list[TeamBoardDTO]
 
 
+class TeamMemberSummaryDTO(BaseModel):
+    thread_id: str
+    role: str
+    work_mode: TeamWorkMode
+
+
+class TeamTaskSummaryDTO(BaseModel):
+    task_id: str
+    title: str
+    status: TeamTaskStatus
+    assignee_thread_id: str
+    phase: TeamTaskPhase
+    cycle: int = Field(ge=1)
+    summary: str | None = None
+    error: str | None = None
+
+
+class TeamBoardSummaryDTO(BaseModel):
+    team_id: str
+    name: str
+    session_id: str
+    coordinator_thread_id: str
+    version: int = Field(ge=1)
+    members: list[TeamMemberSummaryDTO] = Field(default_factory=list)
+    tasks: list[TeamTaskSummaryDTO] = Field(default_factory=list)
+
+
 class TeamMemberOperationDTO(BaseModel):
     board: TeamBoardDTO
     member: TeamMemberDTO

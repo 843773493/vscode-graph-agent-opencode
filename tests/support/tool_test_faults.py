@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
@@ -10,6 +11,7 @@ from typing import Annotated, Any
 from langchain_core.messages import AIMessage
 from langchain_core.tools import InjectedToolArg, tool
 
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.tool_testing.definitions import (
     PreparedToolTest,
     ToolTestEvaluation,
@@ -88,13 +90,32 @@ class RuntimeInjectedArgumentModel:
 
 
 class SingleProviderRuntimeConfig:
+    def get_snapshot(self) -> object:
+        return self
+
+    def use_snapshot(self, snapshot: object):
+        assert snapshot is self
+        return nullcontext()
+
+    async def prepare_llm_credentials(self, models: list[dict[str, Any]]) -> dict:
+        assert all(not model.get("api_key", "").startswith("secret:") for model in models)
+        return {}
+
+    def use_llm_credentials(self, credentials: dict):
+        assert credentials == {}
+        return nullcontext()
+
+    def get_llm_model(self, reference: ModelReferenceDTO) -> dict[str, Any]:
+        return next(model for model in self.get_agent_runtime_config(self.resolve_agent_id(None))["models"]
+                    if (model["provider_id"], model["model_id"]) == (reference.provider_id, reference.model_id))
+
     def resolve_agent_id(self, agent_id: str | None) -> str:
         return "default" if agent_id is None else agent_id
 
     def get_agent_runtime_config(self, agent_id: str) -> dict[str, Any]:
         assert agent_id == "default"
         return {
-            "providers": [
-                {"id": "provider_only", "model": "model-only", "api_key": "secret"}
+            "models": [
+                {"provider_id": "provider_only", "model_id": "general", "model": "model-only", "api_key": "test-key"}
             ]
         }

@@ -86,7 +86,7 @@ class ThreadInitialExecutionService:
         queue_input = ExecutionQueueInput(
             execution_binding=binding, message_id=binding.message_id,
             agent_id=json.loads(record.task_seed)["agent_id"],
-            provider_id=frozen.message.metadata.get("boxteam_session_provider_id"),
+            model=frozen.message.metadata.get("boxteam_session_model"),
             delivery_policy="after_turn", gateway_id=frozen.gateway_id,
             request_id=frozen.request_id, created_at=target.intent.intent_created_at,
         )

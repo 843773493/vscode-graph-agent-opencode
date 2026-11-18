@@ -29,8 +29,13 @@ from app.schemas.internal_v2.session_navigation.models import (
     SessionGenerationExecuteRequest,
     SessionGenerationPreviewRequest,
 )
+from app.services.business.persistent_tasks.usage import budget_reached
 from app.services.business.session_generation.reporting import generation_report_message
 from app.services.orchestration.persistent_tasks.contexts import action_context
+from app.services.orchestration.persistent_tasks.usage import (
+    bind_execution,
+    settle_execution,
+)
 
 if TYPE_CHECKING:
     from app.services.orchestration.persistent_tasks.runtime import (
@@ -140,7 +145,7 @@ async def _advance(runtime: PersistentTaskRuntime, configuration: PersistentTask
             assert state.execution_identity is not None and state.prepared_message is not None
             await observe_phase(run.run_id, "task.generation.prepared_before_accept", details={"task_id": run.task_id})
             receipt = await runtime._orchestrator.dispatch_existing_message(
-                session.session_id, state.prepared_message, execution_binding=state.execution_identity,
+                session.session_id, state.prepared_message, execution_binding=state.execution_identity, background=True,
             )
             if receipt.job_id != state.execution_identity.job_id or receipt.message_id != state.message_id:
                 raise RuntimeError("会话动作准入改变了冻结消息或 Job 身份")
@@ -149,6 +154,9 @@ async def _advance(runtime: PersistentTaskRuntime, configuration: PersistentTask
             })
         assert state is not None and state.session_id is not None and state.thread_id is not None and state.execution_identity is not None
         execution_id, outcome = await _child_outcome(runtime, state)
+        reference = bind_execution(runtime, run.task_id, session_id=state.session_id, thread_id=state.thread_id,
+                       job_id=state.execution_identity.job_id, control_revision=run.task_revision, run_id=run.run_id)
+        await settle_execution(runtime, run.task_id, state.execution_identity.job_id, reference)
         if state.prepared_message is not None or run.delivery is None:
             # canonical 接受后移除准备正文；任务运行只保存原身份和引用。
             state = state.model_copy(update={"prepared_message": None})
@@ -177,6 +185,16 @@ async def _advance(runtime: PersistentTaskRuntime, configuration: PersistentTask
         async with runtime.locks.lock_for(run.task_id):
             wakeup = runtime._dispatcher.submitted(target.session_id, target.thread_id, idempotency_key=key)
             if wakeup is None:
+                # 子执行可能在前一次采样后才结束；先结清，再决定是否接受新的回报执行。
+                await settle_execution(runtime, run.task_id, execution_identity.job_id, reference)
+                task = store.get_automation(run.task_id)
+                if budget_reached(task.tokens_used, task.configuration.token_budget):
+                    runtime._waiting_actions.discard(run.run_id)
+                    state = state.model_copy(update={"status": "completed" if successful else "failed"})
+                    store.record_generation(run, state, runtime.clock(), phase="suppressed",
+                        error="任务累计 Token 预算已耗尽；已保留子会话结果，未接受回报执行")
+                    runtime.notify(run.task_id, run.run_id)
+                    return
                 async with runtime._sessions.session_read_admission(session_id):
                     content, provenance = runtime.messages.execution_output_for_job(
                         session_id, thread_id=thread_id, job_id=execution_identity.job_id,
@@ -195,6 +213,9 @@ async def _advance(runtime: PersistentTaskRuntime, configuration: PersistentTask
                     raise RuntimeError("会话回报接受后缺少原 durable wakeup")
             if state.report_back_job_id is not None and state.report_back_job_id != wakeup.job_id:
                 raise RuntimeError("会话回报恢复改变了原 Job 身份")
+            reference = bind_execution(runtime, run.task_id, session_id=target.session_id, thread_id=target.thread_id,
+                job_id=wakeup.job_id, control_revision=run.task_revision, run_id=run.run_id, role="report")
+            await settle_execution(runtime, run.task_id, wakeup.job_id, reference)
             state = state.model_copy(update={"status": "reporting", "report_back_job_id": wakeup.job_id})
             store.record_generation(run, state, runtime.clock())
             runtime.notify(run.task_id, run.run_id)

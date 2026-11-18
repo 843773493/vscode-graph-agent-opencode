@@ -64,6 +64,7 @@ from app.domain.itemized.resource_activation import ResourceActivationSnapshotRe
 from app.runtime.agent_runtime import AGENT_GRAPH_RECURSION_LIMIT
 from app.schemas.event import ModelTokenUsagePayload
 from app.schemas.internal_v2.message import AttachmentRef
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.message_display import DISPLAY_CONTENT_METADATA_KEY
 from app.services.infrastructure.message_stream_store import (
     MessageStreamTerminalError,
@@ -308,18 +309,14 @@ class StepRunner:
             raise TypeError("v2 checkpoint saver 缺少可调用端口: mark_execution_lost")
 
         resolved_message_metadata = dict(message_metadata or {})
-        preferred_provider_id_value = resolved_message_metadata.get(
-            "boxteam_session_provider_id"
+        preferred_model_value = resolved_message_metadata.get(
+            "boxteam_session_model"
         )
         if isinstance(execution_binding, UserExecutionIdentity):
             resolved_message_metadata.pop(DISPLAY_CONTENT_METADATA_KEY, None)
-            resolved_message_metadata.pop("boxteam_session_provider_id", None)
-        if preferred_provider_id_value is not None and not isinstance(
-            preferred_provider_id_value,
-            str,
-        ):
-            raise TypeError("会话模型 provider id 必须是字符串")
-        preferred_provider_id = preferred_provider_id_value
+            resolved_message_metadata.pop("boxteam_session_model", None)
+        preferred_model = (ModelReferenceDTO.model_validate(preferred_model_value)
+                           if preferred_model_value is not None else None)
         read_input_message = getattr(
             checkpointer,
             "accepted_user_message" if isinstance(execution_binding, UserExecutionIdentity) else "accepted_internal_message",
@@ -618,7 +615,7 @@ class StepRunner:
                     agent_id=resolved_agent_id,
                     execution_overrides=execution_overrides,
                     model_visibility_overrides=model_visibility_overrides,
-                    preferred_provider_id=preferred_provider_id,
+                    preferred_model=preferred_model,
                     include_team_tools=include_team_tools,
                 )
             )

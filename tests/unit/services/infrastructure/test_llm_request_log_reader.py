@@ -8,6 +8,36 @@ import pytest
 from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 
 
+def test_item_request_uses_exact_call_and_job_instead_of_latest_log(tmp_path, session_bundle_factory):
+    from app.core.exceptions import NotFoundError
+
+    session_id = "ses_019b9a5623b97db291238e0644b0b4ae"
+    directory = session_bundle_factory(tmp_path, session_id)
+    for timestamp, job, model_call in ((1000, "job-target", "call-target"), (2000, "job-other", "call-target"), (3000, "job-target", "call-other")):
+        write_llm_request_log(directory, timestamp, {"timestamp": timestamp, "session_id": session_id,
+            "job_id": job, "request": {}, "response": {"result": [{"id": f"response-{timestamp}", "response_metadata": {"model_call_id": model_call}}]}})
+    reader = LLMRequestLogReader(tmp_path)
+    match = reader.find_item_request(session_id, model_call_id="call-target", message_id=None, job_id="job-target")
+    assert match.reference.file_name == "1000.json"
+    assert reader.locate(match.reference).record.job_id == "job-target"
+    with pytest.raises(NotFoundError):
+        reader.find_item_request(session_id, model_call_id="missing", message_id=None, job_id="job-target")
+
+
+def test_item_request_rejects_oversize_record_without_reading_full_body(tmp_path, session_bundle_factory):
+    from app.services.infrastructure.llm_request_log_reader import (
+        MAX_LOG_RECORD_BYTES,
+        LLMRequestLogError,
+    )
+
+    session_id = "ses_019b9a5623b97db291238e0644b0b4ae"
+    directory = session_bundle_factory(tmp_path, session_id)
+    write_llm_request_log(directory, 1000, {"timestamp": 1000, "request": {"body": "x" * (MAX_LOG_RECORD_BYTES + 1)}, "response": {}})
+    with pytest.raises(LLMRequestLogError) as error:
+        LLMRequestLogReader(tmp_path).find_item_request(session_id, model_call_id="call", message_id=None, job_id=None)
+    assert error.value.reason == "record_size_limit"
+
+
 def write_llm_request_log(
     session_directory: Path,
     filename_timestamp_ns: int,
@@ -259,3 +289,13 @@ def test_record_budget_resumes_after_the_exhausted_file_instead_of_reading_it_ag
     second = service.search_session_logs(session_id, "结束", limit=50, position=first.position, budget=budget())
     assert second.complete and [hit.reference.file_name for hit in second.items] == ["2000.json"]
     assert reads == ["2000.json"]
+
+
+def test_item_request_limit_is_not_misreported_as_a_missing_record(searchable_logs, monkeypatch):
+    import app.services.infrastructure.llm_request_log_reader as log_module
+
+    service, session_id, path, _budget = searchable_logs
+    monkeypatch.setattr(log_module, "MAX_SEARCH_RECORDS", 1)
+    path.with_name("2000.json").write_bytes(path.read_bytes())
+    with pytest.raises(TimeoutError, match="记录上限"):
+        service.find_item_request(session_id, model_call_id="outside-window", message_id=None, job_id=None)

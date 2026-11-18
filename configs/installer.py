@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -139,6 +140,7 @@ def install_source_development_configuration(
     project_root: Path,
     config_root: Path,
     local_only: bool = False,
+    force: bool = False,
 ) -> ConfigurationInstallation:
     """把源码开发资源安装到 BOXTEAM_HOME，运行期不再读取源码文件。"""
     resolved_project_root = project_root.expanduser().resolve()
@@ -149,13 +151,30 @@ def install_source_development_configuration(
         config_root=config_root,
         profile="default" if local_only else "development",
         project_root=resolved_project_root,
-        force=True,
+        force=force,
     )
     env_path = config_root.expanduser().resolve() / ".env"
-    atomic_write(env_path, source_env_path.read_bytes(), 0o600)
+    if force or not env_path.exists():
+        atomic_write(env_path, source_env_path.read_bytes(), 0o600)
     return ConfigurationInstallation(
         config_paths=installation.config_paths,
         schema_paths=installation.schema_paths,
         created_config_paths=installation.created_config_paths,
         env_path=env_path,
     )
+
+
+def install_bundled_plugins(*, boxteam_home: Path, packages: Sequence[dict[str, str]]) -> list[str]:
+    """只补缺失的内置包；启用状态仍归配置 owner，不在安装时改写。"""
+    from app.gateway.plugins.packages import PluginPackageStore
+
+    store = PluginPackageStore(boxteam_home / "plugins/packages")
+    installed = []
+    for entry in packages:
+        package_id, version = entry["package_id"], entry["package_version"]
+        try:
+            store.get(package_id, version)
+        except FileNotFoundError:
+            store.install_zip(Path(entry["archive"]), expected_package_id=package_id, expected_package_version=version)
+            installed.append(f"{package_id}@{version}")
+    return installed

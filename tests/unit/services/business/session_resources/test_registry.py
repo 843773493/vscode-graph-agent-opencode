@@ -27,6 +27,9 @@ class FakeResourceProvider:
         self.control_calls: list[tuple[str, str, SessionResourceAction]] = []
         self.cleanup_calls: list[str] = []
 
+    async def get_resource(self, session_id: str, resource_id: str) -> SessionResourceDTO:
+        return next(item for item in await self.list_resources(session_id) if item.resource_id == resource_id)
+
     async def list_resources(
         self,
         session_id: str,

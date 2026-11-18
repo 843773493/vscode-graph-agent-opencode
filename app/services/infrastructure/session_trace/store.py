@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 import zlib
 from collections.abc import Iterator
 from contextlib import aclosing
 from pathlib import Path
 
+from app.core.exceptions import NotFoundError
 from app.core.path_utils import get_session_path_resolver
 from app.core.shielded_cleanup import run_sync_shielded
 from app.schemas.event import Event
-from app.schemas.internal_v2.trace_search import TraceLocationDTO, TraceReferenceDTO
+from app.schemas.internal_v2.trace_search import (
+    TraceLocationDTO,
+    TraceMatchDTO,
+    TraceReferenceDTO,
+)
 from app.services.infrastructure.events.event_channel_service import (
     SESSION_TRACE_CHANNEL_KIND,
     EventChannelService,
@@ -55,6 +61,8 @@ class TraceEventStore:
         self._append_locks = tuple(
             asyncio.Lock() for _ in range(TRACE_STORE_LOCK_SHARDS)
         )
+        self._writers: list[TraceDatabase | None] = [None] * TRACE_STORE_LOCK_SHARDS
+        self._closed = False
         self._event_service = event_service if event_service is not None else EventChannelService()
 
     @staticmethod
@@ -85,10 +93,43 @@ class TraceEventStore:
         )
 
     def _append_event(self, session_id: str, event: Event) -> TraceStreamRecord:
-        return TraceDatabase(self._database_path(session_id)).append(event)
+        path = self._database_path(session_id)
+        slot = self._shard(session_id)
+        database = self._writers[slot]
+        if database is None or database.path != path:
+            self._close_writer(slot)
+            database = self._writers[slot] = TraceDatabase(path)
+        try:
+            return database.append(event)
+        finally:
+            if event.type in {"job_completed", "job_failed", "job_cancelled", "session_interrupted"}:
+                self._close_writer(slot)
+
+    def _close_writer(self, slot: int) -> None:
+        database = self._writers[slot]
+        if database is not None:
+            database.close()
+            self._writers[slot] = None
+
+    async def close_session(self, session_id: str) -> None:
+        # 删除 owner 在原生命周期 gate 内调用，目录隔离前等当前写入结算并关连接。
+        async with self._append_lock(session_id):
+            slot = self._shard(session_id)
+            database = self._writers[slot]
+            if database is not None and database.path == self._database_path(session_id):
+                await run_sync_shielded(self._close_writer, slot)
+
+    async def close(self) -> None:
+        self._closed = True
+        for slot, lock in enumerate(self._append_locks):
+            async with lock:
+                if self._writers[slot] is not None:
+                    await run_sync_shielded(self._close_writer, slot)
 
     async def append(self, session_id: str, event: Event) -> None:
         async with self._append_lock(session_id):
+            if self._closed:
+                raise RuntimeError("TraceEventStore 已关闭，不能追加事件")
             record = await run_sync_shielded(self._append_event, session_id, event)
             # 与提交共用顺序锁；无人订阅时不创建 channel，也不保留正文副本。
             for scope in {None, record.thread_id}:
@@ -246,11 +287,21 @@ class TraceEventStore:
                 ),
             )
 
-    def iter_message_events(self, session_id: str) -> Iterator[Event]:
+    def iter_message_job_events(self, session_id: str, message_id: str) -> Iterator[Event]:
+        """只消费目标消息关联的 Job 创建与终态事实，不读取历史输出正文。"""
         with TraceDatabase(self._database_path(session_id)).connection() as connection:
             if connection is not None:
                 rows = connection.execute(
-                    "SELECT raw FROM trace_events WHERE is_message=1 ORDER BY start"
+                    """SELECT raw FROM trace_events
+                       WHERE job_id IN (
+                           SELECT job_id FROM trace_events
+                           WHERE event_type='job_created'
+                             AND json_extract(raw, '$.payload.message_id')=?
+                       )
+                         AND event_type IN ('job_created', 'job_completed', 'job_cancelled',
+                                            'job_failed', 'session_interrupted')
+                       ORDER BY start""",
+                    (message_id,),
                 )
                 yield from iter_trace_event_lines(
                     session_id=session_id, lines=(row[0] for row in rows)
@@ -275,6 +326,27 @@ class TraceEventStore:
             yield from iter_trace_event_lines(
                 session_id=session_id, lines=(row[0] for row in rows)
             )
+
+    def locate_job_start(self, session_id: str, thread_id: str, job_id: str) -> TraceMatchDTO:
+        """沿既有 Job 生命周期索引定位所属执行起点，不补读整个 Trace。"""
+        with TraceDatabase(self._database_path(session_id)).connection() as connection:
+            row = connection.execute(
+                "SELECT start,end,CASE WHEN end-start<=? THEN raw END FROM trace_events "
+                "WHERE job_id=? AND event_type='job_started' ORDER BY start LIMIT 1",
+                (TRACE_PAGE_MAX_BYTES, job_id),
+            ).fetchone() if connection is not None else None
+            if row is None:
+                raise NotFoundError("所属执行的 Trace 起点未保留")
+            if row[2] is None:
+                raise ValueError("所属执行的 Trace 起点超过单条事件读取上限")
+            raw = row[2].encode("utf-8")
+            record = parse_trace_record(session_id, row[0], row[1], raw)
+            if self._event_threads(connection, session_id, [record.event])[record.event.event_id] != thread_id:
+                raise ValueError("Trace 起点不属于请求的 Thread")
+            return TraceMatchDTO(reference=TraceReferenceDTO(session_id=session_id, thread_id=thread_id,
+                event_id=record.event.event_id, line_start=row[0], line_end=row[1],
+                content_version=hashlib.sha256(raw).hexdigest(), start_codepoint=0, end_codepoint=1),
+                event_type=record.event.type, timestamp=record.event.timestamp, preview="", preview_start_codepoint=0)
 
     def ensure_cursor(self, session_id: str, after_event_id: str | None) -> None:
         if after_event_id is not None:

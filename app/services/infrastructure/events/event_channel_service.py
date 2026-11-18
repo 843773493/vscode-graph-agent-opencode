@@ -58,6 +58,8 @@ CHANNEL_KINDS: Final[frozenset[str]] = frozenset(
         CONTEXT_SOURCE_CHANNEL_KIND,
         MCP_CATALOG_CHANNEL_KIND,
         TASK_LIFECYCLE_CHANNEL_KIND,
+        "user.questions",
+        "workspace.resources",
     }
 )
 

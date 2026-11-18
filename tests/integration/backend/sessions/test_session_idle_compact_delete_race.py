@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -161,7 +162,7 @@ async def test_active_compaction_and_missing_session_keep_their_api_contracts(
 ) -> None:
     session_id = await harness.workspace.create_session(
         "可压缩会话",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
 
     compact = await harness.client.post(f"/api/v1/sessions/{session_id}/compact")
@@ -184,7 +185,7 @@ async def test_compaction_during_real_delete_returns_conflict_before_checkpoint_
 ) -> None:
     session_id = await harness.workspace.create_session(
         "删除排空中的会话",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     drain_started = asyncio.Event()
     continue_drain = asyncio.Event()

@@ -15,6 +15,8 @@ from app.schemas.event import (
     GoalUpdatedPayload,
     JobCreatedEvent,
     JobCreatedPayload,
+    JobStartedEvent,
+    JobStartedPayload,
 )
 from app.services.infrastructure.session_trace import trace_search
 from app.services.infrastructure.session_trace.trace_page import TRACE_PAGE_MAX_BYTES
@@ -22,6 +24,7 @@ from app.services.infrastructure.session_trace.trace_search import (
     TraceSearchBudget,
     TraceSearchError,
 )
+from tests.support.api_helpers import running_job_dispatch_snapshot
 
 
 @pytest.fixture
@@ -42,6 +45,22 @@ async def records(trace_event_store_factory, tmp_path):
 def search(store, session, query="needle😀", *, limit=1, position=None, budget=None):
     return store.search_session_events(session, query, limit=limit, position=position,
         budget=budget or TraceSearchBudget(check=lambda: None))
+
+
+async def test_item_execution_trace_uses_exact_job_start_and_existing_location(records):
+    from app.core.exceptions import NotFoundError
+
+    store, session, _file, main, child = records
+    await store.append(session, JobStartedEvent(event_id="job-1-started", job_id="job-1", timestamp=datetime.now(UTC),
+        payload=JobStartedPayload(session_id=session, thread_id=child, dispatch=running_job_dispatch_snapshot(
+            session, child, "job-1", queued_job_count=0, queue_snapshot_version=0))))
+    match = store.locate_job_start(session, child, "job-1")
+    assert match.reference.event_id == "job-1-started"
+    assert store.locate(match.reference).record.thread_id == child
+    with pytest.raises(ValueError, match="不属于"):
+        store.locate_job_start(session, main, "job-1")
+    with pytest.raises(NotFoundError, match="未保留"):
+        store.locate_job_start(session, child, "missing")
 
 
 def test_reverse_pages_continue_within_record_and_keep_real_thread(records):
@@ -147,7 +166,7 @@ async def test_goal_search_resolves_catalog_main_once_per_batch(records, monkeyp
         event = (GoalUpdatedEvent(**common, payload=GoalUpdatedPayload(
             session_id=session, thread_id=main, goal={"objective": "目标"},
         )) if ordinal % 2 else GoalClearedEvent(**common, payload=GoalClearedPayload(
-            session_id=session, thread_id=main,
+            session_id=session, thread_id=main, control_revision=ordinal, sync_version=ordinal,
         )))
         await store.append(session, event)
     page = search(store, session, "goal-owner-needle", limit=100)

@@ -95,13 +95,13 @@ export default function SessionContextForkDialog({
   };
   return createPortal(
     <div className="session-name-overlay" role="dialog" aria-modal="true" aria-labelledby={labelId}>
-      <form className="session-name-dialog session-context-fork-dialog" onSubmit={submit}>
+      <form className="session-name-dialog session-context-fork-dialog" aria-busy={state.loading} onSubmit={submit}>
         <div className="session-name-header">
           <h2 id={labelId}>{t('navigation.fork.title')}</h2>
           <button type="button" className="session-name-close" aria-label={t('navigation.close')} disabled={state.submitting} onClick={onCancel}>×</button>
         </div>
         <div className="session-context-fork-body">
-        {state.loading ? <p role="status">{sourcePoint ? t('navigation.fork.loadingAttachments') : t('navigation.fork.loadingHistory')}</p> : null}
+
         {sourcePoint ? <>
           {creationKind === "new_session_main"
             ? <p>{t('navigation.fork.newSessionDescription')}</p>

@@ -96,9 +96,6 @@ class JobPendingRequestService:
             await self.refresh_version(session_id)
         return await self.list(session_id, thread_id=thread_id)
 
-    async def reject_reorder(self, session_id: str) -> None:
-        await self._controller.reject_reorder(session_id)
-
     @property
     def execution_queue(self) -> ExecutionQueueProtocol:
         if self._execution_queue is None:

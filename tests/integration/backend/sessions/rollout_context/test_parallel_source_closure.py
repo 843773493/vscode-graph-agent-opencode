@@ -142,10 +142,10 @@ async def test_parallel_skill_and_team_sources_wait_for_all_paired_results(
         index = saver._storage.storage.index_path(session, "", thread_id=thread)
         with sqlite3.connect(index.as_uri() + "?mode=ro", uri=True) as connection:
             observations = connection.execute(
-                "SELECT payload_json FROM team_source_observations WHERE session_id=? AND thread_id=? ORDER BY ledger_revision",
+                "SELECT facet_hashes_json FROM team_source_observations WHERE session_id=? AND thread_id=? ORDER BY ledger_revision",
                 (session, thread),
             ).fetchall()
-        assert any(task.task.task_id in payload for (payload,) in observations)
+        assert any(json.loads(hashes)["tasks"] == team_revision for (hashes,) in observations)
         assert saver.load_context_source_control_states(owner) == controls
         assert manager.prepare_pending() == pending
         assert tuple(assembly.to_dict() for assembly in saver.list_context_assemblies(session, thread)) == original_assemblies

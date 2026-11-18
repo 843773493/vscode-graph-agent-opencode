@@ -32,12 +32,12 @@ def discovery_history(prepare_tool_context, registry_db, discovery_tool_factory)
             yield
 
     async def create(*, target="ci_logs", compact=False, boundary="model_call"):
-        from app.services.infrastructure.mcp.tool_definitions import (
-            tool_catalog_from_activation,
+        from app.services.infrastructure.mcp.frozen_catalog import (
+            restore_frozen_tool_catalog,
         )
         wire, activation = prepare_tool_context("recovery-start", boundary=boundary)
         snapshot = wire["snapshot"]
-        catalog = tool_catalog_from_activation(activation, lambda frozen, binding: saver.read_resource_activation_payload(
+        catalog = restore_frozen_tool_catalog(activation, lambda frozen, binding: saver.read_resource_activation_payload(
             frozen, binding, storage_owner=(session, thread)))
         resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
         tool = discovery_tool_factory(catalog_resolver=lambda: catalog, policy_resolver=lambda frozen: {
@@ -167,7 +167,7 @@ async def test_v2_history_restores_definition_after_compaction_but_cannot_dispat
     discovery_history, prepare_tool_context, registry_db, catalog_runtime,
 ):
     from app.domain.itemized.hashing import canonical_json_bytes
-    from app.services.infrastructure.mcp import catalog_activation
+    from app.services.infrastructure.mcp import frozen_catalog
     from app.services.infrastructure.mcp.extension_catalog import (
         ExtensionCatalogUnavailableError,
     )
@@ -187,7 +187,7 @@ async def test_v2_history_restores_definition_after_compaction_but_cannot_dispat
     assert model_call_id is not None
     before = canonical_json_bytes(original.to_dict())
     parent = next(binding for binding in original.bindings
-                  if binding.resource_id == catalog_activation.MCP_TOOL_CATALOG_RESOURCE_ID)
+                  if binding.resource_id == frozen_catalog.MCP_TOOL_CATALOG_RESOURCE_ID)
     assert "extension-catalog:v2" in dict(parent.source_lineage_ref.sources)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
         wire, _activation = prepare_tool_context("recovery-v2-cold", context_owner=cold)
@@ -196,7 +196,7 @@ async def test_v2_history_restores_definition_after_compaction_but_cannot_dispat
         assert restored.definition.input_schema == entry["input_schema"]
         assert restored.definition.provenance.model_dump() == entry["provenance"]
         with pytest.raises(ExtensionCatalogUnavailableError, match="历史可读但不可恢复执行"):
-            catalog_activation.extension_dispatch_from_activation(
+            frozen_catalog.restore_frozen_extension_dispatch(
                 snapshot=original, binding=parent, model_call_id=model_call_id,
                 payload=cold.read_resource_activation_payload(original, parent, storage_owner=(session, thread)),
             )

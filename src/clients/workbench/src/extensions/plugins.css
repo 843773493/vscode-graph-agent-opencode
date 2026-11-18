@@ -1,5 +1,5 @@
 /* 行、图标、页头、操作与导航直接使用 upstream 的扩展样式；这里只补项目的分组与范围布局。 */
-.service-plugin-packages-view { display: flex; flex-direction: column; min-width: 0; }
+.service-plugin-packages-view { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .service-plugin-search { margin: 5px 12px 6px 20px; }
 .service-plugin-search .monaco-inputbox { width: 100%; }
 .service-plugin-scope { margin: 0 12px 6px 20px; }
@@ -22,3 +22,5 @@
 .service-plugin-owner { color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
 .service-plugin-document .monaco-button { width: fit-content; }
 .service-plugin-document [role=alert] { color: var(--vscode-errorForeground); }
+
+.service-plugin-feedback { position: absolute; z-index: 5; inset-inline: 8px; bottom: 4px; max-height: 40%; overflow: auto; padding: 4px 8px; background: var(--vscode-editorWidget-background); border: 1px solid var(--vscode-editorWidget-border); color: var(--vscode-errorForeground); font-size: 12px; overflow-wrap: anywhere; }

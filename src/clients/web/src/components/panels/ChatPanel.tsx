@@ -24,6 +24,8 @@ import ToolApprovalPanel from "./ToolApprovalPanel";
 import ChatHistoryPageHeader from "../chat/ChatHistoryPageHeader";
 import ChatTurn from "../chat/turn/ChatTurn";
 import InternalExecutionTranscriptItem from "../chat/InternalExecutionTranscriptItem";
+import ContextNotice from "../chat/ContextNotice";
+import { ChatItemOwnerContext } from "../chat/itemContextMenu";
 import ChatTurnErrorBoundary from "../chat/turn/ChatTurnErrorBoundary";
 import { chatTranscriptItems, type ChatTranscriptItem } from "../chat/transcriptItems";
 import { useTurnVirtualScroller, type TurnViewportController } from "../chat/useTurnVirtualScroller";
@@ -47,13 +49,10 @@ interface ChatPanelRenderState extends ChatTurnHandlers {
   onLoadTurnDetails: LoadTurnDetails;
   onLoadToolDetails?: LoadToolDetails;
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
-  projectionState: TurnProjectionState;
-  hasOlderMessages: boolean;
   loadingOlderMessages: boolean;
   historyError: string | null;
   onRetryHistory: () => void;
   pendingActionError: string | null;
-  locatedTurnId: string | null;
 }
 
 interface ChatPanelVirtuosoContext {
@@ -81,8 +80,6 @@ function ChatPanelHistoryHeader({
   }, [context]);
   return (
     <ChatHistoryPageHeader
-      projectionState={state.projectionState}
-      hasOlderMessages={state.hasOlderMessages}
       loadingOlderMessages={state.loadingOlderMessages}
       error={state.historyError}
       onRetry={retryHistory}
@@ -121,6 +118,11 @@ const renderChatPanelItem: ItemContent<
   ChatPanelVirtuosoContext
 > = (_index, item, context) => {
   const state = currentChatPanelRenderState(context);
+  if (item.kind === "context_event") {
+    return <ChatItemOwnerContext.Provider value={state.sessionId && state.threadId ? { sessionId: state.sessionId, threadId: state.threadId } : null}>
+      <ContextNotice notices={item.notices} />
+    </ChatItemOwnerContext.Provider>;
+  }
   if (item.kind === "internal_execution") {
     const source = item.displayPart.provenance;
     const canOpenReport = state.onOpenChildReport && source.source_session_id === state.sessionId
@@ -136,7 +138,6 @@ const renderChatPanelItem: ItemContent<
     <div
       className="chat-virtual-item"
       data-turn-id={item.conversation.turnId}
-      aria-current={state.locatedTurnId === item.conversation.turnId ? "location" : undefined}
     >
       <div>
         <ChatTurnErrorBoundary
@@ -282,6 +283,7 @@ export default function ChatPanel({
     streamRef,
     locatedMessage,
     locatedTool,
+    locatedItem,
     cancelMessageNavigation,
   } = useTurnVirtualScroller({
     items: transcriptItems,
@@ -401,18 +403,15 @@ export default function ChatPanel({
     onChangePendingPolicy: updatePendingPolicy,
     onOpenAttachment,
     onForkConversation,
-    projectionState,
-    hasOlderMessages,
     loadingOlderMessages,
     historyError,
     onRetryHistory: retryHistory,
     pendingActionError,
-    locatedTurnId: navigation?.phase === "located" ? navigation.turnId : null,
   };
 
   return (
-    <MessageSearchLocationContext.Provider value={{ message: locatedMessage, tool: locatedTool, close: cancelMessageNavigation, onMount: scheduleAnchorAlignment }}><section className="chat-stream-shell">
-      {navigation ? <p className="chat-history-notice" role={navigation.phase === "error" ? "alert" : "status"}>{navigation.message}</p> : null}
+    <MessageSearchLocationContext.Provider value={{ message: locatedMessage, tool: locatedTool, item: locatedItem, close: cancelMessageNavigation, onMount: scheduleAnchorAlignment }}><section className="chat-stream-shell panel-feedback-host" aria-busy={loadingOlderMessages || historyLoading}>
+      {navigation ? <p className="panel-feedback" role={navigation.phase === "error" ? "alert" : "status"}>{navigation.message}</p> : null}
       {hasActiveSession && sessionId && threadId && approvalWaits.length > 0 ? <ToolApprovalPanel key={JSON.stringify([apiPort, workspaceId, sessionId, threadId, approvalWaits])}
         apiPort={apiPort} workspaceId={workspaceId} sessionId={sessionId} threadId={threadId} /> : null}
       <section

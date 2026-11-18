@@ -324,9 +324,9 @@ class ModelCallExecution:
             wire_params = responses_wire_params(request.model, kwargs=options)
         else:
             wire_profile = chat_wire_profile(request.model)
-            # Agent dispatch 的真实发送入口是异步流式；封存与发送必须同一形态。
+            # 页面事件流与上游传输分离，封存采用冻结模型的实际传输选择。
             wire_params = chat_wire_params(
-                request.model, stop=stop, kwargs=options, stream=True,
+                request.model, stop=stop, kwargs=options, stream=wire_profile.streaming,
             )
         # provider_version 只承载实际 wire profile 身份，不用 model name 冒充。
         provider_version = wire_profile.identity()

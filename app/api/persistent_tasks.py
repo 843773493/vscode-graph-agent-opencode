@@ -12,7 +12,11 @@ from pydantic_core import PydanticSerializationError
 
 from app.abstractions.state_conflict import ClientStateConflictError
 from app.api.deps import get_persistent_task_service, get_request_id, verify_local_token
-from app.api.errors import not_found_http_error, state_conflict_http_error
+from app.api.errors import (
+    client_error_message,
+    not_found_http_error,
+    state_conflict_http_error,
+)
 from app.api.sse_heartbeat import (
     SSE_HEARTBEAT_INTERVAL_SECONDS,
     SSE_NO_CACHE_HEADERS,
@@ -35,7 +39,7 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskRunListDTO,
     PersistentTaskUpdateRequest,
 )
-from app.schemas.internal_v2.sse import sse_responses
+from app.schemas.internal_v2.sse import SseErrorDTO, sse_responses
 from app.services.business.persistent_task_service import PersistentTaskService
 from app.services.orchestration.persistent_tasks.generator_import import (
     import_generator,
@@ -62,7 +66,10 @@ async def _apply(operation: Callable[[], Awaitable[Result]]) -> Result:
 
 @router.get("", response_model=APIResponse[PersistentTaskListDTO])
 def list_tasks(request_id: RequestId, service: TaskService, session_id: str | None = None):
-    return APIResponse(data=service.snapshot(session_id), request_id=request_id)
+    try:
+        return APIResponse(data=service.snapshot(session_id), request_id=request_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
 
 
 @router.post("", response_model=APIResponse[PersistentTaskDTO])
@@ -73,30 +80,38 @@ async def create_task(payload: PersistentTaskCreateRequest, request_id: RequestI
 
 @router.get("/events", response_class=StreamingResponse,
             responses=sse_responses("持久任务初始快照与精确更新", {
-                "snapshot": PersistentTaskListDTO, "changed": PersistentTaskChangedDTO,
+                "snapshot": PersistentTaskListDTO, "changed": PersistentTaskChangedDTO, "error": SseErrorDTO,
             }))
 async def task_events(service: TaskService, session_id: str | None = None):
+    return StreamingResponse(stream_sse_with_heartbeat(
+        open_persistent_task_sse(service, session_id), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+        close_source_on_exit=True), media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+
+
+async def open_persistent_task_sse(service: PersistentTaskService, session_id: str | None = None):
+    """独立接口与工作区聚合流共享同一任务订阅及错误语义。"""
     channel = service.runtime.events
 
-    async def stream():
-        subscription = channel.subscribe(label="persistent-task-management")
-        try:
-            snapshot = await run_sync_shielded(service.snapshot, session_id)
-            yield "event: snapshot\ndata: " + snapshot.model_dump_json() + "\n\n"
-            while True:
-                delivery = await subscription.next()
-                event = delivery.event
-                if delivery.gap or event.task_id is None:
-                    snapshot = await run_sync_shielded(service.snapshot, session_id)
-                    yield "event: snapshot\ndata: " + snapshot.model_dump_json() + "\n\n"
-                else:
-                    changed = await run_sync_shielded(service.changed, event.task_id, event.run_id, session_id)
-                    yield "event: changed\ndata: " + changed.model_dump_json() + "\n\n"
-        finally:
-            channel.unsubscribe(subscription)
-
-    return StreamingResponse(stream_sse_with_heartbeat(stream(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
-                                                       close_source_on_exit=True), media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+    subscription = channel.subscribe(label="persistent-task-management")
+    try:
+        snapshot = await run_sync_shielded(service.snapshot, session_id)
+        yield "event: snapshot\ndata: " + snapshot.model_dump_json() + "\n\n"
+        while True:
+            delivery = await subscription.next()
+            event = delivery.event
+            if delivery.gap or event.task_id is None:
+                snapshot = await run_sync_shielded(service.snapshot, session_id)
+                snapshot = snapshot.model_copy(update={"history_invalidated": delivery.gap or event.history_invalidated})
+                yield "event: snapshot\ndata: " + snapshot.model_dump_json() + "\n\n"
+            else:
+                changed = await run_sync_shielded(service.changed, event.task_id, event.run_id, session_id)
+                yield "event: changed\ndata: " + changed.model_dump_json() + "\n\n"
+    except (KeyError, NotFoundError) as error:
+        # 会话已删除时显式结束订阅，不把业务缺失伪装成可重连的网络断线。
+        failure = SseErrorDTO(message=client_error_message(error))
+        yield "event: error\ndata: " + failure.model_dump_json() + "\n\n"
+    finally:
+        channel.unsubscribe(subscription)
 
 
 @router.post("/imports/session-generators", response_model=APIResponse[dict[str, str]])

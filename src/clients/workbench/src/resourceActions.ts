@@ -33,7 +33,7 @@ export function supportsChatResourceReference(resource: URI): boolean {
 }
 
 /** 只反转内部编辑器投影；公开引用由统一寻址 owner 生成，不读取正文或打开资源。 */
-export async function resourceReference(resource: URI, resourceOwner?: ResourceReferenceOwner, usage: 'copy' | 'chat' = 'copy'): Promise<string> {
+export async function resourceReference(resource: URI, resourceOwner?: ResourceReferenceOwner, usage: 'copy' | 'chat' = 'copy', itemId?: string): Promise<string> {
   const configuration = resource.scheme === configSourceScheme ? sourceLocation(resource) : undefined;
   const thread = resource.scheme === 'boxteam-thread' ? ThreadInput.fromResource(resource).owner : undefined;
   const change = resource.scheme === 'boxteam-change' ? changeFileSource(resource) : undefined;
@@ -42,6 +42,7 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
     : resource.scheme === 'boxteam-source' ? sourceDocumentSource(resource) : undefined;
   const owner = thread ?? change?.owner ?? source ?? (configuration && { gatewayId: configuration.target.gateway_id, workspaceId: configuration.target.workspace_id });
   if (!owner) throw new Error(t('workbench.resource.referenceUnavailable'));
+  if (itemId && !thread) throw new Error(t('workbench.resource.referenceThreadMismatch'));
   let sourceUri = source && ('path' in source ? source.path : source.uri);
   const gatewayId = workspaceContext.getSnapshot().gatewayId;
   if (!gatewayId) throw new Error(t('workbench.resource.gatewayMissing'));
@@ -69,7 +70,7 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
         session_id: change.owner.sessionId, changeset_id: change.changesetId, file_uri: change.filePath,
       } satisfies GatewayChangeAddressRequest : thread ? {
         local_gateway_id: gatewayId, resource_gateway_id: thread.gatewayId,
-        workspace_id: thread.workspaceId, session_id: thread.sessionId, thread_id: thread.threadId,
+        workspace_id: thread.workspaceId, session_id: thread.sessionId, thread_id: thread.threadId, item_id: itemId,
       } satisfies GatewayThreadAddressRequest : { uri: sourceUri,
         local_gateway_id: gatewayId, resource_gateway_id: owner.gatewayId }),
     });
@@ -81,7 +82,7 @@ export async function resourceReference(resource: URI, resourceOwner?: ResourceR
     if (address.gateway_id !== owner.gatewayId || !sameScope) {
       throw new Error(t('workbench.resource.referenceOwnerMismatch'));
     }
-    if (thread && (address.kind !== 'session' || address.session_id !== thread.sessionId || address.thread_id !== thread.threadId)) {
+    if (thread && (address.kind !== 'session' || address.session_id !== thread.sessionId || address.thread_id !== thread.threadId || itemId && address.item_id !== itemId)) {
       throw new Error(t('workbench.resource.referenceThreadMismatch'));
     }
     if (configuration && address.kind !== 'config') throw new Error(t('workbench.resource.configurationUriMissing'));

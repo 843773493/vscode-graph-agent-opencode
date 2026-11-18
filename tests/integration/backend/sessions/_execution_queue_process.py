@@ -66,7 +66,7 @@ async def run(root: Path, mode: str, barrier: str) -> None:
             message = MessageDTO(message_id=create_prefixed_id("msg"), session_id=session, thread_id=thread,
                                  role=MessageRole.user, content=f"不可变输入 {index}", created_at=now, updated_at=now)
             messages.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
-                execution_binding=identity, message_id=message.message_id, agent_id="default", provider_id=None,
+                execution_binding=identity, message_id=message.message_id, agent_id="default", model=None,
                 delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=now.isoformat()))
             admission = saver.execution_admission_for_job(session, thread_id=thread, job_id=identity.job_id)
             identities.append({"job_id": identity.job_id, "execution_id": admission.execution_id,

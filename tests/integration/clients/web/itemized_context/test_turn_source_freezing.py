@@ -104,8 +104,8 @@ async def verify_agents_source_boundary(
         session = created.json()["data"]
         assert session["workspace_id"] == active_owner["workspace_id"]
         session_id, thread_id = session["session_id"], session["thread_id"]
-        updated = await client.patch(f"/api/v1/sessions/{session_id}", json={"provider_id": "primary"})
-        assert updated.status_code == 200 and updated.json()["data"]["current_provider_id"] == "primary", updated.text
+        updated = await client.patch(f"/api/v1/sessions/{session_id}", json={"model": {"provider_id": "primary", "model_id": "default"}})
+        assert updated.status_code == 200 and updated.json()["data"]["current_model"] == {"provider_id": "primary", "model_id": "default"}, updated.text
     ports = integration_port_block_for_file(Path(request.node.path))
     first_reply = "本轮继续沿用冻结来源。" if boundary == "turn" else "本轮采用更新来源。"
     responses = [

@@ -116,7 +116,7 @@ async def test_fork_keeps_generic_delta_parent_writes_and_excludes_seed_pending(
     pending = await messages.create(source.session_id, MessageCreateRequest(content="只属于来源的排队任务"), thread_id=thread)
     identity = production_fork_container.job_service.reserve_user_execution_identity()
     messages.accept_user_message(pending, execution_identity=identity, queue_input=ExecutionQueueInput(
-        execution_binding=identity, message_id=pending.message_id, agent_id="default", provider_id=None,
+        execution_binding=identity, message_id=pending.message_id, agent_id="default", model=None,
         delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=pending.created_at.isoformat(),
     ))
     assert [row.cursor.admission.job_id for row in saver.execution_queue_snapshot(source.session_id, thread).records] == [identity.job_id]

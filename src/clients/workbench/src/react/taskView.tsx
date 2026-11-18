@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { t } from '../../../shared/core/i18n/index.js';
 import PersistentTasks from '../../../web/src/components/workspace/persistentTasks/PersistentTasks.js';
 import WarmConfirmProvider from '../../../web/src/components/shell/WarmConfirmProvider.js';
@@ -10,6 +10,7 @@ import type { IEditorService } from '../../upstream/src/vs/workbench/services/ed
 import { commands } from '../../upstream/src/vs/workbench/browser/web.factory.js';
 import { taskActionCommand } from '../automation/actions.js';
 import type { PersistentTaskDTO } from '../../../web/src/api/persistentTasks.js';
+import { workspaceContext } from '../workspaceContext.js';
 import type { TaskPresentationAction } from '../automation/input.js';
 
 export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, editors, active, intent }: {
@@ -17,22 +18,18 @@ export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, 
   editors: IEditorService; active: boolean;
   intent?: { task: PersistentTaskDTO; action: TaskPresentationAction; sequence: number };
 }) {
-  const [target, setTarget] = useState<{ route: GatewayWorkspaceRequestTarget; gatewayId: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const snapshot = useSyncExternalStore(workspaceContext.subscribe, workspaceContext.getSnapshot);
   const [notice, setNotice] = useState('');
-  useEffect(() => {
-    let disposed = false;
-    setTarget(null); setError(null);
-    void (async () => {
-      await gateway.assertWorkspace(owner);
-      const workspaces = await gateway.workspaces();
-      const route = requireGatewayWorkspaceRequestTarget(workspaces.items, owner.workspaceKey);
+  let target: { route: GatewayWorkspaceRequestTarget; gatewayId: string } | null = null;
+  let error = snapshot.error;
+  if (snapshot.gatewayId) {
+    try {
+      const route = requireGatewayWorkspaceRequestTarget(snapshot.workspaces, owner.workspaceKey);
       const identity = gatewayWorkspaceOwner(route);
       if (identity.workspaceId !== owner.workspaceId) throw new Error(t('workbench.automation.routeOwnerChanged'));
-      if (!disposed) setTarget({ route, gatewayId: identity.gatewayId });
-    })().catch((cause: unknown) => { if (!disposed) setError(cause instanceof Error ? cause.message : String(cause)); });
-    return () => { disposed = true; };
-  }, [owner.workspaceKey, owner.workspaceId]);
+      target = { route, gatewayId: identity.gatewayId };
+    } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+  }
 
   const openThread = async ({ session_id, thread_id, uri }: TaskThreadTargetDTO) => {
     const path = `workspace/${encodeURIComponent(owner.workspaceId)}/resources/session/${encodeURIComponent(session_id)}/threads/${encodeURIComponent(thread_id)}`;
@@ -46,11 +43,14 @@ export function TaskView({ owner, sessionId, goalSessionId = sessionId ?? null, 
     await editors.openEditor(new ThreadInput({ ...owner, gatewayId: target.gatewayId, sessionId, threadId: main.thread_id, title: sessionId }), { pinned: true });
   };
 
-  return <WarmConfirmProvider>
-    {error ? <p role="alert">{t('workbench.automation.loadFailed', error)}</p> : target ? <PersistentTasks apiPort={0} target={target.route} sessionId={sessionId} goalSessionId={goalSessionId} active={active}
+  return <WarmConfirmProvider><div className="task-view panel-feedback-host" aria-busy={snapshot.loading}>
+    <div className="panel-feedback">
+      {error ? <p role="alert">{t('workbench.automation.loadFailed', error)}</p> : null}
+      {notice ? <p role="status">{notice}</p> : null}
+    </div>
+    {target ? <PersistentTasks apiPort={0} target={target.route} sessionId={sessionId} goalSessionId={goalSessionId} active={active}
       intent={intent} onAction={async (action, source, configuration) => (await commands.executeCommand(taskActionCommand(action),
         { owner: gatewayWorkspaceOwner(source.target), task: source.task, source, configuration })) === true}
-      onStatusChange={setNotice} onOpenSession={openSession} onOpenThread={openThread} /> : <p role="status">{t('workbench.automation.confirmingWorkspace')}</p>}
-    {notice ? <p role="status">{notice}</p> : null}
-  </WarmConfirmProvider>;
+      onStatusChange={setNotice} onOpenSession={openSession} onOpenThread={openThread} /> : null}
+  </div></WarmConfirmProvider>;
 }

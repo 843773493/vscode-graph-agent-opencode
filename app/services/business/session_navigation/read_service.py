@@ -13,6 +13,7 @@ from app.core.session_catalog_resolver import (
     SessionCatalogSessionProjection,
 )
 from app.core.shielded_cleanup import run_sync_shielded
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.session import SessionDTO
 from app.schemas.internal_v2.session_navigation import (
     SessionCatalogBreadcrumbDTO,
@@ -43,7 +44,7 @@ class _SessionCatalogReadSnapshot:
     nodes: list[SessionCatalogNodeDTO]
     folded_search_terms: dict[str, CatalogSearchTerms]
     nodes_by_id: dict[str, SessionCatalogNodeDTO]
-    default_provider_nodes: list[SessionCatalogSessionProjection]
+    default_model_nodes: list[SessionCatalogSessionProjection]
 
 
 class SessionCatalogReadService:
@@ -90,8 +91,8 @@ class SessionCatalogReadService:
                         parent_node_id, collection_size=total,
                     ),
                 )
-                providers: dict[str, str | None] = {}
-                nodes = [self._to_catalog_node(node, scope.node_ids_with_children, providers)
+                models: dict[str, ModelReferenceDTO | None] = {}
+                nodes = [self._to_catalog_node(node, scope.node_ids_with_children, models)
                          for node in self._path_resolver.project_catalog_range(scope)]
                 next_offset = scope.offset + len(nodes)
                 revision = catalog_projection_revision(scope.catalog_revision, projection_revision)
@@ -109,11 +110,11 @@ class SessionCatalogReadService:
                 scope = self._path_resolver.catalog_store.read_catalog_breadcrumb(
                     node_id, minimum_catalog_revision=minimum_catalog_revision,
                 )
-                providers: dict[str, str | None] = {}
+                models: dict[str, ModelReferenceDTO | None] = {}
                 return SessionCatalogBreadcrumbDTO(
                     revision=catalog_projection_revision(scope.catalog_revision, projection_revision),
                     catalog_revision=scope.catalog_revision, node_id=node_id,
-                    items=[self._to_catalog_node(node, scope.node_ids_with_children, providers)
+                    items=[self._to_catalog_node(node, scope.node_ids_with_children, models)
                            if node.node_id in scope.visible_node_ids else self._to_pending_catalog_node(node, scope.node_ids_with_children)
                            for node in self._path_resolver.project_catalog_range(scope)],
                 )
@@ -152,11 +153,11 @@ class SessionCatalogReadService:
                 scope = self._path_resolver.catalog_store.read_catalog_nodes(
                     node_ids, minimum_catalog_revision=minimum_catalog_revision,
                 )
-                providers: dict[str, str | None] = {}
+                models: dict[str, ModelReferenceDTO | None] = {}
                 return SessionCatalogExportDTO(
                     revision=catalog_projection_revision(scope.catalog_revision, projection_revision),
                     catalog_revision=scope.catalog_revision, node_ids=sorted(set(node_ids)), complete=False,
-                    items=[self._to_catalog_node(node, scope.node_ids_with_children, providers)
+                    items=[self._to_catalog_node(node, scope.node_ids_with_children, models)
                            for node in self._path_resolver.project_catalog_range(scope)
                            if node.node_id in scope.visible_node_ids],
                 )
@@ -184,16 +185,16 @@ class SessionCatalogReadService:
             if cached is not None and cached.revision == revision:
                 return cached
             if cached is not None and cached.catalog_revision == current_revision:
-                providers: dict[str, str | None] = {}
+                models: dict[str, ModelReferenceDTO | None] = {}
                 replacements: dict[str, SessionCatalogNodeDTO] = {}
-                for node in cached.default_provider_nodes:
+                for node in cached.default_model_nodes:
                     check()
-                    if node.current_agent_id not in providers:
-                        providers[node.current_agent_id] = self._session_service.project_catalog_session(node).current_provider_id
+                    if node.current_agent_id not in models:
+                        models[node.current_agent_id] = self._session_service.project_catalog_session(node).current_model
                     cached_node = cached.nodes_by_id[node.node_id]
                     session = cast(SessionDTO, cached_node.session)
                     replacements[node.node_id] = cached_node.model_copy(update={
-                        "session": session.model_copy(update={"current_provider_id": providers[node.current_agent_id]}),
+                        "session": session.model_copy(update={"current_model": models[node.current_agent_id]}),
                     })
                 snapshot = replace(
                     cached, revision=revision,
@@ -211,11 +212,11 @@ class SessionCatalogReadService:
                 if node.parent_node_id is not None
             }
             nodes = []
-            default_provider_by_agent: dict[str, str | None] = {}
+            default_model_by_agent: dict[str, ModelReferenceDTO | None] = {}
             for node in visible_catalog_nodes:
                 check()
                 nodes.append(self._to_catalog_node(
-                    node, visible_parent_ids_with_children, default_provider_by_agent,
+                    node, visible_parent_ids_with_children, default_model_by_agent,
                 ))
             nodes_by_id = {node.node_id: node for node in nodes}
             all_nodes_by_id = dict(nodes_by_id)
@@ -231,8 +232,8 @@ class SessionCatalogReadService:
                 nodes=nodes,
                 folded_search_terms=catalog_search_terms(nodes_by_id, check=check),
                 nodes_by_id=all_nodes_by_id,
-                default_provider_nodes=[node for node in visible_catalog_nodes
-                                        if isinstance(node, SessionCatalogSessionProjection) and node.current_provider_id is None],
+                default_model_nodes=[node for node in visible_catalog_nodes
+                                        if isinstance(node, SessionCatalogSessionProjection) and node.current_model_json is None],
             )
             check()
             self._cached_snapshot = snapshot
@@ -265,7 +266,7 @@ class SessionCatalogReadService:
         self,
         node: SessionCatalogNodeProjection,
         visible_parent_ids_with_children: set[str],
-        default_provider_by_agent: dict[str, str | None],
+        default_model_by_agent: dict[str, ModelReferenceDTO | None],
     ) -> SessionCatalogNodeDTO:
         session_projection = (
             node if isinstance(node, SessionCatalogSessionProjection) else None
@@ -273,16 +274,17 @@ class SessionCatalogReadService:
         session = None
         if session_projection is not None:
             if (
-                session_projection.current_provider_id is None
-                and session_projection.current_agent_id in default_provider_by_agent
+                session_projection.current_model_json is None
+                and session_projection.current_agent_id in default_model_by_agent
             ):
                 session_projection = replace(
                     session_projection,
-                    current_provider_id=default_provider_by_agent[session_projection.current_agent_id],
+                    current_model_json=(default_model_by_agent[session_projection.current_agent_id].canonical_json()
+                                        if default_model_by_agent[session_projection.current_agent_id] is not None else None),
                 )
             session = self._session_service.project_catalog_session(session_projection)
-            if session_projection.current_provider_id is None:
-                default_provider_by_agent[session.current_agent_id] = session.current_provider_id
+            if session_projection.current_model_json is None:
+                default_model_by_agent[session.current_agent_id] = session.current_model
         return SessionCatalogNodeDTO(
             node_id=node.node_id,
             kind=node.kind,

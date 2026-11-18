@@ -16,6 +16,8 @@ class SessionResourceProviderProtocol(Protocol):
 
     kind: SessionResourceKind
 
+    async def get_resource(self, session_id: str, resource_id: str) -> SessionResourceDTO: ...
+
     async def list_resources(
         self,
         session_id: str,

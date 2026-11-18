@@ -16,7 +16,7 @@ from app.domain.itemized.hashing import canonical_json_bytes
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogBindingError,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolCatalog,
     FrozenToolDefinition,
 )

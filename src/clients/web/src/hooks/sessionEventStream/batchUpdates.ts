@@ -8,8 +8,6 @@ import {
   writePendingSnapshot,
   writeDispatchActiveJob,
 } from "../../state/conversations";
-import { goalStreamMutation } from "../../protocol/sessionGoal";
-import { applyVersionedValue } from "../../../../shared/core/syncState";
 import {
   appendBoundedLiveTraceEvents,
   appendReceivedEvents,
@@ -57,10 +55,6 @@ function updateCurrentSessionFromEvents(
     ) {
       return previous;
     }
-    const owner = {
-      session_id: context.sessionId, thread_id: previous.currentSession.thread_id ?? "",
-    };
-    const goalMutations = events.map((event) => goalStreamMutation(event, owner));
     const next = cloneMaps(previous);
     next.traceEvents = appendBoundedLiveTraceEvents(next.traceEvents, traceEvents);
     updateAttachmentSummariesFromTraces(
@@ -90,25 +84,6 @@ function updateCurrentSessionFromEvents(
         throw new Error("Job 开始事件缺少同归属的队列水位");
       }
       writeDispatchActiveJob(next.activeJobIdsBySession, dispatch, context.sessionCacheKey, next.pendingQueueVersions);
-    }
-    for (const mutation of goalMutations) {
-      if (mutation?.kind === "updated") {
-        if (mutation.goal.sync_version < next.currentGoalSyncVersion) continue;
-        next.currentGoal = applyVersionedValue(next.currentGoal, mutation.goal, (goal) => goal.sync_version);
-        next.currentGoalSessionId = context.sessionId;
-        next.currentGoalControlRevision = mutation.goal.control_revision;
-        next.currentGoalSyncVersion = mutation.goal.sync_version;
-        next.goalLoading = false;
-        next.goalError = null;
-      } else if (mutation?.kind === "cleared") {
-        if (mutation.syncVersion < next.currentGoalSyncVersion) continue;
-        next.currentGoal = null;
-        next.currentGoalSessionId = context.sessionId;
-        next.currentGoalControlRevision = mutation.controlRevision;
-        next.currentGoalSyncVersion = mutation.syncVersion;
-        next.goalLoading = false;
-        next.goalError = null;
-      }
     }
     return next;
   });
@@ -159,9 +134,7 @@ export function flushSessionStreamEventBatch(
   const pendingQueueChanged = events.some(
     (event, index) =>
       event.type === "status_change"
-      && tracePayloadString(traceEvents[index], "reason").startsWith(
-        "pending_request",
-      ),
+      && typeof rawTracePayload(traceEvents[index]).queue_snapshot_version === "number",
   );
   if (pendingQueueChanged) {
     void listThreadPendingRequests(

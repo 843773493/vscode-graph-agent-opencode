@@ -11,10 +11,10 @@ from pathlib import Path
 import pytest
 
 from app.schemas.internal_v2.goal import (
-    GoalJobAccountingDTO,
     GoalStatus,
     SessionGoalStateDTO,
 )
+from app.schemas.internal_v2.task_usage import TaskJobAccountingDTO
 from app.services.infrastructure.persistent_tasks.goal_import import import_legacy_goals
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
@@ -37,7 +37,7 @@ async def goal_case(empty_workspace_scope: tuple[str, Path]):
                                   status=GoalStatus.active, token_budget=100, tokens_used=7, time_used_seconds=3,
                                   revision=9, created_at=now, updated_at=now, last_accounted_job_id="job_a",
                                   last_continued_job_id="idle:original", accounted_jobs={
-                                      "job_a": GoalJobAccountingDTO(tokens=7, elapsed_seconds=3, time_closed=True),
+                                      "job_a": TaskJobAccountingDTO(tokens=7, elapsed_seconds=3, time_closed=True),
                                   })
             yield workspace, state, store, goal
 
@@ -260,3 +260,23 @@ async def test_control_commit_freezes_old_goal_and_replay_precedes_newer_slot_ve
         with pytest.raises(ClientStateConflictError, match="不同载荷"):
             await goal_service.clear(seed.session_id, expected_control_revision=newer.control_revision, operation_id="control-1")
     assert await goal_service.get(seed.session_id) == newer
+
+
+async def test_goal_snapshot_preserves_empty_and_retired_slot_versions(goal_case):
+    workspace, state, store, goal = goal_case
+    empty = store.goal_snapshot(goal.session_id)
+    assert empty.session_id == goal.session_id
+    assert empty.thread_id == goal.thread_id
+    assert empty.goal is None and empty.control_revision == empty.sync_version == 0
+    written = goal.model_copy(update={"control_revision": 2, "sync_version": 7})
+    store.goal_write(written)
+    snapshot = store.goal_snapshot(goal.session_id)
+    assert snapshot.goal is not None
+    assert snapshot.goal.goal_id == written.goal_id
+    assert snapshot.control_revision == 2 and snapshot.sync_version == 7
+    assert "accounted_jobs" not in snapshot.model_dump()["goal"]
+    assert store.goal_clear(goal.session_id, expected_control_revision=2)
+    restored = PersistentTaskStore(state, workspace_id=workspace.workspace_id, paths=workspace.resolver)
+    cleared = restored.goal_snapshot(goal.session_id)
+    assert cleared.goal is None and cleared.thread_id == goal.thread_id
+    assert cleared.control_revision == 3 and cleared.sync_version == 8

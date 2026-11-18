@@ -28,7 +28,9 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     EXECUTION_QUEUE_SCHEMA_SQL,
+    EXECUTION_SCHEDULING_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
+    TEAM_OBSERVATIONS_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
 )
 from app.services.orchestration.execution_queue import ExecutionQueueService
@@ -51,13 +53,13 @@ class QueueCase:
     session: str
     thread: str
 
-    def accept(self, text: str = "不可变正文", *, internal: bool = False):
+    def accept(self, text: str = "不可变正文", *, internal: bool = False, model: dict[str, str] | None = None):
         now = datetime.now(UTC)
         identity = JobService.reserve_user_execution_identity()
         message_id = create_prefixed_id("msg")
         binding = (InternalExecutionIntent(message_id, create_prefixed_id("exec"), identity.admission_idempotency_key)
                    if internal else identity)
-        frozen = ExecutionQueueInput(binding, message_id, "default", "frozen-provider", "after_turn",
+        frozen = ExecutionQueueInput(binding, message_id, "default", model, "after_turn",
                                      "frozen-gateway", "frozen-request", now.isoformat())
         if internal:
             prepared = internal_message_factory.build(kind="checkpoint_reminder", control=text)
@@ -72,8 +74,9 @@ class QueueCase:
 
     def legacy(self, records) -> Path:
         """只为显式旧格式迁移准备输入；关键 acceptance 仍由产品入口生成。"""
+        assert all(record.input.model is None for record in records), "v5 无法表达完整模型引用"
         controls = [self.store._control(record, position=index, snapshot_version=7).model_dump(mode="json")
-                    | {"provider_id": record.input.provider_id} for index, record in enumerate(records)]
+                    | {"provider_id": None} for index, record in enumerate(records)]
         path = self.workspace.session_dir(self.session) / "pending_requests.json"
         path.write_text(json.dumps({"version": 5, "request_count": len(controls), "snapshot_version": 7})
                         + "\n" + json.dumps(controls) + "\n")
@@ -104,12 +107,13 @@ async def queue_case(request: pytest.FixtureRequest) -> AsyncIterator[QueueCase]
 @pytest.mark.parametrize("internal", [False, True])
 async def test_cold_projection_reads_canonical_body_and_frozen_identity(queue_case: QueueCase, internal: bool):
     case = queue_case
-    record = case.accept(internal=internal)
+    model = {"provider_id": "frozen-provider", "model_id": "frozen-model"}
+    record = case.accept(internal=internal, model=model)
     loaded, = await case.store.load(case.session)
     assert (loaded.job_id, loaded.execution_binding, loaded.message_id) == (
         record.cursor.admission.job_id, record.input.execution_binding, record.input.message_id)
-    assert (loaded.gateway_id, loaded.request_id, loaded.message_metadata["boxteam_session_provider_id"]) == (
-        "frozen-gateway", "frozen-request", "frozen-provider")
+    assert (loaded.gateway_id, loaded.request_id, loaded.message_metadata["boxteam_session_model"]) == (
+        "frozen-gateway", "frozen-request", model)
     assert loaded.turn_id == record.cursor.admission.turn_id
     assert loaded.content == case.messages.accepted_job_message(loaded, display=False).content
     with case.saver._storage.storage.read_connection(case.session, case.thread) as connection:
@@ -248,6 +252,20 @@ async def test_v5_migration_reuses_original_admission_and_is_idempotent(queue_ca
     assert recovered.cursor == original.cursor and recovered.input == original.input
 
 
+async def test_v5_provider_only_selection_preserves_original_and_publishes_nothing(queue_case: QueueCase):
+    case = queue_case
+    path = case.legacy([case.accept(), case.accept("后继保留旧 Provider 选择")])
+    header, detail = path.read_text().split("\n", 1)
+    controls = json.loads(detail)
+    controls[-1]["provider_id"] = "frozen-provider"
+    path.write_text(header + "\n" + json.dumps(controls) + "\n")
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="pending v5 缺少完整模型引用"):
+        await case.store.migrate_schema(case.session)
+    assert path.read_bytes() == original
+    assert case.saver.execution_queue_snapshot(case.session, case.thread).records == ()
+
+
 @pytest.mark.parametrize("failure", ["version", "binding", "hash", "order", "identity"])
 async def test_v5_invalid_input_preserves_original_and_publishes_nothing(queue_case: QueueCase, failure: str):
     case = queue_case
@@ -297,6 +315,14 @@ async def test_schema_23_upgrade_then_v5_import_preserves_original_bytes(queue_c
     storage.migrate_schema(
         case.thread, session_id=case.session, to_version=26,
         migration_name="view_creation_025_026", migration_sql=VIEW_CREATION_MIGRATION_SQL,
+    )
+    storage.migrate_schema(
+        case.thread, session_id=case.session, to_version=27,
+        migration_name="execution_queue_026_027", migration_sql=EXECUTION_SCHEDULING_MIGRATION_SQL,
+    )
+    storage.migrate_schema(
+        case.thread, session_id=case.session, to_version=28,
+        migration_name="team_observations_027_028", migration_sql=TEAM_OBSERVATIONS_MIGRATION_SQL,
     )
     await case.store.migrate_schema(case.session)
     assert not path.exists() and storage.jsonl_path(case.session, thread_id=case.thread).read_bytes() == original

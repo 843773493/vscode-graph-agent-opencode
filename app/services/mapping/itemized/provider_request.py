@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.model_source import ModelSource
 from app.domain.itemized.records import RuntimeNoticePayload
 from app.services.mapping.itemized.content_blocks import (
     iter_direct_content_blocks,
@@ -318,13 +319,6 @@ def _without_server_state(item: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _source_provider(response_metadata: Mapping[str, Any] | None) -> str | None:
-    if response_metadata is None:
-        return None
-    provider = response_metadata.get("provider_id")
-    return provider if isinstance(provider, str) and provider else None
-
-
 def _reasoning_item_for_replay(
     block: Mapping[str, Any],
     *,
@@ -341,26 +335,32 @@ def _reasoning_item_for_replay(
 def project_ai_message_content(
     content: Any,
     *,
-    target_provider: str | None,
+    target_source: ModelSource | None,
     target_capabilities: set[str] | frozenset[str],
     response_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """按目标 provider 能力投影已规范化的 AIMessage content。"""
     blocks = iter_direct_content_blocks(content)
-    source_provider = _source_provider(response_metadata)
-    same_provider = (
-        isinstance(source_provider, str)
-        and isinstance(target_provider, str)
-        and source_provider == target_provider
-    )
+    source = ModelSource.from_dict(response_metadata.get("model_source")) if response_metadata is not None else None
+    same_source = target_source is not None and source == target_source
     can_replay_encrypted = (
-        "encrypted_reasoning_replay" in target_capabilities and same_provider
+        "encrypted_reasoning_replay" in target_capabilities and same_source
     )
 
     visible_blocks: list[dict[str, Any]] = []
     reasoning_content: list[str] = []
     thinking_blocks: list[dict[str, Any]] = []
     reasoning_items: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, str]] = []
+
+    def private_not_sent() -> None:
+        if source is None or target_source is None:
+            reason = "missing_model_source"
+        elif source != target_source:
+            reason = "different_model_source"
+        else:
+            reason = "unsupported_reasoning_replay"
+        diagnostics.append({"status": "not_sent", "detail": reason})
 
     def add_reasoning_item(item: Mapping[str, Any]) -> None:
         text = reasoning_content_text(item)
@@ -373,12 +373,16 @@ def project_ai_message_content(
             item,
             can_replay_encrypted=can_replay_encrypted,
         )
+        if item.get("encrypted_content") and not can_replay_encrypted:
+            private_not_sent()
         if "reasoning_items" in target_capabilities and (
             projected_item.get("content")
             or projected_item.get("summary")
             or projected_item.get("encrypted_content")
         ):
             reasoning_items.append(projected_item)
+        elif summary and "reasoning_content_replay" not in target_capabilities:
+            visible_blocks.append({"type": "text", "text": summary})
 
     for block in blocks:
         block_type = block.get("type")
@@ -403,9 +407,20 @@ def project_ai_message_content(
         if block_type in {"thinking", "redacted_thinking"}:
             if (
                 "thinking_blocks" in target_capabilities
+                and same_source
                 and (block_type != "redacted_thinking" or can_replay_encrypted)
             ):
                 thinking_blocks.append(copy.deepcopy(block))
+            else:
+                if block_type == "thinking":
+                    text = block.get("thinking")
+                    if isinstance(text, str) and text:
+                        if "reasoning_content_replay" in target_capabilities:
+                            reasoning_content.append(text)
+                        else:
+                            visible_blocks.append({"type": "text", "text": text})
+                if block.get("signature") or block_type == "redacted_thinking":
+                    private_not_sent()
             continue
 
     if isinstance(content, str):
@@ -415,7 +430,7 @@ def project_ai_message_content(
     else:
         visible = visible_blocks
 
-    result: dict[str, Any] = {"content": visible}
+    result: dict[str, Any] = {"content": visible, "diagnostics": diagnostics}
     if "reasoning_content_replay" in target_capabilities and reasoning_content:
         result["reasoning_content"] = "\n".join(reasoning_content)
     if "thinking_blocks" in target_capabilities and thinking_blocks:

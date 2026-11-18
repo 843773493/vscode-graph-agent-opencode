@@ -12,9 +12,22 @@
     "application_root",
     "config_resources",
     "skill_resources",
+    "bundled_plugins",
     "node"
   ],
   "properties": {
+    "bundled_plugins": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["package_id", "package_version", "archive"],
+        "properties": {
+          "package_id": {"type": "string", "minLength": 1},
+          "package_version": {"type": "string", "minLength": 1},
+          "archive": {"type": "string", "minLength": 1}
+        }
+      }
+    },
     "schema_version": {
       "const": 1
     },

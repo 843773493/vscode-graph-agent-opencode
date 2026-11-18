@@ -14,6 +14,9 @@ from app.core.identifier import create_uuid_hex
 from app.core.sqlite_state import load_sql
 from app.core.sqlite_state import utc_now_text as _now
 from app.domain.itemized.errors import FormatDispatchError
+from app.services.infrastructure.rollout_context.checkpoint.durable.source_activation import (
+    migrate_team_source_observations,
+)
 from app.services.infrastructure.rollout_context.storage import (
     schema as storage_version,
 )
@@ -42,12 +45,14 @@ from app.services.infrastructure.rollout_context.storage.schema import (
     CONTEXT_CONTRIBUTIONS_OVERLAY_INDEX_SQL,
     CONTEXT_CONTRIBUTIONS_SOURCE_REF_INDEX_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
+    EXECUTION_SCHEDULING_MIGRATION_SQL,
     ITEM_CATALOG_LOCATOR_INDEX_SQL,
     ITEM_CATALOG_MODEL_TOOL_INDEX_SQL,
     MESSAGES_VERSION_MIGRATION_SQL,
     MODEL_CALLS_ASSEMBLY_INDEX_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
     SOURCE_OVERLAY_LOCATOR_INDEXES_SQL,
+    TEAM_OBSERVATIONS_MIGRATION_SQL,
     TOOL_CALLS_MESSAGE_INDEX_SQL,
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
@@ -202,7 +207,7 @@ class RolloutMaintenanceOwner(
                     )
                 if (to_version > storage_version.ROLLOUT_SCHEMA_VERSION
                         or (to_version != storage_version.ROLLOUT_SCHEMA_VERSION
-                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25)})):
+                            and (current_version, to_version) not in {(18, 19), (19, 20), (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26), (26, 27)})):
                     raise RuntimeError(
                         "当前程序尚未声明目标 SQLite schema 版本: "
                         f"target={to_version}, supported={storage_version.ROLLOUT_SCHEMA_VERSION}"
@@ -264,7 +269,16 @@ class RolloutMaintenanceOwner(
                         raise ValueError("schema migration 24→25 必须使用登记的 Skill 选择 SQL")
                     if (current_version, to_version) == (25, 26) and migration_sql != VIEW_CREATION_MIGRATION_SQL:
                         raise ValueError("schema migration 25→26 必须使用登记的 view 创建顺序 SQL")
+                    if (current_version, to_version) == (26, 27):
+                        if migration_sql != EXECUTION_SCHEDULING_MIGRATION_SQL:
+                            raise ValueError("schema migration 26→27 必须使用登记的执行调度 SQL")
+                        if connection.execute("SELECT 1 FROM execution_queue WHERE phase<>'terminal' LIMIT 1").fetchone():
+                            raise RuntimeError("升级前须在原运行时排空执行队列，不能重解释已冻结的输入上下文")
+                    if (current_version, to_version) == (27, 28) and migration_sql != TEAM_OBSERVATIONS_MIGRATION_SQL:
+                        raise ValueError("schema migration 27→28 必须使用登记的团队投递回执 SQL")
                     execute_atomic_schema_sql(connection, migration_sql)
+                    if (current_version, to_version) == (27, 28):
+                        migrate_team_source_observations(connection)
                     if (current_version, to_version) == (21, 22):
                         migrate_assembly_content(connection)
                     if (current_version, to_version) == (22, 23):

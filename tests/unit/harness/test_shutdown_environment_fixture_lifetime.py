@@ -43,15 +43,16 @@ def shutdown_lifetime(
     original_config_bytes = b"// Preserve original formatting\n{}\n"
     config_path.write_bytes(original_config_bytes)
     config = {
-        "llm": {"providers": [
-            {"id": "primary", "model": "chat-fixture", "api_mode": "chat_completions"},
-            {"id": "backup_3", "model": "responses-fixture", "api_mode": "responses"},
-        ]},
-        "agents": {"default": {"model": {"fallback_providers": ["backup_3"]}}},
+        "llm": {"providers": {
+            "primary": {"defaults": {"api_mode": "chat_completions"}, "models": {"default": {"model": "chat-fixture"}}},
+            "backup_3": {"defaults": {"api_mode": "responses"}, "models": {"default": {"model": "responses-fixture"}}},
+        }},
+        "agents": {"default": {"model": {"fallbacks": [{"provider_id": "backup_3", "model_id": "default"}]}}},
     }
     # 只验证装具资源归属；配置解析与schema校验是明确的替身边界。
     monkeypatch.setattr(shutdown_case, "read_jsonc_object", Mock(return_value=config))
     monkeypatch.setattr(shutdown_case, "validate_config", Mock())
+    monkeypatch.setattr(shutdown_case, "integration_port_block_for_file", Mock(return_value=Mock(port=Mock(return_value=9999))))
     original_open, original_close = os.open, os.close
     owned_descriptors: list[int] = []
 
@@ -62,7 +63,7 @@ def shutdown_lifetime(
 
     monkeypatch.setattr(shutdown_case.os, "open", track_open)
     fixture = shutdown_case.shutdown_environment.__wrapped__(
-        str(config_path), str(tmp_path / "workspace"),
+        request, str(config_path), str(tmp_path / "workspace"),
         shutdown_case.shutdown_cassette.__wrapped__(request.param), request.param,
     )
     state = ShutdownEnvironmentLifetime(
@@ -89,13 +90,13 @@ def test_shutdown_environment_exposes_live_short_path_then_restores_exact_config
     assert Path(expected_path).resolve() == state.temporary_directory
     assert not descriptor_released(descriptor)
     config = json.loads(state.config_path.read_text())
-    primary = config["llm"]["providers"][0]
-    assert primary["endpoint"] == (
-        "https://www.cctq.ai/v1" if primary["api_mode"] == "responses" else "https://opencode.ai/zen/v1"
+    primary = config["llm"]["providers"]["primary"]
+    assert primary["defaults"]["endpoint"] == (
+        "https://www.cctq.ai/v1" if primary["defaults"]["api_mode"] == "responses" else "https://opencode.ai/zen/v1"
     )
-    assert primary["api_key"] == "fixture-key"
-    assert primary["model"] == ("gpt-5.6-luna" if primary["api_mode"] == "responses" else "big-pickle")
-    assert config["agents"]["default"]["model"]["fallback_providers"] == []
+    assert primary["defaults"]["api_key"] == ""
+    assert primary["models"]["default"]["model"] == ("gpt-5.6-luna" if primary["defaults"]["api_mode"] == "responses" else "big-pickle")
+    assert config["agents"]["default"]["model"]["fallbacks"] == []
 
     state.fixture.close()
 

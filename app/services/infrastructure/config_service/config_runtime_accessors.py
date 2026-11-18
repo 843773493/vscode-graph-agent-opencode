@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -275,7 +276,10 @@ class ConfigRuntimeAccessorsMixin:
         return {host_key: host, port_key: port}
 
     def get_gateway_connection_url(self) -> str:
-        value = self._read_runtime_value(("gateway", "connection", "url"))
+        # Launcher 绑定的地址属于当前实例，配置默认地址不能把回调发到另一套 Gateway。
+        value = os.environ.get("BOXTEAM_GATEWAY_URL")
+        if value is None:
+            value = self._read_runtime_value(("gateway", "connection", "url"))
         if not isinstance(value, str) or not value.strip():
             raise ValueError("runtime.gateway.connection.url 必须是非空字符串")
         return value

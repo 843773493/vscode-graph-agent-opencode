@@ -2,7 +2,7 @@ import { t } from '../../../shared/core/i18n/index.js';
 import { AbstractDebugAdapter } from '../../upstream/src/vs/workbench/contrib/debug/common/abstractDebugAdapter.js';
 import type { IConfig, IDebugSession } from '../../upstream/src/vs/workbench/contrib/debug/common/debug.js';
 import { URI } from '../../upstream/src/vs/base/common/uri.js';
-import { getGatewayToken, onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
+import { formatFailureContext, getGatewayToken, onGatewayTokenInvalidated, type HttpFailureContext } from '../../../web/src/api/http.js';
 import type { NodeDebugDebuggerContributionDTO, NodeDebugStartRequest, NodeDebugStateDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { gateway, type ThreadOwner } from '../agentApi.js';
 import { workspaceFileSource, workspaceFileUri } from '../workspaceFiles.js';
@@ -67,27 +67,36 @@ export class PluginDebugAdapter extends AbstractDebugAdapter {
         const value: unknown = JSON.parse(event.data);
         this.acceptMessage(this.projectSources(value, true) as DebugProtocol.ProtocolMessage);
       } catch (error) {
-        this._onError.fire(error instanceof Error ? error : new Error(String(error)));
+        this._onError.fire(this.failure('websocket_receive', error instanceof Error ? error.message : String(error), error));
         socket.close(1002, 'DAP 消息无效');
       }
     });
     socket.addEventListener('close', event => {
       this.releaseToken?.(); this.releaseToken = undefined;
-      if (!this.stopped) this._onError.fire(new Error(t('workbench.debug.connectionClosed', event.code, event.reason)));
+      if (!this.stopped) this._onError.fire(this.failure('websocket_closed', t('workbench.debug.connectionClosed', event.code, event.reason)));
       this._onExit.fire(null);
     }, { once: true });
     await new Promise<void>((resolve, reject) => {
       const finish = (error?: Error) => { clearTimeout(timer); socket.removeEventListener('open', open); socket.removeEventListener('close', close); socket.removeEventListener('error', failed); error ? reject(error) : resolve(); };
       const open = () => finish();
-      const close = (event: CloseEvent) => finish(new Error(t('workbench.debug.connectionNotOpened', event.code, event.reason)));
-      const failed = () => finish(new Error(t('workbench.debug.connectionFailed')));
-      const timer = setTimeout(() => { finish(new Error(t('workbench.debug.connectionTimeout'))); socket.close(); }, 30_000);
+      const close = (event: CloseEvent) => finish(this.failure('websocket_connect', t('workbench.debug.connectionNotOpened', event.code, event.reason)));
+      const failed = () => finish(this.failure('websocket_connect', t('workbench.debug.connectionFailed')));
+      const timer = setTimeout(() => { finish(this.failure('websocket_connect', t('workbench.debug.connectionTimeout'))); socket.close(); }, 30_000);
       socket.addEventListener('open', open, { once: true }); socket.addEventListener('close', close, { once: true }); socket.addEventListener('error', failed, { once: true });
     });
   }
 
+  private failure(stage: string, message: string, cause?: unknown): Error & { context: HttpFailureContext } {
+    const { owner, debugger: binding } = this.context;
+    const context: HttpFailureContext = { source: { component: 'workbench' }, stage,
+      target: { gateway_id: owner.gatewayId, workspace_id: owner.workspaceId, session_id: owner.sessionId,
+        thread_id: owner.threadId, debugger_registration_id: binding.registration_id } };
+    // 浏览器不提供 WebSocket 握手状态和响应头，只标明已知边界，不推断 Gateway／Backend 谁故障。
+    return Object.assign(new Error(message + formatFailureContext(context), { cause }), { context });
+  }
+
   sendMessage(message: DebugProtocol.ProtocolMessage): void {
-    if (this.stopped || this.socket?.readyState !== WebSocket.OPEN) throw new Error(t('workbench.debug.connectionUnavailable'));
+    if (this.stopped || this.socket?.readyState !== WebSocket.OPEN) throw this.failure('websocket_send', t('workbench.debug.connectionUnavailable'));
     this.socket.send(JSON.stringify(this.projectSources(message, false)));
   }
 
@@ -119,7 +128,7 @@ export class PluginDebugAdapter extends AbstractDebugAdapter {
       const closed = () => { clearTimeout(timer); resolve(); };
       const timer = setTimeout(() => {
         socket.removeEventListener('close', closed);
-        reject(new Error(t('workbench.debug.closeTimeout')));
+        reject(this.failure('websocket_close', t('workbench.debug.closeTimeout')));
       }, 5_000);
       socket.addEventListener('close', closed, { once: true });
       socket.close(1000, '调试界面断开');

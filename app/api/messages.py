@@ -24,7 +24,10 @@ from app.api.deps import (
 from app.api.errors import not_found_http_error, state_conflict_http_error
 from app.core.exceptions import NotFoundError
 from app.core.session_lifecycle_gate import SessionDeletionPendingError
-from app.domain.itemized.execution_queue import MessageSubmissionConflictError
+from app.domain.itemized.execution_queue import (
+    MessageSubmissionConflictError,
+    QueueOrderConflictError,
+)
 from app.schemas.canonical_params import CanonicalSessionId, CanonicalThreadId
 from app.schemas.internal_v2.common import APIResponse, CursorPage
 from app.schemas.internal_v2.communication import (
@@ -44,6 +47,7 @@ from app.schemas.internal_v2.message import (
 from app.schemas.internal_v2.pending_request import (
     PendingRequestListDTO,
     PendingRequestPolicyUpdateRequest,
+    PendingRequestReorderRequest,
 )
 from app.schemas.internal_v2.turn import ThreadAttachmentListDTO
 from app.services.business.job.service import JobAdmissionClosedError
@@ -59,6 +63,25 @@ from app.services.orchestration.session_turn_replay_service import (
 
 router = APIRouter(prefix="/sessions", tags=["messages"])
 logger = logging.getLogger(__name__)
+
+
+@router.put("/{session_id}/threads/{thread_id}/pending-requests/order", response_model=APIResponse[PendingRequestListDTO])
+async def reorder_pending_requests(
+    session_id: CanonicalSessionId, thread_id: CanonicalThreadId, payload: PendingRequestReorderRequest,
+    _: Annotated[str, Depends(verify_local_token)], request_id: Annotated[str, Depends(get_request_id)],
+    jobs: Annotated[JobServiceProtocol, Depends(get_job_service)],
+    sessions: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
+):
+    try:
+        async with sessions.session_read_admission(session_id):
+            await sessions.resolve_thread(session_id, thread_id)
+            snapshot = await jobs.reorder_pending(session_id, thread_id, message_ids=tuple(payload.message_ids),
+                                                  expected_thread_revision=payload.expected_thread_revision)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except (QueueOrderConflictError, SessionDeletionPendingError) as error:
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=snapshot, request_id=request_id)
 
 
 @router.get(
@@ -95,10 +118,10 @@ async def list_pending_requests(
 )
 async def list_main_thread_pending_requests(
     session_id: CanonicalSessionId,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
-    session_service: SessionThreadReaderProtocol = Depends(get_session_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
+    session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -119,9 +142,9 @@ async def list_main_thread_pending_requests(
 async def remove_pending_request(
     session_id: CanonicalSessionId,
     message_id: str,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
 ):
     try:
         result = await job_service.remove_pending(session_id, message_id)
@@ -170,9 +193,9 @@ async def update_pending_request_policy(
     session_id: CanonicalSessionId,
     message_id: str,
     payload: PendingRequestPolicyUpdateRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    job_service: JobServiceProtocol = Depends(get_job_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
 ):
     try:
         result = await job_service.update_pending_policy(
@@ -198,9 +221,9 @@ async def update_pending_request_policy(
 async def create_message_and_run(
     session_id: CanonicalSessionId,
     payload: MessageRunRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    session_orchestrator: SessionMessageOrchestrator = Depends(get_session_orchestrator),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_orchestrator: Annotated[SessionMessageOrchestrator, Depends(get_session_orchestrator)],
 ):
     try:
         result = await session_orchestrator.submit_user_message(session_id, payload)
@@ -340,11 +363,11 @@ async def observe_communication(
 async def list_messages(
     session_id: CanonicalSessionId,
     session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    message_service: Annotated[MessageService, Depends(get_message_service)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    message_service: MessageService = Depends(get_message_service),
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -391,12 +414,12 @@ async def list_thread_attachments(
 @router.get("/{session_id}/attachments/content", summary="读取会话附件")
 async def get_session_attachment_content(
     session_id: CanonicalSessionId,
+    _: Annotated[str, Depends(verify_local_token)],
+    attachment_store: Annotated[AttachmentBlobStore, Depends(get_attachment_blob_store)],
+    job_service: Annotated[JobServiceProtocol, Depends(get_job_service)],
     file_id: str = Query(min_length=1),
     variant: str = Query(default="original", pattern="^(original|thumbnail)$"),
     max_edge: int = Query(default=512, ge=64, le=1024),
-    _: str = Depends(verify_local_token),
-    attachment_store: AttachmentBlobStore = Depends(get_attachment_blob_store),
-    job_service: JobServiceProtocol = Depends(get_job_service),
 ) -> Response:
     async def read_content():
         return (
@@ -435,9 +458,9 @@ async def get_session_attachment_content(
 async def get_agent_state_messages(
     session_id: CanonicalSessionId,
     session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    message_service: MessageService = Depends(get_message_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    message_service: Annotated[MessageService, Depends(get_message_service)],
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -458,9 +481,9 @@ async def get_message(
     session_id: CanonicalSessionId,
     message_id: str,
     session_service: Annotated[SessionThreadReaderProtocol, Depends(get_session_service)],
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    message_service: MessageService = Depends(get_message_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    message_service: Annotated[MessageService, Depends(get_message_service)],
 ):
     try:
         async with session_service.session_read_admission(session_id):
@@ -488,9 +511,9 @@ async def replay_message_turn(
     session_id: CanonicalSessionId,
     message_id: str,
     payload: MessageReplayRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    replay_service: SessionTurnReplayService = Depends(get_session_turn_replay_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    replay_service: Annotated[SessionTurnReplayService, Depends(get_session_turn_replay_service)],
 ):
     try:
         result = await replay_service.replay_message(session_id, message_id, payload)
@@ -517,9 +540,9 @@ async def replay_turn(
     session_id: CanonicalSessionId,
     turn_id: str,
     payload: MessageReplayRequest,
-    _: str = Depends(verify_local_token),
-    request_id: str = Depends(get_request_id),
-    replay_service: SessionTurnReplayService = Depends(get_session_turn_replay_service),
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    replay_service: Annotated[SessionTurnReplayService, Depends(get_session_turn_replay_service)],
 ):
     try:
         result = await replay_service.replay_turn(session_id, turn_id, payload)

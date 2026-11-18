@@ -9,7 +9,11 @@ import pytest
 from app.core.path_utils import get_session_path_resolver
 from app.domain.background_work import (
     BackgroundTaskDescriptor,
+    BackgroundTaskHandle,
     BackgroundTaskStep,
+)
+from app.services.business.session_resources.providers import (
+    BackgroundTaskResourceProvider,
 )
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
 from app.services.orchestration.background_work.mailbox import BackgroundMailbox
@@ -109,18 +113,25 @@ async def test_unknown_external_effect_is_not_replayed_or_deleted(background_cas
 @pytest.mark.asyncio
 async def test_time_emitter_resumes_exact_checkpoint_without_duplicate_messages(background_case):
     store, session_id, thread_id, _handler, registry_factory = background_case
-    registry = registry_factory((SystemTimeEmitterHandler(),))
+    first_committed, hold_second = asyncio.Event(), asyncio.Event()
+
+    class PausedTimeEmitter(SystemTimeEmitterHandler):
+        async def step(self, handle: BackgroundTaskHandle) -> BackgroundTaskStep:
+            if handle.checkpoint["next_index"] == 1:
+                first_committed.set()
+                await hold_second.wait()
+            return await super().step(handle)
+
+    registry = registry_factory((PausedTimeEmitter(),))
     descriptor = BackgroundTaskDescriptor(kind="emit_system_time_messages", version=1, payload={
         "interval_seconds": 0.05, "message_count": 3, "source_id": "clock-stream",
         "started_at": datetime.now(UTC).isoformat(),
     })
     handle = await registry.spawn(session_id=session_id, thread_id=thread_id, agent_id="agent", task_id="bgt_resume", descriptor=descriptor)
     bus = BackgroundMailbox(store=store)
-    for _ in range(100):
-        messages = await bus.list_messages(session_id, thread_id, "agent")
-        if len(messages) == 1:
-            break
-        await asyncio.sleep(0.001)
+    # 第二次 step 开始前，第一条消息与 checkpoint 已在同一事务提交。
+    await asyncio.wait_for(first_committed.wait(), 5)
+    messages = await bus.list_messages(session_id, thread_id, "agent")
     assert len(messages) == 1
     await registry.stop()
     assert registry.get_handle(session_id, handle.task_id).checkpoint["next_index"] == 1
@@ -136,3 +147,31 @@ async def test_time_emitter_resumes_exact_checkpoint_without_duplicate_messages(
     assert len(completed.metadata["result"]["messages"]) == 3
     retry = await restarted.spawn(session_id=session_id, thread_id=thread_id, agent_id="agent", task_id="bgt_resume", descriptor=descriptor)
     assert retry.to_dict() == completed.to_dict()
+
+    cold_provider = BackgroundTaskResourceProvider(task_registry=registry_factory())
+    listed = await cold_provider.list_resources(session_id)
+    assert [item.resource_id for item in listed] == [handle.task_id]
+    assert "result" not in listed[0].metadata
+    detail = await cold_provider.get_resource(session_id, handle.task_id)
+    assert detail.metadata["result"] == completed.metadata["result"]
+    assert await cold_provider.list_resources(session_id, include_history=False) == []
+
+
+@pytest.mark.asyncio
+async def test_completed_task_recovers_unsettled_lease_without_reexecution(background_case):
+    store, session_id, thread_id, handler, registry_factory = background_case
+    with store.control(session_id) as control:
+        handle = control.create_background_task(task_id="bgt_unsettled", session_id=session_id,
+            thread_id=thread_id, agent_id="agent",
+            descriptor=BackgroundTaskDescriptor(kind=handler.kind, version=1, payload={}),
+            checkpoint={"done": False}, preimage_hash="a" * 64)
+        handle = control.claim_background_task(handle.task_id, expected_token=0, runtime_generation=1)
+        handle = control.commit_background_step(handle.task_id, token=handle.fencing_token,
+            step=BackgroundTaskStep(checkpoint={"done": True}, completed=True, result={"value": "原结果"}))
+        assert len(control.list_non_terminal_leases()) == 1
+    restarted = registry_factory()
+    await restarted.start()
+    assert handler.calls == 0
+    assert restarted.get_handle(session_id, handle.task_id).to_dict() == handle.to_dict()
+    with store.control(session_id, read_only=True) as control:
+        assert control.list_non_terminal_leases() == ()

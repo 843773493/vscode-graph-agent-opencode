@@ -28,6 +28,10 @@ server/
 
 普通列表统一使用 Session 摘要，保留状态、命令、版本和输出游标，不携带 `buffer` 或 `display_buffer`，也不为列表过滤完整输出。原始缓冲仍由同一 Session 持有并持久化；单条详情、增量读取和 WebSocket 快照继续提供正文。
 
+列表的 `resource_id` 查询参数可重复；指定时直接按 Map 取所选 Session，不遍历或计算其它资源摘要。缺失资源返回空清单，由原 Python owner 保留未核实语义，不能据此推断已停止或删除。
+
+`/api/terminals/events` 在首次订阅及已提交的资源/命令状态变化时通知，不携带清单或输出正文；PTY输出、消费游标、普通交互输入和心跳不触发清单补读。断线后读取当前快照，慢订阅者断流，服务关闭前释放全部状态订阅；状态通知不成为恢复事实。
+
 ## 身份与传输授权
 
 `TerminalManager.terminalsById`按`terminal_id`保存`TerminalSession`资源实例，含仍保留的非运行记录；它不是聊天Session或Thread集合。管理器内部资源集合与跨层业务身份用具体资源名区分，不保留旧字段别名。

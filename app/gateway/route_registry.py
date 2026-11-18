@@ -17,6 +17,7 @@ from app.gateway.routes import (
     native_directories,
     resource_addresses,
     search,
+    secrets,
     skill_sources,
     ui_assets,
     workspaces,
@@ -47,6 +48,7 @@ ROUTE_MODULES = (
     resource_addresses,
     search,
     diagnostic_logs,
+    secrets,
 )
 
 

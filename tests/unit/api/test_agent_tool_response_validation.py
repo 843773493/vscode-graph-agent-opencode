@@ -40,11 +40,11 @@ CASES = [
     ),
     pytest.param(
         "PUT",
-        "/agents/default/workspace-default-provider",
-        {"provider_id": "primary"},
-        "set_provider",
+        "/agents/default/workspace-default-model",
+        {"model": {"provider_id": "primary", "model_id": "general"}},
+        "set_model",
         404,
-        id="provider-default",
+        id="model-default",
     ),
     pytest.param("GET", "/tools", None, "list", 400, id="tool-list"),
     pytest.param("GET", "/tools/read_file", None, "get", 400, id="tool-get"),
@@ -74,10 +74,10 @@ class BoundaryService:
     async def set_workspace_default_agent(self, agent_id: str) -> NoReturn:
         self._fail("set_agent")
 
-    async def set_workspace_default_provider(
-        self, agent_id: str, provider_id: str
+    async def set_workspace_default_model(
+        self, agent_id: str, model: object
     ) -> NoReturn:
-        self._fail("set_provider")
+        self._fail("set_model")
 
     async def start(self, *, tool_name: str, request: object) -> NoReturn:
         self._fail("start")
@@ -135,7 +135,7 @@ def test_internal_validation_is_server_failure_without_echo(
                 "model": "model",
                 "tools": [],
                 "capabilities": [],
-                "providers": [],
+                "models": [],
             }
         )
     service.error = captured.value
@@ -186,8 +186,8 @@ def test_business_rejection_keeps_status_and_request_identity(
     [
         (
             "PUT",
-            "/agents/default/workspace-default-provider",
-            {"provider_id": "primary"},
+            "/agents/default/workspace-default-model",
+            {"model": {"provider_id": "primary", "model_id": "general"}},
             TypeError("默认配置结构损坏"),
             409,
         ),
@@ -215,7 +215,7 @@ def test_specific_business_error_keeps_existing_classification(
     ("path", "payload"),
     [
         ("/agents/workspace-default", {}),
-        ("/agents/default/workspace-default-provider", {}),
+        ("/agents/default/workspace-default-model", {}),
         ("/tools/read_file/tests", {"repetitions": 0}),
     ],
 )

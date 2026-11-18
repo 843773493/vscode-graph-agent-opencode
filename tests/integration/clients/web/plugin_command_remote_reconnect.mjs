@@ -112,7 +112,7 @@ try {
   receipt.phase = 'open-connection-manager';
   await page.getByRole('button', { name: '添加工作区', exact: true }).click();
   await page.getByRole('button', { name: /连接新的远程主机/ }).click();
-  await expect(page.getByRole('dialog', { name: 'Gateway 控制中心' })).toBeVisible();
+  await expect(page.locator('.settings-editor:visible .settings-management-view')).toBeVisible();
   const reconnectButton = page.getByRole('button', { name: '重新连接', exact: true });
   await expect(reconnectButton).toBeVisible();
   await reconnectButton.click();

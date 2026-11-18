@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.tool_testing.store import ToolTestStore
 from tests.support.diagnostic_failures import DiagnosticFailure
 from tests.support.diagnostic_failures import (
@@ -49,7 +50,7 @@ def test_store_io_failure_keeps_original_in_diagnostics(
     store.reset_tool("apply_patch")
     payload = {"run_id": "run_a", "tool_name": "apply_patch", "created_at": "1"}
     store.write_run("run_a", payload)
-    case = store.prepare_case_dir(tool_name="apply_patch", provider_id="provider", case_id="case")
+    case = store.prepare_case_dir(tool_name="apply_patch", model_ref=ModelReferenceDTO(provider_id="provider", model_id="general"), case_id="case")
     original = PermissionError(13, f"原生 I/O 错误 {native}", native)
     if sink_fails:
         diagnostic_sink.primary = original
@@ -65,8 +66,8 @@ def test_store_io_failure_keeps_original_in_diagnostics(
     operation = {
         "initialize": lambda: ToolTestStore(root=store.root),
         "reset_tool": lambda: store.reset_tool("apply_patch"),
-        "prepare_case": lambda: store.prepare_case_dir(tool_name="apply_patch", provider_id="provider", case_id="case"),
-        "write_case": lambda: store.write_case_json(tool_name="apply_patch", provider_id="provider", case_id="case", file_name="result.json", payload={}),
+        "prepare_case": lambda: store.prepare_case_dir(tool_name="apply_patch", model_ref=ModelReferenceDTO(provider_id="provider", model_id="general"), case_id="case"),
+        "write_case": lambda: store.write_case_json(tool_name="apply_patch", model_ref=ModelReferenceDTO(provider_id="provider", model_id="general"), case_id="case", file_name="result.json", payload={}),
         "write_run": lambda: store.write_run("run_a", payload),
         "read_run": lambda: store.read_run("run_a"),
         "list_runs": lambda: store.list_runs(),

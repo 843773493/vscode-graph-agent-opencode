@@ -1,5 +1,7 @@
 # 目录用途
 
+`user_questions.py` 另承载主 Agent 的非阻塞 Markdown 留言；归精确 Thread 原 rollout SQLite，通知复用进程内 EventChannel。留言不参与通信等待／审批状态；普通 Composer 回复不绑定答案。
+
 存放跨 Session 通信（send/read/wait）的业务准入与观察 owner：canonical source/target main binding、outbox/inbox 幂等与因果裁决、冻结消费投影、wait selector 与可恢复 DurableDeadline。对应 OpenSpec add-context-injection-lifecycle 任务 4.7（E03）。
 
 # 可修改内容

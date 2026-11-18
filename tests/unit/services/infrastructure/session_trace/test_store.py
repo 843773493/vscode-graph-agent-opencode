@@ -15,6 +15,8 @@ from app.schemas.event import (
     AgentStartPayload,
     JobCreatedEvent,
     JobCreatedPayload,
+    JobFailedEvent,
+    JobFailedPayload,
 )
 from app.services.infrastructure.session_trace.trace_cursor import TraceCursorGoneError
 from app.services.infrastructure.session_trace.trace_page import (
@@ -22,8 +24,9 @@ from app.services.infrastructure.session_trace.trace_page import (
 )
 
 
-def test_offline_trace_upgrade_preserves_events_and_builds_thread_index(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("source_version", [1, 2])
+def test_offline_trace_upgrade_preserves_events_and_builds_indexes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_version: int,
 ) -> None:
     from app.core.sqlite_state import SQLiteStateDatabase
     from app.services.infrastructure.session_trace.trace_database import (
@@ -37,7 +40,7 @@ def test_offline_trace_upgrade_preserves_events_and_builds_thread_index(
         event_id="evt_trace_upgrade", job_id="job_trace_upgrade", timestamp=datetime.now(UTC),
         payload=JobCreatedPayload(session_id=session_id, thread_id="thread_trace_upgrade", message="保留", agent_id="default"),
     ).model_dump_json() + "\n"
-    with (SQLiteStateDatabase(path=path, schema_version=1, migrations=_migrations()[:1]) as old,
+    with (SQLiteStateDatabase(path=path, schema_version=source_version, migrations=_migrations()[:source_version]) as old,
           closing(old.connection()) as connection):
         connection.execute("INSERT INTO trace_events(start, raw) VALUES (?, ?)", (0, raw))
 
@@ -53,16 +56,16 @@ def test_offline_trace_upgrade_preserves_events_and_builds_thread_index(
         assert tuple(connection.execute("SELECT start, raw, thread_id FROM trace_events").fetchone()) == (
             0, raw, "thread_trace_upgrade",
         )
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 2
-    backups = list(tmp_path.glob("trace.sqlite.v1-*.bak"))
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 3
+    backups = list(tmp_path.glob(f"trace.sqlite.v{source_version}-*.bak"))
     assert len(backups) == 1
     with closing(sqlite3.connect(backups[0])) as connection:
         assert connection.execute("SELECT start, raw FROM trace_events").fetchall() == [(0, raw)]
-        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 1
-        assert "thread_id" not in {row[1] for row in connection.execute("PRAGMA table_info(trace_events)")}
+        assert connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == source_version
+        assert ("thread_id" in {row[1] for row in connection.execute("PRAGMA table_info(trace_events)")}) == (source_version >= 2)
 
     runpy.run_module(entry, run_name="__main__")
-    assert list(tmp_path.glob("trace.sqlite.v1-*.bak")) == backups
+    assert list(tmp_path.glob(f"trace.sqlite.v{source_version}-*.bak")) == backups
 
 
 @pytest.mark.asyncio
@@ -83,6 +86,65 @@ async def test_store_append_and_read(tmp_path: Path, trace_event_store_factory):
     assert len(events) == 1
     assert events[0].event_id == "evt_1"
     assert events[0].type == "agent_start"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("release", ["terminal", "session", "store", "slot_replacement"])
+async def test_writer_release_preserves_committed_history(trace_event_store_factory, monkeypatch, release):
+    from app.services.infrastructure.session_trace import store as store_module
+
+    monkeypatch.setattr(store_module, "TRACE_STORE_LOCK_SHARDS", 1)
+    session_id = "ses_019ba1bfed0773fc80049132b9745deb"
+    store, _ = trace_event_store_factory(session_id)
+    event = AgentStartEvent(event_id="first", job_id="job", timestamp=datetime.now(UTC),
+                            payload=AgentStartPayload(message="first", agent_id="default"))
+    await store.append(session_id, event)
+    database = store._writers[0]
+    connection = database._writer
+    await store.append(session_id, event.model_copy(update={"event_id": "second"}))
+    if release == "terminal":
+        await store.append(session_id, JobFailedEvent(event_id="terminal", job_id="job", timestamp=datetime.now(UTC),
+            payload=JobFailedPayload(session_id=session_id, error="expected")))
+    elif release == "session":
+        await store.close_session(session_id)
+    elif release == "store":
+        await store.close()
+    else:
+        other_id = "ses_019c6ab34d1574aa885c385ae9a2493e"
+        trace_event_store_factory(other_id)
+        await store.append(other_id, event.model_copy(update={"event_id": "other"}))
+        assert [item.event_id for item in store.read_events(other_id)] == ["other"]
+    # 验证真实句柄已释放，不能仅以槽位清空冒充关闭成功。
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
+    expected = ["first", "second"] + (["terminal"] if release == "terminal" else [])
+    assert [item.event_id for item in store.read_events(session_id)] == expected
+    if release == "store":
+        with pytest.raises(RuntimeError, match="已关闭"):
+            await store.append(session_id, event)
+    else:
+        await store.append(session_id, event.model_copy(update={"event_id": "reopened"}))
+        assert [item.event_id for item in store.read_events(session_id)] == [*expected, "reopened"]
+
+
+@pytest.mark.asyncio
+async def test_failed_append_rolls_back_and_reuses_writer(trace_event_store_factory):
+    from app.services.infrastructure.session_trace.trace_database import TraceDatabase
+
+    session_id = "ses_019ba1bfed0773fc80049132b9745deb"
+    store, _ = trace_event_store_factory(session_id)
+    event = AgentStartEvent(event_id="first", job_id="job", timestamp=datetime.now(UTC),
+                            payload=AgentStartPayload(message="first", agent_id="default"))
+    await store.append(session_id, event)
+    database = TraceDatabase(store._database_path(session_id))
+    with database.connection(write=True) as connection:
+        connection.execute("CREATE TRIGGER refuse_append AFTER INSERT ON trace_events BEGIN SELECT RAISE(ABORT, 'injected write failure'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="injected write failure"):
+        await store.append(session_id, event.model_copy(update={"event_id": "failed"}))
+    with database.connection(write=True) as connection:
+        connection.execute("DROP TRIGGER refuse_append")
+    await store.append(session_id, event.model_copy(update={"event_id": "following"}))
+    assert [item.event_id for item in store.read_events(session_id)] == ["first", "following"]
 
 
 @pytest.mark.asyncio
@@ -417,6 +479,7 @@ async def test_live_trace_orders_external_commits_and_recovers_after_overflow(tr
     finally:
         receiving.cancel()
         await asyncio.gather(receiving, return_exceptions=True)
+        await external.close()
         await stream.aclose()
 
     resumed = store.stream_events(session_id, third.cursor, thread_id=thread_id)

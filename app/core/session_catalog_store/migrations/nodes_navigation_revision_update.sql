@@ -3,7 +3,7 @@
     AFTER UPDATE OF node_id, kind, parent_node_id, display_name, title_source,
                     state, revision,
                     workspace_id, created_at, storage_relative_locator, main_thread_id,
-                    session_kind, current_agent_id, current_provider_id,
+                    session_kind, current_agent_id, current_model_json,
                     context_source_session_id, generation_origin_json, updated_at
     ON nodes
     WHEN OLD.node_id IS NOT NEW.node_id
@@ -19,7 +19,7 @@
       OR OLD.main_thread_id IS NOT NEW.main_thread_id
       OR OLD.session_kind IS NOT NEW.session_kind
       OR OLD.current_agent_id IS NOT NEW.current_agent_id
-      OR OLD.current_provider_id IS NOT NEW.current_provider_id
+      OR OLD.current_model_json IS NOT NEW.current_model_json
       OR OLD.context_source_session_id IS NOT NEW.context_source_session_id
       OR OLD.generation_origin_json IS NOT NEW.generation_origin_json
       OR OLD.updated_at IS NOT NEW.updated_at

@@ -26,7 +26,6 @@ const { default: RequestLog } = await import(${JSON.stringify(new URL('../panels
 const { default: Changes } = await import(${JSON.stringify(new URL('../workspace/sessionChanges/SessionChangesTree.tsx', import.meta.url).href)});
 const resourceDisplay = await import(${JSON.stringify(new URL('../../state/display/resourceDisplay.ts', import.meta.url).href)});
 const { default: ChildConversation } = await import(${JSON.stringify(new URL('../panels/sessionPanels/ChildThreadConversation.tsx', import.meta.url).href)});
-const { default: Ports } = await import(${JSON.stringify(new URL('../workspace/portForward/WorkspacePortForwardPanel.tsx', import.meta.url).href)});
 const { parsePortLiteral } = await import(${JSON.stringify(new URL('../workspace/portLiteral.ts', import.meta.url).href)});
 const { default: Bootstrap } = await import(${JSON.stringify(new URL('../shell/BootstrapState.tsx', import.meta.url).href)});
 const noop = () => {};
@@ -34,10 +33,10 @@ const tool = {tool_id:'read_file', name:'用户工具', description:'原始工�
   model_visible:false, test_supported:false, execution_locked:false, model_visibility_locked:false};
 const actions = renderToStaticMarkup(React.createElement(Actions, {hasContent:true, showInterrupt:true,
   defaultDeliveryPolicy:'after_turn', onClear:noop, onInterrupt:noop, onSend:noop, onAlternate:noop, onToggleDefault:noop}));
-const model = renderToStaticMarkup(React.createElement(Model, {controlRef:React.createRef(),
-  providers:[{provider_id:'provider-raw', model:'模型原名', custom_llm_provider:'openai', available:false,
-    configuration_error:"Cannot find module '/home/alice/missing.js'"}], currentProviderId:'provider-raw',
-  open:false, disabled:false, onToggle:noop, onClose:noop, onSelect:noop, onSetWorkspaceDefault:noop, onKeyDown:noop}));
+const model = renderToStaticMarkup(React.createElement(Model, {onOpen:noop,
+  models:[{model_ref: { provider_id: 'provider-raw', model_id: "default" }, model:'模型原名', custom_llm_provider:'openai', available:false,
+    configuration_error:"Cannot find module '/home/alice/missing.js'"}], currentModel:{provider_id:'provider-raw',model_id:'default'},
+  }));
 const tools = renderToStaticMarkup(React.createElement(Tools, {groups:[{id:'default', name:'用户工具组', kind:'default', items:[tool]}],
   loading:false, savingToolIds:new Set(), runs:new Map(), testingTools:new Set(), collapsedGroups:new Set(),
   canRunTests:true,
@@ -69,8 +68,6 @@ const resource = {kind:'browser',status:'lost',resource_id:'resource-original',n
 const child = renderToStaticMarkup(React.createElement(ChildConversation, {thread:{thread_id:'child-original',title:'用户子线程 {0}'},
   conversation:{snapshot:{view:'history',history:null,loading:true,sending:false,draft:'子线程草稿 {0}',accepted:{job_id:'job-original'}},
     close:noop,refresh:noop,openReport:noop,loadEarlier:noop,send:noop,setDraft:noop}}));
-const ports = renderToStaticMarkup(React.createElement(WarmConfirm, null, React.createElement(Ports, {
-  apiPort:0,workspace:{connection_kind:'local',gateway_id:'gateway-original',workspace_id:'workspace-original'},active:false})));
 const bootstrap = renderToStaticMarkup(React.createElement(Bootstrap, {onRetry:async () => {}}));
 let portError;
 try { parsePortLiteral('1e3', '目标端口 {0}'); } catch (error) { portError = error.message; }
@@ -78,7 +75,7 @@ const usageUnknown = renderToStaticMarkup(React.createElement(Usage, {responseTe
 const usageKnown = renderToStaticMarkup(React.createElement(Usage, {responseText:'模型原文', modelUsage:{finalModelId:'模型原名'},
   tokenUsage:{totalTokens:0,inputTokens:0,outputTokens:0,cacheReadInputTokens:null,modelCalls:1,reportedModelCalls:1}}));
 process.stdout.write(JSON.stringify({actions, model, tools, goal, usageUnknown, usageKnown, editor, history, schedule:taskSchedule(task),
-  debug, request, changes, child, ports, bootstrap, portError, resourceStatus:resourceDisplay.statusLabel('lost'),
+  debug, request, changes, child, bootstrap, portError, resourceStatus:resourceDisplay.statusLabel('lost'),
   resourceGroup:resourceDisplay.resourceAttentionGroup(resource,null), unknownResourceStatus:resourceDisplay.statusLabel('原始未知状态'),
   unknownTaskLabel:taskLabel('未识别的原始状态'), commands:COMPOSER_SLASH_COMMANDS, activeGoal:GOAL_STATUS_LABELS.active}));
 `], { encoding: 'utf8', timeout: 10_000 });
@@ -138,8 +135,6 @@ process.stdout.write(JSON.stringify({actions, model, tools, goal, usageUnknown, 
     expect(output.child).toContain('用户子线程 {0}');
     expect(output.child).toContain('子线程草稿 {0}');
     expect(output.child).toContain('job-original');
-    expect(output.ports).toContain(locale === 'en' ? 'Workspace Ports' : '工作区端口');
-    expect(output.ports).toContain(locale === 'en' ? 'without SSH forwarding' : '无需 SSH 转发');
     expect(output.bootstrap).toContain(locale === 'en' ? 'Loading workspace and sessions...' : '正在加载工作区与会话...');
     expect(output.bootstrap).toContain(locale === 'en' ? 'Connecting to the local backend' : '正在连接本地后端');
     expect(output.portError).toBe(locale === 'en' ? '目标端口 {0} must be a decimal integer from 1 to 65535' : '目标端口 {0}必须是 1–65535 之间的十进制整数');

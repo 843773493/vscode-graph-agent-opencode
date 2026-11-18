@@ -26,7 +26,7 @@ def frozen_ledger():
         "members": [{
             "delegation_id": "delegation", "child_thread_id": "child", "role": "reviewer",
             "state": "published", "admission_state": "bound", "title": "展示名称",
-            "task_seed": json.dumps({"trusted_context": {"team_id": "team"}}),
+            "team_id": "team",
         }],
     }
 

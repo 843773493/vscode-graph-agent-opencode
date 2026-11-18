@@ -1,6 +1,5 @@
 import type {
   APIResponse,
-  SessionGoalSnapshotDTO,
   SessionGoalOperationResultDTO,
   SessionGoalWriteRequest,
 } from "../../types/backend";
@@ -9,30 +8,7 @@ import {
   unwrapApiData,
   workspaceHeader,
 } from "../http";
-import { parseSessionGoalOperation, parseSessionGoalSnapshot } from "../../protocol/sessionGoal";
-
-export async function getSessionGoal(
-  port: number,
-  sessionId: string,
-  workspaceId?: string | null,
-  signal?: AbortSignal,
-  minimumSyncVersion = 0,
-): Promise<SessionGoalSnapshotDTO> {
-  if (!Number.isSafeInteger(minimumSyncVersion) || minimumSyncVersion < 0) {
-    throw new Error("Goal minimum sync version must be a nonnegative safe integer");
-  }
-  const snapshot = parseSessionGoalSnapshot(unwrapApiData(
-    await requestJson<APIResponse<SessionGoalSnapshotDTO>>(
-      port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/goal?minimum_sync_version=${minimumSyncVersion}`,
-      { headers: workspaceHeader(workspaceId), signal },
-    ),
-  ), sessionId);
-  if (snapshot.sync_version < minimumSyncVersion) {
-    throw new Error(`Goal sync version is stale: ${snapshot.sync_version} < ${minimumSyncVersion}`);
-  }
-  return snapshot;
-}
+import { parseSessionGoalOperation } from "../../protocol/sessionGoal";
 
 export async function updateSessionGoal(
   port: number,

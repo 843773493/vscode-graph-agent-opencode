@@ -1,10 +1,10 @@
 # 目录用途
 
-复用真实 Workbench 的设置操作与搜索网络观察，供 Integration 和 E2E 使用。
+复用真实 Workbench 的设置操作、会话 Thread 导航与搜索网络观察，供 Integration 和 E2E 使用。
 
 # 可修改内容
 
-原命令／剪贴板设置操作、Quick Input 的真实滚轮操作、真实请求及联邦回执断言。
+原命令／剪贴板设置操作、会话树展开后的 Thread 导航、Quick Input 的真实滚轮操作、真实请求及联邦回执断言。
 
 # 不可修改内容
 

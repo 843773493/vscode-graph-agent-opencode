@@ -52,6 +52,8 @@ def test_channel_name_helpers_cover_all_kinds() -> None:
             "context.source",
             "mcp.catalog",
             "task.lifecycle",
+            "user.questions",
+            "workspace.resources",
         }
     )
     for name, expected in (

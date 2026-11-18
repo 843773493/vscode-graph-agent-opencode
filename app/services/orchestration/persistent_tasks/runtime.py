@@ -32,7 +32,7 @@ from app.core.trace_middleware import (
 )
 from app.prompting import PromptSection, internal_message_factory
 from app.schemas.event import Event
-from app.schemas.internal_v2.goal import GoalStatus, SessionGoalStateDTO
+from app.schemas.internal_v2.goal import SessionGoalStateDTO
 from app.schemas.internal_v2.persistent_task import (
     PersistentTaskConfigurationDTO,
     PersistentTaskRunDTO,
@@ -66,6 +66,10 @@ from app.services.orchestration.persistent_tasks.goal import (
     GoalWorkKind,
     process_goal_work,
 )
+from app.services.orchestration.persistent_tasks.usage import (
+    bind_execution,
+    settle_task,
+)
 from app.services.orchestration.runtime_source_dispatcher import RuntimeSourceDispatcher
 
 logger = logging.getLogger(__name__)
@@ -83,9 +87,9 @@ class PersistentTaskRuntime:
         self.generation = generation
         self.messages = messages
         self._waiting_actions: set[str] = set()
+        self._usage_pending: dict[str, set[str]] = {}
         self.trace = trace
         self.jobs = jobs
-        self._goal_job_owners: dict[str, str] = {}
         self._application_work: dict[str, deque[tuple[GoalWork, asyncio.Future[None] | None]]] = {}
         self._active_actions = 0
         self._actions_drained = asyncio.Event()
@@ -150,20 +154,32 @@ class PersistentTaskRuntime:
     async def on_event(self, event: Event) -> None:
         if event.type in {EventType.GOAL_UPDATED, EventType.GOAL_CLEARED}:
             # 两个管理视图共用同一 owner；通知只使完整快照失效，不复制 Goal 状态。
-            self.events.publish(PersistentTaskChanged())
+            self.events.publish(PersistentTaskChanged(history_invalidated=False))
             return
         if event.type == EventType.JOB_STARTED:
             # 发布事务不能重新进入 Goal 异步锁，也不能把归属捕获延迟到编辑之后。
             owner = self.goals.started_owner(event.payload.session_id, event.payload.thread_id)
             if owner is not None:
-                self._goal_job_owners[event.job_id] = owner
+                goal = self.store.goal_read(event.payload.session_id)
+                assert goal is not None
+                bind_execution(self, owner, session_id=event.payload.session_id, thread_id=event.payload.thread_id,
+                               job_id=event.job_id, control_revision=goal.control_revision)
         elif event.type in {EventType.AGENT_END, EventType.JOB_FAILED, EventType.JOB_CANCELLED, EventType.JOB_COMPLETED}:
-            if event.type == EventType.JOB_COMPLETED or event.job_id in self._goal_job_owners:
+            goal_owner = None
+            for task_id in self.store.execution_owners(event.job_id):
+                if self.store.get(task_id).application_type == "automation":
+                    self._usage_pending.setdefault(task_id, set()).add(event.job_id)
+                    self._execution_pending.add(task_id)
+                else:
+                    goal_owner = task_id
+            if event.type == EventType.JOB_COMPLETED or goal_owner is not None:
                 job = await self.jobs.get(event.job_id)
                 kinds: dict[str, GoalWorkKind] = {EventType.AGENT_END: "agent_end", EventType.JOB_FAILED: "failed",
                         EventType.JOB_CANCELLED: "cancelled", EventType.JOB_COMPLETED: "idle"}
                 self._queue_goal(GoalWork(job.session_id, kinds[event.type], job=job,
-                                         tokens=event.payload.token_usage.total_tokens if event.type == EventType.AGENT_END else 0))
+                                         owner_id=goal_owner))
+                if event.type == EventType.JOB_COMPLETED and goal_owner is not None:
+                    self._queue_goal(GoalWork(job.session_id, "agent_end", job=job, owner_id=goal_owner))
             self._waiting_checks.clear()
             self._waiting_actions.clear()
             if self._accepting:
@@ -210,7 +226,7 @@ class PersistentTaskRuntime:
         if work.recovering:
             assert work.goal is not None
             self._recovering.discard(work.goal.goal_id)
-            self.events.publish(PersistentTaskChanged())
+            self.events.publish(PersistentTaskChanged(history_invalidated=False))
 
     @asynccontextmanager
     async def action_admission(self) -> AsyncIterator[bool]:
@@ -275,7 +291,7 @@ class PersistentTaskRuntime:
     async def _run(self, initialized: asyncio.Future[None]) -> None:
         failure: BaseException | None = None
         try:
-            goals = [goal for goal in self.goals.list_existing() if goal.status == GoalStatus.active]
+            goals = self.goals.list_existing()
             self._recovering = {task.task_id for task in self.store.list_automations()} | {goal.goal_id for goal in goals}
             await self._job_events.register_durable_listener(self.on_event)
             self._accepting = True
@@ -351,6 +367,7 @@ class PersistentTaskRuntime:
     async def _process_task(self, task_id: str) -> None:
         if task_id in self._recovering:
             await observe_phase(task_id, "task.recovery.started", details={"task_id": task_id})
+        await settle_task(self, task_id, self._usage_pending.pop(task_id, set()))
         await self._collect_execution_completions(task_id)
         for run in self.store.runs(task_id, pending_only=True):
             if run.run_id in self._waiting_actions:
@@ -490,9 +507,15 @@ class PersistentTaskRuntime:
             "job_id": delivery.job_id, "execution_id": delivery.execution_id,
         })
         async with self.locks.lock_for(run.task_id):
+            if delivery.job_id is not None:
+                bind_execution(self, run.task_id, session_id=session_id, thread_id=thread_id,
+                               job_id=delivery.job_id, control_revision=run.task_revision, run_id=run.run_id)
             self.store.advance(run, phase="delivered", now=self.clock(), delivery=delivery,
                                lifecycle="complete" if configuration.policies.completion == "after_delivery" else None)
             self.notify(run.task_id, run.run_id)
+            if delivery.job_id is not None:
+                self._usage_pending.setdefault(run.task_id, set()).add(delivery.job_id)
+                self._execution_pending.add(run.task_id)
 
     async def _check(self, run: PersistentTaskRunDTO,
                      configuration: PersistentTaskConfigurationDTO) -> PersistentTaskRunDTO | None:
@@ -594,6 +617,9 @@ class PersistentTaskRuntime:
         self.store.record_evaluation(run, TaskEvaluationDTO(thread_uri=model.thread_uri, source_item_id=wakeup.source_item_id,
                                      job_id=wakeup.job_id, execution_id=wakeup.execution_id), self.clock())
         self.notify(run.task_id, run.run_id)
+        bind_execution(self, run.task_id, session_id=session_id, thread_id=thread_id, job_id=wakeup.job_id,
+                       control_revision=run.task_revision, run_id=run.run_id, role="evaluation")
+        await settle_task(self, run.task_id, {wakeup.job_id})
         # 先登记等待，再读终态，避免读后才登记而吞掉并发完成通知；不占worker槽等待模型。
         self._waiting_checks.add(run.task_id)
         try:

@@ -69,6 +69,7 @@ class PendingRequestControl(BaseModel):
 class PendingRequestDTO(PendingRequestControl):
     """正文与附件只由已提交输入的展示投影提供，不是队列存储事实。"""
 
+    reorderable: bool = False
     content: str
     attachments: list[AttachmentRef] = Field(default_factory=list)
     message_created_at: str
@@ -82,11 +83,18 @@ class PendingRequestPolicyUpdateRequest(BaseModel):
     expected_snapshot_version: int | None = Field(default=None, ge=0)
 
 
+class PendingRequestReorderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message_ids: list[str]
+    expected_thread_revision: int = Field(ge=0)
+
+
 class PendingRequestListDTO(BaseModel):
     session_id: str
     # None 表示整个 Session；精确读取显式返回实际 thread 身份。
     thread_id: str | None = None
     active_job_id: str | None = None
+    thread_revision: int | None = None
     requests: list[PendingRequestDTO] = Field(default_factory=list)
     snapshot_version: int = Field(default=0, ge=0)
 

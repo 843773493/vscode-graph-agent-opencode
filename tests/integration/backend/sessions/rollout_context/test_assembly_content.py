@@ -35,7 +35,9 @@ from app.services.infrastructure.rollout_context.storage import (
 from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
     EXECUTION_QUEUE_SCHEMA_SQL,
+    EXECUTION_SCHEDULING_MIGRATION_SQL,
     SKILL_SELECTION_MIGRATION_SQL,
+    TEAM_OBSERVATIONS_MIGRATION_SQL,
     VIEW_CREATION_MIGRATION_SQL,
     VIEW_MEMBERSHIP_MIGRATION_SQL,
 )
@@ -363,6 +365,14 @@ def test_schema21_upgrade_preserves_historical_jcs_hashes_and_jsonl(shared_assem
     saver._storage.storage.migrate_schema(
         thread, session_id=session, to_version=26,
         migration_name="view_creation_025_026", migration_sql=VIEW_CREATION_MIGRATION_SQL,
+    )
+    saver._storage.storage.migrate_schema(
+        thread, session_id=session, to_version=27,
+        migration_name="execution_queue_026_027", migration_sql=EXECUTION_SCHEDULING_MIGRATION_SQL,
+    )
+    saver._storage.storage.migrate_schema(
+        thread, session_id=session, to_version=28,
+        migration_name="team_observations_027_028", migration_sql=TEAM_OBSERVATIONS_MIGRATION_SQL,
     )
     cold = RolloutCheckpointSaver(saver._storage.storage.sessions_dir)
     for original in (first, second):

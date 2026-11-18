@@ -8,7 +8,7 @@ import {
   listGatewaySshConnections,
 } from "../../../gatewayApi";
 import type {
-  AddSshGatewayWorkspaceRequest,
+  AddRemoteGatewayConnectionRequest,
   CreatedGatewayDeviceConnection,
   GatewayDeviceAccessAddress,
   SshConnectionOption,
@@ -26,7 +26,7 @@ interface GatewayConnectionDialogProps {
   mode: ConnectionDialogMode;
   apiPort: number;
   onClose: () => void;
-  onAddSsh: (payload: AddSshGatewayWorkspaceRequest) => Promise<void>;
+  onAddRemoteGatewayConnection: (payload: AddRemoteGatewayConnectionRequest) => Promise<void>;
   onDeviceConnectionsChanged: () => void;
 }
 
@@ -50,7 +50,7 @@ const INITIAL_MANUAL_SSH_FORM: ManualSshForm = {
 
 export function buildSelectedSshConnectionRequest(
   connection: SshConnectionOption,
-): AddSshGatewayWorkspaceRequest {
+): AddRemoteGatewayConnectionRequest {
   if (connection.source === "boxteam") {
     return {
       connection_id: connection.connection_id,
@@ -68,7 +68,7 @@ export function buildSelectedSshConnectionRequest(
 
 export function buildManualSshConnectionRequest(
   form: ManualSshForm,
-): AddSshGatewayWorkspaceRequest {
+): AddRemoteGatewayConnectionRequest {
   const host = form.host.trim();
   const username = form.username.trim();
   const privateKeyPath = form.privateKeyPath.trim();
@@ -105,7 +105,7 @@ export default function GatewayConnectionDialog({
   mode,
   apiPort,
   onClose,
-  onAddSsh,
+  onAddRemoteGatewayConnection,
   onDeviceConnectionsChanged,
 }: GatewayConnectionDialogProps) {
   const overlayRoot = useContext(OverlayRootContext);
@@ -208,7 +208,7 @@ export default function GatewayConnectionDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await onAddSsh(buildSelectedSshConnectionRequest(selected));
+      await onAddRemoteGatewayConnection(buildSelectedSshConnectionRequest(selected));
       onClose();
     } catch (connectError) {
       setError(errorMessage(connectError));
@@ -218,7 +218,7 @@ export default function GatewayConnectionDialog({
   };
 
   const addManualConnection = async () => {
-    let payload: AddSshGatewayWorkspaceRequest;
+    let payload: AddRemoteGatewayConnectionRequest;
     try {
       payload = buildManualSshConnectionRequest(manualForm);
     } catch (validationError) {
@@ -228,7 +228,7 @@ export default function GatewayConnectionDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await onAddSsh(payload);
+      await onAddRemoteGatewayConnection(payload);
       onClose();
     } catch (connectError) {
       setError(errorMessage(connectError));
@@ -345,12 +345,7 @@ export default function GatewayConnectionDialog({
           {page === "ssh-select" ? (
             <div className="gateway-ssh-picker">
               <div className="gateway-ssh-host-list" role="radiogroup" aria-label={t("gateway.connection.sshConnections")}>
-                {loading ? (
-                  <div className="gateway-connection-state">
-                    <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
-                    {t("gateway.connection.readingSshConfig")}
-                  </div>
-                ) : null}
+
                 {!loading && connections.length === 0 ? (
                   <div className="gateway-connection-state">
                     <span className="codicon codicon-remote" aria-hidden="true" />
@@ -358,7 +353,7 @@ export default function GatewayConnectionDialog({
                     <small>{t("gateway.connection.checkSshConfigOrAddManually")}</small>
                   </div>
                 ) : null}
-                {!loading && connections.map((connection) => {
+                {connections.map((connection) => {
                   const selected = connection.connection_id === selectedConnectionId;
                   return (
                     <button

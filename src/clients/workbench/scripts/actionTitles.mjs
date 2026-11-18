@@ -4,7 +4,7 @@ import { parseTree, printParseErrorCode } from 'jsonc-parser';
 
 export const actionTitleKeys = [
   'workbench.changes.openPatch', 'workbench.debug.startScript',
-  'workbench.identityRecovery.import', 'workbench.mcp.openServer',
+  'workbench.identityRecovery.import', 'localData.manage', 'workbench.mcp.openServer',
   'workbench.workspaceAction.activate', 'workbench.workspaceAction.reconnect', 'workbench.workspaceAction.start',
   'workbench.workspaceAction.details',
   'gateway.control.connections', 'gateway.control.connectionsAndCredentials',
@@ -26,8 +26,7 @@ export const actionTitleKeys = [
   'workbench.resource.focus', 'workbench.thread.clearHistoryCache', 'workbench.thread.inspectHistoryCache',
   'workbench.skills.openGatewaySources', 'workbench.skills.openWorkspaceSources',
   'workbench.skills.refreshGatewaySources', 'workbench.skills.refreshWorkspaceSources',
-  'workbench.managementTarget.selectExtensions', 'workbench.managementTarget.selectMcp', 'workbench.managementTarget.selectSettings',
-  'workbench.managementTarget.selectTools',
+  'workbench.managementTarget.selectExtensions', 'workbench.managementTarget.selectSettings', 'workbench.panel.selectTarget',
   'tasks.action.details', 'tasks.action.history', 'tasks.action.edit', 'tasks.action.pause',
   'tasks.action.resume', 'tasks.action.check', 'tasks.action.checkOnly', 'tasks.action.terminate',
   'tasks.action.update',

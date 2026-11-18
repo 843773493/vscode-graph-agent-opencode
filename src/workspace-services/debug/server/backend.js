@@ -281,7 +281,9 @@ async function main() {
             };
             run.pid = run.child.pid ?? null;
             runs.set(request.run_id, run);
-            run.child.stdout.on("data", (buffer) => emit(run, "stdout", { text: buffer.toString("utf8") }));
+            // 与 stderr 共用标准流式解码、行拼接；管道分块不能截断中文或 ANSI 序列。
+            createInterface({ input: run.child.stdout, crlfDelay: Infinity })
+              .on("line", (text) => emit(run, "stdout", { text: `${text}\n` }));
             run.child.once("exit", async (code, signal) => {
               run.exitCode = code;
               run.status = "stopping";

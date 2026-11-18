@@ -6,6 +6,7 @@ import { IQuickInputService } from '../../../../../../src/clients/workbench/upst
 import { IDialogService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/dialogs/common/dialogs.js';
 import { INotificationService } from '../../../../../../src/clients/workbench/upstream/src/vs/platform/notification/common/notification.js';
 import { IEditorService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/services/editor/common/editorService.js';
+import { IViewsService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/services/views/common/viewsService.js';
 import { IMcpService } from '../../../../../../src/clients/workbench/upstream/src/vs/workbench/contrib/mcp/common/mcpTypes.js';
 import { WorkspaceMcpService } from '../../../../../../src/clients/workbench/src/mcp/service.js';
 import { ResourceQuickAccess } from '../../../../../../src/clients/workbench/src/resources/quickAccess.js';
@@ -169,12 +170,6 @@ export async function runtimeActionContract(mode) {
   const commands = { executeCommand(id, ...args) {
     // 面板宿主在真实 Gateway 场景验收；这里核 Provider 冻结的精确命令目标。
     if (id === resourceFocusCommand) { focuses.push(structuredClone(args[0])); return Promise.resolve(); }
-    if (id === 'boxteam.workspace.activate') {
-      focuses.push({ command: id, owner: args[0] });
-      workspaceContext.publish({ ...initial, gatewayId: owners[0].gatewayId });
-      workspaceContext.publish(initial);
-      return Promise.resolve();
-    }
     if (id === 'workbench.mcp.serverOptions') { mcpOptions.push(args[0]); return Promise.resolve(); }
     let valid = true;
     const accessor = { get(service) {
@@ -244,7 +239,13 @@ export async function runtimeActionContract(mode) {
       await until(() => focuses.length || errors.length);
     } else if (mode === 'focus-command-identity') {
       const handler = CommandsRegistry.getCommand(resourceFocusCommand).handler;
-      await handler({ get: service => service === ICommandService ? commands : {} },
+      const views = { async openView(id, focus) {
+        focuses.push({ view: id, focus });
+        workspaceContext.publish({ ...initial, gatewayId: owners[0].gatewayId });
+        workspaceContext.publish(initial);
+        return { revealResource() { throw new Error('身份失效后不得定位资源'); } };
+      } };
+      await handler({ get: service => service === IViewsService ? views : {} },
         { owner: owners[1], resource: records[1][0] }).catch(cause => errors.push(String(cause)));
     } else if (['action-cancel', 'action-gateway-returned', 'identity', 'picker-attach', 'accepted-close'].includes(mode)) {
       picker.items[2].trigger(0, picker.keyMods);

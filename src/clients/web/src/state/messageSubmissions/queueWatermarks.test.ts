@@ -8,7 +8,7 @@ const SESSION = "ses_watermark", THREAD = "thr_watermark", SCOPE = "gateway-work
 function queued(version: number): PendingRequestList {
   return { session_id: SESSION, thread_id: THREAD, active_job_id: null, snapshot_version: version, requests: [{
     session_id: SESSION, thread_id: THREAD, job_id: "job_watermark", message_id: "msg_watermark", turn_id: "turn_watermark",
-    content: "排队消息", attachments: [], agent_id: "default", delivery_policy: "after_turn", enqueue_sequence: 1,
+    content: "排队消息", attachments: [], agent_id: "default", delivery_policy: "after_turn", reorderable: true, enqueue_sequence: 1,
     position: 0, message_created_at: "2026-11-13T00:00:00Z", message_metadata: { updated_at: "2026-11-13T00:00:00Z" },
     created_at: "2026-11-13T00:00:00Z", updated_at: "2026-11-13T00:00:00Z", snapshot_version: version,
     execution_binding: {},

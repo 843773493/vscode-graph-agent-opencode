@@ -12,7 +12,9 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
   const [version, setVersion] = useState(0);
   const observer = useRef(observe); observer.current = observe;
   const [historyVersion, setHistoryVersion] = useState(0);
-  const [view, setView] = useState({ scope, items: [] as api.PersistentTaskDTO[], runtime: null as api.TaskRuntimeStatusDTO | null, loaded: false, error: null as string | null, busy: false });
+  const [view, setView] = useState({ scope, items: [] as api.PersistentTaskDTO[], runtime: null as api.TaskRuntimeStatusDTO | null,
+    session_goal: null as api.PersistentTaskSnapshot["session_goal"], loaded: false,
+    error: null as string | null, streamError: null as string | null, busy: false });
   const [selection, setSelection] = useState({ scope, id: "" });
   const items = view.scope === scope ? view.items : [];
   const selected = items.find((item) => selection.scope === scope && item.task_id === selection.id) ?? null;
@@ -24,7 +26,7 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
   useEffect(() => {
     const controller = new AbortController();
     scope.controller = controller;
-    setView({ scope, items: [], runtime: null, loaded: false, error: null, busy: false });
+    setView({ scope, items: [], runtime: null, session_goal: null, loaded: false, error: null, streamError: null, busy: false });
     setSelection({ scope, id: "" });
     return () => { controller.abort(); scope.reader.abort(); };
   }, [scope]);
@@ -37,8 +39,8 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
     const publish = (next: api.PersistentTaskSnapshot) => {
       if (!valid()) return;
       scope.observation += 1;
-      setView((previous) => ({ ...previous, scope, ...next, loaded: true }));
-      setHistoryVersion((value) => value + 1);
+      setView((previous) => ({ ...previous, scope, ...next, loaded: true, streamError: null }));
+      if (next.history_invalidated !== false) setHistoryVersion((value) => value + 1);
       observer.current?.({ snapshot: next });
     };
     const changed = (next: api.PersistentTaskChangedDTO) => {
@@ -64,7 +66,7 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
       } catch (cause) {
         if (valid()) {
           reader.abort();
-          setView((previous) => ({ ...previous, scope, error: errorMessage(cause) }));
+          setView((previous) => ({ ...previous, scope, streamError: errorMessage(cause) }));
         }
       }
     })();
@@ -78,7 +80,10 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
     historyRequest.current = controller;
     const updates = new Map<string, api.PersistentTaskRunSummaryDTO>();
     const baseline = latestHistory.current;
-    setHistory((previous) => ({ ...previous, scope, taskId, runs: before ? previous.runs : [], nextBefore: before ? previous.nextBefore : undefined, loading: true, error: null }));
+    setHistory((previous) => ({ ...previous, scope, taskId,
+      runs: previous.scope === scope && previous.taskId === taskId ? previous.runs : [],
+      nextBefore: previous.scope === scope && previous.taskId === taskId ? previous.nextBefore : undefined,
+      loading: true, error: null }));
     void api.listPersistentTaskRuns(port, owner, taskId, controller.signal, before).then((page) => {
         if (!controller.signal.aborted && current.current === scope) setHistory((previous) => {
           // 请求期间到达的实时更新优先，避免较早开始的分页响应覆盖新状态。
@@ -123,8 +128,9 @@ export function usePersistentTasks(port: number, target: GatewayWorkspaceRequest
 
   return {
     items, selected, loaded: view.scope === scope && view.loaded, busy: view.scope === scope && view.busy,
-    error: view.scope === scope ? view.error : null,
+    error: view.scope === scope ? view.error ?? view.streamError : null,
     runtime: view.scope === scope ? view.runtime : null,
+    sessionGoal: view.scope === scope ? view.session_goal : null,
     history: history.scope === scope && history.taskId === selected?.task_id ? history : null,
     select,
     loadOlder: () => { if (history.nextBefore && !history.loading) readHistory(history.nextBefore); },

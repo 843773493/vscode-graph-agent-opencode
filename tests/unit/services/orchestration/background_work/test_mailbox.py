@@ -38,6 +38,7 @@ async def test_collect_checkpoint_ack_replays_identical_batch_after_restart(back
     assert [message.content for message in batch.messages] == ["first", "second", "stop"]
     restarted = BackgroundMailbox(store=store)
     bus.acknowledge(session_ids[0], batch.consumption_id)
+    await bus.emit(session_ids[0], main_thread_ids[0], "agent", "later", message_id="later", source_id="clock-stream")
     replay = await restarted.collect(session_ids[0], main_thread_ids[0], "agent", consumption_id="consumer-one", source_id="clock-stream", timeout_seconds=1)
     assert replay == batch
     with pytest.raises(RuntimeError, match="请求内容冲突"):
@@ -69,7 +70,8 @@ async def test_interrupted_consumer_resumes_checkpoint_without_losing_messages(b
     task = asyncio.create_task(bus.collect(session_ids[0], main_thread_ids[0], "agent", consumption_id="resume", timeout_seconds=1, poll_interval_seconds=0.01))
     for _ in range(100):
         with store.control(session_ids[0], read_only=True) as control:
-            count = control.connection.execute("SELECT count(*) FROM background_consumptions WHERE consumption_id='resume' AND batch_json LIKE '%first%'").fetchone()[0]
+            count = control.connection.execute("SELECT message_count FROM background_consumptions WHERE consumption_id='resume'").fetchone()
+            count = count[0] if count else 0
         if count:
             break
         await asyncio.sleep(0.01)

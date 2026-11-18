@@ -13,7 +13,9 @@ from app.core.session_catalog_store import SessionCreationRecord
 from app.domain.itemized.hashing import sha256_jcs
 from app.schemas.internal_v2.goal import (
     GoalStatus,
+    SessionGoalSnapshotDTO,
     SessionGoalStateDTO,
+    goal_public_view,
 )
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
@@ -129,13 +131,26 @@ class TaskGoals:
         with closing(self._store.connection()) as connection:
             return self._goal(connection, self.workspace_id, session_id, thread_id)
 
+    def goal_snapshot(self, session_id: str) -> SessionGoalSnapshotDTO:
+        """同一次读事务取得 Goal 及清空后的槽位版本，供所有管理入口共用。"""
+        thread_id = self._goal_thread(session_id, None)
+        with closing(self._store.connection()) as connection:
+            connection.execute("BEGIN")
+            goal = self._goal(connection, self.workspace_id, session_id, thread_id)
+            return SessionGoalSnapshotDTO(
+                session_id=session_id, thread_id=thread_id,
+                goal=goal_public_view(goal) if goal is not None else None,
+                control_revision=self._slot_control_revision(connection, self.workspace_id, session_id),
+                sync_version=self._slot_sync_version(connection, self.workspace_id, session_id),
+            )
+
     def _write_goal(self, connection: sqlite3.Connection, goal: SessionGoalStateDTO) -> None:
         definition = {"type_id": "builtin.goal", "version": "1", "objective": goal.objective, "token_budget": goal.token_budget}
         definition_json = json.dumps(definition, ensure_ascii=False, sort_keys=True)
         state_json = goal.model_dump_json(exclude=_COMMON_FIELDS)
         lifecycle = {GoalStatus.active: "active", GoalStatus.paused: "paused", GoalStatus.complete: "complete"}.get(goal.status, "needs_attention")
         row = connection.execute(
-            "SELECT t.owner_session_id,t.definition_revision,d.configuration_json FROM persistent_tasks t "
+            "SELECT t.owner_session_id,t.definition_revision,t.application_json,t.lifecycle,d.configuration_json FROM persistent_tasks t "
             "JOIN persistent_task_definitions d ON d.task_id=t.task_id AND d.definition_revision=t.definition_revision "
             "WHERE t.task_id=? AND t.workspace_id=? AND t.application_type='goal' AND t.retired_at IS NULL",
             (goal.goal_id, self.workspace_id),
@@ -156,8 +171,10 @@ class TaskGoals:
             if row["owner_session_id"] != goal.session_id:
                 raise RuntimeError("Goal 任务身份属于其它 Session")
             revision = row["definition_revision"] + (row["configuration_json"] != definition_json)
-            connection.execute("UPDATE persistent_tasks SET revision=revision+1,definition_revision=?,lifecycle=?,application_json=?,updated_at=? WHERE task_id=?",
-                               (revision, lifecycle, state_json, goal.updated_at.isoformat(), goal.goal_id))
+            control_changed = (json.loads(row["application_json"]).get("control_revision", 0) != goal.control_revision
+                               or row["configuration_json"] != definition_json or row["lifecycle"] != lifecycle)
+            connection.execute("UPDATE persistent_tasks SET revision=revision+?,definition_revision=?,lifecycle=?,application_json=?,updated_at=? WHERE task_id=?",
+                               (int(control_changed), revision, lifecycle, state_json, goal.updated_at.isoformat(), goal.goal_id))
         if row is None or revision != row["definition_revision"]:
             connection.execute("INSERT INTO persistent_task_definitions VALUES (?,?,?)", (goal.goal_id, revision, definition_json))
 

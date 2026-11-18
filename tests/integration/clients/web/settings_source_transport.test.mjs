@@ -131,36 +131,33 @@ test('共享来源预览说明观察范围，未上报结果不伪报成功', ()
 });
 
 
-test('瞬时密码在确认前取消不提交，也不留下持久输入或提交身份', async () => {
+test('来源保存确认前取消不提交，也不留下提交身份', async () => {
   const f = fixture({ confirm: async () => ({ confirmed: false }) });
   await f.files.readFile(f.resource);
-  await expect(f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {})).rejects.toBeInstanceOf(CancellationError);
+  await expect(f.files.writeFile(f.resource, VSBuffer.fromString('{ "changed": true }').buffer, options)).rejects.toBeInstanceOf(CancellationError);
   expect(f.calls.map(call => call.method)).toEqual(['POST']);
   expect([...f.stored]).toEqual([]);
   expect(f.files.pendingSubmission(f.resource)).toBeUndefined();
-  expect(JSON.stringify(f.files.backup(f.resource))).not.toContain('transient-password');
-  expect(JSON.stringify(f.notices)).not.toContain('transient-password');
 });
 
-test('密码保存响应丢失按原 edit 和文件版本确认，脱敏正文不同仍只写一次', async () => {
+test('来源保存响应丢失按原 edit 和文件版本确认，格式不同仍只写一次', async () => {
   let saved;
   const f = fixture({ confirm: async () => ({ confirmed: true }), respond(call, document) {
-    if (call.method === 'POST') return { document, changed_paths: ['llm.providers.0.api_key'] };
+    if (call.method === 'POST') return { document, changed_paths: ['changed'] };
     if (call.method === 'PUT') {
-      saved = { ...document, jsonc: '{"api_key":"boxteam-redacted:/api_key"}', file_digest: 'original-file-2',
+      saved = { ...document, jsonc: '{"changed":true}', file_digest: 'original-file-2',
         edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true, file_digest: 'original-file-2', state: 'active' } };
       throw new Error('模拟已提交后的网络断开');
     }
     return saved;
   } });
   await f.files.readFile(f.resource);
-  await f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {});
+  await f.files.writeFile(f.resource, VSBuffer.fromString('{ "changed": true }').buffer, options);
   expect(f.calls.map(call => call.method)).toEqual(['POST', 'PUT', 'GET']);
   expect(new URL(f.calls.at(-1).path, 'http://fixture').searchParams.get('idempotency_key')).toBe(saved.edit.idempotency_key);
-  expect(f.files.currentDocument(f.resource).jsonc).not.toContain('transient-password');
+  expect(f.files.currentDocument(f.resource).jsonc).toBe('{"changed":true}');
   expect(f.files.pendingSubmission(f.resource)).toBeUndefined();
   expect([...f.stored]).toEqual([]);
-  expect(JSON.stringify(f.notices)).not.toContain('transient-password');
 });
 
 test('未知保存重开和重选路由后只沿原连接查询，恢复信息只有非秘密提交身份', async () => {
@@ -168,7 +165,7 @@ test('未知保存重开和重选路由后只沿原连接查询，恢复信息�
   const f = fixture({ confirm: async () => ({ confirmed: true }), respond(call, document) {
     if (call.method === 'POST') return { document, changed_paths: [] };
     if (call.method === 'PUT') {
-      saved = { ...document, jsonc: '{"api_key":"boxteam-redacted:/api_key"}', file_digest: 'file-2',
+      saved = { ...document, jsonc: '{"changed":true}', file_digest: 'file-2',
         edit: { idempotency_key: call.intent.idempotency_key, source_saved: true, layer_imported: true, file_digest: 'file-2', state: 'active' } };
       throw new Error('模拟响应丢失');
     }
@@ -176,9 +173,8 @@ test('未知保存重开和重选路由后只沿原连接查询，恢复信息�
     return saved;
   } });
   await f.files.readFile(f.resource);
-  await expect(f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {})).rejects.toBeInstanceOf(AggregateError);
+  await expect(f.files.writeFile(f.resource, VSBuffer.fromString('{ "changed": true }').buffer, options)).rejects.toBeInstanceOf(AggregateError);
   expect([...f.stored.values()]).toEqual([{ key: saved.edit.idempotency_key, gatewayConnectionId: 'original-route' }]);
-  expect(JSON.stringify([...f.stored])).not.toContain('transient-password');
   expect(f.files.backup(f.resource).submissionKey).toBeUndefined();
   f.files.prepareEditor({ ...f.target, gateway_connection_id: 'new-route' }, f.sourceKey, f.document);
   await expect(f.files.query(f.resource)).rejects.toThrow('模拟查询断开');
@@ -186,7 +182,7 @@ test('未知保存重开和重选路由后只沿原连接查询，恢复信息�
   f.files.release(f.resource);
   const restored = f.createFiles();
   restored.prepareEditor({ ...f.target, gateway_connection_id: 'new-route' }, f.sourceKey, f.document);
-  await expect(restored.saveTransient(f.resource, '{"api_key":"new-password"}', () => {})).rejects.toThrow('仍未知');
+  await expect(restored.writeFile(f.resource, VSBuffer.fromString('{"changed":false}').buffer, options)).rejects.toThrow('模拟查询断开');
   unavailable = false;
   await restored.readFile(f.resource);
   const query = new URL(f.calls.at(-1).path, 'http://fixture');
@@ -198,11 +194,11 @@ test('未知保存重开和重选路由后只沿原连接查询，恢复信息�
   restored.dispose(); f.files.dispose();
 });
 
-test('同一来源的瞬时密码和普通保存不会并行提交', async () => {
+test('同一来源的两个保存不会并行提交', async () => {
   const entered = Promise.withResolvers(), accepted = Promise.withResolvers();
   const f = fixture({ confirm: () => { entered.resolve(); return accepted.promise; } });
   await f.files.readFile(f.resource);
-  const first = f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {});
+  const first = f.files.writeFile(f.resource, VSBuffer.fromString('{ "changed": true }').buffer, options);
   await entered.promise;
   await expect(f.files.writeFile(f.resource, VSBuffer.fromString('{"changed":true}').buffer, options)).rejects.toThrow('保存进行中');
   accepted.resolve({ confirmed: true }); await first;
@@ -218,7 +214,7 @@ test('保存直接返回仍在 applying 的未写入回执时保留原键，恢�
     return receipt;
   } });
   await f.files.readFile(f.resource);
-  await expect(f.files.saveTransient(f.resource, '{"api_key":"transient-password"}', () => {})).rejects.toThrow();
+  await expect(f.files.writeFile(f.resource, VSBuffer.fromString('{ "changed": true }').buffer, options)).rejects.toThrow();
   expect(f.files.pendingSubmission(f.resource)).toBe(receipt.edit.idempotency_key);
   await f.files.query(f.resource);
   expect(f.files.pendingSubmission(f.resource)).toBe(receipt.edit.idempotency_key);
@@ -226,7 +222,7 @@ test('保存直接返回仍在 applying 的未写入回执时保留原键，恢�
   const reopened = f.createFiles();
   await reopened.readFile(f.resource);
   expect(reopened.pendingSubmission(f.resource)).toBe(receipt.edit.idempotency_key);
-  await expect(reopened.saveTransient(f.resource, '{"api_key":"new-password"}', () => {})).rejects.toThrow('仍未知');
+  await expect(reopened.writeFile(f.resource, VSBuffer.fromString('{"changed":false}').buffer, options)).rejects.toThrow('仍未知');
   expect(f.calls.filter(call => call.method === 'PUT')).toHaveLength(1);
   receipt = { ...receipt, file_digest: 'candidate-file', edit: { ...receipt.edit, source_saved: true, layer_imported: true, state: 'active' } };
   await reopened.query(f.resource);

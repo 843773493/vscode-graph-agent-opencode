@@ -1,10 +1,10 @@
-"""同一扩展目录的完整定义 facet；正文仅由既有资源存储冻结和恢复。"""
+"""实时扩展工具的完整定义、来源身份与 Skill 关联。"""
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -12,20 +12,13 @@ from langchain_core.tools import BaseTool
 
 from app.agents.model_tool_schema import (
     export_model_tool_json_schema,
-    model_tool_schema_validator,
 )
 from app.agents.policy.tool_capability import ToolMetadata
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.domain.itemized.resource_activation import (
-    ResourceActivationSnapshotRef,
-    ResourceProvenanceRef,
-)
 from app.schemas.gateway.skill_sources import PluginSkillSourceDTO
 from app.services.infrastructure.mcp.extension_catalog import (
     ConnectionReadiness,
-    ExtensionCatalogUnavailableError,
     extension_schema_hash,
-    member_readiness,
 )
 
 DEFINITION_FACET = "definition"
@@ -263,110 +256,6 @@ def _tool_skill_associations(
     return tuple(sorted(associations.values(), key=lambda item: (item.skill_name, item.entry_identity or "")))
 
 
-
-@dataclass(frozen=True, slots=True)
-class FrozenToolDefinition(ToolDefinition):
-    server_id: str | None
-    provenance: ResourceProvenanceRef
-    _resource_includes_skill_associations: bool = field(default=True, kw_only=True, repr=False)
-
-    @property
-    def resource_payload(self) -> dict[str, object]:
-        payload = super(FrozenToolDefinition, self).resource_payload
-        # 保留读取器既有的四字段冻结正文；补上空关联也会改变其原 revision。
-        if not self._resource_includes_skill_associations:
-            del payload["skill_associations"]
-        return payload
-
-
 def plugin_tool_source_from_tool(tool: BaseTool) -> PluginToolSource | None:
     value = (tool.metadata or {}).get("plugin_tool_source")
     return None if value is None else PluginToolSource.from_metadata(value)
-
-
-@dataclass(frozen=True, slots=True)
-class FrozenToolCatalog:
-    """冻结目录的定义视图；按 ID 选取时仍保留完整目录的 revision。"""
-
-    catalog_revision: str
-    activation_snapshot_id: str
-    definitions: tuple[FrozenToolDefinition, ...]
-    skill_associations: tuple[SkillToolAssociation, ...] = ()
-
-
-def tool_catalog_from_activation(
-    snapshot: ResourceActivationSnapshotRef,
-    read_payload: Callable[[ResourceActivationSnapshotRef, ResourceProvenanceRef], object],
-    *, tool_ids: frozenset[str] | None = None,
-) -> FrozenToolCatalog:
-    """只解析调用所属快照；缺失历史定义时拒绝，不从 live 同名工具补齐。"""
-    # 发布模块依赖本模块，读取路径延迟引用以免形成模块初始化环。
-    from app.services.infrastructure.mcp.catalog_activation import (
-        EXTENSION_CATALOG_SOURCE_ID,
-        MCP_TOOL_CATALOG_RESOURCE_ID,
-        frozen_extension_catalog_revision,
-        frozen_skill_tool_associations,
-    )
-
-    parents = tuple(binding for binding in snapshot.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
-    if len(parents) != 1:
-        raise ExtensionCatalogUnavailableError("冻结扩展目录父行缺失或不唯一")
-    parent = parents[0]
-    parent_payload = read_payload(snapshot, parent)
-    lineage_id, revision = frozen_extension_catalog_revision(
-        snapshot=snapshot, binding=parent, payload=parent_payload,
-    )
-    skill_associations = frozen_skill_tool_associations(parent_payload)
-    facets = {binding.resource_id: binding for binding in snapshot.bindings
-              if binding.resource_kind == "mcp_tool_catalog" and binding.facet == DEFINITION_FACET}
-    definitions = []
-    for member in parent.members:
-        # 准备只消费已发现的定义；完整搜索仍读取全部正文，不跨操作保留校验结果。
-        if tool_ids is not None and member.member_id not in tool_ids:
-            continue
-        binding = facets.get(definition_resource_id(member.member_id))
-        # lineage_id 由 resource_id 派生，来源事实必须逐项相等。
-        if (binding is None or binding.members != (member,)
-                or binding.source_lineage_ref is None or parent.source_lineage_ref is None
-                or binding.source_lineage_ref.sources != parent.source_lineage_ref.sources
-                or binding.captured_registry_generation != parent.captured_registry_generation):
-            raise ExtensionCatalogUnavailableError(f"冻结完整定义与目录身份不一致: {member.member_id}")
-        payload = read_payload(snapshot, binding)
-        if (not isinstance(payload, Mapping)
-                or set(payload) not in ({"description", "input_schema", "kind", "group_id"},
-                                        {"description", "input_schema", "kind", "group_id", "skill_associations"})
-                or any(not isinstance(payload[key], str) for key in ("description", "kind", "group_id"))
-                or not isinstance(payload["input_schema"], dict) or sha256_jcs(payload) != binding.revision
-                or extension_schema_hash(payload["input_schema"]) != member.schema_hash):
-            raise ExtensionCatalogUnavailableError(f"冻结完整定义正文或 schema 身份无效: {member.member_id}")
-        associations = tuple(
-            SkillToolAssociation.from_dict(item) for item in payload.get("skill_associations", [])
-        )
-        if any(item.tool_id != member.member_id for item in associations):
-            raise ExtensionCatalogUnavailableError(f"冻结工具定义含其他 tool_id 的 Skill 关联: {member.member_id}")
-        model_tool_schema_validator(payload["input_schema"])
-        definitions.append(FrozenToolDefinition(
-            metadata=ToolMetadata(member.member_id, member.member_kind, payload["kind"], payload["group_id"]),
-            schema_hash=member.schema_hash, server_id=member.server_id, provenance=binding,
-            description=payload["description"], _input_schema_json=canonical_json_bytes(payload["input_schema"]),
-            skill_associations=associations,
-            _resource_includes_skill_associations="skill_associations" in payload,
-            # TODO: 历史 v2 没有连接身份，只沿原合同恢复定义；v3 执行入口仍拒绝其 lineage。
-            readiness=member_readiness(member) if lineage_id == EXTENSION_CATALOG_SOURCE_ID else "ready",
-        ))
-    associations_by_source = {
-        (item.tool_id, item.skill_name, item.entry_identity): item for item in skill_associations
-    }
-    for definition in definitions:
-        for association in definition.skill_associations:
-            key = (association.tool_id, association.skill_name, association.entry_identity)
-            existing = associations_by_source.get(key)
-            if existing is None or (existing.status == "unavailable" and association.status == "available"):
-                associations_by_source[key] = association
-    all_skill_associations = tuple(sorted(
-        associations_by_source.values(),
-        key=lambda item: (item.skill_name, item.tool_id, item.entry_identity or ""),
-    ))
-    return FrozenToolCatalog(
-        revision, snapshot.activation_snapshot_id, tuple(definitions), all_skill_associations,
-    )

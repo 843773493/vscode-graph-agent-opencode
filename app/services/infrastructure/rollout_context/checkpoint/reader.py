@@ -10,6 +10,14 @@ from typing import Literal
 from langchain_core.messages import BaseMessage
 
 from app.domain.itemized.records import CanonicalItemRecord
+from app.services.infrastructure.rollout_context.storage.catalog.context_notices import (
+    ContextNoticeMetadata,
+    context_notice_metadata,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.item_reader import (
+    ItemInspectionMetadata,
+    inspect_item_metadata,
+)
 from app.services.infrastructure.rollout_context.storage.catalog.message_search import (
     message_search_candidates,
     tool_result_metadata,
@@ -44,6 +52,11 @@ class RolloutContextReader:
 
     def __init__(self, storage: RolloutContextStore) -> None:
         self._storage = storage
+
+    def read_context_notices(self, snapshot: RolloutReadSnapshot, chain: ContextChain, *,
+                             turn_ids: list[str], execution_ids: list[str]) -> list[ContextNoticeMetadata]:
+        return context_notice_metadata(self._storage.storage._snapshot_connection(snapshot),
+            self.context_view_id(chain), turn_ids=turn_ids, execution_ids=execution_ids)
 
     @asynccontextmanager
     async def read_lease(
@@ -167,6 +180,11 @@ class RolloutContextReader:
             lower_ordinal=lower_ordinal, limit=limit, deadline=deadline, item_id=item_id,
             category=category,
         )
+
+    def inspect_item_metadata(self, snapshot: RolloutReadSnapshot, chain: ContextChain, *,
+                              item_id: str | None, message_id: str | None) -> ItemInspectionMetadata | None:
+        return inspect_item_metadata(self._storage.storage._snapshot_connection(snapshot),
+            self.context_view_id(chain), item_id=item_id, message_id=message_id)
 
     def read_tool_result_metadata(
         self, snapshot: RolloutReadSnapshot, chain: ContextChain, *, after: int,

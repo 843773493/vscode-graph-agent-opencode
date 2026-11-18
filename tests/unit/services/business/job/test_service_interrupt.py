@@ -518,7 +518,7 @@ async def test_job_control_cancel_queued_job_removes_it_from_queue(job_service_f
         now = datetime.now(UTC)
         owner.accept_user_message(MessageDTO(message_id=message_id, session_id=session_id, thread_id=thread_id,
                                             role=MessageRole.user, content=content, created_at=now, updated_at=now), execution_identity=binding,
-            queue_input=ExecutionQueueInput(execution_binding=binding, message_id=message_id, agent_id="default", provider_id=None,
+            queue_input=ExecutionQueueInput(execution_binding=binding, message_id=message_id, agent_id="default", model=None,
                 delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=now.isoformat()))
         return await service.start_job(session_id, content, thread_id=thread_id, message_id=message_id,
                                        message_created_at=now.isoformat(), execution_binding=binding)

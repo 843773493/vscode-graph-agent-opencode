@@ -1,51 +1,29 @@
+import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_MAIN_AREA_RATIOS,
-  resizeAdjacentMainAreas,
+  resizeThreadResources,
   resolveMainAreaRatios,
 } from "./workbenchLayout";
 
-const defaults = resolveMainAreaRatios(null);
-if (JSON.stringify(defaults) !== JSON.stringify(DEFAULT_MAIN_AREA_RATIOS)) {
-  throw new Error("主页四区默认比例与权威默认值不一致");
-}
+describe("会话资源布局", () => {
+  test("未保存布局使用权威默认比例", () => {
+    expect(resolveMainAreaRatios(null)).toEqual(DEFAULT_MAIN_AREA_RATIOS);
+  });
 
-const resized = resizeAdjacentMainAreas({
-  ratios: defaults,
-  left: "chat",
-  right: "workspace_preview",
-  leftWidth: 400,
-  rightWidth: 400,
-  deltaX: 100,
-});
-if (resized.chat !== 1.25 || resized.workspace_preview !== 0.75) {
-  throw new Error(`相邻区域比例调整错误: ${JSON.stringify(resized)}`);
-}
-if (resized.agent_sessions !== 1 || resized.auxiliary !== 1) {
-  throw new Error("拖拽修改了非相邻区域比例");
-}
+  test("分隔线按实际区域尺寸分配比例", () => {
+    expect(resizeThreadResources({ leftWidth: 400, rightWidth: 400, deltaX: 100 })).toBe(0.375);
+  });
 
-const grouped = resizeAdjacentMainAreas({
-  ratios: defaults,
-  left: "agent_sessions",
-  right: "chat",
-  grouped: ["workspace_preview", "auxiliary"],
-  leftWidth: 400,
-  rightWidth: 400,
-  deltaX: 100,
-});
-if (grouped.agent_sessions !== 2.5 || grouped.chat !== 0.5
-  || grouped.workspace_preview !== 0.5 || grouped.auxiliary !== 0.5) {
-  throw new Error(`分组区域比例调整错误: ${JSON.stringify(grouped)}`);
-}
+  test("窄组使用单区域导航，不允许无解的并排尺寸", () => {
+    expect(() => resizeThreadResources({ leftWidth: 200, rightWidth: 200, deltaX: 1 })).toThrow('520px');
+  });
 
-const rejected = resizeAdjacentMainAreas({
-  ratios: defaults,
-  left: "chat",
-  right: "workspace_preview",
-  leftWidth: 400,
-  rightWidth: 400,
-  deltaX: 500,
+  test.each([
+    { deltaX: -2000, chat: 280, resources: 520 },
+    { deltaX: 2000, chat: 560, resources: 240 },
+  ])("越界拖动$deltaX像素停在可用边界", ({ deltaX, chat, resources }) => {
+    const ratio = resizeThreadResources({ leftWidth: 400, rightWidth: 400, deltaX });
+    expect(ratio * 800).toBeCloseTo(resources);
+    expect((1 - ratio) * 800).toBeCloseTo(chat);
+  });
 });
-if (rejected !== defaults) {
-  throw new Error("拖拽越过相邻区域边界时不应产生负比例");
-}

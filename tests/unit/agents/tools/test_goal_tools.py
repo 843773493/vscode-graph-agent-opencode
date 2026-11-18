@@ -7,7 +7,8 @@ from app.agents.tool_invocation_context import (
     ToolInvocationContext,
 )
 from app.agents.tools.goal import create_goal_tools
-from app.schemas.internal_v2.goal import GoalJobAccountingDTO, GoalStatus
+from app.schemas.internal_v2.goal import GoalStatus
+from app.schemas.internal_v2.task_usage import TaskJobAccountingDTO
 from app.services.business.session_goal_service import SessionGoalService
 
 
@@ -115,7 +116,7 @@ async def test_goal_tools_keep_large_job_accounting_internal(main_goal_tools):
     created = await tools["create_goal"].ainvoke({"objective": "保持准确且有界的公开计量"})
     assert "accounted_jobs" not in created
     store.goal = store.goal.model_copy(update={
-        "accounted_jobs": {f"job-{index}": GoalJobAccountingDTO(tokens=7, elapsed_seconds=11) for index in range(2000)},
+        "accounted_jobs": {f"job-{index}": TaskJobAccountingDTO(tokens=7, elapsed_seconds=11) for index in range(2000)},
         "tokens_used": 14000, "time_used_seconds": 22000,
         "last_accounted_job_id": "job-1999", "last_continued_job_id": "job-1998",
     })

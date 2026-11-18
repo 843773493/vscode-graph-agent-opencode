@@ -1,5 +1,7 @@
 # 目录用途
 
+`unit-named-secrets` 核对目标侧密文存储、命名引用及受信批量解析，固定60秒／4GiB；`integration-web-configuration-entities` 经真实 Gateway 和完整 Workbench 验证原设置表单、密钥复用、轮换与 Gateway 重启恢复，固定300秒／4GiB。后者不调用真实模型，不替代远端服务或原生客户端验收。
+
 Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `unit-search-providers` 分别核公开结构、联邦调度及领域 owner；定向上限90秒／4GiB。`integration-search-headless-tools`、`integration-search-provider-lifecycle` 和 `integration-search-federation` 保留真实 Gateway／Backend、模型入口及原集成独占闸门，分别限600／240／480秒，不代替页面或真实 Provider 验收。
 
 `integration-workbench-quick-access-contracts` 限300秒／4GiB，核原上游调用语义、文件覆盖及动作目标；`integration-web-quick-access-actions` 限900秒／4GiB，经正式 Workbench 与真实 Gateway 验资源、任务、Session、工作区及 Composer。各测试沿自身隔离目录和原集成闸门，默认共用一次构建；复用已准备的不可变包不复用 Home 或运行实例。

@@ -852,7 +852,7 @@ async def test_conversation_lifecycle_through_real_workbench(
             assert counts["cold"] == counts["before"] and counts["collected"] == counts["before"] + 1
             assert mailbox["consumptionBefore"]["acknowledged"] == 0
             assert mailbox["consumptionAfter"]["acknowledged"] == 1
-            assert mailbox["consumptionBefore"]["batch_json"] == mailbox["consumptionAfter"]["batch_json"]
+            assert mailbox["consumptionAfter"] == {**mailbox["consumptionBefore"], "acknowledged": 1}
             assert mailbox["canonicalBefore"] == []
             canonical = mailbox["canonicalAfter"]
             carrier_kinds = [bool(json.loads(item["projection_manifest_json"])["projection_identity"].get("projection_message_id"))

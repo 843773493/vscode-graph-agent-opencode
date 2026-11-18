@@ -26,6 +26,7 @@ import {
 } from "./dev-environment.mjs";
 
 import { waitForDetachedReady, waitForHttpOk } from "./dev-readiness.mjs";
+import { prepareDevelopmentPlugins } from "./dev-bundled-plugins.mjs";
 
 // 冷启动包含完整 Workbench 资源构建和 Vite 源码预热；此期限不用于普通 API。
 const FRONTEND_START_TIMEOUT_MS = 300_000;
@@ -167,7 +168,7 @@ function installNodeDebugFixture() {
   }
 }
 
-function writeDevelopmentManifest() {
+function writeDevelopmentManifest(bundledPlugins) {
   const runtimeRoot = path.join(boxteamHome, "state");
   const version = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8")).version;
   if (typeof version !== "string" || !version.trim()) {
@@ -191,6 +192,7 @@ function writeDevelopmentManifest() {
           workspace_schema: path.join(projectRoot, "configs", "workspace_schema.jsonc"),
         },
         skill_resources: path.join(projectRoot, "resources", "skills"),
+        bundled_plugins: bundledPlugins,
         web_assets: null,
         chromium_executable:
           process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? null,
@@ -389,7 +391,10 @@ async function main() {
   assertDevelopmentPortsAvailable();
   await assertDevelopmentPortsBindable(selectedPorts(), listenHost);
 
-  const runtimeManifest = writeDevelopmentManifest();
+  const bundledPlugins = serviceMode === "all" || serviceMode === "gateway"
+    ? await prepareDevelopmentPlugins({ projectRoot, pythonExecutable: pythonBin,
+      nodeExecutable: Bun.which(nodeBin), bunExecutable: process.execPath }) : [];
+  const runtimeManifest = writeDevelopmentManifest(bundledPlugins);
   const environment = {
     ...process.env,
     BOXTEAM_PROJECT_ROOT: projectRoot,

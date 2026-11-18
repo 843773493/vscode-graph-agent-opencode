@@ -93,10 +93,12 @@ from app.schemas.internal_v2.session_fork_transfer import (
 from app.schemas.internal_v2.session_resource import (
     SessionResourceControlRequest,
     SessionResourceControlResultDTO,
+    SessionResourceDTO,
     SessionResourceKind,
     SessionResourceListDTO,
 )
 from app.schemas.internal_v2.sse import sse_responses
+from app.schemas.internal_v2.team import TeamBoardDTO
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.trace_search import TraceLocationDTO, TraceReferenceDTO
 from app.schemas.internal_v2.workspace import (
@@ -410,9 +412,9 @@ async def list_session_child_threads(
         async with session_service.session_read_admission(session_id):
             result = await session_service.list_child_threads(session_id)
             main_thread_id = await session_service.resolve_main_thread(session_id)
-            result.teams = (await team_service.list_teams(
+            result.teams = await team_service.list_summaries(
                 requester_session_id=session_id, requester_thread_id=main_thread_id,
-            )).items
+            )
             outcomes = await run_sync_shielded(
                 saver.runtime_execution_outcomes, session_id,
                 {item.thread_id: item.report_execution_id for item in result.items
@@ -436,6 +438,26 @@ async def list_session_child_threads(
         raise not_found_http_error(error) from error
     except (RuntimeError, TimeoutError) as error:
         # 目录索引/物理树异常属于可恢复的工作区状态，不能伪装成空列表。
+        raise state_conflict_http_error(error) from error
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/{session_id}/teams/{team_id}", response_model=APIResponse[TeamBoardDTO])
+async def get_session_team_board(
+    session_id: CanonicalSessionId,
+    team_id: Annotated[str, Path(pattern=r"^team_[0-9a-f]{32}$")],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_service: Annotated[SessionService, Depends(get_session_service)],
+    team_service: Annotated[TeamCoordinationService, Depends(get_team_service)],
+):
+    try:
+        async with session_service.session_read_admission(session_id):
+            thread_id = await session_service.resolve_main_thread(session_id)
+            result = await team_service.get_board(requester_session_id=session_id, requester_thread_id=thread_id, team_id=team_id)
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
+    except (RuntimeError, TimeoutError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
@@ -725,6 +747,24 @@ async def list_session_resources(
         raise state_conflict_http_error(exc) from exc
     except (KeyError, NotFoundError) as exc:
         raise not_found_http_error(exc) from exc
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/{session_id}/resources/{kind}/{resource_id}", response_model=APIResponse[SessionResourceDTO])
+async def get_session_resource(
+    session_id: CanonicalSessionId,
+    kind: SessionResourceKind,
+    resource_id: str,
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+    session_resource_service: Annotated[SessionResourceService, Depends(get_session_resource_service)],
+):
+    try:
+        result = await session_resource_service.get_resource(session_id, kind, resource_id)
+    except SessionDeletionPendingError as error:
+        raise state_conflict_http_error(error) from error
+    except (KeyError, NotFoundError) as error:
+        raise not_found_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
 
 

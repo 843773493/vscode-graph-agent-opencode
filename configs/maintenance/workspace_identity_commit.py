@@ -14,6 +14,7 @@ import portalocker
 from app.core.sqlite_state import SQLiteProcessOwnership
 from app.gateway.control.gateway_registry.snapshot import read_workspace_registry
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.schemas.gateway.workspaces import WorkspaceIdentityRecoveryDTO
 from configs.installer import atomic_write
 from configs.maintenance.runtime_logging_commit import (
     MigrationAsset,
@@ -44,6 +45,23 @@ class IdentityMigrationJournal(MigrationJournal):
     migration_id: str
     gateway_root: str
     recovery: dict[str, object]
+
+
+def read_completed_client_recovery(*, gateway_root: Path, gateway_id: str) -> WorkspaceIdentityRecoveryDTO | None:
+    """只公开该 Gateway 已提交的冻结映射，不从当前注册表猜测历史归属。"""
+    root = gateway_root.expanduser().resolve()
+    journal = _registry_file(root / ".workspace-identity-migration.json")
+    if journal is None or journal.get("state") == "restored":
+        return None
+    if journal.get("gateway_root") != str(root) or journal.get("state") != "completed":
+        raise ValueError("工作区身份迁移尚未完成或属于另一 Gateway 根，不能恢复客户端数据")
+    recovery = WorkspaceIdentityRecoveryDTO.model_validate(journal["recovery"])
+    if recovery.registry_gateway_id != gateway_id or recovery.migration_id != journal.get("migration_id"):
+        raise ValueError("客户端恢复记录与已提交的 Gateway 身份迁移不一致")
+    aliases = [mapping.legacy_workspace_id for mapping in recovery.mappings]
+    if len(set(aliases)) != len(aliases):
+        raise ValueError("客户端恢复记录包含重复旧工作区别名")
+    return recovery
 
 
 def _checked_preview(root: Path, project_root: Path, verified: WorkspaceIdentityPreview | None) -> WorkspaceIdentityPreview:

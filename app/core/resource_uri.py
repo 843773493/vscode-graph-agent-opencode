@@ -362,6 +362,15 @@ def parse_resource_uri(
             "attachments" if artifact_kind == "attachments" else "tool-results",
         )
 
+    if kind == "session" and scope == "workspace" and len(tails) == 5 and tails[1] == "threads" and tails[3] == "items":
+        for tail in tails[:4]:
+            _validate_dynamic_segment(tail, field="Item owner")
+        # canonical Item 的 ID 可含冒号等字符；只在本身份段编码，不扩大其它身份 grammar。
+        item_id = _decode_file_segment(tails[4])
+        if _encode_file_segment(item_id) != tails[4]:
+            raise ResourceUriGrammarError("invalid_path_encoding", "Item ID 必须采用规范的单段编码")
+        return _parsed(scope, body[0], kind, (*tails[:4], item_id), "/".join((*tails[:4], item_id)), uri, authority)
+
     # config 需要逻辑身份尾段；只有 workspace session 可以用空尾段表示集合根。
     if not tails and (
         kind == "config" or (kind == "session" and scope != "workspace")
@@ -391,12 +400,21 @@ def parse_session_thread_uri(
     raise ResourceUriGrammarError("malformed_path", "Session/Thread URI 必须精确指向 session_id 或 session_id/threads/thread_id")
 
 
+def parse_thread_item_uri(uri: str, *, local_gateway_id: str | None = None) -> tuple[ParsedResourceUri, str, str, str]:
+    """Item 地址固定到真实 Thread，不携带正文或展示序号。"""
+    parsed = parse_resource_uri(uri, local_gateway_id=local_gateway_id)
+    tails = parsed.tail_segments
+    if parsed.scope != "workspace" or parsed.kind != "session" or len(tails) != 5 or tails[1] != "threads" or tails[3] != "items":
+        raise ResourceUriGrammarError("malformed_path", "Item URI 必须精确指向 session_id/threads/thread_id/items/item_id")
+    return parsed, tails[0], tails[2], tails[4]
+
+
 def thread_resource_uri(
-    workspace_id: str, session_id: str, thread_id: str, *, gateway_authority: str | None = None,
+    workspace_id: str, session_id: str, thread_id: str, *, gateway_authority: str | None = None, item_id: str | None = None,
 ) -> str:
     return resource_display_uri(
         scope="workspace", scope_id=workspace_id, kind="session",
-        tail_segments=(session_id, "threads", thread_id), gateway_authority=gateway_authority,
+        tail_segments=(session_id, "threads", thread_id, *(("items", item_id) if item_id is not None else ())), gateway_authority=gateway_authority,
     )
 
 
@@ -432,6 +450,8 @@ def resource_display_uri(
         tail_segments = (
             tail_segments[0], *(_encode_file_segment(segment) for segment in tail_segments[1:])
         )
+    elif kind == "session" and len(tail_segments) == 5 and tail_segments[1] == "threads" and tail_segments[3] == "items":
+        tail_segments = (*tail_segments[:4], _encode_file_segment(tail_segments[4]))
     prefix = () if gateway_authority is None else (gateway_authority,)
     if kind == "workspace":
         if scope != "workspace" or tail_segments:

@@ -19,12 +19,13 @@ from pydantic import (
 
 from app.core.resource_uri import parse_session_thread_uri
 from app.core.time_schedule import MisfirePolicy, TimeSchedule
-from app.schemas.internal_v2.goal import SessionGoalDTO
+from app.schemas.internal_v2.goal import SessionGoalDTO, SessionGoalSnapshotDTO
 from app.schemas.internal_v2.pending_request import DeliveryPolicy
 from app.schemas.internal_v2.session_navigation.models import (
     SessionGenerationActionConfigDTO,
     SessionGenerationExecuteResultDTO,
 )
+from app.schemas.internal_v2.task_usage import TaskUsageDTO
 
 TaskLifecycle = Literal["active", "paused", "complete", "terminated", "needs_attention"]
 TaskRunPhase = Literal["pending", "checking", "delivering", "delivered", "checked", "failed", "suppressed", "skipped"]
@@ -163,6 +164,7 @@ class PersistentTaskConfigurationDTO(BaseModel):
     context: TaskContextDTO
     action: TaskActionDTO
     policies: TaskPoliciesDTO = Field(default_factory=TaskPoliciesDTO)
+    token_budget: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def isolate_model_thread(self) -> PersistentTaskConfigurationDTO:
@@ -188,11 +190,12 @@ class PersistentTaskConfigurationDTO(BaseModel):
         return self
 
 
-class PersistentTaskDTO(BaseModel, frozen=True):
+class PersistentTaskDTO(TaskUsageDTO, frozen=True):
     task_id: str
     workspace_id: str
     revision: int
     definition_revision: int
+    sync_version: int = 0
     application_type: Literal["automation", "goal"] = "automation"
     application_version: Literal["1"] = "1"
     configuration: PersistentTaskConfigurationDTO | None = None
@@ -364,6 +367,8 @@ class PersistentTaskListDTO(BaseModel):
     items: list[PersistentTaskDTO]
     runtime: TaskRuntimeStatusDTO
     active_runs: list[PersistentTaskRunSummaryDTO] = Field(default_factory=list)
+    session_goal: SessionGoalSnapshotDTO | None = None
+    history_invalidated: bool = True
 
 
 class PersistentTaskRunListDTO(BaseModel):

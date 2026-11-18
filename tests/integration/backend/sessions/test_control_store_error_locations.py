@@ -62,7 +62,7 @@ async def test_damaged_control_version_returns_safe_conflict_without_mutation(
     assert response.status_code == 409, response.text
     assert response.headers["X-Request-ID"] == response.json()["request_id"] == "control-version-conflict"
     assert "artifact=session_control" in response.text and "stage=schema_version" in response.text
-    assert "user_version=6, supported=18" in response.text
+    assert "user_version=6, supported=20" in response.text
     assert str(startup_container.workspace_root) not in response.text
     assert str(database) in caplog.text
     assert database.read_bytes() == before

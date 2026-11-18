@@ -1,20 +1,15 @@
+import { LOCAL_DATABASES, openBrowserDatabase } from "./browserPersistence";
+
 /** 浏览器展示数据的唯一持久化入口；事务提交后才向调用方报告成功。 */
-const DATABASE = "boxteam-browser-views";
+const DATABASE = LOCAL_DATABASES.views.name;
 const STORE = "views";
 let database: Promise<IDBDatabase> | undefined;
 
 export function openBrowserViewDatabase(): Promise<IDBDatabase> {
   if (!database) {
-    database = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DATABASE, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-      request.onerror = () => reject(new Error(`打开浏览器视图数据库失败：${request.error?.message}`));
-      request.onblocked = () => reject(new Error("浏览器视图数据库升级被其他窗口阻塞，请关闭旧窗口后重试"));
-      request.onsuccess = () => {
-        const db = request.result;
-        db.onversionchange = () => { db.close(); database = undefined; };
-        resolve(db);
-      };
+    database = openBrowserDatabase(LOCAL_DATABASES.views, db => { db.createObjectStore(STORE); }).then(db => {
+      db.onversionchange = () => { db.close(); database = undefined; };
+      return db;
     });
     void database.catch(() => { database = undefined; });
   }

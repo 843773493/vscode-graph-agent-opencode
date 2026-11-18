@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -193,7 +194,7 @@ class MessageService:
             raise TypeError("MessageService 缺少 v2 Turn acceptance owner")
         metadata = dict(message.metadata)
         metadata.pop("display_content", None)
-        metadata.pop("boxteam_session_provider_id", None)
+        metadata.pop("boxteam_session_model", None)
         built = UserContentBuilder(attachment_service=AttachmentContentService(
             workspace_root=self._workspace_root, attachment_store=self._attachment_store,
         )).build(
@@ -275,6 +276,9 @@ class MessageService:
             response = dict(job.message_metadata)
             if attachments_from_message_metadata(response) != job.attachments:
                 raise ValueError("内部 Job 附件与已接受 canonical 输入不一致")
+            # runtime 已准入的后台优先级归原队列，不被 Job 的默认前台值覆盖。
+            frozen = saver.execution_queue_record(job.session_id, job.thread_id, job.job_id)
+            queue_input = replace(queue_input, background=frozen.input.background)
         else:
             built = UserContentBuilder(attachment_service=AttachmentContentService(
                 workspace_root=self._workspace_root, attachment_store=self._attachment_store,

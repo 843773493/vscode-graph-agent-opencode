@@ -6,6 +6,19 @@ from app.domain.message_stream.projection import (
 )
 
 
+def test_tool_argument_deltas_replay_without_mutating_prior_state() -> None:
+    first = apply_event({}, {"type": "tool_call.delta", "event_seq": 1, "payload": {
+        "tool_call_id": "call", "tool_name": "read_file", "arguments_delta": "{", "arguments_complete": False,
+    }})
+    second = apply_event(first, {"type": "tool_call.delta", "event_seq": 2, "payload": {
+        "tool_call_id": "call", "arguments_delta": "}", "arguments": {}, "arguments_complete": True,
+    }})
+    assert first["tool_calls"][0]["arguments"] == {"raw": "{"}
+    assert second["tool_calls"][0]["arguments"] == {}
+    assert second["tool_calls"][0]["tool_name"] == "read_file"
+    assert "arguments_delta" not in second["tool_calls"][0]
+
+
 def _block_delta(block_id: str, text: str, event_seq: int) -> dict[str, object]:
     return {
         "type": "block.delta",

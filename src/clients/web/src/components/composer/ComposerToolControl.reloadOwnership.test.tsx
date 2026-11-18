@@ -97,7 +97,7 @@ function installToolCatalogFetch(catalogs: Record<string, Deferred>): void {
     if (request.path === "/api/v1/agents") {
       return apiSuccessResponse(["agent_a", "agent_b"].map(agent_id => ({
         agent_id, name: agent_id, model: "test-model", tools: [], capabilities: [],
-        providers: [{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }],
+        models: [{ model_ref: { provider_id: "test-provider", model_id: "default" }, model: "test-model", custom_llm_provider: "openai", available: true }],
       })));
     }
     return undefined;
@@ -133,8 +133,8 @@ function toolTestRunPayload(runId: string, status: "queued" | "running" | "compl
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     repetitions: 1,
-    providers: [{
-      provider_id: "test-provider",
+    models: [{
+      model_ref: { provider_id: "test-provider", model_id: "default" },
       model: "test-model",
       status,
       total: 1,
@@ -175,7 +175,7 @@ async function renderAndOpen(props: {
         agentId={props.agentId}
         workspaceId={props.workspaceId}
         onStatus={options.onStatus ?? (() => undefined)}
-        providers={[{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }]}
+        models={[{ model_ref: { provider_id: "test-provider", model_id: "default" }, model: "test-model", custom_llm_provider: "openai", available: true }]}
         active={options.active ?? true}
       />,
     );
@@ -219,7 +219,7 @@ describe("工具目录加载的 owner 归属", () => {
           agentId="agent_b"
           workspaceId={WORKSPACE_KEYS[0]}
           onStatus={() => undefined}
-          providers={[{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }]}
+          models={[{ model_ref: { provider_id: "test-provider", model_id: "default" }, model: "test-model", custom_llm_provider: "openai", available: true }]}
         />,
       );
     });
@@ -278,7 +278,7 @@ describe("工具测试进度轮询的 owner 归属", () => {
           created_at: "2026-01-01T00:00:00Z",
           updated_at: "2026-01-01T00:00:00Z",
           repetitions: 1,
-          providers: [],
+          models: [],
           attempts: [],
         });
       }
@@ -327,7 +327,7 @@ describe("工具测试进度轮询的 owner 归属", () => {
           agentId="agent_a"
           workspaceId={WORKSPACE_KEYS[1]}
           onStatus={() => undefined}
-          providers={[]}
+          models={[]}
         />,
       );
     });
@@ -342,8 +342,8 @@ describe("工具测试进度轮询的 owner 归属", () => {
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-01T00:00:00Z",
         repetitions: 1,
-        providers: [{
-          provider_id: "p",
+        models: [{
+          model_ref: { provider_id: "p", model_id: "default" },
           model: "m",
           status: "completed",
           total: 7,
@@ -403,7 +403,7 @@ describe("工具测试进度轮询的 owner 归属", () => {
           agentId="agent_b"
           workspaceId={WORKSPACE_KEYS[1]}
           onStatus={(text) => statuses.push(text)}
-          providers={[{ provider_id: "test-provider", model: "test-model", custom_llm_provider: "openai", available: true }]}
+          models={[{ model_ref: { provider_id: "test-provider", model_id: "default" }, model: "test-model", custom_llm_provider: "openai", available: true }]}
         />,
       );
     });

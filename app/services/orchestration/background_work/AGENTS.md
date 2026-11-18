@@ -25,5 +25,6 @@ background_work/
 
 - 注册器只保留本地活动 Task 和候选 Session ID，不缓存历史任务正文；reconcile_required 即使没有本地 Task 也仍是活动任务。
 - 邮箱不是事件广播总线；进程内 Event 只唤醒，消息与消费回执始终从控制库读取，canonical 提交后才确认消费。
+- 收集按小页推进持久消息范围；SQLite 操作在受保护 worker 中结算后才释放准入，不在事件循环复制、重写累计正文。消息正文仅在终态返回或重放时组装一次，重启沿原 collected_at 恢复消费期限。
 - 扩展 factory 的 CustomToolFactoryContext.background_message_bus 是既有公开字段；内部使用 BackgroundMailbox，在该边界一次传入，不增加第二字段或兼容实现。
 - handler 的 kind/version、持久身份、消息顺序、期限及错误必须沿原合同保持。

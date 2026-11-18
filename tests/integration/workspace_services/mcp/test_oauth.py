@@ -18,12 +18,12 @@ from app.services.infrastructure.events.event_channel_service import EventChanne
 from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
-    McpCatalogResourcePublisher,
-)
 from app.services.infrastructure.mcp.catalog_owner import (
     McpCatalogError,
     McpCatalogOwner,
+)
+from app.services.infrastructure.mcp.catalog_publication import (
+    McpCatalogResourcePublisher,
 )
 from app.services.infrastructure.mcp.config import parse_mcp_server_configs
 from app.services.infrastructure.mcp.oauth import McpOAuthProvider

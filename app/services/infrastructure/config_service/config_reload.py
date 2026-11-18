@@ -209,15 +209,25 @@ class ConfigReloadMixin:
             if self._shadow_lifecycle.readiness == "cold":
                 await self._shadow_lifecycle.bootstrap(previous.to_dict())
             if candidate.revision == previous.revision:
+                pending = None
                 if source_edit is not None:
                     pending = self._prepare_candidate(previous, candidate, idempotency_key=idempotency_key, source_edit=source_edit)
                     if self._workspace_state_store is None:
                         raise ConfigConflictError("来源编辑必须使用原工作区状态库")
-                    self._workspace_state_store.complete_unchanged_config_candidate(
-                        config_domain=self._CONFIG_DOMAIN, candidate_id=pending.candidate_id,
-                    )
                 async def refresh_sources(_generation, publish_shadow: ConfigPublication) -> None:
                     with self._snapshot_store.publication_lock:
+                        if self._workspace_state_store is not None:
+                            active = self._workspace_state_store.get_active_config_snapshot(self._CONFIG_DOMAIN)
+                            if active is None:
+                                raise ConfigConflictError("刷新来源缺少原 active 配置")
+                            baseline, generation, revisions, digests = self._source_baseline(candidate)
+                            if pending is not None or active.source_baseline != baseline:
+                                self._workspace_state_store.refresh_unchanged_config_sources(
+                                    config_domain=self._CONFIG_DOMAIN, candidate_id=pending.candidate_id if pending else None,
+                                    effective_digest=candidate.revision, expected_active_revision=active.active_revision,
+                                    source_baseline=baseline, source_generation=generation,
+                                    layer_revisions=revisions, layer_digests=digests,
+                                )
                         publish_snapshot()
                         publish_shadow()
 
@@ -863,19 +873,26 @@ class ConfigReloadMixin:
         layer_revisions: dict[str, int] = {}
         layer_digests: dict[str, str | None] = {}
         source_generation = 0
+        # 与原来源基线一同提交字段归属；正文仍只由快照 payload 持有。
+        origins_by_source: dict[str, dict[str, object]] = {}
+        for origin in snapshot.source_origins():
+            origins_by_source.setdefault(str(origin["source_key"]), {})[str(origin["path"])] = origin["shadowed_sources"]
         for source in snapshot.source_details:
             layer_key = source.source_key or f"{source.layer}:{source.precedence}"
             # 持久化键 MUST 可由权威表逐字还原（见 `_resolve_persisted_layer`）：
             # 否则恢复路径会退化成有损兜底。这里 fail-closed，绝不写入无法还原的键。
             ConfigSnapshotMixin._resolve_persisted_layer(layer_key)
             # 只持久化 URI（可为 None），绝不持久化 real path。
-            baseline[layer_key] = {
+            detail: dict[str, object] = {
                 "uri": source.uri,
                 "presence": source.presence,
                 "layer_revision": source.layer_revision,
                 "layer_digest": source.layer_digest,
                 "source_generation": source.source_generation,
             }
+            if layer_key in origins_by_source:
+                detail["value_origins"] = origins_by_source[layer_key]
+            baseline[layer_key] = detail
             if source.layer_revision is not None:
                 layer_revisions[layer_key] = source.layer_revision
             layer_digests[layer_key] = source.layer_digest
@@ -902,7 +919,7 @@ class ConfigReloadMixin:
             layer_digests=layer_digests,
             effective_digest=snapshot.revision,
             secret_bindings=build_secret_binding_summary(snapshot.to_dict()),
-            schema_version=2,
+            schema_version=3,
             promoted_generation="bootstrap",
         )
         cast("ConfigService", self)._record_shared_source_application(sources=snapshot.source_details, result="applied")
@@ -941,7 +958,7 @@ class ConfigReloadMixin:
             layer_digests=layer_digests,
             effective_digest=snapshot.revision,
             secret_bindings=build_secret_binding_summary(snapshot.to_dict()),
-            schema_version=2,
+            schema_version=3,
             promoted_generation="workspace-runtime",
             promoted_apply_id=apply_id,
             expected_active_revision=expected_active_revision,

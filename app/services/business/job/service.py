@@ -701,12 +701,19 @@ class JobService:
 
         return await self.run_session_preparation(session_id, clear_prepared)
 
-    async def reject_pending_reorder(self, session_id: str) -> None:
-        async def reject_prepared() -> None:
+    async def reorder_pending(self, session_id: str, thread_id: str, *, message_ids: tuple[str, ...],
+                              expected_thread_revision: int) -> PendingRequestListDTO:
+        async def reorder_prepared() -> PendingRequestListDTO:
             await self._ensure_pending_loaded(session_id)
-            await self._pending_requests.reject_reorder(session_id)
-
-        await self.run_session_preparation(session_id, reject_prepared)
+            async with (self.thread_input_admission(session_id, thread_id),
+                        self._pending_dispatch_locks.lock_for(f"{session_id}/{thread_id}")):
+                await self._pending_requests.execution_queue.reorder(session_id, thread_id,
+                    message_ids=message_ids, expected_revision=expected_thread_revision)
+                await self._load_pending_records(session_id, await self._pending_requests.load(session_id))
+                snapshot = await self._pending_requests.list(session_id, thread_id=thread_id)
+            await self._publish_pending(snapshot, "pending_order_updated")
+            return snapshot
+        return await self.run_session_preparation(session_id, reorder_prepared)
 
     def _remove_session_slots(self, session_id: str) -> None:
         for key in tuple(self._thread_current_job):
@@ -873,14 +880,14 @@ class JobService:
                     self._input_owner.accept_job_input, job,
                     queue_input=ExecutionQueueInput(
                         execution_binding=execution_binding, message_id=message_id, agent_id=agent_id,
-                        provider_id=job.message_metadata.get("boxteam_session_provider_id"),
+                        model=job.message_metadata.get("boxteam_session_model"),
                         delivery_policy=delivery_policy, gateway_id=job.gateway_id,
                         request_id=job.request_id, created_at=message_created_at,
                     ),
                 )
                 frozen = job.queue_record.input
                 job.agent_id, job.gateway_id, job.request_id = frozen.agent_id, frozen.gateway_id, frozen.request_id
-                job.message_metadata["boxteam_session_provider_id"] = frozen.provider_id
+                job.message_metadata["boxteam_session_model"] = frozen.model
                 job.delivery_policy = job.queue_record.delivery_policy
                 self._jobs[resolved_job_id] = job
                 if job.queue_record.phase == "terminal":
@@ -1705,7 +1712,7 @@ class JobService:
             live_records = []
             for record in records:
                 reference = PendingRequestControl.model_validate(record.model_dump(exclude={
-                    "content", "attachments", "message_created_at", "message_metadata",
+                    "content", "attachments", "message_created_at", "message_metadata", "reorderable",
                 }))
                 outcome = await asyncio.to_thread(
                     self._input_owner.accepted_job_outcome,

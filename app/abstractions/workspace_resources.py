@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 RetentionScope = Literal["thread", "workspace"]
 ResourceKind = Literal["terminal", "browser"]
 ResourceSnapshot = dict[str, object]
+# None 表示首次读取、重连或通知缺口，需要重读当前范围；集合只使指定资源失效。
+ResourceChanges = frozenset[str] | None
 
 
 class ResourceAssociationMissing(ValueError):

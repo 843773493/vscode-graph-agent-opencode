@@ -6,15 +6,21 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
-from urllib.parse import quote
 
 from commentjson.commentjson import parser
 from lark import Token, Tree
 from pydantic import ValidationError
 
+from app.agents.providers.request_parameters import (
+    normalize_request_headers,
+    normalize_request_parameters,
+)
 from app.core.config_sources import StableConfigFile, parse_stable_config_file
 from app.schemas.internal_v2.mcp import McpPrivateHeaderRefDTO
-from app.services.infrastructure.config.state import redact_config_payload
+from app.services.infrastructure.config.state import (
+    normalize_secret_reference,
+    redact_config_payload,
+)
 
 _MASK_PREFIX = "boxteam-redacted:"
 
@@ -95,11 +101,19 @@ def _strings(node: Tree, path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str
 def _secret(path: tuple[str, ...], value: str) -> bool:
     if not path:
         return False
+    model_key = path[:2] == ("llm", "providers") and (
+        len(path) == 5 and path[3:] == ("defaults", "api_key")
+        or len(path) == 7 and path[3] == "models" and path[5:] == ("overrides", "api_key")
+    )
+    # 模型配置保存的是公开引用；不能把环境引用误当正文秘密，再因地址编辑拒绝还原。
+    if model_key and (not value or normalize_secret_reference(value).startswith(("env:", "secret:"))):
+        return False
     if redact_config_payload({path[-1]: value}) != {path[-1]: value}:
         return True
     # 原 MCP env/headers 和 Provider headers 是任意键的秘密输入，不能只识别 password 等键名。
     return ((len(path) >= 5 and path[:2] == ("mcp", "servers") and path[3] in {"env", "headers"})
-            or (len(path) >= 5 and path[:2] == ("llm", "providers") and path[3] == "default_headers"))
+            or (len(path) >= 7 and path[:2] == ("llm", "providers")
+                and path[-3:-1] == ("request_options", "default_headers")))
 
 
 def redact_source_payload(value: object, path: tuple[str, ...] = ()) -> object:
@@ -134,59 +148,32 @@ def _at_path(payload: object, path: tuple[str, ...]) -> object:
     return payload
 
 
-def _provider_api_key(path: tuple[str, ...]) -> bool:
-    return len(path) == 4 and path[:2] == ("llm", "providers") and path[-1] == "api_key"
-
-
-def redact_source_text(text: str, *, provider_scope: str) -> str:
+def redact_source_text(text: str) -> str:
     redacted = redact_source_payload(parse_source_text(text))
     replacements = []
     for path, token in _strings(parser.parse(text)):
         value = json.loads(str(token))
         replacement_value = _at_path(redacted, path)
         if replacement_value != value:
-            if _provider_api_key(path):
-                replacement_value += "#" + quote(provider_scope, safe="")
             replacement = json.dumps(replacement_value, ensure_ascii=False)
             replacements.append((token.pos_in_stream, token.pos_in_stream + len(token), replacement))
     return _replace_tokens(text, replacements)
 
 
-def restore_source_text(text: str, original: str, *, provider_scope: str) -> str:
-    """Provider 密钥可随原对象移动，其余秘密只在原路径及绑定中还原。"""
+def restore_source_text(text: str, original: str) -> str:
+    """秘密只在原路径及所属连接绑定中还原；模型密钥引用按原文保存。"""
     incoming, previous = parse_source_text(text), parse_source_text(original)
     redacted_previous = redact_source_payload(previous)
     originals = {path: (json.loads(str(token)), str(token)) for path, token in _strings(parser.parse(original))}
-    provider_keys = {
-        str(_at_path(redacted_previous, path)) + "#" + quote(provider_scope, safe=""): path
-        for path in originals if _provider_api_key(path)
-    }
     replacements = []
     for path, token in _strings(parser.parse(text)):
         value = json.loads(str(token))
         if not _secret(path, value) or not value.startswith(_MASK_PREFIX):
             continue
-        if _provider_api_key(path):
-            old_path = provider_keys.get(value)
-            if old_path is None:
-                raise ValueError("秘密脱敏占位不属于当前来源，必须重新读取原目标")
-            old_provider = cast(dict[str, object], _at_path(previous, old_path[:-1]))
-            provider = cast(dict[str, object], _at_path(incoming, path[:-1]))
-            provider_id = provider.get("id")
-            if not isinstance(provider_id, str) or not provider_id or (
-                old_provider.get("id"), old_provider.get("endpoint")
-            ) != (provider_id, provider.get("endpoint")):
-                raise ValueError("秘密所属对象或地址已改变，不能沿用原脱敏占位")
-            for payload in (previous, incoming):
-                providers = cast(list[dict[str, object]], _at_path(payload, ("llm", "providers")))
-                if sum(isinstance(item, dict) and item.get("id") == provider_id for item in providers) != 1:
-                    raise ValueError("Provider ID 必须唯一，不能确定秘密所属对象")
-            replacements.append((token.pos_in_stream, token.pos_in_stream + len(token), originals[old_path][1]))
-            continue
         old = originals.get(path)
         if old is None or _at_path(redacted_previous, path) != value:
             raise ValueError("秘密脱敏占位不属于当前来源路径，必须重新读取原目标")
-        # 其他秘密仍按原位置核验，不能借本次 api_key 规则扩大恢复范围。
+        # 原路径上的秘密仍须核对连接身份，不能挪给另一目标。
         left: object = previous
         right: object = incoming
         for part in (*path[:-1], None):
@@ -216,7 +203,14 @@ def source_origins(layers: dict[str, dict[str, object]], effective: dict[str, ob
         sources = []
         for key, payload in layers.items():
             item: object = payload
-            for part in path:
+            for index, part in enumerate(path):
+                if isinstance(item, dict) and path[:2] == ("llm", "providers"):
+                    if path[index - 2:index] == ("request_options", "parameters"):
+                        item = normalize_request_parameters(item, protocol="responses")
+                        part = "max_output_tokens" if part == "max_tokens" else part
+                    elif path[index - 2:index] == ("request_options", "default_headers"):
+                        item = normalize_request_headers(item)
+                        part = part.casefold()
                 if not isinstance(item, dict) or part not in item:
                     break
                 item = item[part]

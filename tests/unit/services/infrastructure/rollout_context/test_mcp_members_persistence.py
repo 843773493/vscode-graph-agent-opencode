@@ -25,7 +25,7 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     MCP_TOOL_CATALOG_RESOURCE_ID,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (

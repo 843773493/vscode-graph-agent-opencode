@@ -37,21 +37,17 @@ try {
   await expect(page.getByTestId(`workspace-node-${JSON.stringify([input.gatewayA, input.workspaceId])}`)).toBeVisible();
 
   const quick = page.locator('.quick-input-widget');
-  const chooseSource = async () => {
-    await expect(quick).toBeVisible();
-    await quick.locator('.monaco-list-row').filter({ hasText: 'workspace_root_mutable_override' }).first().click();
-  };
   const openAgentManagement = async () => {
-    const opening = page.evaluate(() => globalThis.workbench.commands.executeCommand('boxteam.settings.agents'));
-    await chooseSource();
-    await opening;
+    await page.evaluate(() => globalThis.workbench.commands.executeCommand('boxteam.settings.agents'));
+    await expect(quick).toBeHidden();
     const form = page.locator('.editor-group-container.active .configuration-entities[data-definition-kind="agents"]');
     await expect(form).toBeVisible();
     return page.locator('.editor-group-container.active .settings-context-label');
   };
   const header = await openAgentManagement();
-  const gatewaySelector = header.getByRole('combobox', { name: '设置所属 Gateway', exact: true });
-  await expect(gatewaySelector).toBeEnabled();
+  const selectTarget = async name => {
+    await page.locator('.settings-editor:visible').getByRole('combobox', { name: '选择业务配置目标', exact: true }).selectOption({ label: name });
+  };
   await expect(header).toContainText(input.gatewayA);
   await expect(header).toContainText(input.workspaceId);
   const localRead = result.sourceReads.find(read => read.gateway_id === input.gatewayA && read.workspace_id === input.workspaceId);
@@ -59,7 +55,7 @@ try {
 
   result.phase = 'explicit-remote';
   const readsBeforeRemote = result.sourceReads.length;
-  await gatewaySelector.selectOption({ label: `${input.remoteName} · ${input.gatewayB}` });
+  await selectTarget(input.remoteName);
   await expect(header).toContainText(input.gatewayB);
   await expect(header).toContainText(input.workspaceId);
   await expect.poll(() => result.sourceReads.slice(readsBeforeRemote).some(read =>
@@ -70,7 +66,7 @@ try {
 
   result.phase = 'switch-back-local';
   const readsBeforeLocal = result.sourceReads.length;
-  await gatewaySelector.selectOption({ label: `本地 · ${input.gatewayA}` });
+  await selectTarget('本地');
   await expect(header).toContainText(input.gatewayA);
   await expect(header).toContainText(input.workspaceId);
   await expect.poll(() => result.sourceReads.slice(readsBeforeLocal).some(read =>

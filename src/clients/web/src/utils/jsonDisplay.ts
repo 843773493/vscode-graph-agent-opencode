@@ -1,3 +1,5 @@
+import { truncateDisplayText } from "./displayText";
+
 /** 通用对象判定：非数组的 object。全前端共享的 isRecord 权威实现。 */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -31,7 +33,7 @@ export function boundedDisplayString(value: string): string {
   if (value.length <= LARGE_STRING_DISPLAY_LIMIT) {
     return value;
   }
-  return `${value.slice(0, LARGE_STRING_DISPLAY_LIMIT)}…（已截断展示，原文 ${value.length} 字符）`;
+  return `${truncateDisplayText(value, LARGE_STRING_DISPLAY_LIMIT)}…（已截断展示，原文 ${value.length} 字符）`;
 }
 
 export function redactLargeData(value: unknown): unknown {
@@ -174,7 +176,7 @@ function fitDisplayText(
   let displayed = "…";
   while (lowerBound <= upperBound) {
     const prefixLength = Math.floor((lowerBound + upperBound) / 2);
-    const candidate = `${value.slice(0, prefixLength)}${truncationMarker}`;
+    const candidate = `${truncateDisplayText(value, prefixLength)}${truncationMarker}`;
     if (serializedStringLength(candidate) <= budget.remainingText) {
       displayed = candidate;
       lowerBound = prefixLength + 1;

@@ -1,91 +1,42 @@
 import { t } from "../../../../shared/core/i18n/index.js";
-import React, { useEffect, useState } from "react";
-import {
-  useWorkspaceFileReferenceContext,
-  type WorkspaceFileReferenceResolution,
-} from "../workspace/WorkspaceFileReferenceContext";
-import {
-  isLikelyWorkspaceFileReference,
-  shouldResolveWorkspaceFileReference,
-} from "../../utils/workspaceFileReferences";
+import React, { useEffect, useRef, useState } from "react";
+import { useWorkspaceFileReferenceContext, type WorkspaceFileReferenceResolution } from "../workspace/WorkspaceFileReferenceContext";
+import { isLikelyWorkspaceFileReference, shouldResolveWorkspaceFileReference } from "../../utils/workspaceFileReferences";
 import { errorMessage } from "../../utils/errorMessage";
 
-export default function WorkspaceFileReferenceLink({
-  target,
-  children,
-  inlineCode = false,
-}: {
-  target: string;
-  children: React.ReactNode;
-  inlineCode?: boolean;
+/** 展示链接不读取文件；只有用户打开时才定位目标及读取正文。 */
+export default function WorkspaceFileReferenceLink({ target, children, inlineCode = false }: {
+  target: string; children: React.ReactNode; inlineCode?: boolean;
 }) {
   const context = useWorkspaceFileReferenceContext();
-  const [resolution, setResolution] = useState<WorkspaceFileReferenceResolution | null>(
-    null,
-  );
-
+  const [resolution, setResolution] = useState<WorkspaceFileReferenceResolution | null>(null);
+  const [opening, setOpening] = useState(false);
+  const lifetime = useRef(0);
   useEffect(() => {
-    let cancelled = false;
-    setResolution(null);
-    if (!context) {
-      return () => {
-        cancelled = true;
-      };
-    }
-    if (
-      !isLikelyWorkspaceFileReference(target)
-      || !shouldResolveWorkspaceFileReference(target)
-    ) {
-      setResolution({ status: "missing" });
-      return () => {
-        cancelled = true;
-      };
-    }
-    void context.resolve(target)
-      .then((nextResolution) => {
-        if (!cancelled) {
-          setResolution(nextResolution);
-        }
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        const message = errorMessage(error);
-        setResolution({ status: "error", message });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [context, target]);
-
-  if (resolution?.status === "resolved" && context) {
-    const { reference } = resolution;
-    const lineLabel = reference.selection
-      ? reference.selection.startLine === reference.selection.endLine
-        ? t("chat.file.line", reference.selection.startLine)
-        : t("chat.file.lines", reference.selection.startLine, reference.selection.endLine)
-      : "";
-    return (
-      <button
-        type="button"
-        className={`chat-file-reference${inlineCode ? " inline-code" : ""}`}
-        title={t("chat.file.open", reference.path, lineLabel)}
-        aria-label={t("chat.file.openAria", reference.path, lineLabel)}
-        onClick={() => context.open(resolution)}
-      >
-        <span className="codicon codicon-file" aria-hidden="true" />
-        <span>{children}</span>
-      </button>
-    );
+    setResolution(null); setOpening(false);
+    return () => { lifetime.current++; };
+  }, [context?.resolve, target]);
+  const open = async () => {
+    if (!context || opening) return;
+    const generation = lifetime.current;
+    setOpening(true);
+    try {
+      const result = await context.resolve(target);
+      if (generation !== lifetime.current) return;
+      setResolution(result);
+      if (result.status === "resolved") context.open(result);
+    } catch (error) {
+      if (generation === lifetime.current) setResolution({ status: "error", message: errorMessage(error) });
+    } finally { if (generation === lifetime.current) setOpening(false); }
+  };
+  const errorTitle = resolution?.status === "error" ? t("chat.file.validationFailed", resolution.message) : undefined;
+  if (context && isLikelyWorkspaceFileReference(target) && shouldResolveWorkspaceFileReference(target) && resolution?.status !== "missing") {
+    return <button type="button" className={`chat-file-reference${inlineCode ? " inline-code" : ""}`}
+      title={errorTitle ?? t("chat.file.open", target, "")} aria-label={t("chat.file.openAria", target, "")}
+      aria-busy={opening} disabled={opening} onClick={() => void open()}>
+      <span className="codicon codicon-file" aria-hidden="true" /><span>{children}</span>
+    </button>;
   }
-
-  const errorTitle = resolution?.status === "error"
-    ? t("chat.file.validationFailed", resolution.message)
-    : undefined;
-  return inlineCode ? (
-    <code title={errorTitle}>{children}</code>
-  ) : (
-    <span className="chat-file-reference-fallback" title={errorTitle}>
-      {children}
-    </span>
-  );
+  return inlineCode ? <code title={errorTitle}>{children}</code>
+    : <span className="chat-file-reference-fallback" title={errorTitle}>{children}</span>;
 }

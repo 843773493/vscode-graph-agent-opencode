@@ -56,6 +56,8 @@ async def bind_gateway_mcp(case: McpPluginCase, *, enabled: bool = True) -> dict
     source = commentjson.loads(document["jsonc"])
     artifacts = case.context.artifacts_dir
     source.setdefault("plugins", {}).update({
+        # 此隔离装具只安装 MCP 测试包，不继承产品默认的开发工具包绑定。
+        "workspace_defaults": {"entries": []},
         "runtime": {"entries": [{"package_id": "boxteam.mcp-stdio", "package_version": "0.1.0",
             "plugin_id": "stdio", "enabled": enabled}]},
         "configuration": {"values": {"boxteam.mcp-stdio": {"stdio": {
@@ -66,7 +68,7 @@ async def bind_gateway_mcp(case: McpPluginCase, *, enabled: bool = True) -> dict
         "base_file_digest": document["file_digest"], "base_layer_revision": document["layer_revision"],
         "base_layer_digest": document["layer_digest"], "expected_active_revision": document["active_revision"],
         "expected_active_digest": document["active_digest"], "idempotency_key": f"shared-mcp-{enabled}"})
-    response.raise_for_status()
+    assert response.status_code == 200, response.text
     assert response.json()["data"]["edit"]["state"] == "active", response.text
     status = (await case.client.post("/api/gateway/service-plugins/status",
         json={"gateway_id": case.gateway_id})).raise_for_status().json()["data"]

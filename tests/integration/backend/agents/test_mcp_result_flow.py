@@ -73,7 +73,7 @@ def integration_workspace_config_path(
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
     # 会话测试的 Gateway 装具登记本组唯一回放 Provider；不解析无关真实密钥。
-    config["llm"]["providers"] = []
+    config["llm"]["providers"] = {}
     for target in config["agents"]["default"]["tools"]["custom"]:
         if target.get("tool_id") == "fetch_webpage":
             # 网页扩展使用无 embedding 的默认模式，移除旧 Provider 引用。

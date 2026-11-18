@@ -261,6 +261,7 @@ def _activity_parts_from_projection(
                         raw, "result_message_sequence"
                     ),
                     item_id=item_id,
+                    model_call_id=identity.model_call_id,
                     item_sequence=item_sequence,
                     logical_item_ordinal=logical_item_ordinal,
                     part_ordinal=part_ordinal,
@@ -605,6 +606,7 @@ def response_parts_from_internal_item(
         "content_block_index": identity.block_index if identity else None,
         "item_index": None,
         "item_id": item.item_id,
+        "model_call_id": identity.model_call_id if identity else None,
         "item_sequence": item.item_sequence,
         "logical_item_ordinal": logical_item_ordinal,
         "elapsed_ms": elapsed_ms,

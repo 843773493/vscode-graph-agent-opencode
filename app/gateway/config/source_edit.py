@@ -121,7 +121,7 @@ class GatewaySourceEditMixin:
                 )
         return GatewayConfigSourceDocumentDTO(
             gateway_id=service._gateway_id, source_key=source_key, layer=_GATEWAY_SOURCE_LAYER_AUTHORITY[source_key][0],
-            writable=source_key != "inline:0", jsonc=redact_source_text(text, provider_scope=f"{service._gateway_id}::{source_key}"), file_presence=file.presence, file_digest=file.digest,
+            writable=source_key != "inline:0", jsonc=redact_source_text(text), file_presence=file.presence, file_digest=file.digest,
             layer_revision=record.layer_revision if record else None, layer_digest=record.layer_digest if record else None,
             source_generation=record.source_generation if record else None,
             active_revision=active.active_revision if active else None, active_digest=active.effective_digest if active else None,
@@ -170,7 +170,7 @@ class GatewaySourceEditMixin:
     ) -> tuple[str, GatewayConfig]:
         file = self._check_source_edit(source_key, request, accepted)
         original = file.raw_bytes.decode("utf-8") if file.raw_bytes is not None else "{}\n"
-        text = restore_source_text(request.jsonc, original, provider_scope=f"{request.gateway_id}::{source_key}")
+        text = restore_source_text(request.jsonc, original)
         candidate = self._source_config(overrides={source_key: parse_source_text(text)})
         verify_stable_config_file(file)
         return text, candidate

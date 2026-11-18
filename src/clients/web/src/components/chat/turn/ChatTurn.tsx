@@ -1,3 +1,4 @@
+import { ChatItemOwnerContext } from "../itemContextMenu";
 import React from "react";
 import { MessageSearchLocation } from "../messageSearchLocation";
 import type { TurnHistoryInclude } from "../../../api/session/sessionTurnHistory";
@@ -56,7 +57,7 @@ function ChatTurn({
     onReplayTurn,
   });
   return (
-    <article className="chat-turn" data-conversation-id={conversation.conversationId} data-turn-id={conversation.turnId} data-root-logical-item-ordinal={conversation.rootLogicalItemOrdinal}>
+    <ChatItemOwnerContext.Provider value={conversation.threadId ? { sessionId: conversation.sessionId, threadId: conversation.threadId } : null}><article className="chat-turn" data-conversation-id={conversation.conversationId} data-turn-id={conversation.turnId} data-root-logical-item-ordinal={conversation.rootLogicalItemOrdinal}>
       <MessageSearchLocation turnId={conversation.turnId} />
       <ChatTurnUserSection
         apiPort={apiPort}
@@ -88,7 +89,7 @@ function ChatTurn({
           />
         </div>
       </div>
-    </article>
+    </article></ChatItemOwnerContext.Provider>
   );
 }
 

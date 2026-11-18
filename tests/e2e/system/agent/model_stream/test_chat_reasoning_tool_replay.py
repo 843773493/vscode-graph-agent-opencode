@@ -132,10 +132,10 @@ async def test_chat_replay_records_reasoning_and_tool_call_loop(
 
     provider_response = await client.patch(
         f"/api/v1/sessions/{session_id}",
-        json={"provider_id": "primary"},
+        json={"model": {"provider_id": "primary", "model_id": "default"}},
     )
     assert provider_response.status_code == 200, provider_response.text
-    assert provider_response.json()["data"]["current_provider_id"] == "primary"
+    assert provider_response.json()["data"]["current_model"] == {"provider_id": "primary", "model_id": "default"}
 
     async with client.stream(
         "GET",

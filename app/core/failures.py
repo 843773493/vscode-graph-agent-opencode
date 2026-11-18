@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from collections.abc import Mapping
 from traceback import format_exception
-from typing import TypeVar
+from typing import TypedDict, TypeVar
 
 from pydantic import ValidationError
 
@@ -15,8 +15,33 @@ from app.domain.itemized.errors import ItemSchemaError
 logger = logging.getLogger(__name__)
 _PROVIDER_FAILURE_ATTRIBUTE = "_boxteam_provider_failure"
 _PUBLIC_FAILURE_ATTRIBUTE = "_boxteam_public_failure"
+_HTTP_FAILURE_ATTRIBUTE = "_boxteam_http_failure"
+HTTP_FAILURE_HEADER = "X-BoxTeam-Error-Context"
 _ProviderError = TypeVar("_ProviderError", bound=Exception)
 _PublicError = TypeVar("_PublicError", bound=BaseException)
+
+
+class HttpFailureContext(TypedDict, total=False):
+    source: dict[str, str]
+    target: dict[str, str]
+    stage: str
+    error_type: str
+    status_code: int
+
+
+def mark_http_failure(error: BaseException, context: HttpFailureContext) -> None:
+    """传输边界只登记已知事实，保留原异常身份供既有重试与收尾消费。"""
+    setattr(error, _HTTP_FAILURE_ATTRIBUTE, context)
+
+
+def http_failure_context(error: BaseException | None) -> HttpFailureContext:
+    """沿显式因果链寻找传输来源，业务包装不能丢失原失败位置。"""
+    while error is not None:
+        context: HttpFailureContext | None = getattr(error, _HTTP_FAILURE_ATTRIBUTE, None)
+        if context is not None:
+            return context.copy()
+        error = error.__cause__
+    return {}
 
 
 def mark_public_failure(error: _PublicError, message: str | None = None) -> _PublicError:

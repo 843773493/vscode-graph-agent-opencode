@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, cast
 
 from app.core.job_event_bus import EventType
 
@@ -36,7 +36,7 @@ class MessageStreamTraceObserver:
             block_id = self._required_block_id(payload)
             self._parts[block_id] = {
                 "kind": kind,
-                "text": "",
+                "text_chunks": [],
                 "carrier_type": carrier_type,
                 "content_block_index": payload.get("block_index", 0),
             }
@@ -56,7 +56,7 @@ class MessageStreamTraceObserver:
             text = payload.get("text")
             if not isinstance(text, str) or not text:
                 return
-            part["text"] = str(part.get("text") or "") + text
+            cast(list[str], part["text_chunks"]).append(text)
             await self._publish(
                 EventType.TEXT_DELTA,
                 {
@@ -70,7 +70,7 @@ class MessageStreamTraceObserver:
                 EventType.TEXT_END,
                 {
                     **self._trace_payload(block_id, part),
-                    "text": str(part.get("text") or ""),
+                    "text": "".join(cast(list[str], part["text_chunks"])),
                 },
             )
             del self._parts[block_id]

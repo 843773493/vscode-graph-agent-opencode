@@ -27,7 +27,7 @@ from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.serialization import normalize_wire_request
 from app.schemas.internal_v2.session_context import SessionContextResourceDTO
 
-ProviderInvocationPurpose = Literal["agent", "tool_test"]
+ProviderInvocationPurpose = Literal["agent", "tool_test", "model_test"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,9 +120,9 @@ def _require_dispatch(
 ) -> SealedAssemblyDispatch | None:
     """用途由真实构建方给出；缺 binding/admission 不产生直连豁免。"""
     value = _SEALED_ASSEMBLY_DISPATCH.get()
-    if invocation_purpose == "tool_test":
+    if invocation_purpose in {"tool_test", "model_test"}:
         if value is not None:
-            raise ValueError("source-mismatch: tool_test 调用不得消费 Agent assembly binding")
+            raise ValueError(f"source-mismatch: {invocation_purpose} 调用不得消费 Agent assembly binding")
         return None
     if invocation_purpose != "agent":
         raise ValueError("source-mismatch: Provider invocation_purpose 非法")

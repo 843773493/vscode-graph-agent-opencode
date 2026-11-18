@@ -377,3 +377,17 @@ def test_tool_lookup_keeps_direct_identity_and_lazy_error_boundary(codec) -> Non
     unresolved = result.model_copy(update={"tool_call_id": "missing"})
     with pytest.raises(ValueError, match="model_call_id 必须是非空字符串"):
         codec.tool_message_model_call_resolver((malformed, assistant, unresolved))(2)
+
+
+@pytest.mark.parametrize("tool_calls", [[], [{"id": "usage-call", "name": "get_goal", "args": {}}]])
+def test_model_usage_survives_canonical_projection_for_empty_and_tool_responses(codec, tool_calls):
+    message = AIMessage(content="", id="lc_run--usage-model", tool_calls=tool_calls,
+                        usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10})
+    arguments = {"item_sequence": 1, "message_id": message.id, "turn_id": None,
+                 "execution_id": "usage-execution", "timestamp": "2026-11-17T00:00:00+00:00"}
+    items = codec.items_for_message(message, **arguments)
+    anchor = items[-1]
+    assert anchor.projection_identity.model_call_id == "usage-model"
+    assert anchor.extensions["boxteam.checkpoint.annotations"]["value"]["model_token_usage"] == 10
+    restored = codec.from_dict(codec.project_message(items))
+    assert codec.items_for_message(restored, canonical_items=items, **arguments) == items

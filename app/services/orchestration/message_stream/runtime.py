@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from io import StringIO
 
 from langchain_core.messages import AIMessage
 
@@ -85,15 +86,13 @@ class MessageStreamRuntime(
         self._block_metadata: dict[str, tuple[int, str]] = {}
         self._block_local_seq: dict[str, int] = {}
         self._block_model_call_ids: dict[str, str | None] = {}
-        self._normalized_text_by_block: dict[str, str] = {}
-        self._normalized_carrier_by_block: dict[str, str] = {}
+        self._normalized_text_chunks_by_block: dict[str, list[str]] = {}
         self._normalized_block_model_call_ids: dict[str, str | None] = {}
         self._tool_call_ids_by_index: dict[tuple[str | None, int], str] = {}
         self._tool_call_indexes_by_id: dict[str, int] = {}
         self._tool_call_order: list[str] = []
         self._tool_call_names_by_id: dict[str, str] = {}
-        self._tool_call_arguments: dict[str, str] = {}
-        self._tool_call_arguments_by_id: dict[str, dict[str, object]] = {}
+        self._tool_call_arguments: dict[str, StringIO] = {}
         self._tool_call_arguments_complete: dict[str, bool] = {}
         self._provider_tool_call_ids_by_id: dict[str, str] = {}
         self._tool_call_ids_by_provider_key: dict[tuple[str | None, str], str] = {}
@@ -156,8 +155,8 @@ class MessageStreamRuntime(
             self._tool_call_ids_by_index[(model_call_id, index)] = call_id
             self._tool_call_indexes_by_id[call_id] = index
             self._tool_call_names_by_id[call_id] = call["name"]
-            self._tool_call_arguments_by_id[call_id] = dict(call["args"])
-            self._tool_call_arguments[call_id] = json.dumps(call["args"], ensure_ascii=False)
+            self._tool_call_arguments[call_id] = StringIO()
+            self._tool_call_arguments[call_id].write(json.dumps(call["args"], ensure_ascii=False))
             self._tool_call_arguments_complete[call_id] = True
             self._provider_tool_call_ids_by_id[call_id] = provider_id
             self._tool_call_ids_by_provider_key[(model_call_id, provider_id)] = call_id

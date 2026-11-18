@@ -376,19 +376,30 @@ def _sequence_scenario() -> StreamScenario:
 
 
 @pytest.mark.asyncio
-async def test_litellm_replay_preserves_provider_url_and_parser_chain(transport_dispatch) -> None:
+@pytest.mark.parametrize("client_mode", ["shared", "no_proxy", "anonymous"])
+async def test_litellm_replay_preserves_provider_url_and_parser_chain(transport_dispatch, client_mode: str) -> None:
     config = load_model_stream_config(CHAT_BASIC_CONFIG_PATH)
     controller = ModelStreamTransportController.configure(config)
     if controller is None:
         raise RuntimeError("model stream replay controller 未安装")
     try:
-        text = await _visible_text(transport_dispatch(_model()), "测试 LiteLLM replay")
-
-        assert text == "基础回放"
+        for _ in range(2):
+            model = _model()
+            if client_mode == "no_proxy":
+                model.no_proxy = True
+            elif client_mode == "anonymous":
+                model.api_key = ""
+            try:
+                text = await _visible_text(transport_dispatch(model), "测试 LiteLLM replay")
+                assert text == "基础回放"
+            finally:
+                await model.aclose()
+            assert controller.client is not None and not controller.client.is_closed
         assert controller.transport.request_urls == (
             "https://opencode.ai/zen/v1/chat/completions",
+            "https://opencode.ai/zen/v1/chat/completions",
         )
-        assert controller.transport.hit_counts == {0: 1}
+        assert controller.transport.hit_counts == {0: 2}
     finally:
         await controller.aclose()
 

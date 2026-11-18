@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import NoReturn
 
@@ -54,19 +54,19 @@ async def config_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncI
     )
     monkeypatch.setenv("TEST_CONFIG_KEY", "test-key")
     payload: dict[str, object] = {
-        "config_version": 2,
-        "llm": {"providers": [{
-            "id": "primary", "endpoint": "https://example.com/v1", "model": "model-a",
+        "config_version": 3,
+        "llm": {"providers": {"primary": {"defaults": {
+            "endpoint": "https://example.com/v1",
             "api_key": "${TEST_CONFIG_KEY}", "custom_llm_provider": "openai",
             "api_mode": {"protocol": "chat_completions", "model_info": {
                 "supports_function_calling": True, "supports_reasoning": True,
             }, "supports_reasoning": {"reasoning_content": True}},
-        }]},
+        }, "models": {"default": {"model": "model-a"}}}}},
         "default_agent": "default",
         "agents": {"default": {
             "name": "Default Agent", "instructions": {"system_prompt": "hello"},
-            "model": {"primary_provider": "primary", "fallback_providers": []},
-        }, **{name: {"model": {"primary_provider": "primary", "fallback_providers": []}}
+            "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
+        }, **{name: {"model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}}
               for name in ("coder", "reviewer", "researcher")}},
     }
     path = tmp_path / "workspace.jsonc"
@@ -99,11 +99,11 @@ async def source_edit_case(config_case: ConfigCase) -> AsyncIterator[tuple[Confi
     case = config_case
     source = case.workspace / ".boxteam/workspace.jsonc"
     llm = json.loads(json.dumps(case.payload["llm"]))
-    llm["providers"][0]["api_key"] = "literal-source-secret"
     source.write_text("// 原来源注释\n" + json.dumps({
         "ui": {"auto_summarize": True, "ignored_paths": ["source-only"]}, "llm": llm,
         "mcp": {"servers": {"private": {"enabled": False, "transport": "streamable_http",
-            "url": "https://example.com/mcp", "headers": {"Authorization": "Bearer source-secret"}}}},
+            "url": "https://example.com/mcp", "headers": {
+                "Authorization": "Bearer source-secret", "X-Private-Test": "literal-source-secret"}}}},
     }, ensure_ascii=False, indent=2).replace('"literal-source-secret"', '"literal-source-secr\\u0065t"') + "\n", encoding="utf-8")
     await case.service.reload()
     async with AsyncClient(transport=ASGITransport(app=case.app), base_url="http://test",
@@ -166,7 +166,7 @@ async def test_source_preflight_is_read_only_and_save_preserves_secrets_comments
     assert queried.json()["data"]["edit"] == result["edit"]
 
 
-@pytest.mark.parametrize("mutation", ["file", "layer", "active", "gateway", "workspace", "source", "invalid", "provider_endpoint", "provider_id"])
+@pytest.mark.parametrize("mutation", ["file", "layer", "active", "gateway", "workspace", "source", "invalid", "mcp_url", "mcp_id"])
 async def test_source_edit_rejects_stale_or_misbound_input_without_writing(source_edit_case, mutation) -> None:
     case, client = source_edit_case
     source = case.workspace / ".boxteam/workspace.jsonc"
@@ -188,17 +188,17 @@ async def test_source_edit_rejects_stale_or_misbound_input_without_writing(sourc
         request["jsonc"] = '{"unknown_source_setting":true}'
     else:
         request["jsonc"] = document["jsonc"].replace(
-            '"endpoint": "https://example.com/v1"' if mutation == "provider_endpoint" else '"id": "primary"',
-            '"endpoint": "https://other.example/v1"' if mutation == "provider_endpoint" else '"id": "other"')
+            '"url": "https://example.com/mcp"' if mutation == "mcp_url" else '"private": {',
+            '"url": "https://other.example/mcp"' if mutation == "mcp_url" else '"other": {')
     original, rows, snapshot = source.read_bytes(), _source_rows(case), case.service.get_snapshot()
     response = await client.put(_SOURCE_URL, json=request)
-    assert response.status_code == (422 if mutation in {"invalid", "provider_endpoint", "provider_id"} else 409), response.text
+    assert response.status_code == (422 if mutation in {"invalid", "mcp_url", "mcp_id"} else 409), response.text
     assert source.read_bytes() == original and _source_rows(case) == rows and case.service.get_snapshot() is snapshot
     assert "literal-source-secret" not in response.text and "Bearer source-secret" not in response.text
 
 
 @pytest.mark.parametrize("masked", [False, True])
-async def test_source_noop_keeps_active_and_events_and_uses_original_candidate_for_idempotency(source_edit_case, masked) -> None:
+async def test_source_noop_refreshes_baseline_without_execution_revision_or_events(source_edit_case, masked) -> None:
     case, client = source_edit_case
     if masked:
         from app.schemas.internal_v2.config import ConfigUpdateRequest
@@ -216,10 +216,29 @@ async def test_source_noop_keeps_active_and_events_and_uses_original_candidate_f
     request = _source_edit_request(document, text, f"source-unchanged-{masked}")
     response = await client.put(_SOURCE_URL, json=request)
     assert response.status_code == 200, response.text
-    assert response.json()["data"]["edit"]["state"] == "active"
-    assert case.store.get_active_config_snapshot("workspace") == active and case.service.list_config_events() == events
+    receipt = response.json()["data"]["edit"]
+    assert receipt["state"] == "active"
+    updated = case.store.get_active_config_snapshot("workspace")
+    # 来源观察必须前进，否则旧页面会把新来源误当成原基线；执行版本仍保持。
+    assert updated.source_generation == active.source_generation + 1
+    assert updated.layer_revisions == active.layer_revisions | {_SOURCE_KEY: active.layer_revisions[_SOURCE_KEY] + 1}
+    assert updated.layer_digests == active.layer_digests | {_SOURCE_KEY: receipt["file_digest"]}
+    assert replace(updated, source_baseline=active.source_baseline, source_generation=active.source_generation,
+                   layer_revisions=active.layer_revisions, layer_digests=active.layer_digests) == active
+    saved_document = (await client.get(_SOURCE_URL)).json()["data"]
+    baseline_fields = ("uri", "presence", "layer_revision", "layer_digest", "source_generation")
+    assert {
+        key: {field: detail[field] for field in baseline_fields}
+        for key, detail in updated.source_baseline.items()
+    } == {
+        key: {field: detail[field] for field in baseline_fields}
+        for key, detail in saved_document["source_baseline"].items()
+    }
+    assert saved_document["file_presence"] == "present"
+    assert saved_document["file_digest"] == saved_document["layer_digest"] == receipt["file_digest"]
+    assert case.service.list_config_events() == events
     assert (await client.put(_SOURCE_URL, json=request)).status_code == 200
-    assert case.store.get_active_config_snapshot("workspace") == active and case.service.list_config_events() == events
+    assert case.store.get_active_config_snapshot("workspace") == updated and case.service.list_config_events() == events
 
 
 async def test_source_saved_pending_is_observable_and_not_replayed(source_edit_case) -> None:
@@ -548,7 +567,7 @@ async def test_failure_state_persists_facts_and_recovers_through_original_owner(
     revision = case.service.get_revision()
     candidate = case.payload | {"agents": {"default": {
         "name": "Updated Agent", "instructions": {"system_prompt": "hello"},
-        "model": {"primary_provider": "primary", "fallback_providers": []},
+        "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
     }}}
     case.config_path.write_text(json.dumps(candidate), encoding="utf-8")
     original = PermissionError(13, f"配置故障 {native}", native)
@@ -654,7 +673,7 @@ async def test_gateway_restart_failure_posts_facts_to_real_workspace_owner(
     active = case.store.get_active_config_snapshot("workspace")
     candidate = case.payload | {"agents": {"default": {
         "name": "Restart Agent", "instructions": {"system_prompt": "hello"},
-        "model": {"primary_provider": "primary", "fallback_providers": []},
+        "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
     }}}
     case.config_path.write_text(json.dumps(candidate), encoding="utf-8")
 

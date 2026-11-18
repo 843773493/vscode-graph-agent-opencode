@@ -18,7 +18,8 @@ import {
   type StoredFileIntent,
   type WorkspaceFileIntentStore,
 } from "../../../state/workspaceFiles/intentStore";
-import { errorDisplayMessage } from "../../../utils/errorMessage";
+import { errorDisplayMessage, isErrorReported } from "../../../utils/errorMessage";
+import { localDatabaseError } from "../../../state/browserPersistence";
 
 interface FileOperationOptions {
   port: number;
@@ -69,6 +70,8 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
         }
         return { store, scope: { ...owner, workspaceRoot: fileRoots.workspace_uri, actor: "local" } };
       })();
+      const opening = driver.current;
+      void opening.catch(() => { if (driver.current === opening) driver.current = null; });
     }
     return await driver.current;
   }, [port, workspaceId]);
@@ -176,7 +179,11 @@ export function useWorkspaceFileOperations(options: FileOperationOptions) {
         const store = await openWorkspaceFileIntentStore();
         if ((await store.loadForWorkspace(workspaceOwnerFromKey(workspaceId))).length > 0) await run();
       }
-      catch (error) { if (!stopped) callbacks.current.onError(errorDisplayMessage(error)); }
+      catch (error) {
+        if (!stopped && !isErrorReported(error)) callbacks.current.onError(errorDisplayMessage(error));
+        // 存储故障需明确恢复，不能每 500ms 重开同一个受阻数据库。
+        if (localDatabaseError(error)) return;
+      }
       if (!stopped) timer = setTimeout(() => void poll(), 500);
     };
     void poll();

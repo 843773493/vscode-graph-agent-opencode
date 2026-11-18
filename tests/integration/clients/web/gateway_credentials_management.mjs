@@ -49,10 +49,10 @@ try {
     if (!response.ok || body.request_id !== response.headers.get('X-Request-ID')) throw new Error(JSON.stringify(body));
     return { status: response.status, requestId: body.request_id, data: body.data };
   }, { url, method, owner: fixture });
-  const control = page.locator('.gateway-control-shell');
+  const control = page.locator('.settings-editor:visible');
   const closeControl = async () => {
-    await page.getByRole('button', { name: '关闭 Gateway 控制中心', exact: true }).click();
-    await expect(control).toBeHidden();
+    await command('workbench.action.closeActiveEditor');
+    await expect(page.locator('.settings-management-view:visible')).toHaveCount(0);
   };
   await page.goto(fixture.baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#workbench .monaco-workbench')).toBeVisible({ timeout: 30000 });
@@ -66,12 +66,12 @@ try {
   result.phase = 'command-menu-and-demand-loading';
   const otherGatewayId = fixture.gatewayId.slice(0, -1) + (fixture.gatewayId.endsWith('0') ? '1' : '0');
   await assert.rejects(command('boxteam.gateway.credentials', otherGatewayId), /Gateway 或访问凭据已改变/);
-  await expect(control).toBeHidden();
+  await expect(page.locator('.settings-management-view:visible')).toHaveCount(0);
   await command('boxteam.gateway.connections');
   await expect(control.getByRole('heading', { name: '连接管理', exact: true })).toBeVisible();
   assert.equal(result.requests.length, 0, '连接页不应提前读取设备或入站授权');
   await closeControl();
-  await page.getByRole('button', { name: '管理', exact: true }).click();
+  await page.getByRole('button', { name: '帐户', exact: true }).click();
   await expect(page.getByRole('menuitem', { name: '连接与凭据', exact: true })).toBeVisible();
   const firstStarted = performance.now();
   await page.getByRole('menuitem', { name: '连接与凭据', exact: true }).click();
@@ -190,7 +190,7 @@ try {
   await Promise.all([...pending]);
   const closedReads = result.requests.length;
   await page.waitForTimeout(600);
-  assert.equal(result.requests.length, closedReads, '关闭控制中心后不能继续读设备或授权');
+  assert.equal(result.requests.length, closedReads, '关闭设置页后不能继续读设备或授权');
   await command('boxteam.flushViewState');
   result.secretAbsentFromStorage = !(await page.evaluate(async needles => {
     const leaks = value => needles.some(needle => String(value).includes(needle));

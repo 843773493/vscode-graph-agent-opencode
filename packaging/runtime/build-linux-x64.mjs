@@ -2,12 +2,14 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { extract as extractTar } from "tar";
+import { parse as parseJsonc } from "jsonc-parser";
 
 import {
   BOXTEAM_VERSION,
@@ -145,6 +147,7 @@ function installChromium(applicationRoot, chromiumRoot, nodeExecutable) {
 }
 
 function writeRuntimeMetadata({ chromiumExecutable }) {
+  const plugin = parseJsonc(readFileSync(path.join(projectRoot, "resources/plugins/developer-tools/plugin.jsonc"), "utf8"));
   const manifest = {
     schema_version: 1,
     distribution: "npm",
@@ -159,6 +162,8 @@ function writeRuntimeMetadata({ chromiumExecutable }) {
       workspace_schema: "application/configs/workspace_schema.jsonc",
     },
     skill_resources: "application/resources/skills",
+    bundled_plugins: [{ package_id: plugin.package_id, package_version: plugin.version,
+      archive: "application/resources/plugins/developer-tools.zip" }],
     web_assets: "web",
     chromium_executable: path.relative(runtimePackageRoot, chromiumExecutable),
     node: {

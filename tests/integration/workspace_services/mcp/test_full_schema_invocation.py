@@ -31,16 +31,18 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogRelistError
-from app.services.infrastructure.mcp.catalog_activation import (
-    MCP_TOOL_CATALOG_RESOURCE_ID,
+from app.services.infrastructure.mcp.catalog_publication import (
     McpCatalogResourcePublisher,
-    extension_dispatch_from_activation,
 )
-from app.services.infrastructure.mcp.extension_catalog import extension_schema_hash
+from app.services.infrastructure.mcp.extension_catalog import (
+    MCP_TOOL_CATALOG_RESOURCE_ID,
+    extension_schema_hash,
+)
+from app.services.infrastructure.mcp.frozen_catalog import (
+    restore_frozen_extension_dispatch,
+    restore_frozen_tool_catalog,
+)
 from app.services.infrastructure.mcp.invocation import McpResourceUse
-from app.services.infrastructure.mcp.tool_definitions import (
-    tool_catalog_from_activation,
-)
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
 )
@@ -338,7 +340,7 @@ async def test_search_frozen_full_definition_then_execute_real_bridge(
             frozen = activation["activation_snapshot"]
 
             def catalog(owner):
-                return tool_catalog_from_activation(
+                return restore_frozen_tool_catalog(
                     frozen, lambda snapshot, binding: owner.read_resource_activation_payload(snapshot, binding, storage_owner=(session, thread)),
                 )
 
@@ -375,7 +377,7 @@ async def test_search_frozen_full_definition_then_execute_real_bridge(
             assert entry["effective_policy"]["model_visible"] is False
             assert case.received() == []
             parent, = (binding for binding in frozen.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
-            dispatch = extension_dispatch_from_activation(
+            dispatch = restore_frozen_extension_dispatch(
                 snapshot=frozen, binding=parent, model_call_id=activation["model_call_id"],
                 payload=saver.read_resource_activation_payload(frozen, parent, storage_owner=(session, thread)),
             )

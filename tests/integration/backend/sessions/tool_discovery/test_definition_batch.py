@@ -20,8 +20,8 @@ from app.domain.itemized.mutation_intents import MutationIntentOwner
 from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionCatalogUnavailableError,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
-    tool_catalog_from_activation,
+from app.services.infrastructure.mcp.frozen_catalog import (
+    restore_frozen_tool_catalog,
 )
 from app.services.infrastructure.rollout_context.checkpoint.durable import (
     source_activation,
@@ -58,7 +58,7 @@ def discovered_batch(prepare_tool_context, registry_db, discovery_tool_factory):
     async def create(source_count, call_count, *, damage=None, compact=True, split_calls=False):
         wire, activation = prepare_tool_context("batch-discovery-start")
         snapshot = wire["snapshot"]
-        catalog = tool_catalog_from_activation(activation, lambda frozen, binding: saver.read_resource_activation_payload(
+        catalog = restore_frozen_tool_catalog(activation, lambda frozen, binding: saver.read_resource_activation_payload(
             frozen, binding, storage_owner=(session, thread),
         ))
         resolver = ToolPolicyResolver(policy_defaults={"model_visible": False}, policy_rules={}, restrictions={})
@@ -319,7 +319,7 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
     saver, session, connection, _accepted = registry_db
     thread = saver._storage.storage.main_thread_id(session)
     load = RolloutCheckpointSaver.load_tool_call_resource_activation
-    catalog = preparation.tool_catalog_from_activation
+    catalog = preparation.restore_frozen_tool_catalog
     read = RolloutCheckpointSaver.read_resource_activation_payload
     source_values = tool_definitions.definition_source_values
     phases = []
@@ -344,7 +344,7 @@ async def test_prepare_reads_discovered_catalog_once_per_activation(
             yield value, revision
 
     monkeypatch.setattr(RolloutCheckpointSaver, "load_tool_call_resource_activation", observe_load)
-    monkeypatch.setattr(preparation, "tool_catalog_from_activation", observe_catalog)
+    monkeypatch.setattr(preparation, "restore_frozen_tool_catalog", observe_catalog)
     monkeypatch.setattr(RolloutCheckpointSaver, "read_resource_activation_payload", observe_read)
     monkeypatch.setattr(tool_definitions, "definition_source_values", observe_source_values)
     with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:

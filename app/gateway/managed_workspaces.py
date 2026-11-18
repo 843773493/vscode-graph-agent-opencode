@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from app.core.failures import mark_public_failure
 from app.core.identifier import create_uuid_hex
 from app.core.shielded_cleanup import run_cleanup_shielded
 from app.gateway.config import GatewayConfigReloadService
@@ -85,7 +86,10 @@ async def create_direct_managed_workspace(
                 create_directory=create_directory,
             )
             if registry.has_target(workspace_id):
-                raise ValueError("所选工作区已经由当前 Gateway 托管")
+                raise mark_public_failure(
+                    ValueError("所选工作区已经由当前 Gateway 托管"),
+                    "所选工作区已添加，请从资源管理器打开已有工作区。",
+                )
             return registry.upsert(WorkspaceTarget(
                 gateway_id=registry.gateway_id, workspace_id=workspace_id,
                 name=name or workspace_root.name or "workspace", name_customized=bool(name),

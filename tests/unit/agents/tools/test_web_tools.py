@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 from app.agents.tools import web as web_tools
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +40,7 @@ def _hermetic_proxy_env(monkeypatch: pytest.MonkeyPatch):
 
 class _FakeEmbeddingComputer:
     provider_id = "embedding_test"
+    model_id = "semantic"
     model = "semantic-test-model"
 
     async def compute(self, inputs: Sequence[str]) -> list[list[float]]:
@@ -159,6 +162,7 @@ async def test_fetch_webpage_returns_all_page_metadata(
         assert max_chars == 1_500
         assert ranker is not None
         assert ranker.query == "needle"
+        assert await ranker.score(["matching page"]) == [1.0]
         return {
             "url": url,
             "final_url": url,
@@ -170,22 +174,25 @@ async def test_fetch_webpage_returns_all_page_metadata(
     context = MagicMock()
     context.tool_options = {
         "embedding": {
-            "provider_id": "embedding_test",
+            "model_ref": {"provider_id": "embedding_test", "model_id": "semantic"},
             "model": "semantic-test-model",
         }
     }
-    context.config_service.get_llm_provider.return_value = {
-        "id": "embedding_test",
+    context.config_service.resolve_llm_model = AsyncMock(return_value={
+        "provider_id": "embedding_test",
+        "model_id": "semantic",
         "endpoint": "https://example.com/v1",
         "model": "unused",
         "api_key": "test-key",
         "custom_llm_provider": "openai",
-    }
-    monkeypatch.setattr(
-        web_tools.LiteLLMEmbeddingComputer,
-        "from_provider",
-        lambda provider, model=None: _FakeEmbeddingComputer(),
-    )
+    })
+    async def embed(**kwargs: object) -> SimpleNamespace:
+        assert kwargs["model"] == "semantic-test-model"
+        assert kwargs["api_base"] == "https://example.com/v1"
+        assert kwargs["api_key"] == "test-key"
+        return SimpleNamespace(data=[{"embedding": [1, 0]} for _ in kwargs["input"]])
+
+    monkeypatch.setattr("litellm.aembedding", embed)
     tool = web_tools.create_fetch_webpage_tool(context)
     urls = ["https://example.com/a", "https://example.com/b"]
 
@@ -202,9 +209,13 @@ async def test_fetch_webpage_returns_all_page_metadata(
     assert result["requested_url_count"] == 2
     assert result["returned_page_count"] == 2
     assert result["content_is_untrusted"] is True
+    context.config_service.resolve_llm_model.assert_awaited_once_with(
+        ModelReferenceDTO(provider_id="embedding_test", model_id="semantic"),
+    )
     assert result["content_selection"] == {
         "strategy": "semantic_embedding",
         "provider_id": "embedding_test",
+        "model_id": "semantic",
         "model": "semantic-test-model",
     }
     assert [page["url"] for page in result["pages"]] == urls

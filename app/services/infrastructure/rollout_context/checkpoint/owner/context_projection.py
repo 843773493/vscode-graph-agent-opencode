@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from langchain_core.messages import BaseMessage
 
 from app.abstractions.session_context import SessionContextHistoryProjection
+from app.agents.providers.wire_finalize import ResponsesWireProfile
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.dispatch_ref import SealedContextDispatchRef
 from app.domain.itemized.hashing import (
@@ -224,6 +225,7 @@ class ContextProjectionOwnerMixin:
         items: Mapping[tuple[str, str, str], CanonicalItemRecord],
         request_content: Mapping[str, object],
         *, resource_refs: tuple[SessionContextResourceDTO, ...],
+        wire_profile: ResponsesWireProfile | None = None,
     ) -> tuple[list[BaseMessage] | None, dict[str, object]]:
         """只消费本次读取的材料，不自行重读或重新选择 context。"""
         from app.services.infrastructure.rollout_context.provider.native_request import (
@@ -234,6 +236,8 @@ class ContextProjectionOwnerMixin:
             context.plan, items, request_content,
             seal_binding=context.assembly.seal_binding,
             attachment_projector=lambda payload: self._storage.attachment_projection.project_attachment_payload(session_id, thread_id, payload),
+            target_source=wire_profile.model_source if wire_profile is not None else None,
+            target_capabilities=wire_profile.replay_capabilities() if wire_profile is not None else frozenset(),
         )
         # wire projector 只编码请求；同次已验证的 owner/hash 不再由它重算。
         native.update(

@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -9,7 +10,12 @@ from fastapi.responses import JSONResponse
 from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.core.failures import failure_detail, public_failure_message
+from app.core.failures import (
+    HTTP_FAILURE_HEADER,
+    failure_detail,
+    http_failure_context,
+    public_failure_message,
+)
 from app.core.identifier import create_uuid_hex, validate_gateway_id
 
 logger = logging.getLogger(__name__)
@@ -139,6 +145,33 @@ def require_current_navigation_actor(consumer: str) -> str:
     return actor
 
 
+def http_failure_headers(request: HTTPConnection, error: BaseException | None = None) -> dict[str, str]:
+    """只在失败时组装来源；不读取身份文件、不复制凭据、URL 或原异常正文。"""
+    # HTTP 头不区分大小写；已有来源由原响应传回，避免两份 JSON 合并成非法头部。
+    if any(name.lower() == HTTP_FAILURE_HEADER.lower() for name in (getattr(error, "headers", None) or {})):
+        return {}
+    context = http_failure_context(error)
+    context.setdefault("stage", "http_request")
+    if error is not None:
+        context.setdefault("error_type", type(error).__name__)
+    source = {"component": request.scope["state"].get("http_component", "http_service")}
+    state = getattr(request.scope.get("app"), "state", None)
+    if source["component"] == "gateway":
+        registry = getattr(state, "registry", None)
+        if registry is not None:
+            source["gateway_id"] = registry.gateway_id
+    elif source["component"] == "workspace_backend":
+        backend_id = getattr(state, "backend_id", None)
+        if backend_id is not None:
+            source["backend_id"] = backend_id
+        registry = getattr(state, "workspace_container_registry", None)
+        workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")
+        if registry is not None and workspace_id is not None and workspace_id in registry.workspace_ids:
+            source["workspace_id"] = workspace_id
+    context["source"] = source
+    return {HTTP_FAILURE_HEADER: json.dumps(context, separators=(",", ":"))}
+
+
 class TraceMiddleware:
     """
     Middleware for request tracing and performance logging.
@@ -151,8 +184,10 @@ class TraceMiddleware:
     """
     
     def __init__(self, app: ASGIApp, *,
+                 component: str = "http_service",
                  on_request_complete: Callable[[Scope, int, float, bool], None] | None = None) -> None:
         self.app = app
+        self.component = component
         self.on_request_complete = on_request_complete
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -176,6 +211,7 @@ class TraceMiddleware:
 
         # Attach trace info to request state
         request.state.request_id = request_id
+        request.state.http_component = self.component
         request.state.start_time = start_time
         # 同时绑定到请求级 ContextVar：后台 job 创建点在请求作用域内读取该值，
         # 显式随 job 携带，避免下游补造第二个 request ID。
@@ -216,6 +252,9 @@ class TraceMiddleware:
                     if name.lower() != b"x-request-id"
                 ]
                 headers.append((b"x-request-id", request_id.encode("latin-1")))
+                if response_status >= 400 and not any(name.lower() == HTTP_FAILURE_HEADER.lower().encode() for name, _ in headers):
+                    headers.extend((name.lower().encode(), value.encode("ascii"))
+                                   for name, value in http_failure_headers(request).items())
                 message = {**message, "headers": headers}
             await send(message)
 
@@ -240,11 +279,12 @@ class TraceMiddleware:
                 )
             if response_started:
                 raise
+            status_code = http_failure_context(error).get("status_code", 500)
             response = JSONResponse(
-                status_code=500,
-                headers={"X-Request-ID": request_id},
+                status_code=status_code,
+                headers={"X-Request-ID": request_id, **http_failure_headers(request, error)},
                 content={
-                    "code": 500,
+                    "code": status_code,
                     "message": message,
                     "data": None,
                     "request_id": request_id,

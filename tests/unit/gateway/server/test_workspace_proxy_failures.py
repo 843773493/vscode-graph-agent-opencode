@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator
 from pathlib import Path
@@ -10,6 +11,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 
+from app.core.failures import HTTP_FAILURE_HEADER
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import GatewayAuthContext, verify_gateway_access
 from app.gateway.main import gateway_http_exception_handler
@@ -117,7 +119,7 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
         return httpx.Response(200, json={"ok": True, "request_id": request.headers["X-Request-ID"]})
 
     app = FastAPI()
-    app.add_middleware(TraceMiddleware)
+    app.add_middleware(TraceMiddleware, component="gateway")
     app.exception_handler(HTTPException)(gateway_http_exception_handler)
     app.include_router(workspace_router)
     # 单测在认证依赖边界提供已验证上下文，不替生产创建业务或资源状态。
@@ -134,6 +136,11 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
             assert failed.status_code == 502, failed.text
             assert failed.headers["X-Request-ID"] == failed.json()["request_id"] == "proxy-serialized-failure"
             assert "error_type=ConnectError" in failed.json()["detail"]
+            context = json.loads(failed.headers[HTTP_FAILURE_HEADER])
+            assert context["source"] == {"component": "gateway", "gateway_id": registry.gateway_id}
+            assert context["stage"] == "upstream_request"
+            assert context["error_type"] == "ConnectError"
+            assert context["target"]["workspace_id"] == WORKSPACE_ID
             assert "proxy-native-marker" not in failed.text and native_path not in failed.text
             assert "http://127.0.0.1:4100" not in failed.text
             assert len(calls) == 1 and registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)
@@ -141,6 +148,7 @@ async def test_proxy_routes_serialize_safe_failure_and_allow_explicit_retry(
                 "X-Request-ID": "proxy-serialized-retry", "X-BoxTeam-Workspace-Id": WORKSPACE_ID,
             })
             assert recovered.status_code == 200 and recovered.json() == {"ok": True, "request_id": "proxy-serialized-retry"}
+            assert HTTP_FAILURE_HEADER not in recovered.headers
             assert recovered.headers["X-Request-ID"] == "proxy-serialized-retry"
             assert len(calls) == 2 and registry.route_reference_counts((registry.gateway_id, WORKSPACE_ID)) == (0, 0)
     assert [call.headers["X-Request-ID"] for call in calls] == ["proxy-serialized-failure", "proxy-serialized-retry"]

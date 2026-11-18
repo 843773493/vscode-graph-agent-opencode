@@ -275,7 +275,7 @@ describe("ChatPanel Virtuoso 渲染引用", () => {
     expect(renderer!.root.findAllByProps({ role: "alert" })).toHaveLength(1);
     expect(renderer!.root.findAll(
       (node) => node.children.includes("正在加载更早消息…"),
-    )).toHaveLength(1);
+    )).toHaveLength(0);
     const retryButton = renderer!.root.findByProps({ children: "重试" });
     retryButton.props.onClick();
     expect(retryCount).toBe(1);

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.domain.background_work import BackgroundTaskHandle
+from app.domain.background_work import BackgroundTaskHandle, BackgroundTaskSummary
 from app.schemas.internal_v2.session_resource import (
     SessionResourceAction,
     SessionResourceDTO,
@@ -12,7 +12,7 @@ from app.schemas.internal_v2.session_resource import (
 
 
 def background_task_to_session_resource(
-    handle: BackgroundTaskHandle,
+    handle: BackgroundTaskHandle | BackgroundTaskSummary,
     *,
     available_actions: list[SessionResourceAction],
 ) -> SessionResourceDTO:
@@ -29,7 +29,7 @@ def background_task_to_session_resource(
         ended_at=handle.ended_at,
         available_actions=available_actions,
         metadata={**handle.metadata, "thread_id": handle.thread_id, "agent_id": handle.agent_id,
-                  "descriptor_kind": handle.descriptor.kind, "descriptor_version": handle.descriptor.version},
+                  "descriptor_kind": handle.task_name, "descriptor_version": handle.descriptor_version},
     )
 
 

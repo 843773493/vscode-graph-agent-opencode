@@ -359,7 +359,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
     workspace = admission_harness.workspace
     service = admission_harness.job_service
     session_id = await workspace.create_session(
-        "活跃任务删除排空", current_provider_id="test-provider",
+        "活跃任务删除排空", current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     thread_id = workspace.resolver.main_thread_id(session_id)
     admission_harness.executor.hold = True
@@ -375,7 +375,7 @@ async def test_catalog_delete_settles_active_and_queued_jobs_before_isolation(
             queued_message,
             execution_identity=identity, queue_input=ExecutionQueueInput(
             execution_binding=identity, message_id=queued_message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=queued_message.created_at.isoformat(),
         ),
         )
@@ -457,11 +457,11 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
     message_bus = admission_harness.message_bus
     target_session_id = await workspace.create_session(
         "删除后准入拒绝",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     active_session_id = await workspace.create_session(
         "删除失败不影响",
-        current_provider_id="test-provider",
+        current_model_json=json.dumps({"provider_id": "test-provider", "model_id": "default"}),
     )
     target_thread_id = workspace.resolver.main_thread_id(target_session_id)
     active_thread_id = workspace.resolver.main_thread_id(active_session_id)
@@ -576,7 +576,7 @@ async def test_catalog_delete_drain_failure_rejects_late_admission(
         queued_message,
         execution_identity=active_identity, queue_input=ExecutionQueueInput(
         execution_binding=active_identity, message_id=queued_message.message_id, agent_id="default",
-        provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+        model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
         created_at=queued_message.created_at.isoformat(),
     ),
     )

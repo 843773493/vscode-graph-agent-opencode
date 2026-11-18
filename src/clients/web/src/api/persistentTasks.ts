@@ -1,21 +1,32 @@
-import type { APIResponse } from "../types/backend";
+import type { APIResponse, SessionGoalSnapshotDTO } from "../types/backend";
 import type { PersistentTaskChangedDTO, PersistentTaskConfigurationDTO, PersistentTaskDTO, PersistentTaskListDTO, PersistentTaskRunDTO, PersistentTaskRunSummaryDTO, PersistentTaskRunListDTO, PersistentTaskRunDetailDTO, TaskRuntimeStatusDTO, TaskThreadTargetDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import { validatePersistentTaskChangedDTO, validatePersistentTaskListDTO } from "../../../../shared/sseRuntimeValidators.js";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../sse/sseClient";
+import { decodeJsonSseData, defineSseEvent, SseProtocolError } from "../sse/sseClient";
+import { consumeWorkspaceObservation } from "./stream/workspaceObservation";
+import { parseSessionGoalSnapshot } from "../protocol/sessionGoal";
 import { validateSseError } from "../sse/sseRuntimeSchemas";
-import { gatewayWorkspaceRequestHeaders, requestGatewayResponse, requestJson, unwrapApiData } from "./http";
+import { gatewayWorkspaceRequestHeaders, requestJson, unwrapApiData, HttpRequestError } from "./http";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
+import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS, sessionStreamReconnectDelay } from "../hooks/sessionEventStream/sessionEventStreamPolicy";
+import { waitForReconnect } from "../hooks/sessionEventStream/waitForReconnect";
 
 export type { PersistentTaskChangedDTO, PersistentTaskConfigurationDTO, PersistentTaskDTO, PersistentTaskRunDTO, PersistentTaskRunSummaryDTO, PersistentTaskRunListDTO, PersistentTaskRunDetailDTO, TaskRuntimeStatusDTO, TaskThreadTargetDTO };
-export type PersistentTaskSnapshot = PersistentTaskListDTO & { runtime: TaskRuntimeStatusDTO };
+export type PersistentTaskSnapshot = Omit<PersistentTaskListDTO, "session_goal"> & { runtime: TaskRuntimeStatusDTO; session_goal?: SessionGoalSnapshotDTO | null };
 export type TaskObservation = { snapshot: PersistentTaskSnapshot } | { changed: PersistentTaskChangedDTO };
 export type TaskControl = "pause" | "resume" | "terminate";
 const root = "/api/v1/persistent-tasks";
 
-function snapshot(value: unknown): PersistentTaskSnapshot {
-  if (!validatePersistentTaskListDTO(value)) throw new Error(`持久任务快照无效：${JSON.stringify(validatePersistentTaskListDTO.errors)}`);
-  return value as PersistentTaskSnapshot;
+function snapshot(value: unknown, sessionId?: string): PersistentTaskSnapshot {
+  if (!validatePersistentTaskListDTO(value)) throw new SseProtocolError(`持久任务快照无效：${JSON.stringify(validatePersistentTaskListDTO.errors)}`);
+  const result = value as PersistentTaskSnapshot;
+  if (sessionId) {
+    if (!result.session_goal) throw new SseProtocolError("会话持久任务快照缺少 Goal 槽位及清空版本");
+    parseSessionGoalSnapshot(result.session_goal, sessionId);
+  }
+  return result;
 }
+
+class TaskStreamConnectionError extends Error {}
 
 async function request<T>(port: number, target: GatewayWorkspaceRequestTarget, path: string, signal: AbortSignal, init: RequestInit = {}): Promise<T> {
   return unwrapApiData(await requestJson<APIResponse<T>>(port, root + path, {
@@ -24,23 +35,38 @@ async function request<T>(port: number, target: GatewayWorkspaceRequestTarget, p
 }
 
 export async function listPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal, sessionId?: string) {
-  return snapshot(await request<unknown>(port, target, sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "", signal));
+  return snapshot(await request<unknown>(port, target, sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "", signal), sessionId);
 }
 
-export async function watchPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal, onSnapshot: (value: PersistentTaskSnapshot) => void, onChanged: (value: PersistentTaskChangedDTO) => void, sessionId?: string) {
-  const response = await requestGatewayResponse(port, root + "/events" + (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""), {
-    signal, headers: { ...gatewayWorkspaceRequestHeaders(target), accept: "text/event-stream" }, cache: "no-store",
-  });
-  await consumeSseResponse(response, { signal, events: {
-    snapshot: defineSseEvent((data, frame) => snapshot(decodeJsonSseData(data, frame)), onSnapshot),
+async function streamPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal, onSnapshot: (value: PersistentTaskSnapshot) => void, onChanged: (value: PersistentTaskChangedDTO) => void, sessionId?: string) {
+  await consumeWorkspaceObservation(port, gatewayWorkspaceRequestHeaders(target), () => ({
+    kind: "persistent_tasks", session_id: sessionId, paths: [],
+  }), { signal, events: {
+    snapshot: defineSseEvent((data, frame) => snapshot(decodeJsonSseData(data, frame), sessionId), onSnapshot),
     changed: defineSseEvent((data, frame) => {
       const value: unknown = decodeJsonSseData(data, frame);
-      if (!validatePersistentTaskChangedDTO(value)) throw new Error(`持久任务更新无效：${JSON.stringify(validatePersistentTaskChangedDTO.errors)}`);
+      if (!validatePersistentTaskChangedDTO(value)) throw new SseProtocolError(`持久任务更新无效：${JSON.stringify(validatePersistentTaskChangedDTO.errors)}`);
       return value as PersistentTaskChangedDTO;
     }, onChanged),
-    error: defineSseEvent((data, frame) => validateSseError(decodeJsonSseData(data, frame)), (error) => { throw new Error(error.message); }),
+    error: defineSseEvent((data, frame) => validateSseError(decodeJsonSseData(data, frame)), (error) => { throw new SseProtocolError(error.message); }),
   } });
-  if (!signal.aborted) throw new Error("持久任务状态连接已关闭，请刷新重新连接");
+  if (!signal.aborted) throw new TaskStreamConnectionError("持久任务状态连接已关闭");
+}
+
+/** 工作区列表和会话 Goal 使用相同恢复规则；每次重连由服务端重发权威快照。 */
+export async function watchPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal, onSnapshot: (value: PersistentTaskSnapshot) => void, onChanged: (value: PersistentTaskChangedDTO) => void, sessionId?: string) {
+  let attempt = 0;
+  while (!signal.aborted) {
+    try {
+      await streamPersistentTasks(port, target, signal, value => { onSnapshot(value); attempt = 0; }, onChanged, sessionId);
+    } catch (cause) {
+      if (signal.aborted) return;
+      const retryable = cause instanceof TaskStreamConnectionError || cause instanceof TypeError
+        || cause instanceof HttpRequestError && cause.status >= 500;
+      if (!retryable || attempt >= SESSION_STREAM_MAX_RECONNECT_ATTEMPTS) throw cause;
+      await waitForReconnect(signal, sessionStreamReconnectDelay(attempt++));
+    }
+  }
 }
 
 export function createPersistentTask(port: number, target: GatewayWorkspaceRequestTarget, configuration: PersistentTaskConfigurationDTO, idempotencyKey: string, signal: AbortSignal) {

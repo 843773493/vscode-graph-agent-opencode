@@ -7,10 +7,11 @@ import { resolve, join, basename, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
 import { spawn } from 'node:child_process';
 import { sourceTransform } from './sourceTransform.mjs';
-import { createWorkbenchServer } from './server.mjs';
+import { createWorkbenchServer, gatewayProxyFailureHeaders } from './server.mjs';
 
 export default async function () {
   const root = resolve(import.meta.dirname, '..');
+  const brandingRoot = resolve(root, '../../../resources/branding');
   const codiconsAssets = await realpath(join(root, 'node_modules/@vscode/codicons/dist'));
   const { values } = parseArgs({ options: {
     port: { type: 'string', default: process.env.BOXTEAM_DEV_FRONTEND_PORT ?? '8411' },
@@ -59,6 +60,7 @@ export default async function () {
             join(root, 'scripts/build.mjs'),
             join(root, 'scripts/extensions.mjs'),
             join(root, 'scripts/actionTitles.mjs'),
+            ...['icon.png', 'favicon.png', 'icon.ico', 'icon.icns'].map(name => join(brandingRoot, name)),
             join(root, 'upstream/product.json'),
             join(root, '../shared/core/i18n/messages/en.json'),
             join(root, '../shared/core/i18n/messages/zh-cn.json'),
@@ -115,7 +117,8 @@ export default async function () {
               return;
             }
             if (url.pathname === '/mcp-oauth-callback.html'
-              || url.pathname.startsWith('/out/') || url.pathname.startsWith('/extensions/')
+              || (url.pathname.startsWith('/out/') && !url.pathname.startsWith('/out/dev-upstream/'))
+              || url.pathname.startsWith('/extensions/')
               || (url.pathname.startsWith('/node_modules/') && !url.search
                 && existsSync(join(assetsRoot, url.pathname)))) {
               assets.emit('request', request, response);
@@ -131,13 +134,24 @@ export default async function () {
           },
         },
         async resolveId(id, importer) {
-          if (id.startsWith('/out/dev-upstream/')) return { id, external: true };
+          // split bundle 也经过 Vite 的导入分析，反向引用业务源码时沿同一模块身份和 HMR 代际。
+          if (id.startsWith('/out/dev-upstream/')) return join(assetsRoot, id);
           if (id.endsWith('.css?text')) {
             return this.resolve(id.replace(/\?text$/, '?inline'), importer, { skipSelf: true });
           }
         },
+        async handleHotUpdate({ file, read, server }) {
+          if (!file.startsWith(join(root, 'src').replaceAll('\\', '/') + '/') || !/\.tsx?$/.test(file)) return;
+          // 新增上游入口需要重建 split bundle，不能把不存在的产物 URL 发给浏览器。
+          if (dependencies.needsRebuild(await read(), file)) {
+            await server.restart();
+            return [];
+          }
+        },
         transform(code, id) {
           const sourcePath = id.split('?', 1)[0];
+          // 预构建产物没有源码映射；避免导入分析给大型 bundle 追加整份正文的内联映射。
+          if (sourcePath.startsWith(join(assetsRoot, 'out/dev-upstream').replaceAll('\\', '/') + '/')) return { code, map: { mappings: '' } };
           if (sourcePath.startsWith(join(root, 'src'))) return dependencies.transform(code, sourcePath);
         },
       },
@@ -152,6 +166,7 @@ export default async function () {
       dedupe: ['react', 'react-dom'],
       // CSS 的 url() 使用 Vite 资源解析器，字体路径必须在这里参与解析。
       alias: [
+        { find: /^(?:.*\/)?code-icon\.svg$/, replacement: join(brandingRoot, 'icon.png') },
         ...webPackages.map(name => ({ find: name, replacement: join(root, '../web/node_modules', name) })),
         { find: './codicon.ttf', replacement: join(root, 'node_modules/@vscode/codicons/dist/codicon.ttf') },
       ],
@@ -167,8 +182,15 @@ export default async function () {
     },
     server: {
       host: values.host, port: Number(values.port), strictPort: true,
-      fs: { allow: [resolve(root, '..'), assetsRoot, codiconsAssets] },
-      proxy: { '/api': { target: values.gateway, changeOrigin: true, xfwd: true, ws: true, timeout: 0 } },
+      fs: { allow: [resolve(root, '..'), assetsRoot, codiconsAssets, brandingRoot] },
+      proxy: { '/api': { target: values.gateway, changeOrigin: true, xfwd: true, ws: true, timeout: 0,
+        configure(proxy) {
+          proxy.prependListener('error', (cause, request, response) => {
+            if (!response || !('setHeader' in response) || response.headersSent) return;
+            for (const [name, value] of Object.entries(gatewayProxyFailureHeaders(cause, request, 'vite'))) response.setHeader(name, value);
+          });
+        },
+      } },
     },
   };
 }

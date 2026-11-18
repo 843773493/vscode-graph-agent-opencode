@@ -48,4 +48,5 @@ class SessionMessageOrchestratorProtocol(Protocol):
         *,
         execution_binding: ExecutionBinding,
         reserved_job_id: str | None = None,
+        background: bool = False,
     ) -> MessageRunAccepted: ...

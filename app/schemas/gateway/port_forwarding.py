@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from ipaddress import ip_address
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PortForwardProtocol = Literal["http", "https", "tcp"]
 
@@ -10,42 +11,59 @@ PortForwardProtocol = Literal["http", "https", "tcp"]
 PortForwardStatus = Literal["starting", "active", "error", "stopped"]
 
 
+class PortForwardEndpoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    host_id: str = Field(min_length=1)
+    address: str = Field(default="127.0.0.1", min_length=1, max_length=253)
+    port: int = Field(ge=1, le=65535)
+
+    @field_validator("address")
+    @classmethod
+    def validate_address(cls, value: str) -> str:
+        if any(character.isspace() or character in "[]/\\" for character in value):
+            raise ValueError("地址必须是 IP 或主机名，不包含协议、路径或方括号")
+        if ":" in value:
+            ip_address(value)
+        return value
+
+
 class CreatePortForwardRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    remote_port: int = Field(ge=1, le=65535)
-    local_port: int | None = Field(default=None, ge=1, le=65535)
-    protocol: PortForwardProtocol = "http"
+    listener: PortForwardEndpoint
+    destination: PortForwardEndpoint
+    protocol: PortForwardProtocol = "tcp"
     label: str | None = Field(default=None, max_length=120)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_listener(self) -> CreatePortForwardRequest:
+        ip_address(self.listener.address)
+        if self.listener == self.destination:
+            raise ValueError("监听端和服务端不能完全相同")
+        return self
 
 
-class ChangePortForwardLocalPortRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    local_port: int = Field(ge=1, le=65535)
-
-
-class ChangePortForwardLabelRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    label: str | None = Field(default=None, max_length=120)
-
-
-class PortForwardDTO(BaseModel):
+class PortForwardDTO(CreatePortForwardRequest):
     forward_id: str
     gateway_id: str
-    workspace_id: str
-    connection_id: str
-    remote_host: Literal["127.0.0.1"]
-    remote_port: int
-    local_host: Literal["127.0.0.1"]
-    local_port: int
-    protocol: PortForwardProtocol
-    label: str | None
     status: PortForwardStatus
     error: str | None
-    local_url: str | None
 
 
 class PortForwardListDTO(BaseModel):
+    gateway_id: str
     items: list[PortForwardDTO]
+
+
+class PortForwardHostDTO(BaseModel):
+    host_id: str
+    label: str
+    description: str
+    kind: Literal["local", "ssh"]
+
+
+class PortForwardHostsDTO(BaseModel):
+    gateway_id: str
+    items: list[PortForwardHostDTO]

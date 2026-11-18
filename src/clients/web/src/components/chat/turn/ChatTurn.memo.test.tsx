@@ -3,6 +3,7 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import ChatTurn, { areChatTurnPropsEqual, type ChatTurnProps } from "./ChatTurn";
 import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
+import { ChatItemMenuContext, type ChatItemMenuRequest } from "../itemContextMenu";
 
 describe("ChatTurn memo 比较", () => {
   test("历史回答点击携带展示 owner 与快照，同 Turn revision 更新绑定后不复用旧回调", () => {
@@ -23,22 +24,31 @@ describe("ChatTurn memo 比较", () => {
       clicks.push(selection);
     };
     let renderer: ReactTestRenderer;
+    let menu: ChatItemMenuRequest | undefined;
+    const render = (current: typeof value) => <ChatItemMenuContext.Provider value={request => { menu = request; }}>
+      <ChatTurn {...chatTurnProps(current)} onForkConversation={onForkConversation} />
+    </ChatItemMenuContext.Provider>;
+    const forkFromResponse = () => {
+      const source = { closest: () => null, getRootNode: () => ({}), ownerDocument: { getSelection: () => null } };
+      renderer!.root.findByProps({ className: "chat-markdown" }).props.onKeyDown({
+        key: "ContextMenu", target: source, currentTarget: source, preventDefault() {}, stopPropagation() {},
+      });
+      menu!.actions.find(action => action.id === "forkItem")!.run();
+    };
     act(() => {
-      renderer = create(<ChatTurn {...chatTurnProps(value)} onForkConversation={onForkConversation} />);
+      renderer = create(render(value));
     });
     expect(renderer!.root.findAllByProps({ className: "chat-user-row" })).toHaveLength(0);
-    const responseActions = renderer!.root.findByProps({ className: "chat-response-actions" });
-    expect(responseActions.findAllByType("button")[0]?.props["data-fork-item-id"])
-      .toBe("item-visible-final");
+    expect(renderer!.root.findAllByProps({ "data-fork-item-id": "item-visible-final" })).toHaveLength(0);
     act(() => {
-      renderer!.root.findByProps({ "data-fork-item-id": "item-visible-final" }).props.onClick();
+      forkFromResponse();
     });
     const next = { ...value, sourceViewId: "view-next", sourceViewRevision: 9 };
     act(() => {
-      renderer!.update(<ChatTurn {...chatTurnProps(next)} onForkConversation={onForkConversation} />);
+      renderer!.update(render(next));
     });
     act(() => {
-      renderer!.root.findByProps({ "data-fork-item-id": "item-visible-final" }).props.onClick();
+      forkFromResponse();
     });
     expect(clicks).toEqual([
       { workspaceId: "gw_test", sessionId: "ses_web_replay", threadId: "thread-display",

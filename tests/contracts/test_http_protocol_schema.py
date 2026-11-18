@@ -435,10 +435,10 @@ def test_tool_http_routes_check_catalog_selection_test_and_connection_management
     ("McpAuthorizationCallbackDTO", "state", {"type": "integer"}),
     ("ToolDTO", "parameters", {"type": "array", "items": {}}),
     ("ToolSelectionChange", "model_visible", {"type": "string"}),
-    ("ToolTestStartRequest", "provider_ids", {"type": "object"}),
+    ("ToolTestStartRequest", "model_refs", {"type": "object"}),
     ("ToolTestRunDTO", "created_at", {"type": "integer"}),
     ("ToolTestAttemptDTO", "execution_succeeded", {"type": "integer"}),
-    ("ToolTestProviderResultDTO", "success_rate", {"type": "string"}),
+    ("ToolTestModelResultDTO", "success_rate", {"type": "string"}),
 ])
 def test_tool_http_schema_rejects_catalog_selection_authorization_and_nested_test_drift(
     http_openapi: JsonSchemaValue, model: str, field: str, shape: JsonSchemaValue,

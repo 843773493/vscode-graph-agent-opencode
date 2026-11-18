@@ -19,8 +19,12 @@ from app.domain.itemized.execution_queue import (
     ExecutionQueueInput,
     ExecutionQueueRecord,
     ExecutionQueueSnapshot,
+    QueueOrderConflictError,
 )
 from app.domain.itemized.hashing import sha256_jcs
+from app.services.infrastructure.rollout_context.execution.runtime_notice_consumption import (
+    freeze_runtime_notice_selection,
+)
 from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutNotMaterializedError,
 )
@@ -117,10 +121,11 @@ class RolloutExecutionQueueMixin:
             outcome = connection.execute("SELECT outcome FROM executions WHERE execution_id=?", (admission.execution_id,)).fetchone()[0]
             connection.execute(
                 "INSERT INTO execution_queue(checkpoint_ns,job_id,execution_id,admission_commit_id,input_json,input_hash,"
-                "delivery_policy,phase,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "delivery_policy,phase,created_at,updated_at,queue_position,priority) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (checkpoint_ns, admission.job_id, admission.execution_id, cursor.commit_id,
                  canonical_json_text(payload), digest, queue_input.delivery_policy,
-                 "queued" if outcome == "unknown" else "terminal", queue_input.created_at, queue_input.created_at),
+                 "queued" if outcome == "unknown" else "terminal", queue_input.created_at, queue_input.created_at,
+                 cursor.commit_id, int(queue_input.background)),
             )
         return self._execution_queue_record(connection, admission.session_id, admission.thread_id, checkpoint_ns, admission.job_id)
 
@@ -147,7 +152,7 @@ class RolloutExecutionQueueMixin:
     ) -> ExecutionQueueRecord:
         row = connection.execute(
             "SELECT execution_id,admission_commit_id,input_json,input_hash,delivery_policy,phase,"
-            "claim_owner,claim_generation,updated_at,(SELECT outcome FROM executions WHERE execution_id=execution_queue.execution_id) "
+            "claim_owner,claim_generation,updated_at,(SELECT outcome FROM executions WHERE execution_id=execution_queue.execution_id),queue_position,priority "
             "FROM execution_queue WHERE checkpoint_ns=? AND job_id=?",
             (checkpoint_ns, job_id),
         ).fetchone()
@@ -164,7 +169,7 @@ class RolloutExecutionQueueMixin:
         self._validate_execution_queue_input(connection, admission, queue_input)
         if admission.job_id != job_id:
             raise RuntimeError("执行队列与 admission Job identity 不一致")
-        return ExecutionQueueRecord(cursor, queue_input, row[4], row[5], row[6], row[7], row[8], row[9])
+        return ExecutionQueueRecord(cursor, queue_input, row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11])
 
     def validate_execution_queue(self, session_id: str, thread_id: str) -> None:
         """正常调度拒绝缺失冻结输入；历史和迁移可独立读取尚未导入的投影。"""
@@ -194,7 +199,8 @@ class RolloutExecutionQueueMixin:
                 if revision is None:
                     raise RuntimeError("执行队列 revision 缺失")
                 ids = connection.execute(
-                    "SELECT job_id FROM execution_queue WHERE checkpoint_ns=? AND phase<>'terminal' ORDER BY admission_commit_id",
+                    "SELECT job_id FROM execution_queue WHERE checkpoint_ns=? AND phase<>'terminal' "
+                    "ORDER BY CASE phase WHEN 'queued' THEN 1 ELSE 0 END,priority,queue_position,admission_commit_id",
                     (checkpoint_ns,),
                 ).fetchall()
                 records = tuple(self._execution_queue_record(connection, session_id, thread_id, checkpoint_ns, row[0]) for row in ids)
@@ -225,6 +231,32 @@ class RolloutExecutionQueueMixin:
             self._storage._commit_connection(connection)
         return self.execution_queue_snapshot(session_id, thread_id, checkpoint_ns=checkpoint_ns)
 
+    def reorder_execution_queue(self, session_id: str, thread_id: str, *,
+                                message_ids: tuple[str, ...], expected_revision: int) -> ExecutionQueueSnapshot:
+        """只重排完整的待处理用户子序列；领取、准入与重排由同一 SQLite writer 裁决。"""
+        with self._storage.write_connection(session_id, thread_id) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            revision = connection.execute("SELECT revision FROM execution_queue_revision WHERE singleton_id=1").fetchone()[0]
+            if revision != expected_revision:
+                raise QueueOrderConflictError("队列快照已过期")
+            rows = connection.execute(
+                "SELECT q.job_id,json_extract(q.input_json,'$.message_id'),q.queue_position FROM execution_queue q "
+                "JOIN executions e ON e.execution_id=q.execution_id "
+                "WHERE q.checkpoint_ns='' AND q.phase='queued' AND q.priority=0 AND e.execution_origin='user_turn' "
+                "ORDER BY q.queue_position,q.admission_commit_id",
+            ).fetchall()
+            by_message = {row[1]: row[0] for row in rows}
+            if len(message_ids) != len(set(message_ids)) or set(message_ids) != set(by_message):
+                raise QueueOrderConflictError("只能重排仍在等待的完整用户消息队列")
+            if tuple(row[1] for row in rows) != message_ids:
+                # 使用原用户槽位，不移动系统消息；接受身份和 admission 顺序始终不变。
+                connection.executemany(
+                    "UPDATE execution_queue SET queue_position=?,updated_at=? WHERE job_id=? AND phase='queued'",
+                    ((row[2], utc_now_text(), by_message[message_id]) for row, message_id in zip(rows, message_ids, strict=True)),
+                )
+            self._storage._commit_connection(connection)
+        return self.execution_queue_snapshot(session_id, thread_id)
+
     def execution_queue_record(
         self, session_id: str, thread_id: str, job_id: str, *, checkpoint_ns: str = "",
     ) -> ExecutionQueueRecord:
@@ -250,10 +282,12 @@ class RolloutExecutionQueueMixin:
                 raise RuntimeError(f"执行领取 generation 冲突: job_id={job_id}")
             head = connection.execute(
                 "SELECT job_id FROM execution_queue WHERE checkpoint_ns=? AND phase<>'terminal' "
-                "ORDER BY admission_commit_id LIMIT 1", (checkpoint_ns,),
+                "ORDER BY CASE phase WHEN 'queued' THEN 1 ELSE 0 END,priority,queue_position,admission_commit_id LIMIT 1", (checkpoint_ns,),
             ).fetchone()
             if head != (job_id,):
-                raise RuntimeError(f"只能领取同 Thread 的原始 FIFO 队首: job_id={job_id}")
+                raise QueueOrderConflictError(f"调度队首已变化: job_id={job_id}")
+            if record.phase == "queued":
+                self._activate_queued_context(connection, record, checkpoint_ns=checkpoint_ns)
             connection.execute(
                 "UPDATE execution_queue SET phase='claimed',claim_owner=?,claim_generation=claim_generation+1,updated_at=? "
                 "WHERE checkpoint_ns=? AND job_id=? AND claim_generation=?",
@@ -262,6 +296,45 @@ class RolloutExecutionQueueMixin:
             claimed = self._execution_queue_record(connection, session_id, thread_id, checkpoint_ns, job_id)
             self._storage._commit_connection(connection)
             return claimed
+
+    def _activate_queued_context(self, connection: sqlite3.Connection, record: ExecutionQueueRecord, *, checkpoint_ns: str) -> None:
+        """首次领取冻结消费上下文；恢复领取不重排历史，也不重新选择 notice。"""
+        admission = record.cursor.admission
+        branch_id = connection.execute(
+            "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns=?", (checkpoint_ns,),
+        ).fetchone()[0]
+        selection = None
+        if admission.execution_origin == "user_turn":
+            selection = freeze_runtime_notice_selection(
+                connection, storage=self._storage, session_id=admission.session_id, thread_id=admission.thread_id,
+                checkpoint_ns=checkpoint_ns, branch_id=branch_id, execution_id=admission.execution_id,
+                admission_key=admission.admission_idempotency_key,
+            )
+            self._publish_queued_user_turn(connection, admission, checkpoint_ns=checkpoint_ns)
+        order = connection.execute("SELECT COALESCE(MAX(dispatch_order),0)+1 FROM execution_queue").fetchone()[0]
+        connection.execute(
+            "UPDATE execution_queue SET dispatch_order=?,notice_selection_json=? WHERE job_id=?",
+            (order, canonical_json_text(selection) if selection is not None else None, admission.job_id),
+        )
+
+    def _publish_queued_user_turn(self, connection: sqlite3.Connection, admission: ExecutionAdmission, *, checkpoint_ns: str) -> None:
+        """首次消费或撤回时使输入进入可读历史；未消费项仍由因果边界排除。"""
+        branch_id = connection.execute(
+            "SELECT active_branch_id FROM checkpoint_namespace_state WHERE checkpoint_ns=?", (checkpoint_ns,),
+        ).fetchone()[0]
+        root_id, _root_sequence = connection.execute(
+            "SELECT root_input_item_id,root_input_item_sequence FROM turn_records WHERE turn_id=?", (admission.turn_id,),
+        ).fetchone()
+        self._storage._append_context_view_items(connection, checkpoint_ns=checkpoint_ns, item_ids=(root_id,), branch_id=branch_id)
+        view_id = self._storage._active_context_view_id(connection, checkpoint_ns, branch_id)
+        message_sequence = connection.execute("SELECT user_message_sequence FROM turns WHERE turn_id=?", (admission.turn_id,)).fetchone()[0]
+        ordinal = connection.execute("SELECT COALESCE(MAX(logical_turn_ordinal),0)+1 FROM context_view_turns WHERE view_id=?", (view_id,)).fetchone()[0]
+        connection.execute(
+            "INSERT INTO context_view_turns(view_id,turn_id,logical_turn_ordinal,user_message_sequence,root_input_item_id,fork_lineage_json) "
+            "VALUES(?,?,?,?,?,?)", (view_id, admission.turn_id, ordinal, message_sequence, root_id, '{"source":"dispatch"}'),
+        )
+        connection.execute("UPDATE context_views SET head_turn_id=?,logical_turn_count=? WHERE view_id=?", (admission.turn_id, ordinal, view_id))
+        connection.execute("UPDATE database_meta SET history_view_revision=history_view_revision+1 WHERE singleton_id=1")
 
     def start_execution_queue(
         self, session_id: str, thread_id: str, *, job_id: str, claim_owner: str,

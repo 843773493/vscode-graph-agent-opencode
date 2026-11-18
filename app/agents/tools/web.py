@@ -19,6 +19,7 @@ from app.abstractions.embeddings import EmbeddingComputerProtocol
 from app.agents.custom_tools import CustomToolFactoryContext
 from app.core.failures import failure_detail
 from app.runtime.embeddings import LiteLLMEmbeddingComputer
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 
 _MAX_DOWNLOAD_BYTES = 2_000_000
 _CHUNK_CHARS = 1_400
@@ -78,7 +79,7 @@ class FetchWebPageInput(BaseModel):
 class _EmbeddingOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider_id: str = Field(min_length=1)
+    model_ref: ModelReferenceDTO
     model: str | None = Field(default=None, min_length=1)
 
 
@@ -97,6 +98,7 @@ class _SemanticChunkRanker:
     ) -> None:
         self.query = query
         self.provider_id = computer.provider_id
+        self.model_id = computer.model_id
         self.model = computer.model
         self._computer = computer
         self._query_embedding_task: asyncio.Task[list[float]] | None = None
@@ -471,16 +473,6 @@ def create_fetch_webpage_tool(context: CustomToolFactoryContext) -> BaseTool:
         raise TypeError("fetch_webpage 工具 options 必须是对象")
     options = _FetchWebpageToolOptions.model_validate(dict(raw_options))
 
-    embedding_computer: EmbeddingComputerProtocol | None = None
-    if options.embedding is not None:
-        provider = context.config_service.get_llm_provider(
-            options.embedding.provider_id
-        )
-        embedding_computer = LiteLLMEmbeddingComputer.from_provider(
-            provider,
-            model=options.embedding.model,
-        )
-
     async def fetch_webpage(
         urls: list[str],
         query: str | None = None,
@@ -489,11 +481,13 @@ def create_fetch_webpage_tool(context: CustomToolFactoryContext) -> BaseTool:
         normalized_query = _normalize_inline_text(query or "") or None
         ranker: _SemanticChunkRanker | None = None
         if normalized_query is not None:
-            if embedding_computer is None:
+            if options.embedding is None:
                 raise RuntimeError(
                     "fetch_webpage 收到了 query，但未配置语义排序。请在该工具的 "
-                    "options.embedding 中配置 provider_id 和可选 model。"
+                    "options.embedding 中配置 model_ref 和可选 model。"
                 )
+            resolved = await context.config_service.resolve_llm_model(options.embedding.model_ref)
+            embedding_computer = LiteLLMEmbeddingComputer.from_model(resolved, model=options.embedding.model)
             ranker = _SemanticChunkRanker(
                 query=normalized_query,
                 computer=embedding_computer,
@@ -515,6 +509,7 @@ def create_fetch_webpage_tool(context: CustomToolFactoryContext) -> BaseTool:
             selection = {
                 "strategy": "semantic_embedding",
                 "provider_id": ranker.provider_id,
+                "model_id": ranker.model_id,
                 "model": ranker.model,
             }
         return json.dumps(

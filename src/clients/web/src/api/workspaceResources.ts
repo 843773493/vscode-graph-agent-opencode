@@ -1,10 +1,19 @@
 import type { APIResponse } from "../types/backend";
 import type { ResourceThreadRef, WorkspaceResourceDTO, WorkspaceResourceListDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import { requestJson, unwrapApiData, workspaceHeader } from "./http";
+import { consumeWorkspaceObservation } from "./stream/workspaceObservation";
+import { decodeJsonSseData, defineSseEvent } from "../sse/sseClient";
+import { validateResourceChanges } from "../../../../shared/sseRuntime.js";
 
 export type { ResourceThreadRef, WorkspaceResourceDTO };
 export type ResourceAction = "promote" | "attach" | "detach" | "stop" | "delete";
 export type WorkspaceConnectionKind = "terminal" | "browser";
+
+export function observeTerminalResources(port: number, workspaceId: string, onChanged: (resourceIds: string[] | null) => void, signal: AbortSignal): Promise<void> {
+  return consumeWorkspaceObservation(port, workspaceHeader(workspaceId), () => ({ kind: "terminal_resources", paths: [] }), {
+    signal, events: { resources_changed: defineSseEvent((data, frame) => validateResourceChanges(decodeJsonSseData(data, frame)), onChanged) },
+  });
+}
 
 export async function listWorkspaceResources(port: number, workspaceId: string, kind: WorkspaceConnectionKind, signal?: AbortSignal): Promise<WorkspaceResourceListDTO> {
   return unwrapApiData(await requestJson<APIResponse<WorkspaceResourceListDTO>>(

@@ -14,10 +14,12 @@ from app.services.infrastructure.external_resource_leases import (
     ExternalResourceLeaseLedger,
 )
 from app.services.infrastructure.mcp import McpCatalogOwner, McpCatalogResourcePublisher
+from app.services.infrastructure.mcp.frozen_catalog import (
+    restore_frozen_tool_catalog,
+)
 from app.services.infrastructure.mcp.tool_definitions import (
     SkillToolSource,
     ToolDefinition,
-    tool_catalog_from_activation,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -63,8 +65,8 @@ async def catalog_runtime(catalog_workspace, extension_catalog_policy_resolver, 
     # 历史读取测试从 publisher 首次登记起生成 v2 资产，避免改写已登记的 descriptor。
     with monkeypatch.context() as historical_writer:
         if getattr(request, "param", None) == "v2":
-            from app.services.infrastructure.mcp import catalog_activation
-            historical_writer.setattr(catalog_activation, "EXTENSION_CATALOG_SOURCE_ID", "extension-catalog:v2")
+            from app.services.infrastructure.mcp import catalog_publication
+            historical_writer.setattr(catalog_publication, "EXTENSION_CATALOG_SOURCE_ID", "extension-catalog:v2")
         if getattr(request, "param", None) == "four-field-resource":
             historical_writer.setattr(ToolDefinition, "resource_payload", property(lambda definition: definition.contract_payload))
         policies_for = extension_catalog_policy_resolver
@@ -129,7 +131,7 @@ def discovery_case(prepare_tool_context, registry_db, discovery_tool_factory):
     def read(snapshot, binding):
         return saver.read_resource_activation_payload(snapshot, binding, storage_owner=(session, thread))
 
-    catalog = tool_catalog_from_activation(frozen, read)
+    catalog = restore_frozen_tool_catalog(frozen, read)
     policy_resolver = ToolPolicyResolver(
         policy_defaults={"model_visible": False}, policy_rules={},
         restrictions={"execution_disabled": ["notes"], "model_hidden": ["hidden_ci"]},

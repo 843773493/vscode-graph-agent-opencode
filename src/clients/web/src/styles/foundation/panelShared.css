@@ -1,4 +1,5 @@
 .panel-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -156,3 +157,18 @@
   font-size: 11px;
   line-height: 1.5;
 }
+
+/* 临时反馈脱离正文布局；刷新和错误不能改变列表、编辑器或终端的可用尺寸。 */
+.panel-feedback-host { position: relative; }
+.panel-feedback {
+  position: absolute; z-index: 5; inset-inline: 8px; bottom: 4px;
+  box-sizing: border-box; max-height: min(40%, 120px); overflow: auto;
+  padding: 4px 8px; margin: 0; font-size: 12px; line-height: 20px;
+  overflow-wrap: anywhere; white-space: pre-wrap;
+  background: var(--vscode-editorWidget-background, var(--bt-surface-background));
+  color: var(--vscode-descriptionForeground, var(--bt-text-muted));
+  border: 1px solid var(--vscode-editorWidget-border, var(--bt-panel-border));
+}
+.panel-feedback[role="alert"], .panel-feedback [role="alert"] { color: var(--vscode-errorForeground, var(--bt-status-danger)); }
+.panel-feedback > p { margin: 0; }
+.panel-feedback:empty { display: none; }

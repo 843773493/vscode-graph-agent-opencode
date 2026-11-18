@@ -39,6 +39,8 @@ from tests.support.session_navigation.catalog_intents import (
     submit_catalog_intent,
 )
 from tests.unit.services.business.session_service_test_support import (
+    BACKUP_MODEL,
+    PRIMARY_MODEL,
     SessionServiceConfigStub,
     prepare_session_test_workspace,
 )
@@ -53,7 +55,7 @@ def test_config_stub_preserves_explicit_empty_configuration():
     config_service = SessionServiceConfigStub({})
 
     with pytest.raises(ValueError, match="agent default 不存在"):
-        config_service.resolve_agent_provider_id(None)
+        config_service.resolve_agent_model(None)
 
 
 class TestSessionService:
@@ -97,6 +99,7 @@ class TestSessionService:
                 # 目录父关系变更的唯一路径：导航 SessionCatalogService（executor）。
                 self.catalog = SessionCatalogService(session_service=self.service)
                 yield
+                asyncio.run(self.trace_event_store.close())
                 self.path_resolver.catalog_store.close()
         finally:
             context.close()
@@ -146,7 +149,7 @@ class TestSessionService:
         assert session.title_source == "user"
         assert isinstance(session.current_agent_id, str)
         assert session.current_agent_id
-        assert session.current_provider_id == "primary"
+        assert session.current_model == PRIMARY_MODEL
         assert session.created_at is not None
         assert session.updated_at == session.created_at
 
@@ -165,7 +168,7 @@ class TestSessionService:
         assert set(data) == {"session_id", "workspace_id", "created_at"}
         node = self.path_resolver.catalog_store.get_node(session.session_id)
         assert node.current_agent_id == session.current_agent_id
-        assert node.current_provider_id == "primary"
+        assert node.current_model_json == PRIMARY_MODEL.canonical_json()
         assert not self.saver._storage.storage.root(
             session.session_id, thread_id=node.main_thread_id,
         ).exists(), "创建Session不得在execution admission之前物化rollout"
@@ -191,34 +194,16 @@ class TestSessionService:
         assert resolved.is_relative_to(get_sessions_dir())
 
     @pytest.mark.asyncio
-    async def test_update_session_provider_is_persisted(self):
+    async def test_update_session_model_is_persisted(self):
         config = {
-            "llm": {
-                "providers": [
-                    {
-                        "id": "primary",
-                        "endpoint": "https://example.com/v1",
-                        "model": "model-primary",
-                        "api_key": "test-key",
-                        "custom_llm_provider": "openai",
-                    },
-                    {
-                        "id": "backup",
-                        "endpoint": "https://example.com/v1",
-                        "model": "model-backup",
-                        "api_key": "test-key",
-                        "custom_llm_provider": "openai",
-                    },
-                ]
-            },
             "default_agent": "default",
             "agents": {
                 "default": {
                     "name": "Default Agent",
                     "instructions": {"system_prompt": "hello"},
                     "model": {
-                        "primary_provider": "primary",
-                        "fallback_providers": ["backup"],
+                        "primary": PRIMARY_MODEL.model_dump(mode="json"),
+                        "fallbacks": [BACKUP_MODEL.model_dump(mode="json")],
                     },
                 }
             },
@@ -236,10 +221,10 @@ class TestSessionService:
 
         updated = await service.update(
             created.session_id,
-            SessionUpdateRequest(provider_id="backup"),
+            SessionUpdateRequest(model=BACKUP_MODEL),
         )
 
-        assert updated.current_provider_id == "backup"
+        assert updated.current_model == BACKUP_MODEL
         restarted_service = SessionService(
             config_service=config_service,
             trace_event_store=self.trace_event_store,
@@ -249,53 +234,35 @@ class TestSessionService:
 
         )
         restored = await restarted_service.get(created.session_id)
-        assert restored.current_provider_id == "backup"
+        assert restored.current_model == BACKUP_MODEL
         persisted = self.path_resolver.catalog_store.get_node(created.session_id)
-        assert persisted.current_provider_id == "backup"
+        assert persisted.current_model_json == BACKUP_MODEL.canonical_json()
 
-        with pytest.raises(ValueError, match="不允许使用 provider"):
+        with pytest.raises(ValueError, match="不允许使用模型"):
             await service.update(
                 created.session_id,
-                SessionUpdateRequest(provider_id="unknown"),
+                SessionUpdateRequest(model={"provider_id": "team", "model_id": "unknown"}),
             )
 
     @pytest.mark.asyncio
     async def test_workspace_defaults_only_affect_new_sessions(self):
         config = {
-            "llm": {
-                "providers": [
-                    {
-                        "id": "primary",
-                        "endpoint": "https://example.com/v1",
-                        "model": "model-primary",
-                        "api_key": "test-key",
-                        "custom_llm_provider": "openai",
-                    },
-                    {
-                        "id": "backup",
-                        "endpoint": "https://example.com/v1",
-                        "model": "model-backup",
-                        "api_key": "test-key",
-                        "custom_llm_provider": "openai",
-                    },
-                ]
-            },
             "default_agent": "default",
             "agents": {
                 "default": {
                     "name": "Default Agent",
                     "instructions": {"system_prompt": "hello"},
                     "model": {
-                        "primary_provider": "primary",
-                        "fallback_providers": ["backup"],
+                        "primary": PRIMARY_MODEL.model_dump(mode="json"),
+                        "fallbacks": [BACKUP_MODEL.model_dump(mode="json")],
                     },
                 },
                 "coder": {
                     "name": "Coder",
                     "instructions": {"system_prompt": "code"},
                     "model": {
-                        "primary_provider": "primary",
-                        "fallback_providers": ["backup"],
+                        "primary": PRIMARY_MODEL.model_dump(mode="json"),
+                        "fallbacks": [BACKUP_MODEL.model_dump(mode="json")],
                     },
                 },
             },
@@ -312,16 +279,16 @@ class TestSessionService:
         existing = await service.create(SessionCreateRequest(title="Existing"))
 
         config_service.set_workspace_default_agent("coder")
-        config_service.set_workspace_default_provider("coder", "backup")
+        config_service.set_workspace_default_model("coder", BACKUP_MODEL)
         created_after_change = await service.create(
             SessionCreateRequest(title="Created later")
         )
 
         assert existing.current_agent_id == "default"
-        assert existing.current_provider_id == "primary"
-        assert (await service.get(existing.session_id)).current_provider_id == "primary"
+        assert existing.current_model == PRIMARY_MODEL
+        assert (await service.get(existing.session_id)).current_model == PRIMARY_MODEL
         assert created_after_change.current_agent_id == "coder"
-        assert created_after_change.current_provider_id == "backup"
+        assert created_after_change.current_model == BACKUP_MODEL
 
     @pytest.mark.asyncio
     async def test_create_default_session_title_source(self):
@@ -795,7 +762,7 @@ class TestSessionListReadAmplification:
             # provider 解析（与外部环境变量无关）。
             session_ids = [
                 await workspace.create_session(
-                    f"读放大-{index:02d}", current_provider_id="primary"
+                    f"读放大-{index:02d}", current_model_json=PRIMARY_MODEL.canonical_json()
                 )
                 for index in range(population)
             ]

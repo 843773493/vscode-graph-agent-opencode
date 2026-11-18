@@ -26,7 +26,7 @@ class QueueEntry:
 
 
 class JobPendingQueue:
-    """同一 thread 严格 FIFO；会话聚合保持原入队顺序。"""
+    """按持久 owner 的调度顺序维护镜像；策略只控制队首的安全边界。"""
 
     def __init__(self) -> None:
         self._waiting: dict[str, deque[str]] = {}
@@ -136,11 +136,6 @@ class JobPendingQueue:
             entry.job_id in self._entries for entry in entries
         ):
             raise RuntimeError(f"不能覆盖已加载的待处理队列: session_id={session_id}")
-        previous_by_thread: dict[str, int] = {}
-        for entry in entries:
-            if entry.enqueue_sequence <= previous_by_thread.get(entry.thread_id, 0):
-                raise RuntimeError("FIFO 镜像恢复时同 Thread 准入顺序错误")
-            previous_by_thread[entry.thread_id] = entry.enqueue_sequence
         seen_threads: set[str] = set()
         for entry in entries:
             JobPendingQueue._sync_positional_waiting_reason(
@@ -231,11 +226,6 @@ class JobPendingQueue:
             self._entries.pop(job_id, None)
             removed.append(entry)
         return tuple(removed)
-
-    def reject_reorder(self, session_id: str) -> None:
-        raise ValueError(
-            f"会话 {session_id} 的 FIFO 队列不支持重排、提升队首或立即发送"
-        )
 
     def set_snapshot_version(self, session_id: str, version: int) -> None:
         """只缓存已发布 SQLite revision 的 Session 聚合值。"""

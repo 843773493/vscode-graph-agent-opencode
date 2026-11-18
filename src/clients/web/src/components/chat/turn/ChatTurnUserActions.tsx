@@ -3,7 +3,7 @@ import React from "react";
 import type { AttachmentRef, DeliveryPolicy } from "../../../types/backend";
 import type { ConversationView } from "../../../types/frontend";
 import { fileToSelectedAttachment } from "../../../utils/media/mediaAttachments";
-import AnchoredOverlay from "../../overlays/AnchoredOverlay";
+import { copyItemAction, useChatItemMenu } from "../itemContextMenu";
 import MessageAttachments from "./MessageAttachments";
 import PendingRequestActions from "../pending/PendingRequestActions";
 import ProgressiveUserMessage from "./ProgressiveUserMessage";
@@ -38,16 +38,13 @@ export function ChatTurnUserSection({
   onOpenAttachment?: (sessionId: string, attachment: AttachmentRef) => void;
 }): React.ReactNode {
   const editAttachmentInputRef = React.useRef<HTMLInputElement | null>(null);
-  const actionMenuAnchorRef = React.useRef<HTMLDivElement | null>(null);
   const userMessage = conversation.userMessage;
   const userMessageId = userMessage?.message_id ?? null;
-  const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
   const [rawMessageContent, setRawMessageContent] = React.useState<string | null>(null);
   const [rawMessageLoading, setRawMessageLoading] = React.useState(false);
   const [rawMessageError, setRawMessageError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    setActionMenuOpen(false);
     setRawMessageContent(null);
     setRawMessageLoading(false);
     setRawMessageError(null);
@@ -63,11 +60,6 @@ export function ChatTurnUserSection({
     && !summaryOnly
     && !conversation.pending
     && !actions.isInternalDisplayMessage,
-  );
-  const canShowActionMenu = Boolean(
-    userMessage
-    && !actions.editing
-    && (canEditUserMessage || canInspectRawMessage || (conversation.displayMode === "history" && conversation.turnId && onForkConversation)),
   );
   const rawMessageAriaLabel = userMessage?.content.trim()
     ? t("chat.turn.internalHint")
@@ -100,21 +92,37 @@ export function ChatTurnUserSection({
     rawMessageLoading,
     userMessage,
   ]);
-  const handleRawMessageContextMenu = React.useCallback((
-    event: React.MouseEvent<HTMLDivElement>,
-  ) => {
-    if (!canInspectRawMessage) return;
-    event.preventDefault();
-    void toggleRawMessageDetails();
-  }, [canInspectRawMessage, toggleRawMessageDetails]);
-  const handleEditAction = React.useCallback(() => {
-    setActionMenuOpen(false);
-    actions.startEditing();
-  }, [actions.startEditing]);
-  const handleRawDetailsAction = React.useCallback(() => {
-    setActionMenuOpen(false);
-    void toggleRawMessageDetails();
-  }, [toggleRawMessageDetails]);
+  const itemMenu = useChatItemMenu(() => {
+    if (!userMessage) return [];
+    const canFork = conversation.displayMode === "history" && Boolean(conversation.turnId && onForkConversation);
+    const menu = [copyItemAction(rawMessageContent ?? userMessage.content), {
+      id: "forkItem", label: t("chat.itemMenu.fork"),
+      tooltip: t(canFork ? "chat.itemMenu.forkHint" : "chat.itemMenu.forkUnavailableHint"),
+      enabled: canFork,
+      run: () => {
+        if (!workspaceId || !conversation.threadId || !conversation.sourceViewId || conversation.sourceViewRevision === undefined) {
+          throw new Error("历史消息缺少实际读取的来源快照");
+        }
+        onForkConversation?.({
+          workspaceId, sessionId: conversation.sessionId, threadId: conversation.threadId,
+          sourceViewId: conversation.sourceViewId, sourceViewRevision: conversation.sourceViewRevision,
+          turnId: conversation.turnId,
+        });
+      },
+    }];
+    if (canEditUserMessage) menu.push({
+      id: "editAndContinue", label: t("chat.turn.continue"),
+      tooltip: t(sessionBusy ? "chat.itemMenu.editBusyHint" : "chat.itemMenu.editHint"),
+      enabled: !sessionBusy, run: actions.startEditing,
+    });
+    if (canInspectRawMessage) menu.push({
+      id: "rawContent", label: t(rawMessageContent !== null ? "chat.turn.hideRaw" : "chat.turn.showRaw"),
+      tooltip: t("chat.itemMenu.rawHint"), enabled: !rawMessageLoading, run: toggleRawMessageDetails,
+    });
+    return menu;
+  }, !actions.editing, () => conversation.displayMode === "history" && !conversation.pending
+    ? { messageId: typeof userMessage?.metadata?.last_item_message_id === "string"
+      ? userMessage.metadata.last_item_message_id : userMessageId ?? undefined } : undefined);
 
   if (!userMessage) return null;
   const userAttachments = userMessage.attachments ?? [];
@@ -123,78 +131,11 @@ export function ChatTurnUserSection({
     <div className={`chat-user-row${actions.isInternalDisplayMessage ? " is-internal" : ""}`}>
       <div
         className={`chat-user-bubble${actions.editing ? " is-editing" : ""}${actions.isInternalDisplayMessage ? " is-internal" : ""}${canInspectRawMessage ? " is-inspectable" : ""}`}
-        role={canInspectRawMessage ? "group" : undefined}
-        aria-label={canInspectRawMessage ? rawMessageAriaLabel : undefined}
-        title={canInspectRawMessage ? t("chat.turn.rawHint") : undefined}
-        onContextMenu={handleRawMessageContextMenu}
+        role="group"
+        aria-label={canInspectRawMessage ? rawMessageAriaLabel : t("chat.itemMenu.user")}
+        data-chat-item-id={typeof userMessage.metadata?.last_item_message_id === "string" ? userMessage.metadata.last_item_message_id : userMessageId}
+        {...itemMenu}
       >
-        {canShowActionMenu ? (
-          <div ref={actionMenuAnchorRef} className="chat-user-action-menu-anchor">
-            <button
-              type="button"
-              className="chat-user-action-menu-trigger"
-              title={t("chat.turn.actions")}
-              aria-label={t("chat.turn.actions")}
-              aria-haspopup="menu"
-              aria-expanded={actionMenuOpen}
-              onClick={() => setActionMenuOpen((open) => !open)}
-            >
-              <span className="codicon codicon-add" aria-hidden="true" />
-            </button>
-            <AnchoredOverlay
-              open={actionMenuOpen}
-              anchorRef={actionMenuAnchorRef}
-              placement="bottom-end"
-              offset={4}
-              onClose={() => setActionMenuOpen(false)}
-            >
-              <div className="chat-user-action-menu" role="menu" aria-label={t("chat.turn.userActions")}>
-                {conversation.displayMode === "history" && conversation.turnId && onForkConversation ? (
-                  <button type="button" role="menuitem" className="chat-user-action-menu-item"
-                    title={t("chat.turn.fork")} aria-label={t("chat.turn.fork")}
-                    onClick={() => {
-                      if (!workspaceId || !conversation.threadId || !conversation.sourceViewId || conversation.sourceViewRevision === undefined) {
-                        throw new Error("历史消息缺少实际读取的来源快照");
-                      }
-                      setActionMenuOpen(false);
-                      onForkConversation({
-                        workspaceId, sessionId: conversation.sessionId, threadId: conversation.threadId,
-                        sourceViewId: conversation.sourceViewId, sourceViewRevision: conversation.sourceViewRevision,
-                        turnId: conversation.turnId,
-                      });
-                    }}>
-                    <span className="codicon codicon-git-pull-request" aria-hidden="true" />
-                  </button>
-                ) : null}
-                {canEditUserMessage ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="chat-user-action-menu-item"
-                    title={t("chat.turn.continue")}
-                    aria-label={t("chat.turn.continue")}
-                    disabled={sessionBusy}
-                    onClick={handleEditAction}
-                  >
-                    <span className="codicon codicon-edit" aria-hidden="true" />
-                  </button>
-                ) : null}
-                {canInspectRawMessage ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="chat-user-action-menu-item"
-                    title={rawMessageContent !== null ? t("chat.turn.hideRaw") : t("chat.turn.showRaw")}
-                    aria-label={rawMessageContent !== null ? t("chat.turn.hideRaw") : t("chat.turn.showRaw")}
-                    onClick={handleRawDetailsAction}
-                  >
-                    <span className="codicon codicon-eye" aria-hidden="true" />
-                  </button>
-                ) : null}
-              </div>
-            </AnchoredOverlay>
-          </div>
-        ) : null}
         {actions.editing ? (
           <form
             className="chat-request-edit-form"

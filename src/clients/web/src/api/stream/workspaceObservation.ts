@@ -17,9 +17,7 @@ type Options = ConsumeSseResponseOptions & {
   onConnected?: (routeRevision: string | null, cursor: string | undefined) => void;
 };
 interface Subscriber {
-  id: string;
-  headers: Record<string, string>;
-  subscription: () => Subscription;
+  source: ObservationSource;
   options: Options;
   resolve: () => void;
   reject: (error: unknown) => void;
@@ -27,11 +25,18 @@ interface Subscriber {
   abort: () => void;
 }
 
+interface ObservationSource {
+  id: string;
+  subscription: () => Subscription;
+  listeners: Set<Subscriber>;
+  connected?: { routeRevision: string | null; cursor: string | undefined };
+}
+
 const transports = new Map<string, WorkspaceObservationTransport>();
 let nextSubscriptionId = 0;
 
 class WorkspaceObservationTransport {
-  private readonly subscribers = new Map<string, Subscriber>();
+  private readonly sources = new Map<string, ObservationSource>();
   private readonly targetHeaders = new Headers();
   private controller: AbortController | null = null;
   private running: Promise<void> | null = null;
@@ -56,22 +61,39 @@ class WorkspaceObservationTransport {
     }
     for (const [name, value] of incoming) this.targetHeaders.set(name, value);
     return new Promise<void>((resolve, reject) => {
+      // 终端失效通知没有独立游标，同工作区只需一个 source；各视图仍独立取消和报错。
+      const existing = subscription().kind === "terminal_resources"
+        ? [...this.sources.values()].find(source => source.subscription().kind === "terminal_resources") : undefined;
+      const source: ObservationSource = existing ?? {
+        id: `observation-${++nextSubscriptionId}`, subscription, listeners: new Set(),
+      };
       const subscriber: Subscriber = {
-        id: `observation-${++nextSubscriptionId}`,
-        headers, subscription, options, resolve, reject, timer: undefined,
+        source, options, resolve, reject, timer: undefined,
         abort: () => this.settle(subscriber, undefined, true),
       };
-      this.subscribers.set(subscriber.id, subscriber);
+      source.listeners.add(subscriber);
       options.signal?.addEventListener("abort", subscriber.abort, { once: true });
-      this.reconfigure();
+      if (!existing) {
+        this.sources.set(source.id, source);
+        this.reconfigure();
+      } else if (source.connected) {
+        try {
+          this.activity(subscriber);
+          options.onConnected?.(source.connected.routeRevision, source.connected.cursor);
+          // 新视图只补读自身，不为首次快照重启其它视图的传输。
+          this.frame(subscriber, 'event: resources_changed\ndata: {"resource_ids":null}\n\n');
+        } catch (error) { this.settle(subscriber, error); }
+      }
     });
   }
 
   private settle(subscriber: Subscriber, error?: unknown, reconfigure = false): void {
-    if (!this.subscribers.delete(subscriber.id)) return;
+    const source = subscriber.source;
+    if (!source.listeners.delete(subscriber)) return;
+    if (!source.listeners.size) this.sources.delete(source.id);
     clearTimeout(subscriber.timer);
     subscriber.options.signal?.removeEventListener("abort", subscriber.abort);
-    const releaseConnection = reconfigure || this.subscribers.size === 0;
+    const releaseConnection = (!source.listeners.size && reconfigure) || this.sources.size === 0;
     const completed = releaseConnection ? this.connectionDone : null;
     if (releaseConnection) this.reconfigure();
     const finish = () => {
@@ -80,6 +102,16 @@ class WorkspaceObservationTransport {
     };
     if (completed) void completed.then(finish);
     else finish();
+  }
+
+  private frame(subscriber: Subscriber, raw: string): void {
+    subscriber.options.onActivity?.();
+    const frame = parseSseFrameBlock(raw);
+    if (!frame) return;
+    const events = subscriber.options.events;
+    const definition = Object.prototype.hasOwnProperty.call(events, frame.event) ? events[frame.event] : events["*"];
+    if (!definition) throw new SseProtocolError(`未注册的 SSE 事件类型: ${frame.event}`);
+    definition.handle(definition.decode(frame.data, frame), frame);
   }
 
   private activity(subscriber: Subscriber): void {
@@ -101,15 +133,16 @@ class WorkspaceObservationTransport {
     // 同一轮登记的逻辑观察者合并发送；重建串行等待旧 reader 完成取消。
     this.running = Promise.resolve().then(() => this.run()).finally(() => {
       this.running = null;
-      if (this.subscribers.size) this.reconfigure();
+      if (this.sources.size) this.reconfigure();
       else if (transports.get(this.key) === this) transports.delete(this.key);
     });
   }
 
   private async run(): Promise<void> {
-    while (this.subscribers.size) {
+    while (this.sources.size) {
       const revision = this.revision;
-      const subscribers = [...this.subscribers.values()];
+      const sources = [...this.sources.values()];
+      for (const source of sources) source.connected = undefined;
       const controller = new AbortController();
       this.controller = controller;
       let release!: () => void;
@@ -120,8 +153,8 @@ class WorkspaceObservationTransport {
           method: "POST",
           signal: controller.signal,
           headers: { ...Object.fromEntries(this.targetHeaders), accept: "text/event-stream", "Content-Type": "application/json" },
-          body: JSON.stringify({ subscriptions: subscribers.map((subscriber) => ({
-            ...subscriber.subscription(), subscription_id: subscriber.id,
+          body: JSON.stringify({ subscriptions: sources.map((source) => ({
+            ...source.subscription(), subscription_id: source.id,
           })) }),
         });
         if (controller.signal.aborted) {
@@ -129,9 +162,8 @@ class WorkspaceObservationTransport {
           continue;
         }
         const routeRevision = response.headers.get("X-BoxTeam-Route-Revision");
-        const ids = new Set(subscribers.map((subscriber) => subscriber.id));
-        const connected = new Set<string>();
-        for (const subscriber of subscribers) this.activity(subscriber);
+        const ids = new Set(sources.map(source => source.id));
+        for (const source of sources) for (const subscriber of source.listeners) this.activity(subscriber);
         await consumeSseResponse(response, {
           signal: controller.signal,
           idleTimeoutMs: SSE_IDLE_TIMEOUT_MS,
@@ -142,9 +174,10 @@ class WorkspaceObservationTransport {
               if (!ids.has(envelope.subscription_id)) {
                 throw new SseProtocolError(`Workspace SSE 返回未知观察者: ${envelope.subscription_id}`);
               }
-              const subscriber = this.subscribers.get(envelope.subscription_id);
-              if (!subscriber) return;
-              try {
+              const source = this.sources.get(envelope.subscription_id);
+              if (!source) return;
+              if (envelope.state === "connected") source.connected = { routeRevision, cursor: envelope.cursor };
+              for (const subscriber of [...source.listeners]) try {
                 if (envelope.state === "error") {
                   let detail: unknown;
                   try { detail = JSON.parse(envelope.detail_json!); }
@@ -156,25 +189,17 @@ class WorkspaceObservationTransport {
                 }
                 if (envelope.state === "closed") {
                   this.settle(subscriber);
-                  return;
+                  continue;
                 }
                 this.activity(subscriber);
                 if (envelope.state === "connected") {
-                  connected.add(subscriber.id);
                   subscriber.options.onConnected?.(routeRevision, envelope.cursor);
-                  return;
+                  continue;
                 }
-                if (!connected.has(subscriber.id)) {
-                  throw new SseProtocolError(`Workspace 观察者尚未连接就收到事件: ${subscriber.id}`);
+                if (!source.connected) {
+                  throw new SseProtocolError(`Workspace 观察者尚未连接就收到事件: ${source.id}`);
                 }
-                subscriber.options.onActivity?.();
-                const frame = parseSseFrameBlock(envelope.frame!);
-                if (!frame) return;
-                const events = subscriber.options.events;
-                const definition = Object.prototype.hasOwnProperty.call(events, frame.event)
-                  ? events[frame.event] : events["*"];
-                if (!definition) throw new SseProtocolError(`未注册的 SSE 事件类型: ${frame.event}`);
-                definition.handle(definition.decode(frame.data, frame), frame);
+                this.frame(subscriber, envelope.frame!);
               } catch (error) {
                 this.settle(subscriber, error, envelope.state !== "error");
               }
@@ -182,11 +207,11 @@ class WorkspaceObservationTransport {
           ) },
         });
         if (!controller.signal.aborted) {
-          for (const subscriber of subscribers) this.settle(subscriber);
+          for (const source of sources) for (const subscriber of [...source.listeners]) this.settle(subscriber);
         }
       } catch (error) {
         if (revision === this.revision && !controller.signal.aborted) {
-          for (const subscriber of subscribers) this.settle(subscriber, error);
+          for (const source of sources) for (const subscriber of [...source.listeners]) this.settle(subscriber, error);
         }
       } finally {
         if (this.controller === controller) this.controller = null;

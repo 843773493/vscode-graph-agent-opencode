@@ -567,8 +567,7 @@ async def _read_until(
     while True:
         if producer_task is not None and producer_task.done():
             producer_task.result()
-        record = await asyncio.wait_for(subscription.get(), timeout=2)
-        event = record.event
+        event = await asyncio.wait_for(subscription.get(), timeout=2)
         observed.append(event)
         if predicate(event):
             return event

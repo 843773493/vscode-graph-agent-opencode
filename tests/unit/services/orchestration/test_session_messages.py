@@ -23,6 +23,7 @@ from app.schemas.internal_v2.message import (
     MessageRunRequest,
     RunOptions,
 )
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.business.job.input_admission import ThreadInputAdmission
 from app.services.infrastructure.rollout_context.storage.primitives import (
     _RolloutOperationLock,
@@ -213,12 +214,11 @@ class _FakeSession:
         self,
         session_id: str,
         current_agent_id: str,
-        current_provider_id: str = "primary",
         thread_id: object = _UNSET,
     ):
         self.session_id = session_id
         self.current_agent_id = current_agent_id
-        self.current_provider_id = current_provider_id
+        self.current_model = ModelReferenceDTO(provider_id="primary", model_id="default")
         # SessionDTO 的权威 main thread 身份。生产实现取自 catalog 冻结的
         # main_thread_id，绝不用 session_id 冒充；替身默认给可区分的 thr_ 前缀，
         # 使「误用 session_id」的变异能被 thread_id 断言杀掉。
@@ -465,7 +465,7 @@ async def test_orchestrator_forwards_cross_session_delivery_policy(attachment_ho
 @pytest.mark.asyncio
 async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_holder):
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     class _FakeJobService:
         thread_input_admission = ThreadInputAdmission().hold
@@ -481,8 +481,8 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_
 
         async def start_job(self, session_id: str, message: str, agent_id: str = "default", **kwargs):
             captured["agent_id"] = agent_id
-            captured["provider_id"] = kwargs["message_metadata"][
-                "boxteam_session_provider_id"
+            captured["model"] = kwargs["message_metadata"][
+                "boxteam_session_model"
             ]
             return _running_dispatch(session_id, "job_test_002")
 
@@ -504,7 +504,7 @@ async def test_orchestrator_prefers_request_agent_over_session_agent(attachment_
     )
 
     assert captured["agent_id"] == "coder"
-    assert captured["provider_id"] == "primary"
+    assert captured["model"] == {"provider_id": "primary", "model_id": "default"}
 
 
 @pytest.mark.asyncio

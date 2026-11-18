@@ -81,12 +81,10 @@ for (const mode of ['focus', 'focus-browser']) test(`${mode}默认回车只聚�
   expect(result.focuses[0].resource.owner_revision).toBe(7);
   expect(result.requests).toHaveLength(result.discoveryCount);
 });
-test('资源聚焦等待切换工作区期间Gateway离开后切回，旧动作不能继续打开面板', async () => {
+test('资源聚焦等待面板展开期间Gateway离开后切回，旧动作不能继续定位资源或激活工作区', async () => {
   const result = await exercise('focus-command-identity');
   expect(result.errors).toEqual(['Error: Gateway 或访问凭据已改变，请重新选择资源']);
-  expect(result.focuses).toEqual([{ command: 'boxteam.workspace.activate', owner: {
-    gatewayId: ownerB, workspaceId: '019a0000-0000-7000-8000-000000000001',
-  } }]);
+  expect(result.focuses).toEqual([{ view: 'boxteam.workspace.terminal', focus: true }]);
   expect(writes(result)).toEqual([]); expect(result.mcpOpened).toEqual([]);
 });
 test('同名终端和浏览器按owner保留；发现／逐键过滤／取消没有写入或正文读取', async () => {

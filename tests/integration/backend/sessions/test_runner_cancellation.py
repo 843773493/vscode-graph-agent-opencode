@@ -163,7 +163,7 @@ async def _start_job(case: RunnerCase, origin: str, session_id: str, thread_id: 
             queued_message,
             execution_identity=binding, queue_input=ExecutionQueueInput(
             execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=get_current_gateway_id(),
+            model=None, delivery_policy="after_turn", gateway_id=get_current_gateway_id(),
             request_id=get_current_request_id(),
             created_at=queued_message.created_at.isoformat(),
         ),
@@ -370,7 +370,7 @@ def _admit(
             queued_message,
             execution_identity=binding, queue_input=ExecutionQueueInput(
             execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=queued_message.created_at.isoformat(),
         ),
         )
@@ -389,7 +389,7 @@ def _admit(
             session_id, thread_id=thread_id, job_id=job_id, intent=binding, message=human,
             queue_input=ExecutionQueueInput(
                 execution_binding=binding, message_id=message_id, agent_id="default",
-                provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+                model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
                 created_at=created_at.isoformat(),
             ),
         )

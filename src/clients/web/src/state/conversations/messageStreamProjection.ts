@@ -15,6 +15,13 @@ const ACTIVITY_PART_KINDS = new Set([
   "tool_result",
 ]);
 
+// 消息流版本不可变；弱引用只复用展示派生值，不延长历史流的缓存生命周期。
+const streamProjections = new WeakMap<MessageStreamState, {
+  startedAt: string | undefined;
+  responseParts: TurnResponsePart[];
+  activityStats: NonNullable<ConversationView["activityStats"]>;
+}>();
+
 function messageStreamActivityStats(
   stream: MessageStreamState,
   parts: TurnResponsePart[],
@@ -120,12 +127,19 @@ export function applyMessageStreamProjection(
     if (!stream) return conversation;
     const terminalTurn = conversation.turnStatus
       && TERMINAL_TURN_STATUSES.has(conversation.turnStatus);
-    const liveResponseParts = messageStreamToResponseParts(stream);
-    const liveActivityStats = messageStreamActivityStats(
-      stream,
-      liveResponseParts,
-      conversation.userMessage?.created_at,
-    );
+    const startedAt = conversation.userMessage?.created_at;
+    let projection = streamProjections.get(stream);
+    if (!projection || projection.startedAt !== startedAt) {
+      const responseParts = projection?.responseParts ?? messageStreamToResponseParts(stream);
+      projection = {
+        startedAt,
+        responseParts,
+        activityStats: messageStreamActivityStats(stream, responseParts, startedAt),
+      };
+      streamProjections.set(stream, projection);
+    }
+    const { responseParts: liveResponseParts, activityStats: liveActivityStats } = projection;
+    const responseParts = [...liveResponseParts, ...(conversation.responseParts ?? []).filter(part => part.kind === "context_notice")];
     if (terminalTurn) {
       // Job API/Turn projection 已经确认终态时，任何旧 stream（包括错误的
       // completed）只能作为诊断镜像保留，不能重新驱动聊天状态或活动遮罩。
@@ -139,7 +153,7 @@ export function applyMessageStreamProjection(
         ...(conversation.displayMode === "live"
           && isTerminalStatus(stream.streamStatus)
           ? {
-              responseParts: liveResponseParts,
+              responseParts,
               activityStats: liveActivityStats,
             }
           : {}),
@@ -162,7 +176,6 @@ export function applyMessageStreamProjection(
         },
       };
     }
-    const responseParts = liveResponseParts;
     const terminalStatus = stream.streamStatus === "completed"
       ? "done"
       : stream.streamStatus === "interrupted" || stream.streamStatus === "failed"

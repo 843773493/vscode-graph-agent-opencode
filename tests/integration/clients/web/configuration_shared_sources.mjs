@@ -95,11 +95,11 @@ try {
 
   result.phase = 'navigation-workspace-directory-refresh';
   await command('boxteam.gateway.connections');
-  const gatewayDialog = page.getByRole('dialog', { name: 'Gateway 控制中心', exact: true });
+  const gatewayDialog = page.locator('.settings-editor:visible');
   await expect(gatewayDialog).toBeVisible();
   const refreshedDirectory = page.waitForResponse(response => response.request().method() === 'GET'
     && new URL(response.url()).pathname === '/api/gateway/workspaces');
-  await gatewayDialog.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await gatewayDialog.getByRole('button', { name: '刷新', exact: true }).click();
   const directoryResponse = await refreshedDirectory, directoryBody = await directoryResponse.json();
   assert.equal(directoryResponse.status(), 200, JSON.stringify(directoryBody));
   assert.equal(directoryBody.request_id, directoryResponse.headers()['x-request-id']);
@@ -110,7 +110,7 @@ try {
     activeWorkspaceId: directory.active_workspace?.workspace_id,
     workspaces: directory.items.map(item => ({ workspaceId: item.workspace_id, name: item.name })),
     includesB: true };
-  await gatewayDialog.getByRole('button', { name: '关闭 Gateway 控制中心' }).click();
+  await command('workbench.action.closeActiveEditor');
 
   result.phase = 'private-override-via-product';
   const privateBefore = await source(fixture, privateKey);
@@ -191,9 +191,8 @@ try {
     const opened = command('boxteam.settings.agents');
     const response = await listed;
     assert.equal(response.status(), 200);
-    await expect(quick).toBeVisible();
-    await quick.locator('.monaco-list-row').filter({ hasText: privateKey }).click();
     await opened;
+    await expect(quick).not.toBeVisible();
     await expect(form).toBeVisible();
     await expect(header()).toContainText(owner.workspaceId);
   };
@@ -207,29 +206,27 @@ try {
   await command('boxteam.settings.agents', location(fixture, privateKey));
   await expect(form).toBeVisible();
   const writesBeforeTargetSwitch = result.writes.length;
-  const scopeSelector = header().getByRole('combobox', { name: '设置范围／工作区', exact: true });
-  await expect(scopeSelector).toBeEnabled();
-  const selectedScope = () => scopeSelector.evaluate(select => select.selectedOptions[0]?.textContent?.trim());
-  const primaryWorkspace = result.initialization[1].data.items.find(item => item.workspace_id === fixture.workspaceId);
-  assert(primaryWorkspace);
-  await expect.poll(selectedScope).toBe(`${primaryWorkspace.name} · ${fixture.workspaceId}`);
-  const selectedBeforeSwitch = await selectedScope();
-  await scopeSelector.selectOption({ label: `${sibling.name} · ${other.workspaceId}` });
+  const workspaceSelector = () => page.locator('.settings-editor:visible').getByRole('combobox', { name: '配置工作区', exact: true });
+  await expect(workspaceSelector()).toBeVisible();
+  const selectedBeforeSwitch = await header().locator('details[title]').getAttribute('title');
+  await workspaceSelector().selectOption({ label: sibling.name });
   await expect(header()).toContainText(other.workspaceId);
-  await expect.poll(selectedScope).toBe(`${sibling.name} · ${other.workspaceId}`);
-  const selectedAfterSwitch = await selectedScope();
+  await expect(workspaceSelector().locator('option:checked')).toHaveText(sibling.name);
+  const selectedAfterSwitch = await header().locator('details[title]').getAttribute('title');
   await expect(form).toBeVisible();
   await expect(quick).not.toBeVisible();
   await expect(page.locator('.editor-group-container.active .tab.active')).not.toHaveClass(/\bdirty\b/);
-  // 下次同入口沿管理选择继续 B；来源仍由原选择器决定。
+  // 下次同入口沿管理选择继续 B，直接进入共享后端默认来源。
   await chooseGlobalSource(other);
   const bPrivate = await source(other, privateKey);
   const userLayer = bPrivate.layers.find(layer => layer.source_key === sharedKey);
   assert(userLayer);
+  await header().locator('summary').click();
   const sourceSelector = header().getByRole('combobox', { name: '配置来源', exact: true });
   await expect(sourceSelector).toBeEnabled();
-  await sourceSelector.selectOption({ label: `${userLayer.source_key} · ${userLayer.layer}` });
-  await expect(header()).toContainText(sharedKey);
+  await sourceSelector.selectOption({ label: '默认设置（此目标的所有工作区）' });
+  await expect(sourceSelector.locator('option:checked')).toHaveText('默认设置（此目标的所有工作区）');
+  await expect(header().locator(`[title$=" · ${sharedKey}"]`)).toBeVisible();
   await expect(quick).not.toBeVisible();
   await open(fixture, privateKey);
   await expect(text(0)).toContainText(markerA);

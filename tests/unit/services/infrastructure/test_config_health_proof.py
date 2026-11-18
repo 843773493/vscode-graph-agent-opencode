@@ -7,13 +7,13 @@ import pytest
 
 from app.core.mounted_workspaces import MountedWorkspace
 from app.core.workspace_identity import load_or_create_workspace_id
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.config import ConfigRestartRequiredError
-from app.services.infrastructure.config.state import SecretResolutionError
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_state_store import WorkspaceStateStore
 
 
-def test_active_health_proof_does_not_resolve_unused_provider_credentials(
+async def test_active_health_proof_does_not_resolve_unused_model_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -44,13 +44,17 @@ def test_active_health_proof_does_not_resolve_unused_provider_credentials(
 
         assert proof["loaded_source"] == "active"
         assert proof["secret_binding_digest"]
-        assert service.get_llm_provider("primary")["api_key"] == "selected-provider-secret"
+        primary = ModelReferenceDTO(provider_id="primary", model_id="default")
+        backup = ModelReferenceDTO(provider_id="backup_1", model_id="default")
+        assert service.get_llm_model(primary)["api_key"] == "${OPENCODE_ZEN_API_KEY}"
+        assert service.get_llm_model(backup)["api_key"] == "${KILO_API_KEY}"
+        assert (await service.resolve_llm_model(primary))["api_key"] == "selected-provider-secret"
         with pytest.raises(ValueError, match="KILO_API_KEY 未设置"):
-            service.get_llm_provider("backup_1")
+            await service.resolve_llm_model(backup)
 
 
 @pytest.mark.asyncio
-async def test_pending_health_proof_still_resolves_current_secret_bindings(
+async def test_pending_restart_and_health_proof_do_not_resolve_model_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -100,6 +104,9 @@ async def test_pending_health_proof_still_resolves_current_secret_bindings(
         candidate_ref = pending.candidate_ref
         generation = pending.target_generation
         fencing_token = pending.fencing_token
+        for secret_name in secret_names:
+            monkeypatch.delenv(secret_name, raising=False)
+        contract = service.get_pending_startup_contract(candidate_ref=candidate_ref)
     finally:
         store.close()
 
@@ -119,7 +126,10 @@ async def test_pending_health_proof_still_resolves_current_secret_bindings(
             startup_mount=startup_mount,
         )
         restored.get_snapshot()
-        monkeypatch.delenv("KILO_API_KEY", raising=False)
-
-        with pytest.raises(SecretResolutionError, match="KILO_API_KEY"):
-            restored.get_loaded_config_proof()
+        proof = restored.get_loaded_config_proof()
+        assert proof["loaded_source"] == "pending"
+        assert proof["secret_binding_digest"] == contract["secret_binding_digest"]
+        assert proof["generation_id"] == generation
+        primary = ModelReferenceDTO(provider_id="primary", model_id="default")
+        with pytest.raises(ValueError, match="OPENCODE_ZEN_API_KEY 未设置"):
+            await restored.resolve_llm_model(primary)

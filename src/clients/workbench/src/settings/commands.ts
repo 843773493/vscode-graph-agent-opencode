@@ -5,7 +5,7 @@ import type { ServicesAccessor } from '../../upstream/src/vs/platform/instantiat
 import { INotificationService } from '../../upstream/src/vs/platform/notification/common/notification.js';
 import { IQuickInputService } from '../../upstream/src/vs/platform/quickinput/common/quickInput.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
-import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner } from '../../../web/src/api/workspaceIdentity.js';
+import { gatewayWorkspaceOwner, requireGatewayWorkspaceRequestTarget, type WorkspaceOwner, type GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
 import { workspaceContext } from '../workspaceContext.js';
 import { createManagementTargetLifecycle, managementGateway, managementWorkspace, managementTargetDisplayName, type ManagementTarget } from '../managementTarget.js';
 import { inspectDefaultAgentSource } from './defaultAgent.js';
@@ -28,6 +28,21 @@ import { t } from '../../../shared/core/i18n/index.js';
 import actionTitles from '../../../shared/core/i18n/actionTitles.en.json';
 import type { ConfigSourceLayer } from '../../../web/src/types/protocol.js';
 import type { DefinitionEditorOptions } from './entities.js';
+import { manageSecrets } from './secrets.js';
+import { IDialogService } from '../../upstream/src/vs/platform/dialogs/common/dialogs.js';
+import { IStorageService } from '../../upstream/src/vs/platform/storage/common/storage.js';
+import './gatewayCommands.js';
+
+registerAction2(class extends Action2 {
+  constructor() {
+    super({ id: 'boxteam.settings.secrets', title: { value: t('settings.secrets.manage'), original: 'Manage API Keys' }, f1: true });
+  }
+  async run(accessor: ServicesAccessor, target?: GatewayRequestTarget): Promise<void> {
+    const quick = accessor.get(IQuickInputService), dialogs = accessor.get(IDialogService);
+    await workspaceContext.ensureReady();
+    await manageSecrets(target ?? managementGateway('settings', workspaceContext.getSnapshot().gatewayId!), quick, dialogs, accessor.get(IStorageService));
+  }
+});
 
 function commandTitle(key: keyof typeof actionTitles): { value: string; original: string } {
   return { value: t(key), original: actionTitles[key] };
@@ -175,15 +190,18 @@ for (const operation of ['sourceStatus', 'rebaseSource'] as const) registerActio
 registerAction2(class extends Action2 {
   constructor() { super({ id: 'boxteam.settings.openTarget', title: commandTitle('workbench.settings.openTarget'),
     category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true }); }
-  async run(accessor: ServicesAccessor, target?: ManagementTarget, scope?: { workspace_id?: string }): Promise<void> {
+  async run(accessor: ServicesAccessor, target?: ManagementTarget, scope?: { workspace_id?: string; source_key?: string; source_layer?: 'user' | 'workspace' }, options?: DefinitionEditorOptions): Promise<void> {
     const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
+    const groups = accessor.get(IEditorGroupsService), groupId = groups.activeGroup.id;
     const frozen = { ...(target ?? managementGateway('settings')) };
     const explicit = scope ? { ...scope } : undefined;
     const lifecycle = createManagementTargetLifecycle(t('workbench.settings.reopenSource'));
     try {
       const captured = await captureSettingsLocation(parent, lifecycle.token, frozen, explicit);
       lifecycle.check();
-      if (captured) await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { pinned: true });
+      if (!captured) return;
+      if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
+      await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document), { ...options, pinned: true }, groupId);
     } finally { lifecycle.dispose(); }
   }
 });
@@ -193,9 +211,9 @@ for (const kind of ['providers', 'agents'] as const) registerAction2(class exten
   constructor() { super({ id: kind === 'providers' ? 'boxteam.settings.modelsProviders' : 'boxteam.settings.agents',
     title: kind === 'providers' ? commandTitle('workbench.settings.modelsProviders') : commandTitle('workbench.settings.agents'),
     category: { value: t('workbench.settings.openPluginParametersCategory'), original: actionTitles['workbench.settings.openPluginParametersCategory'] }, f1: true }); }
-  async run(accessor: ServicesAccessor, location?: TargetSettingsLocation | WorkspaceOwner, definitionId?: string): Promise<void> {
+  async run(accessor: ServicesAccessor, location?: TargetSettingsLocation | WorkspaceOwner, definitionId?: string, definitionModelId?: string): Promise<void> {
     const parent = accessor.get(IInstantiationService), editors = accessor.get(IEditorService);
-    const quickInput = accessor.get(IQuickInputService), groups = accessor.get(IEditorGroupsService);
+    const groups = accessor.get(IEditorGroupsService);
     const groupId = groups.activeGroup.id;
     const frozen = location && 'source_key' in location ? parseSettingsLocation(location) : undefined;
     if (frozen && !frozen.workspace_id) throw new Error(t('configuration.entities.workspaceRequired'));
@@ -205,22 +223,17 @@ for (const kind of ['providers', 'agents'] as const) registerAction2(class exten
     try {
       await workspaceContext.ensureReady();
       lifecycle.check();
-      // 全局入口默认本地管理目标的首个工作区；来源选择只发生一次。
+      // 全局入口直接进入后端默认来源；精确来源和会话入口保持原归属。
       const workspace = frozen?.workspace_id ? frozen : explicitOwner ? { workspace_id: explicitOwner.workspaceId }
         : managementWorkspace('settings', target);
       if (!workspace) throw new Error(t('plugins.noWorkspaces'));
-      const owner = new ConfigurationSourceOwner({ gateway_id: target.gateway_id, gateway_connection_id: target.gateway_connection_id, workspace_id: workspace.workspace_id });
-      const selected = frozen ? { source_key: frozen.source_key } : await quickInput.pick((await owner.list(lifecycle.signal)).sources.filter(item => item.source_key).map(item => ({
-        label: item.source_key!, description: `${item.layer} · ${item.presence}`, source_key: item.source_key!,
-      })), { title: t(kind === 'providers' ? 'workbench.settings.modelsProviders' : 'workbench.settings.agents'), placeHolder: t('workbench.settings.modelsProvidersHint') }, lifecycle.token);
+      const captured = await captureSettingsLocation(parent, lifecycle.token, target, { workspace_id: workspace.workspace_id,
+        source_key: frozen?.source_key, source_layer: explicitOwner ? 'workspace' : 'user' });
       lifecycle.check();
-      if (!selected) return;
-      const document = await owner.read(selected.source_key, undefined, lifecycle.signal);
-      lifecycle.check();
+      if (!captured) return;
       if (!groups.getGroup(groupId)) throw new Error(t('workbench.settings.originGroupClosed'));
-      const options: ISettingsEditorOptions & DefinitionEditorOptions = { pinned: true, definitionKind: kind, definitionId };
-      await editors.openEditor(parent.createInstance(SettingsEditor2Input, { ...owner.target, version: 2,
-        source_key: selected.source_key, name: frozen?.name ?? workspaceContext.getSnapshot().workspaces.find(item => item.gateway_id === target.gateway_id && item.workspace_id === workspace.workspace_id)?.name ?? workspace.workspace_id! }, document),
+      const options: ISettingsEditorOptions & DefinitionEditorOptions = { pinned: true, definitionKind: kind, definitionId, definitionModelId };
+      await editors.openEditor(parent.createInstance(SettingsEditor2Input, captured.location, captured.document),
         options, groupId);
     } finally { lifecycle.dispose(); }
   }

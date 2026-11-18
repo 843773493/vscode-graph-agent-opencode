@@ -20,6 +20,7 @@ from app.domain.background_work import (
     BackgroundTaskDescriptor,
     BackgroundTaskHandle,
     BackgroundTaskStatus,
+    BackgroundTaskSummary,
 )
 from app.domain.itemized.hashing import sha256_jcs
 from app.services.infrastructure.background_work_store import BackgroundWorkStore
@@ -181,7 +182,7 @@ class BackgroundTaskRegistry:
         active_session_ids: set[str] = set()
         for session_id in self._store.session_ids():
             with self._store.control(session_id) as control:
-                handles = control.list_background_tasks()
+                handles = [*control.list_unsettled_background_tasks(), *control.list_background_tasks(active_only=True)]
             for handle in handles:
                 if handle.status not in ACTIVE_BACKGROUND_TASK_STATUSES:
                     self._settle_lease(handle)
@@ -215,9 +216,9 @@ class BackgroundTaskRegistry:
         with self._store.control(session_id, read_only=True) as control:
             return control.list_background_tasks(active_only=True)
 
-    def list_closed_handles(self, session_id: str) -> list[BackgroundTaskHandle]:
+    def list_summaries(self, session_id: str, *, include_history: bool) -> list[BackgroundTaskSummary]:
         with self._store.control(session_id, read_only=True) as control:
-            return [handle for handle in control.list_background_tasks() if handle.status not in ACTIVE_BACKGROUND_TASK_STATUSES]
+            return control.list_background_task_summaries(include_history=include_history)
 
     def list_active_handles(self) -> list[BackgroundTaskHandle]:
         # 启动恢复与本 registry 的准入确定候选；状态正文始终读取控制库。

@@ -1,4 +1,4 @@
-import type { Agent, APIResponse, WorkspaceInfo } from "../types/backend";
+import type { Agent, APIResponse, ModelReference, WorkspaceInfo } from "../types/backend";
 import type { GatewayWorkspaceRequestTarget } from "./workspaceIdentity";
 import {
   gatewayWorkspaceRequestHeaders,
@@ -57,20 +57,20 @@ export async function setWorkspaceDefaultAgent(
   );
 }
 
-export async function setWorkspaceDefaultProvider(
+export async function setWorkspaceDefaultModel(
   port: number,
   agentId: string,
-  providerId: string,
+  model: ModelReference,
   workspaceId: AgentWorkspaceTarget,
 ): Promise<Agent[]> {
   return unwrapApiData(
     await requestJson<APIResponse<Agent[]>>(
       port,
-      `/api/v1/agents/${encodeURIComponent(agentId)}/workspace-default-provider`,
+      `/api/v1/agents/${encodeURIComponent(agentId)}/workspace-default-model`,
       {
         method: "PUT",
         headers: agentHeaders(workspaceId),
-        body: JSON.stringify({ provider_id: providerId }),
+        body: JSON.stringify({ model }),
       },
     ),
   );

@@ -57,20 +57,29 @@ def product_case(request: pytest.FixtureRequest, recovery_case, free_tcp_port_fa
         if sealed_call_timeout_seconds is not None:
             payload["mcp"]["supervision"] = {"sealed_call_timeout_seconds": sealed_call_timeout_seconds}
         payload["context"] = {"resource_activation": {"default_boundary": boundary, "overrides": {"mcp_tool_catalog": boundary}}}
-        payload["llm"] = {"providers": [{
-            "id": "control-replay", "endpoint": "https://opencode.ai/zen/v1", "model": "control-replay-model",
-            "api_key": "control-replay-key", "custom_llm_provider": "openai",
-            "api_mode": {
-                "protocol": "chat_completions", "model_info": {"supports_function_calling": True},
-                "supports_reasoning": {"reasoning_content": False},
-            },
-        }]}
+        payload["llm"] = {
+            "providers": {
+                "control-replay": {
+                    "defaults": {
+                        "endpoint": "https://opencode.ai/zen/v1",
+                        "api_key": "",
+                        "custom_llm_provider": "openai",
+                        "api_mode": {
+                            "protocol": "chat_completions",
+                            "model_info": {"supports_function_calling": True},
+                            "supports_reasoning": {"reasoning_content": False},
+                        },
+                    },
+                    "models": {"default": {"model": "control-replay-model"}},
+                }
+            }
+        }
         default = payload.setdefault("agents", {}).setdefault("default", {})
-        default["model"] = {"primary_provider": "control-replay", "fallback_providers": []}
+        default["model"] = {'primary': {'provider_id': 'control-replay', 'model_id': 'default'}, 'fallbacks': []}
         if web:
             # 完整页面会读取全部 Agent；每个继承的模型引用都必须指向真实回放 Provider。
             for agent_id in read_jsonc_object(case.context.project_root / "configs/workspace_inline.jsonc")["agents"]:
-                payload["agents"].setdefault(agent_id, {})["model"] = {"primary_provider": "control-replay", "fallback_providers": []}
+                payload["agents"].setdefault(agent_id, {})["model"] = {'primary': {'provider_id': 'control-replay', 'model_id': 'default'}, 'fallbacks': []}
         default.setdefault("tools", {})["custom"] = [{"tool_id": "connections.manage"}]
         if tool_restrictions is not None:
             default["tools"].setdefault("policy", {})["restrictions"] = tool_restrictions

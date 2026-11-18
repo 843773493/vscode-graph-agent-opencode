@@ -147,7 +147,7 @@ class SessionControlStore(
     不迁移、不回填；当前 GraphBinding 仍由 thread_catalog 唯一持有。
     """
 
-    SCHEMA_VERSION = 18
+    SCHEMA_VERSION = 20
 
     def __init__(self, database_path: Path, *, read_only: bool = False) -> None:
         if not isinstance(database_path, Path):

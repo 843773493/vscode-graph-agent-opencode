@@ -5,6 +5,7 @@ import type { TraceMatchDTO } from "../../types/protocol_generated/boxteam/works
 import { errorMessage } from "../../utils/errorMessage";
 
 export interface TraceNavigation {
+  recordOnly?: boolean;
   match: TraceMatchDTO;
   location?: LocatedTrace;
   error?: string;

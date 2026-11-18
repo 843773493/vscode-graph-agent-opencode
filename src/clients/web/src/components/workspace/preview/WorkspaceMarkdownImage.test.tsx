@@ -225,52 +225,73 @@ test("外部 Markdown 图片使用浏览器原生懒加载，不请求工作区�
   act(() => renderer.unmount());
 });
 
-for (const pending of [false, true]) {
-  test(`身份失效撤销${pending ? "在途" : "已显示"}工作区图片，旧结果不能恢复展示`, async () => {
+for (const scenario of ["refresh", "pending", "displayed"] as const) {
+  test(`真实文件请求：${scenario === "refresh" ? "401 刷新后正常显示图片" : scenario === "pending" ? "正文读取时撤销凭据" : "撤销已显示图片"}`, async () => {
     const observers = installIntersectionObserver();
-    const response = deferred<Blob>();
-    const getBlob = spyOn(api, "getWorkspaceRawFileBlob").mockImplementation(async () => (
-      pending ? await response.promise : new Blob(["image"])
-    ));
+    const originalFetch = globalThis.fetch;
+    invalidateGatewayToken(8014);
+    let credentials = 0;
+    let rawRequests = 0;
+    let bodyCancelled = false;
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://127.0.0.1");
+      if (url.pathname === "/api/gateway/auth/local-credential") {
+        return Response.json({ data: { token: ++credentials === 1 ? "old-token" : "fresh-token" } });
+      }
+      expect(url.pathname).toBe("/api/v1/workspace/files/raw");
+      expect(url.searchParams.get("path")).toBe(`${ROOT}/docs/identity.png`);
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
+      expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(OWNER.workspaceId);
+      rawRequests += 1;
+      if (scenario === "refresh" && headers.get("X-Local-Token") === "old-token") {
+        return Response.json({ detail: "invalid local token" }, { status: 401 });
+      }
+      return new Response(scenario === "pending" ? new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array([1, 2])); },
+        cancel() { bodyCancelled = true; },
+      }) : "image", { headers: { "Content-Type": "image/png" } });
+    }, { preconnect: originalFetch.preconnect });
     const createUrl = spyOn(URL, "createObjectURL").mockReturnValue("blob:identity-image");
     const revokeUrl = spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-    restoreFns.push(() => getBlob.mockRestore(), () => createUrl.mockRestore(), () => revokeUrl.mockRestore());
+    restoreFns.push(() => { globalThis.fetch = originalFetch; }, () => createUrl.mockRestore(), () => revokeUrl.mockRestore());
     let renderer!: ReactTestRenderer;
-    act(() => {
+    await act(async () => {
       renderer = create(markdownImage("./identity.png", "身份图片"), {
         createNodeMock: element => element.type === "span" ? {} : null,
       });
     });
-    // 失败也释放真实组件的订阅，避免污染下一场景。
     restoreFns.unshift(() => act(() => renderer.unmount()));
-    act(() => observers[0]!.intersect());
-    await flush();
-    expect(renderer.root.findAllByType("img")).toHaveLength(pending ? 0 : 1);
-    expect(getBlob).toHaveBeenCalledTimes(1);
-    const signal = getBlob.mock.calls[0]?.[3];
+    await act(async () => {
+      observers[0]!.intersect();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(rawRequests).toBe(scenario === "refresh" ? 2 : 1);
+    expect(credentials).toBe(scenario === "refresh" ? 2 : 1);
+    expect(renderer.root.findAllByType("img")).toHaveLength(scenario === "pending" ? 0 : 1);
+    expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);
 
-    act(() => invalidateGatewayToken(8015));
-    expect(signal?.aborted).toBe(false);
+    await act(async () => { invalidateGatewayToken(8015); });
     expect(revokeUrl).not.toHaveBeenCalled();
+    expect(bodyCancelled).toBe(false);
 
-    act(() => invalidateGatewayToken(8014));
-    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      invalidateGatewayToken(8014);
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
     expect(renderer.root.findAllByType("img")).toHaveLength(0);
     expect(renderer.root.findByProps({ role: "alert" }).children.join("")).toContain("访问凭据已改变");
-    expect(revokeUrl.mock.calls).toEqual(pending ? [] : [["blob:identity-image"]]);
-    response.resolve(new Blob(["late image"]));
-    await flush();
-    expect(createUrl).toHaveBeenCalledTimes(pending ? 0 : 1);
-    expect(renderer.root.findAllByType("img")).toHaveLength(0);
-    expect(getBlob).toHaveBeenCalledTimes(1);
+    expect(bodyCancelled).toBe(scenario === "pending");
+    expect(createUrl).toHaveBeenCalledTimes(scenario === "pending" ? 0 : 1);
+    expect(revokeUrl.mock.calls).toEqual(scenario === "pending" ? [] : [["blob:identity-image"]]);
 
-    // 新 input 按原请求链读取；旧 input 的释放不能撤销它。
-    getBlob.mockResolvedValue(new Blob(["new identity image"]));
-    act(() => renderer.update(markdownImage("./next.png", "新身份图片")));
-    act(() => observers[1]!.intersect());
-    await flush();
-    expect(renderer.root.findByType("img").props.alt).toBe("新身份图片");
-    expect(getBlob.mock.calls[1]?.[3]?.aborted).toBe(false);
+    // 新 input 沿原请求链读取；旧组件的释放不能撤销新图片。
+    await act(async () => renderer.update(markdownImage("./identity.png#next", "新身份图片")));
+    await act(async () => {
+      observers[1]!.intersect();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    if (scenario !== "pending") expect(renderer.root.findByType("img").props.alt).toBe("新身份图片");
     act(() => renderer.unmount());
     const released = revokeUrl.mock.calls.length;
     act(() => invalidateGatewayToken(8014));

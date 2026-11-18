@@ -153,8 +153,8 @@ async def test_nonstream_call_keeps_nonstream_request_parameters(
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
 
 
-def test_build_model_passes_provider_request_overrides():
-    """provider 请求覆盖应优先于 agent 通用参数并透传给 LiteLLM。"""
+def test_build_model_passes_provider_request_parameters():
+    """未声明 Agent 参数时透传模型参数。"""
     model = build_model_from_provider(
         provider={
             "id": "backup_3",
@@ -164,7 +164,7 @@ def test_build_model_passes_provider_request_overrides():
             "endpoint": "https://example.com/v1",
             "api_mode": _chat_api_mode(),
             "request_options": {
-                "overrides": {
+                "parameters": {
                     "temperature": 1,
                     "extra_body": {
                         "reasoning": True,
@@ -189,46 +189,24 @@ def test_build_model_passes_provider_request_overrides():
     assert model._default_params["temperature"] == 1
 
 
-def test_request_overrides_replace_output_parameter_without_model_branch():
-    """特殊参数完全由配置表达，不依赖 provider 或模型名称判断。"""
+def test_agent_parameters_override_model_defaults_and_preserve_extension_null():
+    """Agent 显式参数高于模型默认；扩展正文中的 JSON null 保持。"""
     model = build_model_from_provider(
         provider={
-            "id": "backup_3",
-            "custom_llm_provider": "openai",
-            "model": "vendor-special-model",
-            "api_key": "test-key",
-            "endpoint": "https://www.cctq.ai/v1",
+            "provider_id": "service", "model_id": "configured", "model": "work-model",
+            "custom_llm_provider": "openai", "api_key": "test-key",
             "api_mode": _chat_api_mode(),
-            "request_options": {
-                "overrides": {
-                    "temperature": 1,
-                    "max_tokens": None,
-                    "extra_body": {
-                        "reasoning_effort": "low",
-                        "max_output_tokens": 512,
-                    },
-                }
-            },
+            "request_options": {"parameters": {
+                "temperature": 1, "top_p": None, "max_tokens": None,
+                "extra_body": {"vendor_feature": None},
+            }},
         },
-        runtime_config={
-            "temperature": 0,
-            "top_p": 1,
-            "max_output_tokens": 512,
-        },
+        runtime_config={"temperature": 0, "max_output_tokens": 512},
     )
-
-    assert model.max_tokens is None
     assert model.model_kwargs == {
-        "temperature": 1,
-        "top_p": 1,
-        "max_tokens": None,
-        "extra_body": {
-            "reasoning_effort": "low",
-            "max_output_tokens": 512,
-        },
+        "temperature": 0, "max_tokens": 512, "extra_body": {"vendor_feature": None},
     }
-    assert model._default_params["temperature"] == 1
-    assert model._default_params["max_tokens"] is None
+    assert "top_p" not in model.model_kwargs
 
 
 def test_build_model_defaults_no_proxy_to_false():
@@ -328,7 +306,7 @@ async def test_litellm_stream_sends_extra_body(
     monkeypatch: pytest.MonkeyPatch,
     empty_chat_completion_stream: _EmptyChatCompletionStream,
 ) -> None:
-    """LiteLLM 流式调用应携带 overrides 中的顶层参数和 extra_body。"""
+    """LiteLLM 流式调用保留正式参数和独立扩展正文。"""
     captured: dict[str, object] = {}
 
     class FakeCompletions:
@@ -348,7 +326,7 @@ async def test_litellm_stream_sends_extra_body(
         api_base="https://example.com/v1",
         model_kwargs={
             "temperature": 1,
-            "extra_body": {"reasoning_effort": "low"},
+            "extra_body": {"vendor_feature": "low"},
         },
         invocation_purpose="tool_test",
     )
@@ -366,4 +344,4 @@ async def test_litellm_stream_sends_extra_body(
 
     assert chunks == []
     assert captured["temperature"] == 1
-    assert captured["extra_body"] == {"reasoning_effort": "low"}
+    assert captured["extra_body"] == {"vendor_feature": "low"}

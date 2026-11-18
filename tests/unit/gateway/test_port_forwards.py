@@ -1,917 +1,216 @@
+"""端口规则独立于工作区；覆盖传输、持久启停及多 Host 路由。"""
 from __future__ import annotations
 
 import asyncio
 import json
-import os
-from collections.abc import Iterator
-from dataclasses import replace
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import UUID
 
+import httpx
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import FastAPI
 
+from app.core.trace_middleware import TraceMiddleware
 from app.gateway.auth import verify_gateway_token
-from app.gateway.federation import FEDERATION_PROTOCOL_VERSION, RemoteGatewayConnection
-from app.gateway.main import app
-from app.gateway.registry import GatewayWorkspaceRegistry, WorkspaceTarget
+from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes._shared import get_registry
-from app.gateway.runtime import port_forwarding
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
-from app.gateway.server.port_forwarding import get_port_forward_manager
-from app.schemas.gateway.port_forwarding import CreatePortForwardRequest
-
-_WORKSPACE_ID = "00000000-0000-4000-8000-000000000002"
-_OTHER_WORKSPACE_ID = "00000000-0000-4000-8000-000000000003"
-_REMOTE_GATEWAY_ID = "gateway_" + "a" * 32
-_OTHER_GATEWAY_ID = "gateway_" + "b" * 32
-
-
-class _FakeManagedProcess:
-    def __init__(self) -> None:
-        self.process = SimpleNamespace(poll=lambda: None)
-        self.closed = False
-
-    def close(self, *, timeout_seconds: float = 8) -> None:
-        del timeout_seconds
-        self.closed = True
-
-
-def _registry(tmp_path: Path) -> GatewayWorkspaceRegistry:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
-    registry.upsert_remote_gateway(
-        RemoteGatewayConnection(
-            connection_id="rgw_server",
-            name="Development server",
-            host="server.example.com",
-            port=22,
-            username="developer",
-            private_key_path="/keys/never-persist-content",
-            ssh_config_host="development-alias",
-            remote_gateway_port=8014,
-            remote_gateway_id=_REMOTE_GATEWAY_ID,
-            protocol_version=FEDERATION_PROTOCOL_VERSION,
-            source_owner="manual",
-        )
-    )
-    projections = []
-    for workspace_id in (_WORKSPACE_ID, _OTHER_WORKSPACE_ID):
-        projections.append(
-            WorkspaceTarget(
-                gateway_id=_REMOTE_GATEWAY_ID,
-                workspace_id=workspace_id,
-                name=workspace_id,
-                root_path=None,
-                backend_url="http://127.0.0.1:41000",
-                connection_kind="remote_gateway",
-                remote_gateway_connection_ids=("rgw_server",),
-                owner="remote_projection",
-            ),
-        )
-    registry.apply_remote_projection_snapshot(
-        connection=registry.remote_gateway_connection("rgw_server"), projections=tuple(projections),
-    )
-    return registry
-
-
-def _manager(
-    tmp_path: Path,
-    registry: GatewayWorkspaceRegistry,
-    calls: list[dict[str, object]],
-    processes: list[_FakeManagedProcess],
-) -> SshPortForwardManager:
-    def starter(**kwargs: object):
-        calls.append(kwargs)
-        process = _FakeManagedProcess()
-        processes.append(process)
-        return process, tmp_path / "logs" / f"{kwargs['forward_id']}.log"
-
-    manager = SshPortForwardManager(
-        registry=registry,
-        storage_path=tmp_path / "port-forwards.json",
-        log_dir=tmp_path / "logs",
-        process_starter=starter,
-        port_allocator=lambda: 41234,
-    )
-
-    async def ready(*_: object) -> None:
-        return None
-
-    manager._wait_until_listening = ready  # type: ignore[method-assign]
-    return manager
-
-
-def _write_saved_forwards(
-    storage_path: Path,
-    forwards: list[tuple[str, str, int, int]],
-) -> None:
-    storage_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "items": [
-                    {
-                        "forward_id": forward_id,
-                        "gateway_id": _REMOTE_GATEWAY_ID,
-                        "workspace_id": workspace_id,
-                        "connection_id": "rgw_server",
-                        "remote_host": "127.0.0.1",
-                        "remote_port": remote_port,
-                        "local_host": "127.0.0.1",
-                        "local_port": local_port,
-                        "protocol": "http",
-                        "label": None,
-                        "desired_running": True,
-                    }
-                    for forward_id, workspace_id, remote_port, local_port in forwards
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-@pytest.mark.asyncio
-async def test_create_binds_forward_to_workspace_and_reuses_ssh_alias(
-    tmp_path: Path,
-) -> None:
-    calls: list[dict[str, object]] = []
-    processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, _registry(tmp_path), calls, processes)
-
-    created = await manager.create(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        CreatePortForwardRequest(
-            remote_port=5173,
-            protocol="http",
-            label="Vite",
-        ),
-    )
-
-    assert UUID(hex=created.forward_id.removeprefix("pf_")).version == 7
-    assert created.workspace_id == _WORKSPACE_ID
-    assert created.gateway_id == _REMOTE_GATEWAY_ID
-    assert created.connection_id == "rgw_server"
-    assert created.local_port == 41234
-    assert created.local_url == "http://127.0.0.1:41234"
-    assert created.status == "active"
-    assert calls[0]["ssh_config_host"] == "development-alias"
-    assert calls[0]["host"] == "server.example.com"
-    assert calls[0]["username"] == "developer"
-    forward = calls[0]["forward"]
-    assert forward.remote_host == "127.0.0.1"
-    assert forward.remote_port == 5173
-
-    persisted = json.loads(
-        (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
-    )
-    assert persisted["items"][0]["workspace_id"] == _WORKSPACE_ID
-    assert persisted["items"][0]["gateway_id"] == _REMOTE_GATEWAY_ID
-    assert persisted["schema_version"] == 2
-    assert persisted["items"][0]["desired_running"] is True
-    assert "private_key" not in json.dumps(persisted)
-    if os.name != "nt":
-        assert (tmp_path / "port-forwards.json").stat().st_mode & 0o777 == 0o600
-
-
-@pytest.mark.asyncio
-async def test_server_remote_port_has_single_workspace_owner(
-    tmp_path: Path,
-) -> None:
-    manager = _manager(tmp_path, _registry(tmp_path), [], [])
-    await manager.create(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        CreatePortForwardRequest(remote_port=5173, local_port=41235),
-    )
-
-    with pytest.raises(ValueError, match=f"已归属于工作区 {_WORKSPACE_ID}"):
-        await manager.create(
-            (_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID),
-            CreatePortForwardRequest(remote_port=5173, local_port=41236),
-        )
-
-
-@pytest.mark.asyncio
-async def test_change_local_port_restarts_same_forward_and_persists_new_port(
-    tmp_path: Path,
-) -> None:
-    calls: list[dict[str, object]] = []
-    processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, _registry(tmp_path), calls, processes)
-    created = await manager.create(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        CreatePortForwardRequest(remote_port=5173, local_port=41235),
-    )
-
-    changed = await manager.change_local_port(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        created.forward_id,
-        41236,
-    )
-
-    assert changed.forward_id == created.forward_id
-    assert changed.local_port == 41236
-    assert changed.local_url == "http://127.0.0.1:41236"
-    assert processes[0].closed is True
-    assert calls[1]["forward"].local_port == 41236
-    persisted = json.loads(
-        (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
-    )
-    assert persisted["items"][0]["local_port"] == 41236
-
-
-@pytest.mark.asyncio
-async def test_change_label_replaces_definition_and_persists_display_name(
-    tmp_path: Path,
-) -> None:
-    manager = _manager(tmp_path, _registry(tmp_path), [], [])
-    created = await manager.create(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        CreatePortForwardRequest(remote_port=5173, local_port=41236, label="旧名称"),
-    )
-
-    changed = await manager.change_label((_REMOTE_GATEWAY_ID, _WORKSPACE_ID), created.forward_id, "新名称")
-
-    assert changed.label == "新名称"
-    assert (await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)))[0].label == "新名称"
-    persisted = json.loads(
-        (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
-    )
-    assert persisted["items"][0]["label"] == "新名称"
-
-
-@pytest.mark.asyncio
-async def test_local_port_conflict_is_rejected_across_workspaces(
-    tmp_path: Path,
-) -> None:
-    manager = _manager(tmp_path, _registry(tmp_path), [], [])
-    await manager.create(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        CreatePortForwardRequest(remote_port=5173, local_port=41237),
-    )
-
-    with pytest.raises(ValueError, match="本地端口 .* 已被转发"):
-        await manager.create(
-            (_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID),
-            CreatePortForwardRequest(remote_port=8080, local_port=41237),
-        )
-
-
-@pytest.mark.asyncio
-async def test_delete_closes_process_before_removing_persisted_definition(
-    tmp_path: Path,
-) -> None:
-    processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, _registry(tmp_path), [], processes)
-    created = await manager.create(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        CreatePortForwardRequest(remote_port=5173, local_port=41238),
-    )
-
-    await manager.delete((_REMOTE_GATEWAY_ID, _WORKSPACE_ID), created.forward_id)
-
-    assert processes[0].closed is True
-    assert await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID)) == []
-    persisted = json.loads(
-        (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
-    )
-    assert persisted["items"] == []
-
-
-@pytest.mark.asyncio
-async def test_reconcile_removes_forward_owned_by_stale_projection(
-    tmp_path: Path,
-) -> None:
-    registry = _registry(tmp_path)
-    processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, registry, [], processes)
-    await manager.create(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        CreatePortForwardRequest(remote_port=5173, local_port=41241),
-    )
-
-    registry.apply_remote_projection_snapshot(
-        connection=registry.remote_gateway_connection("rgw_server"),
-        projections=(registry.resolve((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID)),),
-    )
-    await manager.reconcile_workspaces()
-
-    assert processes[0].closed is True
-    persisted = json.loads(
-        (tmp_path / "port-forwards.json").read_text(encoding="utf-8")
-    )
-    assert persisted["items"] == []
-
-
-@pytest.mark.asyncio
-async def test_restore_failure_remains_visible_on_workspace_list(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-) -> None:
-    storage_path = tmp_path / "port-forwards.json"
-    storage_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "items": [
-                    {
-                        "forward_id": "pf_stale",
-                        "gateway_id": _REMOTE_GATEWAY_ID,
-                        "workspace_id": _WORKSPACE_ID,
-                        "connection_id": "rgw_replaced",
-                        "remote_host": "127.0.0.1",
-                        "remote_port": 5173,
-                        "local_host": "127.0.0.1",
-                        "local_port": 41239,
-                        "protocol": "http",
-                        "label": "Vite",
-                        "desired_running": True,
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    manager = SshPortForwardManager(
-        registry=_registry(tmp_path),
-        storage_path=storage_path,
-        log_dir=tmp_path / "logs",
-    )
-
-    await manager.restore()
-    restored = await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))
-
-    assert restored[0].status == "error"
-    assert "error_type=RuntimeError" in (restored[0].error or "")
-    assert "绑定的远程 Gateway 已变化" in caplog.text
-    with pytest.raises(RuntimeError, match="SSH 端口转发健康检查失败"):
-        manager.assert_healthy()
-
-
-@pytest.mark.asyncio
-async def test_restore_starts_saved_forwards_concurrently(tmp_path: Path) -> None:
-    registry = _registry(tmp_path)
-    storage_path = tmp_path / "port-forwards.json"
-    _write_saved_forwards(
-        storage_path,
-        [
-            ("pf_1", _WORKSPACE_ID, 5173, 41250),
-            ("pf_2", _OTHER_WORKSPACE_ID, 3000, 41251),
-        ],
-    )
-    calls: list[dict[str, object]] = []
-    processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, registry, calls, processes)
-    entered_ports: list[int] = []
-    both_forwards_started = asyncio.Event()
-    release_readiness = asyncio.Event()
-
-    async def wait_for_listening(
-        _process: _FakeManagedProcess,
-        local_port: int,
-    ) -> None:
-        entered_ports.append(local_port)
-        if len(entered_ports) == 2:
-            both_forwards_started.set()
-        await release_readiness.wait()
-
-    manager._wait_until_listening = wait_for_listening  # type: ignore[method-assign]
-    restore = asyncio.create_task(manager.restore())
-    try:
-        await asyncio.wait_for(both_forwards_started.wait(), timeout=0.5)
-    except TimeoutError:
-        release_readiness.set()
-        await restore
-        raise
-    release_readiness.set()
-    await restore
-
-    assert sorted(entered_ports) == [41250, 41251]
-    assert len(calls) == 2
-    assert [item.status for item in await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))] == ["active"]
-    assert [item.status for item in await manager.list((_REMOTE_GATEWAY_ID, _OTHER_WORKSPACE_ID))] == ["active"]
-
-
-@pytest.mark.asyncio
-async def test_restore_cancellation_closes_started_forward(tmp_path: Path) -> None:
-    registry = _registry(tmp_path)
-    storage_path = tmp_path / "port-forwards.json"
-    _write_saved_forwards(storage_path, [("pf_waiting", _WORKSPACE_ID, 5173, 41252)])
-    processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, registry, [], processes)
-    readiness_started = asyncio.Event()
-
-    async def wait_for_listening(
-        _process: _FakeManagedProcess,
-        _local_port: int,
-    ) -> None:
-        readiness_started.set()
-        await asyncio.Future()
-
-    manager._wait_until_listening = wait_for_listening  # type: ignore[method-assign]
-    restore = asyncio.create_task(manager.restore())
-    await asyncio.wait_for(readiness_started.wait(), timeout=0.5)
-
-    restore.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await restore
-
-    assert len(processes) == 1
-    assert processes[0].closed is True
-    restored = await manager.list((_REMOTE_GATEWAY_ID, _WORKSPACE_ID))
-    assert restored[0].status == "error"
-    assert restored[0].error == "SSH 端口转发启动被取消"
-
-
-@pytest.mark.asyncio
-async def test_restore_limits_parallel_process_starts(tmp_path: Path) -> None:
-    registry = _registry(tmp_path)
-    storage_path = tmp_path / "port-forwards.json"
-    forwards = [
-        (
-            f"pf_{index}",
-            _WORKSPACE_ID if index % 2 == 0 else _OTHER_WORKSPACE_ID,
-            1000 + index,
-            41300 + index,
-        )
-        for index in range(port_forwarding._RESTORE_CONCURRENCY + 2)
-    ]
-    _write_saved_forwards(storage_path, forwards)
-    calls: list[dict[str, object]] = []
-    processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, registry, calls, processes)
-    entered_count = 0
-    peak_active = 0
-    active = 0
-    concurrency_reached = asyncio.Event()
-    release_readiness = asyncio.Event()
-
-    async def wait_for_listening(
-        _process: _FakeManagedProcess,
-        _local_port: int,
-    ) -> None:
-        nonlocal active, entered_count, peak_active
-        active += 1
-        entered_count += 1
-        peak_active = max(peak_active, active)
-        if entered_count == port_forwarding._RESTORE_CONCURRENCY:
-            concurrency_reached.set()
-        await release_readiness.wait()
-        active -= 1
-
-    manager._wait_until_listening = wait_for_listening  # type: ignore[method-assign]
-    restore = asyncio.create_task(manager.restore())
-    await asyncio.wait_for(concurrency_reached.wait(), timeout=0.5)
-    await asyncio.sleep(0)
-
-    assert entered_count == port_forwarding._RESTORE_CONCURRENCY
-    assert peak_active == port_forwarding._RESTORE_CONCURRENCY
-
-    release_readiness.set()
-    await restore
-
-    assert entered_count == len(forwards)
-    assert peak_active == port_forwarding._RESTORE_CONCURRENCY
-    assert len(calls) == len(forwards)
-
-
-@pytest.mark.asyncio
-async def test_failed_start_retains_process_when_close_fails(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-) -> None:
-    processes: list[_FakeManagedProcess] = []
-    manager = _manager(tmp_path, _registry(tmp_path), [], processes)
-    close_attempts = 0
-
-    def start_process(**_: object) -> tuple[_FakeManagedProcess, Path]:
-        process = _FakeManagedProcess()
-        processes.append(process)
-
-        def close(*, timeout_seconds: float = 8) -> None:
-            nonlocal close_attempts
-            del timeout_seconds
-            close_attempts += 1
-            if close_attempts == 1:
-                raise RuntimeError("close failed")
-            process.closed = True
-
-        process.close = close
-        return process, tmp_path / "logs" / "failed-start.log"
-
-    manager._process_starter = start_process
-
-    async def readiness_failure(*_: object) -> None:
-        raise TimeoutError("readiness failed")
-
-    manager._wait_until_listening = readiness_failure  # type: ignore[method-assign]
-    created = await manager.create(
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID),
-        CreatePortForwardRequest(remote_port=5173, local_port=41253),
-    )
-
-    assert created.status == "error"
-    assert "error_type=RuntimeError" in (created.error or "")
-    assert "close failed" in caplog.text
-    assert processes[0].closed is False
-    assert manager._runtimes[created.forward_id].process is processes[0]
-
-    await manager.delete((_REMOTE_GATEWAY_ID, _WORKSPACE_ID), created.forward_id)
-
-    assert close_attempts == 2
-    assert processes[0].closed is True
-
-
-def test_log_tail_reads_bounded_utf8_suffix(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    log_path = tmp_path / "large-ssh.log"
-    content = "旧日志🚀\n" * 20_000 + "末尾错误🧭\n" * 1_000
-    log_path.write_text(content, encoding="utf-8")
-    max_tail_bytes = port_forwarding._LOG_TAIL_MAX_CHARACTERS * 4 + 3
-    read_sizes: list[int] = []
-    real_open = Path.open
-
-    class ReadProbe:
-        def __init__(self, stream) -> None:
-            self._stream = stream
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args) -> None:
-            self._stream.close()
-
-        def seek(self, *args):
-            return self._stream.seek(*args)
-
-        def tell(self) -> int:
-            return self._stream.tell()
-
-        def read(self, size: int) -> bytes:
-            read_sizes.append(size)
-            return self._stream.read(size)
-
-    def open_probe(path: Path, *args, **kwargs):
-        return ReadProbe(real_open(path, *args, **kwargs))
-
-    def reject_full_read(*_args, **_kwargs):
-        pytest.fail("日志尾部读取不得调用完整 read_text")
-
-    monkeypatch.setattr(Path, "open", open_probe)
-    monkeypatch.setattr(Path, "read_text", reject_full_read)
-
-    actual = SshPortForwardManager._read_log_tail(log_path)
-
-    assert actual == content[-port_forwarding._LOG_TAIL_MAX_CHARACTERS :].strip()
-    assert read_sizes == [max_tail_bytes]
-
-
-def test_port_forward_runtime_generation_protocol_is_reversible(
-    tmp_path: Path,
-) -> None:
-    manager = _manager(tmp_path, _registry(tmp_path), [], [])
-
-    assert manager.prepare_runtime_generation("gateway-generation") is None
-    assert manager.apply_runtime_generation("gateway-generation") is None
-    manager.promote_runtime_generation("gateway-generation")
-    proof = manager.runtime_health_proof(generation="gateway-generation")
-    assert proof.details["runtime_generation"] == "gateway-generation"
-    manager.rollback_runtime_generation("gateway-generation", None)
-
-
-def test_load_rejects_duplicate_persisted_local_port(tmp_path: Path) -> None:
-    items = [
-        {
-            "forward_id": f"pf_{index}",
-            "gateway_id": _REMOTE_GATEWAY_ID,
-            "workspace_id": workspace_id,
-            "connection_id": "rgw_server",
-            "remote_host": "127.0.0.1",
-            "remote_port": 5000 + index,
-            "local_host": "127.0.0.1",
-            "local_port": 41240,
-            "protocol": "tcp",
-            "label": None,
-            "desired_running": True,
-        }
-        for index, workspace_id in enumerate((_WORKSPACE_ID, _OTHER_WORKSPACE_ID))
-    ]
-    storage_path = tmp_path / "port-forwards.json"
-    storage_path.write_text(
-        json.dumps({"schema_version": 2, "items": items}),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValueError, match="本地端口重复"):
-        SshPortForwardManager(
-            registry=_registry(tmp_path),
-            storage_path=storage_path,
-            log_dir=tmp_path / "logs",
-        )
-
-
-@pytest.mark.asyncio
-async def test_local_workspace_is_rejected(tmp_path: Path) -> None:
-    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "workspaces.json")
-    registry.upsert(
-        WorkspaceTarget(
-            gateway_id=registry.gateway_id,
-            workspace_id=_WORKSPACE_ID,
-            name="Local",
-            root_path=str(tmp_path),
-            backend_url="http://127.0.0.1:8010",
-            connection_kind="local",
-        )
-    )
-    manager = SshPortForwardManager(
-        registry=registry,
-        storage_path=tmp_path / "port-forwards.json",
-        log_dir=tmp_path / "logs",
-    )
-
-    with pytest.raises(ValueError, match="只支持远程 Gateway 投影工作区"):
-        await manager.create(
-            _WORKSPACE_ID,
-            CreatePortForwardRequest(remote_port=5173),
-        )
-
-
-def test_create_api_returns_complete_workspace_forward_list(
-    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
-) -> None:
-    client, _, _ = forward_http
-    response = client.post(
-        f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards",
-        headers={"X-Request-ID": "req-port-forward"},
-        json={
-            "remote_port": 5173,
-            "local_port": 41241,
-            "protocol": "https",
-            "label": "Preview",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["request_id"] == "req-port-forward"
-    items = response.json()["data"]["items"]
-    assert len(items) == 1
-    assert items[0]["workspace_id"] == _WORKSPACE_ID
-    assert items[0]["gateway_id"] == _REMOTE_GATEWAY_ID
-    assert items[0]["connection_id"] == "rgw_server"
-    assert items[0]["status"] == "active"
-    assert items[0]["local_url"] == "https://127.0.0.1:41241"
+from app.gateway.runtime.port_forwarding import PortForwardManager
+from app.gateway.runtime.port_forwarding.hosts import SshHost
+from app.gateway.runtime.process_ports import allocate_local_port
+from app.gateway.server.port_forwarding import get_port_forward_manager, router
+from app.schemas.gateway.port_forwarding import (
+    CreatePortForwardRequest,
+    PortForwardEndpoint,
+)
 
 
 @pytest.fixture
-def forward_http(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]]]:
-    processes: list[_FakeManagedProcess] = []
-    registry = _registry(tmp_path)
-    manager = _manager(tmp_path, registry, [], processes)
-    monkeypatch.setitem(app.dependency_overrides, verify_gateway_token, lambda: "test-token")
-    monkeypatch.setitem(app.dependency_overrides, get_port_forward_manager, lambda: manager)
-    monkeypatch.setitem(app.dependency_overrides, get_registry, lambda: registry)
-    client = TestClient(app, headers={"X-BoxTeam-Target-Gateway-Id": _REMOTE_GATEWAY_ID})
+def registry(tmp_path: Path):
+    registry = GatewayWorkspaceRegistry(storage_path=tmp_path / "registry.json")
+    yield registry
+    registry.close()
+
+
+@pytest.fixture
+async def manager(tmp_path: Path, registry: GatewayWorkspaceRegistry) -> AsyncIterator[PortForwardManager]:
+    manager = PortForwardManager(registry=registry, storage_path=tmp_path / "forwards.json", log_dir=tmp_path / "logs")
+    yield manager
+    await manager.close()
+
+
+@pytest.fixture
+async def echo_service():
+    async def echo(reader, writer):
+        try:
+            while data := await reader.read(65536):
+                writer.write(data)
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    server = await asyncio.start_server(echo, "127.0.0.1", 0)
+    yield server.sockets[0].getsockname()[1]
+    server.close()
+    await server.wait_closed()
+
+
+def rule(destination_port: int, *, listener_host: str = "local", destination_host: str = "local", enabled: bool = True):
+    return CreatePortForwardRequest(
+        listener=PortForwardEndpoint(host_id=listener_host, port=allocate_local_port()),
+        destination=PortForwardEndpoint(host_id=destination_host, port=destination_port), enabled=enabled,
+    )
+
+
+async def exchange(port: int) -> None:
+    async with asyncio.timeout(3):
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        message = b"actual forwarded bytes\x00" * 2000
+        writer.write(message)
+        await writer.drain()
+        assert await reader.readexactly(len(message)) == message
+        writer.close()
+        await writer.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_tcp_rules_start_stop_restart_restore_and_share_destination(manager, registry, tmp_path, echo_service):
+    first = await manager.create(rule(echo_service))
+    second = await manager.create(rule(echo_service))
+    assert first.status == second.status == "active"
+    assert first.gateway_id == registry.gateway_id
+    await exchange(first.listener.port)
+    await exchange(second.listener.port)
+    stopped = await manager.set_running(first.forward_id, False)
+    assert stopped.status == "stopped" and not stopped.enabled
+    assert len(await manager.list()) == 2
+    with pytest.raises(OSError):
+        await asyncio.open_connection("127.0.0.1", first.listener.port)
+    restarted = await manager.set_running(first.forward_id, True)
+    await exchange(restarted.listener.port)
+    await manager.close()
+    restored = PortForwardManager(registry=registry, storage_path=tmp_path / "forwards.json", log_dir=tmp_path / "logs")
     try:
-        yield client, manager, processes
+        await restored.restore()
+        assert [item.status for item in await restored.list()] == ["active", "active"]
+        await exchange(first.listener.port)
+        await restored.delete(first.forward_id)
+        assert [item.forward_id for item in await restored.list()] == [second.forward_id]
     finally:
-        client.close()
+        await restored.close()
 
 
-def test_http_routes_keep_same_uuid_owned_by_each_gateway(
-    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
-    tmp_path: Path,
-) -> None:
-    client, manager, processes = forward_http
-    registry = manager._registry
-    connection = replace(
-        registry.remote_gateway_connection("rgw_server"),
-        connection_id="rgw_other", remote_gateway_id=_OTHER_GATEWAY_ID,
-        host="other.example.com",
-    )
-    registry.apply_remote_projection_snapshot(
-        connection=connection,
-        projections=(WorkspaceTarget(
-            gateway_id=_OTHER_GATEWAY_ID, workspace_id=_WORKSPACE_ID,
-            name="Other source", root_path=None, backend_url="http://127.0.0.1:42000",
-            connection_kind="remote_gateway", owner="remote_projection",
-            remote_gateway_connection_ids=(connection.connection_id,),
-        ),),
-    )
-    endpoint = f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards"
-    other_headers = {"X-BoxTeam-Target-Gateway-Id": _OTHER_GATEWAY_ID}
-    first_response = client.post(endpoint, json={"remote_port": 5173, "local_port": 41243})
-    second_response = client.post(endpoint, headers=other_headers, json={"remote_port": 5173, "local_port": 41244})
-    assert first_response.status_code == second_response.status_code == 200
-    [first] = first_response.json()["data"]["items"]
-    [second] = second_response.json()["data"]["items"]
-    assert (first["gateway_id"], first["workspace_id"], first["connection_id"]) == (
-        _REMOTE_GATEWAY_ID, _WORKSPACE_ID, "rgw_server",
-    )
-    assert (second["gateway_id"], second["workspace_id"], second["connection_id"]) == (
-        _OTHER_GATEWAY_ID, _WORKSPACE_ID, "rgw_other",
-    )
-    assert client.get(endpoint).json()["data"]["items"] == [first]
-    assert client.get(endpoint, headers=other_headers).json()["data"]["items"] == [second]
-    saved = (tmp_path / "port-forwards.json").read_bytes()
-    assert {(item["gateway_id"], item["workspace_id"]) for item in json.loads(saved)["items"]} == {
-        (_REMOTE_GATEWAY_ID, _WORKSPACE_ID), (_OTHER_GATEWAY_ID, _WORKSPACE_ID),
-    }
-    rejected = client.delete(f"{endpoint}/{first['forward_id']}", headers=other_headers)
-    assert rejected.status_code == 404
-    assert (tmp_path / "port-forwards.json").read_bytes() == saved
-    assert not any(process.closed for process in processes)
-
-    renamed = client.patch(f"{endpoint}/{first['forward_id']}/label", json={"label": "First preview"})
-    assert renamed.status_code == 200
-    first = {**first, "label": "First preview"}
-    assert renamed.json()["data"]["items"] == [first]
-    assert client.get(endpoint, headers=other_headers).json()["data"]["items"] == [second]
-    reconnected = client.post(f"{endpoint}/{first['forward_id']}/reconnect")
-    assert reconnected.status_code == 200
-    assert reconnected.json()["data"]["items"] == [first]
-    assert [process.closed for process in processes] == [True, False, False]
-
-    changed = client.patch(
-        f"{endpoint}/{second['forward_id']}/local-port", headers=other_headers,
-        json={"local_port": 41245},
-    )
-    assert changed.status_code == 200
-    second = {**second, "local_port": 41245, "local_url": "http://127.0.0.1:41245"}
-    assert changed.json()["data"]["items"] == [second]
-    assert client.get(endpoint).json()["data"]["items"] == [first]
-    assert [process.closed for process in processes] == [True, True, False, False]
-    deleted = client.delete(f"{endpoint}/{first['forward_id']}")
-    assert deleted.status_code == 200
-    assert deleted.json()["data"]["items"] == []
-    assert client.get(endpoint, headers=other_headers).json()["data"]["items"] == [second]
-    assert [process.closed for process in processes] == [True, True, True, False]
-    assert [(item["gateway_id"], item["workspace_id"]) for item in json.loads(
-        (tmp_path / "port-forwards.json").read_bytes(),
-    )["items"]] == [(_OTHER_GATEWAY_ID, _WORKSPACE_ID)]
+@pytest.mark.asyncio
+async def test_conflict_edit_and_failed_bind_keep_authoritative_rule(manager, echo_service):
+    first = await manager.create(rule(echo_service))
+    duplicate = CreatePortForwardRequest(listener=first.listener, destination=first.destination)
+    with pytest.raises(ValueError, match="监听端口"):
+        await manager.create(duplicate)
+    occupied = rule(echo_service)
+    occupied.listener.port = echo_service
+    # 不同逻辑入口的业务服务占用真实监听端口，启动失败仍保留可编辑的规则。
+    occupied.destination.port = echo_service + 1
+    failed = await manager.create(occupied)
+    assert failed.status == "error" and failed.error
+    edited = await manager.update(failed.forward_id, rule(echo_service))
+    assert edited.forward_id == failed.forward_id and edited.status == "active"
+    await exchange(edited.listener.port)
 
 
-@pytest.mark.parametrize(("method", "suffix", "payload"), [
-    ("GET", "", None),
-    ("POST", "", {"remote_port": 5173}),
-    ("DELETE", "/pf_unknown", None),
-    ("POST", "/pf_unknown/reconnect", None),
-    ("PATCH", "/pf_unknown/local-port", {"local_port": 41246}),
-    ("PATCH", "/pf_unknown/label", {"label": "Preview"}),
-])
-@pytest.mark.parametrize(("headers", "status"), [
-    ({"X-BoxTeam-Target-Gateway-Id": _REMOTE_GATEWAY_ID, "X-BoxTeam-Workspace-Id": _OTHER_WORKSPACE_ID}, 400),
-    ({"X-BoxTeam-Target-Gateway-Id": _OTHER_GATEWAY_ID}, 404),
-    ({"X-BoxTeam-Target-Gateway-Id": "gateway-invalid"}, 400),
-    ({}, 404),
-], ids=["workspace-conflict", "unknown-gateway", "invalid-gateway", "bare-uuid-is-local"])
-def test_http_identity_errors_are_rejected_before_forward_manager(
-    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
-    monkeypatch: pytest.MonkeyPatch,
-    method: str, suffix: str, payload: dict[str, object] | None,
-    headers: dict[str, str], status: int,
-) -> None:
-    client, manager, _ = forward_http
-    client.headers.pop("X-BoxTeam-Target-Gateway-Id")
-    manager_calls: list[tuple[object, ...]] = []
-
-    async def reject(*args: object) -> None:
-        manager_calls.append(args)
-        pytest.fail("无效工作区身份不得进入端口转发管理器")
-
-    for operation in ("create", "list", "delete", "reconnect", "change_local_port", "change_label"):
-        monkeypatch.setattr(manager, operation, reject)
-    response = client.request(
-        method, f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards{suffix}",
-        headers={**headers, "X-Request-ID": "req-forward-identity-rejected"}, json=payload,
-    )
-    assert response.status_code == status
-    assert response.headers["X-Request-ID"] == response.json()["request_id"] == "req-forward-identity-rejected"
-    assert manager_calls == []
-    assert manager._definitions == {} and not manager._storage_path.exists()
-
-
-@pytest.mark.parametrize("native_path", [
-    "/srv/private/key.pem", r"C:\private\key.pem",
-    r"\\server\private\key.pem", r"\\?\UNC\server\private\key.pem",
-], ids=["posix", "drive", "unc", "extended-unc"])
-@pytest.mark.parametrize("stage", ["spawn", "readiness", "exit", "close", "restore", "reconnect"])
-def test_error_response_excludes_native_location(
-    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    native_path: str, stage: str,
-) -> None:
-    client, manager, processes = forward_http
-    log_path = tmp_path / "ssh.log"
-    original_log = f"Identity file {native_path} is not accessible\n".encode()
-    log_path.write_bytes(original_log)
-    native_error = OSError(2, "SSH 文件访问失败", native_path)
-    native_error.winerror = 206
-
-    def start(**_: object) -> tuple[_FakeManagedProcess, Path]:
-        if stage == "spawn":
-            raise native_error
-        process = _FakeManagedProcess()
+@pytest.fixture
+def ssh_processes(tmp_path, monkeypatch):
+    calls = []
+    processes = []
+    def resolve(_registry, host_id):
+        return None if host_id == "local" else SshHost(host_id, 22, "tester", None, host_id)
+    monkeypatch.setattr("app.gateway.runtime.port_forwarding.manager.resolve_host", resolve)
+    def starter(**kwargs):
+        calls.append(kwargs)
+        process = SimpleNamespace(code=None, closed=False)
+        process.process = SimpleNamespace(poll=lambda: process.code)
+        def close(**_):
+            process.closed = True
+        process.close = close
+        path = tmp_path / f"{kwargs['forward_id']}.log"
+        marker = "remote forward success for:" if kwargs['forward'].direction == 'R' else "Local forwarding listening on"
+        path.write_text(marker)
         processes.append(process)
-        return process, log_path
-
-    async def failed_readiness(*_: object) -> None:
-        raise native_error
-
-    monkeypatch.setattr(manager, "_process_starter", start)
-    if stage == "readiness":
-        monkeypatch.setattr(manager, "_wait_until_listening", failed_readiness)
-    endpoint = f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards"
-    headers = {"X-Request-ID": "req-forward-location"}
-    response = client.post(endpoint, headers=headers, json={"remote_port": 5173, "local_port": 41241})
-    assert response.status_code == 200
-    item = response.json()["data"]["items"][0]
-    forward_id = item["forward_id"]
-    stored = (tmp_path / "port-forwards.json").read_bytes()
-    original_close = processes[0].close if processes else None
-    if stage == "exit":
-        processes[0].process.poll = lambda: 27
-    elif stage == "close":
-        def failed_close(*, timeout_seconds: float = 8) -> None:
-            del timeout_seconds
-            raise native_error
-        monkeypatch.setattr(processes[0], "close", failed_close)
-        response = client.delete(f"{endpoint}/{forward_id}", headers=headers)
-        assert response.status_code == 502
-        assert manager._runtimes[forward_id].process is processes[0]
-        assert processes[0].closed is False
-    elif stage == "restore":
-        asyncio.run(manager.close())
-        monkeypatch.setattr(manager, "_wait_until_listening", failed_readiness)
-        asyncio.run(manager.restore())
-    elif stage == "reconnect":
-        monkeypatch.setattr(manager, "_wait_until_listening", failed_readiness)
-        response = client.post(f"{endpoint}/{forward_id}/reconnect", headers=headers)
-        assert response.status_code == 200
-        assert len(processes) == 2 and all(process.closed for process in processes)
-    if stage != "close":
-        response = client.get(endpoint, headers=headers)
-        assert response.status_code == 200
-        item = response.json()["data"]["items"][0]
-        assert item["status"] == "error"
-        assert item["forward_id"] == forward_id
-        if stage == "exit":
-            assert "returncode=27" in item["error"]
-        else:
-            assert "errno=2" in item["error"] and "winerror=206" in item["error"]
-    else:
-        assert "errno=2" in response.json()["detail"]
-        assert "winerror=206" in response.json()["detail"]
-    assert response.headers["X-Request-ID"] == headers["X-Request-ID"]
-    assert response.json()["request_id"] == headers["X-Request-ID"]
-    error_text = response.json()["detail"] if stage == "close" else item["error"]
-    assert native_path not in error_text
-    assert json.dumps(native_path)[1:-1] not in response.text
-    assert "请查看 Gateway 原始诊断日志" in response.text
-    assert log_path.read_bytes() == original_log
-    assert (tmp_path / "port-forwards.json").read_bytes() == stored
-    assert any(
-        native_path in str(record.args)
-        or isinstance(record.args, tuple) and any(native_path in str(arg) for arg in record.args)
-        or record.exc_info and getattr(record.exc_info[1], "filename", None) == native_path
-        for record in caplog.records
-    )
-    if stage == "close":
-        monkeypatch.setattr(processes[0], "close", original_close)
-        deleted = client.delete(f"{endpoint}/{forward_id}", headers=headers)
-        assert deleted.status_code == 200 and deleted.json()["data"]["items"] == []
-        assert len(processes) == 1 and processes[0].closed is True
-    elif stage == "exit":
-        recovered = client.post(f"{endpoint}/{forward_id}/reconnect", headers=headers)
-        assert recovered.status_code == 200
-        assert recovered.json()["data"]["items"][0]["forward_id"] == forward_id
-        assert recovered.json()["data"]["items"][0]["status"] == "active"
-        assert len(processes) == 2 and processes[0].closed is True
+        return process, path, 0
+    return starter, calls, processes
 
 
-@pytest.mark.parametrize(("error_type", "status"), [(LookupError, 404), (ValueError, 409), (OSError, 502), (PermissionError, 502)])
-def test_request_failure_preserves_status_without_native_detail(
-    forward_http: tuple[TestClient, SshPortForwardManager, list[_FakeManagedProcess]],
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
-    error_type: type[Exception], status: int,
-) -> None:
-    client, manager, _ = forward_http
-    native_path = "/srv/private/port-forwards.json"
-    original_error = error_type(native_path)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("listener", "destination", "directions"), [
+    ("local", "host-b", ["L"]), ("host-a", "local", ["R"]), ("host-a", "host-b", ["L", "R"]),
+])
+async def test_ssh_direction_and_cross_host_relay(tmp_path, registry, ssh_processes, listener, destination, directions):
+    starter, calls, processes = ssh_processes
+    manager = PortForwardManager(registry=registry, storage_path=tmp_path / "ssh.json", log_dir=tmp_path / "logs", process_starter=starter)
+    try:
+        item = await manager.create(rule(3000, listener_host=listener, destination_host=destination))
+        assert item.status == "active"
+        assert [call['forward'].direction for call in calls] == directions
+        assert calls[-1]['forward'].listen_port == item.listener.port
+        if len(calls) == 2:
+            assert calls[0]['host'] == "host-b" and calls[1]['host'] == "host-a"
+            assert calls[1]['forward'].destination_port == calls[0]['forward'].listen_port
+            # 一段退出立即关闭整条规则；不等用户刷新或依赖工作区生命周期。
+            processes[0].code = 255
+            async with asyncio.timeout(2):
+                while not all(process.closed for process in processes):
+                    await asyncio.sleep(.02)
+            assert (await manager.list())[0].status == "error"
+    finally:
+        await manager.close()
+    assert all(process.closed for process in processes)
 
-    async def fail(_: tuple[str, str]) -> None:
-        raise original_error
 
-    monkeypatch.setattr(manager, "list", fail)
-    response = client.get(
-        f"/api/gateway/workspaces/{_WORKSPACE_ID}/port-forwards",
-        headers={"X-Request-ID": "req-forward-rejected"},
-    )
-    assert response.status_code == status
-    assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req-forward-rejected"
-    assert native_path not in response.text
-    assert f"error_type={error_type.__name__}" in response.json()["detail"]
-    assert any(record.exc_info and record.exc_info[1] is original_error for record in caplog.records)
-    assert manager._definitions == {} and not manager._storage_path.exists()
+@pytest.mark.asyncio
+async def test_partial_ssh_failure_closes_first_leg_and_retains_rule(tmp_path, registry, ssh_processes):
+    starter, calls, processes = ssh_processes
+    def fail_second(**kwargs):
+        if calls:
+            raise OSError("second SSH failed")
+        return starter(**kwargs)
+    manager = PortForwardManager(registry=registry, storage_path=tmp_path / "ssh.json", log_dir=tmp_path / "logs", process_starter=fail_second)
+    try:
+        failed = await manager.create(rule(3000, listener_host="host-a", destination_host="host-b"))
+        assert failed.status == "error" and processes[0].closed
+        assert (await manager.list())[0].enabled
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_api_has_no_workspace_dependency(manager, registry, echo_service, monkeypatch):
+    app = FastAPI()
+    app.add_middleware(TraceMiddleware)
+    app.include_router(router)
+    app.dependency_overrides[verify_gateway_token] = lambda: "test"
+    app.dependency_overrides[get_port_forward_manager] = lambda: manager
+    app.dependency_overrides[get_registry] = lambda: registry
+    monkeypatch.setattr("app.gateway.runtime.port_forwarding.hosts.list_ssh_connection_options", lambda _: [])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test") as client:
+        hosts = await client.get("/api/gateway/port-forwards/hosts")
+        assert hosts.json()["data"]["items"][0]["host_id"] == "local"
+        created = await client.post("/api/gateway/port-forwards", json=rule(echo_service).model_dump(), headers={"X-Request-ID": "port-rule-request"})
+        assert created.status_code == 200, created.text
+        assert created.headers['X-Request-ID'] == created.json()['request_id'] == "port-rule-request"
+        item = created.json()['data']['items'][0]
+        assert 'workspace_id' not in item
+        await exchange(item['listener']['port'])
+        stopped = await client.post(f"/api/gateway/port-forwards/{item['forward_id']}/stop")
+        assert stopped.json()['data']['items'][0]['status'] == "stopped"
+        assert (await client.post(f"/api/gateway/port-forwards/{item['forward_id']}/start")).status_code == 200
+        assert (await client.delete(f"/api/gateway/port-forwards/{item['forward_id']}")).json()['data']['items'] == []
+        assert (await client.get('/api/gateway/workspaces/old/port-forwards')).status_code == 404
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_old_definition_is_not_silently_rewritten(tmp_path, registry, version):
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps({"schema_version": version, "items": []}))
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="版本不匹配"):
+        PortForwardManager(registry=registry, storage_path=path, log_dir=tmp_path / "logs")
+    assert path.read_bytes() == before

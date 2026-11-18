@@ -22,4 +22,5 @@
 - 默认turn在active slot冻结team_state且整个tool-loop不漂移；显式model_call仅在安全call边界消费Registry最新已发布snapshot。
 - 启动恢复与required snapshot就绪先于dispatch；fence关闭后的未投递者明确terminal，不晚到append。
 - 原operation lease、holder token和Session删除归既有生命周期owner；本目录只协调，不建立第二状态机。
+- 提交仅唤醒所属 Session；已就绪的冻结 revision 不重复核验。投递 I/O 在线程中完成，调用方持有原准入直到 worker 结算；旧 revision 的核验结果不得覆盖并发新提交。
 - 异常保真实原因；测试覆盖真实投递/恢复闭包并使用进程外保护，不能用内存计数冒充持久结果。

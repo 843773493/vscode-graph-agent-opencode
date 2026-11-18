@@ -6,6 +6,10 @@ from pathlib import Path
 import jsonschema
 from referencing.exceptions import Unresolvable
 
+from app.agents.providers.request_parameters import (
+    normalize_request_headers,
+    normalize_request_parameters,
+)
 from app.core.config_migration_guard import require_settled_config_migration
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from app.services.infrastructure.config.policy import (
@@ -26,14 +30,32 @@ def read_jsonc_object(path: Path) -> dict[str, object]:
 def merge_json_objects(
     base: dict[str, object],
     override: dict[str, object],
+    *,
+    _path: tuple[str, ...] = (),
 ) -> dict[str, object]:
-    """递归合并对象；标量和数组由高优先级配置整体覆盖。"""
+    """递归合并；逻辑别名按层覆盖，保留胜出来源的原文键名。"""
+
+    model_options = _path[:2] == ("llm", "providers")
+    base_names: dict[str, str] = {}
+    override_names: dict[str, str] = {}
+    if model_options and _path[-2:] == ("request_options", "parameters"):
+        base_names = dict(zip(normalize_request_parameters(base, protocol="responses"), base, strict=True))
+        override_names = dict(zip(normalize_request_parameters(override, protocol="responses"), override, strict=True))
+    elif model_options and _path[-2:] == ("request_options", "default_headers"):
+        base_names = dict(zip(normalize_request_headers(base), base, strict=True))
+        override_names = dict(zip(normalize_request_headers(override), override, strict=True))
 
     result = dict(base)
+    # 这里只统一比较身份；实际协议字段在选定模型解析后归一，来源仍可定位原 JSONC。
+    for canonical, name in override_names.items():
+        previous = base_names.get(canonical)
+        if previous is not None and previous != name:
+            result[name] = result.pop(previous)
     for key, value in override.items():
         base_value = result.get(key)
-        if isinstance(base_value, dict) and isinstance(value, dict):
-            result[key] = merge_json_objects(base_value, value)
+        atomic_reasoning = model_options and _path[-1:] == ("api_mode",) and key == "supports_reasoning"
+        if isinstance(base_value, dict) and isinstance(value, dict) and not atomic_reasoning:
+            result[key] = merge_json_objects(base_value, value, _path=(*_path, key))
         else:
             result[key] = value
     return result
@@ -95,15 +117,38 @@ def validate_config_payload(
         raise ValueError(
             f"配置验证失败: stage={stage}, location={location}, rule={error.validator}"
         ) from error
+    if schema_domain == "workspace":
+        from app.services.infrastructure.config.llm_resolution import LlmResolution
+
+        resolver = LlmResolution(
+            effective_config_provider=lambda: config,
+            default_agent_id_provider=lambda: config["default_agent"],
+        )
+        validator = jsonschema.Draft202012Validator({
+            "$ref": "#/$defs/resolvedModelOptions", "$defs": schema["$defs"],
+        })
+        option_fields = schema["$defs"]["modelOptions"]["properties"]
+        for model in resolver.list_models(config):
+            options = {key: value for key, value in model.items() if key in option_fields}
+            try:
+                validator.validate(options)
+            except jsonschema.ValidationError as error:
+                raise ValueError(
+                    "模型配置验证失败: "
+                    f"provider_id={model['provider_id']}, model_id={model['model_id']}, "
+                    f"location={_structural_location(options, error.absolute_path)}, rule={error.validator}"
+                ) from error
     return config
 
 
 def require_current_workspace_config(config: dict[str, object], *, partial: bool = False) -> None:
-    if "logger" in config or "logging" in config or config.get("config_version", 2 if partial else None) != 2:
+    if "logger" in config or "logging" in config:
         raise ValueError(
             "Workspace 日志配置须显式迁移到 Gateway logging.runtime；停止相关服务后执行 "
             "uv run python -m configs.boxteam migrate-runtime-config --migration-workspace <工作区>"
         )
+    if config.get("config_version", 3 if partial else None) != 3:
+        raise ValueError("Workspace 配置版本不受支持；当前版本为 3，模型选择须使用完整 ModelReference，原件保持不变")
 
 
 def load_validated_config(

@@ -24,17 +24,24 @@ export interface AgentDTO {
   model: string;
   tools: string[];
   capabilities: string[];
-  providers: AgentProviderDTO[];
+  models: AgentModelDTO[];
   workspace_default?: boolean | undefined;
 }
 
-export interface AgentProviderDTO {
+export interface ModelReferenceDTO {
   provider_id: string;
+  model_id: string;
+}
+
+export interface AgentModelDTO {
+  model_ref: ModelReferenceDTO | undefined;
   model: string;
   custom_llm_provider: string;
   workspace_default?: boolean | undefined;
   available: boolean;
   configuration_error?: string | undefined;
+  name?: string | undefined;
+  provider_name?: string | undefined;
 }
 
 export interface AgentStateMessagesDTO {
@@ -111,6 +118,17 @@ export interface ConfigSourceLayerViewDTO {
   payload: { [key: string]: any } | undefined;
 }
 
+/** 文件事实也参与临时探测准入，不能仅依赖尚未追赶磁盘变化的物化层。 */
+export interface ConfigSourceBaselineDTO {
+  uri: any | undefined;
+  presence: string;
+  layer_revision: any | undefined;
+  layer_digest: any | undefined;
+  source_generation: any | undefined;
+  file_presence: any | undefined;
+  file_digest: any | undefined;
+}
+
 export interface ConfigSourceOriginDTO {
   path: string;
   source_key: string;
@@ -165,6 +183,136 @@ export interface ConfigSourceDocumentDTO {
   status: ConfigReloadStatusDTO | undefined;
   edit?: ConfigSourceEditDTO | undefined;
   fanout?: ConfigSourceFanoutDTO | undefined;
+  source_baseline: { [key: string]: ConfigSourceBaselineDTO };
+  active_origins: ConfigSourceOriginDTO[];
+}
+
+export interface ConfigSourceDocumentDTO_SourceBaselineEntry {
+  key: string;
+  value: ConfigSourceBaselineDTO | undefined;
+}
+
+export interface LlmCredentialInput {
+  scope: string;
+  provider_id: string;
+  model_id?: string | undefined;
+  value: string;
+}
+
+/** active 与 draft 是互斥输入，业务校验拒绝混用。 */
+export interface LlmDiscoverRequest {
+  gateway_id: string;
+  workspace_id: string;
+  mode: string;
+  provider_id: string;
+  edit_version: number;
+  source_key?: string | undefined;
+  jsonc?: string | undefined;
+  expected_source_baseline: { [key: string]: ConfigSourceBaselineDTO };
+  expected_active_revision?: number | undefined;
+  expected_active_digest?: string | undefined;
+  credential_input?: LlmCredentialInput | undefined;
+}
+
+export interface LlmDiscoverRequest_ExpectedSourceBaselineEntry {
+  key: string;
+  value: ConfigSourceBaselineDTO | undefined;
+}
+
+export interface LlmCredentialObservationDTO {
+  source: string;
+  secret_id?: string | undefined;
+  revision?: number | undefined;
+  scope?: string | undefined;
+}
+
+export interface LlmProbeObservationDTO {
+  gateway_id: string;
+  workspace_id: string;
+  mode: string;
+  provider_id: string;
+  edit_version: number;
+  source_key?: string | undefined;
+  source_baseline: { [key: string]: ConfigSourceBaselineDTO };
+  active_revision?: number | undefined;
+  active_digest?: string | undefined;
+  credential: LlmCredentialObservationDTO | undefined;
+  protocol: string;
+  endpoint: string;
+  observed_at: string;
+}
+
+export interface LlmProbeObservationDTO_SourceBaselineEntry {
+  key: string;
+  value: ConfigSourceBaselineDTO | undefined;
+}
+
+export interface LlmDiscoveredModelDTO {
+  model: string;
+  name?: string | undefined;
+}
+
+export interface LlmProbeErrorDTO {
+  category: string;
+  message: string;
+  status_code?: number | undefined;
+  field?: string | undefined;
+}
+
+export interface LlmDiscoverResultDTO {
+  observation: LlmProbeObservationDTO | undefined;
+  source: string;
+  models: LlmDiscoveredModelDTO[];
+  complete: boolean;
+  error?: LlmProbeErrorDTO | undefined;
+}
+
+export interface LlmTestRequest {
+  gateway_id: string;
+  workspace_id: string;
+  mode: string;
+  provider_id: string;
+  edit_version: number;
+  source_key?: string | undefined;
+  jsonc?: string | undefined;
+  expected_source_baseline: { [key: string]: ConfigSourceBaselineDTO };
+  expected_active_revision?: number | undefined;
+  expected_active_digest?: string | undefined;
+  credential_input?: LlmCredentialInput | undefined;
+  model_id: string;
+  streaming?: boolean | undefined;
+  timeout_seconds: number;
+}
+
+export interface LlmTestRequest_ExpectedSourceBaselineEntry {
+  key: string;
+  value: ConfigSourceBaselineDTO | undefined;
+}
+
+export interface LlmTestStartDTO {
+  request_id: string;
+  observation: LlmProbeObservationDTO | undefined;
+  model_ref: ModelReferenceDTO | undefined;
+  streaming: boolean;
+}
+
+export interface LlmTestDeltaDTO {
+  request_id: string;
+  text: string;
+}
+
+export interface LlmTestResultDTO {
+  request_id: string;
+  observation: LlmProbeObservationDTO | undefined;
+  model_ref: ModelReferenceDTO | undefined;
+  streaming: boolean;
+  status: string;
+  first_content_ms?: number | undefined;
+  elapsed_ms: number;
+  preview: string;
+  preview_truncated: boolean;
+  usage?: { [key: string]: any } | undefined;
+  error?: LlmProbeErrorDTO | undefined;
 }
 
 export interface ConfigSourcePreflightDTO {
@@ -172,6 +320,24 @@ export interface ConfigSourcePreflightDTO {
   candidate: { [key: string]: any } | undefined;
   candidate_digest: string;
   changed_paths: string[];
+  model_options?: ConfigModelInspectionDTO | undefined;
+  active_model_options?: ConfigModelInspectionDTO | undefined;
+}
+
+export interface ConfigModelOptionOriginDTO {
+  path: string;
+  source_key: string;
+  definition: string;
+  definition_path: string;
+}
+
+export interface ConfigModelInspectionDTO {
+  model_ref: ModelReferenceDTO | undefined;
+  model: string;
+  options: { [key: string]: any } | undefined;
+  origins: ConfigModelOptionOriginDTO[];
+  request_url: string;
+  catalog_url?: string | undefined;
 }
 
 export interface ConfigEventDTO {
@@ -243,7 +409,34 @@ export interface ChildThreadListDTO {
   parent_session_id: string;
   items: ChildThreadSummaryDTO[];
   total: number;
-  teams: TeamBoardDTO[];
+  teams: TeamBoardSummaryDTO[];
+}
+
+export interface TeamMemberSummaryDTO {
+  thread_id: string;
+  role: string;
+  work_mode: string;
+}
+
+export interface TeamTaskSummaryDTO {
+  task_id: string;
+  title: string;
+  status: string;
+  assignee_thread_id: string;
+  phase: string;
+  cycle: number;
+  summary?: string | undefined;
+  error?: string | undefined;
+}
+
+export interface TeamBoardSummaryDTO {
+  team_id: string;
+  name: string;
+  session_id: string;
+  coordinator_thread_id: string;
+  version: number;
+  members: TeamMemberSummaryDTO[];
+  tasks: TeamTaskSummaryDTO[];
 }
 
 /** 有界名称查询；不加载执行运行态，cursor 显式续查尚未覆盖的目录。 */
@@ -1181,6 +1374,7 @@ export interface PendingRequestDTO {
   thread_id: string;
   turn_id?: string | undefined;
   execution_binding: { [key: string]: any } | undefined;
+  reorderable: boolean;
 }
 
 export interface PendingRequestListDTO {
@@ -1192,6 +1386,36 @@ export interface PendingRequestListDTO {
     | undefined;
   /** 精确 thread 读取的范围；Session 聚合快照不设置。 */
   thread_id?: string | undefined;
+  thread_revision?: number | undefined;
+}
+
+export interface PendingRequestReorderRequest {
+  message_ids: string[];
+  expected_thread_revision: number;
+}
+
+export interface UserQuestionDTO {
+  question_id: string;
+  sequence: number;
+  markdown: string;
+  turn_id?: string | undefined;
+  created_at: string;
+}
+
+export interface UserQuestionSummaryDTO {
+  session_id: string;
+  thread_id: string;
+  count: number;
+  revision: number;
+}
+
+export interface UserQuestionPageDTO {
+  session_id: string;
+  thread_id: string;
+  count: number;
+  revision: number;
+  items: UserQuestionDTO[];
+  next_before?: number | undefined;
 }
 
 export interface PendingRequestPolicyUpdateRequest {
@@ -1509,9 +1733,6 @@ export interface SessionDTO {
   title: string;
   title_source?: string | undefined;
   current_agent_id: string;
-  current_provider_id?:
-    | string
-    | undefined;
   /** catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。 */
   parent_session_id?:
     | string
@@ -1524,6 +1745,7 @@ export interface SessionDTO {
   uri: string;
   scope: string;
   thread_id?: string | undefined;
+  current_model?: ModelReferenceDTO | undefined;
 }
 
 export interface SessionExecutionSnapshotDTO {
@@ -1828,9 +2050,6 @@ export interface SessionInformationSessionDTO {
   workspace_id: string;
   title: string;
   current_agent_id: string;
-  current_provider_id?:
-    | string
-    | undefined;
   /** catalog 导航父链中最近祖先 Session 的稳定 ID；随导航移动派生，不表示物理父目录。 */
   parent_session_id?:
     | string
@@ -1845,6 +2064,7 @@ export interface SessionInformationSessionDTO {
   /** catalog 记录的 Session 配置最近一次更新 UTC 时刻；初建等于 created_at，导航改名和移动不推进。 */
   updated_at: string | undefined;
   title_truncated?: boolean | undefined;
+  current_model?: ModelReferenceDTO | undefined;
 }
 
 export interface SessionInformationResourceSummaryDTO {
@@ -2332,7 +2552,7 @@ export interface SessionTurnBootstrapDTO {
 
 export interface SessionUpdateRequest {
   agent_id?: string | undefined;
-  provider_id?: string | undefined;
+  model?: ModelReferenceDTO | undefined;
 }
 
 export interface StaleTurnCursorErrorDTO {
@@ -2482,7 +2702,7 @@ export interface ToolSelectionPatchRequest {
 export interface ToolTestAttemptDTO {
   attempt_id: string;
   case_id: string;
-  provider_id: string;
+  model_ref: ModelReferenceDTO | undefined;
   model: string;
   status: string;
   passed: boolean;
@@ -2496,8 +2716,8 @@ export interface ToolTestAttemptDTO {
   error?: string | undefined;
 }
 
-export interface ToolTestProviderResultDTO {
-  provider_id: string;
+export interface ToolTestModelResultDTO {
+  model_ref: ModelReferenceDTO | undefined;
   model: string;
   status: string;
   completed?: number | undefined;
@@ -2518,7 +2738,7 @@ export interface ToolTestRunDTO {
   created_at: string | undefined;
   updated_at: string | undefined;
   repetitions: number;
-  providers: ToolTestProviderResultDTO[];
+  models: ToolTestModelResultDTO[];
   attempts: ToolTestAttemptDTO[];
   error?: string | undefined;
 }
@@ -2529,8 +2749,8 @@ export interface ToolTestRunListDTO {
 
 export interface ToolTestStartRequest {
   agent_id?: string | undefined;
-  provider_ids: string[];
   repetitions?: number | undefined;
+  model_refs: ModelReferenceDTO[];
 }
 
 export interface TraceEventDTO {
@@ -2888,7 +3108,14 @@ export interface TurnResponsePartDTO {
   /** 历史 terminal Turn 的本次 mapper 输入缺少同一 ModelCall 与 Provider call ID 的匹配结果；不证明底层工具未执行或执行失败。 */
   outcome_unknown?: boolean | undefined;
   completion_reason?: string | undefined;
-  partial?: boolean | undefined;
+  partial?:
+    | boolean
+    | undefined;
+  /** 内部上下文标记只携带来源；正文沿 Item inspect 按需读取。 */
+  context_kind?: string | undefined;
+  context_source_id?: string | undefined;
+  context_model_call_id?: string | undefined;
+  context_before_item_id?: string | undefined;
 }
 
 export interface TurnResponseSourceDTO {
@@ -2910,6 +3137,7 @@ export interface TurnResponseSourceDTO {
   /** 历史 activity 首项从 Turn projection.created_at 起算，后续按逻辑 activity 顺序计算相邻 item 的整数毫秒差；final 固定为零；standalone internal 首项从 execution.created_at 起算，后续沿同 view、同 execution 的前一 visible/display_only 逻辑成员计算，runtime notice 自身固定为零。历史时间缺少时区或倒退时明确拒绝；streaming 可缺省。 */
   elapsed_ms?: number | undefined;
   logical_item_ordinal?: number | undefined;
+  model_call_id?: string | undefined;
 }
 
 export interface TurnSummaryDTO {
@@ -3021,8 +3249,8 @@ export interface WorkspaceDefaultAgentUpdateRequest {
   agent_id: string;
 }
 
-export interface WorkspaceDefaultProviderUpdateRequest {
-  provider_id: string;
+export interface WorkspaceDefaultModelUpdateRequest {
+  model: ModelReferenceDTO | undefined;
 }
 
 export interface WorkspaceFileChangeBatchDTO {
@@ -3172,6 +3400,7 @@ export interface WorkspaceFileWatchRequest {
 /** 每个逻辑观察者保留独立的 source、恢复游标和生命周期。 */
 export interface WorkspaceObservationSubscription {
   subscription_id: string;
+  /** 持久任务使用 persistent_tasks；session_id 省略时观察整个工作区。 */
   kind: string;
   session_id?: string | undefined;
   activity_after?: number | undefined;
@@ -3370,7 +3599,11 @@ export interface PersistentTaskConfigurationDTO {
   condition: TaskConditionDTO | undefined;
   context: TaskContextDTO | undefined;
   action: TaskActionDTO | undefined;
-  policies: TaskPoliciesDTO | undefined;
+  policies:
+    | TaskPoliciesDTO
+    | undefined;
+  /** 累计执行预算，缺省不限制；不覆盖模型单次输出参数。 */
+  token_budget?: number | undefined;
 }
 
 export interface PersistentTaskDTO {
@@ -3392,6 +3625,9 @@ export interface PersistentTaskDTO {
   application_type: string;
   application_version: string;
   goal?: SessionGoalDTO | undefined;
+  tokens_used: number;
+  time_used_seconds: number;
+  sync_version: number;
 }
 
 export interface TaskDecisionDTO {
@@ -3498,6 +3734,12 @@ export interface PersistentTaskListDTO {
   items: PersistentTaskDTO[];
   runtime: TaskRuntimeStatusDTO | undefined;
   active_runs: PersistentTaskRunSummaryDTO[];
+  /** 会话范围包含空槽位版本；清空后也不能让迟到响应复活旧 Goal。 */
+  session_goal?:
+    | SessionGoalSnapshotDTO
+    | undefined;
+  /** 首次连接和事件缺口需补读历史；单纯 Goal 状态通知不使运行历史失效。 */
+  history_invalidated?: boolean | undefined;
 }
 
 export interface PersistentTaskRunListDTO {
@@ -3691,6 +3933,41 @@ export interface LLMRequestLogSummaryDTO {
   size_bytes: number;
 }
 
+/** 卡片操作只在用户接受后读取；稳定 Item 引用不冻结正文版本。 */
+export interface ThreadItemInspectionRequest {
+  item_id?: string | undefined;
+  message_id?: string | undefined;
+  operation: string;
+}
+
+export interface ThreadItemLocationDTO {
+  item_id: string;
+  turn_id?: string | undefined;
+  execution_id?: string | undefined;
+  job_id?: string | undefined;
+  model_call_id?: string | undefined;
+  message_id?: string | undefined;
+  semantic_kind: string;
+  content_hash: string;
+  byte_length: number;
+}
+
+export interface ThreadItemContentDTO {
+  name: string;
+  language: string;
+  content?: string | undefined;
+  uri?: string | undefined;
+  mime_type?: string | undefined;
+  encoding?: string | undefined;
+}
+
+export interface ThreadItemInspectionDTO {
+  location: ThreadItemLocationDTO | undefined;
+  contents: ThreadItemContentDTO[];
+  request_log?: LLMRequestLogMatchDTO | undefined;
+  trace?: TraceMatchDTO | undefined;
+}
+
 function createBaseAPIResponse(): APIResponse {
   return { code: undefined, message: undefined, data: undefined, request_id: "" };
 }
@@ -3743,7 +4020,7 @@ function createBaseAgentDTO(): AgentDTO {
     model: "",
     tools: [],
     capabilities: [],
-    providers: [],
+    models: [],
     workspace_default: undefined,
   };
 }
@@ -3759,8 +4036,8 @@ export const AgentDTO: MessageFns<AgentDTO> = {
       capabilities: globalThis.Array.isArray(object?.capabilities)
         ? object.capabilities.map((e: any) => globalThis.String(e))
         : [],
-      providers: globalThis.Array.isArray(object?.providers)
-        ? object.providers.map((e: any) => AgentProviderDTO.fromJSON(e))
+      models: globalThis.Array.isArray(object?.models)
+        ? object.models.map((e: any) => AgentModelDTO.fromJSON(e))
         : [],
       workspace_default: isSet(object.workspace_default) ? globalThis.Boolean(object.workspace_default) : undefined,
     };
@@ -3786,8 +4063,8 @@ export const AgentDTO: MessageFns<AgentDTO> = {
     if (message.capabilities?.length) {
       obj.capabilities = message.capabilities;
     }
-    if (message.providers?.length) {
-      obj.providers = message.providers.map((e) => AgentProviderDTO.toJSON(e));
+    if (message.models?.length) {
+      obj.models = message.models.map((e) => AgentModelDTO.toJSON(e));
     }
     if (message.workspace_default !== undefined) {
       obj.workspace_default = message.workspace_default;
@@ -3806,27 +4083,63 @@ export const AgentDTO: MessageFns<AgentDTO> = {
     message.model = object.model ?? "";
     message.tools = object.tools?.map((e) => e) || [];
     message.capabilities = object.capabilities?.map((e) => e) || [];
-    message.providers = object.providers?.map((e) => AgentProviderDTO.fromPartial(e)) || [];
+    message.models = object.models?.map((e) => AgentModelDTO.fromPartial(e)) || [];
     message.workspace_default = object.workspace_default ?? undefined;
     return message;
   },
 };
 
-function createBaseAgentProviderDTO(): AgentProviderDTO {
+function createBaseModelReferenceDTO(): ModelReferenceDTO {
+  return { provider_id: "", model_id: "" };
+}
+
+export const ModelReferenceDTO: MessageFns<ModelReferenceDTO> = {
+  fromJSON(object: any): ModelReferenceDTO {
+    return {
+      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      model_id: isSet(object.model_id) ? globalThis.String(object.model_id) : "",
+    };
+  },
+
+  toJSON(message: ModelReferenceDTO): unknown {
+    const obj: any = {};
+    if (message.provider_id !== "") {
+      obj.provider_id = message.provider_id;
+    }
+    if (message.model_id !== "") {
+      obj.model_id = message.model_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ModelReferenceDTO>, I>>(base?: I): ModelReferenceDTO {
+    return ModelReferenceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ModelReferenceDTO>, I>>(object: I): ModelReferenceDTO {
+    const message = createBaseModelReferenceDTO();
+    message.provider_id = object.provider_id ?? "";
+    message.model_id = object.model_id ?? "";
+    return message;
+  },
+};
+
+function createBaseAgentModelDTO(): AgentModelDTO {
   return {
-    provider_id: "",
+    model_ref: undefined,
     model: "",
     custom_llm_provider: "",
     workspace_default: undefined,
     available: false,
     configuration_error: undefined,
+    name: undefined,
+    provider_name: undefined,
   };
 }
 
-export const AgentProviderDTO: MessageFns<AgentProviderDTO> = {
-  fromJSON(object: any): AgentProviderDTO {
+export const AgentModelDTO: MessageFns<AgentModelDTO> = {
+  fromJSON(object: any): AgentModelDTO {
     return {
-      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      model_ref: isSet(object.model_ref) ? ModelReferenceDTO.fromJSON(object.model_ref) : undefined,
       model: isSet(object.model) ? globalThis.String(object.model) : "",
       custom_llm_provider: isSet(object.custom_llm_provider) ? globalThis.String(object.custom_llm_provider) : "",
       workspace_default: isSet(object.workspace_default) ? globalThis.Boolean(object.workspace_default) : undefined,
@@ -3834,13 +4147,15 @@ export const AgentProviderDTO: MessageFns<AgentProviderDTO> = {
       configuration_error: isSet(object.configuration_error)
         ? globalThis.String(object.configuration_error)
         : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      provider_name: isSet(object.provider_name) ? globalThis.String(object.provider_name) : undefined,
     };
   },
 
-  toJSON(message: AgentProviderDTO): unknown {
+  toJSON(message: AgentModelDTO): unknown {
     const obj: any = {};
-    if (message.provider_id !== "") {
-      obj.provider_id = message.provider_id;
+    if (message.model_ref !== undefined) {
+      obj.model_ref = ModelReferenceDTO.toJSON(message.model_ref);
     }
     if (message.model !== "") {
       obj.model = message.model;
@@ -3857,20 +4172,30 @@ export const AgentProviderDTO: MessageFns<AgentProviderDTO> = {
     if (message.configuration_error !== undefined) {
       obj.configuration_error = message.configuration_error;
     }
+    if (message.name !== undefined) {
+      obj.name = message.name;
+    }
+    if (message.provider_name !== undefined) {
+      obj.provider_name = message.provider_name;
+    }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<AgentProviderDTO>, I>>(base?: I): AgentProviderDTO {
-    return AgentProviderDTO.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<AgentModelDTO>, I>>(base?: I): AgentModelDTO {
+    return AgentModelDTO.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<AgentProviderDTO>, I>>(object: I): AgentProviderDTO {
-    const message = createBaseAgentProviderDTO();
-    message.provider_id = object.provider_id ?? "";
+  fromPartial<I extends Exact<DeepPartial<AgentModelDTO>, I>>(object: I): AgentModelDTO {
+    const message = createBaseAgentModelDTO();
+    message.model_ref = (object.model_ref !== undefined && object.model_ref !== null)
+      ? ModelReferenceDTO.fromPartial(object.model_ref)
+      : undefined;
     message.model = object.model ?? "";
     message.custom_llm_provider = object.custom_llm_provider ?? "";
     message.workspace_default = object.workspace_default ?? undefined;
     message.available = object.available ?? false;
     message.configuration_error = object.configuration_error ?? undefined;
+    message.name = object.name ?? undefined;
+    message.provider_name = object.provider_name ?? undefined;
     return message;
   },
 };
@@ -4383,6 +4708,73 @@ export const ConfigSourceLayerViewDTO: MessageFns<ConfigSourceLayerViewDTO> = {
   },
 };
 
+function createBaseConfigSourceBaselineDTO(): ConfigSourceBaselineDTO {
+  return {
+    uri: undefined,
+    presence: "",
+    layer_revision: undefined,
+    layer_digest: undefined,
+    source_generation: undefined,
+    file_presence: undefined,
+    file_digest: undefined,
+  };
+}
+
+export const ConfigSourceBaselineDTO: MessageFns<ConfigSourceBaselineDTO> = {
+  fromJSON(object: any): ConfigSourceBaselineDTO {
+    return {
+      uri: isSet(object?.uri) ? object.uri : undefined,
+      presence: isSet(object.presence) ? globalThis.String(object.presence) : "",
+      layer_revision: isSet(object?.layer_revision) ? object.layer_revision : undefined,
+      layer_digest: isSet(object?.layer_digest) ? object.layer_digest : undefined,
+      source_generation: isSet(object?.source_generation) ? object.source_generation : undefined,
+      file_presence: isSet(object?.file_presence) ? object.file_presence : undefined,
+      file_digest: isSet(object?.file_digest) ? object.file_digest : undefined,
+    };
+  },
+
+  toJSON(message: ConfigSourceBaselineDTO): unknown {
+    const obj: any = {};
+    if (message.uri !== undefined) {
+      obj.uri = message.uri;
+    }
+    if (message.presence !== "") {
+      obj.presence = message.presence;
+    }
+    if (message.layer_revision !== undefined) {
+      obj.layer_revision = message.layer_revision;
+    }
+    if (message.layer_digest !== undefined) {
+      obj.layer_digest = message.layer_digest;
+    }
+    if (message.source_generation !== undefined) {
+      obj.source_generation = message.source_generation;
+    }
+    if (message.file_presence !== undefined) {
+      obj.file_presence = message.file_presence;
+    }
+    if (message.file_digest !== undefined) {
+      obj.file_digest = message.file_digest;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceBaselineDTO>, I>>(base?: I): ConfigSourceBaselineDTO {
+    return ConfigSourceBaselineDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceBaselineDTO>, I>>(object: I): ConfigSourceBaselineDTO {
+    const message = createBaseConfigSourceBaselineDTO();
+    message.uri = object.uri ?? undefined;
+    message.presence = object.presence ?? "";
+    message.layer_revision = object.layer_revision ?? undefined;
+    message.layer_digest = object.layer_digest ?? undefined;
+    message.source_generation = object.source_generation ?? undefined;
+    message.file_presence = object.file_presence ?? undefined;
+    message.file_digest = object.file_digest ?? undefined;
+    return message;
+  },
+};
+
 function createBaseConfigSourceOriginDTO(): ConfigSourceOriginDTO {
   return { path: "", source_key: "", shadowed_sources: [] };
 }
@@ -4622,6 +5014,8 @@ function createBaseConfigSourceDocumentDTO(): ConfigSourceDocumentDTO {
     status: undefined,
     edit: undefined,
     fanout: undefined,
+    source_baseline: {},
+    active_origins: [],
   };
 }
 
@@ -4653,6 +5047,23 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
       status: isSet(object.status) ? ConfigReloadStatusDTO.fromJSON(object.status) : undefined,
       edit: isSet(object.edit) ? ConfigSourceEditDTO.fromJSON(object.edit) : undefined,
       fanout: isSet(object.fanout) ? ConfigSourceFanoutDTO.fromJSON(object.fanout) : undefined,
+      source_baseline: isObject(object.source_baseline)
+        ? (globalThis.Object.entries(object.source_baseline) as [string, any][]).reduce(
+          (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: ConfigSourceBaselineDTO.fromJSON(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      active_origins: globalThis.Array.isArray(object?.active_origins)
+        ? object.active_origins.map((e: any) => ConfigSourceOriginDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -4721,6 +5132,18 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
     if (message.fanout !== undefined) {
       obj.fanout = ConfigSourceFanoutDTO.toJSON(message.fanout);
     }
+    if (message.source_baseline) {
+      const entries = globalThis.Object.entries(message.source_baseline) as [string, ConfigSourceBaselineDTO][];
+      if (entries.length > 0) {
+        obj.source_baseline = {};
+        entries.forEach(([k, v]) => {
+          obj.source_baseline[k] = ConfigSourceBaselineDTO.toJSON(v);
+        });
+      }
+    }
+    if (message.active_origins?.length) {
+      obj.active_origins = message.active_origins.map((e) => ConfigSourceOriginDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -4756,12 +5179,1003 @@ export const ConfigSourceDocumentDTO: MessageFns<ConfigSourceDocumentDTO> = {
     message.fanout = (object.fanout !== undefined && object.fanout !== null)
       ? ConfigSourceFanoutDTO.fromPartial(object.fanout)
       : undefined;
+    message.source_baseline =
+      (globalThis.Object.entries(object.source_baseline ?? {}) as [string, ConfigSourceBaselineDTO][]).reduce(
+        (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, ConfigSourceBaselineDTO]) => {
+          if (value !== undefined) {
+            acc[key] = ConfigSourceBaselineDTO.fromPartial(value);
+          }
+          return acc;
+        },
+        {},
+      );
+    message.active_origins = object.active_origins?.map((e) => ConfigSourceOriginDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseConfigSourceDocumentDTO_SourceBaselineEntry(): ConfigSourceDocumentDTO_SourceBaselineEntry {
+  return { key: "", value: undefined };
+}
+
+export const ConfigSourceDocumentDTO_SourceBaselineEntry: MessageFns<ConfigSourceDocumentDTO_SourceBaselineEntry> = {
+  fromJSON(object: any): ConfigSourceDocumentDTO_SourceBaselineEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? ConfigSourceBaselineDTO.fromJSON(object.value) : undefined,
+    };
+  },
+
+  toJSON(message: ConfigSourceDocumentDTO_SourceBaselineEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== undefined) {
+      obj.value = ConfigSourceBaselineDTO.toJSON(message.value);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigSourceDocumentDTO_SourceBaselineEntry>, I>>(
+    base?: I,
+  ): ConfigSourceDocumentDTO_SourceBaselineEntry {
+    return ConfigSourceDocumentDTO_SourceBaselineEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigSourceDocumentDTO_SourceBaselineEntry>, I>>(
+    object: I,
+  ): ConfigSourceDocumentDTO_SourceBaselineEntry {
+    const message = createBaseConfigSourceDocumentDTO_SourceBaselineEntry();
+    message.key = object.key ?? "";
+    message.value = (object.value !== undefined && object.value !== null)
+      ? ConfigSourceBaselineDTO.fromPartial(object.value)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseLlmCredentialInput(): LlmCredentialInput {
+  return { scope: "", provider_id: "", model_id: undefined, value: "" };
+}
+
+export const LlmCredentialInput: MessageFns<LlmCredentialInput> = {
+  fromJSON(object: any): LlmCredentialInput {
+    return {
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
+      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      model_id: isSet(object.model_id) ? globalThis.String(object.model_id) : undefined,
+      value: isSet(object.value) ? globalThis.String(object.value) : "",
+    };
+  },
+
+  toJSON(message: LlmCredentialInput): unknown {
+    const obj: any = {};
+    if (message.scope !== "") {
+      obj.scope = message.scope;
+    }
+    if (message.provider_id !== "") {
+      obj.provider_id = message.provider_id;
+    }
+    if (message.model_id !== undefined) {
+      obj.model_id = message.model_id;
+    }
+    if (message.value !== "") {
+      obj.value = message.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmCredentialInput>, I>>(base?: I): LlmCredentialInput {
+    return LlmCredentialInput.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmCredentialInput>, I>>(object: I): LlmCredentialInput {
+    const message = createBaseLlmCredentialInput();
+    message.scope = object.scope ?? "";
+    message.provider_id = object.provider_id ?? "";
+    message.model_id = object.model_id ?? undefined;
+    message.value = object.value ?? "";
+    return message;
+  },
+};
+
+function createBaseLlmDiscoverRequest(): LlmDiscoverRequest {
+  return {
+    gateway_id: "",
+    workspace_id: "",
+    mode: "",
+    provider_id: "",
+    edit_version: 0,
+    source_key: undefined,
+    jsonc: undefined,
+    expected_source_baseline: {},
+    expected_active_revision: undefined,
+    expected_active_digest: undefined,
+    credential_input: undefined,
+  };
+}
+
+export const LlmDiscoverRequest: MessageFns<LlmDiscoverRequest> = {
+  fromJSON(object: any): LlmDiscoverRequest {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : "",
+      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      edit_version: isSet(object.edit_version) ? globalThis.Number(object.edit_version) : 0,
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : undefined,
+      jsonc: isSet(object.jsonc) ? globalThis.String(object.jsonc) : undefined,
+      expected_source_baseline: isObject(object.expected_source_baseline)
+        ? (globalThis.Object.entries(object.expected_source_baseline) as [string, any][]).reduce(
+          (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: ConfigSourceBaselineDTO.fromJSON(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      expected_active_revision: isSet(object.expected_active_revision)
+        ? globalThis.Number(object.expected_active_revision)
+        : undefined,
+      expected_active_digest: isSet(object.expected_active_digest)
+        ? globalThis.String(object.expected_active_digest)
+        : undefined,
+      credential_input: isSet(object.credential_input)
+        ? LlmCredentialInput.fromJSON(object.credential_input)
+        : undefined,
+    };
+  },
+
+  toJSON(message: LlmDiscoverRequest): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.mode !== "") {
+      obj.mode = message.mode;
+    }
+    if (message.provider_id !== "") {
+      obj.provider_id = message.provider_id;
+    }
+    if (message.edit_version !== 0) {
+      obj.edit_version = Math.round(message.edit_version);
+    }
+    if (message.source_key !== undefined) {
+      obj.source_key = message.source_key;
+    }
+    if (message.jsonc !== undefined) {
+      obj.jsonc = message.jsonc;
+    }
+    if (message.expected_source_baseline) {
+      const entries = globalThis.Object.entries(message.expected_source_baseline) as [
+        string,
+        ConfigSourceBaselineDTO,
+      ][];
+      if (entries.length > 0) {
+        obj.expected_source_baseline = {};
+        entries.forEach(([k, v]) => {
+          obj.expected_source_baseline[k] = ConfigSourceBaselineDTO.toJSON(v);
+        });
+      }
+    }
+    if (message.expected_active_revision !== undefined) {
+      obj.expected_active_revision = Math.round(message.expected_active_revision);
+    }
+    if (message.expected_active_digest !== undefined) {
+      obj.expected_active_digest = message.expected_active_digest;
+    }
+    if (message.credential_input !== undefined) {
+      obj.credential_input = LlmCredentialInput.toJSON(message.credential_input);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmDiscoverRequest>, I>>(base?: I): LlmDiscoverRequest {
+    return LlmDiscoverRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmDiscoverRequest>, I>>(object: I): LlmDiscoverRequest {
+    const message = createBaseLlmDiscoverRequest();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.mode = object.mode ?? "";
+    message.provider_id = object.provider_id ?? "";
+    message.edit_version = object.edit_version ?? 0;
+    message.source_key = object.source_key ?? undefined;
+    message.jsonc = object.jsonc ?? undefined;
+    message.expected_source_baseline =
+      (globalThis.Object.entries(object.expected_source_baseline ?? {}) as [string, ConfigSourceBaselineDTO][]).reduce(
+        (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, ConfigSourceBaselineDTO]) => {
+          if (value !== undefined) {
+            acc[key] = ConfigSourceBaselineDTO.fromPartial(value);
+          }
+          return acc;
+        },
+        {},
+      );
+    message.expected_active_revision = object.expected_active_revision ?? undefined;
+    message.expected_active_digest = object.expected_active_digest ?? undefined;
+    message.credential_input = (object.credential_input !== undefined && object.credential_input !== null)
+      ? LlmCredentialInput.fromPartial(object.credential_input)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseLlmDiscoverRequest_ExpectedSourceBaselineEntry(): LlmDiscoverRequest_ExpectedSourceBaselineEntry {
+  return { key: "", value: undefined };
+}
+
+export const LlmDiscoverRequest_ExpectedSourceBaselineEntry: MessageFns<
+  LlmDiscoverRequest_ExpectedSourceBaselineEntry
+> = {
+  fromJSON(object: any): LlmDiscoverRequest_ExpectedSourceBaselineEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? ConfigSourceBaselineDTO.fromJSON(object.value) : undefined,
+    };
+  },
+
+  toJSON(message: LlmDiscoverRequest_ExpectedSourceBaselineEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== undefined) {
+      obj.value = ConfigSourceBaselineDTO.toJSON(message.value);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmDiscoverRequest_ExpectedSourceBaselineEntry>, I>>(
+    base?: I,
+  ): LlmDiscoverRequest_ExpectedSourceBaselineEntry {
+    return LlmDiscoverRequest_ExpectedSourceBaselineEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmDiscoverRequest_ExpectedSourceBaselineEntry>, I>>(
+    object: I,
+  ): LlmDiscoverRequest_ExpectedSourceBaselineEntry {
+    const message = createBaseLlmDiscoverRequest_ExpectedSourceBaselineEntry();
+    message.key = object.key ?? "";
+    message.value = (object.value !== undefined && object.value !== null)
+      ? ConfigSourceBaselineDTO.fromPartial(object.value)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseLlmCredentialObservationDTO(): LlmCredentialObservationDTO {
+  return { source: "", secret_id: undefined, revision: undefined, scope: undefined };
+}
+
+export const LlmCredentialObservationDTO: MessageFns<LlmCredentialObservationDTO> = {
+  fromJSON(object: any): LlmCredentialObservationDTO {
+    return {
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      secret_id: isSet(object.secret_id) ? globalThis.String(object.secret_id) : undefined,
+      revision: isSet(object.revision) ? globalThis.Number(object.revision) : undefined,
+      scope: isSet(object.scope) ? globalThis.String(object.scope) : undefined,
+    };
+  },
+
+  toJSON(message: LlmCredentialObservationDTO): unknown {
+    const obj: any = {};
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.secret_id !== undefined) {
+      obj.secret_id = message.secret_id;
+    }
+    if (message.revision !== undefined) {
+      obj.revision = Math.round(message.revision);
+    }
+    if (message.scope !== undefined) {
+      obj.scope = message.scope;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmCredentialObservationDTO>, I>>(base?: I): LlmCredentialObservationDTO {
+    return LlmCredentialObservationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmCredentialObservationDTO>, I>>(object: I): LlmCredentialObservationDTO {
+    const message = createBaseLlmCredentialObservationDTO();
+    message.source = object.source ?? "";
+    message.secret_id = object.secret_id ?? undefined;
+    message.revision = object.revision ?? undefined;
+    message.scope = object.scope ?? undefined;
+    return message;
+  },
+};
+
+function createBaseLlmProbeObservationDTO(): LlmProbeObservationDTO {
+  return {
+    gateway_id: "",
+    workspace_id: "",
+    mode: "",
+    provider_id: "",
+    edit_version: 0,
+    source_key: undefined,
+    source_baseline: {},
+    active_revision: undefined,
+    active_digest: undefined,
+    credential: undefined,
+    protocol: "",
+    endpoint: "",
+    observed_at: "",
+  };
+}
+
+export const LlmProbeObservationDTO: MessageFns<LlmProbeObservationDTO> = {
+  fromJSON(object: any): LlmProbeObservationDTO {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : "",
+      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      edit_version: isSet(object.edit_version) ? globalThis.Number(object.edit_version) : 0,
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : undefined,
+      source_baseline: isObject(object.source_baseline)
+        ? (globalThis.Object.entries(object.source_baseline) as [string, any][]).reduce(
+          (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: ConfigSourceBaselineDTO.fromJSON(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      active_revision: isSet(object.active_revision) ? globalThis.Number(object.active_revision) : undefined,
+      active_digest: isSet(object.active_digest) ? globalThis.String(object.active_digest) : undefined,
+      credential: isSet(object.credential) ? LlmCredentialObservationDTO.fromJSON(object.credential) : undefined,
+      protocol: isSet(object.protocol) ? globalThis.String(object.protocol) : "",
+      endpoint: isSet(object.endpoint) ? globalThis.String(object.endpoint) : "",
+      observed_at: isSet(object.observed_at) ? globalThis.String(object.observed_at) : "",
+    };
+  },
+
+  toJSON(message: LlmProbeObservationDTO): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.mode !== "") {
+      obj.mode = message.mode;
+    }
+    if (message.provider_id !== "") {
+      obj.provider_id = message.provider_id;
+    }
+    if (message.edit_version !== 0) {
+      obj.edit_version = Math.round(message.edit_version);
+    }
+    if (message.source_key !== undefined) {
+      obj.source_key = message.source_key;
+    }
+    if (message.source_baseline) {
+      const entries = globalThis.Object.entries(message.source_baseline) as [string, ConfigSourceBaselineDTO][];
+      if (entries.length > 0) {
+        obj.source_baseline = {};
+        entries.forEach(([k, v]) => {
+          obj.source_baseline[k] = ConfigSourceBaselineDTO.toJSON(v);
+        });
+      }
+    }
+    if (message.active_revision !== undefined) {
+      obj.active_revision = Math.round(message.active_revision);
+    }
+    if (message.active_digest !== undefined) {
+      obj.active_digest = message.active_digest;
+    }
+    if (message.credential !== undefined) {
+      obj.credential = LlmCredentialObservationDTO.toJSON(message.credential);
+    }
+    if (message.protocol !== "") {
+      obj.protocol = message.protocol;
+    }
+    if (message.endpoint !== "") {
+      obj.endpoint = message.endpoint;
+    }
+    if (message.observed_at !== "") {
+      obj.observed_at = message.observed_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmProbeObservationDTO>, I>>(base?: I): LlmProbeObservationDTO {
+    return LlmProbeObservationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmProbeObservationDTO>, I>>(object: I): LlmProbeObservationDTO {
+    const message = createBaseLlmProbeObservationDTO();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.mode = object.mode ?? "";
+    message.provider_id = object.provider_id ?? "";
+    message.edit_version = object.edit_version ?? 0;
+    message.source_key = object.source_key ?? undefined;
+    message.source_baseline =
+      (globalThis.Object.entries(object.source_baseline ?? {}) as [string, ConfigSourceBaselineDTO][]).reduce(
+        (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, ConfigSourceBaselineDTO]) => {
+          if (value !== undefined) {
+            acc[key] = ConfigSourceBaselineDTO.fromPartial(value);
+          }
+          return acc;
+        },
+        {},
+      );
+    message.active_revision = object.active_revision ?? undefined;
+    message.active_digest = object.active_digest ?? undefined;
+    message.credential = (object.credential !== undefined && object.credential !== null)
+      ? LlmCredentialObservationDTO.fromPartial(object.credential)
+      : undefined;
+    message.protocol = object.protocol ?? "";
+    message.endpoint = object.endpoint ?? "";
+    message.observed_at = object.observed_at ?? "";
+    return message;
+  },
+};
+
+function createBaseLlmProbeObservationDTO_SourceBaselineEntry(): LlmProbeObservationDTO_SourceBaselineEntry {
+  return { key: "", value: undefined };
+}
+
+export const LlmProbeObservationDTO_SourceBaselineEntry: MessageFns<LlmProbeObservationDTO_SourceBaselineEntry> = {
+  fromJSON(object: any): LlmProbeObservationDTO_SourceBaselineEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? ConfigSourceBaselineDTO.fromJSON(object.value) : undefined,
+    };
+  },
+
+  toJSON(message: LlmProbeObservationDTO_SourceBaselineEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== undefined) {
+      obj.value = ConfigSourceBaselineDTO.toJSON(message.value);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmProbeObservationDTO_SourceBaselineEntry>, I>>(
+    base?: I,
+  ): LlmProbeObservationDTO_SourceBaselineEntry {
+    return LlmProbeObservationDTO_SourceBaselineEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmProbeObservationDTO_SourceBaselineEntry>, I>>(
+    object: I,
+  ): LlmProbeObservationDTO_SourceBaselineEntry {
+    const message = createBaseLlmProbeObservationDTO_SourceBaselineEntry();
+    message.key = object.key ?? "";
+    message.value = (object.value !== undefined && object.value !== null)
+      ? ConfigSourceBaselineDTO.fromPartial(object.value)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseLlmDiscoveredModelDTO(): LlmDiscoveredModelDTO {
+  return { model: "", name: undefined };
+}
+
+export const LlmDiscoveredModelDTO: MessageFns<LlmDiscoveredModelDTO> = {
+  fromJSON(object: any): LlmDiscoveredModelDTO {
+    return {
+      model: isSet(object.model) ? globalThis.String(object.model) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+    };
+  },
+
+  toJSON(message: LlmDiscoveredModelDTO): unknown {
+    const obj: any = {};
+    if (message.model !== "") {
+      obj.model = message.model;
+    }
+    if (message.name !== undefined) {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmDiscoveredModelDTO>, I>>(base?: I): LlmDiscoveredModelDTO {
+    return LlmDiscoveredModelDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmDiscoveredModelDTO>, I>>(object: I): LlmDiscoveredModelDTO {
+    const message = createBaseLlmDiscoveredModelDTO();
+    message.model = object.model ?? "";
+    message.name = object.name ?? undefined;
+    return message;
+  },
+};
+
+function createBaseLlmProbeErrorDTO(): LlmProbeErrorDTO {
+  return { category: "", message: "", status_code: undefined, field: undefined };
+}
+
+export const LlmProbeErrorDTO: MessageFns<LlmProbeErrorDTO> = {
+  fromJSON(object: any): LlmProbeErrorDTO {
+    return {
+      category: isSet(object.category) ? globalThis.String(object.category) : "",
+      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      status_code: isSet(object.status_code) ? globalThis.Number(object.status_code) : undefined,
+      field: isSet(object.field) ? globalThis.String(object.field) : undefined,
+    };
+  },
+
+  toJSON(message: LlmProbeErrorDTO): unknown {
+    const obj: any = {};
+    if (message.category !== "") {
+      obj.category = message.category;
+    }
+    if (message.message !== "") {
+      obj.message = message.message;
+    }
+    if (message.status_code !== undefined) {
+      obj.status_code = Math.round(message.status_code);
+    }
+    if (message.field !== undefined) {
+      obj.field = message.field;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmProbeErrorDTO>, I>>(base?: I): LlmProbeErrorDTO {
+    return LlmProbeErrorDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmProbeErrorDTO>, I>>(object: I): LlmProbeErrorDTO {
+    const message = createBaseLlmProbeErrorDTO();
+    message.category = object.category ?? "";
+    message.message = object.message ?? "";
+    message.status_code = object.status_code ?? undefined;
+    message.field = object.field ?? undefined;
+    return message;
+  },
+};
+
+function createBaseLlmDiscoverResultDTO(): LlmDiscoverResultDTO {
+  return { observation: undefined, source: "", models: [], complete: false, error: undefined };
+}
+
+export const LlmDiscoverResultDTO: MessageFns<LlmDiscoverResultDTO> = {
+  fromJSON(object: any): LlmDiscoverResultDTO {
+    return {
+      observation: isSet(object.observation) ? LlmProbeObservationDTO.fromJSON(object.observation) : undefined,
+      source: isSet(object.source) ? globalThis.String(object.source) : "",
+      models: globalThis.Array.isArray(object?.models)
+        ? object.models.map((e: any) => LlmDiscoveredModelDTO.fromJSON(e))
+        : [],
+      complete: isSet(object.complete) ? globalThis.Boolean(object.complete) : false,
+      error: isSet(object.error) ? LlmProbeErrorDTO.fromJSON(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: LlmDiscoverResultDTO): unknown {
+    const obj: any = {};
+    if (message.observation !== undefined) {
+      obj.observation = LlmProbeObservationDTO.toJSON(message.observation);
+    }
+    if (message.source !== "") {
+      obj.source = message.source;
+    }
+    if (message.models?.length) {
+      obj.models = message.models.map((e) => LlmDiscoveredModelDTO.toJSON(e));
+    }
+    if (message.complete !== false) {
+      obj.complete = message.complete;
+    }
+    if (message.error !== undefined) {
+      obj.error = LlmProbeErrorDTO.toJSON(message.error);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmDiscoverResultDTO>, I>>(base?: I): LlmDiscoverResultDTO {
+    return LlmDiscoverResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmDiscoverResultDTO>, I>>(object: I): LlmDiscoverResultDTO {
+    const message = createBaseLlmDiscoverResultDTO();
+    message.observation = (object.observation !== undefined && object.observation !== null)
+      ? LlmProbeObservationDTO.fromPartial(object.observation)
+      : undefined;
+    message.source = object.source ?? "";
+    message.models = object.models?.map((e) => LlmDiscoveredModelDTO.fromPartial(e)) || [];
+    message.complete = object.complete ?? false;
+    message.error = (object.error !== undefined && object.error !== null)
+      ? LlmProbeErrorDTO.fromPartial(object.error)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseLlmTestRequest(): LlmTestRequest {
+  return {
+    gateway_id: "",
+    workspace_id: "",
+    mode: "",
+    provider_id: "",
+    edit_version: 0,
+    source_key: undefined,
+    jsonc: undefined,
+    expected_source_baseline: {},
+    expected_active_revision: undefined,
+    expected_active_digest: undefined,
+    credential_input: undefined,
+    model_id: "",
+    streaming: undefined,
+    timeout_seconds: 0,
+  };
+}
+
+export const LlmTestRequest: MessageFns<LlmTestRequest> = {
+  fromJSON(object: any): LlmTestRequest {
+    return {
+      gateway_id: isSet(object.gateway_id) ? globalThis.String(object.gateway_id) : "",
+      workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
+      mode: isSet(object.mode) ? globalThis.String(object.mode) : "",
+      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      edit_version: isSet(object.edit_version) ? globalThis.Number(object.edit_version) : 0,
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : undefined,
+      jsonc: isSet(object.jsonc) ? globalThis.String(object.jsonc) : undefined,
+      expected_source_baseline: isObject(object.expected_source_baseline)
+        ? (globalThis.Object.entries(object.expected_source_baseline) as [string, any][]).reduce(
+          (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, any]) => {
+            globalThis.Object.defineProperty(acc, key, {
+              value: ConfigSourceBaselineDTO.fromJSON(value),
+              enumerable: true,
+              configurable: true,
+              writable: true,
+            });
+            return acc;
+          },
+          {},
+        )
+        : {},
+      expected_active_revision: isSet(object.expected_active_revision)
+        ? globalThis.Number(object.expected_active_revision)
+        : undefined,
+      expected_active_digest: isSet(object.expected_active_digest)
+        ? globalThis.String(object.expected_active_digest)
+        : undefined,
+      credential_input: isSet(object.credential_input)
+        ? LlmCredentialInput.fromJSON(object.credential_input)
+        : undefined,
+      model_id: isSet(object.model_id) ? globalThis.String(object.model_id) : "",
+      streaming: isSet(object.streaming) ? globalThis.Boolean(object.streaming) : undefined,
+      timeout_seconds: isSet(object.timeout_seconds) ? globalThis.Number(object.timeout_seconds) : 0,
+    };
+  },
+
+  toJSON(message: LlmTestRequest): unknown {
+    const obj: any = {};
+    if (message.gateway_id !== "") {
+      obj.gateway_id = message.gateway_id;
+    }
+    if (message.workspace_id !== "") {
+      obj.workspace_id = message.workspace_id;
+    }
+    if (message.mode !== "") {
+      obj.mode = message.mode;
+    }
+    if (message.provider_id !== "") {
+      obj.provider_id = message.provider_id;
+    }
+    if (message.edit_version !== 0) {
+      obj.edit_version = Math.round(message.edit_version);
+    }
+    if (message.source_key !== undefined) {
+      obj.source_key = message.source_key;
+    }
+    if (message.jsonc !== undefined) {
+      obj.jsonc = message.jsonc;
+    }
+    if (message.expected_source_baseline) {
+      const entries = globalThis.Object.entries(message.expected_source_baseline) as [
+        string,
+        ConfigSourceBaselineDTO,
+      ][];
+      if (entries.length > 0) {
+        obj.expected_source_baseline = {};
+        entries.forEach(([k, v]) => {
+          obj.expected_source_baseline[k] = ConfigSourceBaselineDTO.toJSON(v);
+        });
+      }
+    }
+    if (message.expected_active_revision !== undefined) {
+      obj.expected_active_revision = Math.round(message.expected_active_revision);
+    }
+    if (message.expected_active_digest !== undefined) {
+      obj.expected_active_digest = message.expected_active_digest;
+    }
+    if (message.credential_input !== undefined) {
+      obj.credential_input = LlmCredentialInput.toJSON(message.credential_input);
+    }
+    if (message.model_id !== "") {
+      obj.model_id = message.model_id;
+    }
+    if (message.streaming !== undefined) {
+      obj.streaming = message.streaming;
+    }
+    if (message.timeout_seconds !== 0) {
+      obj.timeout_seconds = message.timeout_seconds;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmTestRequest>, I>>(base?: I): LlmTestRequest {
+    return LlmTestRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmTestRequest>, I>>(object: I): LlmTestRequest {
+    const message = createBaseLlmTestRequest();
+    message.gateway_id = object.gateway_id ?? "";
+    message.workspace_id = object.workspace_id ?? "";
+    message.mode = object.mode ?? "";
+    message.provider_id = object.provider_id ?? "";
+    message.edit_version = object.edit_version ?? 0;
+    message.source_key = object.source_key ?? undefined;
+    message.jsonc = object.jsonc ?? undefined;
+    message.expected_source_baseline =
+      (globalThis.Object.entries(object.expected_source_baseline ?? {}) as [string, ConfigSourceBaselineDTO][]).reduce(
+        (acc: { [key: string]: ConfigSourceBaselineDTO }, [key, value]: [string, ConfigSourceBaselineDTO]) => {
+          if (value !== undefined) {
+            acc[key] = ConfigSourceBaselineDTO.fromPartial(value);
+          }
+          return acc;
+        },
+        {},
+      );
+    message.expected_active_revision = object.expected_active_revision ?? undefined;
+    message.expected_active_digest = object.expected_active_digest ?? undefined;
+    message.credential_input = (object.credential_input !== undefined && object.credential_input !== null)
+      ? LlmCredentialInput.fromPartial(object.credential_input)
+      : undefined;
+    message.model_id = object.model_id ?? "";
+    message.streaming = object.streaming ?? undefined;
+    message.timeout_seconds = object.timeout_seconds ?? 0;
+    return message;
+  },
+};
+
+function createBaseLlmTestRequest_ExpectedSourceBaselineEntry(): LlmTestRequest_ExpectedSourceBaselineEntry {
+  return { key: "", value: undefined };
+}
+
+export const LlmTestRequest_ExpectedSourceBaselineEntry: MessageFns<LlmTestRequest_ExpectedSourceBaselineEntry> = {
+  fromJSON(object: any): LlmTestRequest_ExpectedSourceBaselineEntry {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      value: isSet(object.value) ? ConfigSourceBaselineDTO.fromJSON(object.value) : undefined,
+    };
+  },
+
+  toJSON(message: LlmTestRequest_ExpectedSourceBaselineEntry): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.value !== undefined) {
+      obj.value = ConfigSourceBaselineDTO.toJSON(message.value);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmTestRequest_ExpectedSourceBaselineEntry>, I>>(
+    base?: I,
+  ): LlmTestRequest_ExpectedSourceBaselineEntry {
+    return LlmTestRequest_ExpectedSourceBaselineEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmTestRequest_ExpectedSourceBaselineEntry>, I>>(
+    object: I,
+  ): LlmTestRequest_ExpectedSourceBaselineEntry {
+    const message = createBaseLlmTestRequest_ExpectedSourceBaselineEntry();
+    message.key = object.key ?? "";
+    message.value = (object.value !== undefined && object.value !== null)
+      ? ConfigSourceBaselineDTO.fromPartial(object.value)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseLlmTestStartDTO(): LlmTestStartDTO {
+  return { request_id: "", observation: undefined, model_ref: undefined, streaming: false };
+}
+
+export const LlmTestStartDTO: MessageFns<LlmTestStartDTO> = {
+  fromJSON(object: any): LlmTestStartDTO {
+    return {
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      observation: isSet(object.observation) ? LlmProbeObservationDTO.fromJSON(object.observation) : undefined,
+      model_ref: isSet(object.model_ref) ? ModelReferenceDTO.fromJSON(object.model_ref) : undefined,
+      streaming: isSet(object.streaming) ? globalThis.Boolean(object.streaming) : false,
+    };
+  },
+
+  toJSON(message: LlmTestStartDTO): unknown {
+    const obj: any = {};
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.observation !== undefined) {
+      obj.observation = LlmProbeObservationDTO.toJSON(message.observation);
+    }
+    if (message.model_ref !== undefined) {
+      obj.model_ref = ModelReferenceDTO.toJSON(message.model_ref);
+    }
+    if (message.streaming !== false) {
+      obj.streaming = message.streaming;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmTestStartDTO>, I>>(base?: I): LlmTestStartDTO {
+    return LlmTestStartDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmTestStartDTO>, I>>(object: I): LlmTestStartDTO {
+    const message = createBaseLlmTestStartDTO();
+    message.request_id = object.request_id ?? "";
+    message.observation = (object.observation !== undefined && object.observation !== null)
+      ? LlmProbeObservationDTO.fromPartial(object.observation)
+      : undefined;
+    message.model_ref = (object.model_ref !== undefined && object.model_ref !== null)
+      ? ModelReferenceDTO.fromPartial(object.model_ref)
+      : undefined;
+    message.streaming = object.streaming ?? false;
+    return message;
+  },
+};
+
+function createBaseLlmTestDeltaDTO(): LlmTestDeltaDTO {
+  return { request_id: "", text: "" };
+}
+
+export const LlmTestDeltaDTO: MessageFns<LlmTestDeltaDTO> = {
+  fromJSON(object: any): LlmTestDeltaDTO {
+    return {
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      text: isSet(object.text) ? globalThis.String(object.text) : "",
+    };
+  },
+
+  toJSON(message: LlmTestDeltaDTO): unknown {
+    const obj: any = {};
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.text !== "") {
+      obj.text = message.text;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmTestDeltaDTO>, I>>(base?: I): LlmTestDeltaDTO {
+    return LlmTestDeltaDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmTestDeltaDTO>, I>>(object: I): LlmTestDeltaDTO {
+    const message = createBaseLlmTestDeltaDTO();
+    message.request_id = object.request_id ?? "";
+    message.text = object.text ?? "";
+    return message;
+  },
+};
+
+function createBaseLlmTestResultDTO(): LlmTestResultDTO {
+  return {
+    request_id: "",
+    observation: undefined,
+    model_ref: undefined,
+    streaming: false,
+    status: "",
+    first_content_ms: undefined,
+    elapsed_ms: 0,
+    preview: "",
+    preview_truncated: false,
+    usage: undefined,
+    error: undefined,
+  };
+}
+
+export const LlmTestResultDTO: MessageFns<LlmTestResultDTO> = {
+  fromJSON(object: any): LlmTestResultDTO {
+    return {
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
+      observation: isSet(object.observation) ? LlmProbeObservationDTO.fromJSON(object.observation) : undefined,
+      model_ref: isSet(object.model_ref) ? ModelReferenceDTO.fromJSON(object.model_ref) : undefined,
+      streaming: isSet(object.streaming) ? globalThis.Boolean(object.streaming) : false,
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      first_content_ms: isSet(object.first_content_ms) ? globalThis.Number(object.first_content_ms) : undefined,
+      elapsed_ms: isSet(object.elapsed_ms) ? globalThis.Number(object.elapsed_ms) : 0,
+      preview: isSet(object.preview) ? globalThis.String(object.preview) : "",
+      preview_truncated: isSet(object.preview_truncated) ? globalThis.Boolean(object.preview_truncated) : false,
+      usage: isObject(object.usage) ? object.usage : undefined,
+      error: isSet(object.error) ? LlmProbeErrorDTO.fromJSON(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: LlmTestResultDTO): unknown {
+    const obj: any = {};
+    if (message.request_id !== "") {
+      obj.request_id = message.request_id;
+    }
+    if (message.observation !== undefined) {
+      obj.observation = LlmProbeObservationDTO.toJSON(message.observation);
+    }
+    if (message.model_ref !== undefined) {
+      obj.model_ref = ModelReferenceDTO.toJSON(message.model_ref);
+    }
+    if (message.streaming !== false) {
+      obj.streaming = message.streaming;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.first_content_ms !== undefined) {
+      obj.first_content_ms = message.first_content_ms;
+    }
+    if (message.elapsed_ms !== 0) {
+      obj.elapsed_ms = message.elapsed_ms;
+    }
+    if (message.preview !== "") {
+      obj.preview = message.preview;
+    }
+    if (message.preview_truncated !== false) {
+      obj.preview_truncated = message.preview_truncated;
+    }
+    if (message.usage !== undefined) {
+      obj.usage = message.usage;
+    }
+    if (message.error !== undefined) {
+      obj.error = LlmProbeErrorDTO.toJSON(message.error);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<LlmTestResultDTO>, I>>(base?: I): LlmTestResultDTO {
+    return LlmTestResultDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<LlmTestResultDTO>, I>>(object: I): LlmTestResultDTO {
+    const message = createBaseLlmTestResultDTO();
+    message.request_id = object.request_id ?? "";
+    message.observation = (object.observation !== undefined && object.observation !== null)
+      ? LlmProbeObservationDTO.fromPartial(object.observation)
+      : undefined;
+    message.model_ref = (object.model_ref !== undefined && object.model_ref !== null)
+      ? ModelReferenceDTO.fromPartial(object.model_ref)
+      : undefined;
+    message.streaming = object.streaming ?? false;
+    message.status = object.status ?? "";
+    message.first_content_ms = object.first_content_ms ?? undefined;
+    message.elapsed_ms = object.elapsed_ms ?? 0;
+    message.preview = object.preview ?? "";
+    message.preview_truncated = object.preview_truncated ?? false;
+    message.usage = object.usage ?? undefined;
+    message.error = (object.error !== undefined && object.error !== null)
+      ? LlmProbeErrorDTO.fromPartial(object.error)
+      : undefined;
     return message;
   },
 };
 
 function createBaseConfigSourcePreflightDTO(): ConfigSourcePreflightDTO {
-  return { document: undefined, candidate: undefined, candidate_digest: "", changed_paths: [] };
+  return {
+    document: undefined,
+    candidate: undefined,
+    candidate_digest: "",
+    changed_paths: [],
+    model_options: undefined,
+    active_model_options: undefined,
+  };
 }
 
 export const ConfigSourcePreflightDTO: MessageFns<ConfigSourcePreflightDTO> = {
@@ -4773,6 +6187,10 @@ export const ConfigSourcePreflightDTO: MessageFns<ConfigSourcePreflightDTO> = {
       changed_paths: globalThis.Array.isArray(object?.changed_paths)
         ? object.changed_paths.map((e: any) => globalThis.String(e))
         : [],
+      model_options: isSet(object.model_options) ? ConfigModelInspectionDTO.fromJSON(object.model_options) : undefined,
+      active_model_options: isSet(object.active_model_options)
+        ? ConfigModelInspectionDTO.fromJSON(object.active_model_options)
+        : undefined,
     };
   },
 
@@ -4790,6 +6208,12 @@ export const ConfigSourcePreflightDTO: MessageFns<ConfigSourcePreflightDTO> = {
     if (message.changed_paths?.length) {
       obj.changed_paths = message.changed_paths;
     }
+    if (message.model_options !== undefined) {
+      obj.model_options = ConfigModelInspectionDTO.toJSON(message.model_options);
+    }
+    if (message.active_model_options !== undefined) {
+      obj.active_model_options = ConfigModelInspectionDTO.toJSON(message.active_model_options);
+    }
     return obj;
   },
 
@@ -4804,6 +6228,114 @@ export const ConfigSourcePreflightDTO: MessageFns<ConfigSourcePreflightDTO> = {
     message.candidate = object.candidate ?? undefined;
     message.candidate_digest = object.candidate_digest ?? "";
     message.changed_paths = object.changed_paths?.map((e) => e) || [];
+    message.model_options = (object.model_options !== undefined && object.model_options !== null)
+      ? ConfigModelInspectionDTO.fromPartial(object.model_options)
+      : undefined;
+    message.active_model_options = (object.active_model_options !== undefined && object.active_model_options !== null)
+      ? ConfigModelInspectionDTO.fromPartial(object.active_model_options)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseConfigModelOptionOriginDTO(): ConfigModelOptionOriginDTO {
+  return { path: "", source_key: "", definition: "", definition_path: "" };
+}
+
+export const ConfigModelOptionOriginDTO: MessageFns<ConfigModelOptionOriginDTO> = {
+  fromJSON(object: any): ConfigModelOptionOriginDTO {
+    return {
+      path: isSet(object.path) ? globalThis.String(object.path) : "",
+      source_key: isSet(object.source_key) ? globalThis.String(object.source_key) : "",
+      definition: isSet(object.definition) ? globalThis.String(object.definition) : "",
+      definition_path: isSet(object.definition_path) ? globalThis.String(object.definition_path) : "",
+    };
+  },
+
+  toJSON(message: ConfigModelOptionOriginDTO): unknown {
+    const obj: any = {};
+    if (message.path !== "") {
+      obj.path = message.path;
+    }
+    if (message.source_key !== "") {
+      obj.source_key = message.source_key;
+    }
+    if (message.definition !== "") {
+      obj.definition = message.definition;
+    }
+    if (message.definition_path !== "") {
+      obj.definition_path = message.definition_path;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigModelOptionOriginDTO>, I>>(base?: I): ConfigModelOptionOriginDTO {
+    return ConfigModelOptionOriginDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigModelOptionOriginDTO>, I>>(object: I): ConfigModelOptionOriginDTO {
+    const message = createBaseConfigModelOptionOriginDTO();
+    message.path = object.path ?? "";
+    message.source_key = object.source_key ?? "";
+    message.definition = object.definition ?? "";
+    message.definition_path = object.definition_path ?? "";
+    return message;
+  },
+};
+
+function createBaseConfigModelInspectionDTO(): ConfigModelInspectionDTO {
+  return { model_ref: undefined, model: "", options: undefined, origins: [], request_url: "", catalog_url: undefined };
+}
+
+export const ConfigModelInspectionDTO: MessageFns<ConfigModelInspectionDTO> = {
+  fromJSON(object: any): ConfigModelInspectionDTO {
+    return {
+      model_ref: isSet(object.model_ref) ? ModelReferenceDTO.fromJSON(object.model_ref) : undefined,
+      model: isSet(object.model) ? globalThis.String(object.model) : "",
+      options: isObject(object.options) ? object.options : undefined,
+      origins: globalThis.Array.isArray(object?.origins)
+        ? object.origins.map((e: any) => ConfigModelOptionOriginDTO.fromJSON(e))
+        : [],
+      request_url: isSet(object.request_url) ? globalThis.String(object.request_url) : "",
+      catalog_url: isSet(object.catalog_url) ? globalThis.String(object.catalog_url) : undefined,
+    };
+  },
+
+  toJSON(message: ConfigModelInspectionDTO): unknown {
+    const obj: any = {};
+    if (message.model_ref !== undefined) {
+      obj.model_ref = ModelReferenceDTO.toJSON(message.model_ref);
+    }
+    if (message.model !== "") {
+      obj.model = message.model;
+    }
+    if (message.options !== undefined) {
+      obj.options = message.options;
+    }
+    if (message.origins?.length) {
+      obj.origins = message.origins.map((e) => ConfigModelOptionOriginDTO.toJSON(e));
+    }
+    if (message.request_url !== "") {
+      obj.request_url = message.request_url;
+    }
+    if (message.catalog_url !== undefined) {
+      obj.catalog_url = message.catalog_url;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ConfigModelInspectionDTO>, I>>(base?: I): ConfigModelInspectionDTO {
+    return ConfigModelInspectionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ConfigModelInspectionDTO>, I>>(object: I): ConfigModelInspectionDTO {
+    const message = createBaseConfigModelInspectionDTO();
+    message.model_ref = (object.model_ref !== undefined && object.model_ref !== null)
+      ? ModelReferenceDTO.fromPartial(object.model_ref)
+      : undefined;
+    message.model = object.model ?? "";
+    message.options = object.options ?? undefined;
+    message.origins = object.origins?.map((e) => ConfigModelOptionOriginDTO.fromPartial(e)) || [];
+    message.request_url = object.request_url ?? "";
+    message.catalog_url = object.catalog_url ?? undefined;
     return message;
   },
 };
@@ -5203,7 +6735,7 @@ export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
         : [],
       total: isSet(object.total) ? globalThis.Number(object.total) : 0,
       teams: globalThis.Array.isArray(object?.teams)
-        ? object.teams.map((e: any) => TeamBoardDTO.fromJSON(e))
+        ? object.teams.map((e: any) => TeamBoardSummaryDTO.fromJSON(e))
         : [],
     };
   },
@@ -5220,7 +6752,7 @@ export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
       obj.total = Math.round(message.total);
     }
     if (message.teams?.length) {
-      obj.teams = message.teams.map((e) => TeamBoardDTO.toJSON(e));
+      obj.teams = message.teams.map((e) => TeamBoardSummaryDTO.toJSON(e));
     }
     return obj;
   },
@@ -5233,7 +6765,182 @@ export const ChildThreadListDTO: MessageFns<ChildThreadListDTO> = {
     message.parent_session_id = object.parent_session_id ?? "";
     message.items = object.items?.map((e) => ChildThreadSummaryDTO.fromPartial(e)) || [];
     message.total = object.total ?? 0;
-    message.teams = object.teams?.map((e) => TeamBoardDTO.fromPartial(e)) || [];
+    message.teams = object.teams?.map((e) => TeamBoardSummaryDTO.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseTeamMemberSummaryDTO(): TeamMemberSummaryDTO {
+  return { thread_id: "", role: "", work_mode: "" };
+}
+
+export const TeamMemberSummaryDTO: MessageFns<TeamMemberSummaryDTO> = {
+  fromJSON(object: any): TeamMemberSummaryDTO {
+    return {
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      role: isSet(object.role) ? globalThis.String(object.role) : "",
+      work_mode: isSet(object.work_mode) ? globalThis.String(object.work_mode) : "",
+    };
+  },
+
+  toJSON(message: TeamMemberSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.role !== "") {
+      obj.role = message.role;
+    }
+    if (message.work_mode !== "") {
+      obj.work_mode = message.work_mode;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TeamMemberSummaryDTO>, I>>(base?: I): TeamMemberSummaryDTO {
+    return TeamMemberSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TeamMemberSummaryDTO>, I>>(object: I): TeamMemberSummaryDTO {
+    const message = createBaseTeamMemberSummaryDTO();
+    message.thread_id = object.thread_id ?? "";
+    message.role = object.role ?? "";
+    message.work_mode = object.work_mode ?? "";
+    return message;
+  },
+};
+
+function createBaseTeamTaskSummaryDTO(): TeamTaskSummaryDTO {
+  return {
+    task_id: "",
+    title: "",
+    status: "",
+    assignee_thread_id: "",
+    phase: "",
+    cycle: 0,
+    summary: undefined,
+    error: undefined,
+  };
+}
+
+export const TeamTaskSummaryDTO: MessageFns<TeamTaskSummaryDTO> = {
+  fromJSON(object: any): TeamTaskSummaryDTO {
+    return {
+      task_id: isSet(object.task_id) ? globalThis.String(object.task_id) : "",
+      title: isSet(object.title) ? globalThis.String(object.title) : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      assignee_thread_id: isSet(object.assignee_thread_id) ? globalThis.String(object.assignee_thread_id) : "",
+      phase: isSet(object.phase) ? globalThis.String(object.phase) : "",
+      cycle: isSet(object.cycle) ? globalThis.Number(object.cycle) : 0,
+      summary: isSet(object.summary) ? globalThis.String(object.summary) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+    };
+  },
+
+  toJSON(message: TeamTaskSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.task_id !== "") {
+      obj.task_id = message.task_id;
+    }
+    if (message.title !== "") {
+      obj.title = message.title;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.assignee_thread_id !== "") {
+      obj.assignee_thread_id = message.assignee_thread_id;
+    }
+    if (message.phase !== "") {
+      obj.phase = message.phase;
+    }
+    if (message.cycle !== 0) {
+      obj.cycle = Math.round(message.cycle);
+    }
+    if (message.summary !== undefined) {
+      obj.summary = message.summary;
+    }
+    if (message.error !== undefined) {
+      obj.error = message.error;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TeamTaskSummaryDTO>, I>>(base?: I): TeamTaskSummaryDTO {
+    return TeamTaskSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TeamTaskSummaryDTO>, I>>(object: I): TeamTaskSummaryDTO {
+    const message = createBaseTeamTaskSummaryDTO();
+    message.task_id = object.task_id ?? "";
+    message.title = object.title ?? "";
+    message.status = object.status ?? "";
+    message.assignee_thread_id = object.assignee_thread_id ?? "";
+    message.phase = object.phase ?? "";
+    message.cycle = object.cycle ?? 0;
+    message.summary = object.summary ?? undefined;
+    message.error = object.error ?? undefined;
+    return message;
+  },
+};
+
+function createBaseTeamBoardSummaryDTO(): TeamBoardSummaryDTO {
+  return { team_id: "", name: "", session_id: "", coordinator_thread_id: "", version: 0, members: [], tasks: [] };
+}
+
+export const TeamBoardSummaryDTO: MessageFns<TeamBoardSummaryDTO> = {
+  fromJSON(object: any): TeamBoardSummaryDTO {
+    return {
+      team_id: isSet(object.team_id) ? globalThis.String(object.team_id) : "",
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      coordinator_thread_id: isSet(object.coordinator_thread_id) ? globalThis.String(object.coordinator_thread_id) : "",
+      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
+      members: globalThis.Array.isArray(object?.members)
+        ? object.members.map((e: any) => TeamMemberSummaryDTO.fromJSON(e))
+        : [],
+      tasks: globalThis.Array.isArray(object?.tasks)
+        ? object.tasks.map((e: any) => TeamTaskSummaryDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: TeamBoardSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.team_id !== "") {
+      obj.team_id = message.team_id;
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.coordinator_thread_id !== "") {
+      obj.coordinator_thread_id = message.coordinator_thread_id;
+    }
+    if (message.version !== 0) {
+      obj.version = Math.round(message.version);
+    }
+    if (message.members?.length) {
+      obj.members = message.members.map((e) => TeamMemberSummaryDTO.toJSON(e));
+    }
+    if (message.tasks?.length) {
+      obj.tasks = message.tasks.map((e) => TeamTaskSummaryDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<TeamBoardSummaryDTO>, I>>(base?: I): TeamBoardSummaryDTO {
+    return TeamBoardSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<TeamBoardSummaryDTO>, I>>(object: I): TeamBoardSummaryDTO {
+    const message = createBaseTeamBoardSummaryDTO();
+    message.team_id = object.team_id ?? "";
+    message.name = object.name ?? "";
+    message.session_id = object.session_id ?? "";
+    message.coordinator_thread_id = object.coordinator_thread_id ?? "";
+    message.version = object.version ?? 0;
+    message.members = object.members?.map((e) => TeamMemberSummaryDTO.fromPartial(e)) || [];
+    message.tasks = object.tasks?.map((e) => TeamTaskSummaryDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -11346,6 +13053,7 @@ function createBasePendingRequestDTO(): PendingRequestDTO {
     thread_id: "",
     turn_id: undefined,
     execution_binding: undefined,
+    reorderable: false,
   };
 }
 
@@ -11375,6 +13083,7 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
       turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
       execution_binding: isObject(object.execution_binding) ? object.execution_binding : undefined,
+      reorderable: isSet(object.reorderable) ? globalThis.Boolean(object.reorderable) : false,
     };
   },
 
@@ -11443,6 +13152,9 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
     if (message.execution_binding !== undefined) {
       obj.execution_binding = message.execution_binding;
     }
+    if (message.reorderable !== false) {
+      obj.reorderable = message.reorderable;
+    }
     return obj;
   },
 
@@ -11472,12 +13184,20 @@ export const PendingRequestDTO: MessageFns<PendingRequestDTO> = {
     message.thread_id = object.thread_id ?? "";
     message.turn_id = object.turn_id ?? undefined;
     message.execution_binding = object.execution_binding ?? undefined;
+    message.reorderable = object.reorderable ?? false;
     return message;
   },
 };
 
 function createBasePendingRequestListDTO(): PendingRequestListDTO {
-  return { session_id: "", active_job_id: undefined, requests: [], snapshot_version: undefined, thread_id: undefined };
+  return {
+    session_id: "",
+    active_job_id: undefined,
+    requests: [],
+    snapshot_version: undefined,
+    thread_id: undefined,
+    thread_revision: undefined,
+  };
 }
 
 export const PendingRequestListDTO: MessageFns<PendingRequestListDTO> = {
@@ -11490,6 +13210,7 @@ export const PendingRequestListDTO: MessageFns<PendingRequestListDTO> = {
         : [],
       snapshot_version: isSet(object.snapshot_version) ? globalThis.Number(object.snapshot_version) : undefined,
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+      thread_revision: isSet(object.thread_revision) ? globalThis.Number(object.thread_revision) : undefined,
     };
   },
 
@@ -11510,6 +13231,9 @@ export const PendingRequestListDTO: MessageFns<PendingRequestListDTO> = {
     if (message.thread_id !== undefined) {
       obj.thread_id = message.thread_id;
     }
+    if (message.thread_revision !== undefined) {
+      obj.thread_revision = Math.round(message.thread_revision);
+    }
     return obj;
   },
 
@@ -11523,6 +13247,192 @@ export const PendingRequestListDTO: MessageFns<PendingRequestListDTO> = {
     message.requests = object.requests?.map((e) => PendingRequestDTO.fromPartial(e)) || [];
     message.snapshot_version = object.snapshot_version ?? undefined;
     message.thread_id = object.thread_id ?? undefined;
+    message.thread_revision = object.thread_revision ?? undefined;
+    return message;
+  },
+};
+
+function createBasePendingRequestReorderRequest(): PendingRequestReorderRequest {
+  return { message_ids: [], expected_thread_revision: 0 };
+}
+
+export const PendingRequestReorderRequest: MessageFns<PendingRequestReorderRequest> = {
+  fromJSON(object: any): PendingRequestReorderRequest {
+    return {
+      message_ids: globalThis.Array.isArray(object?.message_ids)
+        ? object.message_ids.map((e: any) => globalThis.String(e))
+        : [],
+      expected_thread_revision: isSet(object.expected_thread_revision)
+        ? globalThis.Number(object.expected_thread_revision)
+        : 0,
+    };
+  },
+
+  toJSON(message: PendingRequestReorderRequest): unknown {
+    const obj: any = {};
+    if (message.message_ids?.length) {
+      obj.message_ids = message.message_ids;
+    }
+    if (message.expected_thread_revision !== 0) {
+      obj.expected_thread_revision = Math.round(message.expected_thread_revision);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<PendingRequestReorderRequest>, I>>(base?: I): PendingRequestReorderRequest {
+    return PendingRequestReorderRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<PendingRequestReorderRequest>, I>>(object: I): PendingRequestReorderRequest {
+    const message = createBasePendingRequestReorderRequest();
+    message.message_ids = object.message_ids?.map((e) => e) || [];
+    message.expected_thread_revision = object.expected_thread_revision ?? 0;
+    return message;
+  },
+};
+
+function createBaseUserQuestionDTO(): UserQuestionDTO {
+  return { question_id: "", sequence: 0, markdown: "", turn_id: undefined, created_at: "" };
+}
+
+export const UserQuestionDTO: MessageFns<UserQuestionDTO> = {
+  fromJSON(object: any): UserQuestionDTO {
+    return {
+      question_id: isSet(object.question_id) ? globalThis.String(object.question_id) : "",
+      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : 0,
+      markdown: isSet(object.markdown) ? globalThis.String(object.markdown) : "",
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
+      created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : "",
+    };
+  },
+
+  toJSON(message: UserQuestionDTO): unknown {
+    const obj: any = {};
+    if (message.question_id !== "") {
+      obj.question_id = message.question_id;
+    }
+    if (message.sequence !== 0) {
+      obj.sequence = Math.round(message.sequence);
+    }
+    if (message.markdown !== "") {
+      obj.markdown = message.markdown;
+    }
+    if (message.turn_id !== undefined) {
+      obj.turn_id = message.turn_id;
+    }
+    if (message.created_at !== "") {
+      obj.created_at = message.created_at;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<UserQuestionDTO>, I>>(base?: I): UserQuestionDTO {
+    return UserQuestionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<UserQuestionDTO>, I>>(object: I): UserQuestionDTO {
+    const message = createBaseUserQuestionDTO();
+    message.question_id = object.question_id ?? "";
+    message.sequence = object.sequence ?? 0;
+    message.markdown = object.markdown ?? "";
+    message.turn_id = object.turn_id ?? undefined;
+    message.created_at = object.created_at ?? "";
+    return message;
+  },
+};
+
+function createBaseUserQuestionSummaryDTO(): UserQuestionSummaryDTO {
+  return { session_id: "", thread_id: "", count: 0, revision: 0 };
+}
+
+export const UserQuestionSummaryDTO: MessageFns<UserQuestionSummaryDTO> = {
+  fromJSON(object: any): UserQuestionSummaryDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      count: isSet(object.count) ? globalThis.Number(object.count) : 0,
+      revision: isSet(object.revision) ? globalThis.Number(object.revision) : 0,
+    };
+  },
+
+  toJSON(message: UserQuestionSummaryDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.count !== 0) {
+      obj.count = Math.round(message.count);
+    }
+    if (message.revision !== 0) {
+      obj.revision = Math.round(message.revision);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<UserQuestionSummaryDTO>, I>>(base?: I): UserQuestionSummaryDTO {
+    return UserQuestionSummaryDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<UserQuestionSummaryDTO>, I>>(object: I): UserQuestionSummaryDTO {
+    const message = createBaseUserQuestionSummaryDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.count = object.count ?? 0;
+    message.revision = object.revision ?? 0;
+    return message;
+  },
+};
+
+function createBaseUserQuestionPageDTO(): UserQuestionPageDTO {
+  return { session_id: "", thread_id: "", count: 0, revision: 0, items: [], next_before: undefined };
+}
+
+export const UserQuestionPageDTO: MessageFns<UserQuestionPageDTO> = {
+  fromJSON(object: any): UserQuestionPageDTO {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : "",
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : "",
+      count: isSet(object.count) ? globalThis.Number(object.count) : 0,
+      revision: isSet(object.revision) ? globalThis.Number(object.revision) : 0,
+      items: globalThis.Array.isArray(object?.items) ? object.items.map((e: any) => UserQuestionDTO.fromJSON(e)) : [],
+      next_before: isSet(object.next_before) ? globalThis.Number(object.next_before) : undefined,
+    };
+  },
+
+  toJSON(message: UserQuestionPageDTO): unknown {
+    const obj: any = {};
+    if (message.session_id !== "") {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== "") {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.count !== 0) {
+      obj.count = Math.round(message.count);
+    }
+    if (message.revision !== 0) {
+      obj.revision = Math.round(message.revision);
+    }
+    if (message.items?.length) {
+      obj.items = message.items.map((e) => UserQuestionDTO.toJSON(e));
+    }
+    if (message.next_before !== undefined) {
+      obj.next_before = Math.round(message.next_before);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<UserQuestionPageDTO>, I>>(base?: I): UserQuestionPageDTO {
+    return UserQuestionPageDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<UserQuestionPageDTO>, I>>(object: I): UserQuestionPageDTO {
+    const message = createBaseUserQuestionPageDTO();
+    message.session_id = object.session_id ?? "";
+    message.thread_id = object.thread_id ?? "";
+    message.count = object.count ?? 0;
+    message.revision = object.revision ?? 0;
+    message.items = object.items?.map((e) => UserQuestionDTO.fromPartial(e)) || [];
+    message.next_before = object.next_before ?? undefined;
     return message;
   },
 };
@@ -13547,7 +15457,6 @@ function createBaseSessionDTO(): SessionDTO {
     title: "",
     title_source: undefined,
     current_agent_id: "",
-    current_provider_id: undefined,
     parent_session_id: undefined,
     context_source_session_id: undefined,
     kind: undefined,
@@ -13556,6 +15465,7 @@ function createBaseSessionDTO(): SessionDTO {
     uri: "",
     scope: "",
     thread_id: undefined,
+    current_model: undefined,
   };
 }
 
@@ -13569,9 +15479,6 @@ export const SessionDTO: MessageFns<SessionDTO> = {
       title: isSet(object.title) ? globalThis.String(object.title) : "",
       title_source: isSet(object.title_source) ? globalThis.String(object.title_source) : undefined,
       current_agent_id: isSet(object.current_agent_id) ? globalThis.String(object.current_agent_id) : "",
-      current_provider_id: isSet(object.current_provider_id)
-        ? globalThis.String(object.current_provider_id)
-        : undefined,
       parent_session_id: isSet(object.parent_session_id) ? globalThis.String(object.parent_session_id) : undefined,
       context_source_session_id: isSet(object.context_source_session_id)
         ? globalThis.String(object.context_source_session_id)
@@ -13584,6 +15491,7 @@ export const SessionDTO: MessageFns<SessionDTO> = {
       uri: isSet(object.uri) ? globalThis.String(object.uri) : "",
       scope: isSet(object.scope) ? globalThis.String(object.scope) : "",
       thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+      current_model: isSet(object.current_model) ? ModelReferenceDTO.fromJSON(object.current_model) : undefined,
     };
   },
 
@@ -13610,9 +15518,6 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     if (message.current_agent_id !== "") {
       obj.current_agent_id = message.current_agent_id;
     }
-    if (message.current_provider_id !== undefined) {
-      obj.current_provider_id = message.current_provider_id;
-    }
     if (message.parent_session_id !== undefined) {
       obj.parent_session_id = message.parent_session_id;
     }
@@ -13637,6 +15542,9 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     if (message.thread_id !== undefined) {
       obj.thread_id = message.thread_id;
     }
+    if (message.current_model !== undefined) {
+      obj.current_model = ModelReferenceDTO.toJSON(message.current_model);
+    }
     return obj;
   },
 
@@ -13652,7 +15560,6 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     message.title = object.title ?? "";
     message.title_source = object.title_source ?? undefined;
     message.current_agent_id = object.current_agent_id ?? "";
-    message.current_provider_id = object.current_provider_id ?? undefined;
     message.parent_session_id = object.parent_session_id ?? undefined;
     message.context_source_session_id = object.context_source_session_id ?? undefined;
     message.kind = object.kind ?? undefined;
@@ -13663,6 +15570,9 @@ export const SessionDTO: MessageFns<SessionDTO> = {
     message.uri = object.uri ?? "";
     message.scope = object.scope ?? "";
     message.thread_id = object.thread_id ?? undefined;
+    message.current_model = (object.current_model !== undefined && object.current_model !== null)
+      ? ModelReferenceDTO.fromPartial(object.current_model)
+      : undefined;
     return message;
   },
 };
@@ -15317,13 +17227,13 @@ function createBaseSessionInformationSessionDTO(): SessionInformationSessionDTO 
     workspace_id: "",
     title: "",
     current_agent_id: "",
-    current_provider_id: undefined,
     parent_session_id: undefined,
     context_source_session_id: undefined,
     kind: "",
     created_at: undefined,
     updated_at: undefined,
     title_truncated: undefined,
+    current_model: undefined,
   };
 }
 
@@ -15334,9 +17244,6 @@ export const SessionInformationSessionDTO: MessageFns<SessionInformationSessionD
       workspace_id: isSet(object.workspace_id) ? globalThis.String(object.workspace_id) : "",
       title: isSet(object.title) ? globalThis.String(object.title) : "",
       current_agent_id: isSet(object.current_agent_id) ? globalThis.String(object.current_agent_id) : "",
-      current_provider_id: isSet(object.current_provider_id)
-        ? globalThis.String(object.current_provider_id)
-        : undefined,
       parent_session_id: isSet(object.parent_session_id) ? globalThis.String(object.parent_session_id) : undefined,
       context_source_session_id: isSet(object.context_source_session_id)
         ? globalThis.String(object.context_source_session_id)
@@ -15345,6 +17252,7 @@ export const SessionInformationSessionDTO: MessageFns<SessionInformationSessionD
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       title_truncated: isSet(object.title_truncated) ? globalThis.Boolean(object.title_truncated) : undefined,
+      current_model: isSet(object.current_model) ? ModelReferenceDTO.fromJSON(object.current_model) : undefined,
     };
   },
 
@@ -15361,9 +17269,6 @@ export const SessionInformationSessionDTO: MessageFns<SessionInformationSessionD
     }
     if (message.current_agent_id !== "") {
       obj.current_agent_id = message.current_agent_id;
-    }
-    if (message.current_provider_id !== undefined) {
-      obj.current_provider_id = message.current_provider_id;
     }
     if (message.parent_session_id !== undefined) {
       obj.parent_session_id = message.parent_session_id;
@@ -15383,6 +17288,9 @@ export const SessionInformationSessionDTO: MessageFns<SessionInformationSessionD
     if (message.title_truncated !== undefined) {
       obj.title_truncated = message.title_truncated;
     }
+    if (message.current_model !== undefined) {
+      obj.current_model = ModelReferenceDTO.toJSON(message.current_model);
+    }
     return obj;
   },
 
@@ -15395,13 +17303,15 @@ export const SessionInformationSessionDTO: MessageFns<SessionInformationSessionD
     message.workspace_id = object.workspace_id ?? "";
     message.title = object.title ?? "";
     message.current_agent_id = object.current_agent_id ?? "";
-    message.current_provider_id = object.current_provider_id ?? undefined;
     message.parent_session_id = object.parent_session_id ?? undefined;
     message.context_source_session_id = object.context_source_session_id ?? undefined;
     message.kind = object.kind ?? "";
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.title_truncated = object.title_truncated ?? undefined;
+    message.current_model = (object.current_model !== undefined && object.current_model !== null)
+      ? ModelReferenceDTO.fromPartial(object.current_model)
+      : undefined;
     return message;
   },
 };
@@ -18411,14 +20321,14 @@ export const SessionTurnBootstrapDTO: MessageFns<SessionTurnBootstrapDTO> = {
 };
 
 function createBaseSessionUpdateRequest(): SessionUpdateRequest {
-  return { agent_id: undefined, provider_id: undefined };
+  return { agent_id: undefined, model: undefined };
 }
 
 export const SessionUpdateRequest: MessageFns<SessionUpdateRequest> = {
   fromJSON(object: any): SessionUpdateRequest {
     return {
       agent_id: isSet(object.agent_id) ? globalThis.String(object.agent_id) : undefined,
-      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : undefined,
+      model: isSet(object.model) ? ModelReferenceDTO.fromJSON(object.model) : undefined,
     };
   },
 
@@ -18427,8 +20337,8 @@ export const SessionUpdateRequest: MessageFns<SessionUpdateRequest> = {
     if (message.agent_id !== undefined) {
       obj.agent_id = message.agent_id;
     }
-    if (message.provider_id !== undefined) {
-      obj.provider_id = message.provider_id;
+    if (message.model !== undefined) {
+      obj.model = ModelReferenceDTO.toJSON(message.model);
     }
     return obj;
   },
@@ -18439,7 +20349,9 @@ export const SessionUpdateRequest: MessageFns<SessionUpdateRequest> = {
   fromPartial<I extends Exact<DeepPartial<SessionUpdateRequest>, I>>(object: I): SessionUpdateRequest {
     const message = createBaseSessionUpdateRequest();
     message.agent_id = object.agent_id ?? undefined;
-    message.provider_id = object.provider_id ?? undefined;
+    message.model = (object.model !== undefined && object.model !== null)
+      ? ModelReferenceDTO.fromPartial(object.model)
+      : undefined;
     return message;
   },
 };
@@ -19355,7 +21267,7 @@ function createBaseToolTestAttemptDTO(): ToolTestAttemptDTO {
   return {
     attempt_id: "",
     case_id: "",
-    provider_id: "",
+    model_ref: undefined,
     model: "",
     status: "",
     passed: false,
@@ -19375,7 +21287,7 @@ export const ToolTestAttemptDTO: MessageFns<ToolTestAttemptDTO> = {
     return {
       attempt_id: isSet(object.attempt_id) ? globalThis.String(object.attempt_id) : "",
       case_id: isSet(object.case_id) ? globalThis.String(object.case_id) : "",
-      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      model_ref: isSet(object.model_ref) ? ModelReferenceDTO.fromJSON(object.model_ref) : undefined,
       model: isSet(object.model) ? globalThis.String(object.model) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       passed: isSet(object.passed) ? globalThis.Boolean(object.passed) : false,
@@ -19400,8 +21312,8 @@ export const ToolTestAttemptDTO: MessageFns<ToolTestAttemptDTO> = {
     if (message.case_id !== "") {
       obj.case_id = message.case_id;
     }
-    if (message.provider_id !== "") {
-      obj.provider_id = message.provider_id;
+    if (message.model_ref !== undefined) {
+      obj.model_ref = ModelReferenceDTO.toJSON(message.model_ref);
     }
     if (message.model !== "") {
       obj.model = message.model;
@@ -19446,7 +21358,9 @@ export const ToolTestAttemptDTO: MessageFns<ToolTestAttemptDTO> = {
     const message = createBaseToolTestAttemptDTO();
     message.attempt_id = object.attempt_id ?? "";
     message.case_id = object.case_id ?? "";
-    message.provider_id = object.provider_id ?? "";
+    message.model_ref = (object.model_ref !== undefined && object.model_ref !== null)
+      ? ModelReferenceDTO.fromPartial(object.model_ref)
+      : undefined;
     message.model = object.model ?? "";
     message.status = object.status ?? "";
     message.passed = object.passed ?? false;
@@ -19462,9 +21376,9 @@ export const ToolTestAttemptDTO: MessageFns<ToolTestAttemptDTO> = {
   },
 };
 
-function createBaseToolTestProviderResultDTO(): ToolTestProviderResultDTO {
+function createBaseToolTestModelResultDTO(): ToolTestModelResultDTO {
   return {
-    provider_id: "",
+    model_ref: undefined,
     model: "",
     status: "",
     completed: undefined,
@@ -19478,10 +21392,10 @@ function createBaseToolTestProviderResultDTO(): ToolTestProviderResultDTO {
   };
 }
 
-export const ToolTestProviderResultDTO: MessageFns<ToolTestProviderResultDTO> = {
-  fromJSON(object: any): ToolTestProviderResultDTO {
+export const ToolTestModelResultDTO: MessageFns<ToolTestModelResultDTO> = {
+  fromJSON(object: any): ToolTestModelResultDTO {
     return {
-      provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "",
+      model_ref: isSet(object.model_ref) ? ModelReferenceDTO.fromJSON(object.model_ref) : undefined,
       model: isSet(object.model) ? globalThis.String(object.model) : "",
       status: isSet(object.status) ? globalThis.String(object.status) : "",
       completed: isSet(object.completed) ? globalThis.Number(object.completed) : undefined,
@@ -19497,10 +21411,10 @@ export const ToolTestProviderResultDTO: MessageFns<ToolTestProviderResultDTO> = 
     };
   },
 
-  toJSON(message: ToolTestProviderResultDTO): unknown {
+  toJSON(message: ToolTestModelResultDTO): unknown {
     const obj: any = {};
-    if (message.provider_id !== "") {
-      obj.provider_id = message.provider_id;
+    if (message.model_ref !== undefined) {
+      obj.model_ref = ModelReferenceDTO.toJSON(message.model_ref);
     }
     if (message.model !== "") {
       obj.model = message.model;
@@ -19535,12 +21449,14 @@ export const ToolTestProviderResultDTO: MessageFns<ToolTestProviderResultDTO> = 
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<ToolTestProviderResultDTO>, I>>(base?: I): ToolTestProviderResultDTO {
-    return ToolTestProviderResultDTO.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<ToolTestModelResultDTO>, I>>(base?: I): ToolTestModelResultDTO {
+    return ToolTestModelResultDTO.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<ToolTestProviderResultDTO>, I>>(object: I): ToolTestProviderResultDTO {
-    const message = createBaseToolTestProviderResultDTO();
-    message.provider_id = object.provider_id ?? "";
+  fromPartial<I extends Exact<DeepPartial<ToolTestModelResultDTO>, I>>(object: I): ToolTestModelResultDTO {
+    const message = createBaseToolTestModelResultDTO();
+    message.model_ref = (object.model_ref !== undefined && object.model_ref !== null)
+      ? ModelReferenceDTO.fromPartial(object.model_ref)
+      : undefined;
     message.model = object.model ?? "";
     message.status = object.status ?? "";
     message.completed = object.completed ?? undefined;
@@ -19564,7 +21480,7 @@ function createBaseToolTestRunDTO(): ToolTestRunDTO {
     created_at: undefined,
     updated_at: undefined,
     repetitions: 0,
-    providers: [],
+    models: [],
     attempts: [],
     error: undefined,
   };
@@ -19580,8 +21496,8 @@ export const ToolTestRunDTO: MessageFns<ToolTestRunDTO> = {
       created_at: isSet(object.created_at) ? globalThis.String(object.created_at) : undefined,
       updated_at: isSet(object.updated_at) ? globalThis.String(object.updated_at) : undefined,
       repetitions: isSet(object.repetitions) ? globalThis.Number(object.repetitions) : 0,
-      providers: globalThis.Array.isArray(object?.providers)
-        ? object.providers.map((e: any) => ToolTestProviderResultDTO.fromJSON(e))
+      models: globalThis.Array.isArray(object?.models)
+        ? object.models.map((e: any) => ToolTestModelResultDTO.fromJSON(e))
         : [],
       attempts: globalThis.Array.isArray(object?.attempts)
         ? object.attempts.map((e: any) => ToolTestAttemptDTO.fromJSON(e))
@@ -19613,8 +21529,8 @@ export const ToolTestRunDTO: MessageFns<ToolTestRunDTO> = {
     if (message.repetitions !== 0) {
       obj.repetitions = Math.round(message.repetitions);
     }
-    if (message.providers?.length) {
-      obj.providers = message.providers.map((e) => ToolTestProviderResultDTO.toJSON(e));
+    if (message.models?.length) {
+      obj.models = message.models.map((e) => ToolTestModelResultDTO.toJSON(e));
     }
     if (message.attempts?.length) {
       obj.attempts = message.attempts.map((e) => ToolTestAttemptDTO.toJSON(e));
@@ -19637,7 +21553,7 @@ export const ToolTestRunDTO: MessageFns<ToolTestRunDTO> = {
     message.created_at = object.created_at ?? undefined;
     message.updated_at = object.updated_at ?? undefined;
     message.repetitions = object.repetitions ?? 0;
-    message.providers = object.providers?.map((e) => ToolTestProviderResultDTO.fromPartial(e)) || [];
+    message.models = object.models?.map((e) => ToolTestModelResultDTO.fromPartial(e)) || [];
     message.attempts = object.attempts?.map((e) => ToolTestAttemptDTO.fromPartial(e)) || [];
     message.error = object.error ?? undefined;
     return message;
@@ -19674,17 +21590,17 @@ export const ToolTestRunListDTO: MessageFns<ToolTestRunListDTO> = {
 };
 
 function createBaseToolTestStartRequest(): ToolTestStartRequest {
-  return { agent_id: undefined, provider_ids: [], repetitions: undefined };
+  return { agent_id: undefined, repetitions: undefined, model_refs: [] };
 }
 
 export const ToolTestStartRequest: MessageFns<ToolTestStartRequest> = {
   fromJSON(object: any): ToolTestStartRequest {
     return {
       agent_id: isSet(object.agent_id) ? globalThis.String(object.agent_id) : undefined,
-      provider_ids: globalThis.Array.isArray(object?.provider_ids)
-        ? object.provider_ids.map((e: any) => globalThis.String(e))
-        : [],
       repetitions: isSet(object.repetitions) ? globalThis.Number(object.repetitions) : undefined,
+      model_refs: globalThis.Array.isArray(object?.model_refs)
+        ? object.model_refs.map((e: any) => ModelReferenceDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -19693,11 +21609,11 @@ export const ToolTestStartRequest: MessageFns<ToolTestStartRequest> = {
     if (message.agent_id !== undefined) {
       obj.agent_id = message.agent_id;
     }
-    if (message.provider_ids?.length) {
-      obj.provider_ids = message.provider_ids;
-    }
     if (message.repetitions !== undefined) {
       obj.repetitions = Math.round(message.repetitions);
+    }
+    if (message.model_refs?.length) {
+      obj.model_refs = message.model_refs.map((e) => ModelReferenceDTO.toJSON(e));
     }
     return obj;
   },
@@ -19708,8 +21624,8 @@ export const ToolTestStartRequest: MessageFns<ToolTestStartRequest> = {
   fromPartial<I extends Exact<DeepPartial<ToolTestStartRequest>, I>>(object: I): ToolTestStartRequest {
     const message = createBaseToolTestStartRequest();
     message.agent_id = object.agent_id ?? undefined;
-    message.provider_ids = object.provider_ids?.map((e) => e) || [];
     message.repetitions = object.repetitions ?? undefined;
+    message.model_refs = object.model_refs?.map((e) => ModelReferenceDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -21626,6 +23542,10 @@ function createBaseTurnResponsePartDTO(): TurnResponsePartDTO {
     outcome_unknown: undefined,
     completion_reason: undefined,
     partial: undefined,
+    context_kind: undefined,
+    context_source_id: undefined,
+    context_model_call_id: undefined,
+    context_before_item_id: undefined,
   };
 }
 
@@ -21648,6 +23568,14 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
       outcome_unknown: isSet(object.outcome_unknown) ? globalThis.Boolean(object.outcome_unknown) : undefined,
       completion_reason: isSet(object.completion_reason) ? globalThis.String(object.completion_reason) : undefined,
       partial: isSet(object.partial) ? globalThis.Boolean(object.partial) : undefined,
+      context_kind: isSet(object.context_kind) ? globalThis.String(object.context_kind) : undefined,
+      context_source_id: isSet(object.context_source_id) ? globalThis.String(object.context_source_id) : undefined,
+      context_model_call_id: isSet(object.context_model_call_id)
+        ? globalThis.String(object.context_model_call_id)
+        : undefined,
+      context_before_item_id: isSet(object.context_before_item_id)
+        ? globalThis.String(object.context_before_item_id)
+        : undefined,
     };
   },
 
@@ -21701,6 +23629,18 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
     if (message.partial !== undefined) {
       obj.partial = message.partial;
     }
+    if (message.context_kind !== undefined) {
+      obj.context_kind = message.context_kind;
+    }
+    if (message.context_source_id !== undefined) {
+      obj.context_source_id = message.context_source_id;
+    }
+    if (message.context_model_call_id !== undefined) {
+      obj.context_model_call_id = message.context_model_call_id;
+    }
+    if (message.context_before_item_id !== undefined) {
+      obj.context_before_item_id = message.context_before_item_id;
+    }
     return obj;
   },
 
@@ -21727,6 +23667,10 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
     message.outcome_unknown = object.outcome_unknown ?? undefined;
     message.completion_reason = object.completion_reason ?? undefined;
     message.partial = object.partial ?? undefined;
+    message.context_kind = object.context_kind ?? undefined;
+    message.context_source_id = object.context_source_id ?? undefined;
+    message.context_model_call_id = object.context_model_call_id ?? undefined;
+    message.context_before_item_id = object.context_before_item_id ?? undefined;
     return message;
   },
 };
@@ -21745,6 +23689,7 @@ function createBaseTurnResponseSourceDTO(): TurnResponseSourceDTO {
     created_at: undefined,
     elapsed_ms: undefined,
     logical_item_ordinal: undefined,
+    model_call_id: undefined,
   };
 }
 
@@ -21771,6 +23716,7 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
       logical_item_ordinal: isSet(object.logical_item_ordinal)
         ? globalThis.Number(object.logical_item_ordinal)
         : undefined,
+      model_call_id: isSet(object.model_call_id) ? globalThis.String(object.model_call_id) : undefined,
     };
   },
 
@@ -21812,6 +23758,9 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     if (message.logical_item_ordinal !== undefined) {
       obj.logical_item_ordinal = Math.round(message.logical_item_ordinal);
     }
+    if (message.model_call_id !== undefined) {
+      obj.model_call_id = message.model_call_id;
+    }
     return obj;
   },
 
@@ -21832,6 +23781,7 @@ export const TurnResponseSourceDTO: MessageFns<TurnResponseSourceDTO> = {
     message.created_at = object.created_at ?? undefined;
     message.elapsed_ms = object.elapsed_ms ?? undefined;
     message.logical_item_ordinal = object.logical_item_ordinal ?? undefined;
+    message.model_call_id = object.model_call_id ?? undefined;
     return message;
   },
 };
@@ -22447,33 +24397,35 @@ export const WorkspaceDefaultAgentUpdateRequest: MessageFns<WorkspaceDefaultAgen
   },
 };
 
-function createBaseWorkspaceDefaultProviderUpdateRequest(): WorkspaceDefaultProviderUpdateRequest {
-  return { provider_id: "" };
+function createBaseWorkspaceDefaultModelUpdateRequest(): WorkspaceDefaultModelUpdateRequest {
+  return { model: undefined };
 }
 
-export const WorkspaceDefaultProviderUpdateRequest: MessageFns<WorkspaceDefaultProviderUpdateRequest> = {
-  fromJSON(object: any): WorkspaceDefaultProviderUpdateRequest {
-    return { provider_id: isSet(object.provider_id) ? globalThis.String(object.provider_id) : "" };
+export const WorkspaceDefaultModelUpdateRequest: MessageFns<WorkspaceDefaultModelUpdateRequest> = {
+  fromJSON(object: any): WorkspaceDefaultModelUpdateRequest {
+    return { model: isSet(object.model) ? ModelReferenceDTO.fromJSON(object.model) : undefined };
   },
 
-  toJSON(message: WorkspaceDefaultProviderUpdateRequest): unknown {
+  toJSON(message: WorkspaceDefaultModelUpdateRequest): unknown {
     const obj: any = {};
-    if (message.provider_id !== "") {
-      obj.provider_id = message.provider_id;
+    if (message.model !== undefined) {
+      obj.model = ModelReferenceDTO.toJSON(message.model);
     }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<WorkspaceDefaultProviderUpdateRequest>, I>>(
+  create<I extends Exact<DeepPartial<WorkspaceDefaultModelUpdateRequest>, I>>(
     base?: I,
-  ): WorkspaceDefaultProviderUpdateRequest {
-    return WorkspaceDefaultProviderUpdateRequest.fromPartial(base ?? ({} as any));
+  ): WorkspaceDefaultModelUpdateRequest {
+    return WorkspaceDefaultModelUpdateRequest.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<WorkspaceDefaultProviderUpdateRequest>, I>>(
+  fromPartial<I extends Exact<DeepPartial<WorkspaceDefaultModelUpdateRequest>, I>>(
     object: I,
-  ): WorkspaceDefaultProviderUpdateRequest {
-    const message = createBaseWorkspaceDefaultProviderUpdateRequest();
-    message.provider_id = object.provider_id ?? "";
+  ): WorkspaceDefaultModelUpdateRequest {
+    const message = createBaseWorkspaceDefaultModelUpdateRequest();
+    message.model = (object.model !== undefined && object.model !== null)
+      ? ModelReferenceDTO.fromPartial(object.model)
+      : undefined;
     return message;
   },
 };
@@ -24737,6 +26689,7 @@ function createBasePersistentTaskConfigurationDTO(): PersistentTaskConfiguration
     context: undefined,
     action: undefined,
     policies: undefined,
+    token_budget: undefined,
   };
 }
 
@@ -24749,6 +26702,7 @@ export const PersistentTaskConfigurationDTO: MessageFns<PersistentTaskConfigurat
       context: isSet(object.context) ? TaskContextDTO.fromJSON(object.context) : undefined,
       action: isSet(object.action) ? TaskActionDTO.fromJSON(object.action) : undefined,
       policies: isSet(object.policies) ? TaskPoliciesDTO.fromJSON(object.policies) : undefined,
+      token_budget: isSet(object.token_budget) ? globalThis.Number(object.token_budget) : undefined,
     };
   },
 
@@ -24771,6 +26725,9 @@ export const PersistentTaskConfigurationDTO: MessageFns<PersistentTaskConfigurat
     }
     if (message.policies !== undefined) {
       obj.policies = TaskPoliciesDTO.toJSON(message.policies);
+    }
+    if (message.token_budget !== undefined) {
+      obj.token_budget = Math.round(message.token_budget);
     }
     return obj;
   },
@@ -24798,6 +26755,7 @@ export const PersistentTaskConfigurationDTO: MessageFns<PersistentTaskConfigurat
     message.policies = (object.policies !== undefined && object.policies !== null)
       ? TaskPoliciesDTO.fromPartial(object.policies)
       : undefined;
+    message.token_budget = object.token_budget ?? undefined;
     return message;
   },
 };
@@ -24819,6 +26777,9 @@ function createBasePersistentTaskDTO(): PersistentTaskDTO {
     application_type: "",
     application_version: "",
     goal: undefined,
+    tokens_used: 0,
+    time_used_seconds: 0,
+    sync_version: 0,
   };
 }
 
@@ -24842,6 +26803,9 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
       application_type: isSet(object.application_type) ? globalThis.String(object.application_type) : "",
       application_version: isSet(object.application_version) ? globalThis.String(object.application_version) : "",
       goal: isSet(object.goal) ? SessionGoalDTO.fromJSON(object.goal) : undefined,
+      tokens_used: isSet(object.tokens_used) ? globalThis.Number(object.tokens_used) : 0,
+      time_used_seconds: isSet(object.time_used_seconds) ? globalThis.Number(object.time_used_seconds) : 0,
+      sync_version: isSet(object.sync_version) ? globalThis.Number(object.sync_version) : 0,
     };
   },
 
@@ -24892,6 +26856,15 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
     if (message.goal !== undefined) {
       obj.goal = SessionGoalDTO.toJSON(message.goal);
     }
+    if (message.tokens_used !== 0) {
+      obj.tokens_used = Math.round(message.tokens_used);
+    }
+    if (message.time_used_seconds !== 0) {
+      obj.time_used_seconds = Math.round(message.time_used_seconds);
+    }
+    if (message.sync_version !== 0) {
+      obj.sync_version = Math.round(message.sync_version);
+    }
     return obj;
   },
 
@@ -24919,6 +26892,9 @@ export const PersistentTaskDTO: MessageFns<PersistentTaskDTO> = {
     message.goal = (object.goal !== undefined && object.goal !== null)
       ? SessionGoalDTO.fromPartial(object.goal)
       : undefined;
+    message.tokens_used = object.tokens_used ?? 0;
+    message.time_used_seconds = object.time_used_seconds ?? 0;
+    message.sync_version = object.sync_version ?? 0;
     return message;
   },
 };
@@ -25610,7 +27586,7 @@ export const TaskRuntimeStatusDTO: MessageFns<TaskRuntimeStatusDTO> = {
 };
 
 function createBasePersistentTaskListDTO(): PersistentTaskListDTO {
-  return { items: [], runtime: undefined, active_runs: [] };
+  return { items: [], runtime: undefined, active_runs: [], session_goal: undefined, history_invalidated: undefined };
 }
 
 export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
@@ -25621,6 +27597,10 @@ export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
       active_runs: globalThis.Array.isArray(object?.active_runs)
         ? object.active_runs.map((e: any) => PersistentTaskRunSummaryDTO.fromJSON(e))
         : [],
+      session_goal: isSet(object.session_goal) ? SessionGoalSnapshotDTO.fromJSON(object.session_goal) : undefined,
+      history_invalidated: isSet(object.history_invalidated)
+        ? globalThis.Boolean(object.history_invalidated)
+        : undefined,
     };
   },
 
@@ -25635,6 +27615,12 @@ export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
     if (message.active_runs?.length) {
       obj.active_runs = message.active_runs.map((e) => PersistentTaskRunSummaryDTO.toJSON(e));
     }
+    if (message.session_goal !== undefined) {
+      obj.session_goal = SessionGoalSnapshotDTO.toJSON(message.session_goal);
+    }
+    if (message.history_invalidated !== undefined) {
+      obj.history_invalidated = message.history_invalidated;
+    }
     return obj;
   },
 
@@ -25648,6 +27634,10 @@ export const PersistentTaskListDTO: MessageFns<PersistentTaskListDTO> = {
       ? TaskRuntimeStatusDTO.fromPartial(object.runtime)
       : undefined;
     message.active_runs = object.active_runs?.map((e) => PersistentTaskRunSummaryDTO.fromPartial(e)) || [];
+    message.session_goal = (object.session_goal !== undefined && object.session_goal !== null)
+      ? SessionGoalSnapshotDTO.fromPartial(object.session_goal)
+      : undefined;
+    message.history_invalidated = object.history_invalidated ?? undefined;
     return message;
   },
 };
@@ -27002,6 +28992,230 @@ export const LLMRequestLogSummaryDTO: MessageFns<LLMRequestLogSummaryDTO> = {
     message.file_name = object.file_name ?? "";
     message.recorded_at = object.recorded_at ?? 0;
     message.size_bytes = object.size_bytes ?? 0;
+    return message;
+  },
+};
+
+function createBaseThreadItemInspectionRequest(): ThreadItemInspectionRequest {
+  return { item_id: undefined, message_id: undefined, operation: "" };
+}
+
+export const ThreadItemInspectionRequest: MessageFns<ThreadItemInspectionRequest> = {
+  fromJSON(object: any): ThreadItemInspectionRequest {
+    return {
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : undefined,
+      message_id: isSet(object.message_id) ? globalThis.String(object.message_id) : undefined,
+      operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
+    };
+  },
+
+  toJSON(message: ThreadItemInspectionRequest): unknown {
+    const obj: any = {};
+    if (message.item_id !== undefined) {
+      obj.item_id = message.item_id;
+    }
+    if (message.message_id !== undefined) {
+      obj.message_id = message.message_id;
+    }
+    if (message.operation !== "") {
+      obj.operation = message.operation;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ThreadItemInspectionRequest>, I>>(base?: I): ThreadItemInspectionRequest {
+    return ThreadItemInspectionRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThreadItemInspectionRequest>, I>>(object: I): ThreadItemInspectionRequest {
+    const message = createBaseThreadItemInspectionRequest();
+    message.item_id = object.item_id ?? undefined;
+    message.message_id = object.message_id ?? undefined;
+    message.operation = object.operation ?? "";
+    return message;
+  },
+};
+
+function createBaseThreadItemLocationDTO(): ThreadItemLocationDTO {
+  return {
+    item_id: "",
+    turn_id: undefined,
+    execution_id: undefined,
+    job_id: undefined,
+    model_call_id: undefined,
+    message_id: undefined,
+    semantic_kind: "",
+    content_hash: "",
+    byte_length: 0,
+  };
+}
+
+export const ThreadItemLocationDTO: MessageFns<ThreadItemLocationDTO> = {
+  fromJSON(object: any): ThreadItemLocationDTO {
+    return {
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : "",
+      turn_id: isSet(object.turn_id) ? globalThis.String(object.turn_id) : undefined,
+      execution_id: isSet(object.execution_id) ? globalThis.String(object.execution_id) : undefined,
+      job_id: isSet(object.job_id) ? globalThis.String(object.job_id) : undefined,
+      model_call_id: isSet(object.model_call_id) ? globalThis.String(object.model_call_id) : undefined,
+      message_id: isSet(object.message_id) ? globalThis.String(object.message_id) : undefined,
+      semantic_kind: isSet(object.semantic_kind) ? globalThis.String(object.semantic_kind) : "",
+      content_hash: isSet(object.content_hash) ? globalThis.String(object.content_hash) : "",
+      byte_length: isSet(object.byte_length) ? globalThis.Number(object.byte_length) : 0,
+    };
+  },
+
+  toJSON(message: ThreadItemLocationDTO): unknown {
+    const obj: any = {};
+    if (message.item_id !== "") {
+      obj.item_id = message.item_id;
+    }
+    if (message.turn_id !== undefined) {
+      obj.turn_id = message.turn_id;
+    }
+    if (message.execution_id !== undefined) {
+      obj.execution_id = message.execution_id;
+    }
+    if (message.job_id !== undefined) {
+      obj.job_id = message.job_id;
+    }
+    if (message.model_call_id !== undefined) {
+      obj.model_call_id = message.model_call_id;
+    }
+    if (message.message_id !== undefined) {
+      obj.message_id = message.message_id;
+    }
+    if (message.semantic_kind !== "") {
+      obj.semantic_kind = message.semantic_kind;
+    }
+    if (message.content_hash !== "") {
+      obj.content_hash = message.content_hash;
+    }
+    if (message.byte_length !== 0) {
+      obj.byte_length = Math.round(message.byte_length);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ThreadItemLocationDTO>, I>>(base?: I): ThreadItemLocationDTO {
+    return ThreadItemLocationDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThreadItemLocationDTO>, I>>(object: I): ThreadItemLocationDTO {
+    const message = createBaseThreadItemLocationDTO();
+    message.item_id = object.item_id ?? "";
+    message.turn_id = object.turn_id ?? undefined;
+    message.execution_id = object.execution_id ?? undefined;
+    message.job_id = object.job_id ?? undefined;
+    message.model_call_id = object.model_call_id ?? undefined;
+    message.message_id = object.message_id ?? undefined;
+    message.semantic_kind = object.semantic_kind ?? "";
+    message.content_hash = object.content_hash ?? "";
+    message.byte_length = object.byte_length ?? 0;
+    return message;
+  },
+};
+
+function createBaseThreadItemContentDTO(): ThreadItemContentDTO {
+  return { name: "", language: "", content: undefined, uri: undefined, mime_type: undefined, encoding: undefined };
+}
+
+export const ThreadItemContentDTO: MessageFns<ThreadItemContentDTO> = {
+  fromJSON(object: any): ThreadItemContentDTO {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      language: isSet(object.language) ? globalThis.String(object.language) : "",
+      content: isSet(object.content) ? globalThis.String(object.content) : undefined,
+      uri: isSet(object.uri) ? globalThis.String(object.uri) : undefined,
+      mime_type: isSet(object.mime_type) ? globalThis.String(object.mime_type) : undefined,
+      encoding: isSet(object.encoding) ? globalThis.String(object.encoding) : undefined,
+    };
+  },
+
+  toJSON(message: ThreadItemContentDTO): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.language !== "") {
+      obj.language = message.language;
+    }
+    if (message.content !== undefined) {
+      obj.content = message.content;
+    }
+    if (message.uri !== undefined) {
+      obj.uri = message.uri;
+    }
+    if (message.mime_type !== undefined) {
+      obj.mime_type = message.mime_type;
+    }
+    if (message.encoding !== undefined) {
+      obj.encoding = message.encoding;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ThreadItemContentDTO>, I>>(base?: I): ThreadItemContentDTO {
+    return ThreadItemContentDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThreadItemContentDTO>, I>>(object: I): ThreadItemContentDTO {
+    const message = createBaseThreadItemContentDTO();
+    message.name = object.name ?? "";
+    message.language = object.language ?? "";
+    message.content = object.content ?? undefined;
+    message.uri = object.uri ?? undefined;
+    message.mime_type = object.mime_type ?? undefined;
+    message.encoding = object.encoding ?? undefined;
+    return message;
+  },
+};
+
+function createBaseThreadItemInspectionDTO(): ThreadItemInspectionDTO {
+  return { location: undefined, contents: [], request_log: undefined, trace: undefined };
+}
+
+export const ThreadItemInspectionDTO: MessageFns<ThreadItemInspectionDTO> = {
+  fromJSON(object: any): ThreadItemInspectionDTO {
+    return {
+      location: isSet(object.location) ? ThreadItemLocationDTO.fromJSON(object.location) : undefined,
+      contents: globalThis.Array.isArray(object?.contents)
+        ? object.contents.map((e: any) => ThreadItemContentDTO.fromJSON(e))
+        : [],
+      request_log: isSet(object.request_log) ? LLMRequestLogMatchDTO.fromJSON(object.request_log) : undefined,
+      trace: isSet(object.trace) ? TraceMatchDTO.fromJSON(object.trace) : undefined,
+    };
+  },
+
+  toJSON(message: ThreadItemInspectionDTO): unknown {
+    const obj: any = {};
+    if (message.location !== undefined) {
+      obj.location = ThreadItemLocationDTO.toJSON(message.location);
+    }
+    if (message.contents?.length) {
+      obj.contents = message.contents.map((e) => ThreadItemContentDTO.toJSON(e));
+    }
+    if (message.request_log !== undefined) {
+      obj.request_log = LLMRequestLogMatchDTO.toJSON(message.request_log);
+    }
+    if (message.trace !== undefined) {
+      obj.trace = TraceMatchDTO.toJSON(message.trace);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ThreadItemInspectionDTO>, I>>(base?: I): ThreadItemInspectionDTO {
+    return ThreadItemInspectionDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ThreadItemInspectionDTO>, I>>(object: I): ThreadItemInspectionDTO {
+    const message = createBaseThreadItemInspectionDTO();
+    message.location = (object.location !== undefined && object.location !== null)
+      ? ThreadItemLocationDTO.fromPartial(object.location)
+      : undefined;
+    message.contents = object.contents?.map((e) => ThreadItemContentDTO.fromPartial(e)) || [];
+    message.request_log = (object.request_log !== undefined && object.request_log !== null)
+      ? LLMRequestLogMatchDTO.fromPartial(object.request_log)
+      : undefined;
+    message.trace = (object.trace !== undefined && object.trace !== null)
+      ? TraceMatchDTO.fromPartial(object.trace)
+      : undefined;
     return message;
   },
 };

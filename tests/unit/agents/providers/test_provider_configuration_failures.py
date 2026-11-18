@@ -38,21 +38,22 @@ def model_failure(request: pytest.FixtureRequest, tmp_path: Path) -> tuple[Excep
 
 @pytest.fixture
 def provider_config() -> dict[str, object]:
-    return {"id": "configuration-failure", "model": "test-model", "custom_llm_provider": "openai",
+    return {"provider_id": "configuration-failure", "model_id": "test", "model": "test-model", "custom_llm_provider": "openai",
             "api_mode": {"protocol": "chat_completions", "model_info": {"supports_function_calling": True}}}
 
 
 @pytest.fixture
 def runtime_config(provider_config: dict[str, object]) -> ConfigService:
     return cast(ConfigService, SimpleNamespace(get_agent_runtime_config=lambda *_args, **_kwargs: {
-        "providers": [provider_config], "system_prompt": "test", "runtime_identity_description": "",
+        "models": [provider_config], "system_prompt": "test", "runtime_identity_description": "",
     }))
 
 
 @pytest.mark.parametrize("changed,reason", [
     ({"custom_llm_provider": ""}, "custom_llm_provider"),
     ({"custom_llm_provider": "chatgpt"}, "auth.type='oauth'"),
-    ({"api_mode": {"protocol": "anthropic_messages", "model_info": {"supports_reasoning": True}}}, "custom_llm_provider='anthropic'"),
+    ({"api_mode": {"protocol": "anthropic_messages", "model_info": {"supports_reasoning": True},
+                   "supports_reasoning": {"thinking_blocks": {"thinking": True}}}}, "custom_llm_provider='anthropic'"),
     ({"request_options": {"unknown_option": True}}, "不支持的字段"),
 ])
 def test_local_configuration_rejection_is_shared_by_list_and_execution(provider_config, changed, reason):
@@ -91,7 +92,7 @@ def test_provider_native_failure_does_not_become_a_public_runtime_error(
     if broken_log:
         failures.logger.addHandler(handler)
     try:
-        monkeypatch.setattr(provider_model, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
+        monkeypatch.setattr(provider_model, "validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
         if entry == "availability":
             message = provider_model.provider_configuration_error(provider_config)
             assert message is not None
@@ -102,7 +103,11 @@ def test_provider_native_failure_does_not_become_a_public_runtime_error(
             message = str(caught.value)
             assert "provider_id=configuration-failure" in message
         assert type(error).__name__ in message
-        assert location not in message
+        if isinstance(error, OSError) and error.filename is not None:
+            # 目标机器的结构化 I/O 位置可供排障；不把任意异常原文直接发布。
+            assert location in message and error.strerror in message
+        else:
+            assert location not in message
         assert error.args == original_args
         if broken_log:
             assert diagnostics == [error]
@@ -126,7 +131,7 @@ def test_provider_business_rejection_keeps_its_existing_message(
     def fail(*_args: object, **_kwargs: object) -> None:
         raise error
 
-    monkeypatch.setattr(provider_model, "_validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
+    monkeypatch.setattr(provider_model, "validate_provider_configuration" if entry == "availability" else "build_model_from_provider", fail)
     if entry == "availability":
         assert provider_model.provider_configuration_error(provider_config) == str(error)
     else:

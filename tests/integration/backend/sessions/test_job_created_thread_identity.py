@@ -179,7 +179,7 @@ async def test_real_job_created_preserves_main_and_child_thread_in_durable_trace
         )
         case.input_owner.accept_user_message(message, execution_identity=identity, queue_input=ExecutionQueueInput(
             execution_binding=identity, message_id=message.message_id, agent_id="default",
-            provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+            model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
             created_at=message.created_at.isoformat(),
         ))
         dispatch = await case.jobs.start_job(

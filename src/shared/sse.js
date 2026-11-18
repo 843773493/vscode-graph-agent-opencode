@@ -115,6 +115,8 @@ function yieldBetweenEvents() {
   });
 }
 
+const EVENT_BATCH_TIME_MS = 8;
+
 export async function consumeSseResponse(response, options) {
   assertEventStreamResponse(response);
   const reader = response.body.getReader();
@@ -124,6 +126,7 @@ export async function consumeSseResponse(response, options) {
   let pendingCarriageReturn = false;
   let reachedEnd = false;
   let readFailed = false;
+  let yieldDeadline = performance.now() + EVENT_BATCH_TIME_MS;
   const readError = (cause) => {
     readFailed = true;
     return options.readError?.(cause) ?? cause;
@@ -148,7 +151,10 @@ export async function consumeSseResponse(response, options) {
 
   try {
     while (true) {
+      const readStarted = performance.now();
       const { done, value } = await readStreamChunk(reader, options, readError);
+      // 网络等待不消耗处理时间片；已缓冲的多个网络 chunk 共用同一预算。
+      yieldDeadline += performance.now() - readStarted;
       if (value && value.byteLength > 0) {
         options.onActivity?.();
       }
@@ -175,16 +181,23 @@ export async function consumeSseResponse(response, options) {
 
       let frameStart = 0;
       let boundaryIndex = chunk.indexOf('\n\n');
-      while (boundaryIndex !== -1) {
+      while (boundaryIndex !== -1 && !options.signal?.aborted) {
         frameParts.push(chunk.slice(frameStart, boundaryIndex));
         dispatchBlock(frameParts.join(''));
         frameParts.length = 0;
         frameStart = boundaryIndex + 2;
         boundaryIndex = chunk.indexOf('\n\n', frameStart);
-        if (boundaryIndex !== -1 && options.yieldBetweenEvents) {
-          await yieldBetweenEvents();
+        if (options.yieldBetweenEvents) {
+          // 逐帧保留微任务交接，长批次才让出主线程，避免每帧触发浏览器 4ms 定时器限制。
+          if (performance.now() >= yieldDeadline) {
+            await yieldBetweenEvents();
+            yieldDeadline = performance.now() + EVENT_BATCH_TIME_MS;
+          } else if (boundaryIndex !== -1) {
+            await Promise.resolve();
+          }
         }
       }
+      if (options.signal?.aborted) return;
       pendingLineFeed = frameStart < chunk.length && chunk.endsWith('\n');
       const remainder = chunk.slice(frameStart, pendingLineFeed ? -1 : undefined);
       if (remainder) {

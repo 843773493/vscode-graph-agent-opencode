@@ -619,26 +619,6 @@ body > #root {
   font-size: 11px;
   line-height: 1.35;
 }
-.composer-goal-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 4px 4px 0;
-  color: var(--bt-text-secondary);
-  font-size: 11px;
-  line-height: 1.35;
-}
-.composer-goal-status-label {
-  flex: 0 0 auto;
-  color: var(--bt-status-success);
-}
-.composer-goal-status-objective {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .composer-slash-menu {
   width: min(520px, calc(100vw - 40px), var(--anchored-overlay-available-width, 520px));
   max-height: min(320px, 48vh, var(--anchored-overlay-available-height, 320px));
@@ -742,7 +722,7 @@ body > #root {
 }
 .composer-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -766,7 +746,7 @@ body > #root {
 }
 .composer-actions-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
@@ -818,8 +798,7 @@ body > #root {
   ) !important;
 }
 .composer-view-menu,
-.composer-agent-menu,
-.composer-model-menu {
+.composer-agent-menu {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -835,12 +814,8 @@ body > #root {
 .composer-agent-menu {
   width: min(260px, var(--anchored-overlay-available-width, 260px));
 }
-.composer-model-menu {
-  width: min(280px, var(--anchored-overlay-available-width, 280px));
-}
 .composer-view-menu-item,
-.composer-agent-menu-item,
-.composer-model-menu-item {
+.composer-agent-menu-item {
   width: 100%;
   height: auto !important;
   min-height: 46px;
@@ -854,8 +829,7 @@ body > #root {
   background: transparent !important;
   text-align: left;
 }
-.composer-agent-menu-item,
-.composer-model-menu-item {
+.composer-agent-menu-item {
   position: relative;
   padding: 0 !important;
   display: flex;
@@ -892,9 +866,7 @@ body > #root {
   transition: opacity 120ms ease;
 }
 .composer-agent-menu-item:hover .composer-workspace-default-button,
-.composer-agent-menu-item:focus-within .composer-workspace-default-button,
-.composer-model-menu-item:hover .composer-workspace-default-button,
-.composer-model-menu-item:focus-within .composer-workspace-default-button {
+.composer-agent-menu-item:focus-within .composer-workspace-default-button {
   opacity: 1;
   pointer-events: auto;
 }
@@ -904,40 +876,20 @@ body > #root {
 .composer-view-menu-item:hover,
 .composer-view-menu-item.active,
 .composer-agent-menu-item:hover,
-.composer-agent-menu-item.active,
-.composer-model-menu-item:hover,
-.composer-model-menu-item.active {
+.composer-agent-menu-item.active {
   background: var(--bt-hover-background) !important;
 }
 .composer-view-menu-label,
-.composer-agent-menu-label,
-.composer-model-menu-label {
+.composer-agent-menu-label {
   font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
 }
 .composer-view-menu-description,
-.composer-agent-menu-description,
-.composer-model-menu-description {
+.composer-agent-menu-description {
   color: var(--bt-text-muted);
   font-size: 11px;
   line-height: 1.35;
-}
-.composer-model-menu-item.configuration-error {
-  color: var(--bt-status-danger) !important;
-  background: color-mix(in srgb, var(--bt-status-danger) 10%, transparent) !important;
-}
-.composer-model-menu-item.configuration-error .composer-menu-item-main:disabled {
-  cursor: not-allowed;
-  opacity: 1;
-}
-.composer-model-menu-error {
-  display: flex;
-  gap: 4px;
-  color: var(--bt-status-danger);
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
 }
 .composer-model-pill.configuration-error {
   border-color: var(--bt-status-danger) !important;
@@ -1519,8 +1471,6 @@ body {
 .composer {
   flex: 0 0 auto;
   align-self: center;
-  width: min(800px, calc(100% - 32px));
-  max-width: 800px;
   padding: 0;
   border-top: 0;
   background: transparent;
@@ -1533,7 +1483,6 @@ body {
 .composer-surface.new-chat-input-container {
   display: block;
   width: 100%;
-  max-width: 800px;
   min-height: 86px;
   margin-top: 0;
   padding: 0;
@@ -1672,20 +1621,16 @@ body {
   height: 26px !important;
   background: var(--bt-status-danger) !important;
 }
-
 .composer-view-menu,
 .composer-agent-menu,
-.composer-model-menu,
 .composer-slash-menu,
 .agent-sessions-session-menu {
   border-radius: var(--bt-radius-large);
   background: var(--bt-panel-background);
   box-shadow: 0 8px 24px color-mix(in srgb, var(--bt-text-primary) 18%, transparent);
 }
-
 .composer-view-menu,
-.composer-agent-menu,
-.composer-model-menu {
+.composer-agent-menu {
   pointer-events: auto;
 }
 

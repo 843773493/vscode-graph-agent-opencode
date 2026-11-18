@@ -91,7 +91,7 @@ class EmptyExecutionQueueService:
             execution_binding=binding,
             message_id=payload.message_id,
             agent_id=payload.agent_id,
-            provider_id=None,
+            model=None,
             delivery_policy="after_turn",
             gateway_id=None,
             request_id=None,

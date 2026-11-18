@@ -23,7 +23,7 @@ from app.gateway.control.gateway_state import GatewayStateStore
 from app.gateway.registry import GatewayWorkspaceRegistry
 from app.gateway.routes.health_config import gateway_config_sources
 from app.gateway.runtime.controller import GatewayWorkspaceRuntimeController
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import PortForwardManager
 from app.gateway.runtime_proof import (
     _apply_gateway_runtime_config,
     _gateway_pending_consumer_health_digests,
@@ -222,7 +222,7 @@ def test_gateway_pending_proof_collects_all_runtime_consumer_digests(
         project_root=tmp_path,
         log_dir=tmp_path / "logs",
     )
-    port_forward_manager = SshPortForwardManager(
+    port_forward_manager = PortForwardManager(
         registry=registry,
         storage_path=tmp_path / "port-forwards.json",
         log_dir=tmp_path / "logs",

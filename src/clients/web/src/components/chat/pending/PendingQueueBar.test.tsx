@@ -39,6 +39,33 @@ function queuedConversation(
 }
 
 describe("PendingQueueBar", () => {
+  test("键盘乐观重排保留系统槽位，权威版本更新后以服务端为准", async () => {
+    let renderer!: ReactTestRenderer;
+    let finish!: () => void;
+    const calls: unknown[] = [];
+    const user = (id: string, position: number) => ({ ...queuedConversation(id, position + 1, id),
+      pendingPosition: position, queueReorderable: true, queueThreadRevision: 8 });
+    const conversations = [user("a", 0), { ...user("system", 1), queueReorderable: false }, user("b", 2)];
+    const props = { onClear: async () => {}, onRemove: async () => {}, onChangePolicy: async () => {},
+      onReorder: async (ids: string[], revision: number) => { calls.push([ids, revision]); await new Promise<void>(resolve => { finish = resolve; }); } };
+    act(() => { renderer = create(<PendingQueueBar {...props} conversations={conversations} />); });
+    const order = () => renderer.root.findAllByProps({ role: "listitem" }).map(node => node.props["data-message-id"]);
+    expect(order()).toEqual(["a", "system", "b"]);
+    act(() => {
+      renderer.root.findAllByProps({ className: "chat-pending-icon-button chat-pending-drag-handle" })[1]!.props.onKeyDown({
+        altKey: true, key: "ArrowUp", preventDefault() {}, stopPropagation() {},
+      });
+    });
+    expect(order()).toEqual(["b", "system", "a"]);
+    expect(calls).toEqual([[["b", "a"], 8]]);
+    // 另一个客户端已推进队列；旧请求不能盖回权威顺序，也不添加错误行。
+    act(() => { renderer.update(<PendingQueueBar {...props} conversations={conversations.map(item => ({ ...item, queueThreadRevision: 9 }))} />); });
+    expect(order()).toEqual(["a", "system", "b"]);
+    await act(async () => { finish(); });
+    expect(order()).toEqual(["a", "system", "b"]);
+    expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);
+    act(() => renderer.unmount());
+  });
   test("只显示仍在队列中的消息，并位于 Composer 前的队列区域", async () => {
     let cleared = 0;
     let renderer!: ReactTestRenderer;

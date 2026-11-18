@@ -30,17 +30,21 @@ try {
   await page.getByRole("button", { name: "添加工作区", exact: true }).click();
   await page.getByRole("dialog", { name: "选择工作区所在设备", exact: true })
     .getByRole("button", { name: "连接新的远程主机…", exact: true }).click();
-  const control = page.getByRole("dialog", { name: "Gateway 控制中心", exact: true });
+  const control = page.locator(".settings-editor:visible");
   await expect(control).toBeVisible();
   const pending = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/gateway/diagnostics");
+  await control.getByRole("treeitem", { name: /日志与遥测/ }).first().click();
   await control.getByRole("button", { name: "日志与诊断", exact: true }).click();
   const response = await pending;
   const diagnostics = (await response.json()).data;
   if (response.status() !== 200 || diagnostics.processes.length !== 7) throw new Error("真实双工作区进程诊断缺失");
   const backends = diagnostics.processes.filter((process) => process.service === "backend");
   if (backends.length !== 1 || backends[0].workspace_ids.length !== 2) throw new Error("共享 Backend 未按实例去重");
-  const panel = control.locator(".gateway-diagnostics-runtime");
+  const panel = control.locator(".gateway-diagnostics-runtime").filter({
+    has: page.locator("summary", { hasText: "进程日志设置" }),
+  });
   await panel.waitFor({ state: "visible" });
+  await panel.locator("summary").click();
   const text = await panel.innerText();
   for (const process of diagnostics.processes) {
     if (process.error || !process.state || !text.includes(process.state.runtime_instance_id)

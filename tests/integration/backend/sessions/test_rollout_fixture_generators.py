@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from app.core.execution_admission_context import execution_admission_scope
 from app.core.path_utils import get_session_path_resolver
 from app.core.session_thread_context import session_thread_owner_scope
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
 )
@@ -29,14 +31,15 @@ from tests.support.workspaces import prepare_default_test_workspace
 
 
 def test_provider_fallback_preserves_each_original_failure() -> None:
-    failures = {"provider-a": TypeError("首个模型调用失败"), "provider-b": ValueError("后备模型失败")}
+    failures = {ModelReferenceDTO(provider_id="provider-a", model_id="first"): TypeError("首个模型调用失败"),
+                ModelReferenceDTO(provider_id="provider-a", model_id="second"): ValueError("后备模型失败")}
 
     def invoke(provider_id, _messages, _use_tools):
         raise failures[provider_id]
 
     with pytest.raises(RuntimeError, match="fallback 全部失败") as captured:
-        generator._invoke_with_provider_fallback(
-            invoke, tuple(failures), "provider-a", [], provider_available={}, use_tools=False,
+        generator._invoke_with_model_fallback(
+            invoke, tuple(failures), next(iter(failures)), [], model_available={}, use_tools=False,
         )
     assert isinstance(captured.value.__cause__, ExceptionGroup)
     assert captured.value.__cause__.exceptions == tuple(failures.values())
@@ -85,9 +88,10 @@ def real_generator_case(
         workspace / ".boxteam" / "sessions", generator.SESSION_ID
     )
     http_state, endpoint = native_http_server
-    providers = [
+    models = [
         {
-            "id": identity, "model": "openai/gpt-4.1",
+            "provider_id": "shared-provider" if len(request.param) > 3 else identity,
+            "model_id": identity, "model": "openai/gpt-4.1",
             "endpoint": endpoint,
             "api_key": http_state.api_key, "custom_llm_provider": "openai",
             "api_mode": {"protocol": protocol},
@@ -102,8 +106,16 @@ def real_generator_case(
         def validate_workspace_config(self):
             pass
 
-        def get_agent_runtime_config(self, _agent_id, **_kwargs):
-            return {"providers": providers}
+        def get_agent_runtime_config(self, _agent_id, preferred_model=None):
+            ordered = sorted(models, key=lambda model: preferred_model is not None
+                             and ModelReferenceDTO(provider_id=model["provider_id"], model_id=model["model_id"]) != preferred_model)
+            return {"models": ordered}
+
+        async def prepare_llm_credentials(self, _models):
+            return {}
+
+        def use_llm_credentials(self, credentials):
+            return nullcontext()
 
     monkeypatch.setattr(generator, "ConfigService", FixtureConfig)
     monkeypatch.setattr(
@@ -112,7 +124,8 @@ def real_generator_case(
     tool_every = request.param[2]
     if tool_every:
         http_state.output_tool_name = "inspect_fixture"
-    return workspace, bundle, http_state, tool_every
+    expected = ModelReferenceDTO(provider_id=models[1]["provider_id"], model_id=models[1]["model_id"])
+    return workspace, bundle, http_state, tool_every, expected
 
 
 @pytest.mark.parametrize("real_generator_case", [
@@ -120,18 +133,19 @@ def real_generator_case(
     pytest.param(("responses", "responses", 0), id="responses-switch"),
     pytest.param(("responses", "chat_completions", 0), id="protocol-switch"),
     pytest.param(("responses", "responses", 1), id="tool-loop"),
+    pytest.param(("chat_completions", "chat_completions", 0, "shared"), id="same-provider-two-models"),
 ], indirect=True)
 def test_provider_stub_generator_writes_real_canonical_owner_and_admissions(
     real_generator_case,
 ) -> None:
-    workspace, bundle, http_state, tool_every = real_generator_case
-    generator.generate(workspace, end_turn=2, tool_every=tool_every, strict_provider_sequence=True)
+    workspace, bundle, http_state, tool_every, expected_model = real_generator_case
+    generator.generate(workspace, end_turn=2, tool_every=tool_every, strict_model_sequence=True)
     expected_calls = 3 if tool_every else 2
     manifest = json.loads((bundle.directory / "session.json").read_text(encoding="utf-8"))
     assert manifest["workspace_id"] == bundle.node.workspace_id
     assert set(manifest) == {"session_id", "workspace_id", "created_at"}
     resolver = get_session_path_resolver(workspace / ".boxteam" / "sessions")
-    assert resolver.catalog_store.get_node(bundle.session_id).current_provider_id == "provider-b"
+    assert json.loads(resolver.catalog_store.get_node(bundle.session_id).current_model_json) == expected_model.model_dump()
     rollout = resolver.resolve_thread_node(bundle.session_id, bundle.main_thread_id) / "rollout"
     assert rollout.is_dir()
     with sqlite3.connect(rollout / "index.sqlite") as connection:

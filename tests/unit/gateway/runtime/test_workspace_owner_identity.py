@@ -14,7 +14,7 @@ from app.gateway.runtime.managed_backend import (
     ManagedBackendContract,
     ManagedBackendMember,
 )
-from app.gateway.runtime.port_forwarding import SshPortForwardManager
+from app.gateway.runtime.port_forwarding import PortForwardManager
 from app.gateway.runtime.workspace import WorkspaceRuntime
 from app.schemas.gateway.lifecycle import GatewayRuntimeGroupRequest
 
@@ -116,44 +116,12 @@ async def test_delegated_result_preserves_owner_and_rejects_cross_gateway_blocke
         await owner_controller._delegated_result(target, data)
 
 
-@pytest.fixture
-def forward_path(tmp_path: Path) -> Path:
+def test_legacy_port_forwards_require_explicit_conversion_without_rewrite(
+    owner_registry: GatewayWorkspaceRegistry, tmp_path: Path,
+) -> None:
     path = tmp_path / "forwards.json"
-    path.write_text(json.dumps({"schema_version": 2, "items": [{
-        "forward_id": f"forward-{index}", "gateway_id": gateway_id, "workspace_id": WORKSPACE_ID,
-        "connection_id": f"remote-{index}", "remote_host": "127.0.0.1", "remote_port": 8000,
-        "local_host": "127.0.0.1", "local_port": 42000 + index, "protocol": "http",
-        "label": None, "desired_running": False,
-    } for index, gateway_id in enumerate((REMOTE_GATEWAY, OTHER_GATEWAY), start=1)]}))
-    return path
-
-
-@pytest.mark.asyncio
-async def test_port_forwards_with_same_uuid_remain_owned_by_native_gateway(
-    owner_registry: GatewayWorkspaceRegistry, forward_path: Path, tmp_path: Path,
-) -> None:
-    manager = SshPortForwardManager(registry=owner_registry, storage_path=forward_path, log_dir=tmp_path / "logs")
-    first, = await manager.list((REMOTE_GATEWAY, WORKSPACE_ID))
-    second, = await manager.list((OTHER_GATEWAY, WORKSPACE_ID))
-    assert first.gateway_id == REMOTE_GATEWAY and first.forward_id == "forward-1"
-    assert second.gateway_id == OTHER_GATEWAY and second.forward_id == "forward-2"
-    with pytest.raises(ValueError, match="只支持远程"):
-        await manager.list(WORKSPACE_ID)
-    with pytest.raises(LookupError, match="端口转发不存在"):
-        await manager.delete((OTHER_GATEWAY, WORKSPACE_ID), first.forward_id)
-    assert len(json.loads(forward_path.read_text())["items"]) == 2
-
-
-def test_nonempty_legacy_port_forwards_require_explicit_migration_without_rewrite(
-    owner_registry: GatewayWorkspaceRegistry, forward_path: Path, tmp_path: Path,
-) -> None:
-    payload = json.loads(forward_path.read_text())
-    payload["schema_version"] = 1
-    for item in payload["items"]:
-        item.pop("gateway_id")
-        item["workspace_id"] = "legacy-route-alias"
-    forward_path.write_text(json.dumps(payload))
-    before = forward_path.read_bytes()
-    with pytest.raises(RuntimeError, match="workspace-identity 显式迁移"):
-        SshPortForwardManager(registry=owner_registry, storage_path=forward_path, log_dir=tmp_path / "logs")
-    assert forward_path.read_bytes() == before
+    path.write_text(json.dumps({"schema_version": 2, "items": [{"workspace_id": WORKSPACE_ID}]}))
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="版本不匹配"):
+        PortForwardManager(registry=owner_registry, storage_path=path, log_dir=tmp_path / "logs")
+    assert path.read_bytes() == before

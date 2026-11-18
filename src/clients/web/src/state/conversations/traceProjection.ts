@@ -7,6 +7,7 @@ import {
   terminalStatusForEvent,
   traceJobId,
   tracePayloadString,
+  rawTracePayload,
 } from "../traceEvents";
 import { writePendingList } from "./pendingMap";
 
@@ -206,6 +207,9 @@ export function statusForConversationEvents(
       continue;
     }
     if (event.type === "status_change") {
+      // 队列通知描述整个 Thread，可能同时指向活动 Job 和队首消息；
+      // 只触发权威快照读取，不能据此把队首标成正在执行。
+      if (typeof rawTracePayload(event).queue_snapshot_version === "number") continue;
       status =
         tracePayloadString(event, "status") === "queued"
           ? "queued"
@@ -223,8 +227,6 @@ export function statusForConversationEvents(
     }
     if (
       [
-        "job_created",
-        "message_created",
         "job_started",
         "agent_start",
         "llm_request",

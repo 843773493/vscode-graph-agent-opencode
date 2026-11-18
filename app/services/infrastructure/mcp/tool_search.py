@@ -15,10 +15,10 @@ from app.agents.policy.tool_capability import ToolCapabilityPolicy
 from app.agents.tool_identity import EXTENSION_TOOL_INVOKER_NAME
 from app.core.failures import report_failure
 from app.domain.itemized.hashing import canonical_json_bytes, sha256_jcs
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_SOURCE_ID,
 )
-from app.services.infrastructure.mcp.tool_definitions import (
+from app.services.infrastructure.mcp.frozen_catalog import (
     FrozenToolCatalog,
     FrozenToolDefinition,
 )

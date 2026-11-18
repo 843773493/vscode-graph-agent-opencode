@@ -14,6 +14,7 @@ from langchain_core.messages import (
 
 from app.domain.itemized.enums import SemanticKind
 from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.model_source import ModelSource
 from app.domain.itemized.identity.tool_call_identity import provider_tool_call_id
 from app.domain.itemized.records import CanonicalItemRecord, RuntimeNoticePayload
 from app.prompting.validation import internal_prompt_metadata, validate_internal_message
@@ -198,9 +199,9 @@ def _message_id(item: CanonicalItemRecord) -> str:
 def _model_call_metadata(item: CanonicalItemRecord) -> dict[str, object]:
     """按 codec 合同镜像已提交的 typed model-call 归属。"""
     identity = item.projection_identity
-    if identity is None or identity.model_call_id is None:
-        return {}
-    return {"model_call_id": identity.model_call_id}
+    source = ModelSource.from_extensions(item.extensions)
+    return {**({"model_call_id": identity.model_call_id} if identity is not None and identity.model_call_id is not None else {}),
+            **({"model_source": source.to_dict()} if source is not None else {})}
 
 
 def _tool_calls(item: CanonicalItemRecord) -> list[dict[str, object]]:

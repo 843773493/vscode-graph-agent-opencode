@@ -58,7 +58,7 @@ async def test_removed_agent_keeps_running_snapshot_and_requires_explicit_sessio
                     agents["source_agent"] = {
                         "name": "执行中的来源 Agent",
                         "instructions": {"system_prompt": "source-agent-frozen-prompt"},
-                        "model": {"primary_provider": "primary", "fallback_providers": []},
+                        "model": {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []},
                     }
                 request = {name: document[name] for name in ("gateway_id", "workspace_id", "source_key")}
                 request.update({

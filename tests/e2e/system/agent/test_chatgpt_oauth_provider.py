@@ -185,10 +185,10 @@ async def test_backup_4_chatgpt_oauth_hits_prompt_cache_with_stable_session(
 
     provider_response = await client.patch(
         f"/api/v1/sessions/{session_id}",
-        json={"provider_id": "backup_4"},
+        json={"model": {"provider_id": "backup_4", "model_id": "default"}},
     )
     assert provider_response.status_code == 200, provider_response.text
-    assert provider_response.json()["data"]["current_provider_id"] == "backup_4"
+    assert provider_response.json()["data"]["current_model"] == {"provider_id": "backup_4", "model_id": "default"}
 
     stable_material = "\n".join(
         f"ChatGPT OAuth 缓存固定资料-{index:04d}：这一行必须保持原样。"

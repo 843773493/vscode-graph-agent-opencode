@@ -245,6 +245,10 @@ async function copyResources(folder) {
   }
 }
 await copyResources(join(upstream, 'src/vs'));
+await mkdir(join(dist, 'out/branding'), { recursive: true });
+for (const name of ['icon.png', 'favicon.png', 'icon.ico', 'icon.icns']) {
+  await cp(join(repository, 'resources/branding', name), join(dist, 'out/branding', name));
+}
 // AMD 和 WASM 加载器使用独立 Web 依赖的原始发行文件。
 for (const name of Object.keys(JSON.parse(await readFile(join(upstream, 'remote/web/package.json'), 'utf8')).dependencies)) {
   await cp(join(root, 'node_modules', name), join(dist, 'node_modules', name), { recursive: true, dereference: true });

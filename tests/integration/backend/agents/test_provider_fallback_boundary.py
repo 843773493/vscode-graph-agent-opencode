@@ -36,6 +36,7 @@ from tests.integration.backend.sessions.itemized_dispatch_helpers import (
     native_http_server as native_http_server,  # noqa: PLC0414 - 复用 HTTP 服务及唯一 SSE 编码
 )
 from tests.integration.backend.sessions.test_runtime_source_pipeline import (
+    _managed_gateway_skill_source,
     _prepare_source_workspace,
 )
 from tests.support.api_helpers import create_session, with_message_run_operation_id
@@ -45,6 +46,7 @@ from tests.support.api_helpers import create_session, with_message_run_operation
 async def fallback_backend(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch,
     native_http_server: tuple[NativeHTTPState, str],
+    unused_tcp_port: int,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, Path, TestRunContext, NativeHTTPState]]:
     """独立工作区装配真实后端；本测试专门保留 TCP 与 SDK 的失败边界。"""
     state, endpoint = native_http_server
@@ -54,17 +56,25 @@ async def fallback_backend(
     workspace = _prepare_source_workspace(context, port)
     config_path = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
+    for provider_id in ("primary", "backup_1"):
+        provider = config["llm"]["providers"][provider_id]
         # 真 HTTP 用 SDK 已登记的原生流模型，避免虚构名称触发 LiteLLM fake_stream。
-        provider.update(endpoint=endpoint, api_key=state.api_key, model="openai/gpt-4.1")
-        provider["api_mode"]["protocol"] = "responses" if provider["id"] == "primary" else "chat_completions"
-        if provider["id"] == "primary":
-            provider["api_mode"]["supports_reasoning"] = {"reasoning_items": {"summary": True, "encrypted_content": False}}
-    config["agents"]["default"]["model"]["fallback_providers"] = ["backup_1"]
+        defaults = provider["defaults"]
+        defaults.update(endpoint=endpoint, api_key="${FALLBACK_MODEL_KEY}")
+        provider["models"] = {"default": {"model": "openai/gpt-4.1"}}
+        defaults["api_mode"]["protocol"] = "responses" if provider_id == "primary" else "chat_completions"
+        if provider_id == "primary":
+            defaults["api_mode"]["supports_reasoning"] = {"reasoning_items": {"summary": True, "encrypted_content": False}}
+    config["agents"]["default"]["model"] = {
+        "primary": {"provider_id": "primary", "model_id": "default"},
+        "fallbacks": [{"provider_id": "backup_1", "model_id": "default"}],
+    }
     config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
     workspace_id = load_or_create_workspace_id(workspace)
+    monkeypatch.setenv("FALLBACK_MODEL_KEY", state.api_key)
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
-    monkeypatch.setenv("BOXTEAM_HOME", str(context.boxteam_home_for_node(request.node.nodeid)))
+    home = context.boxteam_home_for_node(request.node.nodeid)
+    monkeypatch.setenv("BOXTEAM_HOME", str(home))
     monkeypatch.delenv("BOXTEAM_GATEWAY_ROOT", raising=False)
     monkeypatch.delenv("BOXTEAM_GATEWAY_URL", raising=False)
     monkeypatch.delenv("BOXTEAM_TEST_MODEL_STREAM_CONFIG", raising=False)
@@ -73,13 +83,18 @@ async def fallback_backend(
         "workspace_id": workspace_id, "workspace_root": str(workspace),
         "config_candidate_ref": None, "config_generation": None, "config_fencing_token": None,
     }]))
-    async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
-        headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": workspace_id},
-        timeout=30,
-    ) as client:
-        await _main_lifespan_state["after_http_startup"]()
-        yield client, workspace, context, state
+    async with _managed_gateway_skill_source(
+        workspace=workspace, workspace_id=workspace_id, boxteam_home=home,
+        port=unused_tcp_port, artifacts_dir=context.artifacts_dir,
+    ) as (gateway_id, _owner):
+        monkeypatch.setenv("BOXTEAM_GATEWAY_URL", f"http://127.0.0.1:{unused_tcp_port}")
+        async with main.lifespan(main.app) as _main_lifespan_state, httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app), base_url="http://workspace.test",
+            headers={"X-Local-Token": "local-dev-token", "X-BoxTeam-Workspace-Id": workspace_id,
+                     "X-BoxTeam-Gateway-Id": gateway_id}, timeout=30,
+        ) as client:
+            await _main_lifespan_state["after_http_startup"]()
+            yield client, workspace, context, state
 
 
 @pytest.mark.parametrize("failure", ["http", "stream", "partial_tool"])

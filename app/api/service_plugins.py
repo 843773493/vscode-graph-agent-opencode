@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import Secret
@@ -28,7 +28,10 @@ from app.schemas.internal_v2.config import ConfigSourceEditRequest
 from app.services.infrastructure.config.plugin_private_inputs import (
     PluginPrivateInputStore,
 )
-from app.services.infrastructure.config.source_document import set_source_value
+from app.services.infrastructure.config.source_document import (
+    parse_source_text,
+    set_source_value,
+)
 from configs.plugin_parameters import plugin_parameters
 
 router = APIRouter(
@@ -113,8 +116,14 @@ async def initialize_workspace_plugins(
         saved = await service.retry_source_edit(source_key=source_key, gateway_id=gateway_id,
             idempotency_key=payload.intent_id)
     else:
+        # 首次接入已有默认工作区时，保留其显式开关（包括空数组）；不覆盖用户选择。
+        source = parse_source_text(document.jsonc)
+        plugins = cast(dict[str, dict[str, object]], source.get("plugins", {}))
+        if "entries" in plugins.get("runtime", {}):
+            return APIResponse(data=True, request_id=request_id)
         entries = [binding.model_dump(mode="json", exclude={"workspace_id"}) for binding in payload.bindings]
-        text = set_source_value(document.jsonc, ("plugins", "runtime", "entries"), entries)
+        text = set_source_value(document.jsonc, ("config_version",), service.get_snapshot().to_dict()["config_version"])
+        text = set_source_value(text, ("plugins", "runtime", "entries"), entries)
         saved = await service.save_source_edit(source_key=source_key, gateway_id=gateway_id,
             request=ConfigSourceEditRequest(
                 gateway_id=gateway_id, workspace_id=container.workspace_id, source_key=source_key,

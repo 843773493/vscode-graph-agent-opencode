@@ -1,12 +1,125 @@
 import { afterEach, expect, test } from "bun:test";
-import { discardConfigPending, getConfigSourceDocument, listConfigSources, preflightConfigSource, retryConfigPending, saveConfigSource } from "./configSources";
+import { discardConfigPending, discoverLlmModels, getConfigSourceDocument, listConfigSources, preflightConfigSource, retryConfigPending, saveConfigSource, testLlmModel } from "./configSources";
 import { HttpRequestError } from "./http";
+import type { LlmTestRequest } from "../types/protocol_generated/boxteam/workspace/v2/public";
 
 const originalFetch = globalThis.fetch;
 const target = { gateway_id: "gateway_00000000000040008000000000000001", workspace_id: "00000000-0000-4000-8000-000000000001" };
 const sourceKey = "workspace_root_mutable_override";
 let port = 59_580;
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+const modelTest: LlmTestRequest = { ...target, mode: "draft", provider_id: "team", model_id: "main", edit_version: 2,
+  source_key: sourceKey, jsonc: "{}", expected_source_baseline: {}, timeout_seconds: 60, streaming: true };
+const observation = { ...target, mode: "draft", provider_id: "team", edit_version: 2, source_key: sourceKey,
+  source_baseline: {}, credential: { source: "none" },
+  protocol: "chat_completions", endpoint: "https://model.test/v1", observed_at: "2026-11-17T00:00:00Z" };
+const start = { request_id: "model-test", observation, model_ref: { provider_id: "team", model_id: "main" }, streaming: true };
+const delta = { request_id: "model-test", text: "Hello" };
+const result = { ...start, status: "passed", first_content_ms: 5, elapsed_ms: 8, preview: "Hello",
+  preview_truncated: false, usage: null, error: null };
+const frame = (event: string, value: object) => new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`);
+const sseResponse = (body: BodyInit) => new Response(body, { headers: { "Content-Type": "text/event-stream", "X-Request-ID": "model-test" } });
+
+test("模型测试单次POST先展示start和增量，再消费冻结观察的终态", async () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+  let count = 0;
+  const current = respond((_url, init) => {
+    count++;
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Content-Type")).toBe("application/json");
+    expect(JSON.parse(String(init?.body))).toEqual(modelTest);
+    return sseResponse(stream);
+  });
+  let opened!: () => void;
+  const ready = new Promise<void>(resolve => { opened = resolve; });
+  const content: string[] = [];
+  const pending = testLlmModel(current, target, modelTest, { signal: new AbortController().signal,
+    onStart: event => { expect(event).toEqual(start); opened(); }, onDelta: event => content.push(event.text) });
+  controller.enqueue(frame("start", start));
+  await ready;
+  controller.enqueue(frame("delta", delta));
+  // 合法 JSON 的键顺序变化不能被误判为另一个观察版本。
+  controller.enqueue(frame("result", { ...result, observation: Object.fromEntries(Object.entries(observation).reverse()) }));
+  controller.close();
+  expect((await pending).status).toBe("passed");
+  expect(content).toEqual(["Hello"]);
+  expect(count).toBe(1);
+});
+
+test.each(["missing-result", "duplicate-start", "wrong-request", "wrong-owner", "wrong-model", "changed-observation", "after-terminal", "wrong-shape"])(
+  "模型测试拒绝不完整或串线事件，不重发POST：%s", async failure => {
+    const parts = [frame("start", start)];
+    if (failure === "duplicate-start") parts.push(frame("start", start));
+    if (failure === "wrong-shape") parts.push(frame("delta", { request_id: "model-test", text: 1 }));
+    if (failure !== "missing-result") parts.push(frame("result", failure === "wrong-request" ? { ...result, request_id: "another" }
+      : failure === "wrong-owner" ? { ...result, observation: { ...observation, gateway_id: "another" } }
+      : failure === "wrong-model" ? { ...result, model_ref: { ...result.model_ref, model_id: "another" } }
+      : failure === "changed-observation" ? { ...result, observation: { ...observation, credential: { source: "vault", revision: 9 } } } : result));
+    if (failure === "after-terminal") parts.push(frame("delta", delta));
+    let count = 0;
+    const current = respond(() => { count++; return sseResponse(new Blob(parts)); });
+    await expect(testLlmModel(current, target, modelTest, { signal: new AbortController().signal,
+      onStart: () => {}, onDelta: () => {} })).rejects.toThrow();
+    expect(count).toBe(1);
+  },
+);
+
+test("模型测试首内容前取消回收正文reader并保留用户取消原因", async () => {
+  let closed = false, count = 0;
+  const abort = new AbortController();
+  const cancelled = new Error("用户停止本次测试");
+  const current = respond(() => {
+    count++;
+    return sseResponse(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(frame("start", start)); }, cancel() { closed = true; },
+    }));
+  });
+  await expect(testLlmModel(current, target, modelTest, { signal: abort.signal,
+    onStart: () => abort.abort(cancelled), onDelta: () => { throw new Error("取消后不能接收内容"); } })).rejects.toBe(cancelled);
+  expect(closed).toBe(true);
+  expect(count).toBe(1);
+});
+
+test("模型发现沿原目标发送单次草稿；部分目录及观察版本保持原回执", async () => {
+  const input = { ...target, mode: "draft", provider_id: "team", edit_version: 3, source_key: sourceKey,
+    jsonc: "// 未保存草稿\n{}", expected_source_baseline: {} };
+  const result = { observation: { ...input, source_baseline: {}, protocol: "responses", endpoint: "https://model.test/v1",
+    credential: { source: "temporary" }, observed_at: "2026-11-17T00:00:00Z" }, source: "upstream", models: [{ model: "model-a" }],
+    complete: false, error: { category: "pagination", message: "当前目录不完整" } };
+  let count = 0;
+  const route = { ...target, gateway_connection_id: "original-connection" };
+  const current = respond(result, (url, init) => {
+    count++;
+    expect(url.pathname).toBe("/api/v1/config/llm/discover");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(input);
+    expect(new Headers(init?.headers).get("X-BoxTeam-Gateway-Connection-Id")).toBe(route.gateway_connection_id);
+  });
+  expect(await discoverLlmModels(current, route, input)).toEqual(result);
+  expect(count).toBe(1);
+});
+
+test.each(["gateway_id", "workspace_id", "provider_id", "mode", "edit_version", "source_key"])("模型发现拒绝迟到的另一观察：%s", async field => {
+  const input = { ...target, mode: "draft", provider_id: "team", edit_version: 3, source_key: sourceKey,
+    jsonc: "{}", expected_source_baseline: {} };
+  const current = respond({ observation: { ...input, [field]: "changed" }, models: [] });
+  await expect(discoverLlmModels(current, target, input)).rejects.toThrow("编辑版本");
+});
+
+test("active模型目录接受HTTP空来源，取消不重发模型发现", async () => {
+  const input = { ...target, mode: "active", provider_id: "team", edit_version: 0, expected_source_baseline: {},
+    expected_active_revision: 1, expected_active_digest: "active" };
+  let count = 0;
+  const current = respond({ observation: { ...input, source_key: null }, models: [] }, () => { count++; });
+  await discoverLlmModels(current, target, input);
+  const controller = new AbortController();
+  const cancelled = new Error("用户取消目录发现");
+  controller.abort(cancelled);
+  await expect(discoverLlmModels(current, target, input, controller.signal)).rejects.toBe(cancelled);
+  expect(count).toBe(1);
+});
 
 function respond(document: Record<string, unknown> | ((url: URL, init?: RequestInit) => Record<string, unknown> | Response),
   inspect: (url: URL, init?: RequestInit) => void = () => {}) {
@@ -23,7 +136,7 @@ function respond(document: Record<string, unknown> | ((url: URL, init?: RequestI
 test("来源读取保留原正文与全部CAS，查询原提交携带同一幂等键和完整owner", async () => {
   const document = { ...target, source_key: sourceKey, jsonc: "// 原正文\r\n{}\r\n", file_digest: "file", layer: "workspace",
     writable: true, file_presence: "present", source_generation: "generation", json_schema: {}, effective: {}, source_effective: {},
-    layers: [], origins: [], status: undefined, layer_revision: 3, layer_digest: "layer", active_revision: 2, active_digest: "active" };
+    layers: [], origins: [], source_baseline: {}, active_origins: [], status: undefined, layer_revision: 3, layer_digest: "layer", active_revision: 2, active_digest: "active" };
   const seen: URL[] = [];
   const controller = new AbortController();
   const route = { ...target, gateway_connection_id: 'original-connection' };
@@ -46,11 +159,33 @@ test("来源读取保留原正文与全部CAS，查询原提交携带同一幂�
 const intent = { ...target, source_key: sourceKey, jsonc: '// 保留注释\n{"default_agent":"reviewer"}\n', base_file_digest: "file-old",
   base_layer_revision: 7, base_layer_digest: "layer-old", expected_active_revision: 4, expected_active_digest: "active-old", idempotency_key: "fixed-intent" };
 
+test("选定模型预检只增加查询引用，沿原来源意图取回同一模型的后端投影", async () => {
+  const modelRef = { provider_id: "team+/", model_id: "main model" };
+  const inspection = { model_ref: modelRef, model: "upstream-main", options: { temperature: 0 }, origins: [],
+    request_url: "https://model.test/v1/responses" };
+  let count = 0;
+  const current = respond((url, init) => {
+    count++;
+    expect(url.pathname).toBe(`/api/v1/config/sources/${sourceKey}/preflight`);
+    expect(url.searchParams.get("provider_id")).toBe(modelRef.provider_id);
+    expect(url.searchParams.get("model_id")).toBe(modelRef.model_id);
+    expect(JSON.parse(String(init?.body))).toEqual(intent);
+    return { document: { ...target, source_key: sourceKey }, model_options: inspection };
+  });
+  expect((await preflightConfigSource(current, target, intent, undefined, modelRef)).model_options).toEqual(inspection);
+  expect(count).toBe(1);
+});
+
+test.each([undefined, { provider_id: "team", model_id: "another" }])("选定模型预检拒绝缺失或串线的模型回执 %j", async model_ref => {
+  const current = respond({ document: { ...target, source_key: sourceKey }, model_options: model_ref ? { model_ref } : undefined });
+  await expect(preflightConfigSource(current, target, intent, undefined, { provider_id: "team", model_id: "main" })).rejects.toThrow();
+});
+
 test("来源列表、预检和保存沿同一目标传输完整意图；预检只调用无副作用端点", async () => {
   const requests: { path: string; method: string; body: unknown }[] = [];
   const document = { ...target, source_key: sourceKey, jsonc: intent.jsonc, layer: "workspace", writable: true, file_presence: "present",
     file_digest: "file", layer_revision: 7, layer_digest: "layer", source_generation: 9, active_revision: 4, active_digest: "active",
-    json_schema: {}, effective: {}, source_effective: {}, layers: [], origins: [], status: undefined };
+    json_schema: {}, effective: {}, source_effective: {}, layers: [], origins: [], source_baseline: {}, active_origins: [], status: undefined };
   const saved = { ...document, edit: { idempotency_key: intent.idempotency_key, candidate_id: "candidate", state: "active",
     file_digest: "file-saved", source_saved: true, layer_imported: true } };
   const current = respond((url, init) => {

@@ -1,6 +1,7 @@
 import { t } from "../../../../shared/core/i18n/index.js";
 import type { TimelineItem } from "../timeline/timelineTypes";
 import { isRecord } from "../../utils/jsonDisplay";
+import { truncateDisplayText } from "../../utils/displayText";
 
 type AggregatedToolItem = Extract<TimelineItem, { kind: "aggregated_tool" }>;
 
@@ -93,7 +94,7 @@ function compactInline(value: string, maxLength = 120): string {
   if (text.length <= maxLength) {
     return text;
   }
-  return `${text.slice(0, maxLength)}...`;
+  return `${truncateDisplayText(text, maxLength)}...`;
 }
 
 function isTerminalToolItem(item: AggregatedToolItem): boolean {

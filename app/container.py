@@ -44,6 +44,7 @@ from app.services.business.agent_service import AgentService
 from app.services.business.agent_tool_settings.catalog import AgentToolCatalog
 from app.services.business.agent_tool_settings.service import AgentToolSettingsService
 from app.services.business.browser_resources.owner import BrowserResourceOwner
+from app.services.business.communication.user_questions import UserQuestionService
 from app.services.business.context_compaction_service import ContextCompactionService
 from app.services.business.job.service import JobService
 from app.services.business.message_service import MessageService
@@ -224,6 +225,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         *,
         message_service: MessageService,
         session_service: SessionService,
+        user_question_service: UserQuestionService,
         checkpointer: RolloutCheckpointSaver,
         terminal_resource_owner: TerminalResourceOwner,
         browser_resource_owner: BrowserResourceOwner,
@@ -236,6 +238,7 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
     ) -> None:
         self._message_service = message_service
         self._session_service = session_service
+        self._user_question_service = user_question_service
         self._checkpointer = checkpointer
         self._terminal_resource_owner = terminal_resource_owner
         self._browser_resource_owner = browser_resource_owner
@@ -260,6 +263,9 @@ class _AgentRuntimeDependencyProvider(AgentRuntimeDependencyProvider):
         if self._goal_service is None:
             raise RuntimeError("_AgentRuntimeDependencyProvider 未绑定 SessionGoalService")
         return self._goal_service
+
+    def get_user_question_service(self) -> UserQuestionService:
+        return self._user_question_service
 
     def get_message_service(self) -> MessageService:
         return self._message_service
@@ -369,6 +375,7 @@ class AppContainer:
     artifact_service: ArtifactService
     job_service: JobServiceProtocol
     message_service: MessageService
+    user_question_service: UserQuestionService
     attachment_blob_store: AttachmentBlobStore
     external_resource_leases: ExternalResourceLeaseLedger
     runtime_service: WorkspaceRuntimeLifecycleService
@@ -828,9 +835,11 @@ def _build_app_container(
         browser_resource_owner=browser_resource_owner,
         transport=workspace_session_context_transport,
     )
+    user_question_service = UserQuestionService(sessions=session_service, store=checkpointer.user_questions, events=job_event_bus.event_channel_service)
     dependency_provider = _AgentRuntimeDependencyProvider(
         message_service=message_service,
         session_service=session_service,
+        user_question_service=user_question_service,
         checkpointer=checkpointer,
         terminal_resource_owner=terminal_resource_owner,
         browser_resource_owner=browser_resource_owner,
@@ -1083,6 +1092,7 @@ def _build_app_container(
             await observe_phase(session_id, "attachments.working_copies.processed", details={
                 "released_attachment_ids": list(released),
             })
+            await trace_event_store.close_session(session_id)
 
         session_path_resolver.bind_fork_retention_release_callback(checkpointer.release_fork_retentions)
         session_path_resolver.bind_fork_child_abort_callback(checkpointer.forks.abort_prepared_child_fork)
@@ -1150,6 +1160,7 @@ def _build_app_container(
         artifact_service=artifact_service,
         job_service=job_service,
         message_service=message_service,
+        user_question_service=user_question_service,
         attachment_blob_store=attachment_blob_store,
         external_resource_leases=external_resource_leases,
         runtime_service=runtime_service,

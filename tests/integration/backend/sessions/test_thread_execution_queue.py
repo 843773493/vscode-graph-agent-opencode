@@ -61,7 +61,7 @@ class QueueCase:
         )
         frozen = ExecutionQueueInput(
             execution_binding=identity, message_id=message.message_id, agent_id="default",
-            provider_id=None, delivery_policy=policy, gateway_id=None, request_id=None, created_at=now.isoformat(),
+            model=None, delivery_policy=policy, gateway_id=None, request_id=None, created_at=now.isoformat(),
         )
         self.messages.accept_user_message(message, execution_identity=identity, queue_input=frozen)
         return message, identity

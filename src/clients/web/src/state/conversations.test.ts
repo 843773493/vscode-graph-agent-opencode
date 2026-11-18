@@ -17,12 +17,57 @@ import {
   isLiveConversationView,
 } from "./trace/traceAggregation";
 import {
+  applyMessageStreamEvent,
   createMessageStreamState,
   type MessageStreamState,
 } from "./messageStream/index";
 import type { AppState, ConversationView } from "../types/frontend";
 import type { AttachmentRef, PendingRequestList, TraceEvent } from "../types/backend";
 import { updateSessionAttachmentSummary, updateAttachmentSummariesFromTraces } from "./attachments";
+
+test("消息流投影随增量和补齐的用户时间更新，保留此前展示值", () => {
+  const sessionId = "ses_projection_versions";
+  const threadId = "thr_projection";
+  const turnId = "turn_projection";
+  let stream = createMessageStreamState(sessionId, turnId, "stream_projection", sessionId, threadId);
+  const conversation: ConversationView = {
+    conversationId: turnId, sessionId, threadId, turnId, displayMode: "live",
+    userMessage: null, events: [], status: "running", jobId: null, pending: true, source: "pending",
+  };
+  const state = {
+    turnTimelinesBySession: new Map(),
+    pendingConversations: new Map([[sessionId, [conversation]]]),
+    messageStreamsByTurnStream: new Map(),
+  } as unknown as AppState;
+  const append = (text: string, second: number) => {
+    stream = applyMessageStreamEvent(stream, {
+      event_id: `event_${second}`, session_id: sessionId, thread_id: threadId, turn_id: turnId,
+      turn_stream_id: stream.turnStreamId, event_seq: stream.lastEventSeq + 1,
+      emitted_at: `2026-11-17T00:00:0${second}Z`, type: "block.delta",
+      payload: { block_id: "text", carrier_type: "text", operation: "append", text },
+    });
+    state.messageStreamsByTurnStream!.set(stream.turnStreamId, stream);
+    return getConversationsForSession(sessionId, state)[0]!;
+  };
+  const first = append("甲", 2);
+  expect(first.responseParts?.[0]?.text).toBe("甲");
+  expect(first.activityStats?.duration_ms).toBeNull();
+  const second = append("乙", 3);
+  expect(second.responseParts?.[0]?.text).toBe("甲乙");
+  expect(first.responseParts?.[0]?.text).toBe("甲");
+  state.pendingConversations.set(sessionId, [{
+    ...conversation,
+    userMessage: {
+      message_id: "input", session_id: sessionId, thread_id: threadId, role: "user", content: "输入",
+      metadata: {},
+      created_at: "2026-11-17T00:00:01Z", updated_at: "2026-11-17T00:00:01Z",
+    },
+  }]);
+  const timed = getConversationsForSession(sessionId, state)[0]!;
+  expect(timed.activityStats?.duration_ms).toBe(2000);
+  expect(timed.responseParts).toEqual(second.responseParts);
+  expect(second.activityStats?.duration_ms).toBeNull();
+});
 
 test("附件摘要保留同 ID 跨工作区归属并拒绝其它会话的 Trace", () => {
   const summaries: AppState["sessionAttachmentSummaries"] = new Map();
@@ -407,7 +452,7 @@ test("排队中的内部准入不会伪造用户聊天回合", () => {
       content: "生成分支已结束，主会话正在处理返回结果。",
       attachments: [],
       delivery_policy: "after_turn",
-      enqueue_sequence: 1,
+      reorderable: true, enqueue_sequence: 1,
       status: "queued",
       position: 0,
       agent_id: "default",
@@ -699,7 +744,7 @@ test("活动 Turn 的正反和重复快照顺序只消费当前视图坐标并�
       session_id: sessionId, thread_id: threadId, job_id: jobId, turn_id: turnId,
       message_id: "msg_active_identity", content: "权威用户消息", attachments: [],
       execution_binding: { job_id: jobId, turn_id: turnId, admission_idempotency_key: "admission_active_identity" },
-      delivery_policy: "after_turn", enqueue_sequence: 2, position: 0, status: "queued",
+      delivery_policy: "after_turn", reorderable: true, enqueue_sequence: 2, position: 0, status: "queued",
       agent_id: "default", message_created_at: "2026-10-09T00:00:00Z",
       message_metadata: { updated_at: "2026-10-09T00:00:01Z" },
       created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:01Z", snapshot_version: 2,
@@ -1125,6 +1170,17 @@ test("Job failed 镜像优先于迟到的 open message stream", () => {
   expect(conversation?.activeJobOverlay).toBe(false);
   expect(conversation?.events[0]?.content).toContain("No tool call found");
   expect(conversation?.messageStream?.streamStatus).toBe("open");
+});
+
+test("消息创建及队列汇总通知不能把未领取消息显示为运行中", () => {
+  const events: TraceEvent[] = ["job_created", "message_created", "status_change"].map((type, index) => ({
+    event_id: `evt_accepted_${index}`, session_id: "ses_queued", thread_id: "thr_queued", job_id: "job_queued",
+    type, phase: "job", title: "已接受", content: "", timestamp: `2026-11-17T00:00:0${index}Z`,
+    raw: { payload: { status: "running", queue_snapshot_version: 10 } },
+  }));
+  expect(statusForConversationEvents(events, "queued")).toBe("queued");
+  expect(statusForConversationEvents([...events, { ...events[0]!, event_id: "evt_started", type: "job_started",
+    timestamp: "2026-11-17T00:00:03Z" }], "queued")).toBe("running");
 });
 
 test("终态事件之后的迟到 running 事件不能恢复转圈", () => {

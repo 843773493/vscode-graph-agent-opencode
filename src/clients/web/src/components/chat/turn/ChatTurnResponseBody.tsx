@@ -1,7 +1,7 @@
 import { t } from "../../../../../shared/core/i18n/index.js";
 import React from "react";
 import { conversationModelUsage, conversationTokenUsage } from "../../../state/tokenUsage";
-import { buildPendingStatusItem, isLiveConversationView } from "../../../state/trace/traceAggregation";
+import { isLiveConversationView } from "../../../state/trace/traceAggregation";
 import type { TimelineItem } from "../../../state/timeline/timelineTypes";
 import { buildRenderGroups, responseItemsForConversation } from "../../../state/timeline/chatResponseGroups";
 import type { ConversationView } from "../../../types/frontend";
@@ -9,7 +9,7 @@ import ResponseActionToolbar from "../ResponseActionToolbar";
 import type { ChatTurnActions } from "./useChatTurnActions";
 import type { LoadToolDetails, LoadTurnDetails } from "./types";
 import { RewindStatusPart, MessageStreamStatusPart, HistoricalBoundaryStatusPart, ExecutionLostRecoveryPart, ResponsePart } from "./responseStatusParts";
-import { ConversationWorkSummary, ForkItemButtons, TurnActivitySummary } from "./TurnActivitySummary";
+import { ConversationWorkSummary, TurnActivitySummary } from "./TurnActivitySummary";
 import type { ChatTurnHandlers } from "./types";
 
 export default function ChatTurnResponseBody({
@@ -46,6 +46,7 @@ export default function ChatTurnResponseBody({
   const visibleParts = parts.filter((item) =>
     item.kind === "aggregated_text"
     || item.kind === "aggregated_tool"
+    || item.kind === "context_event"
     || (item.kind === "trace"
       && ["error", "job_failed", "job_cancelled", "session_interrupted"]
         .includes(item.eventType)
@@ -65,13 +66,8 @@ export default function ChatTurnResponseBody({
         sourceViewId: conversation.sourceViewId, sourceViewRevision: conversation.sourceViewRevision, itemId,
       });
     } : undefined;
-  const forkActions = onForkItem
-    ? renderGroups.flatMap((group) => group.kind === "response"
-      ? [<ForkItemButtons key={group.id} item={group.item} onForkItem={onForkItem} />]
-      : [])
-    : undefined;
-  const showConversationWorkSummary = !historyTurn
-    && (activityItems.length > 0 || (!running && Boolean(conversation.activityStats)));
+  const showConversationWorkSummary = !historyTurn && !running
+    && (activityItems.length > 0 || Boolean(conversation.activityStats));
   let responseTextPart: Extract<TimelineItem, { kind: "aggregated_text" }> | undefined;
   for (let index = visibleParts.length - 1; index >= 0; index -= 1) {
     const item = visibleParts[index];
@@ -80,21 +76,6 @@ export default function ChatTurnResponseBody({
       break;
     }
   }
-  const hasActiveWork = visibleParts.some((item) =>
-    (item.kind === "aggregated_tool"
-      || (item.kind === "aggregated_text" && item.partKind === "reasoning"))
-    && item.active,
-  );
-  const hasStreamingMarkdown = visibleParts.some((item) =>
-    item.kind === "aggregated_text" && item.partKind === "markdown" && item.active
-  );
-  const status = running
-    && Boolean(conversation.messageStream)
-    && !hasActiveWork
-    && !hasStreamingMarkdown
-    && !showConversationWorkSummary
-    ? buildPendingStatusItem(conversation)
-    : null;
   const showResponseActions = !running && !conversation.pending;
   return (
     <>
@@ -115,7 +96,6 @@ export default function ChatTurnResponseBody({
         <ConversationWorkSummary
           conversation={conversation}
           items={activityItems}
-          running={running}
         />
       ) : null}
       {!historyTurn ? renderGroups.map((group) => group.kind === "response" ? (
@@ -125,13 +105,6 @@ export default function ChatTurnResponseBody({
         <div className="chat-turn-detail-loading" role="status">
           <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
           <span>{t("chat.turn.loadingFull")}</span>
-        </div>
-      ) : null}
-      {status ? (
-        <div className="chat-working" role="status">
-          <span className="codicon codicon-loading codicon-modifier-spin" aria-hidden="true" />
-          <span>{status.title}</span>
-          <span className="chat-working-detail">{status.detail}</span>
         </div>
       ) : null}
       <MessageStreamStatusPart conversation={conversation} />
@@ -146,7 +119,6 @@ export default function ChatTurnResponseBody({
           responseText={responseTextPart?.text ?? ""}
           tokenUsage={conversationTokenUsage(conversation)}
           modelUsage={conversationModelUsage(conversation)}
-          forkActions={forkActions}
         />
       ) : null}
       {actions.confirmAction ? (

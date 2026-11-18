@@ -3,12 +3,13 @@ import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { HttpRequestError } from "../../api/http";
 import { sessionScopeKey } from "../../state/session/sessionScope";
+import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import type { PendingRequestList, Session } from "../../types/backend";
 import type { AppState } from "../../types/frontend";
 import { usePendingRequestActions } from "./usePendingRequestActions";
 
 const PORT = 49_508;
-const WORKSPACE_ID = "gw_pending_error";
+const WORKSPACE_ID = gatewayWorkspaceKey({ gatewayId: "gateway_00000000000040008000000000000001", workspaceId: "00000000-0000-4000-8000-000000000001" });
 const SESSION_ID = "ses_pending_error";
 const CACHE_KEY = sessionScopeKey(WORKSPACE_ID, SESSION_ID);
 
@@ -98,6 +99,7 @@ function snapshot(
     active_job_id: `job_${messageId}`,
     thread_id: "thr_018f0000000070008000000000000001",
     snapshot_version: version,
+    thread_revision: version,
     requests: [{
       job_id: `job_${messageId}`,
       message_id: messageId,
@@ -107,7 +109,7 @@ function snapshot(
       execution_binding: { job_id: `job_${messageId}`, turn_id: `turn_${messageId}`, admission_idempotency_key: `admission_${messageId}` },
       content,
       delivery_policy: "after_turn",
-      enqueue_sequence: 1,
+      reorderable: true, enqueue_sequence: 1,
       position: 0,
       status: "queued",
       agent_id: "default",
@@ -159,6 +161,31 @@ afterEach(() => {
 });
 
 describe("待处理请求动作的失败补偿", () => {
+  test("重排冲突时静默重读完整权威快照", async () => {
+    currentThreadId = "thr_018f0000000070008000000000000001";
+    await mount();
+    route = (path, method) => {
+      if (method === "PUT") {
+        return Response.json({ detail: "消息已被领取" }, { status: 409 });
+      }
+      if (path === `/api/v1/sessions/${SESSION_ID}/pending-requests`) {
+        return apiResponse(snapshot("msg_remaining", "后端剩余消息", 8));
+      }
+      throw new Error(`未预期请求: ${method} ${path}`);
+    };
+    await actions.reorderPendingRequests(["msg_remaining", "msg_claimed"], 6);
+    expect(calls).toEqual([
+      `PUT /api/v1/sessions/${SESSION_ID}/threads/${currentThreadId}/pending-requests/order`,
+      `GET /api/v1/sessions/${SESSION_ID}/pending-requests`,
+    ]);
+    expect(queries.at(-1)).toBe(`?thread_id=${currentThreadId}`);
+    const pending = currentState.pendingConversations.get(CACHE_KEY);
+    expect(pending).toHaveLength(1);
+    expect(pending?.[0].conversationId).toBe("msg_remaining");
+    expect(pending?.[0].queueThreadRevision).toBe(8);
+    expect(currentState.status).toBe("");
+  });
+
   test("变更失败且补偿重取成功时抛出原始错误", async () => {
     await mount();
     route = (path, method) => {

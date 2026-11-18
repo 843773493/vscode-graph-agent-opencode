@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
@@ -57,7 +58,11 @@ class RegistryDtosMixin:
                 backend_mount_digests[contract.owner_id] = digest
             return digest
 
-        async with httpx.AsyncClient(timeout=2, trust_env=False) as client:
+        # 纯登记读取不创建 HTTP/TLS 客户端；健康检查的同步 TLS 初始化也不阻塞事件循环。
+        async with (
+            await asyncio.to_thread(httpx.AsyncClient, timeout=2, trust_env=False)
+            if check_health else nullcontext()
+        ) as client:
             async def build_dto(target: WorkspaceTarget) -> GatewayWorkspaceDTO:
                 backend_owner, backend_contract = backend_by_workspace_id.get(
                     target.key, (None, None)
@@ -101,7 +106,7 @@ class RegistryDtosMixin:
                             error, stage="backend_runtime_health",
                             label=f"Backend 运行检查失败: owner={backend_contract.owner_id}",
                         )
-                if check_health:
+                if client is not None:
                     try:
                         if backend_owner is not None:
                             backend_owner.assert_healthy()
@@ -154,7 +159,7 @@ class RegistryDtosMixin:
                             label=f"工作区健康检查失败: workspace_id={target.workspace_id}",
                         )
                 config_reload = GatewayConfigReloadStatusDTO()
-                if check_health and workspace_service_status == "ready":
+                if client is not None and workspace_service_status == "ready":
                     if backend_url is None:
                         raise RuntimeError(
                             f"工作区健康检查已通过但缺少后端地址: {target.workspace_id}"

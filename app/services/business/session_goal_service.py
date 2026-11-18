@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import zlib
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from app.core.identifier import create_prefixed_id
 from app.core.job_event_bus import EventType
+from app.core.key_lock_pool import KeyLockPool
 from app.core.phase_observer import observe_phase
 from app.core.session_catalog_store import SessionCreationRecord
 from app.schemas.internal_v2.goal import (
@@ -31,8 +31,6 @@ from app.services.infrastructure.persistent_tasks.goals import GoalOperationRepl
 from app.services.infrastructure.persistent_tasks.store import PersistentTaskStore
 
 _UNSET = object()
-# Goal 锁按 session_id 分片；分片数固定，避免长驻进程随历史会话数无界增长。
-GOAL_LOCK_SHARDS = 64
 
 
 class SessionGoalService:
@@ -42,15 +40,10 @@ class SessionGoalService:
         self._store = store
         self._session_service = session_service
         self._job_event_bus = job_event_bus
-        self._locks: tuple[asyncio.Lock, ...] = tuple(
-            asyncio.Lock() for _ in range(GOAL_LOCK_SHARDS)
-        )
+        self._locks = KeyLockPool()
 
     def lock_for(self, session_id: str) -> asyncio.Lock:
-        # 分片锁池：同一 session_id 恒得同一把锁（保住互斥），数量恒为分片数
-        # （有界）。用 crc32 而非 hash() 是为了跨进程确定，不引入 hash 随机化。
-        shard = zlib.crc32(session_id.encode("utf-8")) % len(self._locks)
-        return self._locks[shard]
+        return self._locks.lock_for(session_id)
 
     async def assert_agent_thread(self, session_id: str, thread_id: str) -> None:
         if thread_id != await self._session_service.resolve_main_thread(session_id):
@@ -69,15 +62,9 @@ class SessionGoalService:
             return self._store.goal_read(session_id)
 
     async def get_snapshot(self, session_id: str) -> SessionGoalSnapshotDTO:
-        thread_id = await self._session_service.resolve_main_thread(session_id)
+        await self._session_service.resolve_main_thread(session_id)
         async with self.lock_for(session_id):
-            goal = self._store.goal_read(session_id)
-            return SessionGoalSnapshotDTO(
-                session_id=session_id, thread_id=thread_id,
-                goal=goal_public_view(goal) if goal is not None else None,
-                control_revision=self._store.goal_control_revision(session_id),
-                sync_version=self._store.goal_sync_version(session_id),
-            )
+            return self._store.goal_snapshot(session_id)
 
     async def get_operation(self, session_id: str, operation_id: str) -> SessionGoalOperationResultDTO:
         thread_id = await self._session_service.resolve_main_thread(session_id)
@@ -359,6 +346,7 @@ class SessionGoalService:
         tokens: int,
         elapsed_seconds: int,
         close_time: bool = False,
+        settled: bool = False,
         goal_id: str | None = None,
     ) -> SessionGoalStateDTO | None:
         async with self.lock_for(session_id):
@@ -366,10 +354,16 @@ class SessionGoalService:
             if goal is None or (goal_id is not None and goal.goal_id != goal_id):
                 return None
             previous_status = goal.status
+            previous_goal = goal
             goal = account_job(
                 goal, job_id=job_id, tokens=tokens, elapsed_seconds=elapsed_seconds,
                 close_time=close_time, now=datetime.now(UTC),
             )
+            if settled:
+                entry = goal.accounted_jobs[job_id].model_copy(update={"settled": True})
+                goal = goal.model_copy(update={"accounted_jobs": {**goal.accounted_jobs, job_id: entry}})
+            if goal == previous_goal:
+                return goal
             control_revision = goal.control_revision + (goal.status != previous_status)
             goal = goal.model_copy(update={
                 "control_revision": control_revision,
@@ -382,21 +376,23 @@ class SessionGoalService:
             await self._publish_updated(goal)
             return goal
 
-    async def dispatch_continuation_if_active(
+    async def dispatch_if_current(
         self,
         session_id: str,
         trigger_id: str,
         dispatch: Callable[[SessionGoalStateDTO], Awaitable[None]],
         *, goal_id: str | None = None, revision: int | None = None,
+        expected_control_revision: int | None = None, status: GoalStatus = GoalStatus.active,
     ) -> bool:
         """同一 Goal 锁内派发并登记已接受标记，避免 pause/clear 与续跑穿插。"""
         async with self.lock_for(session_id):
             goal = self._store.goal_read(session_id)
             if (
                 goal is None
-                or goal.status != GoalStatus.active
+                or goal.status != status
                 or (goal_id is not None and goal.goal_id != goal_id)
                 or (revision is not None and goal.revision != revision)
+                or (expected_control_revision is not None and goal.control_revision != expected_control_revision)
                 or goal.last_continued_job_id == trigger_id
             ):
                 return False
@@ -408,6 +404,10 @@ class SessionGoalService:
             await observe_phase(goal.goal_id, "goal.continuation.accepted_before_record", details={
                 "session_id": session_id, "goal_id": goal.goal_id, "trigger_id": trigger_id,
             })
+            # JOB_STARTED 会在准入期间同步登记通用执行归属，保留这次写入。
+            goal = self._store.goal_read(session_id)
+            if goal is None:
+                raise RuntimeError("Goal 派发期间丢失原 owner")
             self._store.goal_write(goal.model_copy(update={
                 "last_continued_job_id": trigger_id,
                 "updated_at": datetime.now(UTC),

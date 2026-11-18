@@ -142,6 +142,7 @@ class SessionMessageOrchestrator:
         *,
         execution_binding: ExecutionBinding,
         reserved_job_id: str | None = None,
+        background: bool = False,
     ) -> MessageRunAccepted:
         """派发已经持久化的消息；重启恢复时保持同一个 message_id。"""
         async def dispatch() -> MessageRunAccepted:
@@ -151,7 +152,7 @@ class SessionMessageOrchestrator:
                 message,
                 requested_agent_id=session.current_agent_id,
                 execution_binding=execution_binding,
-                reserved_job_id=reserved_job_id,
+                reserved_job_id=reserved_job_id, background=background,
             )
 
         return await self._job_service.run_session_preparation(
@@ -217,6 +218,7 @@ class SessionMessageOrchestrator:
         reserved_job_id: str | None = None,
         thread_id: str | None = None,
         submission_hash: str | None = None,
+        background: bool = False,
     ) -> MessageRunAccepted:
         """调度一条已生成稳定 message_id 的用户消息。"""
         import logging
@@ -246,7 +248,7 @@ class SessionMessageOrchestrator:
             logger.info("[session_orchestrator] message created: session_id=%s message_id=%s", session_id, message.message_id)
             job_message_metadata = {
                 **message.metadata,
-                "boxteam_session_provider_id": session.current_provider_id,
+                "boxteam_session_model": session.current_model.model_dump(mode="json") if session.current_model is not None else None,
             }
             if execution_binding is None:
                 if reserved_job_id is not None:
@@ -259,10 +261,10 @@ class SessionMessageOrchestrator:
                     execution_identity=execution_binding,
                     queue_input=ExecutionQueueInput(
                         execution_binding=execution_binding, message_id=message.message_id,
-                        agent_id=effective_agent_id, provider_id=session.current_provider_id,
+                        agent_id=effective_agent_id, model=session.current_model.model_dump(mode="json") if session.current_model is not None else None,
                         delivery_policy=delivery_policy, gateway_id=get_current_gateway_id(),
                         request_id=get_current_request_id(), created_at=message.created_at.isoformat(),
-                        submission_hash=submission_hash,
+                        submission_hash=submission_hash, background=background,
                     ),
                 )
                 if submission_hash is not None and record.input.message_id != message.message_id:

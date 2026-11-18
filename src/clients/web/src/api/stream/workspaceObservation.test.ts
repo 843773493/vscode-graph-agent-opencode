@@ -6,11 +6,12 @@ import { streamSessionActivity } from "../session/sessionActivity";
 import { streamSessionCatalogSnapshots } from "../session/sessionCatalogOperations";
 import { SessionStreamIdleTimeoutError, streamSessionEvents, TraceCursorGoneError } from "./sessionTraceStream";
 import { streamWorkspaceFileEvents } from "./workspaceFileEvents";
+import { observeTerminalResources } from "../workspaceResources";
 import type { WorkspaceObservationSubscription } from "../../types/backend";
 
 const originalFetch = globalThis.fetch;
 const encoder = new TextEncoder();
-type Kind = "session_activity" | "session_trace" | "workspace_files" | "session_navigation";
+type Kind = "session_activity" | "session_trace" | "workspace_files" | "session_navigation" | "terminal_resources";
 
 interface Connection {
   subscriptions: WorkspaceObservationSubscription[];
@@ -113,6 +114,92 @@ function readers(port: number, workspaceId = "workspace", traceTimeout?: number,
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 describe("Workspace 单物理 SSE 观察者", () => {
+  test("六个终端共用一个逻辑 source 和物理连接，关闭最后一项释放 reader", async () => {
+    const connections = installBackend();
+    const controllers = Array.from({ length: 6 }, () => new AbortController());
+    const received: Array<string[] | null> = [];
+    const scope = gatewayWorkspaceKey({ gateway_id: "gateway-test", workspace_id: "workspace" });
+    const streams = controllers.map(controller => observeTerminalResources(49_122, scope,
+      ids => received.push(ids), controller.signal));
+    try {
+      await waitUntil(() => connections.length === 1);
+      const connection = connections[0];
+      expect(connection.subscriptions).toHaveLength(1);
+      for (const item of connection.subscriptions) {
+        connection.controller.enqueue(envelope({ subscription_id: item.subscription_id, state: "frame",
+          frame: 'event: resources_changed\ndata: {"resource_ids":["term_a"]}\n\n' }));
+      }
+      await waitUntil(() => received.length === 6);
+      expect(received).toEqual(Array.from({ length: 6 }, () => ["term_a"]));
+    } finally {
+      controllers.forEach(controller => controller.abort());
+      await Promise.all(streams);
+    }
+    expect(connections).toHaveLength(1);
+    expect(connections[0].cancelled).toBe(true);
+  });
+  test("增减单个终端视图不重连其它终端、Trace 和文件观察，迟到视图仅补读自身", async () => {
+    const connections = installBackend();
+    const shared = readers(49_123);
+    const first = new AbortController(), second = new AbortController();
+    const firstChanges: Array<string[] | null> = [], secondChanges: Array<string[] | null> = [];
+    let firstStream: Promise<void> | undefined, secondStream: Promise<void> | undefined;
+    try {
+      await waitUntil(() => connections.length === 1);
+      firstStream = observeTerminalResources(49_123, gatewayWorkspaceKey(shared.target), ids => firstChanges.push(ids), first.signal);
+      await waitUntil(() => connections.length === 2);
+      const connection = connections[1];
+      send(connection, "terminal_resources", 'event: resources_changed\ndata: {"resource_ids":null}\n\n');
+      await waitUntil(() => firstChanges.length === 1);
+      secondStream = observeTerminalResources(49_123, gatewayWorkspaceKey(shared.target), ids => secondChanges.push(ids), second.signal);
+      await waitUntil(() => secondChanges.length === 1);
+      expect(firstChanges).toEqual([null]);
+      expect(secondChanges).toEqual([null]);
+      first.abort();
+      await firstStream;
+      expect(connections).toHaveLength(2);
+      expect(connection.cancelled).toBe(false);
+      send(connection, "terminal_resources", 'event: resources_changed\ndata: {"resource_ids":["term_b"]}\n\n');
+      send(connection, "session_trace", trace("tc1.5"));
+      send(connection, "workspace_files", files(28));
+      await waitUntil(() => secondChanges.length === 2 && shared.received.trace.length === 1 && shared.received.files.length === 1);
+      expect(secondChanges).toEqual([null, ["term_b"]]);
+      expect(shared.received.trace).toEqual(["tc1.5"]);
+      expect(shared.received.files).toEqual([28]);
+      expect(connections).toHaveLength(2);
+    } finally {
+      first.abort(); second.abort();
+      await Promise.all([firstStream, secondStream, shared.stop()]);
+    }
+  });
+  test("终端状态与文件共享连接，心跳不触发资源查询，重连后重新接收失效通知", async () => {
+    const connections = installBackend();
+    const controller = new AbortController();
+    const target = { gateway_id: "gateway-test", workspace_id: "workspace" };
+    const fileController = new AbortController();
+    let changes = 0;
+    const resources = observeTerminalResources(49_121, gatewayWorkspaceKey(target), () => { changes += 1; }, controller.signal);
+    const fileStream = streamWorkspaceFileEvents(49_121, [], { workspaceId: gatewayWorkspaceKey(target), signal: fileController.signal, onBatch() {} });
+    try {
+      await waitUntil(() => connections.length === 1);
+      expect(connections[0].subscriptions).toHaveLength(2);
+      send(connections[0], "terminal_resources", ": heartbeat\n\n");
+      send(connections[0], "terminal_resources", 'event: resources_changed\ndata: {"resource_ids":null}\n\n');
+      await waitUntil(() => changes === 1);
+      fileController.abort();
+      await fileStream;
+      await waitUntil(() => connections.length === 2);
+      send(connections[1], "terminal_resources", ": heartbeat\n\n");
+      send(connections[1], "terminal_resources", 'event: resources_changed\ndata: {"resource_ids":null}\n\n');
+      await waitUntil(() => changes === 2);
+      expect(connections[1].subscriptions.map(item => item.kind)).toEqual(["terminal_resources"]);
+    } finally {
+      controller.abort();
+      fileController.abort();
+      await Promise.all([resources, fileStream]);
+    }
+    expect(connections.every(connection => connection.cancelled)).toBe(true);
+  });
   test("目录快照与活动共享连接，取消目录不终止活动", async () => {
     const connections = installBackend();
     const target = { gateway_id: "gateway-test", workspace_id: "workspace" };

@@ -132,6 +132,8 @@ export interface ConversationView {
   enqueueSequence?: number;
   waitingReason?: string | null;
   queueSnapshotVersion?: number;
+  queueThreadRevision?: number;
+  queueReorderable?: boolean;
   pendingPosition?: number;
   /** 后端 dispatch 快照直投的队列事实：排队 Job 数与含活动 Job 的待处理总数。 */
   queuedJobCount?: number;

@@ -49,14 +49,12 @@ def generation_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    primary_provider = next(
-        provider for provider in config["llm"]["providers"] if provider["id"] == "primary"
-    )
-    primary_provider.update(
+    primary_provider = config["llm"]["providers"]["primary"]
+    primary_provider["models"]["default"]["model"] = "e2e-stub-model"
+    primary_provider["defaults"].update(
         {
             "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "e2e-stub-model",
-            "api_key": "e2e-local-model-key",
+            "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
             "custom_llm_provider": "openai",
         }
     )
@@ -69,7 +67,7 @@ def generation_backend(
         default_backend_url=None,
         port=port_block.port(0),
         asgi_app="tests.support.e2e_control.gateway_app:app",
-        extra_env=generation_replay.environment,
+        extra_env={**generation_replay.environment, "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key"},
         artifacts_dir=workspace_root.parent / "artifacts/gateway",
     )
     try:

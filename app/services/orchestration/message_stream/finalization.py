@@ -47,6 +47,16 @@ class MessageStreamFinalizationMixin:
             else self._canonical_block_accumulator
         )
         if accumulator is not None and self._canonical_item_sink is not None:
+            # 参数片段只在 Runtime 累计；封存时一次交给原 canonical draft。
+            for call_id in self._tool_call_order:
+                if self._tool_call_model_call_ids.get(call_id) == model_call_id:
+                    arguments, _ = self._read_tool_call_arguments(call_id)
+                    accumulator.accept({
+                        "block_id": call_id,
+                        "block_index": self._tool_call_indexes_by_id[call_id],
+                        "carrier_type": "tool_call",
+                        "args": arguments,
+                    })
             status = (
                 CanonicalItemStatus.PARTIAL.value
                 if partial

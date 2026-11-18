@@ -65,23 +65,74 @@ def test_initialize_current_workspace_reenters_without_rewriting_it(
 
 
 @pytest.mark.parametrize("preview", [False, True])
-def test_initialize_does_not_relabel_legacy_model_configuration(
+def test_initialize_migrates_legacy_models_with_backup_and_readonly_preview(
     startup_home: Path, monkeypatch: pytest.MonkeyPatch, preview: bool,
+    legacy_model_configuration: dict[str, object], capsys: pytest.CaptureFixture[str],
 ) -> None:
     path = startup_home / "config/workspace.jsonc"
     path.parent.mkdir(parents=True)
-    original = json.dumps({"config_version": 2, "llm": {"providers": [{
-        "id": "primary", "model": "user-model", "endpoint": "https://example.invalid/v1",
-        "custom_llm_provider": "openai", "api_key": "${USER_MODEL_KEY}",
-    }]}}).encode()
+    original = ('// 保留原始注释\n' + json.dumps(legacy_model_configuration)).encode()
     path.write_bytes(original)
     monkeypatch.setattr("sys.argv", ["boxteam", "initialize", *(["--preview"] if preview else [])])
 
-    with pytest.raises(ValueError, match="配置验证失败"):
-        main()
+    main()
+    report = json.loads(capsys.readouterr().out)
+    if preview:
+        assert report["upgrade_required"] is True
+        assert list(path.parent.iterdir()) == [path]
+        assert path.read_bytes() == original
+        return
+    converted = read_jsonc_object(path)
+    assert converted["config_version"] == 3
+    providers = converted["llm"]["providers"]
+    assert list(providers) == ["primary", "backup_1", "backup_2"]
+    for old in legacy_model_configuration["llm"]["providers"]:
+        assert providers[old["id"]] == {
+            "defaults": {**{key: value for key, value in old.items() if key not in ("id", "model", "request_options")},
+                         "request_options": {"parameters": {"reasoning_effort": "max", "extra_body": {"custom": True}},
+                                             "default_headers": {"X-Test": "kept"}, "no_proxy": True}},
+            "models": {"default": {"model": old["model"]}},
+        }
+    assert converted["agents"]["default"]["model"] == {
+        "primary": {"provider_id": "primary", "model_id": "default"},
+        "fallbacks": [{"provider_id": "backup_2", "model_id": "default"},
+                      {"provider_id": "backup_1", "model_id": "default"}], "temperature": 0.2,
+    }
+    backup = Path(report["upgrades"]["configuration"]["backup_root"])
+    assert original in [file.read_bytes() for file in backup.glob("file-*.before")]
+    after = {file: file.read_bytes() for file in startup_home.rglob("*") if file.is_file()}
+    main()
+    assert json.loads(capsys.readouterr().out)["upgrades"] == {}
+    assert {file: file.read_bytes() for file in startup_home.rglob("*") if file.is_file()} == after
 
-    assert list(path.parent.iterdir()) == [path]
-    assert path.read_bytes() == original
+
+@pytest.mark.parametrize("conflict", ["duplicate", "options", "reference", "current_version", "extra_body"])
+def test_initialize_rejects_ambiguous_or_mislabeled_model_config_without_writes(
+    startup_home: Path, legacy_model_configuration: dict[str, object], conflict: str,
+) -> None:
+    providers = legacy_model_configuration["llm"]["providers"]
+    if conflict == "duplicate":
+        providers.append(providers[0])
+    elif conflict == "options":
+        providers[0]["request_options"]["parameters"] = {"reasoning_effort": "low"}
+    elif conflict == "reference":
+        legacy_model_configuration["agents"]["default"]["model"]["primary"] = {
+            "provider_id": "backup_1", "model_id": "default",
+        }
+    elif conflict == "extra_body":
+        providers[0]["request_options"]["overrides"]["reasoning_effort"] = "low"
+    else:
+        legacy_model_configuration["config_version"] = 3
+    path = startup_home / "config/workspace.jsonc"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(legacy_model_configuration), encoding="utf-8")
+    if conflict == "current_version":
+        # 另一个域需要迁移时，也不能把已标记 v3 的非法旧结构当作升级来源。
+        (path.parent / "gateway.jsonc").write_text('{"config_version":4}', encoding="utf-8")
+    before = {file: file.read_bytes() for file in startup_home.rglob("*") if file.is_file()}
+    with pytest.raises(ValueError, match="重复 id|同时声明|配置验证失败|extra_body 重复"):
+        main()
+    assert {file: file.read_bytes() for file in startup_home.rglob("*") if file.is_file()} == before
 
 
 def test_initialize_upgrades_old_config_with_exact_backups_and_reenters_without_writes(

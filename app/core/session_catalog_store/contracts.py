@@ -66,7 +66,7 @@ class SessionCatalogNode:
     # SessionDTO 业务字段只归 nodes；folder 对应槽全部为空。
     session_kind: str | None
     current_agent_id: str | None
-    current_provider_id: str | None
+    current_model_json: str | None
     context_source_session_id: str | None
     generation_origin_json: str | None
     updated_at: str | None

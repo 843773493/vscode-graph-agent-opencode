@@ -6,7 +6,7 @@ import { useGenerationActivity } from "./useGenerationActivity";
 
 const target: GatewayWorkspaceRequestTarget = { gateway_id: "gateway-test", workspace_id: "owner-one" };
 const task: api.PersistentTaskDTO = {
-  task_id: "gen_imported", workspace_id: "owner-one", revision: 1, definition_revision: 1,
+  task_id: "gen_imported", workspace_id: "owner-one", revision: 1, definition_revision: 1, tokens_used: 0, time_used_seconds: 0, sync_version: 1,
   application_type: "automation", application_version: "1", lifecycle: "active", phase: "waiting_trigger", recovering: false,
   created_at: "2026-10-27T00:00:00Z", updated_at: "2026-10-27T00:00:00Z",
   configuration: {

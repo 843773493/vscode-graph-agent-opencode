@@ -16,18 +16,20 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../upstream/s
 import { ITextFileService, TextFileEditorModelState } from '../../upstream/src/vs/workbench/services/textfile/common/textfiles.js';
 import { IFilesConfigurationService } from '../../upstream/src/vs/workbench/services/filesConfiguration/common/filesConfigurationService.js';
 import { HttpRequestError } from '../../../web/src/api/http.js';
+import type { GatewayRequestTarget } from '../../../web/src/api/workspaceIdentity.js';
+import type { ModelReferenceDTO } from '../../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import type { PluginConfigurationSchemasDTO } from '../../../web/src/types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
-import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus, type SourceTarget, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
+import { ConfigurationSourceOwner, sourceBaseline, sourceStatus, sourceFanoutStatus, type SourceDocument, type SourceBaseline } from './sourceOwner.js';
 
 export const configSourceScheme = 'boxteam-config-source';
 
 /** 编辑器身份，不是业务资源 grammar；规范来源 URI 仍只取 owner 的 sources 回执。 */
-export function configSourceEditorUri(target: SourceTarget, sourceKey: string): URI {
+export function configSourceEditorUri(target: GatewayRequestTarget, sourceKey: string): URI {
   return URI.from({ scheme: configSourceScheme, authority: target.gateway_id,
     path: '/' + [target.workspace_id ? 'workspace' : 'gateway', target.workspace_id ?? '-', sourceKey + '.jsonc'].map(encodeURIComponent).join('/') });
 }
 
-export function sourceLocation(resource: URI): { target: SourceTarget; sourceKey: string } {
+export function sourceLocation(resource: URI): { target: GatewayRequestTarget; sourceKey: string } {
   const parts = resource.path.slice(1).split('/').map(decodeURIComponent);
   if (resource.scheme !== configSourceScheme || !resource.authority || resource.query || resource.fragment || parts.length !== 3
     || !['gateway', 'workspace'].includes(parts[0]) || !parts[1] || !parts[2].endsWith('.jsonc') || parts[2] === '.jsonc'
@@ -74,6 +76,11 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     await this.storage.flush();
   }
   pendingSubmission(resource: URI): string | undefined { return this.edit(resource).submission?.key; }
+  async preflight(resource: URI, jsonc: string, signal?: AbortSignal, modelRef?: ModelReferenceDTO) {
+    const edit = this.edit(resource);
+    if (!edit.baseline) throw new Error(t('settings.editor.restoredBaselineMissing'));
+    return edit.owner.preflight(edit.owner.intent(edit.sourceKey, jsonc, edit.baseline), signal, modelRef);
+  }
 
 
   private edit(resource: URI): SourceEdit {
@@ -87,7 +94,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     }
     return edit;
   }
-  prepareEditor(target: SourceTarget, sourceKey: string, document: SourceDocument): URI {
+  prepareEditor(target: GatewayRequestTarget, sourceKey: string, document: SourceDocument): URI {
     const resource = configSourceEditorUri(target, sourceKey), key = resource.toString();
     const current = this.edits.get(key);
     if (current) {
@@ -212,12 +219,7 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     if (options.append || options.atomic) throw new Error(t('settings.editor.appendUnsupported'));
     await this.saveSource(resource, VSBuffer.wrap(content).toString());
   }
-  /** 非持久输入与文本保存共用同一预检、确认、CAS 和未知结果查询。 */
-  async saveTransient(resource: URI, jsonc: string, check: () => void): Promise<void> {
-    if (this.pendingSubmission(resource)) throw new Error(t('settings.editor.originalSaveUnknown', this.pendingSubmission(resource)!));
-    await this.saveSource(resource, jsonc, check);
-  }
-  private async saveSource(resource: URI, jsonc: string, check?: () => void): Promise<void> {
+  private async saveSource(resource: URI, jsonc: string): Promise<void> {
     // 每次操作捕获原路由；显式重选连接只影响后续操作，资源目标始终来自 URI。
     const edit = this.edit(resource), owner = edit.owner;
     if (edit.saving) throw new Error(t('configuration.entities.saveInProgress'));
@@ -239,21 +241,17 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     const intent = owner.intent(edit.sourceKey, jsonc, edit.baseline);
     let saving = false;
     try {
-      check?.();
       const preflight = await owner.preflight(intent);
-      check?.();
       const accepted = await this.dialogs.confirm({ type: 'question', message: t('settings.editor.confirmSourceSave'), primaryButton: t('settings.editor.saveSource'),
         detail: t('settings.editor.sourceSaveDetail', owner.target.gateway_id, owner.target.workspace_id ? t('settings.editor.workspaceSuffix') + owner.target.workspace_id : ' · Gateway', edit.sourceKey, preflight.changed_paths.join(t('plugins.listSeparator')) || t('settings.editor.formatOrShadowed'), sourceFanoutStatus(preflight.document!)) });
       if (!accepted.confirmed) throw new CancellationError();
-      check?.();
       await this.setSubmission(resource, edit, { key: intent.idempotency_key, gatewayConnectionId: owner.target.gateway_connection_id });
-      check?.();
       saving = true;
       const saved = await owner.save(intent);
       this.update(resource, edit, saved);
       if (saved.edit && (saved.edit.source_saved || ['rejected', 'discarded', 'conflict'].includes(saved.edit.state))) await this.setSubmission(resource, edit);
       if (!saved.edit?.source_saved) throw new Error(t('settings.editor.sourceNotSaved', sourceStatus(saved)));
-      if (!check) edit.baseline = sourceBaseline(saved);
+      edit.baseline = sourceBaseline(saved);
       if (!saved.edit.layer_imported) this.notifications.error(sourceStatus(saved));
       else this.notifications.info(sourceStatus(saved));
       return;
@@ -274,10 +272,10 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
         if (latest.edit.source_saved || ['rejected', 'discarded', 'conflict'].includes(latest.edit.state)) await this.setSubmission(resource, edit);
         if (latest.edit.source_saved) {
           if (latest.edit.file_digest !== latest.file_digest) {
-            if (!check) edit.baseline = sourceBaseline(latest);
+            edit.baseline = sourceBaseline(latest);
             throw new Error(t('settings.editor.savedThenChanged'));
           }
-          if (!check) edit.baseline = sourceBaseline(latest);
+          edit.baseline = sourceBaseline(latest);
           this.notifications.info(sourceStatus(latest)); return;
         }
       }

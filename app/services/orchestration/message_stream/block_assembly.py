@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
+from io import StringIO
 from typing import Any
 
 from langchain_core.messages import AIMessageChunk
@@ -80,8 +81,7 @@ class MessageStreamBlockAssemblyMixin:
                 self._normalized_block_model_call_ids.items()
             ):
                 if block_model_call_id == previous_model_call_id:
-                    self._normalized_text_by_block.pop(block_id, None)
-                    self._normalized_carrier_by_block.pop(block_id, None)
+                    self._normalized_text_chunks_by_block.pop(block_id, None)
                     self._normalized_block_model_call_ids.pop(block_id, None)
         for block_id in self._active_block_order:
             if self._block_model_call_ids.get(block_id) is None:
@@ -108,7 +108,12 @@ class MessageStreamBlockAssemblyMixin:
             elif registered_execution_id is not None:
                 accumulator.bind_execution_id(registered_execution_id)
             self._canonical_block_accumulator = accumulator
+            pending_tool_calls: set[str] = set()
             for block in self._pending_canonical_blocks:
+                if block.get("carrier_type") == "tool_call" and block["block_id"] not in pending_tool_calls:
+                    call_id = block["block_id"]
+                    block["args"], _ = self._read_tool_call_arguments(call_id)
+                    pending_tool_calls.add(call_id)
                 accumulator.accept(block)
             self._pending_canonical_blocks.clear()
         else:
@@ -196,13 +201,13 @@ class MessageStreamBlockAssemblyMixin:
         """
         effective_model_call_id = model_call_id or self.current_model_call_id
         return "".join(
-            self._normalized_text_by_block[block_id]
+            text
             for block_id in self._active_block_order
             if (
                 self._normalized_block_model_call_ids.get(block_id)
                 == effective_model_call_id
-                and block_id in self._normalized_text_by_block
             )
+            for text in self._normalized_text_chunks_by_block.get(block_id, ())
         )
 
     def model_call_has_carrier(
@@ -376,10 +381,7 @@ class MessageStreamBlockAssemblyMixin:
             await self._observe_normalized_block("block.delta", payload)
             self._accept_canonical_block(payload, model_call_id=model_call_id)
             if carrier_type in {"text", "output_text", "refusal"}:
-                self._normalized_text_by_block[block_id] = (
-                    self._normalized_text_by_block.get(block_id, "") + text
-                )
-                self._normalized_carrier_by_block[block_id] = carrier_type
+                self._normalized_text_chunks_by_block.setdefault(block_id, []).append(text)
                 self._normalized_block_model_call_ids[block_id] = (
                     model_call_id or self.current_model_call_id
                 )
@@ -482,30 +484,25 @@ class MessageStreamBlockAssemblyMixin:
         if isinstance(raw_tool_name, str) and raw_tool_name:
             self._tool_call_names_by_id[tool_call_id] = raw_tool_name
         raw_args = chunk.get("args")
-        if isinstance(raw_args, str):
-            self._tool_call_arguments[tool_call_id] = (
-                self._tool_call_arguments.get(tool_call_id, "") + raw_args
-            )
-        accumulated_args = self._tool_call_arguments.get(tool_call_id, "")
-        arguments: dict[str, object]
-        arguments_complete = False
-        if accumulated_args:
-            # 对象末尾只能是 } 和空白；未到边界时不反复解析全部参数前缀。
-            try:
-                parsed = json.loads(accumulated_args) if accumulated_args.rstrip().endswith("}") else None
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, dict):
-                arguments = parsed
-                arguments_complete = True
-            else:
-                arguments = {"raw": accumulated_args}
-        elif isinstance(raw_args, Mapping):
-            arguments = dict(raw_args)
+        buffer = self._tool_call_arguments.setdefault(tool_call_id, StringIO())
+        was_complete = self._tool_call_arguments_complete.get(tool_call_id, False)
+        arguments_complete = was_complete
+        update: dict[str, object] = {}
+        if isinstance(raw_args, str) and raw_args:
+            buffer.write(raw_args)
+            update["arguments_delta"] = raw_args
+            arguments_complete = False
+            # 只在可能形成完整对象时物化全文。完成后又收到内容时，同样核对新前缀。
+            if raw_args.rstrip().endswith("}") or was_complete:
+                arguments, arguments_complete = self._read_tool_call_arguments(tool_call_id)
+                if arguments_complete or was_complete:
+                    update["arguments"] = arguments
+        elif not buffer.tell() and isinstance(raw_args, Mapping):
+            update["arguments"] = dict(raw_args)
+            buffer.write(json.dumps(dict(raw_args), ensure_ascii=False))
             arguments_complete = True
-        else:
-            arguments = {}
-        self._tool_call_arguments_by_id[tool_call_id] = arguments
+        elif not buffer.tell():
+            update["arguments"] = {}
         self._tool_call_arguments_complete[tool_call_id] = arguments_complete
         for block_id in tuple(self._active_block_ids):
             await self._close_block(
@@ -520,7 +517,7 @@ class MessageStreamBlockAssemblyMixin:
                 {
                     "tool_call_id": tool_call_id,
                     "tool_name": self._tool_call_names_by_id.get(tool_call_id, ""),
-                    "arguments": arguments,
+                    **update,
                     "status": "accumulating",
                     "arguments_complete": self._tool_call_arguments_complete[tool_call_id],
                 },
@@ -536,7 +533,6 @@ class MessageStreamBlockAssemblyMixin:
                 "block_id": tool_call_id,
                 "block_index": tool_index,
                 "carrier_type": "tool_call",
-                "args": arguments,
                 "name": self._tool_call_names_by_id.get(tool_call_id, ""),
                 "tool_call_id": tool_call_id,
                 "tool_invocation_id": self._tool_invocation_id_for(
@@ -546,6 +542,16 @@ class MessageStreamBlockAssemblyMixin:
             },
             model_call_id=model_call_id,
         )
+
+    def _read_tool_call_arguments(self, tool_call_id: str) -> tuple[dict[str, object], bool]:
+        text = self._tool_call_arguments[tool_call_id].getvalue()
+        if not text:
+            return {}, False
+        try:
+            parsed = json.loads(text) if text.rstrip().endswith("}") else None
+        except json.JSONDecodeError:
+            parsed = None
+        return (parsed, True) if isinstance(parsed, dict) else ({"raw": text}, False)
 
     def _next_tool_call_index(self, model_call_id: str | None) -> int:
         index = 0
@@ -701,8 +707,7 @@ class MessageStreamBlockAssemblyMixin:
     def normalized_final_text(self) -> str:
         """返回当前 ModelCall 规范化文本，用于与最终聚合结果做诊断对账。"""
         return "".join(
-            self._normalized_text_by_block[block_id]
-            for block_id in self._normalized_text_by_block
-            if self._normalized_carrier_by_block.get(block_id)
-            in {"text", "output_text", "refusal"}
+            text
+            for chunks in self._normalized_text_chunks_by_block.values()
+            for text in chunks
         )

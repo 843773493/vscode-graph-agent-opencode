@@ -28,12 +28,55 @@ import {
   wait,
 } from "./testFixtures";
 import { useSessionTurnHistory } from "./useSessionTurnHistory";
+import { createMessageStreamState } from "../../state/messageStream/state";
 
 afterEach(() => {
   restoreTurnHistoryTestGlobals();
 });
 
 describe("useSessionTurnHistory pending bootstrap", () => {
+  test("每次模型请求首次输出补读来源 metadata，后续 token 不增加请求", async () => {
+    const state = appState();
+    const turn = { ...bootstrap("ready", 1).latest_turn!, status: "running" as const };
+    state.activeJobIdsBySession.set(SCOPE_KEY, turn.job_id);
+    state.pendingConversations.set(SCOPE_KEY, [{ conversationId: turn.turn_id, displayMode: "live",
+      sessionId: SESSION_ID, threadId: THREAD_ID, turnId: turn.turn_id, jobId: turn.job_id,
+      status: "running", pending: true, source: "pending", userMessage: null, assistantMessages: [], events: [] }]);
+    state.turnTimelinesBySession.set(SCOPE_KEY, { ...upsertTurns(createSessionTurnTimeline(SCOPE_KEY), [turn]),
+      phase: "ready", scopeKey: SCOPE_KEY, threadId: THREAD_ID });
+    const reads: Array<{ ids: string[]; identity: string | null; include?: string[] }> = [];
+    const load: ReturnType<typeof useSessionTurnHistory>["loadTurnDetails"] = async (ids, identity = null, _refresh, include) => {
+      reads.push({ ids, identity, include });
+    };
+    const setState = () => {};
+    function Harness({ value }: { value: AppState }): React.ReactNode {
+      const latest = React.useRef(value);
+      latest.current = value;
+      useSessionJobTurnLoader({ state: value, loadTurnDetails: load, latestStateRef: latest,
+        sessionCacheKey: SCOPE_KEY, refreshTurnHistory: setState, setState });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness value={state} />); });
+    const update = async (modelCallId: string, text: string) => {
+      const stream = createMessageStreamState(SESSION_ID, turn.turn_id, "stream-context", SCOPE_KEY, THREAD_ID);
+      stream.blocks = [{ block_id: "block-context", model_call_id: modelCallId, block_index: 0,
+        carrier_type: "text", status: "running", text, items: [], redacted: false, projection: "detail" }];
+      await act(async () => { renderer.update(<Harness value={{ ...state,
+        messageStreamsByTurnStream: new Map([["stream-context", stream]]) }} />); });
+    };
+    try {
+      expect(reads).toHaveLength(0);
+      await update("call-first", "第一个 token");
+      await update("call-first", "更多 token");
+      await update("call-next", "下一次请求");
+      expect(reads).toEqual([
+        { ids: [turn.turn_id], identity: `active-turn:${turn.turn_id}:call-first`, include: ["metadata", "user"] },
+        { ids: [turn.turn_id], identity: `active-turn:${turn.turn_id}:call-next`, include: ["metadata", "user"] },
+      ]);
+    } finally { act(() => renderer.unmount()); }
+  });
+
   test.each(["snapshot_first", "metadata_first", "queued_to_active", "internal_turn",
     "metadata_then_full", "full_then_metadata", "completed_metadata_expand"] as const)(
     "真实活动 Turn reader 在 %s 顺序下读取一次根消息和 metadata 并保留 live 内容", async (order) => {
@@ -77,7 +120,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
           attachments: [], execution_binding: { job_id: jobId,
             turn_id: order === "internal_turn" ? null : turnId,
             admission_idempotency_key: "admission_active_metadata" },
-          delivery_policy: "after_turn", enqueue_sequence: 1, position: 0,
+          delivery_policy: "after_turn", reorderable: true, enqueue_sequence: 1, position: 0,
           status: "queued", agent_id: "default",
           message_created_at: "2026-10-09T00:00:00Z",
           message_metadata: { updated_at: "2026-10-09T00:00:01Z" },
@@ -500,7 +543,7 @@ describe("useSessionTurnHistory pending bootstrap", () => {
                 content: "排队消息真实内容",
                 attachments: [],
                 delivery_policy: "after_turn",
-                enqueue_sequence: 1,
+                reorderable: true, enqueue_sequence: 1,
                 status: "queued",
                 position: 1,
                 agent_id: "default",

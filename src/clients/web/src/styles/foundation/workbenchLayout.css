@@ -354,62 +354,6 @@ body.is-layout-resizing {
   background: var(--bt-panel-background);
 }
 
-.workspace-preview-text-editor-line-numbers {
-  flex: 0 0 auto;
-  box-sizing: border-box;
-  overflow: hidden;
-  padding: 10px 8px 28px 0;
-  color: var(--bt-text-subtle);
-  font-family: var(
-    --bt-font-family-mono,
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    "Liberation Mono",
-    monospace
-  );
-  font-size: 12px;
-  line-height: 20px;
-  text-align: right;
-  white-space: pre;
-  user-select: none;
-}
-
-.workspace-preview-text-editor {
-  display: block;
-  flex: 1 1 auto;
-  width: 0;
-  min-width: 0;
-  min-height: 0;
-  resize: none;
-  padding: 10px 14px 28px 4px;
-  border: 0;
-  outline: 0;
-  background: var(--bt-panel-background);
-  color: var(--bt-text-primary);
-  font-family: var(
-    --bt-font-family-mono,
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    "Liberation Mono",
-    monospace
-  );
-  font-size: 12px;
-  line-height: 20px;
-  tab-size: 2;
-  white-space: pre;
-  overflow: auto;
-}
-
-.workspace-preview-text-editor[readonly] {
-  cursor: text;
-}
-
 .workspace-markdown-preview {
   flex: 1 1 auto;
   min-width: 0;
@@ -1001,14 +945,16 @@ body.is-layout-resizing {
   min-height: 0;
 }
 
-/* 固定预留提示位；提示出现时不推移树，也不覆盖树末行。 */
+/* 错误在所属树底部展示，不为短暂状态预留顶部空白。 */
 .files-tree-notifications {
+  position: absolute;
+  z-index: 5;
+  inset-inline: 8px;
+  bottom: 4px;
   display: flex;
-  flex: 0 0 36px;
   box-sizing: border-box;
-  height: 36px;
-  min-height: 36px;
-  overflow: hidden;
+  max-height: min(40%, 120px);
+  overflow: auto;
   pointer-events: none;
 }
 
@@ -1034,21 +980,6 @@ body.is-layout-resizing {
   border-radius: 4px;
   background: var(--bt-panel-background);
   box-shadow: 0 4px 12px color-mix(in srgb, black 18%, transparent);
-}
-
-.files-tree-notification-row > .files-tree-notification-loading {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  margin: 0;
-  padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--bt-panel-border) 80%, transparent);
-  border-radius: 4px;
-  background: var(--bt-panel-background);
-  box-shadow: 0 4px 12px color-mix(in srgb, black 18%, transparent);
-  color: var(--bt-text-muted);
 }
 
 .files-tree-notification-next {

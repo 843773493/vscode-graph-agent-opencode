@@ -197,13 +197,13 @@ class RuntimeSourceDispatcher:
             frozen_wakeup = self._saver.runtime_wakeup_for_admission(
                 session_id, thread_id, intent.admission_idempotency_key,
             )
-            provider_id = session.current_provider_id
+            model = session.current_model.model_dump(mode="json") if session.current_model is not None else None
             if frozen_wakeup is not None:
                 frozen_metadata = self._saver.runtime_wakeup_message(frozen_wakeup).response_metadata
-                provider_id = frozen_metadata["boxteam_session_provider_id"]
+                model = frozen_metadata["boxteam_session_model"]
             message_metadata = {
                 **dict(message.metadata),
-                "boxteam_session_provider_id": provider_id,
+                "boxteam_session_model": model,
             }
             resolver = self._sessions.path_resolver
             resolver.resolve_thread_node(session_id, thread_id)

@@ -27,8 +27,10 @@
 
 `test_gateway_launcher_handoff.py` 通过真实 Launcher、Gateway 和受管工作区运行；`runtime_logging_controls.py` 驱动 Gateway、Backend、Launcher 和可选 Extension Management 的原有控制入口及真实用户配置 watcher。它建立 Terminal／Browser 资源并验证日志热应用期间资源身份与运行状态不变；这些资源由插件 owner 管理，不作为独立 Backend 辅助进程或日志目标。核对实际日志目标的私有认证、实例／revision 冲突、真实配置热应用、DEBUG 落盘、WARNING 过滤及换代后的旧实例拒绝，观察结果保存到本测试 `artifacts/runtime-logging-*.json`。其 Web 驱动 `clients/web/runtime_logging_diagnostics.mjs` 使用同一现场，经真实 Gateway 初始化并打开日志诊断，产物仍归父测试目录。两个工作区通过真实注册和受控重启共享 Backend；这项正常热应用验收不代替真实失败补偿。
 
-该页面使用 `web_workbench_assets` 构建正式 Workbench，由 Launcher 的 Gateway 托管。日志诊断从主侧栏的 Gateway 控制中心进入，按对应 ShadowRoot 内的对话框定位；保留原进程实例、revision 和 request_id 断言。HOME 与产物按运行和 pytest 节点隔离；handoff 后按 Launcher 原有退出期限等待旧进程完成连接排空，不用固定睡眠判断退出。
+该页面使用 `web_workbench_assets` 构建正式 Workbench，由 Launcher 的 Gateway 托管。日志诊断从原生设置的日志与遥测分类进入，按管理内容 ShadowRoot 定位；保留原进程实例、revision 和 request_id 断言。HOME 与产物按运行和 pytest 节点隔离；handoff 后按 Launcher 原有退出期限等待旧进程完成连接排空，不用固定睡眠判断退出。
 
 `test_gateway_logging.py` 使用显式 `runtime_logging_app.py` 测试组合，仍运行真实 Gateway、受管 Backend／Node、HTTP 校验和 SQLite 事务；保留 Terminal／Browser 插件完成统一日志热应用后的原失败补偿场景。故障只让发出的前置条件过期，不替换进程状态或写入业务结果。终端验收通过模型回放驱动真实 `exec_command`，同时核 wire、canonical、用户定点详情与工作区专用记录。测试组合不进入产品启动入口，模型响应复用统一 model_stream 资产与编码。
 
 - Gateway 测试组合包装产品 lifespan 时必须原样 yield `state`，保留 `after_http_startup` 与 `before_http_shutdown` 回调供 runner 调用；不得用已退役的 Extension Management owner 替代生命周期状态合同。Backend 测试组合仍沿 Workspace 生命周期。
+
+- `terminal_plugin_page.mjs` 还用实际 React 观察 hook 和正式 attach 页面验证六个嵌入终端：同工作区单source与单物理SSE、跨真实60秒对账静止65秒零补读、增减单项不扰动其它视图、按资源变化、一次摘要读取503后的提示恢复、卸载释放及普通请求可达。503仅注入指定资源的一次读取，健康请求仍限3秒；测试宿主页只负责装配，不替换Gateway、Backend、插件或资源请求，不代替完整Workbench布局验收。

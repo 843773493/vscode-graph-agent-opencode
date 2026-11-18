@@ -269,25 +269,24 @@ button:disabled:hover {
   }
 }
 
+.embedded-terminal,
+.embedded-terminal body {
+  background: var(--terminal-background);
+}
+
 .embedded-terminal .terminal-shell {
-  gap: 4px;
-  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
 }
 
 .embedded-terminal .terminal-toolbar {
-  gap: 8px;
-}
-
-.embedded-terminal .terminal-title strong {
   display: none;
 }
 
-.embedded-terminal .terminal-title span {
-  font-size: 12px;
-}
-
-.embedded-terminal .terminal-actions {
-  gap: 2px;
+.embedded-terminal .terminal-stage {
+  flex: 1;
 }
 
 .embedded-terminal .status-line {
@@ -297,6 +296,8 @@ button:disabled:hover {
 }
 
 .embedded-terminal .terminal {
-  border-radius: 6px;
+  border: 0;
+  border-radius: 0;
+  background: var(--terminal-background);
   padding: 4px;
 }

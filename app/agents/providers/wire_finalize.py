@@ -28,10 +28,16 @@ from langchain_core.messages import (
 from langchain_openai.chat_models.base import _construct_responses_api_payload
 
 from app.agents.providers.litellm_stream_types import _openai_tool_call
+from app.agents.providers.request_parameters import (
+    merge_request_parameters,
+    validate_extra_body,
+)
 from app.agents.providers.request_validation import (
     reject_sealed_overrides,
     validate_provider_system_scope,
 )
+from app.domain.itemized.hashing import canonical_json_bytes
+from app.domain.itemized.identity.model_source import ModelSource
 from app.services.mapping.itemized.provider_history import reasoning_projection_rows
 from app.services.mapping.itemized.provider_request import (
     project_ai_message_content,
@@ -42,7 +48,7 @@ from app.services.mapping.itemized.provider_request import (
 
 # 最终 wire 转换算法身份独立于 provider/model/capability profile。
 WIRE_PROJECTOR_ID = "itemized-context-provider"
-WIRE_PROJECTOR_VERSION = "v3"
+WIRE_PROJECTOR_VERSION = "v6"
 
 # 认证与本地传输只属于连接本身，不进入 request hash；其余真实语义参数
 # （含 model_kwargs 展开的 temperature/max_tokens/extra_body 等）必须参与。
@@ -80,22 +86,35 @@ class ChatWireProfile:
     model: str
     reasoning_content_replay: bool = False
     thinking_blocks_replay: bool = False
+    redacted_thinking_replay: bool = False
     image_input_replay: bool = False
+    streaming: bool = True
+    model_source: ModelSource | None = None
+
+    def replay_capabilities(self) -> frozenset[str]:
+        return frozenset(name for name, enabled in (
+            ("reasoning_content_replay", self.reasoning_content_replay),
+            ("thinking_blocks", self.thinking_blocks_replay),
+            ("encrypted_reasoning_replay", self.redacted_thinking_replay),
+        ) if enabled)
 
     def capabilities(self) -> dict[str, bool]:
         return {
             "reasoning_content_replay": self.reasoning_content_replay,
             "thinking_blocks_replay": self.thinking_blocks_replay,
+            "redacted_thinking_replay": self.redacted_thinking_replay,
             "image_input_replay": self.image_input_replay,
+            "streaming": self.streaming,
         }
 
     def identity(self) -> str:
         return wire_profile_identity(
-            protocol="chat_completions",
+            protocol="anthropic_messages" if self.custom_llm_provider == "anthropic" else "chat_completions",
             provider_id=self.provider_id,
             custom_llm_provider=self.custom_llm_provider,
             model=self.model,
             capabilities=self.capabilities(),
+            model_source=self.model_source,
         )
 
 
@@ -111,6 +130,15 @@ class ResponsesWireProfile:
     reasoning_items_summary_replay: bool = False
     reasoning_items_encrypted_replay: bool = False
     image_input_replay: bool = False
+    streaming: bool = True
+    model_source: ModelSource | None = None
+
+    def replay_capabilities(self) -> frozenset[str]:
+        return frozenset(name for name, enabled in (
+            ("reasoning_items", self.reasoning_items_summary_replay or self.reasoning_items_encrypted_replay),
+            ("reasoning_summary", self.reasoning_items_summary_replay),
+            ("encrypted_reasoning_replay", self.reasoning_items_encrypted_replay),
+        ) if enabled)
 
     def capabilities(self) -> dict[str, bool]:
         return {
@@ -118,6 +146,7 @@ class ResponsesWireProfile:
             "reasoning_items_summary_replay": self.reasoning_items_summary_replay,
             "reasoning_items_encrypted_replay": self.reasoning_items_encrypted_replay,
             "image_input_replay": self.image_input_replay,
+            "streaming": self.streaming,
             **{f"include:{value}": True for value in self.include},
         }
 
@@ -128,6 +157,7 @@ class ResponsesWireProfile:
             custom_llm_provider=self.custom_llm_provider,
             model=self.model,
             capabilities=self.capabilities(),
+            model_source=self.model_source,
         )
 
 
@@ -138,6 +168,7 @@ def wire_profile_identity(
     custom_llm_provider: str,
     model: str,
     capabilities: Mapping[str, bool],
+    model_source: ModelSource | None = None,
 ) -> str:
     """profile 字符串：只标识 provider/model 能力身份，不代表投影算法版本。"""
     if not protocol or not model:
@@ -149,6 +180,7 @@ def wire_profile_identity(
         f"{protocol}|"
         f"provider={provider_id or ''}|custom={custom_llm_provider}"
         f"|model={model}|caps={flags}"
+        f"|source={canonical_json_bytes(model_source.to_dict()).decode('utf-8') if model_source is not None else 'unknown'}"
     )
 
 
@@ -166,6 +198,7 @@ def finalize_chat_wire(
     messages: Sequence[Mapping[str, Any]],
     tools: Sequence[Mapping[str, Any]] | None,
     params: Mapping[str, Any],
+    custom_llm_provider: str,
 ) -> dict[str, Any]:
     """Chat Completions 最终 wire：真实消息、sealed tools 与剩余请求参数。"""
     reject_sealed_overrides(params, CHAT_SEALED_KEYS, protocol="Chat Completions")
@@ -174,6 +207,10 @@ def finalize_chat_wire(
         payload["tools"] = [dict(tool) for tool in tools]
     payload.update(params)
     validate_provider_system_scope(payload)
+    if custom_llm_provider == "anthropic":
+        from app.runtime.litellm_runtime import anthropic_request_body
+
+        return anthropic_request_body(payload)
     return payload
 
 
@@ -344,6 +381,7 @@ def finalize_provider_wire(
             messages=finalize_chat_messages(messages, profile=profile),
             tools=tools or None,
             params=params,
+            custom_llm_provider=profile.custom_llm_provider,
         )
     if not isinstance(profile, ResponsesWireProfile):
         raise TypeError("source-mismatch: Provider wire 需要纯值 profile")
@@ -354,7 +392,7 @@ def finalize_provider_wire(
     return finalize_responses_wire(
         input_items=native_request["input"],
         tools=native_request["tools"],
-        params={**params, "stream": True},
+        params={**params, "stream": profile.streaming},
         include=profile.include,
         store=profile.store,
         merge_system_to_instructions=profile.custom_llm_provider == "chatgpt",
@@ -452,18 +490,14 @@ def _apply_reasoning_content_replay(
     message_dict: dict[str, Any],
     *,
     content: Any,
+    projection: Mapping[str, Any],
     profile: ChatWireProfile,
-    target_capabilities: set[str],
+    target_capabilities: frozenset[str],
 ) -> None:
+    message_dict.pop("reasoning_content", None)
+    message_dict.pop("thinking_blocks", None)
     if not target_capabilities:
-        message_dict.pop("reasoning_content", None)
-        message_dict.pop("thinking_blocks", None)
         return
-    projection = project_ai_message_content(
-        content,
-        target_provider=profile.provider_id,
-        target_capabilities=target_capabilities,
-    )
     if profile.reasoning_content_replay:
         reasoning = projection.get("reasoning_content")
         if not isinstance(reasoning, str) or not reasoning:
@@ -531,7 +565,10 @@ def chat_wire_profile(model: object) -> ChatWireProfile:
         model=str(getattr(model, "model_name", None) or getattr(model, "model", "") or ""),
         reasoning_content_replay=bool(getattr(model, "reasoning_content_replay", False)),
         thinking_blocks_replay=bool(getattr(model, "thinking_blocks_replay", False)),
+        redacted_thinking_replay=bool(getattr(model, "redacted_thinking_replay", False)),
         image_input_replay=bool(getattr(model, "image_input_replay", False)),
+        streaming=bool(getattr(model, "streaming", True)),
+        model_source=getattr(model, "model_source", None),
     )
 
 
@@ -555,6 +592,8 @@ def responses_wire_profile(model: object) -> ResponsesWireProfile:
             getattr(model, "reasoning_items_encrypted_replay", False)
         ),
         image_input_replay=bool(getattr(model, "image_input_replay", False)),
+        streaming=bool(getattr(model, "streaming", True)),
+        model_source=getattr(model, "model_source", None),
     )
 
 
@@ -572,31 +611,28 @@ def chat_send_params(
     kwargs: Mapping[str, Any] | None = None,
     stream: bool | None = None,
 ) -> dict[str, Any]:
-    """Chat adapter 的真实发送参数：保留凭据，行为与迁移前逐字段一致。
+    """合并完调用参数后省略 null；传输选择由冻结的模型配置提供。
 
-    ``_client_params`` 中的 None 与迁移前一样先省略，再逐字合并 ``kwargs``；
-    ``stream`` 只由真实调用方传入（流式路径 True，非流式路径 None）。只有流式
-    才带 ``stream_options``，非流式请求不得凭空获得 usage chunk 参数。
-    凭据/传输键必须保留给 LiteLLM 建连。
+    只有流式请求携带 stream_options，凭据和本地传输参数保留给 SDK 建连。
     """
-    params = {
-        key: value for key, value in _client_params(model).items()
-        if value is not None
-    }
+    params = dict(_client_params(model))
     if stop is not None:
         if "stop" in params:
             raise ValueError("`stop` 同时出现在输入和默认参数中")
         params["stop"] = list(stop)
-    if kwargs:
-        params.update(kwargs)
+    protocol = "anthropic_messages" if getattr(model, "custom_llm_provider", None) == "anthropic" else "chat_completions"
+    params = merge_request_parameters(params, kwargs or {}, protocol=protocol)
+    validate_extra_body(params, protocol=protocol)
     if stream is not None:
-        params["stream"] = bool(stream)
         if stream:
+            params["stream"] = True
             stream_options = getattr(model, "stream_options", None)
             params["stream_options"] = (
                 dict(stream_options) if stream_options else {"include_usage": True}
             )
         else:
+            # LiteLLM 对 Chat／Anthropic 的 False 使用协议默认值，不写入真实正文。
+            params.pop("stream", None)
             params.pop("stream_options", None)
     return params
 
@@ -608,21 +644,24 @@ def wire_request_params(
     """把 adapter 发送参数归一成真实 HTTP body 的语义视图。
 
     本地回环实测（litellm-http-body-probe）：LiteLLM 在真实请求里 ① 去掉
-    "<custom_llm_provider>/" 的 model 前缀；② 把 ``extra_body`` 展开为顶层键；
+    "<custom_llm_provider>/" 的 model 前缀；② OpenAI 将 ``extra_body`` 展开为顶层键，
+    Anthropic 保留该对象，完整正文另经原 SDK 的协议转换；
     ③ 丢弃 ``api_key``/``api_base``/``organization``/``extra_headers``/``timeout``
     与路由键 ``custom_llm_provider``/``base_model``；④ 丢弃 None 值。封存 preimage
     必须与真实 body 同形，否则发送侧与封存侧会出现第二份事实。
     """
-    merged = {
-        key: value for key, value in params.items() if key != "extra_body"
-    }
+    merged = provider_wire_params({key: value for key, value in params.items() if key != "extra_body"})
     extra_body = params.get("extra_body")
     if extra_body is not None:
         if not isinstance(extra_body, Mapping):
             raise TypeError("provider extra_body 必须是对象")
-        merged.update(extra_body)
+        if getattr(model, "custom_llm_provider", None) == "anthropic":
+            merged["extra_body"] = dict(extra_body)
+        else:
+            merged.update(extra_body)
     merged["model"] = _effective_model(model, params)
-    return provider_wire_params(merged)
+    # 扩展的 JSON null 有业务语义，不能按正式可省略参数再次过滤。
+    return merged
 
 
 def _effective_model(model: object, params: Mapping[str, Any]) -> str:
@@ -654,13 +693,9 @@ def responses_send_params(
     *,
     kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Responses adapter 的真实发送参数：保留凭据，与迁移前逐字段一致。"""
-    params = {
-        key: value for key, value in _client_params(model).items()
-        if value is not None
-    }
-    if kwargs:
-        params.update(kwargs)
+    """Responses 发送与封存共用同一参数合并，凭据保留给 SDK 建连。"""
+    params = merge_request_parameters(_client_params(model), kwargs or {}, protocol="responses")
+    validate_extra_body(params, protocol="responses")
     return params
 
 
@@ -675,7 +710,7 @@ def responses_wire_params(
         model,
         {
             **responses_send_params(model, kwargs=kwargs),
-            "stream": True,
+            "stream": profile.streaming,
             "include": list(profile.include),
             "store": profile.store,
         },
@@ -689,11 +724,7 @@ def finalize_chat_messages(
     profile: ChatWireProfile,
 ) -> list[dict[str, Any]]:
     """Chat Completions 真实消息编码；封存与发送共用这一份实现。"""
-    target_capabilities: set[str] = set()
-    if profile.reasoning_content_replay:
-        target_capabilities.add("reasoning_content_replay")
-    if profile.thinking_blocks_replay:
-        target_capabilities.add("thinking_blocks")
+    target_capabilities = profile.replay_capabilities()
 
     result: list[dict[str, Any]] = []
     for message in messages:
@@ -724,14 +755,17 @@ def finalize_chat_messages(
                 continue
             projection = project_ai_message_content(
                 original_content,
-                target_provider=profile.provider_id,
+                target_source=profile.model_source,
                 target_capabilities=target_capabilities,
+                response_metadata=item.pop("response_metadata", None),
             )
+            item.pop("additional_kwargs", None)
             item["content"] = normalize_chat_history_content(projection["content"])
             if item.get("role") == "assistant":
                 _apply_reasoning_content_replay(
                     item,
                     content=original_content,
+                    projection=projection,
                     profile=profile,
                     target_capabilities=target_capabilities,
                 )
@@ -768,7 +802,7 @@ def finalize_chat_messages(
 
         projection = project_ai_message_content(
             message.content,
-            target_provider=profile.provider_id,
+            target_source=profile.model_source,
             target_capabilities=target_capabilities,
             response_metadata=message.response_metadata,
         )
@@ -794,6 +828,7 @@ def finalize_chat_messages(
             _apply_reasoning_content_replay(
                 message_dict,
                 content=message.content,
+                projection=projection,
                 profile=profile,
                 target_capabilities=target_capabilities,
             )

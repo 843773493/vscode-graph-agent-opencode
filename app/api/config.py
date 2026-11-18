@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from typing import Annotated
 from uuid import uuid4
 
@@ -14,7 +15,11 @@ from app.api.deps import (
     verify_local_token,
 )
 from app.api.errors import state_conflict_http_error
-from app.api.sse_heartbeat import SSE_NO_CACHE_HEADERS
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    SSE_NO_CACHE_HEADERS,
+    stream_sse_with_heartbeat,
+)
 from app.container import AppContainer
 from app.core.trace_middleware import require_current_gateway_id
 from app.schemas.gateway.plugin_private_inputs import (
@@ -39,6 +44,15 @@ from app.schemas.internal_v2.config import (
     ConfigStartupContractDTO,
     ConfigUpdateRequest,
 )
+from app.schemas.internal_v2.llm_probe import (
+    LlmDiscoverRequest,
+    LlmDiscoverResultDTO,
+    LlmTestDeltaDTO,
+    LlmTestRequest,
+    LlmTestResultDTO,
+    LlmTestStartDTO,
+)
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.schemas.internal_v2.sse import SseErrorDTO, sse_responses
 from app.services.infrastructure.config.plugin_private_inputs import (
     PluginPrivateInputStore,
@@ -53,6 +67,94 @@ from app.services.infrastructure.config_service import ConfigService
 from configs.plugin_parameters import plugin_parameters
 
 router = APIRouter(prefix="/config", tags=["config"])
+
+
+@router.post("/llm/discover", response_model=APIResponse[LlmDiscoverResultDTO], summary="发现当前模型连接的上游目录")
+async def discover_llm_models(
+    payload: LlmDiscoverRequest,
+    request: Request,
+    response: Response,
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> APIResponse[LlmDiscoverResultDTO]:
+    request_task = asyncio.current_task()
+    assert request_task is not None
+
+    async def cancel_disconnected() -> None:
+        while True:
+            if (await request.receive())["type"] == "http.disconnect":
+                request_task.cancel()
+                return
+
+    disconnected = asyncio.create_task(cancel_disconnected())
+    try:
+        result = await config_service.discover_llm_models(
+            payload, gateway_id=require_current_gateway_id("模型目录发现"),
+        )
+    except ConfigConflictError as error:
+        raise HTTPException(409, str(error)) from error
+    except (ValueError, TypeError) as error:
+        raise HTTPException(422, str(error)) from error
+    except TimeoutError as error:
+        raise HTTPException(504, "模型目录发现达到 15 秒绝对期限") from error
+    finally:
+        disconnected.cancel()
+        with suppress(asyncio.CancelledError):
+            await disconnected
+    response.headers["Cache-Control"] = "no-store"
+    return APIResponse(data=result, request_id=request_id)
+
+
+@router.post("/llm/test", response_class=StreamingResponse, summary="单次模型文本试运行",
+    responses=sse_responses("模型试运行的开始、内容和唯一终态", {
+        "start": LlmTestStartDTO, "delta": LlmTestDeltaDTO, "result": LlmTestResultDTO,
+    }))
+async def test_llm_model(
+    payload: LlmTestRequest,
+    request: Request,
+    config_service: Annotated[ConfigService, Depends(get_config_service)],
+    _: Annotated[str, Depends(verify_local_token)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> StreamingResponse:
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
+    deadline = started_at + payload.timeout_seconds
+    request_task = asyncio.current_task()
+    assert request_task is not None
+
+    async def cancel_disconnected() -> None:
+        while True:
+            if (await request.receive())["type"] == "http.disconnect":
+                request_task.cancel()
+                return
+
+    disconnected = asyncio.create_task(cancel_disconnected())
+    try:
+        invocation = await config_service.prepare_llm_test(payload,
+            gateway_id=require_current_gateway_id("模型试运行"), deadline=deadline)
+    except ConfigConflictError as error:
+        raise HTTPException(409, str(error)) from error
+    except (ValueError, TypeError) as error:
+        raise HTTPException(422, str(error)) from error
+    except TimeoutError as error:
+        raise HTTPException(504, "模型试运行准备阶段已达到绝对期限") from error
+    finally:
+        disconnected.cancel()
+        with suppress(asyncio.CancelledError):
+            await disconnected
+
+    async def events():
+        source = config_service.stream_llm_test(invocation, request_id=request_id, started_at=started_at, deadline=deadline)
+        async for item in stream_sse_with_heartbeat(source,
+            heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS, close_source_on_exit=True):
+            if isinstance(item, str):
+                yield item
+            else:
+                name = {LlmTestStartDTO: "start", LlmTestDeltaDTO: "delta", LlmTestResultDTO: "result"}[type(item)]
+                yield f"event: {name}\ndata: {item.model_dump_json()}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
 
 
 @router.post("/plugin-private-inputs", response_model=APIResponse[PluginPrivateInputReference])
@@ -183,12 +285,17 @@ async def preflight_config_source(
     source_key: str,
     payload: ConfigSourceEditRequest,
     config_service: Annotated[ConfigService, Depends(get_config_service)],
+    provider_id: str | None = Query(default=None),
+    model_id: str | None = Query(default=None),
     _: str = Depends(verify_local_token),
     request_id: str = Depends(get_request_id),
 ):
     try:
+        if (provider_id is None) != (model_id is None):
+            raise ValueError("模型选项预检须同时提供 provider_id 和 model_id")
+        model_ref = ModelReferenceDTO(provider_id=provider_id, model_id=model_id) if provider_id is not None else None
         result = await config_service.preflight_source_edit(source_key=source_key,
-            gateway_id=require_current_gateway_id("配置来源预检"), request=payload)
+            gateway_id=require_current_gateway_id("配置来源预检"), request=payload, model_ref=model_ref)
     except ConfigConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except (ValueError, TypeError) as error:

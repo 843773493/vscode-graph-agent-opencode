@@ -1,4 +1,4 @@
-import { browserViewKey, openBrowserViewDatabase, updateBrowserView } from "../browserViewStore";
+import { openBrowserViewDatabase } from "../browserViewStore";
 import { openWorkspaceFileIntentDatabase } from "../workspaceFiles/intentStore";
 import { openCatalogOutboxDatabase } from "../session/sessionCatalogOutboxStore";
 import { planBrowserViewRecovery, type RecoveryIssue } from "./browserViews";
@@ -122,7 +122,7 @@ async function recoverQueue(materials: readonly WorkspaceIdentityRecovery[], kin
   return batch;
 }
 
-/** 只由显式导入命令调用；各存储原子提交，重入不重复转换新格式。 */
+/** 自动领取或显式导入共用此转换；各存储原子提交，重入不重复转换新格式。 */
 export async function recoverWorkspaceIdentity(value: unknown): Promise<WorkspaceIdentityRecoveryReport> {
   const materials = parseWorkspaceIdentityRecoveries(value);
   const report: WorkspaceIdentityRecoveryReport = { migrations: materials.map(({ migration_id, registry_gateway_id }) => ({ migration_id, registry_gateway_id })), batches: [] };
@@ -130,6 +130,5 @@ export async function recoverWorkspaceIdentity(value: unknown): Promise<Workspac
   catch (error) { report.batches.push({ storage: "boxteam-browser-views", changed: 0, issues: [{ key: "views", message: error instanceof Error ? error.message : String(error) }] }); }
   report.batches.push(await recoverQueue(materials, "files"));
   report.batches.push(await recoverQueue(materials, "catalog"));
-  for (const material of materials) await updateBrowserView(browserViewKey(material.registry_gateway_id, "workspace-identity-recovery", material.migration_id), () => report);
   return report;
 }

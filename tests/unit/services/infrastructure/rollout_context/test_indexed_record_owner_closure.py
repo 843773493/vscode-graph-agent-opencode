@@ -22,7 +22,9 @@ from app.core.session_control_store import SessionControlStore, ThreadGraphBindi
 from app.core.session_creation import SessionCreationResult, SessionCreationService
 from app.core.session_thread_context import session_thread_owner_scope
 from app.core.thread_creation import ThreadCreationResult, ThreadCreationService
+from app.core.workspace_identity import load_or_create_workspace_id
 from app.domain.itemized.mutation_intents import MutationIntentOwner
+from app.schemas.internal_v2.model_reference import ModelReferenceDTO
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -34,14 +36,13 @@ from app.services.infrastructure.rollout_context.checkpoint.saver import (
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 
-WORKSPACE_ID = "ws-indexed-record-owner"
-
 
 @pytest.fixture
 def indexed_threads(
     tmp_path: Path,
 ) -> tuple[RolloutContextStore, str, str, str, Path]:
     boxteam_root = tmp_path / ".boxteam"
+    workspace_id = load_or_create_workspace_id(tmp_path)
     sessions_root = boxteam_root / "sessions"
     sessions_root.mkdir(parents=True)
     catalog = SessionCatalogStore(
@@ -51,7 +52,7 @@ def indexed_threads(
     session_creator = SessionCreationService(
         store=catalog,
         sessions_root=sessions_root,
-        workspace_id=WORKSPACE_ID,
+        workspace_id=workspace_id,
     )
 
     async def create_session_and_thread() -> tuple[
@@ -74,7 +75,7 @@ def indexed_threads(
                 "delegation": None,
                 "generation_origin": None,
                 "current_agent_id": "default",
-                "current_provider_id": "default_provider",
+                "current_model_json": ModelReferenceDTO(provider_id="default_provider", model_id="default").canonical_json(),
                 "context_source_session_id": None,
             },
         )
@@ -87,7 +88,7 @@ def indexed_threads(
             store=catalog,
             control_store=control,
             sessions_root=sessions_root,
-            workspace_id=WORKSPACE_ID,
+            workspace_id=workspace_id,
             compute_capability_profile_hash=compute_capability_profile_hash,
         )
         child = await child_creator.create(

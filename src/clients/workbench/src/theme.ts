@@ -15,6 +15,31 @@ import type { ServicesAccessor } from '../upstream/src/vs/platform/instantiation
 import { ICommandService } from '../upstream/src/vs/platform/commands/common/commands.js';
 import { BACKGROUND_SETTING, DEFAULT_BACKGROUND, readAppearanceBackground, loadAndApplyBackground, applyBackground } from '../../web/src/theme/theme.js';
 import { errorMessage } from '../../web/src/utils/errorMessage.js';
+import type { IColorTheme } from '../upstream/src/vs/platform/theme/common/themeService.js';
+import type { ITheme } from '@xterm/xterm';
+import { ansiColorIdentifiers } from '../upstream/src/vs/workbench/contrib/terminal/common/terminalColorRegistry.js';
+
+/** 与原 XtermTerminal 一样消费当前主题及 ANSI 色，不维护另一份配色。 */
+export function getTerminalTheme(theme: IColorTheme): ITheme {
+  const color = (id: string) => theme.getColor(id)?.toString();
+  const background = color('terminal.background') ?? color('panel.background');
+  const foreground = color('terminal.foreground');
+  const result: ITheme = {
+    background, foreground,
+    cursor: color('terminalCursor.foreground') ?? foreground,
+    cursorAccent: color('terminalCursor.background') ?? background,
+    selectionBackground: color('terminal.selectionBackground'),
+    selectionInactiveBackground: color('terminal.inactiveSelectionBackground'),
+    selectionForeground: color('terminal.selectionForeground'),
+    scrollbarSliderBackground: color('scrollbarSlider.background'),
+    scrollbarSliderHoverBackground: color('scrollbarSlider.hoverBackground'),
+    scrollbarSliderActiveBackground: color('scrollbarSlider.activeBackground'),
+  };
+  const ansi = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+    'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'] as const;
+  ansi.forEach((key, index) => { result[key] = color(ansiColorIdentifiers[index]); });
+  return result;
+}
 
 // 聊天专属颜色仍由原主题扩展和 workbench.colorCustomizations 提供。
 registerColor('boxteam.chat.background', 'editor.background', t('appearance.chatBackground'));

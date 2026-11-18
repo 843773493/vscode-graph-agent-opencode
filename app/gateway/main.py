@@ -12,7 +12,11 @@ from starlette.types import Scope
 
 from app.core.http_cache import NoStoreErrorsMiddleware
 from app.core.logging_config import configure_application_logging
-from app.core.trace_middleware import TraceMiddleware, get_request_id
+from app.core.trace_middleware import (
+    TraceMiddleware,
+    get_request_id,
+    http_failure_headers,
+)
 from app.gateway.lifespan import lifespan
 from app.gateway.route_registry import register_gateway_routes
 from app.gateway.server.static_ui import install_static_web_ui
@@ -60,7 +64,7 @@ def _observe_request(scope: Scope, status_code: int, duration_ms: float, failed:
                                    proxy=scope["state"].get("proxy_request", False))
 
 
-app.add_middleware(TraceMiddleware, on_request_complete=_observe_request)
+app.add_middleware(TraceMiddleware, component="gateway", on_request_complete=_observe_request)
 app.add_middleware(NoStoreErrorsMiddleware, paths=(
     "/api/v1/workspace/files/raw", "/api/v1/workspaces/{workspace_id}/workspace/files/raw",
 ))
@@ -75,7 +79,7 @@ async def gateway_http_exception_handler(
     request_id = get_request_id(request)
     return JSONResponse(
         status_code=error.status_code,
-        headers=error.headers,
+        headers={**http_failure_headers(request, error), **(error.headers or {})},
         content={
             "detail": error.detail,
             "request_id": request_id,

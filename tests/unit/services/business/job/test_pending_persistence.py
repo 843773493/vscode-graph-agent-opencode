@@ -149,12 +149,12 @@ def _request(
         message_id=message_id, session_id=session_id, thread_id=request.thread_id,
         role=MessageRole.user, content=message_id, created_at=now, updated_at=now,
     ), execution_identity=execution_binding, queue_input=ExecutionQueueInput(
-        execution_binding=execution_binding, message_id=message_id, agent_id="default", provider_id=None,
+        execution_binding=execution_binding, message_id=message_id, agent_id="default", model=None,
         delivery_policy="after_turn", gateway_id=gateway_id, request_id=request_id, created_at=now.isoformat(),
     ))
-    reference = PendingRequestControl.model_validate(request.model_dump(exclude={"content", "attachments", "message_created_at", "message_metadata"}))
+    reference = PendingRequestControl.model_validate(request.model_dump(exclude={"content", "attachments", "message_created_at", "message_metadata", "reorderable"}))
     message = input_owner.accepted_job_message(reference, display=False)
-    return request.model_copy(update={"message_created_at": message.created_at.isoformat(), "message_metadata": {**message.metadata, "boxteam_session_provider_id": None}})
+    return request.model_copy(update={"message_created_at": message.created_at.isoformat(), "message_metadata": {**message.metadata, "boxteam_session_model": None}})
 
 
 @pytest.mark.asyncio
@@ -428,7 +428,7 @@ async def test_restore_and_new_send_keep_one_session_fifo_order(
         message_id="msg_new", session_id="ses_019b8605a35b7fd6829e9dfec660d38c", thread_id=new_thread,
         role=MessageRole.user, content="后发送", created_at=new_created, updated_at=new_created,
     ), execution_identity=new_binding, queue_input=ExecutionQueueInput(
-        execution_binding=new_binding, message_id="msg_new", agent_id="default", provider_id=None,
+        execution_binding=new_binding, message_id="msg_new", agent_id="default", model=None,
         delivery_policy="after_turn", gateway_id=None, request_id=None, created_at=new_created.isoformat(),
     ))
     _snapshot, new_dispatch = await asyncio.gather(

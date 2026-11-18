@@ -3,12 +3,14 @@ import {
   DEFAULT_SESSION_TITLE,
   getSession as apiGetSession,
   updateSessionAgent as apiUpdateSessionAgent,
-  updateSessionProvider as apiUpdateSessionProvider,
+  updateSessionModel as apiUpdateSessionModel,
 } from "../../../api";
 import { replaceSessionMetadata } from "../../../state/session/sessions";
 import { appendFrontendEvent } from "../../../state/traceEvents";
 import { sessionScopeKey } from "../../../state/session/sessionScope";
 import { errorMessage } from "../../../utils/errorMessage";
+import type { ModelReference } from "../../../types/backend";
+import { sameModel } from "../../../utils/modelReference";
 import type { SessionLifecycleContext } from "./sessionLifecycleContext";
 import type { useSessionCreationActions } from "./useSessionCreationActions";
 import { currentSessionMatchesOwner } from "./sessionLifecycleTransitions";
@@ -116,12 +118,13 @@ export function useSessionAgentModelActions(
   );
 
   const switchModel = useCallback(
-    async (providerId: string) => {
+    async (model: ModelReference) => {
       const session = currentSession ?? await createSession(DEFAULT_SESSION_TITLE);
-      if (providerId === session.current_provider_id) {
+      const label = `${model.provider_id} / ${model.model_id}`;
+      if (sameModel(model, session.current_model)) {
         setState((prev) => ({
           ...prev,
-          status: `当前已使用模型 provider: ${providerId}`,
+          status: `当前已使用模型: ${label}`,
         }));
         return;
       }
@@ -136,13 +139,13 @@ export function useSessionAgentModelActions(
 
       setState((prev) => ({
         ...prev,
-        status: `正在切换模型 provider: ${providerId}`,
+        status: `正在切换模型: ${label}`,
       }));
       try {
-        const updatedSession = await apiUpdateSessionProvider(
+        const updatedSession = await apiUpdateSessionModel(
           apiPort,
           session.session_id,
-          providerId,
+          model,
           currentSessionGatewayWorkspaceId
             ?? activeGatewayWorkspaceId
             ?? defaultGatewayWorkspaceId,
@@ -156,7 +159,7 @@ export function useSessionAgentModelActions(
               ?? defaultGatewayWorkspaceId,
           );
           if (currentSessionMatchesOwner(prev, statusOwner)) {
-            next.status = `已切换模型 provider: ${updatedSession.current_provider_id}`;
+            next.status = `已切换模型: ${updatedSession.current_model?.provider_id} / ${updatedSession.current_model?.model_id}`;
           }
           const workspaceId =
             currentSessionGatewayWorkspaceId
@@ -172,9 +175,9 @@ export function useSessionAgentModelActions(
             "切换模型",
             {
               session_id: updatedSession.session_id,
-              provider_id: updatedSession.current_provider_id,
+              model: updatedSession.current_model,
             },
-            updatedSession.current_provider_id ?? "",
+            label,
             cacheKey,
           );
           return next;

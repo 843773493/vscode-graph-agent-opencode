@@ -192,18 +192,21 @@ describe("文件树管理 API", () => {
     const requests: RecordedRequest[] = [];
     installFileManagementBackend(38_020, requests);
 
-    const request = await createWorkspaceFileDownloadRequest(
+    const request = createWorkspaceFileDownloadRequest(
       38_020,
       "models/model.bin",
       "model.bin",
       FILE_SELECTION,
     );
 
-    expect(request.url).toEndWith(
+    expect(request.port).toBe(38_020);
+    expect(request.path).toBe(
       "/api/v1/workspace/files/download?path=models%2Fmodel.bin&scope=workspace",
     );
     expect(request.headers["X-BoxTeam-Workspace-Id"]).toBe(FILE_OWNER.workspaceId);
-    expect(request.headers["X-Local-Token"]).toBe("file-manager-token");
+    // 凭据由实际下载时的统一请求屏障读取，不提前固化进描述对象。
+    expect(request.headers["X-Local-Token"]).toBeUndefined();
+    expect(requests).toHaveLength(0);
     expect(request.suggestedName).toBe("model.bin");
   });
 

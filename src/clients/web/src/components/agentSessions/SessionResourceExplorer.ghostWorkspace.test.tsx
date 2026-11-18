@@ -265,7 +265,8 @@ describe("工作区导航树的空态与加载态", () => {
       workspaces: [],
       navigationPending: true,
     });
-    expect(html).toContain("正在加载工作区目录");
+    expect(html).toContain('"aria-busy":true');
+    expect(html).not.toContain("正在加载工作区目录");
     expect(html).not.toContain("还没有工作区");
   });
 
@@ -278,7 +279,7 @@ describe("工作区导航树的空态与加载态", () => {
     expect(html).toContain("无法加载工作区列表");
     expect(html).not.toContain("HTTP 500 内部错误");
     viewDiagnostic(tree);
-    expect(diagnostics[0]).toEqual({ title: "无法加载工作区列表", detail: "请求失败 500 : HTTP 500 内部错误" });
+    expect(diagnostics[0]).toEqual({ title: "无法加载工作区列表", detail: "请求失败 500 : HTTP 500 内部错误；请求=/api/gateway/workspace-navigation" });
     expect(html).not.toContain("还没有工作区");
   });
 
@@ -368,7 +369,7 @@ describe("会话目录分支的加载失败与空态", () => {
     expect(JSON.stringify(tree.toJSON())).toContain("无法读取工作区目录");
     expect(JSON.stringify(tree.toJSON())).not.toContain("HTTP 500 内部错误");
     viewDiagnostic(tree);
-    expect(diagnostics[0].detail).toBe("重新读取会话目录失败: root: 请求失败 500 : HTTP 500 内部错误");
+    expect(diagnostics[0].detail).toBe("重新读取会话目录失败: root: 请求失败 500 : HTTP 500 内部错误；请求=/api/v1/session-catalog/children?minimum_catalog_revision=0&limit=100");
     // 失败时不得同时宣称「暂无会话」，否则用户无法区分空目录和加载失败
     expect(JSON.stringify(tree.toJSON())).not.toContain("暂无会话或会话文件夹");
   });

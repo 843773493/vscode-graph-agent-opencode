@@ -119,6 +119,35 @@ function catalogNodeRow(tree: ReactTestRenderer, nodeId: string) {
   return tree.root.findByProps({ "data-testid": `catalog-node-${WORKSPACE_KEY}-${nodeId}` });
 }
 
+test("无子 Session 的会话仍可展开 Thread；折叠释放列表，不额外查询空目录分支", async () => {
+  const session = { session_id: "ses_threads", workspace_id: WORKSPACE_ID, thread_id: "thr_main", title: "独立会话",
+    resource_identity: "session:ses_threads", uri: "boxteam://gateway-test/workspace/test/resources/session/ses_threads",
+    scope: "workspace", current_agent_id: "default", parent_session_id: null,
+    created_at: "2026-11-17T00:00:00Z", updated_at: "2026-11-17T00:00:00Z" };
+  let catalogReads = 0;
+  const rendered: string[] = [];
+  const tree = await renderWithBranchItem([{ node_id: session.session_id, session_id: session.session_id,
+    kind: "session", name: session.title, has_children: false, node_revision: 1, session }], () => undefined, {
+    props: { renderSessionThreads: (workspaceKey, owner) => {
+      rendered.push(`${workspaceKey}/${owner.session_id}/${owner.thread_id}`);
+      return <div data-testid="thread-navigation">主 Thread</div>;
+    } },
+    respond: request => { if (request.path.includes('/api/v1/session-catalog/children')) catalogReads += 1; return undefined; },
+  });
+  try {
+    const row = catalogNodeRow(tree, session.session_id);
+    expect(tree.root.findAllByProps({ "data-testid": "thread-navigation" })).toHaveLength(0);
+    const initialReads = catalogReads;
+    const chevron = row.findByProps({ className: "session-resource-chevron" });
+    await act(async () => { chevron.props.onClick(); await flushReactEffects(); });
+    expect(tree.root.findAllByProps({ "data-testid": "thread-navigation" })).toHaveLength(1);
+    expect(rendered.at(-1)).toBe(`${WORKSPACE_KEY}/${session.session_id}/${session.thread_id}`);
+    expect(catalogReads).toBe(initialReads);
+    act(() => chevron.props.onClick());
+    expect(tree.root.findAllByProps({ "data-testid": "thread-navigation" })).toHaveLength(0);
+  } finally { act(() => tree.unmount()); }
+});
+
 /** 右键菜单的可见失败出口：会话资源区的 actionError 横幅。 */
 function actionErrorText(tree: ReactTestRenderer): string {
   const banners = tree.root.findAll(

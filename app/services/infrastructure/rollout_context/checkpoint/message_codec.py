@@ -428,6 +428,13 @@ class LangChainMessageCodec:
         relations = tuple(
             ItemProvenanceRelation.from_dict(entry) for entry in raw_relations
         )
+        # 完整 AIMessage 已合并最终 usage 帧；空回复及工具调用沿同一 canonical 写入。
+        # 不从流式正文 delta 推测用量，也不把末次调用的统计当作整轮累计。
+        if isinstance(message, AIMessage) and message.usage_metadata is not None and model_call_id is not None:
+            total = message.usage_metadata["total_tokens"]
+            if type(total) is not int or total < 0:
+                raise ValueError("模型 total_tokens 必须是非负整数")
+            response_metadata = {**response_metadata, "model_token_usage": total}
         extensions = message_annotations(response_metadata)
         if role == "user" and not internal:
             content = user_input_payload(content, response_metadata.get("attachments"))

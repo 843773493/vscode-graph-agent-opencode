@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from app.abstractions.job_service import JobServiceProtocol
 from app.abstractions.session_read import SessionThreadReaderProtocol
+from app.core.exceptions import NotFoundError
 from app.core.history_loading import HistoryLoadingConfig
 from app.core.phase_observer import observe_phase
 from app.core.shielded_cleanup import run_sync_shielded
@@ -14,10 +15,13 @@ from app.schemas.internal_v2.turn import (
     TurnJobSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    ThreadItemInspectionDTO,
+    ThreadItemInspectionRequest,
     ThreadToolResultListDTO,
     TurnMessageSearchRequest,
     TurnMessageSearchResultsDTO,
 )
+from app.services.infrastructure.llm_request_log_reader import LLMRequestLogReader
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
@@ -138,6 +142,21 @@ class SessionTurnHistoryService:
                 policy=history_loading,
             )
             return page.model_copy(update={"thread_id": thread_id})
+
+    async def inspect_item(self, session_id: str, thread_id: str, request: ThreadItemInspectionRequest,
+                           *, request_logs: LLMRequestLogReader) -> ThreadItemInspectionDTO:
+        async with self._session_service.session_read_admission(session_id):
+            thread_id = await self._session_service.resolve_thread(session_id, thread_id)
+            result = await run_sync_shielded(self._checkpointer.inspect_history_item, session_id, thread_id, request)
+            location = result.location
+            if request.operation == "trace":
+                if not location.job_id:
+                    raise NotFoundError("此 Item 没有所属执行 Trace")
+                result.trace = await run_sync_shielded(self._trace_event_store.locate_job_start, session_id, thread_id, location.job_id)
+            elif request.operation == "request":
+                result.request_log = await run_sync_shielded(request_logs.find_item_request, session_id,
+                    model_call_id=location.model_call_id, message_id=location.message_id, job_id=location.job_id)
+            return result
 
     async def list_tool_results(self, session_id: str, thread_id: str, *, after: int = 0,
                                 limit: int = 100, view_id: str | None = None,

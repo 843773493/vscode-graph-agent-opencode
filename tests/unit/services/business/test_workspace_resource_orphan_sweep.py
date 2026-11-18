@@ -103,11 +103,11 @@ async def test_sweep_deadline_covers_all_phases_without_false_release_or_automat
     original_list = bundle.transport.list_resources
     deletes: list[str] = []
 
-    async def listing() -> list[dict[str, object]]:
+    async def listing(**query) -> list[dict[str, object]]:
         if phase == "prepare":
             entered.set()
             await release.wait()
-        return await original_list()
+        return await original_list(**query)
 
     async def syncing(resource_id: str, revision: int, *, for_stop: bool) -> None:
         await original_sync(resource_id, revision, for_stop=for_stop)

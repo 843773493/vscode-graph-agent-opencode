@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     main_thread_id TEXT,
     session_kind TEXT CHECK (session_kind IN ('normal', 'context_fork')),
     current_agent_id TEXT CHECK (length(current_agent_id) > 0),
-    current_provider_id TEXT CHECK (current_provider_id IS NULL OR length(current_provider_id) > 0),
+    current_model_json TEXT CHECK (current_model_json IS NULL OR json_valid(current_model_json)),
     context_source_session_id TEXT,
     generation_origin_json TEXT CHECK (generation_origin_json IS NULL OR json_valid(generation_origin_json)),
     updated_at TEXT,
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS nodes (
             AND title_source IS NULL
             AND session_kind IS NULL
             AND current_agent_id IS NULL
-            AND current_provider_id IS NULL
+            AND current_model_json IS NULL
             AND context_source_session_id IS NULL
             AND generation_origin_json IS NULL
             AND updated_at IS NULL)

@@ -17,7 +17,7 @@
 - `tool_adapter.py` 是 SDK 完整分页和调用的唯一工具适配入口；公开参数不能与 Python 注入参数重名后被吞掉，协议结果继续复用现有库转换，不另写传输协议。
 - 扩展目录 binding（ExtensionCatalogBindingRef）与目录 generation lease 的维护。
 - 扩展工具的有界分组导航和显式 `model_visible` 完整定义指引，以及经 `McpCatalogOwner` 的唯一发布回调，把同 revision 的指引父行、typed members 与完整定义 facets 原子发布到既有 ResourceRegistry；父行正文不混入完整目录或 provenance。
-- `tool_definitions.py` 只从原 activation 恢复完整定义；`tool_search.py` 负责确定性匹配、逐项结果与有界分页，不访问当前网络目录或执行候选。定义正文和来源沿现有资源 body store/Saver 保存，不增设 schema 库。
+- `tool_definitions.py` 构造实时工具定义与 Skill 关联，`catalog_publication.py` 将 Owner publication 原子发布到资源平台；`frozen_catalog.py` 从原 activation 恢复完整定义与分派身份，读取不反向依赖实时发布；`tool_search.py` 负责确定性匹配、逐项结果与有界分页，不访问当前网络目录或执行候选。定义正文和来源沿现有资源 body store/Saver 保存，不增设 schema 库。
 - 工具定义的 `contract_payload` 只含描述、参数 schema、kind 和 group；`resource_payload` 是实际冻结并参与资源 revision 的完整正文，包含原正文中的 Skill 关联。搜索和自动指引使用契约视图，资源发布与恢复摘要校验使用资源正文，不能互换。
 - 扩展 dispatch binding（ExtensionDispatchBindingRef）从已封存的目录 payload/members 派生；targets 是 members 的只读视图，不保存第二份权威映射。
 - MCP 可执行 typed member 的 revision 保存 Owner 实例与连接代际组成的精确 connection_ref；已验证定义在断开／SDK 再授权时由同一 publication 保留，以 `mcp-catalog-only:v1:disconnected|authorization_required` 表达目录专用成员，不进入执行 targets。定义正文与 readiness 同批冻结，目录语义 revision 独立保存，搜索 cursor 同时约束 readiness；不建立目录缓存或借其它会话重建当前事实。Agent 运行时只经 Owner 解析执行目标，不捕获初始 MCP 工具，也不按同名同 schema 迁投新连接。

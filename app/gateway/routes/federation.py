@@ -15,7 +15,7 @@ from fastapi import (
 )
 
 from app.core.env import get_project_root
-from app.core.failures import failure_detail
+from app.core.failures import failure_detail, public_failure_message
 from app.core.logging_contract import get_runtime_log_root
 from app.core.shielded_cleanup import run_sync_shielded
 from app.core.trace_middleware import get_request_id
@@ -223,7 +223,8 @@ async def create_federation_managed_workspace(
             plugins=request.app.state.service_plugins,
         )
     except (FileNotFoundError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
+        raise HTTPException(status_code=400, detail=public_failure_message(error)
+            or failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     except (OSError, RuntimeError) as error:
         raise HTTPException(status_code=502, detail=failure_detail(error, stage="workspace_create", label="工作区创建失败")) from error
     return APIResponse(

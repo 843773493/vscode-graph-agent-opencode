@@ -10,7 +10,7 @@ afterEach(() => { act(() => renderer?.unmount()); restores.splice(0).forEach(res
 
 test('任务编辑首次保留原版本，冲突重读后保留草稿并允许用户用最新版本重试', async () => {
   const initial: api.PersistentTaskDTO = {
-    task_id: 'task-edit', workspace_id: 'backend', revision: 1, definition_revision: 1,
+    task_id: 'task-edit', workspace_id: 'backend', revision: 1, definition_revision: 1, tokens_used: 0, time_used_seconds: 0, sync_version: 1,
     application_type: 'automation', application_version: '1', lifecycle: 'active', phase: 'waiting_trigger',
     recovering: false, created_at: '2026-10-29T00:00:00Z', updated_at: '2026-10-29T00:00:00Z',
     configuration: {

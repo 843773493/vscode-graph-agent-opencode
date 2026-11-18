@@ -114,6 +114,49 @@ class LLMRequestLogReader:
         except FileNotFoundError as error:
             raise NotFoundError(f"LLM 请求日志不存在或已被裁剪: {file_name}") from error
 
+    def find_item_request(self, session_id: str, *, model_call_id: str | None,
+                          message_id: str | None, job_id: str | None) -> LLMRequestLogMatchDTO:
+        """只在日志 owner 的保留窗口内核精确响应身份；不按正文或最近时间猜请求。"""
+        if not model_call_id and not message_id:
+            raise NotFoundError("此 Item 没有可核验的模型请求来源")
+        deadline, remaining = monotonic() + 1.0, MAX_SEARCH_BYTES
+        directory = self._directory(session_id)
+        try:
+            entries = os.scandir(directory)
+        except FileNotFoundError as error:
+            raise NotFoundError("所属请求日志未保留") from error
+        files: list[Path] = []
+        with entries:
+            for entry in entries:
+                if monotonic() >= deadline or len(files) >= MAX_DIRECTORY_FILES:
+                    raise TimeoutError("所属请求定位达到目录枚举上限")
+                if entry.name.endswith(".json"):
+                    files.append(directory / entry.name)
+        for path in sorted(files, key=self._log_sort_key, reverse=True)[:MAX_SEARCH_RECORDS]:
+            if monotonic() >= deadline:
+                raise TimeoutError("所属请求定位达到 1 秒／8 MiB 读取上限")
+            raw = self._read_bytes(path, min(MAX_LOG_RECORD_BYTES, remaining))
+            remaining -= len(raw)
+            record = self._decode_log(raw, path, session_id)
+            if job_id is not None and record.job_id != job_id:
+                continue
+            messages = record.response.get("result", [])
+            if not isinstance(messages, list):
+                continue
+            matched = any(isinstance(message, dict) and (
+                message_id is not None and message.get("id") == message_id
+                or model_call_id is not None and isinstance(message.get("response_metadata"), dict)
+                and message["response_metadata"].get("model_call_id") == model_call_id
+            ) for message in messages)
+            if matched:
+                return LLMRequestLogMatchDTO(reference=LLMRequestLogReferenceDTO(session_id=session_id,
+                    file_name=path.name, content_version=hashlib.sha256(raw).hexdigest(),
+                    start_codepoint=0, end_codepoint=1), timestamp=record.timestamp,
+                    preview="", preview_start_codepoint=0)
+        if len(files) > MAX_SEARCH_RECORDS:
+            raise TimeoutError("所属请求定位达到记录上限，请在请求视图中继续查找")
+        raise NotFoundError("所属请求日志未保留或缺少精确来源身份")
+
     def search_session_logs(
         self, session_id: str, query: str, *, limit: int,
         position: LLMRequestLogSearchPosition | None, budget: LLMRequestLogSearchBudget,

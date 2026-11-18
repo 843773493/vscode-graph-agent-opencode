@@ -48,11 +48,17 @@ export function useSessionJobTurnLoader({
     ? state.turnTimelinesBySession.get(sessionCacheKey) : undefined;
   const needsActiveTurn = Boolean(activeTurnId && timeline?.phase === "ready"
     && timeline.scopeKey === sessionCacheKey && !timeline.turnsById[activeTurnId]);
+  // 首个真实输出到达时，读取该请求已消费的来源元数据；没有新增轮询。
+  const activeModelCallId = [...(state.messageStreamsByTurnStream?.values() ?? [])]
+    .find(stream => stream.sessionCacheKey === sessionCacheKey && stream.turnId === activeTurnId)
+    ?.blocks.at(-1)?.model_call_id;
+  const activeReadIdentity = activeTurnId && (needsActiveTurn || activeModelCallId)
+    ? `active-turn:${activeTurnId}:${activeModelCallId ?? "root"}` : null;
   useEffect(() => {
-    if (!needsActiveTurn || !activeTurnId) return;
+    if (!activeReadIdentity || !activeTurnId) return;
     let cancelled = false;
     // 读取根消息的正式附件引用，不让上传前的临时 ID 留在活动回合；不刷新整段历史。
-    void loadTurnDetails([activeTurnId], `active-turn:${activeTurnId}`, false, ["metadata", "user"])
+    void loadTurnDetails([activeTurnId], activeReadIdentity, false, ["metadata", "user"])
       .catch((error: unknown) => {
         if (cancelled) return;
         setState((previous) => ({
@@ -61,7 +67,7 @@ export function useSessionJobTurnLoader({
         }));
       });
     return () => { cancelled = true; };
-  }, [activeTurnId, loadTurnDetails, needsActiveTurn, sessionCacheKey, setState]);
+  }, [activeTurnId, activeReadIdentity, loadTurnDetails, sessionCacheKey, setState]);
   return useCallback(
     async (jobId: string) => {
       if (!sessionCacheKey) return;

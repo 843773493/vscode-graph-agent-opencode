@@ -128,8 +128,8 @@ def factory_context(text_mutations_factory, registry_db, request, monkeypatch):
     config.get_agent_runtime_config.return_value = {
         "system_prompt": "配置基础说明",
         "runtime_identity_description": "集成测试的路径说明",
-        "providers": [{
-            "id": "fixture", "model": "openai/gpt-4.1",
+        "models": [{
+            "provider_id": "fixture", "model_id": "default", "model": "openai/gpt-4.1",
             "api_key": "factory-fixture-key", "endpoint": "http://127.0.0.1:1/v1",
             "custom_llm_provider": "openai",
             "api_mode": {"protocol": protocol},

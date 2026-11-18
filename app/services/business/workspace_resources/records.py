@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Iterator, KeysView
+from collections.abc import Callable, Iterator, KeysView
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -125,12 +125,14 @@ _RESOURCE_RECORDS = TypeAdapter(list[OwnedResourceRecord], config=ConfigDict(ext
 class ResourceRecordStore:
     """原 owner 的唯一持久快照；读取副本，写盘成功后才发布。"""
 
-    def __init__(self, *, workspace_root: Path, workspace_id: str, kind: ResourceKind) -> None:
+    def __init__(self, *, workspace_root: Path, workspace_id: str, kind: ResourceKind,
+                 on_changed: Callable[[frozenset[str]], None] | None = None) -> None:
         self.kind = kind
         self.workspace_id = validate_workspace_id(workspace_id)
         self.path = workspace_root / ".boxteam" / f"{kind}-resources.json"
         self._records: dict[str, OwnedResourceRecord] = {}
         self._write_lock = asyncio.Lock()
+        self._on_changed = on_changed
         try:
             with self._io("read"):
                 if not self.path.exists():
@@ -195,8 +197,11 @@ class ResourceRecordStore:
             return
         async with self._write_lock:
             # 相同观察已由原读写入口核验；不重复排队worker或重写整份快照。
-            if all(self._records.get(record.resource_id) == record for record in records):
+            changed = frozenset(record.resource_id for record in records
+                                if self._records.get(record.resource_id) != record)
+            if not changed:
                 return
+            loop = asyncio.get_running_loop()
 
             def publish() -> None:
                 candidate = {**self._records, **{record.resource_id: deepcopy(record) for record in records}}
@@ -215,6 +220,9 @@ class ResourceRecordStore:
                         os.fsync(stream.fileno())
                     pending.replace(self.path)
                 self._records = candidate
+                if self._on_changed is not None:
+                    # 在提交点排回原事件循环；调用方取消也不能漏掉已提交的变更通知。
+                    loop.call_soon_threadsafe(self._on_changed, changed)
 
             # TODO(5.4)：worker 不可抢占原生 I/O；同步冷加载、lease 写盘和整次关闭仍须分别核实。
             await run_sync_shielded(publish)

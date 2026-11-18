@@ -32,16 +32,16 @@ from app.services.infrastructure.mcp import (
     McpCatalogRelistError,
     McpCatalogResourcePublisher,
 )
-from app.services.infrastructure.mcp.catalog_activation import (
+from app.services.infrastructure.mcp.extension_catalog import (
     EXTENSION_CATALOG_SOURCE_ID,
     MCP_GUIDANCE_SOURCE_ID,
     MCP_OWNER_CATALOG_SOURCE_ID,
     MCP_TOOL_CATALOG_RESOURCE_ID,
-    extension_dispatch_from_activation,
-)
-from app.services.infrastructure.mcp.extension_catalog import (
     ExtensionTargetResolutionError,
     extension_schema_hash,
+)
+from app.services.infrastructure.mcp.frozen_catalog import (
+    restore_frozen_extension_dispatch,
 )
 from app.services.infrastructure.resource_platform.registry.semantic_registry import (
     ResourceRegistry,
@@ -444,7 +444,7 @@ async def test_connection_identity_survives_cold_seal_without_changing_wire_hash
         )
         restored_parent, = (binding for binding in restored.bindings if binding.resource_id == MCP_TOOL_CATALOG_RESOURCE_ID)
         assert restored_parent.members == (sealed_member,)
-        dispatch = extension_dispatch_from_activation(
+        dispatch = restore_frozen_extension_dispatch(
             snapshot=restored, binding=restored_parent, model_call_id=assembly.model_call_id,
             payload=cold.read_resource_activation_payload(restored, restored_parent, storage_owner=(session, thread)),
         )

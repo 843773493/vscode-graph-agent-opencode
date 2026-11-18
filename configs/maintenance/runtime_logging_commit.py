@@ -130,7 +130,7 @@ def validate_runtime_logging_plan(
         if path.name == "workspace.jsonc" and path.parent.name == ".boxteam":
             validate_config(merge_json_objects(effective["workspace"], payload), schema_path=resolve_config_resource_source("workspace_schema.jsonc", project_root=project_root))
     for item in plan.inputs:
-        if item.kind == "active" and item.payload is not None:
+        if item.kind in {"active", "pending"} and item.payload is not None:
             candidate = migrated_active_payload(item.payload, item.domain, plan, inline[item.domain], connection_entries)
             if item.domain == "workspace":
                 candidate = cast(dict[str, object], restore_environment_secret_references(candidate))

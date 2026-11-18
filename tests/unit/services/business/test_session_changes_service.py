@@ -42,12 +42,10 @@ def session_changes_workspace(
         json.dumps(
             {
                 "llm": {
-                    "providers": [
-                        {
-                            "id": "test-local",
+                    "providers": {
+                        "test-local": {"defaults": {
                             "endpoint": "http://127.0.0.1:9/v1",
-                            "model": "offline-test-model",
-                            "api_key": "offline-test-key",
+                            "api_key": "",
                             "custom_llm_provider": "openai",
                             "api_mode": {
                                 "protocol": "chat_completions",
@@ -57,14 +55,14 @@ def session_changes_workspace(
                                 },
                                 "supports_reasoning": {"reasoning_content": True},
                             },
-                        }
-                    ]
+                        }, "models": {"default": {"model": "offline-test-model"}}}
+                    }
                 },
                 "agents": {
                     "default": {
                         "model": {
-                            "primary_provider": "test-local",
-                            "fallback_providers": [],
+                            "primary": {"provider_id": "test-local", "model_id": "default"},
+                            "fallbacks": [],
                         }
                     }
                 },

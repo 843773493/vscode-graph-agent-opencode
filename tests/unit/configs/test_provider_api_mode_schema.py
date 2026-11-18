@@ -13,7 +13,7 @@ def provider_validator() -> jsonschema.Draft202012Validator:
         Path("configs/workspace_schema.jsonc").read_text(encoding="utf-8")
     )
     jsonschema.Draft202012Validator.check_schema(schema)
-    return jsonschema.Draft202012Validator(schema["$defs"]["provider"])
+    return jsonschema.Draft202012Validator({"$ref": "#/$defs/provider", "$defs": schema["$defs"]})
 
 
 def _validate_provider(
@@ -27,12 +27,13 @@ def _validate_provider(
 
 def _provider(api_mode: dict[str, object]) -> dict[str, object]:
     return {
-        "id": "schema-provider",
-        "endpoint": "https://example.com/v1",
-        "model": "schema-model",
-        "api_key": "test-key",
-        "custom_llm_provider": "openai",
-        "api_mode": api_mode,
+        "defaults": {
+            "endpoint": "https://example.com/v1",
+            "api_key": "${SCHEMA_TEST_KEY}",
+            "custom_llm_provider": "openai",
+            "api_mode": api_mode,
+        },
+        "models": {"general": {"model": "schema-model"}},
     }
 
 
@@ -104,26 +105,17 @@ def test_schema_accepts_anthropic_thinking_block_shape(
             },
         }
     )
-    provider["custom_llm_provider"] = "anthropic"
+    provider["defaults"]["custom_llm_provider"] = "anthropic"
     provider_validator.validate(provider)
 
 
 def test_schema_rejects_legacy_string_api_mode_and_flat_capabilities(
     provider_validator: jsonschema.Draft202012Validator,
 ) -> None:
+    legacy_mode = _provider({"protocol": "chat_completions"})
+    legacy_mode["defaults"]["api_mode"] = "responses"
     with pytest.raises(jsonschema.ValidationError):
-        provider_validator.validate(
-            {
-                **_provider(
-                    {
-                        "protocol": "chat_completions",
-                        "model_info": {},
-                        "supports_reasoning": {"reasoning_content": False},
-                    }
-                ),
-                "api_mode": "responses",
-            }
-        )
+        provider_validator.validate(legacy_mode)
 
     legacy = _provider(
         {
@@ -132,7 +124,7 @@ def test_schema_rejects_legacy_string_api_mode_and_flat_capabilities(
             "supports_reasoning": {"reasoning_content": False},
         }
     )
-    legacy["capabilities"] = ["image_input"]
+    legacy["defaults"]["capabilities"] = ["image_input"]
     with pytest.raises(jsonschema.ValidationError, match="capabilities"):
         _validate_provider(provider_validator, legacy)
 
@@ -153,38 +145,46 @@ def test_schema_rejects_unknown_model_info_and_replay_policy_fields(
         )
 
 
-def test_schema_requires_anthropic_custom_provider_for_anthropic_protocol(
+def test_provider_fragment_schema_allows_model_level_protocol_override(
     provider_validator: jsonschema.Draft202012Validator,
 ) -> None:
     provider = _provider(
         {
-            "protocol": "anthropic_messages",
-            "model_info": {},
-            "supports_reasoning": {"thinking_blocks": False},
+            "protocol": "chat_completions",
+            "model_info": {"supports_reasoning": True},
+            "supports_reasoning": {"reasoning_content": True},
         }
     )
-    with pytest.raises(jsonschema.ValidationError, match="anthropic"):
-        _validate_provider(provider_validator, provider)
+    provider["models"]["general"]["overrides"] = {
+        "custom_llm_provider": "anthropic",
+        "api_mode": {
+            "protocol": "anthropic_messages",
+            "model_info": {"supports_reasoning": True},
+            "supports_reasoning": {
+                "thinking_blocks": {"thinking": True, "redacted_thinking": False}
+            },
+        },
+    }
+    provider_validator.validate(provider)
 
 
-def test_schema_rejects_protocol_specific_reasoning_shape_mismatch(
+def test_provider_fragment_schema_defers_reasoning_protocol_validation(
     provider_validator: jsonschema.Draft202012Validator,
 ) -> None:
-    with pytest.raises(jsonschema.ValidationError):
-        provider_validator.validate(
-            _provider(
-                {
-                    "protocol": "chat_completions",
-                    "model_info": {"supports_reasoning": True},
-                    "supports_reasoning": {
-                        "thinking_blocks": {
-                            "thinking": True,
-                            "redacted_thinking": True,
-                        }
-                    },
-                }
-            )
+    provider_validator.validate(
+        _provider(
+            {
+                "protocol": "chat_completions",
+                "model_info": {"supports_reasoning": True},
+                "supports_reasoning": {
+                    "thinking_blocks": {
+                        "thinking": True,
+                        "redacted_thinking": True,
+                    }
+                },
+            }
         )
+    )
 
     with pytest.raises(jsonschema.ValidationError, match="different_source"):
         _validate_provider(

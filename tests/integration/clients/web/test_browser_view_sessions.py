@@ -80,19 +80,18 @@ def browser_backend(
     workspace_root = Path(integration_workspace_root_path).resolve()
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    for provider in config["llm"]["providers"]:
-        provider.update({
-            "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
-            "model": "e2e-stub-model", "api_key": "e2e-local-model-key",
-            "custom_llm_provider": "openai",
-            "api_mode": {"protocol": "chat_completions", "model_info": {
-                "supports_function_calling": True, "supports_reasoning": True,
-            }, "supports_reasoning": {"reasoning_content": True}},
-        })
-        provider.pop("auth", None)
-        provider.pop("request_options", None)
+    provider = config["llm"]["providers"]["primary"]
+    provider["defaults"] = {
+        "endpoint": f"http://127.0.0.1:{port_block.port(10)}/v1",
+         "api_key": "",
+        "custom_llm_provider": "openai",
+        "api_mode": {"protocol": "chat_completions", "model_info": {
+            "supports_function_calling": True, "supports_reasoning": True,
+        }, "supports_reasoning": {"reasoning_content": True}},
+    }
+    provider["models"]["default"]["model"] = "e2e-stub-model"
     for agent in config["agents"].values():
-        agent["model"]["fallback_providers"] = []
+        agent["model"]["fallbacks"] = []
     config_path.write_text(
         json.dumps(config, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

@@ -1,4 +1,4 @@
-// Integration：完整源码副本、产品 Vite 入口和真实 Gateway；只改副本的观测属性与翻译。
+// Integration：完整源码副本、产品 Vite 入口和真实 Gateway；只改副本的观测属性、源码注释与翻译。
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ const required = name => {
 };
 const run = TestRunContext.fromTestFile('tests/integration/clients/web/quick_access/test_development_hmr.py');
 const result = { classification: 'Integration', phase: 'prepare', routeStubs: [],
-  boundary: '独占完整源码副本的原 React 导航观测属性及 NLS 补译；产品 Vite／Gateway；不代替发行或 Electron',
+  boundary: '独占完整源码副本的 React 导航观测属性、公共 HTTP 源码注释及 NLS 补译；产品 Vite／Gateway；不代替发行或 Electron',
   pageErrors: [], consoleErrors: [], failedResponses: [], websocket: [], initialization: [], changes: [], scripts: [], moduleUrls: [], browserEvents: [] };
 const nlsResponses = [];
 const observationStartedAt = performance.now();
@@ -85,6 +85,7 @@ try {
   recordBrowserEvent({ type: 'browser-connected' });
   run.addCleanup('hmr-browser', () => browser.close());
   const context = await browser.newContext();
+  await context.addInitScript(() => performance.setResourceTimingBufferSize(10000));
   run.addCleanup('hmr-context', () => context.close());
   context.on('page', observed => {
     trackPage(observed);
@@ -139,9 +140,9 @@ try {
   expect(result.settingsModuleUrls).toEqual([required('BOXTEAM_HMR_SHARED_I18N_URL')]);
   result.settingsIdentity = await page.evaluate(async sourceUrl => {
     const module = await import(sourceUrl);
-    return { locale: module.getLocale(), message: module.t('workbench.settings.editorName', 'Identity') };
+    return { locale: module.getLocale(), message: module.t('workbench.settings.editorName') };
   }, result.settingsModuleUrls[0]);
-  expect(result.settingsIdentity).toEqual({ locale: 'zh-cn', message: '设置 · Identity' });
+  expect(result.settingsIdentity).toEqual({ locale: 'zh-cn', message: '设置' });
   await page.evaluate(() => { void globalThis.workbench.commands.executeCommand('workbench.action.closeActiveEditor'); });
   await expect(page.locator('.settings-editor')).toBeHidden({ timeout: 30000 });
   result.moduleUrls = await page.evaluate(() => [...new Set(performance.getEntriesByType('resource')
@@ -163,6 +164,27 @@ try {
   expect(scriptPaths.filter(path => path === '/out/main.js')).toHaveLength(0);
   expect(scriptPaths.filter(path => path === '/@vite/client')).toHaveLength(1);
   expect(scriptPaths.filter(path => path === '/src/bootstrap.ts')).toHaveLength(1);
+  result.phase = 'shared-source-update';
+  // 公共 HTTP 模块会同时使 split bundle 的反向依赖与应用入口失效，必须共享新的模块 URL。
+  const sharedSource = required('BOXTEAM_HMR_SHARED_SOURCE');
+  const sharedBefore = await readFile(sharedSource, 'utf8');
+  const sharedAfter = sharedBefore + '\n// HMR 验收：共享依赖变更后业务贡献仍只注册一次。\n';
+  const previousReloads = result.websocket.filter(event => event.type === 'full-reload').length;
+  const sharedReload = page.waitForEvent('framenavigated', { predicate: frame => frame === page.mainFrame(), timeout: 30000 });
+  result.changes.push({ source: sharedSource, before: createHash('sha256').update(sharedBefore).digest('hex'),
+    after: createHash('sha256').update(sharedAfter).digest('hex') });
+  await writeFile(sharedSource, sharedAfter);
+  await expect.poll(() => result.websocket.filter(event => event.type === 'full-reload').length,
+    { timeout: 30000 }).toBeGreaterThan(previousReloads);
+  await sharedReload;
+  await expect(page.locator('.native-session-navigation')).toHaveAttribute('data-hmr-acceptance', 'version-2', { timeout: 45000 });
+  await page.waitForFunction(() => !!globalThis.workbench?.commands);
+  result.sharedContributionUrls = await page.evaluate(() => performance.getEntriesByType('resource')
+    .map(entry => entry.name).filter(url => /\/src\/(?:mcp\/commands|settings\/sourceEditor)\.ts(?:\?|$)/.test(url)));
+  for (const name of ['mcp/commands', 'settings/sourceEditor']) {
+    expect(result.sharedContributionUrls.filter(url => url.includes(`/src/${name}.ts`))).toHaveLength(1);
+  }
+  expect(result.consoleErrors.filter(message => /(?:Cannot register two commands|Can't register multiple contributions)/.test(message))).toEqual([]);
   result.phase = 'translation-update';
   const command = id => page.evaluate(id => globalThis.workbench.commands.executeCommand(id), id);
   const quick = page.locator('.quick-input-widget');

@@ -1,4 +1,4 @@
-import type { APIResponse } from "../types/backend";
+import type { APIResponse, ModelReference } from "../types/backend";
 import type {
   ToolCatalogItem,
   ToolSelectionChange,
@@ -42,7 +42,7 @@ export async function startToolTest(
   toolId: string,
   agentId: string,
   workspaceId?: string | null,
-  providerIds: string[] = [],
+  modelRefs: ModelReference[] = [],
   repetitions = 1,
 ): Promise<ToolTestRun> {
   return unwrapApiData(await requestJson<APIResponse<ToolTestRun>>(
@@ -51,7 +51,7 @@ export async function startToolTest(
     {
       method: "POST",
       headers: workspaceHeader(workspaceId),
-      body: JSON.stringify({ agent_id: agentId, provider_ids: providerIds, repetitions }),
+      body: JSON.stringify({ agent_id: agentId, model_refs: modelRefs, repetitions }),
     },
   ));
 }

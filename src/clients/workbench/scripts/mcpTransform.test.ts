@@ -594,7 +594,7 @@ test.each(['当前续页失败', '已取消查询', '已替换模型', '取消�
     else fail(failure);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(messages).toEqual(state === '当前续页失败' ? [{ text: failure.message, severity: 3 }] : []);
-    expect(notifications).toEqual(state === '当前续页失败' ? [failure] : []);
+    expect(notifications).toEqual([]); // 所属列表已显示原始错误，不再重复弹通知。
     expect(rendered).toEqual([]);
     data.disposable!.dispose();
   },
@@ -666,12 +666,17 @@ test('首次目录失败保留原 show 拒绝，恢复只由同一 owner 的可�
     CancellationTokenSource, isCancellationError, getErrorMessage, { Error: 3 },
   ) as (this: { workspaceMcpQueryFailed: boolean; currentQuery: string; input?: unknown }, query: string) => Promise<unknown>;
   const original = new Error('首次目录 503');
-  const view = { workspaceMcpQueryFailed: false, currentQuery: '', input: undefined,
+  let disposed = false;
+  const cachedInput = { model: { length: 2 }, disposables: { dispose() { disposed = true; } } };
+  const view = { workspaceMcpQueryFailed: false, currentQuery: '', input: cachedInput,
+    getProgressIndicator: () => ({ show: () => ({ done() {} }) }),
     queryCancellation: undefined as CancellationTokenSource | undefined,
     updateBody(message: { text: string }) { expect(message.text).toBe(original.message); },
     mpcViewOptions: {}, query: async () => { throw original; } };
   await expect(run.call(view, '')).rejects.toBe(original);
   expect(view.workspaceMcpQueryFailed).toBe(true);
+  expect(view.input).toBe(cachedInput);
+  expect(disposed).toBe(false);
   view.queryCancellation?.dispose(true);
   const constructor = declaration('mcpServersView.ts', 'McpServersListView').members.find(ts.isConstructorDeclaration)!;
   expect(constructor.getText()).toContain('this.mcpWorkbenchService.isLocalCatalogAvailable');
@@ -680,7 +685,7 @@ test('首次目录失败保留原 show 拒绝，恢复只由同一 owner 的可�
   expect(declaration('mcpWorkbenchService.ts', 'MCPContextsInitialisation').getText()).not.toContain('queryLocal().finally(');
 });
 
-test('无工作区 MCP 目录报错，已加载但为空的目录保留空列表状态', async () => {
+test('连接列表消费空目录或失败后的镜像，错误由同一 owner 单独展示，不把失败推断为未配置', async () => {
   const body = methodBody('mcpServersView.ts', 'McpServersListView', 'query');
   const javascript = new Bun.Transpiler({ loader: 'ts' }).transformSync(`async function query(query: string, token: { isCancellationRequested: boolean }) ${body}`);
   class TestWorkbenchService {}
@@ -713,7 +718,9 @@ test('无工作区 MCP 目录报错，已加载但为空的目录保留空列表
   const noWorkspace = createView(false);
   noWorkspace.mcpWorkbenchService.queryLocal = async () => [];
   noWorkspace.mcpWorkbenchService.isLocalCatalogAvailable = false;
-  await expect(run.call(noWorkspace, '@mcp', { isCancellationRequested: false })).rejects.toThrow('当前 Gateway 没有可读取的工作区 MCP 目录');
+  const unavailable = await run.call(noWorkspace, '@mcp', { isCancellationRequested: false });
+  expect(unavailable.model.items).toEqual([]);
+  unavailable.disposables.dispose();
 
   const emptyDirectory = createView(true);
   emptyDirectory.mcpWorkbenchService.queryLocal = async () => [];
@@ -721,6 +728,9 @@ test('无工作区 MCP 目录报错，已加载但为空的目录保留空列表
   const result = await run.call(emptyDirectory, '@mcp', { isCancellationRequested: false });
   expect(result.model.items).toEqual([]);
   result.disposables.dispose();
+  const originalError = new Error('工作区响应 503 · request-id: original');
+  emptyDirectory.mcpWorkbenchService.queryLocal = async () => { throw originalError; };
+  await expect(run.call(emptyDirectory, '@mcp', { isCancellationRequested: false })).rejects.toBe(originalError);
 });
 
 test('转换投影删除 Gallery 查询闭包与未注册旧 MCP 服务', () => {
@@ -752,14 +762,15 @@ test('项目原列表自身接回 Extensions 隐藏作用域，恢复后隐藏�
   const view = new View();
   view.id = 'boxteam.mcp.view';
   view.element = { classList: { add: token => { classes.add(token); } } };
-  expect(() => view.renderBody({})).toThrow(stop);
+  expect(() => view.renderBody({ classList: { add() {} } })).toThrow(stop);
   expect(classes.has('extensions-viewlet')).toBe(true);
   classes.clear();
   view.id = 'workbench.mcp.installed';
   expect(() => view.renderBody({})).toThrow(stop);
   expect(classes.size).toBe(0);
 
-  const update = new Function('alert', `return function(message) ${methodBody('mcpServersView.ts', 'McpServersListView', 'updateBody')};`)(() => {}) as
+  const jsUpdate = new Bun.Transpiler({ loader: 'ts' }).transformSync(`function update(message?: unknown) ${methodBody('mcpServersView.ts', 'McpServersListView', 'updateBody')}`);
+  const update = new Function('alert', 'WorkspaceMcpWorkbenchService', `return ${jsUpdate};`)(() => {}, class {}) as
     (this: object, message?: unknown) => void;
   const messageClasses = new Set<string>();
   const toggle = (token: string, added: boolean) => { if (added) messageClasses.add(token); else messageClasses.delete(token); };

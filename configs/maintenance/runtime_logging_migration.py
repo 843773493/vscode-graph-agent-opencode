@@ -14,6 +14,7 @@ from typing import Literal
 from app.core.config_sources import parse_stable_config_file, read_stable_config_file
 from app.core.logging_contract import RuntimeLogContract, load_runtime_log_contract
 from app.gateway.config.connection_ids import _CONNECTION_ID_RECORD_VERSION
+from app.services.infrastructure.config.recovery import plan_stopped_config_recovery
 from app.services.infrastructure.config.state import CONFIG_LIFECYCLE_STATES
 
 ConfigDomain = Literal["gateway", "workspace"]
@@ -31,7 +32,7 @@ _SOURCE_KEYS: dict[ConfigDomain, tuple[str, ...]] = {
 class LoggingMigrationInput:
     domain: ConfigDomain
     path: Path
-    kind: Literal["file", "source_layer", "active", "connection_identity"]
+    kind: Literal["file", "source_layer", "active", "pending", "connection_identity"]
     key: str
     payload: dict[str, object] | None
     digest: str | None
@@ -120,6 +121,7 @@ class RuntimeLoggingMigrationPlan:
     choices: dict[str, str | bool]
     contract: RuntimeLogContract
     databases: tuple[tuple[ConfigDomain, Path], ...] = ()
+    recoveries: tuple[dict[str, str], ...] = ()
 
     def report(self) -> dict[str, object]:
         # 只输出日志字段与来源身份，不能把模型密钥或完整业务配置带入预览。
@@ -132,6 +134,7 @@ class RuntimeLoggingMigrationPlan:
             "explicit_choices": self.choices,
             "conflicts": list(self.conflicts),
             "unsettled": list(self.unsettled),
+            "recoveries": list(self.recoveries),
             "sources": [
                 {
                     "source": item.identity, "domain": item.domain,
@@ -186,9 +189,9 @@ def read_connection_identity(connection: sqlite3.Connection) -> tuple[int, dict[
 
 def _read_database(
     path: Path, domain: ConfigDomain,
-) -> tuple[list[LoggingMigrationInput], list[dict[str, str]]]:
+) -> tuple[list[LoggingMigrationInput], list[dict[str, str]], list[dict[str, str]]]:
     if not path.exists():
-        return [], []
+        return [], [], []
     inputs: list[LoggingMigrationInput] = []
     unsettled: list[dict[str, str]] = []
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
@@ -219,14 +222,19 @@ def _read_database(
                 raise ValueError(f"SQLite 配置 active 状态非法: {path}#{domain}")
             if state != "active":
                 unsettled.append({"source": str(path), "kind": "active", "id": domain, "state": state})
-        for candidate_id, state in connection.execute(
-            "SELECT candidate_id, state FROM config_pending_candidate WHERE config_domain = ? ORDER BY candidate_id",
+        for candidate_id, state, content, revision, digest in connection.execute(
+            "SELECT candidate_id, state, payload_json, pending_revision, effective_digest "
+            "FROM config_pending_candidate WHERE config_domain = ? ORDER BY candidate_id",
             (domain,),
         ):
             if state not in CONFIG_LIFECYCLE_STATES:
                 raise ValueError(f"SQLite 配置候选状态非法: {path}#{candidate_id}")
             if state not in {"active", "rejected", "discarded"}:
                 unsettled.append({"source": str(path), "kind": "candidate", "id": candidate_id, "state": state})
+                inputs.append(LoggingMigrationInput(
+                    domain, path, "pending", candidate_id,
+                    _json_payload(content, source=f"{path}#pending:{candidate_id}"), digest, revision,
+                ))
         for apply_id, state in connection.execute(
             "SELECT apply_id, state FROM config_apply_journal WHERE config_domain = ? ORDER BY apply_id",
             (domain,),
@@ -239,6 +247,13 @@ def _read_database(
             "SELECT apply_id FROM config_apply_claim WHERE config_domain = ?", (domain,),
         ):
             unsettled.append({"source": str(path), "kind": "claim", "id": apply_id[0], "state": "claimed"})
+        recovery = plan_stopped_config_recovery(connection, domain)
+        recoveries = [{"source": str(path), **action} for action in recovery.actions]
+        if not recovery.blockers:
+            unsettled = []
+        else:
+            unsettled.extend({"source": str(path), **blocker} for blocker in recovery.blockers
+                             if not any(item["kind"] == blocker["kind"] and item["id"] == blocker["id"] for item in unsettled))
         if domain == "gateway":
             identity = read_connection_identity(connection)
             if identity is not None:
@@ -252,7 +267,7 @@ def _read_database(
                     unsettled.append({"source": str(path), "kind": "connection_id_migration", "id": "gateway_connection_ids", "state": "planned"})
     finally:
         connection.close()
-    return inputs, unsettled
+    return inputs, unsettled, recoveries
 
 
 def _read_shared_source_owner(path: Path) -> list[dict[str, str]]:
@@ -299,6 +314,7 @@ def preview_runtime_logging_migration(
         legacy_files.append(root / ".boxteam/boxteam.jsonc")
     inputs: list[LoggingMigrationInput] = []
     unsettled: list[dict[str, str]] = []
+    recoveries: list[dict[str, str]] = []
     for path in legacy_files:
         if path.exists() and (planned_files is None or path.with_name("workspace.jsonc") not in planned_files):
             unsettled.append({"source": str(path), "kind": "legacy_layout", "id": path.name, "state": "migration_required"})
@@ -310,9 +326,10 @@ def preview_runtime_logging_migration(
             domain, path, "file", path.name, payload, snapshot.digest,
         ))
     for domain, path in databases:
-        stored, pending = _read_database(path, domain)
+        stored, pending, recovery = _read_database(path, domain)
         inputs.extend(stored)
         unsettled.extend(pending)
+        recoveries.extend(recovery)
     unsettled.extend(_read_shared_source_owner(home / "config/workspace-source.sqlite"))
     observed: dict[str, list[tuple[str, str | bool]]] = {"level": [], "pretty": []}
     for item in inputs:
@@ -341,4 +358,5 @@ def preview_runtime_logging_migration(
     return RuntimeLoggingMigrationPlan(
         tuple(inputs), settings, tuple(conflicts), tuple(unsettled), choices, contract,
         tuple(databases),
+        tuple(recoveries),
     )

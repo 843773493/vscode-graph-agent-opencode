@@ -10,8 +10,18 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api import workspace_observation as api
+from app.api.persistent_tasks import open_persistent_task_sse
+from app.schemas.internal_v2.persistent_task import (
+    PersistentTaskListDTO,
+    TaskRuntimeStatusDTO,
+)
 from app.schemas.internal_v2.session_navigation.operations import NavigationSnapshotDTO
 from app.schemas.internal_v2.workspace_observation import WorkspaceObservationRequest
+from app.services.infrastructure.events.event_channel_service import EventChannelService
+from app.services.infrastructure.persistent_tasks.events import (
+    PersistentTaskChanged,
+    task_channel,
+)
 
 SESSION_ID = "ses_019bef80066f7038ae8e88ccb2e5e2ea"
 THREAD_ID = "thr_018f0000000070008000000000000001"
@@ -21,7 +31,7 @@ THREAD_ID = "thr_018f0000000070008000000000000001"
 def observation_sources(monkeypatch: pytest.MonkeyPatch):
     calls = []
     closed = set()
-    queues = {kind: asyncio.Queue() for kind in ("activity", "trace", "files", "navigation")}
+    queues = {kind: asyncio.Queue() for kind in ("activity", "trace", "files", "navigation", "tasks")}
 
     async def frames(kind: str) -> AsyncIterator[str]:
         try:
@@ -55,10 +65,15 @@ def observation_sources(monkeypatch: pytest.MonkeyPatch):
         calls.append(("navigation",))
         return frames("navigation")
 
+    def tasks(service, session_id):
+        calls.append(("tasks", session_id))
+        return frames("tasks")
+
     monkeypatch.setattr(api, "_stream_navigation_changes", navigation)
     monkeypatch.setattr(api, "_stream_session_activity_sse", activity)
     monkeypatch.setattr(api, "open_session_trace_sse", trace)
     monkeypatch.setattr(api, "open_workspace_file_sse", files)
+    monkeypatch.setattr(api, "open_persistent_task_sse", tasks)
     monkeypatch.setattr(api, "SSE_HEARTBEAT_INTERVAL_SECONDS", 0.01)
     return SimpleNamespace(calls=calls, closed=closed, queues=queues)
 
@@ -69,7 +84,7 @@ def open_observations(observation_sources):
         return await api.stream_workspace_observation(
             WorkspaceObservationRequest(subscriptions=subscriptions), "token",
             activity_service=object(), session_service=object(), config_service=object(),
-            watch_service=object(), catalog_service=object(), workspace_service=SimpleNamespace(
+            watch_service=object(), catalog_service=object(), terminal_owner=object(), task_service=object(), workspace_service=SimpleNamespace(
                 file_operations=SimpleNamespace(store=SimpleNamespace(latest_event_id=lambda: 27)),
             ),
         )
@@ -80,6 +95,64 @@ async def read_envelope(stream):
     frame = await asyncio.wait_for(anext(stream), 0.5)
     assert frame.startswith("event: observation\ndata: ")
     return json.loads(frame.split("data: ", 1)[1])
+
+
+async def test_task_observation_reuses_owner_frames_and_session_scope(open_observations, observation_sources):
+    response = await open_observations([
+        {"subscription_id": "tasks", "kind": "persistent_tasks", "session_id": SESSION_ID},
+    ])
+    stream = response.body_iterator
+    try:
+        assert (await read_envelope(stream))["state"] == "connected"
+        original = 'event: snapshot\ndata: {"session_goal":null}\n\n'
+        observation_sources.queues["tasks"].put_nowait(original)
+        envelope = await read_envelope(stream)
+        assert envelope["frame"] == original
+        assert observation_sources.calls == [("tasks", SESSION_ID)]
+    finally:
+        await stream.aclose()
+    assert "tasks" in observation_sources.closed
+
+
+async def test_idle_task_observation_heartbeats_belong_to_logical_subscription(open_observations, observation_sources):
+    response = await open_observations([{"subscription_id": "tasks", "kind": "persistent_tasks"}])
+    stream = response.body_iterator
+    try:
+        assert (await read_envelope(stream))["state"] == "connected"
+        # 外层注释不能续活逻辑观察者，任务心跳必须带自己的 subscription_id。
+        async with asyncio.timeout(0.5):
+            while True:
+                frame = await anext(stream)
+                if frame.startswith("event: observation"):
+                    heartbeat = json.loads(frame.split("data: ", 1)[1])
+                    break
+        assert heartbeat == {"subscription_id": "tasks", "state": "frame", "frame": ": heartbeat\n\n"}
+        assert observation_sources.calls == [("tasks", None)]
+    finally:
+        await stream.aclose()
+    assert "tasks" in observation_sources.closed
+
+
+@pytest.fixture
+def task_snapshot_service():
+    channel = task_channel(EventChannelService(), "task-snapshot-test")
+    snapshot = PersistentTaskListDTO(items=[], runtime=TaskRuntimeStatusDTO(state="running", recovering_tasks=0))
+    return SimpleNamespace(runtime=SimpleNamespace(events=channel), snapshot=lambda _session: snapshot)
+
+
+@pytest.mark.parametrize("overflow", [False, True])
+async def test_goal_notifications_keep_history_but_event_gaps_invalidate_it(task_snapshot_service, overflow):
+    stream = open_persistent_task_sse(task_snapshot_service)
+    try:
+        initial = json.loads((await anext(stream)).split("data: ", 1)[1])
+        assert initial["history_invalidated"] is True
+        for _ in range(65 if overflow else 1):
+            task_snapshot_service.runtime.events.publish(PersistentTaskChanged(history_invalidated=False))
+        invalidations = [json.loads((await anext(stream)).split("data: ", 1)[1])["history_invalidated"]
+                         for _ in range(64 if overflow else 1)]
+        assert invalidations == ([False] * 63 + [True] if overflow else [False])
+    finally:
+        await stream.aclose()
 
 
 async def test_idle_navigation_confirms_original_snapshot_on_heartbeat(monkeypatch):
@@ -238,3 +311,28 @@ async def test_navigation_changes_share_transport_and_release_reader(open_observ
     finally:
         await stream.aclose()
     assert observation_sources.closed == {"navigation", "activity"}
+
+
+async def test_terminal_changes_are_initial_and_pushed_while_heartbeat_does_not_query(monkeypatch):
+    changed = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def changes():
+        try:
+            yield None
+            await changed.wait()
+            yield frozenset({"term_changed"})
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(api, "SSE_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    stream = api._stream_terminal_changes(SimpleNamespace(changes=changes))
+    try:
+        assert await anext(stream) == 'event: resources_changed\ndata: {"resource_ids":null}\n\n'
+        assert await asyncio.wait_for(anext(stream), 0.5) == ': heartbeat\n\n'
+        changed.set()
+        assert await asyncio.wait_for(anext(stream), 0.5) == 'event: resources_changed\ndata: {"resource_ids":["term_changed"]}\n\n'
+    finally:
+        await stream.aclose()
+    assert closed.is_set()

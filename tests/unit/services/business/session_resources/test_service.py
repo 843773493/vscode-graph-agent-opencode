@@ -153,7 +153,7 @@ class _EmptyBackgroundTaskRegistry:
     def list_handles(self, _session_id: str) -> list[BackgroundTaskHandle]:
         return []
 
-    def list_closed_handles(self, _session_id: str) -> list[BackgroundTaskHandle]:
+    def list_summaries(self, _session_id: str, *, include_history: bool):
         return []
 
     def get_handle(
@@ -306,7 +306,7 @@ async def test_disabled_resource_plugin_only_suppresses_empty_session_owner(
         else BrowserPluginDisabled("Browser 插件关闭")
     )
 
-    async def disabled_listing() -> list[dict[str, object]]:
+    async def disabled_listing(**query) -> list[dict[str, object]]:
         raise plugin_error
 
     monkeypatch.setattr(bundle.transport, "list_resources", disabled_listing)
@@ -343,7 +343,7 @@ async def test_session_resource_provider_preserves_regular_cold_listing_errors(
     owner = bundle.restart()
     failure = ConnectionError("首次资源清单未取得回执")
 
-    async def failed_listing() -> list[dict[str, object]]:
+    async def failed_listing(**query) -> list[dict[str, object]]:
         raise failure
 
     monkeypatch.setattr(bundle.transport, "list_resources", failed_listing)

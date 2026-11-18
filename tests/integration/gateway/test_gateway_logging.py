@@ -51,9 +51,10 @@ def logging_case(
     port = integration_port_block_for_file(Path(request.node.path)).port(0)
     config_path = workspace / ".boxteam/workspace.jsonc"
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
-    provider.update({"model": "e2e-stub-model", "api_key": "logging-fixture-key"})
-    config["agents"]["default"]["model"] = {"primary_provider": "primary", "fallback_providers": []}
+    provider = config["llm"]["providers"]["primary"]
+    provider["models"]["default"]["model"] = "e2e-stub-model"
+    provider["defaults"]["api_key"] = ""
+    config["agents"]["default"]["model"] = {"primary": {"provider_id": "primary", "model_id": "default"}, "fallbacks": []}
     config.setdefault("runtime", {}).setdefault("gateway", {}).setdefault("connection", {})["url"] = f"http://127.0.0.1:{port}"
     config.setdefault("plugins", {}).setdefault("runtime", {})["entries"] = [
         {"package_id": "boxteam.developer-tools", "package_version": "0.1.0", "plugin_id": plugin_id, "enabled": True}

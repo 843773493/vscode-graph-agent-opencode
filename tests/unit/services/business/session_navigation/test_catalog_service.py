@@ -29,6 +29,8 @@ from tests.support.session_navigation.catalog_intents import (
     submit_catalog_intent,
 )
 from tests.unit.services.business.session_service_test_support import (
+    BACKUP_MODEL,
+    PRIMARY_MODEL,
     SessionServiceConfigStub,
 )
 
@@ -268,18 +270,17 @@ async def test_catalog_snapshot_enriches_session_nodes_and_reuses_cached_metadat
 
 
 @pytest.mark.asyncio
-async def test_catalog_cached_null_provider_tracks_config_default_without_catalog_read(
+async def test_catalog_cached_null_model_tracks_config_default_without_catalog_read(
     tmp_path: Path,
     session_bundle_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """NULL provider 继续动态解析配置；缓存不冻结旧默认值或重读会话。"""
-    model = {"primary_provider": "primary", "fallback_providers": ["backup"]}
+    """NULL 模型引用 继续动态解析配置；缓存不冻结旧默认值或重读会话。"""
+    model = {"primary": PRIMARY_MODEL.model_dump(mode="json"), "fallbacks": [BACKUP_MODEL.model_dump(mode="json")]}
     config = SessionServiceConfigStub({
         "default_agent": "default",
         "agents": {"default": {"model": model}},
-        "llm": {"providers": [{"id": "primary"}, {"id": "backup"}]},
-    })
+            })
     sessions_root = tmp_path / "sessions"
     service = _SessionService(sessions_root, config_service=config)
     resolver = service.path_resolver
@@ -291,7 +292,7 @@ async def test_catalog_cached_null_provider_tracks_config_default_without_catalo
     resolver.catalog_store.update_session_configuration(
         explicit_id,
         current_agent_id="default",
-        current_provider_id="primary",
+        current_model_json=PRIMARY_MODEL.canonical_json(),
         updated_at=datetime.fromisoformat(explicit.updated_at),
     )
     count = _count_catalog_snapshots(monkeypatch, resolver)
@@ -299,32 +300,31 @@ async def test_catalog_cached_null_provider_tracks_config_default_without_catalo
     first = await catalog.export_index()
     first_sessions = {node.node_id: node.session for node in first.items}
     assert first_sessions[default_id] is not None
-    assert first_sessions[default_id].current_provider_id == "primary"
+    assert first_sessions[default_id].current_model == PRIMARY_MODEL
 
-    model["primary_provider"] = "backup"
+    model["primary"] = BACKUP_MODEL.model_dump(mode="json")
     second = await catalog.export_index()
     second_sessions = {node.node_id: node.session for node in second.items}
 
     assert second_sessions[default_id] is not None
-    assert second_sessions[default_id].current_provider_id == "backup"
+    assert second_sessions[default_id].current_model == BACKUP_MODEL
     assert second_sessions[explicit_id] == first_sessions[explicit_id]
     assert second.catalog_revision == first.catalog_revision
     assert second.revision != first.revision
     assert count == [1]
     assert service.get_calls == []
-    assert resolver.catalog_store.get_node(default_id).current_provider_id is None
+    assert resolver.catalog_store.get_node(default_id).current_model_json is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", ["children", "breadcrumb", "nodes", "full"])
-async def test_catalog_read_keeps_provider_and_revision_in_same_configuration_publication(
+async def test_catalog_read_keeps_model_and_revision_in_same_configuration_publication(
     tmp_path: Path, session_bundle_factory, monkeypatch: pytest.MonkeyPatch, scope: str,
 ) -> None:
-    model = {"primary_provider": "primary", "fallback_providers": ["backup"]}
+    model = {"primary": PRIMARY_MODEL.model_dump(mode="json"), "fallbacks": [BACKUP_MODEL.model_dump(mode="json")]}
     config = SessionServiceConfigStub({
         "default_agent": "default", "agents": {"default": {"model": model}},
-        "llm": {"providers": [{"id": "primary"}, {"id": "backup"}]},
-    })
+            })
     sessions_root = tmp_path / "sessions"
     service = _SessionService(sessions_root, config_service=config)
     session_id = canonical("publication-session")
@@ -345,14 +345,14 @@ async def test_catalog_read_keeps_provider_and_revision_in_same_configuration_pu
         # 在 DTO 投影前尝试发布：只有整个读取持原屏障，发布才会等到本批投影结束。
         if config.publication_lock.acquire(blocking=False):
             try:
-                model["primary_provider"] = "backup"
+                model["primary"] = BACKUP_MODEL.model_dump(mode="json")
             finally:
                 config.publication_lock.release()
                 publication_attempted.set()
         else:
             publication_attempted.set()
             with config.publication_lock:
-                model["primary_provider"] = "backup"
+                model["primary"] = BACKUP_MODEL.model_dump(mode="json")
 
     def project(node):
         assert publication_attempted.wait(5), "配置发布线程未尝试切换"
@@ -372,11 +372,11 @@ async def test_catalog_read_keeps_provider_and_revision_in_same_configuration_pu
     finally:
         await publisher
     assert first.revision == catalog_projection_revision(first.catalog_revision, old_projection)
-    assert first.items[0].session.current_provider_id == "primary"
+    assert first.items[0].session.current_model == PRIMARY_MODEL
     second = await reads[scope]()
     assert second.catalog_revision == first.catalog_revision
     assert second.revision != first.revision
-    assert second.items[0].session.current_provider_id == "backup"
+    assert second.items[0].session.current_model == BACKUP_MODEL
 
 
 @pytest.mark.asyncio
@@ -898,7 +898,7 @@ async def test_catalog_snapshot_keeps_one_revision_when_writer_commits_after_rea
         revision, rows = original(check=check)
         resolver.catalog_store.move_node(child_id, parent_id)
         resolver.catalog_store.update_session_configuration(
-            child_id, current_agent_id="default", current_provider_id="backup",
+            child_id, current_agent_id="default", current_model_json=BACKUP_MODEL.canonical_json(),
             updated_at=datetime(2026, 10, 9, tzinfo=UTC),
         )
         return revision, rows
@@ -908,7 +908,7 @@ async def test_catalog_snapshot_keeps_one_revision_when_writer_commits_after_rea
     first_child = next(node for node in first.items if node.node_id == child_id)
     assert first_child.session is not None
     assert first_child.parent_node_id is first_child.session.parent_session_id is None
-    assert first_child.session.current_provider_id == "primary"
+    assert first_child.session.current_model == PRIMARY_MODEL
     assert first_child.session.updated_at.isoformat() == before.updated_at
     assert first.catalog_revision < resolver.revision
     assert service.get_calls == []
@@ -917,7 +917,7 @@ async def test_catalog_snapshot_keeps_one_revision_when_writer_commits_after_rea
     second_child = next(node for node in second.items if node.node_id == child_id)
     assert second_child.session is not None
     assert second_child.parent_node_id == second_child.session.parent_session_id == parent_id
-    assert second_child.session.current_provider_id == "backup"
+    assert second_child.session.current_model == BACKUP_MODEL
     assert second_child.session.updated_at == datetime(2026, 10, 9, tzinfo=UTC)
     assert second.catalog_revision == resolver.revision
 
@@ -978,7 +978,7 @@ async def test_version_and_required_ranges_do_not_build_full_catalog(tmp_path, m
 
 @pytest.mark.asyncio
 async def test_bounded_page_uses_same_casefold_order_and_config_cursor_version(tmp_path):
-    model = {"primary_provider": "primary", "fallback_providers": ["backup"]}
+    model = {"primary": PRIMARY_MODEL.model_dump(mode="json"), "fallbacks": [BACKUP_MODEL.model_dump(mode="json")]}
     config = SessionServiceConfigStub({"default_agent": "default", "agents": {"default": {"model": model}}})
     service = _SessionService(tmp_path / "sessions", config_service=config)
     store = service.path_resolver.catalog_store
@@ -989,7 +989,7 @@ async def test_bounded_page_uses_same_casefold_order_and_config_cursor_version(t
     page = await catalog.list_children(parent_node_id=None, limit=2, cursor=None)
     assert page.revision == exported.revision
     assert [node.node_id for node in page.items] == [node.node_id for node in sorted(exported.items, key=lambda node: (node.kind != "folder", node.name.casefold(), node.node_id))[:2]]
-    model["primary_provider"] = "backup"
+    model["primary"] = BACKUP_MODEL.model_dump(mode="json")
     from app.services.business.session_navigation.catalog_query import (
         CatalogCursorError,
     )

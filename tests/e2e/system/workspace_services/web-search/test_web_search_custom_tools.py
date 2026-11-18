@@ -150,6 +150,7 @@ async def test_model_searches_web_then_fetches_selected_result(
     assert fetch_result["content_selection"] == {
         "strategy": "semantic_embedding",
         "provider_id": "backup_2",
+        "model_id": "default",
         "model": "openai/text-embedding-3-small",
     }
     assert fetch_result["pages"][0]["content_selection"] == "semantic_embedding"

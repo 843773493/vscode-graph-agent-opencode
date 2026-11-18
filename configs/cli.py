@@ -18,6 +18,7 @@ from app.core.user_storage_migration import migrate_user_storage_layout
 from configs.diagnostics import diagnose_configuration, diagnostic_error
 from configs.gateway_development_assets import install_gateway_development_assets
 from configs.installer import (
+    install_bundled_plugins,
     install_source_development_configuration,
     install_user_configuration,
     resolve_config_resource_source,
@@ -301,6 +302,7 @@ def main() -> None:
         default="initialize",
     )
     parser.add_argument("--project-root", type=Path)
+    parser.add_argument("--bundled-plugins", type=json.loads, default=[])
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--migration-workspace", type=Path, action="append", default=[])
     parser.add_argument("--preview", action="store_true")
@@ -470,6 +472,7 @@ def main() -> None:
             project_root=development_root,
             config_root=config_root,
             local_only=local_only,
+            force=args.force,
         )
         gateway_development_assets = _environment_flag(
             GATEWAY_DEVELOPMENT_ASSETS_ENV
@@ -496,6 +499,7 @@ def main() -> None:
         return
 
     if args.action == "initialize":
+        bundled_plugins = install_bundled_plugins(boxteam_home=boxteam_home, packages=args.bundled_plugins)
         installation = install_user_configuration(
             config_root=config_root,
             profile="default",
@@ -506,6 +510,7 @@ def main() -> None:
             json.dumps(
                 {
                     "action": args.action,
+                    "installed_bundled_plugins": bundled_plugins,
                     "config_paths": [str(path) for path in installation.config_paths],
                     "schema_paths": [str(path) for path in installation.schema_paths],
                     "created_config_paths": [

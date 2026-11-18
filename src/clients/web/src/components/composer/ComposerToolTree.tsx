@@ -14,8 +14,8 @@ export interface ToolGroup {
 }
 
 function runMetric(run: ToolTestRun): string {
-  const completed = run.providers.reduce((sum, item) => sum + item.completed, 0);
-  const passed = run.providers.reduce((sum, item) => sum + item.passed, 0);
+  const completed = run.models.reduce((sum, item) => sum + item.completed, 0);
+  const passed = run.models.reduce((sum, item) => sum + item.passed, 0);
   if (run.status === "queued") return t("composer.tools.testQueued");
   if (run.status === "running") {
     return t("composer.tools.progress", run.progress, passed, completed);
@@ -216,16 +216,16 @@ export default function ComposerToolTree({
                           <span>{t("composer.tools.test")}</span>
                         </button>
                       </div>
-                      {run && run.providers.length > 0 ? (
+                      {run && run.models.length > 0 ? (
                         <div className="composer-tool-provider-results">
-                          {run.providers.map((provider) => (
+                          {run.models.map((provider) => (
                             <span
-                              key={provider.provider_id}
+                              key={`${provider.model_ref.provider_id} / ${provider.model_ref.model_id}`}
                               title={
                                 t("composer.tools.providerSummary", provider.passed, provider.failed, provider.model_calls, provider.reasoning_only_calls, provider.transient_retries)
                               }
                             >
-                              {provider.provider_id} · {provider.model} · {provider.success_rate}%
+                              {`${provider.model_ref.provider_id} / ${provider.model_ref.model_id}`} · {provider.model} · {provider.success_rate}%
                               {t("composer.tools.modelCalls", provider.model_calls)}
                               {provider.reasoning_only_calls > 0
                                 ? t("composer.tools.reasoningCalls", provider.reasoning_only_calls)
@@ -243,7 +243,7 @@ export default function ComposerToolTree({
                           <ul>
                             {failedAttempts.map((attempt) => (
                               <li key={attempt.attempt_id}>
-                                <strong>{attempt.provider_id} · {attempt.case_id}</strong>
+                                <strong>{`${attempt.model_ref.provider_id} / ${attempt.model_ref.model_id}`} · {attempt.case_id}</strong>
                                 <span>{attempt.error || attempt.detail}</span>
                               </li>
                             ))}

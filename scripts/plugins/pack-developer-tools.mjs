@@ -76,7 +76,7 @@ const SOURCE_FILES = [
   "src/workspace-services/debug/server/backend.js",
 ];
 
-const PACKAGE_FILES = [
+export const PACKAGE_FILES = [
   ["resources/plugins/developer-tools/plugin.jsonc", "plugin.jsonc"],
   ["resources/plugins/developer-tools/package.json", "package.json"],
   ["resources/plugins/developer-tools/bun.lock", "bun.lock"],

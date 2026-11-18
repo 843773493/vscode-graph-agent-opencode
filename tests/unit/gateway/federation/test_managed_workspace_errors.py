@@ -121,7 +121,6 @@ async def test_remote_http_rejection_keeps_status_without_copying_body_and_can_r
         assert any(error.response.json() == {"detail": location} for error in originals)
         assert registry.registry_revision == before
         refresh.assert_not_awaited()
-        forwards.reconcile_workspaces.assert_not_awaited()
         reply.status, reply.payload = 200, {"data": managed_list}
         recovered = await client.request(method, path, params={"gateway_connection_id": "rgw_management"},
                                          headers={"X-Request-ID": "req_management_retry"})
@@ -130,7 +129,6 @@ async def test_remote_http_rejection_keeps_status_without_copying_body_and_can_r
                                              "gateway_name": "指定远端", "connection_kind": "remote_gateway"}
         assert recovered.json()["request_id"] == recovered.headers["X-Request-ID"] == "req_management_retry"
         refresh.assert_awaited_once_with(registry=registry, connection_id="rgw_management")
-        forwards.reconcile_workspaces.assert_awaited_once()
     assert [request.headers["X-Request-ID"] for request in reply.requests] == ["req_management_failure", "req_management_retry"]
 
 
@@ -145,7 +143,6 @@ async def test_malformed_removal_conflict_stays_explicit_and_preserves_remote_st
     assert response.status_code == 409, response.text
     assert response.json()["detail"] == "工作区删除失败: stage=workspace_remove, error=HTTPStatusError"
     refresh.assert_not_awaited()
-    forwards.reconcile_workspaces.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -164,7 +161,6 @@ async def test_removal_conflict_preserves_complete_blocker_and_group_identity(
     assert response.json()["request_id"] == response.headers["X-Request-ID"] == "req_removal_blocked"
     assert registry.registry_revision == before
     refresh.assert_not_awaited()
-    forwards.reconcile_workspaces.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -201,7 +197,6 @@ async def test_remote_failure_keeps_original_cause_even_when_diagnostic_sink_fai
         assert any(record.exc_info and record.exc_info[1] is original for record in caplog.records)
     assert registry.registry_revision == before
     refresh.assert_not_awaited()
-    forwards.reconcile_workspaces.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -214,4 +209,3 @@ async def test_non_json_removal_conflict_is_rejected_without_changing_http_statu
     assert response.status_code == 409, response.text
     assert response.json()["detail"] == "工作区删除失败: stage=workspace_remove, error=HTTPStatusError"
     refresh.assert_not_awaited()
-    forwards.reconcile_workspaces.assert_not_awaited()

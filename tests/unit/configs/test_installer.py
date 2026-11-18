@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -22,13 +23,53 @@ from configs.boxteam import (
     install_source_development_configuration,
     install_user_configuration,
 )
-from configs.installer import validate_config_resource_pair
+from configs.installer import install_bundled_plugins, validate_config_resource_pair
 
 
 def _load_jsonc_object(path: Path) -> dict[str, object]:
     payload = commentjson.loads(path.read_text(encoding="utf-8"))
     assert isinstance(payload, dict)
     return payload
+
+
+def test_bundled_plugin_install_is_idempotent_and_does_not_change_switches(tmp_path: Path) -> None:
+    archive = tmp_path / "builtin.zip"
+    manifest = {"manifest_version": 1, "package_id": "example.builtin", "version": "1.0.0",
+                "name": "Builtin", "extension_contract_version": 1,
+                "plugins": [{"id": "guide", "name": "Guide", "instance_scope": "workspace",
+                    "requires": [{"extension_point": "skills", "version": 1}],
+                    "contributes": {"skills": [{"id": "guide", "path": "guide"}]}}]}
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("plugin.jsonc", json.dumps(manifest))
+        output.writestr("guide/SKILL.md", "---\nname: guide\ndescription: Test guidance\n---\nUse guide.\n")
+    home = tmp_path / "home"
+    entries = [{"package_id": "example.builtin", "package_version": "1.0.0", "archive": str(archive)}]
+    assert install_bundled_plugins(boxteam_home=home, packages=entries) == ["example.builtin@1.0.0"]
+    config = home / "config/gateway.jsonc"
+    config.parent.mkdir()
+    switches = '{"plugins":{"workspace_defaults":{"entries":[]}}}\n'
+    config.write_text(switches)
+    archive.unlink()
+    # 已安装时不再读 ZIP、hash 全包，也不把空模板重新变成启用。
+    assert install_bundled_plugins(boxteam_home=home, packages=entries) == []
+    assert config.read_text() == switches
+
+
+def test_development_restart_preserves_plugin_choices_and_environment(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".env").write_text("NEW_VALUE=1\n")
+    shutil.copytree(Path.cwd() / "configs", project / "configs", ignore=shutil.ignore_patterns("__pycache__"))
+    config_root = tmp_path / "home/config"
+    install_source_development_configuration(project_root=project, config_root=config_root)
+    document = _load_jsonc_object(config_root / "gateway.jsonc")
+    document["plugins"]["workspace_defaults"]["entries"] = []
+    saved = json.dumps(document)
+    (config_root / "gateway.jsonc").write_text(saved)
+    (config_root / ".env").write_text("USER_VALUE=2\n")
+    install_source_development_configuration(project_root=project, config_root=config_root)
+    assert (config_root / "gateway.jsonc").read_text() == saved
+    assert (config_root / ".env").read_text() == "USER_VALUE=2\n"
 
 
 def _default_custom_tool_names(config: dict[str, object]) -> set[str]:
@@ -235,6 +276,7 @@ def test_source_development_install_uses_dev_profiles_and_source_env(
     result = install_source_development_configuration(
         project_root=source_project_root,
         config_root=config_root,
+        force=True,
     )
 
     assert result.env_path is not None

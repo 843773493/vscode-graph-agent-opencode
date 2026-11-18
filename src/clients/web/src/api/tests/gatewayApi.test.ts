@@ -3,14 +3,21 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import {
   addManagedGatewayWorkspace,
+  addRemoteGatewayConnection,
   browseGatewayLocalDirectories,
   deleteGatewayUiAsset,
   getGatewayDiagnostics,
   listGatewayUiAssets,
+  listGatewayManagementTargets,
   listGatewayWorkspaces,
   removeGatewayWorkspace,
+  removeRemoteGatewayConnection,
+  reconnectRemoteGatewayConnection,
+  revokeGatewayDeviceConnection,
   uploadGatewayUiAsset,
 } from "../../gatewayApi";
+import type { AddRemoteGatewayConnectionRequest } from "../../types/backend";
+import type { GatewayDiagnosticsDTO } from "../../types/gatewayProtocol";
 import { createSessionConnection } from "../gateway/sessionConnections";
 import { requestJson } from "../../api";
 import { DEFAULT_API_REQUEST_TIMEOUT_MS, HttpRequestError } from "../http";
@@ -27,6 +34,100 @@ const DIRECTORY_URI = "boxteam://gateway/gateway_0000000000007000800000000000000
 afterEach(() => {
   globalThis.fetch = originalFetch;
   setLocaleResources("zh-cn", chinese);
+});
+
+describe("Gateway 管理目标传输合同", () => {
+  const requests: Array<{ url: URL; init: RequestInit | undefined }> = [];
+  function captureRequests(data: unknown, status = 200): void {
+    requests.length = 0;
+    globalThis.fetch = Object.assign(async (...[input, init]: Parameters<typeof fetch>) => {
+      const url = new URL(String(input), "http://127.0.0.1");
+      if (url.pathname === "/api/gateway/auth/local-credential") return Response.json({ data: { token: "contract-token" } });
+      requests.push({ url, init });
+      return Response.json(status === 200 ? { data, request_id: "req_contract" } : { detail: "目标连接不可用", request_id: "req_contract" },
+        { status, headers: { "X-Request-ID": "req_contract" } });
+    }, { preconnect: originalFetch.preconnect });
+  }
+
+  test("目标目录只查询入口 Gateway，保留连接路由并传递取消信号", async () => {
+    const controller = new AbortController();
+    const data = { local_gateway_id: "gateway-local", items: [
+      { gateway_id: "gateway-local", connection_kind: "local", name: "本地" },
+      { gateway_id: "gateway-remote", gateway_connection_id: "rgw-primary", connection_kind: "remote_gateway", name: "主连接" },
+      { gateway_id: "gateway-remote", gateway_connection_id: "rgw-alternate", connection_kind: "remote_gateway", name: "备用连接" },
+    ] };
+    captureRequests(data);
+    expect(await listGatewayManagementTargets(49_980, controller.signal)).toEqual(data);
+    expect(requests).toHaveLength(1);
+    const { url, init } = requests[0];
+    expect(url.pathname).toBe("/api/gateway/management/gateways");
+    expect(url.search).toBe("");
+    expect(new Headers(init?.headers).has("X-BoxTeam-Target-Gateway-Id")).toBe(false);
+    expect(new Headers(init?.headers).has("X-BoxTeam-Workspace-Id")).toBe(false);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(init?.signal?.aborted).toBe(true);
+  });
+
+  test.each([
+    { gateway_id: "gateway-local" },
+    { gateway_id: "gateway-local", workspace_id: WORKSPACE_UUID },
+    { gateway_id: "gateway-remote", gateway_connection_id: "rgw_remote" },
+    { gateway_id: "gateway-remote", gateway_connection_id: "rgw_remote", workspace_id: WORKSPACE_UUID },
+  ])("诊断明确传递资源身份和连接路由：%j", async target => {
+    const data: GatewayDiagnosticsDTO = { gateway_id: target.gateway_id, selected_workspace_id: target.workspace_id,
+      gateway_name: "测试目标", connection_kind: target.gateway_connection_id ? "remote_gateway" : "local",
+      status: "ready", checked_at: "2026-11-17T00:00:00Z", workspaces: [], logs: [], processes: [], observation: null, plugin_observations: [] };
+    captureRequests(data);
+    expect<GatewayDiagnosticsDTO>(await getGatewayDiagnostics(49_980, { target, logId: "log/backend", tailLines: 120 })).toEqual(data);
+    expect(requests).toHaveLength(1);
+    const { url, init } = requests[0];
+    expect(url.pathname).toBe("/api/gateway/diagnostics");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ log_id: "log/backend", tail_lines: "120",
+      ...(target.workspace_id ? { workspace_id: target.workspace_id } : {}),
+      ...(target.gateway_connection_id ? { gateway_connection_id: target.gateway_connection_id } : {}) });
+    const headers = new Headers(init?.headers);
+    expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(target.gateway_id);
+    expect(headers.get("X-BoxTeam-Workspace-Id")).toBe(target.workspace_id ?? null);
+  });
+
+  test("诊断失败保留原状态与 request_id，不重试或返回空结果", async () => {
+    captureRequests(null, 502);
+    const failure = await getGatewayDiagnostics(49_980, { target: { gateway_id: "gateway-remote", gateway_connection_id: "rgw_remote" } })
+      .catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(HttpRequestError);
+    expect(failure).toMatchObject({ status: 502, requestId: "req_contract" });
+    expect(String(failure)).toContain("目标连接不可用");
+    expect(requests).toHaveLength(1);
+  });
+
+  const connectionSources: AddRemoteGatewayConnectionRequest[] = [
+    { connection_id: "rgw_existing", remote_gateway_port: 8014 },
+    { ssh_config_host: "lab", remote_gateway_port: 8014 },
+    { name: "lab", host: "lab.example", port: 22, username: "agent", private_key_path: "~/.ssh/id_ed25519", remote_gateway_port: 8014 },
+  ];
+  test.each(connectionSources)("添加远端 Gateway 保持原请求和完整回执：%j", async payload => {
+    const data = { items: [], active_workspace: null };
+    captureRequests(data);
+    expect(await addRemoteGatewayConnection(49_980, payload)).toEqual(data);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].url.pathname).toBe("/api/gateway/remote-gateways");
+    expect(requests[0].init?.method).toBe("POST");
+    expect(JSON.parse(String(requests[0].init?.body))).toEqual(payload);
+  });
+
+  test("远端 Gateway 连接与入站设备连接各用所属端点", async () => {
+    captureRequests({ items: [] });
+    await reconnectRemoteGatewayConnection(49_980, "rgw/remote");
+    await removeRemoteGatewayConnection(49_980, "rgw/remote");
+    await revokeGatewayDeviceConnection(49_980, "device/inbound");
+    expect(requests.map(({ url, init }) => [url.pathname, init?.method])).toEqual([
+      ["/api/gateway/remote-gateways/rgw%2Fremote/reconnect", "POST"],
+      ["/api/gateway/remote-gateways/rgw%2Fremote", "DELETE"],
+      ["/api/gateway/device-connections/device%2Finbound", "DELETE"],
+    ]);
+  });
 });
 describe("Gateway API 超时常量收敛", () => {
   /** 捕获 createRequestAbortState 注册的超时毫秒数，不改动真实计时。 */

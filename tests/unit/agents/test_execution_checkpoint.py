@@ -147,9 +147,13 @@ def accept_runtime_input():
             )
             build_message_service(sessions_dir, checkpointer=saver).accept_user_message(queued_message, execution_identity=binding, queue_input=ExecutionQueueInput(
                 execution_binding=binding, message_id=queued_message.message_id, agent_id="default",
-                provider_id=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
+                model=None, delivery_policy="after_turn", gateway_id=None, request_id=None,
                 created_at=queued_message.created_at.isoformat(),
             ))
+            saver.claim_execution_queue(
+                session_id, thread_id, job_id=job_id,
+                claim_owner="checkpoint-test", previous_generation=0,
+            )
         return saver.accepted_user_message(session_id, thread_id=thread_id, job_id=job_id, message_id=message.response_metadata["message_id"])
     return accept
 

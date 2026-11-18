@@ -1,5 +1,5 @@
 import { t } from "../../../../shared/core/i18n/index.js";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import { DEFAULT_BACKEND_PORT } from "../../api";
 import { MessageSubmissionRejectedError, MessageSubmissionUnknownError } from "../../api/session/sessionMessages";
 import { useComposerState } from "../../hooks/app/appContext";
@@ -28,6 +28,7 @@ import {
 import ComposerActionButtons from "./ComposerActionButtons";
 import ComposerAgentControl from "./ComposerAgentControl";
 import ComposerModelControl from "./ComposerModelControl";
+import type { ModelPickerRequest } from "../../state/modelPicker";
 import ComposerAttachmentTray from "./ComposerAttachmentTray";
 import MessageSubmissionRecovery from "./MessageSubmissionRecovery";
 import ComposerSlashCommandMenu from "./ComposerSlashCommandMenu";
@@ -49,6 +50,8 @@ import {
   parseGoalSlashAction,
 } from "../../state/sessionGoal";
 import { errorMessage } from "../../utils/errorMessage";
+import ThreadStatusBar, { type ThreadStatusBarProps } from "./ThreadStatusBar";
+import { ComposerDiagnosticsContext } from "./ComposerDiagnosticsContext";
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null) {
   if (!textarea) {
@@ -73,8 +76,11 @@ function nextDeliveryPolicy(policy: DeliveryPolicy): DeliveryPolicy {
   return "after_turn";
 }
 
-function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?: string; onDraftReady?: (controller: ComposerDraftController | undefined) => void;
-  onManageConfiguration?: (kind: 'providers' | 'agents', id: string) => void }) {
+function Composer({ threadId, onDraftReady, onManageConfiguration, onPickModel, status }: { threadId?: string; onDraftReady?: (controller: ComposerDraftController | undefined) => void;
+  status?: Omit<ThreadStatusBarProps, "submission" | "syncError" | "activeJobId">;
+  onManageConfiguration?: (kind: 'providers' | 'agents', id: string, modelId?: string) => void;
+  onPickModel?: (request: ModelPickerRequest) => Promise<void> }) {
+  const reportDiagnostic = useContext(ComposerDiagnosticsContext);
   const {
     state,
     setStatus,
@@ -88,7 +94,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
     switchModel,
     refreshAgents,
     setWorkspaceDefaultAgent,
-    setWorkspaceDefaultProvider,
+    setWorkspaceDefaultModel,
     switchContentView,
     createSession,
     renameSession,
@@ -102,9 +108,9 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
   >([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [composerNotice, setComposerNotice] = useState("");
+  const [stopPendingFor, setStopPendingFor] = useState<string | null>(null);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [slashCommandIndex, setSlashCommandIndex] = useState(0);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameDialogSubmitting, setRenameDialogSubmitting] = useState(false);
@@ -115,7 +121,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   // 同一份输入内容的重入闸门。产品明确支持「生成中继续排队下一条消息」
-  // （见 composerHint：「正在生成，可继续发送下一条或点击停止」），因此不能
+  // （运行状态显示在输入区上方），因此不能
   // 禁用发送或整个会话级加锁——那会一并挡掉合法的排队。这里只挡「同一次提交
   // 被瞬时重复触发」：Enter 提交会同步 setInput("")，但同一事件循环内的
   // 重复触发仍可能读到尚未刷新的旧 input，导致同一 payload 被提交两次。
@@ -123,7 +129,6 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
   // 失败回填后也会被清空以允许重试。
   const inFlightSubmissionRef = useRef<{ content: string; policy: DeliveryPolicy } | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
-  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const currentSessionId = state.currentSession?.session_id ?? null;
   const currentWorkspaceId =
     state.currentSessionWorkspaceId ?? state.activeGatewayWorkspaceId;
@@ -152,6 +157,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
   const visibleGoal = state.currentGoalSessionId === currentSessionId
     ? state.currentGoal
     : null;
+  useEffect(() => { if (attachmentError) reportDiagnostic(attachmentError); }, [reportDiagnostic, attachmentError]);
 
   const hasContent = input.trim().length > 0
     || attachments.length > 0
@@ -163,28 +169,16 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
   const currentAgentConfig = state.agents.find(
     (agent) => agent.agent_id === currentAgent,
   );
-  const currentProviders = currentAgentConfig?.providers ?? [];
-  const currentProviderId =
-    state.currentSession?.current_provider_id
-    ?? currentProviders.find((provider) => provider.workspace_default)?.provider_id
-    ?? currentProviders[0]?.provider_id
-    ?? currentAgentConfig?.model
-    ?? "model";
+  const currentModels = currentAgentConfig?.models ?? [];
+  const currentModel = state.currentSession
+    ? state.currentSession.current_model ?? null
+    : currentModels.find((model) => model.workspace_default)?.model_ref ?? null;
   const defaultDeliveryPolicy =
     state.uiSettings.layout.delivery_policy_default ?? "after_turn";
   const currentView =
     VIEW_OPTIONS.find((option) => option.id === state.contentView) ??
     VIEW_OPTIONS[0];
   const showInterrupt = Boolean(state.currentActiveJobId);
-  const queuedCount = state.queuedPendingCount;
-  const composerHint = useMemo(() => {
-    if (showInterrupt) {
-      return queuedCount > 0
-        ? t("composer.queued", queuedCount)
-        : t("composer.generating");
-    }
-    return t("composer.sendHint");
-  }, [queuedCount, showInterrupt]);
 
   useEffect(() => {
     resizeTextarea(textareaRef.current);
@@ -199,7 +193,6 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
     setAttachmentError("");
     setComposerNotice("");
     setAgentMenuOpen(false);
-    setModelMenuOpen(false);
     setViewMenuOpen(false);
     setSlashCommandIndex(0);
     setRenameDialogOpen(false);
@@ -370,20 +363,9 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
     await runGoalMutation(() => updateGoal({ status: "active", expected_control_revision: visibleGoal.control_revision }), t("composer.goalResumed"));
   };
 
-  const clearCurrentGoal = async (requireConfirmation: boolean) => {
+  const clearCurrentGoal = async () => {
     if (!visibleGoal) {
       throw new Error(t("composer.goalMissing"));
-    }
-    if (requireConfirmation) {
-      const confirmed = await confirm({
-        title: t("composer.clearGoal"),
-        message: t("composer.clearGoalDetail", visibleGoal.objective),
-        confirmText: t("composer.clearGoalConfirm"),
-        danger: true,
-      });
-      if (!confirmed) {
-        return;
-      }
     }
     await runGoalMutation(() => clearGoal({
       sessionId: visibleGoal.session_id, threadId: visibleGoal.thread_id,
@@ -419,7 +401,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
           await resumeGoal();
           return;
         case "clear":
-          await clearCurrentGoal(false);
+          await clearCurrentGoal();
           return;
         case "create":
           await createGoal(action.objective);
@@ -625,15 +607,16 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
   };
 
   const handleInterrupt = () => {
-    if (!showInterrupt) {
+    if (!showInterrupt || stopPendingFor === currentSessionCacheKey) {
       return;
     }
 
     setAttachmentError("");
     const scopeKey = currentSessionCacheKey;
+    setStopPendingFor(scopeKey);
     void interruptSession().catch((error: unknown) => {
       if (currentScopeKeyRef.current === scopeKey) setAttachmentError(t("composer.interruptFailed", errorMessage(error)));
-    });
+    }).finally(() => setStopPendingFor(current => current === scopeKey ? null : current));
   };
 
   const handleViewSelect = (view: ConversationContentView) => {
@@ -662,33 +645,31 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
     });
   };
 
-  const handleModelSelect = (providerId: string) => {
-    setModelMenuOpen(false);
+  const handleModelPicker = () => {
+    const scopeKey = currentSessionCacheKey;
     setAttachmentError("");
-    void switchModel(providerId).catch((error: unknown) => {
-      setAttachmentError(
-        t("composer.modelFailed", errorMessage(error)),
-      );
-    });
-  };
-
-  const handleModelMenuToggle = () => {
-    const nextOpen = !modelMenuOpen;
-    setModelMenuOpen(nextOpen);
-    if (!nextOpen || !currentWorkspaceId) {
-      return;
-    }
-    void refreshAgents(currentWorkspaceId).catch((error: unknown) => {
-      setAttachmentError(t("composer.refreshModelsFailed", errorMessage(error)));
-    });
-  };
-
-  const handleWorkspaceDefaultProvider = (providerId: string) => {
-    setAttachmentError("");
-    void setWorkspaceDefaultProvider(currentAgent, providerId).catch((error: unknown) => {
-      setAttachmentError(
-        t("composer.modelDefaultFailed", errorMessage(error)),
-      );
+    const open = async () => {
+      if (!onPickModel) throw new Error(t("composer.model.pickerMissing"));
+      if (!currentWorkspaceId) throw new Error(t("composer.model.sourceGone"));
+      await onPickModel({
+        loadModels: async () => (await refreshAgents(currentWorkspaceId)).find(agent => agent.agent_id === currentAgent)?.models ?? [],
+        currentModel,
+        onSelect: async model => {
+          try { await switchModel(model); }
+          catch (error) { throw new Error(t("composer.modelFailed", errorMessage(error)), { cause: error }); }
+        },
+        onSetWorkspaceDefault: async model => {
+          try { await setWorkspaceDefaultModel(currentAgent, model); }
+          catch (error) { throw new Error(t("composer.modelDefaultFailed", errorMessage(error)), { cause: error }); }
+        },
+        onManage: onManageConfiguration ? model => {
+          const selected = model ?? currentModel;
+          onManageConfiguration('providers', selected?.provider_id ?? '', selected?.model_id);
+        } : undefined,
+      });
+    };
+    void open().catch((error: unknown) => {
+      if (currentScopeKeyRef.current === scopeKey) setAttachmentError(errorMessage(error));
     });
   };
 
@@ -706,12 +687,6 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
     }
     e.preventDefault();
     setAgentMenuOpen(false);
-  };
-
-  const handleModelMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Escape") return;
-    e.preventDefault();
-    setModelMenuOpen(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -774,7 +749,10 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
         <MessageSubmissionRecovery port={state.apiPort ?? DEFAULT_BACKEND_PORT}
           owner={currentWorkspaceId && currentSessionId && (threadId ?? state.currentSession?.thread_id)
             ? { workspaceKey: currentWorkspaceId, sessionId: currentSessionId, threadId: (threadId ?? state.currentSession!.thread_id)! } : null}
-          onAccepted={refreshTurnHistory} />
+          onAccepted={refreshTurnHistory} render={submission => <ThreadStatusBar key={currentSessionCacheKey} {...status}
+            conversations={status?.conversations ?? []} timeline={status?.timeline ?? null}
+            active={status?.active ?? true} activeJobId={state.currentActiveJobId}
+            syncError={state.sessionExecutionSyncError} submission={submission} />} />
         <div className="composer-surface new-chat-input-container">
           <div className="new-chat-input-area">
             <div className="composer-copy sessions-chat-editor">
@@ -808,37 +786,6 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
                 notice={composerNotice}
                 onRemove={handleRemoveAttachment}
               />
-              {visibleGoal ? (
-                <div
-                  className="composer-goal-status"
-                  role="status"
-                  aria-label={t("composer.currentGoal", GOAL_STATUS_LABELS[visibleGoal.status], visibleGoal.objective)}
-                  title={visibleGoal.objective}
-                  data-testid="composer-current-goal"
-                >
-                  <span className="codicon codicon-target" aria-hidden="true" />
-                  <span className="composer-goal-status-label">
-                    Goal · {GOAL_STATUS_LABELS[visibleGoal.status]}
-                  </span>
-                  <span className="composer-goal-status-objective">
-                    {visibleGoal.objective}
-                  </span>
-                </div>
-              ) : state.goalLoading && currentSessionId ? (
-                <div className="composer-goal-status" role="status">
-                  {t("composer.loadingGoal")}
-                </div>
-              ) : null}
-              {state.goalError && currentSessionId ? (
-                <div className="composer-attachment-error" role="alert">
-                  {t("composer.syncGoalFailed", state.goalError)}
-                </div>
-              ) : null}
-              {state.sessionExecutionSyncError && currentSessionId ? (
-                <div className="composer-attachment-error" role="alert">
-                  {t("composer.syncExecutionFailed", state.sessionExecutionSyncError)}
-                </div>
-              ) : null}
               {selectedBrowserElements.length > 0 ? (
                 <div className="composer-browser-elements" aria-label={t("composer.selectedElements")}>
                   {selectedBrowserElements.map((element) => (
@@ -894,7 +841,7 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
                   onSelect={handleViewSelect}
                   onKeyDown={handleViewMenuKeyDown}
                 />
-                <div className="composer-hint">{composerHint}</div>
+                <div className="composer-hint">{t("composer.sendHint")}</div>
               </div>
               <div className="composer-actions-right">
                 <div className="composer-actions-row sessions-chat-config-toolbar">
@@ -910,29 +857,18 @@ function Composer({ threadId, onDraftReady, onManageConfiguration }: { threadId?
                     onKeyDown={handleAgentMenuKeyDown}
                     onManage={onManageConfiguration ? () => { setAgentMenuOpen(false); onManageConfiguration('agents', currentAgent); } : undefined}
                   />
-                  <ComposerModelControl
-                    controlRef={modelMenuRef}
-                    providers={currentProviders}
-                    currentProviderId={currentProviderId}
-                    open={modelMenuOpen}
-                    disabled={currentProviders.length === 0}
-                    onToggle={handleModelMenuToggle}
-                    onClose={() => setModelMenuOpen(false)}
-                    onSelect={handleModelSelect}
-                    onSetWorkspaceDefault={handleWorkspaceDefaultProvider}
-                    onKeyDown={handleModelMenuKeyDown}
-                    onManage={onManageConfiguration ? () => { setModelMenuOpen(false); onManageConfiguration('providers', currentProviderId); } : undefined}
-                  />
+                  <ComposerModelControl models={currentModels} currentModel={currentModel} onOpen={handleModelPicker} />
                   <ComposerToolControl
                     apiPort={state.apiPort ?? DEFAULT_BACKEND_PORT}
                     agentId={currentAgent}
                     workspaceId={currentWorkspaceId}
                     onStatus={setStatus}
-                    providers={currentProviders}
+                    models={currentModels}
                   />
                   <ComposerActionButtons
                     hasContent={hasContent}
                     showInterrupt={showInterrupt}
+                    stopPending={stopPendingFor !== null && stopPendingFor === currentSessionCacheKey}
                     onClear={handleClear}
                     onInterrupt={handleInterrupt}
                     onSend={() => handleSend(defaultDeliveryPolicy)}
