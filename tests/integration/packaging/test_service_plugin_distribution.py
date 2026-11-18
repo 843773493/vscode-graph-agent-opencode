@@ -540,29 +540,31 @@ def test_relocated_distribution_completes_service_plugin_lifecycle(
             result_path = context.artifacts_dir / "workbench.json"
             temporary = context.runtime_root_for_node(request.node.nodeid) / "chromium-tmp"
             electron_asset = os.environ.get("BOXTEAM_TEST_ELECTRON_ASSET")
-            native: dict[str, str] = {}
-            if electron_asset:
-                destination = context.runtime_root_for_node(request.node.nodeid) / "electron"
-                with tarfile.open(electron_asset) as archive:
-                    archive.extractall(destination, filter="data")
-                executable, = destination.glob("*/boxteam.exe" if sys.platform == "win32" else "*/boxteam")
-                native = {"electron": str(executable), "cwd": str(temporary),
-                    "profile": str(temporary / "electron-home"), "emptyPath": str(temporary / "empty-path")}
-                Path(native["emptyPath"]).mkdir(parents=True)
-            environment = {**os.environ, "HOME": str(temporary),
-                "XDG_CACHE_HOME": str(temporary / "cache"),
-                "BOXTEAM_DISTRIBUTION_WORKBENCH": json.dumps({"baseUrl": str(client.base_url),
-                    "application": str(distribution / manifest["application_root"]),
-                    "chromium": str(distribution / manifest["chromium_executable"]),
-                    "browserResource": {"resourceId": browser_resource["resource_id"], "workspaceId": workspace_id,
-                        "gatewayId": gateway_id, "instanceId": browser_plugin["instance"]["instance_id"]},
-                    "packages": [str(context.artifacts_dir / f"distribution-probe-{version}.zip")
-                        for version in ("1.0.0", "2.0.0")],
-                    "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png"), **native})}
             command = [_process_path(node), "tests/integration/packaging/service_plugin_distribution_workbench.mjs"]
             if electron_asset and sys.platform == "linux":
                 command = ["/usr/bin/xvfb-run", "-a", *command]
             with chromium_temporary_environment(temporary) as browser_environment:
+                native: dict[str, str] = {}
+                if electron_asset:
+                    destination = context.runtime_root_for_node(request.node.nodeid) / "electron"
+                    with tarfile.open(electron_asset) as archive:
+                        archive.extractall(destination, filter="data")
+                    executable, = destination.glob("*/boxteam.exe" if sys.platform == "win32" else "*/boxteam")
+                    # Chromium 的存储子目录也受路径限长约束，复用同一正式 runtime 的短别名。
+                    native = {"electron": _process_path(executable), "cwd": str(temporary),
+                        "profile": str(Path(browser_environment["TEMP"]) / "electron-home"),
+                        "emptyPath": str(temporary / "empty-path")}
+                    Path(native["emptyPath"]).mkdir(parents=True)
+                environment = {**os.environ, "HOME": str(temporary),
+                    "XDG_CACHE_HOME": str(temporary / "cache"),
+                    "BOXTEAM_DISTRIBUTION_WORKBENCH": json.dumps({"baseUrl": str(client.base_url),
+                        "application": str(distribution / manifest["application_root"]),
+                        "chromium": _process_path(distribution / manifest["chromium_executable"]),
+                        "browserResource": {"resourceId": browser_resource["resource_id"], "workspaceId": workspace_id,
+                            "gatewayId": gateway_id, "instanceId": browser_plugin["instance"]["instance_id"]},
+                        "packages": [str(context.artifacts_dir / f"distribution-probe-{version}.zip")
+                            for version in ("1.0.0", "2.0.0")],
+                        "resultPath": str(result_path), "screenshot": str(context.artifacts_dir / "workbench.png"), **native})}
                 browser = subprocess.run(command, env=environment | browser_environment,
                     capture_output=True, text=True, timeout=180, check=False)
             (context.artifacts_dir / "browser.stdout.raw").write_text(browser.stdout, encoding="utf-8")
