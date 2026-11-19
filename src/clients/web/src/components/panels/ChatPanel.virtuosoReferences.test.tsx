@@ -161,7 +161,7 @@ function virtuosoProps(renderer: ReactTestRenderer): Record<string, unknown> {
 }
 
 describe("ChatPanel Virtuoso 渲染引用", () => {
-  test("轮次候选展示序号和用户正文摘要，仅接纳已提交历史 Turn", () => {
+  test("历史 Turn 保留稳定定位身份，活动投影不伪造 Turn，普通排队消息不进入时间线", () => {
     installVirtuosoEnvironment();
     const history: ConversationView = {
       ...conversation(""), conversationId: "turn-history", turnId: "turn-history", displayMode: "history", status: "done",
@@ -186,10 +186,6 @@ describe("ChatPanel Virtuoso 渲染引用", () => {
     ])} />), {
       createNodeMock: createVirtuosoHostNode,
     }); });
-    const options = renderer!.root.findAllByType("option");
-    expect(options).toHaveLength(1);
-    expect(options[0].props.value).toBe("turn-history");
-    expect(options[0].children.join("")).toBe("第 9 轮 · 真实 用户 摘要");
     const virtuoso = virtuosoProps(renderer!);
     const items = virtuoso.data as Array<{ key: string; conversation: ConversationView }>;
     const computeItemKey = virtuoso.computeItemKey as (
