@@ -15,4 +15,5 @@
 - [x] 2.3 完成最小充分实现复审、静态分析和精确本地提交；不自动同步 dev/release/main。
   - 候选 `20c86faf4ee33041cfff826eb4ff436950609c25` 已本地提交；Ruff、Node语法、差异与OpenSpec严格校验通过，复用Sol只读复审确认首写顺序已闭合。未push或同步固定dev/release/main。
   - Windows编码收口另提交 `bddf1713b`、`353a4b9ef`、`dc38827e8`；Launcher子进程输出明确UTF-8，测试静态资产及journal显式UTF-8，不改变目标全局locale或静态文件的读取合同。
+  - 2026-11-19 当前源码复验：配置／身份／SQLite 定向回归149项、Launcher回归31项通过；真实受支持来源升级与两次Gateway／Workspace启动1项通过（47.27秒），核精确原件备份、工作区身份和重入不重写。已同步 configuration-evolution／workspace-identity 主规范，未改产品代码。命令、源码指纹、退出码及正式业务原件见 `out/tests/temp/2026/11/19/upgrade_contract_sync/artifacts/verification.json`。本轮未重跑Windows，2026-11-14 Windows原件只证明其冻结候选；下述2.4仍未完成，不能以这些支持链结果替代。
 - [ ] 2.4 TODO：真实旧快照的完整历史恢复尚未验收。固定来源 bf0f2e1d9d037efcb0210c458fa157fb4d54a27a 含非空 Trace JSONL，用户已将其裁定为未知来源，本轮保留原件、不新增导入；保留原测试及强断言并明确跳过，不能以支持链局部通过替代。
