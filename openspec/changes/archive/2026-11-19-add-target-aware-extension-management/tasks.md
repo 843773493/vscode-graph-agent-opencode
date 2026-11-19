@@ -375,6 +375,11 @@
 2026-11-08 插件 Skill 来源切片：真实 Gateway ZIP 安装、Workspace 来源 CAS、双工作区隔离、原资源读／列举／搜索、模型 skill_load、v1 冻结／v2 切换、禁用／解绑／卸载及冷读原调用封存通过；纯声明零进程，代码重启不撤静态贡献。精确候选来源批117项、历史回归52项、最终重启／代理／联邦批30项分别通过，批次不相加；新增生产与测试类型零诊断，历史／导航旧类型及 lifespan Ruff 已对照 HEAD 无新增，协议生成一致性通过。原件和指纹见 `out/tests/temp/2026/11/08/plugin_skills/artifacts/verification-v1.json`。工具关联归并、Browser／Debug 正文迁移、真实 Relay／Windows 和 Workbench 完整验收未完成，宽项保持未勾选。
 
 
+## 2026-11-19 归档复验
+
+- 当前源码的插件包／运行管理／配置／私有输入合同回归 114 项通过；真实 Gateway／Workbench 来源编辑综合场景 1 项通过（93.16 秒，`phase=complete`、`pageErrors=[]`），覆盖来源保存、CAS 冲突、未知结果原键查询、纯声明插件参数、表单与 JSON 共用草稿、刷新恢复、只读来源及配置 URI 打开／复制。复验修正测试的名称点击与原生进度观察，并复用现有不可变预备包 fixture 补齐默认配置引用的安装前提；未修改产品逻辑或放宽原断言，预备包不作为本场景的安装／运行证明。前轮失败及定位原件保留。
+- 本轮未修改产品源码；完整 Workbench 构建及真实类型检查复用同日当前源码结果，新增测试改动通过 Ruff 和 Node 语法检查。8 份主规范及本 change 的 strict 校验通过。跨平台／SSH 沿 `out/tests/temp/2026/11/17/plugin_ssh_distribution/artifacts/distribution-final-verification-01.json` 及其业务原件核验，不宣称本轮重跑，也不作为正式发布／签名／NSIS 交互安装的验收。命令、源码指纹、退出码、正式浏览器结果与最小充分实现复审见 `out/tests/temp/2026/11/19/plugin_spec_closure/artifacts/verification.json`。未知非空 Trace JSONL 仍由独立升级变更保留，未扩大本轮范围。
+
 ## 历史证据（旧方案，非当前任务或执行指令）
 
 以下为修订前 tasks.md 原文的引用存档，包括共享工作树中既有补充。旧勾选只表示原合同下的记录；其中 VSIX、市场、Extension Host、旧权限、旧配置或旧脚本要求全部被当前 proposal／design／specs 取代，不得据此继续实施。原始路径、失败及通过事实保持，以便核验和判断基础设施是否可复用。

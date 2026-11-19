@@ -25,6 +25,7 @@ from tests.support.processes.gateway import (
     close_gateway_process,
     start_gateway_process,
 )
+from tests.support.terminal_plugin import copy_prepared_developer_tools_package
 
 
 @pytest.mark.asyncio
@@ -32,6 +33,7 @@ async def test_settings_source_editor_preserves_owner_and_draft(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
+    prepared_developer_tools_package: Path,
 ) -> None:
     prepared = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
     assets = Path(prepared) if prepared else request.getfixturevalue("web_workbench_assets")
@@ -57,8 +59,10 @@ async def test_settings_source_editor_preserves_owner_and_draft(
                     "password": {"type": "string", "writeOnly": True}}}}}]}
     with ZipFile(package_path, "w") as archive:
         archive.writestr("plugin.jsonc", json.dumps(manifest, ensure_ascii=False))
+    gateway_home = context.boxteam_home_for_node(request.node.nodeid)
+    copy_prepared_developer_tools_package(prepared_developer_tools_package, gateway_home)
     gateway = start_gateway_process(workspace_root=workspace_root, default_backend_url=None,
-        port=ports.port(20), boxteam_home=context.boxteam_home_for_node(request.node.nodeid),
+        port=ports.port(20), boxteam_home=gateway_home,
         artifacts_dir=context.artifacts_dir / "gateway", extra_env={"BOXTEAM_WEB_ASSETS": str(assets)})
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{gateway.port}", headers=LOCAL_TOKEN_HEADERS, timeout=30) as client:

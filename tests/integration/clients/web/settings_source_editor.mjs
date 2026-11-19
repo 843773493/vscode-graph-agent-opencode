@@ -85,11 +85,13 @@ try {
   const resourceSource = (source, gatewayScope) => quick.locator('.monaco-list-row').filter({ hasText: source + '.jsonc' })
     .filter({ hasText: gatewayScope ? '配置来源 · Gateway ·' : `配置来源 · ${workspace.name} ·` });
   const showSources = async (source = 'workspace_root_mutable_override', gatewayScope = false) => {
+    await page.mouse.move(5, 5);
     await command('boxteam.quickAccess.resources', result.owner);
     await expect(quick.locator('input').first()).toHaveValue('resource ');
     await quick.locator('input').first().fill('resource ' + source);
     await expect(resourceSource(source, gatewayScope)).toBeVisible();
-    await expect(quick.locator('.monaco-list-row').filter({ hasText: '正在读取其余来源' })).toHaveCount(0);
+    // 来源目录采用原 Quick Input 进度条；等待真实发现结束，避免行插入时点中另一项。
+    await expect(quick.locator('[role="progressbar"]')).toHaveAttribute('aria-hidden', 'true');
   };
   result.phase = 'resource-discovery';
   const readsBeforeDiscovery = result.sourceReads.length;
@@ -104,7 +106,7 @@ try {
   assert.equal(result.sourceReads.length, readsBeforeDiscovery);
   result.resource_browse_only = true;
   result.phase = 'gateway-save';
-  await showSources('gateway_mutable_override', true); await resourceSource('gateway_mutable_override', true).click();
+  await showSources('gateway_mutable_override', true); await resourceSource('gateway_mutable_override', true).getByText('gateway_mutable_override.jsonc', { exact: true }).click();
   await expect(tab).toContainText('gateway_mutable_override.jsonc');
   let gatewayDocument = await api(gatewayPath, { headers: gatewayHeaders });
   const gatewayDraft = '// Gateway 来源注释\n' + update(gatewayDocument.jsonc, ['logging', 'runtime', 'level'], 'debug');
@@ -368,7 +370,7 @@ try {
   }
   await showSources('gateway_mutable_override', true);
   assert.equal(await resourceSource('gateway_mutable_override', true).getByRole('button', { name: '复制资源 URI', exact: true }).count(), 0);
-  await resourceSource('gateway_mutable_override', true).click();
+  await resourceSource('gateway_mutable_override', true).getByText('gateway_mutable_override.jsonc', { exact: true }).click();
   await expect(tab).toContainText('gateway_mutable_override.jsonc');
   await expect(text).toBeVisible();
   const logicalCopy = await page.evaluate(async () => {
