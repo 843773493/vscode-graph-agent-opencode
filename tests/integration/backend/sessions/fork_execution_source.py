@@ -61,12 +61,14 @@ async def fork_execution_message(
     """按需启动真实执行面；来源和副本续写共用 model_stream 与产品消息入口。"""
     replay, controller = inprocess_model_replay
     controller.ensure_installed()
+    resource_owners: dict[int, AppContainer] = {}
 
     async def execute(
         container: AppContainer, session_id: str, *, content: str,
         attachments: list[AttachmentRef] | None = None, gateway_id: str | None = None,
         tool_loop: bool = False, start_fanout: bool = True,
     ) -> MessageRunAccepted:
+        resource_owners[id(container)] = container
         async with AsyncExitStack() as cleanup:
             cleanup.callback(reset_current_gateway_id, set_current_gateway_id(gateway_id))
             if gateway_id is not None:
@@ -131,7 +133,13 @@ async def fork_execution_message(
             assert controller.transport.call_count == calls_before + len(interactions)
             return accepted
 
-    return execute
+    async with AsyncExitStack() as cleanup:
+        try:
+            yield execute
+        finally:
+            # 同一容器可以执行多轮；全部调用结束后才关闭共享监听进程及来源 owner。
+            for container in resource_owners.values():
+                cleanup.push_async_callback(container.resource_platform.close)
 
 
 @pytest.fixture

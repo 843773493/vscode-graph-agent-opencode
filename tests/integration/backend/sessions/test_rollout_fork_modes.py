@@ -359,10 +359,10 @@ def production_fork_container(request: pytest.FixtureRequest,
     config = json.loads(render_test_workspace_config(
         (Path.cwd() / "configs/tests/workspace/default.jsonc").read_text(encoding="utf-8"),
     ))
-    for provider in config["llm"]["providers"]:
-        provider["api_key"] = "fork-contract-unused-key"
-        provider["endpoint"] = "http://127.0.0.1:1/v1"
-        provider.pop("auth", None)
+    for provider in config["llm"]["providers"].values():
+        provider["defaults"]["api_key"] = "fork-contract-unused-key"
+        provider["defaults"]["endpoint"] = "http://127.0.0.1:1/v1"
+        provider["defaults"].pop("auth", None)
     (workspace / ".boxteam/workspace.jsonc").write_text(json.dumps(config, ensure_ascii=False) + "\n", encoding="utf-8")
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
     monkeypatch.setenv("WORKSPACE_ROOT", str(workspace))
