@@ -1,3 +1,4 @@
+import { observeRealtime } from "../../support/workbench/realtime.mjs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
@@ -26,7 +27,7 @@ const responses = [];
 let embeddedResult;
 
 async function buildEmbeddedHarness() {
-  // 只提供测试宿主页；iframe、React hook、共享 SSE 和所有 owner 请求均使用产品实现。
+  // 只提供测试宿主页；iframe、React hook、统一 WS 订阅 和所有 owner 请求均使用产品实现。
   const bundle = await build({
     stdin: { resolveDir: process.cwd(), sourcefile: "terminal-observation-harness.tsx", loader: "tsx", contents: `
       import React, { useRef, useState } from "react";
@@ -83,16 +84,10 @@ async function verifyEmbeddedTerminals(page) {
   }));
   const active = new Set();
   const readers = [];
-  const onRequest = request => {
-    if (new URL(request.url()).pathname !== "/api/v1/workspace/observations/stream") return;
-    active.add(request);
-    readers.push({ frame: request.frame().url(), subscriptions: request.postDataJSON().subscriptions.length });
-    expect(request.frame()).toBe(page.mainFrame());
-  };
-  const onDone = request => active.delete(request);
-  page.on("request", onRequest);
-  page.on("requestfinished", onDone);
-  page.on("requestfailed", onDone);
+  const observation = observeRealtime(page, { subscribe(request) {
+    if (new URL(request.url).pathname !== '/api/v1/resources/events') return;
+    active.add(request); readers.push({ transport: request.transport, subscriptions: 1 });
+  }, end(request) { active.delete(request); } });
   await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto(`${gatewayUrl}/__terminal_observation_test__`, { waitUntil: "domcontentloaded" });
   await expect(page.locator("iframe")).toHaveCount(6, { timeout: 30_000 });
@@ -166,14 +161,14 @@ async function verifyEmbeddedTerminals(page) {
   // 原生进程终止逐项结算，五次管理请求共用75秒清理预算；每次HTTP期限保持不变。
   await expect(page.locator("body")).toHaveAttribute("data-cleaned", "true", { timeout: 75_000 });
   await expect.poll(() => active.size).toBe(0);
-  page.off("request", onRequest);
-  page.off("requestfinished", onDone);
-  page.off("requestfailed", onDone);
+  observation.dispose();
   return { readers, beforeIdle, afterToggle, health, activeAfterCleanup: active.size, createdIds,
     expectedFailures: [{ path: failurePath, status: 503 }] };
 }
 try {
-  page = await browser.newPage();
+  // route.fulfill 的测试宿主页没有真实远端地址，Chromium 将它视为公共网络；显式授予测试上下文本机网络权限。
+  const context = await browser.newContext({ permissions: ['local-network-access'] });
+  page = await context.newPage();
   await page.context().addCookies(input.cookies);
   page.on("pageerror", error => pageErrors.push(String(error)));
   page.on("console", message => {
@@ -187,6 +182,9 @@ try {
     });
   });
   page.on("websocket", socket => sockets.push(new URL(socket.url()).pathname));
+  observeRealtime(page, { headers(request, response) {
+    responses.push({ path: new URL(request.url).pathname, status: response.status, requestId: response.headers['x-request-id'] });
+  } });
   page.on("response", response => {
     const url = new URL(response.url());
     const record = { path: url.pathname, status: response.status() };
@@ -207,7 +205,7 @@ try {
   await page.keyboard.type(`printf '%s%s\\n' 'terminal-page-' '${suffix}'`);
   await page.keyboard.press("Enter");
   await expect(page.locator(".xterm-rows")).toContainText(marker, { timeout: 15_000 });
-  await expect.poll(() => responses.some(response => response.path === "/api/v1/workspace/observations/stream" && response.status === 200)).toBe(true);
+  await expect.poll(() => responses.some(response => response.path === "/api/v1/resources/events" && response.status === 200)).toBe(true);
   // 独立页验证真实输入输出；静止零补读在下方六终端完成初始化后覆盖完整心跳周期。
   expect(pageErrors).toEqual([]);
   expect(requestFailures).toEqual([]);

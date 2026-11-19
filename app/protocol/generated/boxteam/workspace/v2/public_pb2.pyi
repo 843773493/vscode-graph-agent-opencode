@@ -4948,7 +4948,7 @@ class WorkspaceMessageSearchResultsDTO(_message.Message):
     def __init__(self, catalog_revision: _Optional[int] = ..., items: _Optional[_Iterable[_Union[WorkspaceMessageMatchDTO, _Mapping]]] = ..., cursor: _Optional[str] = ..., complete: _Optional[bool] = ..., limited_reason: _Optional[str] = ..., scanned_sessions: _Optional[int] = ..., scanned_threads: _Optional[int] = ..., scanned_items: _Optional[int] = ..., scanned_bytes: _Optional[int] = ...) -> None: ...
 
 class TurnHistoryLoadRequest(_message.Message):
-    __slots__ = ("direction", "cursor", "anchor_turn_id", "turn_ids", "turns", "before_turns", "after_turns", "include", "execution_id", "tool_call_ids", "anchor_message", "anchor_tool_result")
+    __slots__ = ("direction", "cursor", "anchor_turn_id", "turn_ids", "turns", "before_turns", "after_turns", "include", "execution_id", "tool_call_ids", "anchor_message", "anchor_tool_result", "context_cursor")
     DIRECTION_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     ANCHOR_TURN_ID_FIELD_NUMBER: _ClassVar[int]
@@ -4961,6 +4961,7 @@ class TurnHistoryLoadRequest(_message.Message):
     TOOL_CALL_IDS_FIELD_NUMBER: _ClassVar[int]
     ANCHOR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     ANCHOR_TOOL_RESULT_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
     direction: str
     cursor: str
     anchor_turn_id: str
@@ -4973,10 +4974,21 @@ class TurnHistoryLoadRequest(_message.Message):
     tool_call_ids: _containers.RepeatedScalarFieldContainer[str]
     anchor_message: TurnMessageReferenceDTO
     anchor_tool_result: str
-    def __init__(self, direction: _Optional[str] = ..., cursor: _Optional[str] = ..., anchor_turn_id: _Optional[str] = ..., turn_ids: _Optional[_Iterable[str]] = ..., turns: _Optional[int] = ..., before_turns: _Optional[int] = ..., after_turns: _Optional[int] = ..., include: _Optional[_Iterable[str]] = ..., execution_id: _Optional[str] = ..., tool_call_ids: _Optional[_Iterable[str]] = ..., anchor_message: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ..., anchor_tool_result: _Optional[str] = ...) -> None: ...
+    context_cursor: str
+    def __init__(self, direction: _Optional[str] = ..., cursor: _Optional[str] = ..., anchor_turn_id: _Optional[str] = ..., turn_ids: _Optional[_Iterable[str]] = ..., turns: _Optional[int] = ..., before_turns: _Optional[int] = ..., after_turns: _Optional[int] = ..., include: _Optional[_Iterable[str]] = ..., execution_id: _Optional[str] = ..., tool_call_ids: _Optional[_Iterable[str]] = ..., anchor_message: _Optional[_Union[TurnMessageReferenceDTO, _Mapping]] = ..., anchor_tool_result: _Optional[str] = ..., context_cursor: _Optional[str] = ...) -> None: ...
+
+class ContextNoticeBatchDTO(_message.Message):
+    __slots__ = ("owner_id", "owner_kind", "parts")
+    OWNER_ID_FIELD_NUMBER: _ClassVar[int]
+    OWNER_KIND_FIELD_NUMBER: _ClassVar[int]
+    PARTS_FIELD_NUMBER: _ClassVar[int]
+    owner_id: str
+    owner_kind: str
+    parts: _containers.RepeatedCompositeFieldContainer[TurnResponsePartDTO]
+    def __init__(self, owner_id: _Optional[str] = ..., owner_kind: _Optional[str] = ..., parts: _Optional[_Iterable[_Union[TurnResponsePartDTO, _Mapping]]] = ...) -> None: ...
 
 class TurnHistoryPageDTO(_message.Message):
-    __slots__ = ("items", "next_cursor", "has_more", "before_cursor", "after_cursor", "has_before", "has_after", "projection_epoch", "summaries", "internal_executions", "thread_id", "source_view_id", "source_view_revision", "located_message", "located_tool_result")
+    __slots__ = ("items", "next_cursor", "has_more", "before_cursor", "after_cursor", "has_before", "has_after", "projection_epoch", "summaries", "internal_executions", "thread_id", "source_view_id", "source_view_revision", "located_message", "located_tool_result", "context_notices")
     ITEMS_FIELD_NUMBER: _ClassVar[int]
     NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
     HAS_MORE_FIELD_NUMBER: _ClassVar[int]
@@ -4992,6 +5004,7 @@ class TurnHistoryPageDTO(_message.Message):
     SOURCE_VIEW_REVISION_FIELD_NUMBER: _ClassVar[int]
     LOCATED_MESSAGE_FIELD_NUMBER: _ClassVar[int]
     LOCATED_TOOL_RESULT_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_NOTICES_FIELD_NUMBER: _ClassVar[int]
     items: _containers.RepeatedCompositeFieldContainer[TurnDetailDTO]
     next_cursor: str
     has_more: bool
@@ -5007,7 +5020,8 @@ class TurnHistoryPageDTO(_message.Message):
     source_view_revision: int
     located_message: TurnMessageLocationDTO
     located_tool_result: TurnToolResultDTO
-    def __init__(self, items: _Optional[_Iterable[_Union[TurnDetailDTO, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., has_more: _Optional[bool] = ..., before_cursor: _Optional[str] = ..., after_cursor: _Optional[str] = ..., has_before: _Optional[bool] = ..., has_after: _Optional[bool] = ..., projection_epoch: _Optional[int] = ..., summaries: _Optional[_Iterable[_Union[TurnSummaryDTO, _Mapping]]] = ..., internal_executions: _Optional[_Iterable[_Union[InternalExecutionHistoryDTO, _Mapping]]] = ..., thread_id: _Optional[str] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., located_message: _Optional[_Union[TurnMessageLocationDTO, _Mapping]] = ..., located_tool_result: _Optional[_Union[TurnToolResultDTO, _Mapping]] = ...) -> None: ...
+    context_notices: _containers.RepeatedCompositeFieldContainer[ContextNoticeBatchDTO]
+    def __init__(self, items: _Optional[_Iterable[_Union[TurnDetailDTO, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., has_more: _Optional[bool] = ..., before_cursor: _Optional[str] = ..., after_cursor: _Optional[str] = ..., has_before: _Optional[bool] = ..., has_after: _Optional[bool] = ..., projection_epoch: _Optional[int] = ..., summaries: _Optional[_Iterable[_Union[TurnSummaryDTO, _Mapping]]] = ..., internal_executions: _Optional[_Iterable[_Union[InternalExecutionHistoryDTO, _Mapping]]] = ..., thread_id: _Optional[str] = ..., source_view_id: _Optional[str] = ..., source_view_revision: _Optional[int] = ..., located_message: _Optional[_Union[TurnMessageLocationDTO, _Mapping]] = ..., located_tool_result: _Optional[_Union[TurnToolResultDTO, _Mapping]] = ..., context_notices: _Optional[_Iterable[_Union[ContextNoticeBatchDTO, _Mapping]]] = ...) -> None: ...
 
 class InternalExecutionHistoryDTO(_message.Message):
     __slots__ = ("execution_id", "job_id", "status", "created_at", "display_parts", "response_parts", "session_id", "thread_id", "updated_at")
@@ -5098,7 +5112,7 @@ class TurnProjectionCorruptedErrorDTO(_message.Message):
     def __init__(self, code: _Optional[str] = ..., session_id: _Optional[str] = ..., message: _Optional[str] = ...) -> None: ...
 
 class TurnResponsePartDTO(_message.Message):
-    __slots__ = ("part_id", "kind", "projection", "status", "source", "text", "carrier_type", "tool_call_id", "tool_name", "arguments", "result", "truncated", "final", "outcome_unknown", "completion_reason", "partial", "context_kind", "context_source_id", "context_model_call_id", "context_before_item_id")
+    __slots__ = ("part_id", "kind", "projection", "status", "source", "text", "carrier_type", "tool_call_id", "tool_name", "arguments", "result", "truncated", "final", "outcome_unknown", "completion_reason", "partial", "context_kind", "context_source_id", "context_model_call_id", "context_before_item_id", "context_content_ref", "context_source_revision", "context_content_length", "context_availability", "context_anchor", "context_anchor_ordinal", "context_plan_ordinal", "context_cursor")
     PART_ID_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
     PROJECTION_FIELD_NUMBER: _ClassVar[int]
@@ -5119,6 +5133,14 @@ class TurnResponsePartDTO(_message.Message):
     CONTEXT_SOURCE_ID_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_MODEL_CALL_ID_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_BEFORE_ITEM_ID_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_CONTENT_REF_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_SOURCE_REVISION_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_CONTENT_LENGTH_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_AVAILABILITY_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_ANCHOR_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_ANCHOR_ORDINAL_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_PLAN_ORDINAL_FIELD_NUMBER: _ClassVar[int]
+    CONTEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
     part_id: str
     kind: str
     projection: str
@@ -5139,7 +5161,15 @@ class TurnResponsePartDTO(_message.Message):
     context_source_id: str
     context_model_call_id: str
     context_before_item_id: str
-    def __init__(self, part_id: _Optional[str] = ..., kind: _Optional[str] = ..., projection: _Optional[str] = ..., status: _Optional[str] = ..., source: _Optional[_Union[TurnResponseSourceDTO, _Mapping]] = ..., text: _Optional[str] = ..., carrier_type: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments: _Optional[str] = ..., result: _Optional[str] = ..., truncated: _Optional[bool] = ..., final: _Optional[bool] = ..., outcome_unknown: _Optional[bool] = ..., completion_reason: _Optional[str] = ..., partial: _Optional[bool] = ..., context_kind: _Optional[str] = ..., context_source_id: _Optional[str] = ..., context_model_call_id: _Optional[str] = ..., context_before_item_id: _Optional[str] = ...) -> None: ...
+    context_content_ref: ContextContentReferenceDTO
+    context_source_revision: str
+    context_content_length: int
+    context_availability: str
+    context_anchor: str
+    context_anchor_ordinal: int
+    context_plan_ordinal: int
+    context_cursor: str
+    def __init__(self, part_id: _Optional[str] = ..., kind: _Optional[str] = ..., projection: _Optional[str] = ..., status: _Optional[str] = ..., source: _Optional[_Union[TurnResponseSourceDTO, _Mapping]] = ..., text: _Optional[str] = ..., carrier_type: _Optional[str] = ..., tool_call_id: _Optional[str] = ..., tool_name: _Optional[str] = ..., arguments: _Optional[str] = ..., result: _Optional[str] = ..., truncated: _Optional[bool] = ..., final: _Optional[bool] = ..., outcome_unknown: _Optional[bool] = ..., completion_reason: _Optional[str] = ..., partial: _Optional[bool] = ..., context_kind: _Optional[str] = ..., context_source_id: _Optional[str] = ..., context_model_call_id: _Optional[str] = ..., context_before_item_id: _Optional[str] = ..., context_content_ref: _Optional[_Union[ContextContentReferenceDTO, _Mapping]] = ..., context_source_revision: _Optional[str] = ..., context_content_length: _Optional[int] = ..., context_availability: _Optional[str] = ..., context_anchor: _Optional[str] = ..., context_anchor_ordinal: _Optional[int] = ..., context_plan_ordinal: _Optional[int] = ..., context_cursor: _Optional[str] = ...) -> None: ...
 
 class TurnResponseSourceDTO(_message.Message):
     __slots__ = ("message_sequence", "assistant_message_sequence", "content_block_index", "item_index", "call_index", "result_message_sequence", "item_id", "item_sequence", "part_ordinal", "created_at", "elapsed_ms", "logical_item_ordinal", "model_call_id")
@@ -5584,48 +5614,6 @@ class WorkspaceFileWatchRequest(_message.Message):
     paths: _containers.RepeatedScalarFieldContainer[str]
     after_event_id: int
     def __init__(self, paths: _Optional[_Iterable[str]] = ..., after_event_id: _Optional[int] = ...) -> None: ...
-
-class WorkspaceObservationSubscription(_message.Message):
-    __slots__ = ("subscription_id", "kind", "session_id", "activity_after", "trace_after", "paths", "files_after", "thread_id")
-    SUBSCRIPTION_ID_FIELD_NUMBER: _ClassVar[int]
-    KIND_FIELD_NUMBER: _ClassVar[int]
-    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    ACTIVITY_AFTER_FIELD_NUMBER: _ClassVar[int]
-    TRACE_AFTER_FIELD_NUMBER: _ClassVar[int]
-    PATHS_FIELD_NUMBER: _ClassVar[int]
-    FILES_AFTER_FIELD_NUMBER: _ClassVar[int]
-    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
-    subscription_id: str
-    kind: str
-    session_id: str
-    activity_after: int
-    trace_after: str
-    paths: _containers.RepeatedScalarFieldContainer[str]
-    files_after: int
-    thread_id: str
-    def __init__(self, subscription_id: _Optional[str] = ..., kind: _Optional[str] = ..., session_id: _Optional[str] = ..., activity_after: _Optional[int] = ..., trace_after: _Optional[str] = ..., paths: _Optional[_Iterable[str]] = ..., files_after: _Optional[int] = ..., thread_id: _Optional[str] = ...) -> None: ...
-
-class WorkspaceObservationRequest(_message.Message):
-    __slots__ = ("subscriptions",)
-    SUBSCRIPTIONS_FIELD_NUMBER: _ClassVar[int]
-    subscriptions: _containers.RepeatedCompositeFieldContainer[WorkspaceObservationSubscription]
-    def __init__(self, subscriptions: _Optional[_Iterable[_Union[WorkspaceObservationSubscription, _Mapping]]] = ...) -> None: ...
-
-class WorkspaceObservationFrameDTO(_message.Message):
-    __slots__ = ("subscription_id", "state", "frame", "status", "detail_json", "cursor")
-    SUBSCRIPTION_ID_FIELD_NUMBER: _ClassVar[int]
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    FRAME_FIELD_NUMBER: _ClassVar[int]
-    STATUS_FIELD_NUMBER: _ClassVar[int]
-    DETAIL_JSON_FIELD_NUMBER: _ClassVar[int]
-    CURSOR_FIELD_NUMBER: _ClassVar[int]
-    subscription_id: str
-    state: str
-    frame: str
-    status: int
-    detail_json: str
-    cursor: str
-    def __init__(self, subscription_id: _Optional[str] = ..., state: _Optional[str] = ..., frame: _Optional[str] = ..., status: _Optional[int] = ..., detail_json: _Optional[str] = ..., cursor: _Optional[str] = ...) -> None: ...
 
 class WorkspaceIndexRebuildDTO(_message.Message):
     __slots__ = ("status", "job_id")
@@ -6475,15 +6463,33 @@ class LLMRequestLogSummaryDTO(_message.Message):
     size_bytes: int
     def __init__(self, session_id: _Optional[str] = ..., file_name: _Optional[str] = ..., recorded_at: _Optional[int] = ..., size_bytes: _Optional[int] = ...) -> None: ...
 
+class ContextContentReferenceDTO(_message.Message):
+    __slots__ = ("kind", "item_id", "session_id", "thread_id", "assembly_id", "contribution_id")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    ITEM_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    ASSEMBLY_ID_FIELD_NUMBER: _ClassVar[int]
+    CONTRIBUTION_ID_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    item_id: str
+    session_id: str
+    thread_id: str
+    assembly_id: str
+    contribution_id: str
+    def __init__(self, kind: _Optional[str] = ..., item_id: _Optional[str] = ..., session_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., assembly_id: _Optional[str] = ..., contribution_id: _Optional[str] = ...) -> None: ...
+
 class ThreadItemInspectionRequest(_message.Message):
-    __slots__ = ("item_id", "message_id", "operation")
+    __slots__ = ("item_id", "message_id", "operation", "content_ref")
     ITEM_ID_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_ID_FIELD_NUMBER: _ClassVar[int]
     OPERATION_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_REF_FIELD_NUMBER: _ClassVar[int]
     item_id: str
     message_id: str
     operation: str
-    def __init__(self, item_id: _Optional[str] = ..., message_id: _Optional[str] = ..., operation: _Optional[str] = ...) -> None: ...
+    content_ref: ContextContentReferenceDTO
+    def __init__(self, item_id: _Optional[str] = ..., message_id: _Optional[str] = ..., operation: _Optional[str] = ..., content_ref: _Optional[_Union[ContextContentReferenceDTO, _Mapping]] = ...) -> None: ...
 
 class ThreadItemLocationDTO(_message.Message):
     __slots__ = ("item_id", "turn_id", "execution_id", "job_id", "model_call_id", "message_id", "semantic_kind", "content_hash", "byte_length")
@@ -6524,13 +6530,21 @@ class ThreadItemContentDTO(_message.Message):
     def __init__(self, name: _Optional[str] = ..., language: _Optional[str] = ..., content: _Optional[str] = ..., uri: _Optional[str] = ..., mime_type: _Optional[str] = ..., encoding: _Optional[str] = ...) -> None: ...
 
 class ThreadItemInspectionDTO(_message.Message):
-    __slots__ = ("location", "contents", "request_log", "trace")
+    __slots__ = ("location", "contents", "request_log", "trace", "content_ref")
     LOCATION_FIELD_NUMBER: _ClassVar[int]
     CONTENTS_FIELD_NUMBER: _ClassVar[int]
     REQUEST_LOG_FIELD_NUMBER: _ClassVar[int]
     TRACE_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_REF_FIELD_NUMBER: _ClassVar[int]
     location: ThreadItemLocationDTO
     contents: _containers.RepeatedCompositeFieldContainer[ThreadItemContentDTO]
     request_log: LLMRequestLogMatchDTO
     trace: TraceMatchDTO
-    def __init__(self, location: _Optional[_Union[ThreadItemLocationDTO, _Mapping]] = ..., contents: _Optional[_Iterable[_Union[ThreadItemContentDTO, _Mapping]]] = ..., request_log: _Optional[_Union[LLMRequestLogMatchDTO, _Mapping]] = ..., trace: _Optional[_Union[TraceMatchDTO, _Mapping]] = ...) -> None: ...
+    content_ref: ContextContentReferenceDTO
+    def __init__(self, location: _Optional[_Union[ThreadItemLocationDTO, _Mapping]] = ..., contents: _Optional[_Iterable[_Union[ThreadItemContentDTO, _Mapping]]] = ..., request_log: _Optional[_Union[LLMRequestLogMatchDTO, _Mapping]] = ..., trace: _Optional[_Union[TraceMatchDTO, _Mapping]] = ..., content_ref: _Optional[_Union[ContextContentReferenceDTO, _Mapping]] = ...) -> None: ...
+
+class WorkspaceResourceChangesDTO(_message.Message):
+    __slots__ = ("resource_ids",)
+    RESOURCE_IDS_FIELD_NUMBER: _ClassVar[int]
+    resource_ids: _struct_pb2.ListValue
+    def __init__(self, resource_ids: _Optional[_Union[_struct_pb2.ListValue, _Mapping]] = ...) -> None: ...

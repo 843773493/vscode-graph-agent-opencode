@@ -30,7 +30,7 @@ export default function ThreadStatusBar({ queueActions, submission, tasks, quest
   const stack = useRef<HTMLDivElement>(null);
   const triggers = useRef<Partial<Record<Section, HTMLButtonElement | null>>>({});
   const items: { id: Section; title: string; label: string; icon: string; attention?: boolean; content: React.ReactNode }[] = [];
-  if (tasks && (tasks.items.length > 0 || tasks.error)) items.push({ id: "tasks", title: t("composer.tasks.title"), icon: "codicon-checklist",
+  if (tasks && tasks.items.length > 0) items.push({ id: "tasks", title: t("composer.tasks.title"), icon: "codicon-checklist",
     label: tasks.loaded ? t("composer.tasks.count", tasks.items.length) : t("composer.tasks.title"),
     attention: Boolean(tasks.error), content: <ComposerTaskList {...tasks} /> });
   const queueCount = queued.length + (submission?.count ?? 0);

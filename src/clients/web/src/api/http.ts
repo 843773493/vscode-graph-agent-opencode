@@ -154,7 +154,7 @@ const ERROR_BODY_SNIPPET_LIMIT = 200;
  * JSON 时，把这件事本身作为可诊断信息返回，而不是吞成无 detail。断流与截断响应
  * 下用户才能看到真实原因。
  */
-async function readHttpErrorDetail(response: Response): Promise<unknown> {
+export async function readHttpErrorDetail(response: Response): Promise<unknown> {
   const raw = await response.text().catch(() => null);
   if (raw === null) return "响应体不可读取";
   const trimmed = raw.trim();
@@ -247,11 +247,12 @@ export function getApiBaseUrl(port: number): string {
 }
 
 const gatewayTokenByPort = new Map<number, Promise<string>>();
-const gatewayTokenInvalidations = new Map<number, Set<() => void>>();
+type GatewayTokenInvalidationReason = "invalidated" | "refresh";
+const gatewayTokenInvalidations = new Map<number, Set<(reason: GatewayTokenInvalidationReason) => void>>();
 
 /** 撤销依赖旧凭据的在途展示，凭据刷新仍由唯一 HTTP 入口负责。 */
-export function onGatewayTokenInvalidated(port: number, listener: () => void): () => void {
-  const listeners = gatewayTokenInvalidations.get(port) ?? new Set<() => void>();
+export function onGatewayTokenInvalidated(port: number, listener: (reason: GatewayTokenInvalidationReason) => void): () => void {
+  const listeners = gatewayTokenInvalidations.get(port) ?? new Set<(reason: GatewayTokenInvalidationReason) => void>();
   gatewayTokenInvalidations.set(port, listeners);
   listeners.add(listener);
   return () => {
@@ -260,9 +261,9 @@ export function onGatewayTokenInvalidated(port: number, listener: () => void): (
   };
 }
 
-export function invalidateGatewayToken(port: number): void {
+export function invalidateGatewayToken(port: number, reason: GatewayTokenInvalidationReason = "invalidated"): void {
   gatewayTokenByPort.delete(port);
-  for (const listener of gatewayTokenInvalidations.get(port) ?? []) listener();
+  for (const listener of gatewayTokenInvalidations.get(port) ?? []) listener(reason);
 }
 
 export function getGatewayToken(port: number): Promise<string> {
@@ -341,7 +342,7 @@ async function runGatewayRequest<T>(
         abortState.signal,
       );
       if (attempt === 0 && await isInvalidGatewayToken(response)) {
-        if (gatewayTokenByPort.get(port) === tokenPromise) invalidateGatewayToken(port);
+        if (gatewayTokenByPort.get(port) === tokenPromise) invalidateGatewayToken(port, "refresh");
         tokenPromise = getGatewayToken(port);
         continue;
       }

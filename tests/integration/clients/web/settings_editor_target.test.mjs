@@ -686,7 +686,7 @@ scenario('创建同 ID Agent 须确认继承覆盖，取消不编辑，确认后
   }
 });
 
-scenario('新 Provider 只建立连接草稿且零密钥请求，重复 ID 或协议选择期间编辑变化均拒绝覆盖', async () => {
+scenario('新 Provider 只建立连接草稿且零密钥请求，同名服务生成新 ID，协议选择期间编辑变化拒绝覆盖', async () => {
   for (const failure of ['duplicate', 'changed', 'none']) {
     let version = 1, credentialRequests = 0;
     const edits = [], inputs = ['team'];
@@ -700,12 +700,15 @@ scenario('新 Provider 只建立连接草稿且零密钥请求，重复 ID 或�
         return items[0];
       } } });
     try {
-      if (failure === 'none') {
+      if (failure !== 'changed') {
         await view.create();
-        expect(edits).toEqual([[['llm', 'providers', 'team'], { defaults: { custom_llm_provider: 'openai', api_key: '',
+        const id = edits[0][0][2];
+        if (failure === 'duplicate') { expect(id).toMatch(/^provider-/); expect(id).not.toBe('team'); }
+        else expect(id).toBe('team');
+        expect(edits).toEqual([[['llm', 'providers', id], { name: 'team', defaults: { custom_llm_provider: 'openai', api_key: '',
           api_mode: { protocol: 'chat_completions', model_info: {}, supports_reasoning: {} } }, models: {} }]]);
       } else {
-        await expect(view.create()).rejects.toThrow(t(failure === 'duplicate' ? 'configuration.entities.duplicateId' : 'configuration.entities.definitionChanged', 'team'));
+        await expect(view.create()).rejects.toThrow(t('configuration.entities.definitionChanged', 'team'));
         expect(edits).toEqual([]);
       }
       expect(credentialRequests).toBe(0);
@@ -737,7 +740,7 @@ scenario('凭据选择只向原脏草稿写公开引用，零保存且拒绝选�
 
 scenario('Model 稳定键局部添加和复制，草稿变化时不写入过期预设', async () => {
   for (const copy of [false, true]) {
-    const edits = [], inputs = ['new-model', 'new-server-model'];
+    const edits = [], inputs = ['new-model'];
     let version = 1;
     const preset = { model: 'server-model', overrides: { request_options: { parameters: { temperature: 0 } } } };
     const source = { readDraft: () => ({}), document: { source_effective: {} },
@@ -748,10 +751,10 @@ scenario('Model 稳定键局部添加和复制，草稿变化时不写入过期�
       lifetime: { signal: new AbortController().signal }, input: async () => inputs.shift() });
     try {
       await view.addModel('team', copy ? 'preset' : undefined);
-      expect(edits).toEqual([[['llm', 'providers', 'team', 'models', 'new-model'], copy ? preset : { model: 'new-server-model' }]]);
+      expect(edits).toEqual([[['llm', 'providers', 'team', 'models', 'new-model'], copy ? { ...preset, name: 'new-model' } : { model: 'new-model' }]]);
       inputs.splice(0, inputs.length, 'stale');
       source.preflightDraft = async () => { version++; return { candidate: { llm: { providers: { team: { models: { preset } } } } } }; };
-      await expect(view.addModel('team', 'preset')).rejects.toThrow(t('configuration.entities.definitionChanged', 'stale'));
+      await expect(view.addModel('team', 'preset')).rejects.toThrow(t('configuration.entities.definitionChanged', 'team'));
       expect(edits).toHaveLength(1);
     } finally { view.dispose(); }
   }

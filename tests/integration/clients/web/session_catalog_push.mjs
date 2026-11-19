@@ -1,3 +1,4 @@
+import { observeRealtime } from "../../../support/workbench/realtime.mjs";
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
@@ -22,11 +23,13 @@ try {
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   const catalogGets = [];
   const subscriptions = [];
+  observeRealtime(page, { subscribe(request) {
+    if (new URL(request.url).pathname === '/api/v1/session-catalog/snapshot/events') subscriptions.push(request);
+  } });
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (path.startsWith('/api/gateway/users')) result.retiredUserRequests.push({ method: request.method(), path });
     if (request.method() === 'GET' && /\/session-catalog\/(navigation-events|snapshot)$/.test(path)) catalogGets.push(path);
-    if (path === '/api/v1/workspace/observations/stream') subscriptions.push(JSON.parse(request.postData()).subscriptions);
   });
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: '刷新资源树', exact: true })).toBeVisible({ timeout: 30_000 });
@@ -62,7 +65,7 @@ try {
   await expect(workspaceRow).toBeVisible();
   const chevron = workspaceRow.locator('.session-resource-chevron');
   if ((await chevron.getAttribute('aria-label')).startsWith('展开')) await chevron.click();
-  await expect.poll(() => subscriptions.some(items => items.some(item => item.kind === 'session_navigation'))).toBe(true);
+  await expect.poll(() => subscriptions.length > 0).toBe(true);
   // 先等待初读完成，再跨越原先每秒轮询的多个周期。
   await page.waitForTimeout(500);
   result.phase = 'idle';

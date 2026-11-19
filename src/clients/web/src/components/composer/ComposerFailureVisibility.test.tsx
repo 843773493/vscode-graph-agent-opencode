@@ -209,7 +209,7 @@ describe("Composer 切换类动作失败必须可见", () => {
     });
     expect(messages).toEqual(["持续任务: HTTP 503 · task-stream"]);
     expect(renderer.root.findAllByType("button").filter(button => button.props["data-status-section"]))
-      .toHaveLength(1);
+      .toHaveLength(0);
     expect(JSON.stringify(renderer.toJSON())).not.toContain("HTTP 503");
     act(() => renderer.unmount());
   });

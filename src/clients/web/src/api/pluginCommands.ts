@@ -1,7 +1,8 @@
+import { consumeRealtimeSubscription } from './stream/realtime.js';
 import { fromJsonString, toJson } from '@bufbuild/protobuf';
 import { ValueSchema } from '@bufbuild/protobuf/wkt';
 import { requestGatewayResponse, DEFAULT_API_REQUEST_TIMEOUT_MS } from './http.js';
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from '../sse/sseClient.js';
+import { decodeJsonSseData, defineSseEvent } from '../sse/sseClient.js';
 import { validatePluginCommandSnapshotDTO } from '../../../../shared/sseRuntimeValidators.js';
 import { PluginCommandSnapshotDTO, type PluginContributionTarget, type PluginCommandCallRequest } from '../types/protocol_generated/boxteam/gateway/v2/plugin_commands.js';
 import { PluginCommandEventDTOSchema } from '../types/protocol_buf_generated/boxteam/gateway/v2/plugin_commands_pb.js';
@@ -11,10 +12,9 @@ const jsonHeaders = { 'Content-Type': 'application/json' };
 
 export async function watchPluginCommands(target: PluginContributionTarget, signal: AbortSignal,
   onSnapshot: (snapshot: PluginCommandSnapshotDTO) => void): Promise<void> {
-  const response = await requestGatewayResponse(0, path + '/events', {
-    method: 'POST', headers: jsonHeaders, body: JSON.stringify(target), signal,
-  });
-  await consumeSseResponse(response, { signal, events: {
+  await consumeRealtimeSubscription(0, () => ({ path: '/api/gateway/service-plugins/commands/events',
+    method: 'POST', body: JSON.stringify(target),
+  }), { signal, events: {
     snapshot: defineSseEvent((data, frame) => {
       const value = decodeJsonSseData(data, frame);
       if (!validatePluginCommandSnapshotDTO(value)) throw new Error('插件贡献快照不符合公开合同：' + JSON.stringify(validatePluginCommandSnapshotDTO.errors));

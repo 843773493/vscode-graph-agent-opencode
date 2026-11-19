@@ -4,7 +4,7 @@ import type { ThreadItemInspectionDTO, ThreadItemInspectionRequest } from '../..
 import type { ThreadOwner } from '../agentApi.js';
 import { gateway } from '../agentApi.js';
 import { workspaceContext } from '../workspaceContext.js';
-import { itemContentUri } from '../itemDocuments.js';
+import { contextContentUri, itemContentUri } from '../itemDocuments.js';
 import { resourceReference } from '../resourceActions.js';
 import { ThreadInput } from '../threadInput.js';
 import { onGatewayTokenInvalidated } from '../../../web/src/api/http.js';
@@ -45,9 +45,22 @@ export class ChatItemActions extends Disposable {
     finally { releaseToken(); releaseGateway(); }
   }
 
+  private async selectContextSource(sources: NonNullable<ChatItemTarget['contextSources']>) {
+    return sources.length === 1 ? sources[0] : (await this.quick.pick(sources.map(value => ({
+      label: value.name, description: value.reference.contribution_id ?? value.reference.item_id, value,
+    })), { placeHolder: t('chat.itemMenu.chooseItem') }))?.value;
+  }
+
   /** 菜单与详情中的全文按钮共用同一打开链路和发起编辑器组。 */
   openContent(owner: ThreadOwner, groupId: number, target: ChatItemTarget): Promise<void> {
     return this.run(groupId, async (signal, check) => {
+      if (target.contextSources) {
+        const source = await this.selectContextSource(target.contextSources);
+        check();
+        if (source) await this.editors.openEditor({ resource: contextContentUri(owner, source.reference),
+          options: { pinned: true } }, groupId);
+        return;
+      }
       let itemId = target.itemIds?.at(-1)?.id;
       if (target.itemIds && target.itemIds.length > 1) {
         const pick = await this.quick.pick(target.itemIds.map((item, index) => ({ label: `${index + 1}. ${item.kind}`, description: item.id, item })),
@@ -56,7 +69,7 @@ export class ChatItemActions extends Disposable {
         if (!pick) return;
         itemId = pick.item.id;
       }
-      const result = await inspectItem(owner, { operation: 'content', item_id: itemId,
+      const result = await inspectItem(owner, { operation: 'content_metadata', item_id: itemId,
         message_id: itemId ? undefined : target.messageId }, signal);
       check();
       const variants = result.contents.flatMap((content, index) => content.uri ? [{ label: content.name, index, preview: false }]
@@ -84,6 +97,22 @@ export class ChatItemActions extends Disposable {
     const owner = target ? { ...thread, sessionId: target.sessionId, threadId: target.threadId } : thread;
     const boundary = target?.itemIds?.at(-1)?.id;
     const enabled = Boolean(boundary || target?.messageId);
+    const sources = target?.contextSources;
+    if (sources) return [
+      { id: 'openContextContent', label: t('chat.contextNotice.open'),
+        tooltip: t('chat.contextNotice.openHint'), enabled: sources.length > 0,
+        run: () => this.openContent(owner, groupId, { contextSources: sources }) },
+      { id: 'copyContextContent', label: t('chat.itemMenu.copy'),
+        tooltip: t('chat.contextNotice.copyHint'), enabled: sources.length > 0,
+        run: () => this.run(groupId, async (signal, check) => {
+          const source = await this.selectContextSource(sources);
+          check();
+          if (!source) return;
+          const result = await inspectItem(owner, { operation: 'content', content_ref: source.reference }, signal);
+          check();
+          await this.clipboard.writeText(result.contents.map(content => content.content ?? '').join('\n\n'));
+        }) },
+    ];
     const inspect = (operation: ThreadItemInspectionRequest['operation'], signal: AbortSignal, itemId = boundary) => inspectItem(owner,
       { operation, item_id: itemId, message_id: itemId ? undefined : target?.messageId }, signal);
     return [

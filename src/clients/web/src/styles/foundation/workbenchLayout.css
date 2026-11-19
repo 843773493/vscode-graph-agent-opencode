@@ -60,7 +60,7 @@ body.is-layout-resizing {
   border-bottom: 1px solid color-mix(in srgb, var(--bt-text-muted) 16%, transparent);
   background: var(--bt-workspace-header-background);
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-component-tabs {
@@ -95,7 +95,7 @@ body.is-layout-resizing {
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -213,7 +213,7 @@ body.is-layout-resizing {
   padding: 0 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--bt-text-muted) 12%, transparent);
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-preview-title-group {
@@ -242,7 +242,7 @@ body.is-layout-resizing {
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-subtle);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -314,7 +314,7 @@ body.is-layout-resizing {
 
 .workspace-preview-dirty-indicator {
   color: var(--bt-status-warning);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-preview-terminal-link {
@@ -461,7 +461,7 @@ body.is-layout-resizing {
     "Liberation Mono",
     monospace
   );
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 20px;
 }
 
@@ -553,7 +553,7 @@ body.is-layout-resizing {
   gap: 8px;
   min-height: 0;
   color: var(--bt-text-subtle);
-  font-size: 13px;
+  font-size: var(--bt-font-size);
 }
 
 .workspace-preview-empty-icon {
@@ -571,7 +571,7 @@ body.is-layout-resizing {
   border-radius: var(--bt-radius-small);
   background: color-mix(in srgb, var(--bt-panel-background) 95%, transparent);
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -602,7 +602,7 @@ body.is-layout-resizing {
   gap: 6px;
   min-width: 0;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   font-weight: 600;
 }
 
@@ -615,7 +615,7 @@ body.is-layout-resizing {
   border-radius: 999px;
   background: var(--bt-status-danger);
   color: var(--bt-text-on-strong);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   line-height: 1;
 }
 
@@ -742,21 +742,21 @@ body.is-layout-resizing {
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-subtle);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .workspace-runtime-preview-header strong {
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .workspace-runtime-preview-header span {
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -799,7 +799,7 @@ body.is-layout-resizing {
   border: 1px solid color-mix(in srgb, var(--bt-panel-border) 82%, transparent);
   border-radius: var(--bt-radius-small);
   background: color-mix(in srgb, var(--bt-panel-surface) 42%, transparent);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .auxiliary-scope-context > span:first-child {
@@ -862,7 +862,7 @@ body.is-layout-resizing {
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -884,7 +884,7 @@ body.is-layout-resizing {
   gap: 7px;
   min-height: 24px;
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .auxiliary-empty-row.muted {
@@ -908,14 +908,14 @@ body.is-layout-resizing {
 
 .auxiliary-tree-section header {
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   font-weight: 700;
 }
 
 .auxiliary-service-note {
   margin-top: 12px;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.45;
 }
 
@@ -995,7 +995,7 @@ body.is-layout-resizing {
   background: var(--bt-panel-background);
   color: var(--bt-status-danger);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   cursor: pointer;
 }
 
@@ -1022,7 +1022,7 @@ body.is-layout-resizing {
   background: color-mix(in srgb, currentColor 10%, transparent);
   border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
   border-radius: 4px;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.4;
 }
 
@@ -1078,19 +1078,19 @@ body.is-layout-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .workspace-attachment-preview-header span {
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-attachment-download,
 .workspace-attachment-generic-preview a {
   flex: 0 0 auto;
   color: var(--bt-accent);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-attachment-preview-status,
@@ -1098,7 +1098,7 @@ body.is-layout-resizing {
 .workspace-attachment-generic-preview {
   padding: 16px;
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.5;
 }
 
@@ -1137,13 +1137,13 @@ body.is-layout-resizing {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   color: var(--bt-text-primary);
-  font: 12px/1.5 var(--bt-font-mono);
+  font: var(--bt-font-size)/1.5 var(--bt-font-family-mono);
 }
 
 .workspace-attachment-text-preview > div {
   margin-top: 8px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .workspace-attachment-generic-preview {
@@ -1186,7 +1186,7 @@ body.is-layout-resizing {
   flex: 0 0 auto;
   margin-left: auto;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .files-tree-context-menu {
@@ -1208,7 +1208,7 @@ body.is-layout-resizing {
   margin-left: auto;
   padding-left: 18px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .files-tree-context-shortcut-action {
@@ -1262,7 +1262,7 @@ body.is-layout-resizing {
   background: color-mix(in srgb, var(--bt-surface-raised) 86%, transparent);
   color: var(--bt-text-primary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   outline: none;
 }
 
@@ -1304,7 +1304,7 @@ body.is-layout-resizing {
   overflow: hidden;
   padding: 0 4px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .files-tree-search-status > span {
@@ -1352,7 +1352,7 @@ body.is-layout-resizing {
   width: 10px;
   height: 14px;
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1;
   text-align: center;
 }
@@ -1383,7 +1383,7 @@ body.is-layout-resizing {
   flex: 0 0 auto;
   margin-left: auto;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .files-tree-loading {
@@ -1398,7 +1398,7 @@ body.is-layout-resizing {
   color: var(--bt-link-foreground);
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .files-tree-load-more:hover:not(:disabled) {
@@ -1417,7 +1417,7 @@ body.is-layout-resizing {
   gap: 6px;
   min-height: 24px;
   color: var(--bt-status-danger);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .files-tree-error span {
@@ -1663,7 +1663,7 @@ button.files-tree-item:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-text-primary);
 }
 
@@ -1679,7 +1679,7 @@ button.files-tree-item:hover {
   background: transparent;
   color: var(--bt-status-danger);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-decoration: underline;
 }
 
@@ -1720,7 +1720,7 @@ button.files-tree-item:hover {
 .message-media-viewer-title span {
   flex: 0 0 auto;
   color: var(--bt-terminal-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .message-media-viewer-actions {

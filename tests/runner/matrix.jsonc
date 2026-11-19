@@ -675,6 +675,9 @@
       "dataLimitKb": 4194304,
       "command": ["uv", "run", "--no-sync", "pytest", "-x", "-q", "tests/integration/clients/electron/test_webview_resource_cache.py"]
     },
+    {"id":"integration-workbench-item-documents","layer":"integration","client":"web","enabled":true,"timeoutMs":60000,"dataLimitKb":4194304,"command":["bun","test","tests/integration/clients/web/quick_access/item_documents.test.mjs"]},
+    {"id":"integration-context-history-markers","layer":"integration","client":null,"enabled":true,"timeoutMs":180000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-x","-q","-o","faulthandler_timeout=30","tests/integration/backend/sessions/test_context_notice_history.py"]},
+    {"id":"integration-web-context-history-markers","layer":"integration","client":"web","enabled":true,"timeoutMs":300000,"dataLimitKb":4194304,"command":["uv","run","--no-sync","pytest","-q","tests/integration/clients/web/itemized_context/test_context_history_markers.py"]},
     {
       "id": "e2e-electron",
       "layer": "e2e",

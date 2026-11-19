@@ -60,17 +60,19 @@ try {
   await command('boxteam.settings.modelsProviders', location);
   const form = page.locator('.configuration-entities[data-definition-kind="providers"]');
   await expect(form).toBeVisible();
-  await form.getByRole('button', { name: '新增 Provider', exact: true }).click();
+  await form.getByRole('button', { name: '添加模型服务', exact: true }).click();
   const quick = page.locator('.quick-input-widget');
   const input = async value => { await expect(quick).toBeVisible(); const field = quick.locator('input').first(); await field.fill(value); await field.press('Enter'); };
   await input('native-management-provider-12');
-  await input('native-management-model');
-  await input('https://native-management.example/v1');
-  await input('openai');
-  await quick.locator('.monaco-list-row').filter({ hasText: 'chat_completions' }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: 'OpenAI 兼容' }).click();
+  await form.getByRole('checkbox', { name: '连接编辑结束后自动获取一次模型', exact: true }).uncheck();
+  await form.getByLabel('API 地址', { exact: true }).first().fill('https://native-management.example/v1');
+  await form.getByRole('button', { name: '设置 API 密钥', exact: true }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: '使用环境变量' }).click();
   await input('${NATIVE_MANAGEMENT_KEY}');
+  await form.getByRole('button', { name: '添加模型', exact: true }).click();
+  await input('native-management-model');
   const confirmation = page.locator('.monaco-dialog-box[role="dialog"]');
-  if (await confirmation.isVisible()) await confirmation.getByRole('button', { name: '新增 Provider', exact: true }).click();
   await expect(form.locator('[data-definition-id="native-management-provider-12"]')).toBeVisible();
   await form.getByLabel('模型名称', { exact: true }).fill('native-management-model-saved');
   const tab = page.locator('.tabs-container .tab.active');
@@ -86,14 +88,14 @@ try {
   assert.equal(envelope.request_id, saved.headers()['x-request-id']);
   await expect(tab).not.toHaveClass(/dirty/);
   const current = await readSource();
-  const stored = current.data.source_effective.llm.providers.find(item => item.id === 'native-management-provider-12');
-  assert.equal(stored.model, 'native-management-model-saved');
-  assert(stored.api_key.startsWith('boxteam-redacted:'), '公开来源读取仍应脱敏凭据');
+  const stored = current.data.source_effective.llm.providers['native-management-provider-12'];
+  assert.equal(stored.models['native-management-model'].model, 'native-management-model-saved');
+  assert.equal(stored.defaults.api_key, '${NATIVE_MANAGEMENT_KEY}', '公开来源保留环境变量引用，不展开密钥');
   const sourceWrite = result.writes.at(-1).body;
   assert.equal(sourceWrite.gateway_id, owner.gateway_id);
   assert.equal(sourceWrite.workspace_id, owner.workspace_id);
   result.backendValues.push({ requestId: envelope.request_id, gatewayId: sourceWrite.gateway_id,
-    workspaceId: sourceWrite.workspace_id, model: stored.model, apiKeyReference: stored.api_key, edit: envelope.data.edit });
+    workspaceId: sourceWrite.workspace_id, model: stored.models['native-management-model'].model, apiKeyReference: stored.defaults.api_key, edit: envelope.data.edit });
   const physicalConfig = path.join(workspace, '.boxteam/workspace.jsonc');
   const physicalText = await readFile(physicalConfig, 'utf8');
   assert(physicalText.includes('native-management-model-saved'), `目标工作区配置文件未保存：${physicalConfig}`);
@@ -107,10 +109,10 @@ try {
   await expect(page.locator('.configuration-entities[data-definition-kind="providers"] [data-definition-id="native-management-provider-12"]').getByLabel('模型名称', { exact: true }))
     .toHaveValue('native-management-model-saved');
   const reloaded = await readSource();
-  const reloadedProvider = reloaded.data.source_effective.llm.providers.find(item => item.id === 'native-management-provider-12');
-  assert.equal(reloadedProvider.model, 'native-management-model-saved');
+  const reloadedProvider = reloaded.data.source_effective.llm.providers['native-management-provider-12'];
+  assert.equal(reloadedProvider.models['native-management-model'].model, 'native-management-model-saved');
   result.backendValues.push({ requestId: reloaded.request_id, gatewayId: owner.gateway_id,
-    workspaceId: owner.workspace_id, model: reloadedProvider.model });
+    workspaceId: owner.workspace_id, model: reloadedProvider.models['native-management-model'].model });
   result.recoveredOwner = owner;
   assert.equal(result.writes.length, 1, '保存仅一次提交，重启不能重放写入');
   await host.leave();

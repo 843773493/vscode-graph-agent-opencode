@@ -16,19 +16,17 @@ import type { ChildThreadForkPoint } from "./ChildThreadConversation";
 const CHILD_THREAD_ICON = "codicon-git-branch";
 
 /**
- * 主窗口左侧会话节点展开后的 Thread 导航。
+ * 会话标签页内独立的 Thread 索引。
  * Thread 属于当前 Session，不是导航子 Session 或运行连接；
  * 数据由 App 层加载后通过 props 传入，组件本身不持有业务状态权威。
  */
 export default function ChildThreadPanel({
   threads,
   teams,
-  total,
   loading,
   error,
   loadedAt,
   sessionId,
-  ownerLabel,
   mainThreadId,
   activeThreadId,
   onRefresh,
@@ -40,12 +38,10 @@ export default function ChildThreadPanel({
 }: {
   threads: ChildThreadSummary[];
   teams: ChildThreadList["teams"];
-  total: number;
   loading: boolean;
   error: string | null;
   loadedAt: string | null;
   sessionId: string;
-  ownerLabel: string;
   /** 当前会话在权威 catalog 中解析出的 canonical main thread ID。 */
   mainThreadId: string | null;
   /** 当前调试 owner 的 thread id。 */
@@ -83,39 +79,9 @@ export default function ChildThreadPanel({
   };
 
   return (
-    <section className="panel-view child-thread-panel" aria-busy={loading} aria-label={t("child.panel")}>
-      <div className="panel-header">
-        <div
-          className="panel-title"
-          title={`${sessionId || t("child.noSession")}${loadedAt ? t("child.readAt", loadedAt) : ""}`}
-        >
-
-          {t("child.panel")} <span className="resource-total-count">{formatNumber(threads.length + (mainThreadId ? 1 : 0))}</span>
-        </div>
-        <div className="panel-header-meta">
-          {total > threads.length ? <span>{t("child.total", formatNumber(total))}</span> : null}
-        </div>
-        <button
-          type="button"
-          className="resource-icon-button"
-          onClick={onRefresh}
-          disabled={loading || !sessionId}
-          title={t("child.refresh")}
-          aria-label={t("child.refresh")}
-        >
-          <span
-            className={`codicon codicon-refresh${loading ? " codicon-modifier-spin" : ""}`}
-            aria-hidden="true"
-          />
-        </button>
-      </div>
-
-      <div className="panel-header-meta" data-child-owner-session={sessionId}>
-        {ownerLabel}
-      </div>
-
-      <div className="child-thread-notice-slot">
-        {notice ? (
+    <section className="panel-view child-thread-panel" aria-busy={loading} aria-label={t("child.panel")} data-child-owner-session={sessionId}>
+      {notice ? (
+        <div className="child-thread-notice-slot">
           <div
             className={`child-thread-notice${noticeError ? " is-error" : ""}`}
             role="status"
@@ -131,12 +97,16 @@ export default function ChildThreadPanel({
               <span className="codicon codicon-close" aria-hidden="true" />
             </button>
           </div>
-        ) : null}
-      </div>
-
-
+        </div>
+      ) : null}
       {error ? (
-        <div className="panel-feedback" role="alert">{t("child.loadFailed", error)}</div>
+        <div className="panel-feedback" role="alert">
+          {t("child.loadFailed", error)}
+          <button type="button" className="resource-icon-button" onClick={onRefresh}
+            disabled={loading || !sessionId} title={t("child.refresh")} aria-label={t("child.refresh")}>
+            <span className="codicon codicon-refresh" aria-hidden="true" />
+          </button>
+        </div>
       ) : null}
       {!loading && !error && !mainThreadId && threads.length === 0 && teams.length === 0 && sessionId ? (
         <div className="empty-state">

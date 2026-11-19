@@ -436,6 +436,25 @@ async def test_plugin_skill_tracked_version_switch_untrack_and_cold_uninstalled_
             assert frozen_receipt["tracked"] is False and frozen_receipt["append_status"] == "none"
             assert frozen_receipt["revision"] == new_receipt["revision"]
             assert BODIES["2.0.0"].strip() in plugin_model.request_text(untrack_calls[1])
+
+            async def read_context_markers() -> tuple[list[dict], list[list[dict]]]:
+                headers = {"X-BoxTeam-Workspace-Id": workspace_id}
+                path = f"/api/v1/sessions/{session_id}/threads/{thread_id}"
+                history = await _data(await client.post(f"{path}/history", headers=headers,
+                    json={"direction": "tail", "turns": 20, "include": ["metadata"]}))
+                assert history["has_before"] is False
+                markers = [part for turn in history["items"] for part in turn["response_parts"]
+                    if part["kind"] == "context_notice"]
+                assert markers and all(not marker.get("context_cursor") for marker in markers)
+                contents = [(await _data(await client.post(f"{path}/items/inspect", headers=headers,
+                    json={"operation": "content", "content_ref": marker["context_content_ref"]})))["contents"]
+                    for marker in markers]
+                return markers, contents
+
+            frozen_markers = await read_context_markers()
+            assert any(marker["context_source_id"].startswith("skill:") for marker in frozen_markers[0])
+            for body in BODIES.values():
+                assert body.strip() in json.dumps(frozen_markers[1], ensure_ascii=False)
             await _bind(client, gateway_id, workspace_id, None)
             await _published(client, gateway_id, workspace_id, None)
             for version in BODIES:
@@ -447,6 +466,7 @@ async def test_plugin_skill_tracked_version_switch_untrack_and_cold_uninstalled_
         close_gateway_process(gateway)
         gateway = start("gateway-restarted")
         async with httpx.AsyncClient(base_url=base_url, headers=LOCAL_TOKEN_HEADERS, timeout=75, trust_env=False) as client:
+            assert await read_context_markers() == frozen_markers
             retained = plugin_model.plan(session_id, thread_id, load=False)
             await _completed(client, workspace_id, await _send(client, workspace_id, session_id))
             assert BODIES["2.0.0"].strip() in plugin_model.request_text(retained[0])

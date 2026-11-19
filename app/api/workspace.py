@@ -148,11 +148,19 @@ async def stream_workspace_file_events(
     *,
     workspace_service: Annotated[WorkspaceService, Depends(get_workspace_service)],
 ):
-    source = await asyncio.to_thread(open_workspace_file_sse, payload, watch_service, workspace_service)
+    try:
+        cursor = payload.after_event_id
+        if cursor is None:
+            cursor = await asyncio.to_thread(workspace_service.file_operations.store.latest_event_id)
+            payload = payload.model_copy(update={"after_event_id": cursor})
+        source = await asyncio.to_thread(open_workspace_file_sse, payload, watch_service, workspace_service)
+    except (OSError, RuntimeError) as error:
+        detail = report_failure(error, detail=failure_detail(error, stage="workspace-files-open", label="文件订阅失败"))
+        raise HTTPException(500, detail=detail) from error
     return StreamingResponse(
         source,
         media_type="text/event-stream",
-        headers=SSE_NO_CACHE_HEADERS,
+        headers={**SSE_NO_CACHE_HEADERS, "X-Workspace-File-Cursor": str(cursor)},
     )
 
 
@@ -203,26 +211,31 @@ def open_workspace_file_sse(
         return f"event: changes\ndata: {data}\n\n"
 
     async def generate():
-        async with aclosing(
-            stream_sse_with_heartbeat(
-                file_events(workspace_service.file_operations, watch_service, roots, payload.after_event_id, references),
-                heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
-                close_source_on_exit=True,
-            )
-        ) as stream:
-            async for batch in stream:
-                if isinstance(batch, str):
-                    yield batch
-                    continue
-                if batch.error is not None:
-                    data = json.dumps(
-                        sse_error_to_json(sse_error_to_proto(batch.error)),
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    yield f"event: error\ndata: {data}\n\n"
-                    return
-                yield await run_sync_shielded(encode_changes, batch)
+        try:
+            async with aclosing(
+                stream_sse_with_heartbeat(
+                    file_events(workspace_service.file_operations, watch_service, roots, payload.after_event_id, references),
+                    heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+                    close_source_on_exit=True,
+                )
+            ) as stream:
+                async for batch in stream:
+                    if isinstance(batch, str):
+                        yield batch
+                        continue
+                    if batch.error is not None:
+                        data = json.dumps(
+                            sse_error_to_json(sse_error_to_proto(batch.error)),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        yield f"event: error\ndata: {data}\n\n"
+                        return
+                    yield await run_sync_shielded(encode_changes, batch)
+        except (OSError, RuntimeError) as error:
+            message = report_failure(error, detail=failure_detail(error, stage="workspace-files-stream", label="文件订阅失败"))
+            data = json.dumps(sse_error_to_json(sse_error_to_proto(message)), ensure_ascii=False)
+            yield f"event: error\ndata: {data}\n\n"
 
     return generate()
 

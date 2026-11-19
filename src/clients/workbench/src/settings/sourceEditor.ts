@@ -95,15 +95,12 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     return edit;
   }
   prepareEditor(target: GatewayRequestTarget, sourceKey: string, document: SourceDocument): URI {
-    const resource = configSourceEditorUri(target, sourceKey), key = resource.toString();
-    const current = this.edits.get(key);
-    if (current) {
-      // 显式重选只切换后续传输，保留当前草稿、CAS 和原提交身份。
-      if (current.owner.target.gateway_connection_id !== target.gateway_connection_id) current.owner = new ConfigurationSourceOwner(target);
-    } else {
-      const edit: SourceEdit = { owner: new ConfigurationSourceOwner(target), sourceKey, initial: document,
-        submission: this.storage.getObject<SourceSubmission>(this.submissionStorageKey(resource), StorageScope.WORKSPACE) };
-      this.edits.set(key, edit); this.update(resource, edit, document);
+    const resource = configSourceEditorUri(target, sourceKey), edit = this.edit(resource);
+    // 显式重选只切换后续传输，保留当前草稿、CAS 和原提交身份。
+    if (edit.owner.target.gateway_connection_id !== target.gateway_connection_id) edit.owner = new ConfigurationSourceOwner(target);
+    if (!edit.document) {
+      edit.initial = document;
+      this.update(resource, edit, document);
     }
     return resource;
   }
@@ -153,9 +150,11 @@ class ConfigurationSourceFiles extends Disposable implements IFileSystemProvider
     const edit = this.edits.get(resource.toString());
     return { baseline: edit?.baseline };
   }
-  restore(resource: URI, backup: ConfigSourceBackup | undefined): void {
+  async restore(resource: URI, backup: ConfigSourceBackup | undefined): Promise<void> {
     const edit = this.edit(resource);
     edit.baseline = backup?.baseline;
+    // 原文本备份只恢复草稿和 CAS；先取得来源声明，再创建模型供相对 schema 与表单消费。
+    await this.document(resource);
   }
   private update(resource: URI, edit: SourceEdit, document: SourceDocument): SourceDocument {
     edit.document = document;
@@ -309,8 +308,8 @@ export function configSourceFiles(files: IFileService): ConfigurationSourceFiles
 export function configSourceBackup(files: IFileService, resource: URI): ConfigSourceBackup | undefined {
   return resource.scheme === configSourceScheme ? configSourceFiles(files).backup(resource) : undefined;
 }
-export function restoreConfigSourceBackup(files: IFileService, resource: URI, backup?: ConfigSourceBackup): void {
-  if (resource.scheme === configSourceScheme) configSourceFiles(files).restore(resource, backup);
+export async function restoreConfigSourceBackup(files: IFileService, resource: URI, backup?: ConfigSourceBackup): Promise<void> {
+  if (resource.scheme === configSourceScheme) await configSourceFiles(files).restore(resource, backup);
 }
 
 class ConfigurationSourceEditors extends Disposable {

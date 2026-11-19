@@ -150,7 +150,7 @@ export default function WarmActionDialog({
             </label>
           </div>
         ) : null}
-        {children ? <fieldset className="workspace-dialog-grid" disabled={submitting} style={{ border: 0, margin: 0, padding: 0 }}>{children}</fieldset> : null}
+        {children ? <fieldset className="workspace-dialog-grid" disabled={submitting}>{children}</fieldset> : null}
         {error ? <div className="workspace-dialog-error" role="alert">{error}</div> : null}
         <footer className="workspace-dialog-actions">
           <button type="button" disabled={submitting} onClick={onClose}>{t("dialogs.cancel")}</button>

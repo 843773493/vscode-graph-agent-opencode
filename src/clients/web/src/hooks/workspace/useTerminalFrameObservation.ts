@@ -3,7 +3,7 @@ import { observeTerminalResources } from "../../api/workspaceResources";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { errorMessage } from "../../utils/errorMessage";
 
-/** iframe 只登记可见订阅；网络观察归宿主已有的工作区共享 SSE。 */
+/** iframe 只登记可见订阅；网络观察由宿主统一实时入口按工作区共享逻辑订阅。 */
 export function useTerminalFrameObservation(frame: RefObject<HTMLIFrameElement>, source: string | null): void {
   useEffect(() => {
     if (!source) return;

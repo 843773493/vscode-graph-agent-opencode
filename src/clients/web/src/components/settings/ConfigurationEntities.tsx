@@ -56,6 +56,8 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
     sourceKey: Object.hasOwn(localDefinitions, id) ? document.source_key : inheritedDefinitions.get(id)!,
   }));
   const selected = selectedId === undefined ? entries[0] : entries.find(entry => entry.id === selectedId);
+  const entryName = (entry: typeof entries[number]) => text(entry.value.name) || text([...lower].reverse()
+    .map(layer => definitionValue(layer.payload, [...basePath, entry.id, 'name'])).find(value => value !== undefined)) || entry.id;
   const editable = Boolean(document.writable && selected && draft);
   const inherited = (path: (string | number)[]): unknown => {
     if (!selected) return undefined;
@@ -84,16 +86,18 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
     const placeholder = selected?.local && value === undefined ? text(inherited(path)) : '';
     const props = { value: text(value), placeholder, disabled: !editable,
       onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onEdit(selected!.id, path,
-        path.at(-1) === 'system_prompt_file' && !event.target.value ? null : event.target.value) };
+        path.at(-1) === 'system_prompt_file' && !event.target.value ? null
+          : path.at(-1) === 'name' && !event.target.value ? undefined : event.target.value) };
     return <label className="configuration-entity-field">{label}
       {multiline ? <textarea rows={8} {...props} /> : <input {...props} />}
       {placeholder ? <small>{t('configuration.entities.inheritedValue', placeholder)}</small> : null}
-      {editable && definitionValue(selected?.value, path) !== undefined
-        ? <button type="button" onClick={() => onEdit(selected!.id, path, undefined)}>{t('configuration.entities.restoreField')}</button> : null}
+      {editable && definitionValue(selected?.value, path) !== undefined && inherited(path) !== undefined
+        ? <button className="configuration-field-reset" type="button" onClick={() => onEdit(selected!.id, path, undefined)}>{t('configuration.entities.restoreField')}</button> : null}
     </label>;
   };
   const active = definitionValue(document.effective, [...basePath, selected?.id ?? '']);
-  const optionFields = (prefix: string[]) => <ModelOptionFields
+  const optionFields = (prefix: string[], advanced?: ReactNode) => <ModelOptionFields
+    scope={prefix[0] === 'models' ? 'model' : 'provider'} advanced={advanced}
     schema={definitionObject(definitionValue(document.json_schema, ['$defs', 'modelOptions']))} disabled={!editable}
     read={path => definitionValue(selected?.value, [...prefix, ...path])} inherited={path => inherited([...prefix, ...path])}
     onEdit={(path, value) => onEdit(selected!.id, [...prefix, ...path], value)} />;
@@ -102,12 +106,15 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
     const value = selectedValue(path);
     const local = definitionValue(selected?.value, path);
     return <section className="configuration-credential" data-credential-scope={targetModel === undefined ? 'provider' : 'model'}>
-      <p>{t('configuration.entities.credentialsHint')}</p>
-      <p>{t('settings.secrets.reference')} <code>{value === '' ? t('configuration.entities.noAuthentication') : text(value) || t('configuration.entities.inherit')}</code></p>
+      <h4>{t('configuration.entities.apiKey')}</h4>
+      <p><code>{value === '' ? t('configuration.entities.noAuthentication') : text(value) || text(inherited(path))
+        || t(targetModel ? 'configuration.entities.useServiceDefault' : 'configuration.entities.credentialMissing')}</code></p>
       {onSetSecret ? <button type="button" disabled={!editable || Boolean(pendingSubmission)}
         onClick={() => onSetSecret(selected!.id, targetModel)}>{t('configuration.entities.setSecret')}</button> : null}
-      {local !== undefined ? <button type="button" disabled={!editable || Boolean(pendingSubmission)}
-        onClick={() => onEdit(selected!.id, path, undefined)}>{t('configuration.entities.restoreField')}</button> : null}
+      {local !== undefined && (local !== '' || inherited(path) !== undefined || targetModel !== undefined) ? <button type="button" disabled={!editable || Boolean(pendingSubmission)}
+        onClick={() => onEdit(selected!.id, path, inherited(path) !== undefined || targetModel !== undefined ? undefined : '')}>{t(inherited(path) !== undefined ? 'configuration.entities.restoreField'
+          : targetModel !== undefined ? 'configuration.entities.useServiceDefault' : 'configuration.entities.clearKey')}</button> : null}
+      <small>{t('configuration.entities.credentialsHint')}</small>
     </section>;
   };
   return <section className="configuration-entity-content" data-definition-kind={kind}>
@@ -118,41 +125,46 @@ export function ConfigurationEntities({ kind, draft, document, selectedId, selec
     {error ? <p role="alert">{error}</p> : <div className="configuration-entity-columns">
       <nav aria-label={t(kind === 'providers' ? 'configuration.entities.providerList' : 'configuration.entities.agentList')}>
         {entries.length ? entries.map(entry => <button type="button" key={entry.id} aria-pressed={entry.id === selected?.id}
-          onClick={() => onSelect(entry.id)}><strong>{entry.id}</strong><small>{entry.local ? t('configuration.entities.localDefinition') : t('configuration.entities.inheritedDefinition', entry.sourceKey)}</small></button>)
+          title={entry.id} onClick={() => onSelect(entry.id)}><strong>{entryName(entry)}</strong></button>)
           : <p>{t('configuration.entities.empty')}</p>}
       </nav>
-      {selected ? <article data-definition-id={selected.id}>
-        <h2>{selected.id}</h2><p>{t('configuration.entities.stableId')}</p>
-        <p>{t('configuration.entities.definitionSource', selected.sourceKey, active ? t('configuration.entities.activePresent') : t('configuration.entities.activeAbsent'))}</p>
+      {selected ? <article key={selected.id} data-definition-id={selected.id}>
+        <h2>{entryName(selected)}</h2>
+        <details className="configuration-definition-details"><summary>{t('configuration.entities.details')}</summary>
+          <p>ID: <code>{selected.id}</code></p>
+          <p>{t('configuration.entities.definitionSource', selected.sourceKey, active ? t('configuration.entities.activePresent') : t('configuration.entities.activeAbsent'))}</p>
+          {!selected.local ? <p>{t('configuration.entities.inheritedDefinition', selected.sourceKey)}</p> : null}
+        </details>
         {!selected.local ? <button type="button" onClick={() => onOpenSource(selected.sourceKey)}>{t('configuration.entities.editOwningSource')}</button> : null}
         {kind === 'providers' ? <>
           {field(t('configuration.entities.name'), ['name'])}
-          <h3>{t('configuration.entities.providerDefaults')}</h3>
           <div onBlur={event => {
             if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onConnectionCommit?.(selected.id);
           }}>
             {field(t('configuration.entities.endpoint'), ['defaults', 'endpoint'])}
-            {field(t('configuration.entities.handler'), ['defaults', 'custom_llm_provider'])}
-            {optionFields(['defaults'])}
             {credential(['defaults'])}
+            {optionFields(['defaults'], field(t('configuration.entities.handler'), ['defaults', 'custom_llm_provider']))}
           </div>
           <h3>{t('configuration.entities.models')}</h3>
           <nav aria-label={t('configuration.entities.models')}>
             {modelIds.map(id => <button type="button" key={id} aria-pressed={id === modelId} onClick={() => onSelectModel?.(id)}>
-              <strong>{id}</strong><small>{Object.hasOwn(localModels, id) ? t('configuration.entities.localDefinition') : t('configuration.entities.inheritedDefinition', modelSources.get(id)!)}</small>
+              <strong>{text(selectedValue(['models', id, 'name']) ?? inherited(['models', id, 'name']))
+                || text(selectedValue(['models', id, 'model']) ?? inherited(['models', id, 'model'])) || id}</strong>
             </button>)}
           </nav>
           {onAddModel ? <button type="button" disabled={!editable} onClick={() => onAddModel(selected.id)}>{t('configuration.entities.addModel')}</button> : null}
-          {modelId !== undefined && modelIds.includes(modelId) ? <section data-model-id={modelId}>
-            <h3>{modelId}</h3>
+          {!modelIds.length ? <p>{t('configuration.entities.noModels')}</p> : null}
+          {modelId !== undefined && modelIds.includes(modelId) ? <section key={modelId} data-model-id={modelId}>
             {field(t('configuration.entities.name'), [...modelPath, 'name'])}
             {field(t('configuration.entities.model'), [...modelPath, 'model'])}
-            <h4>{t('configuration.entities.modelOverrides')}</h4>
+            <details className="configuration-model-overrides"><summary>{t('configuration.entities.modelOverrides')}</summary>
+            <p>{t('configuration.entities.modelDefaultsHint')}</p>
             {field(t('configuration.entities.endpoint'), [...modelPath, 'overrides', 'endpoint'])}
             {optionFields([...modelPath, 'overrides'])}
             {credential([...modelPath, 'overrides'], modelId)}
             {onInspectModel && draftVersion !== undefined ? <ModelOptionsInspection version={draftVersion}
               modelRef={{ provider_id: selected.id, model_id: modelId }} inspect={onInspectModel} onOpenSource={onOpenSource} /> : null}
+            </details>
             {onCopyModel ? <button type="button" disabled={!editable} onClick={() => onCopyModel(selected.id, modelId)}>{t('configuration.entities.copyModel')}</button> : null}
             {onRemoveModel && Object.hasOwn(localModels, modelId) ? <button type="button" disabled={!editable} onClick={() => onRemoveModel(selected.id, modelId)}>{t('configuration.entities.removeLocal')}</button> : null}
           </section> : selectedModelId !== undefined ? <p role="alert">{t('configuration.entities.definitionChanged', selectedModelId)}</p> : null}

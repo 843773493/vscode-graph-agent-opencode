@@ -16,8 +16,6 @@ import type { ConfigSourceDTO, ConfigSourcesDTO, Session, SessionResource } from
 
 export type {
   LLMRequestLogSummaryDTO,
-  WorkspaceObservationFrameDTO,
-  WorkspaceObservationSubscription,
 } from "./protocol_generated/boxteam/workspace/v2/public";
 
 export type {

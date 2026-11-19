@@ -1,15 +1,14 @@
-import { requestGatewayResponse } from './http.js';
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from '../sse/sseClient.js';
+import { consumeRealtimeSubscription } from './stream/realtime.js';
+import { decodeJsonSseData, defineSseEvent } from '../sse/sseClient.js';
 import { validatePluginConfigurationSchemasDTO } from '../../../../shared/sseRuntimeValidators.js';
 import { PluginConfigurationSchemasDTO, type PluginConfigurationSchemasRequest } from '../types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 
 /** 只观察目标安装声明，完整快照由原安装 owner 提供，不启动插件。 */
 export async function watchPluginConfigurationSchemas(target: PluginConfigurationSchemasRequest, signal: AbortSignal,
   onSnapshot: (snapshot: PluginConfigurationSchemasDTO) => void): Promise<void> {
-  const response = await requestGatewayResponse(0, '/api/gateway/service-plugins/configuration-schemas/events', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(target), signal,
-  });
-  await consumeSseResponse(response, { signal, events: {
+  await consumeRealtimeSubscription(0, () => ({ path: '/api/gateway/service-plugins/configuration-schemas/events',
+    method: 'POST', body: JSON.stringify(target),
+  }), { signal, events: {
     snapshot: defineSseEvent((data, frame) => {
       const value = decodeJsonSseData(data, frame);
       if (!validatePluginConfigurationSchemasDTO(value)) throw new Error('配置声明事件不符合公开合同：' + JSON.stringify(validatePluginConfigurationSchemasDTO.errors));

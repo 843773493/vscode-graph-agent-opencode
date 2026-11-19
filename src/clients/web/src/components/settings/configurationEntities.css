@@ -20,12 +20,13 @@
 .configuration-entity-columns nav button:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-list-hoverForeground); }
 .configuration-entity-columns nav button[aria-pressed=true] { background: var(--vscode-list-inactiveSelectionBackground); color: var(--vscode-list-inactiveSelectionForeground); }
 .configuration-entity-columns nav:focus-within button[aria-pressed=true] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-.configuration-entity-columns small { margin-top: 3px; font-size: 12px; opacity: .8; overflow-wrap: anywhere; }
+.configuration-entity-columns small { margin-top: 3px; font-size: var(--bt-font-size-small); color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
 .configuration-entity-columns article { min-width: 0; max-width: 730px; }
 .configuration-entity-columns article h2 { margin: 6px 0 16px; font-size: 20px; font-weight: 600; }
+.configuration-entity-columns article :is(h3,h4) { margin: 12px 0 6px; font-size: var(--bt-font-size); font-weight: 600; }
 .configuration-entity-columns article > button { margin-right: 8px; margin-bottom: 8px; }
-.configuration-entity-columns article p { line-height: 1.5; overflow-wrap: anywhere; color: var(--vscode-descriptionForeground); }
-.configuration-entity-field { display: flex; flex-direction: column; gap: 6px; margin: 20px 0; font-weight: 600; }
+.configuration-entity-columns article p { margin: 4px 0 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.configuration-entity-field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0 18px; font-weight: 600; }
 .configuration-entity-field :is(input,textarea,select) {
   box-sizing: border-box; width: 100%; max-width: 480px; min-height: 26px; padding: 4px 6px;
   color: var(--vscode-settings-textInputForeground, var(--vscode-input-foreground));
@@ -35,6 +36,19 @@
 }
 .configuration-entity-field textarea { max-width: 640px; resize: vertical; }
 .configuration-entity-field small { font-weight: 400; }
+.configuration-entity-field > button { align-self: flex-start; font-weight: 400; }
+.configuration-entity-content .configuration-field-reset {
+  color: var(--vscode-textLink-foreground); background: transparent; border: 0; padding: 0; min-height: 20px;
+}
+.configuration-entity-content .configuration-field-reset:hover { color: var(--vscode-textLink-activeForeground); background: transparent; text-decoration: underline; }
+.configuration-definition-details { margin: -8px 0 16px; color: var(--vscode-descriptionForeground); }
+.configuration-entity-content summary { cursor: pointer; line-height: 26px; }
+.configuration-model-overrides { margin: 12px 0 18px; }
+.configuration-credential { margin: 12px 0 18px; }
+.configuration-credential h4 { margin-bottom: 6px; }
+.configuration-credential p { margin: 6px 0; }
+.configuration-credential button { margin-inline-end: 8px; }
+.configuration-credential small { display: block; margin-top: 8px; }
 .configuration-entity-content [role=alert] { color: var(--vscode-errorForeground); }
 /* 依据编辑器内的实际宽度收起列表列，分屏时不借用整个浏览器的宽度。 */
 @container (max-width: 650px) {

@@ -1,16 +1,18 @@
 :host {
-  color: var(--vscode-editor-foreground);
+  color: var(--vscode-foreground);
   background: var(--bt-canvas-background);
   background-image: var(--bt-background-overlay, none), var(--bt-background-image, none);
   background-position: center, var(--bt-background-position, center);
   background-size: cover, var(--bt-background-size, cover);
   background-repeat: no-repeat, var(--bt-background-repeat, no-repeat);
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
+  font-family: var(--bt-font-family);
+  font-size: var(--bt-font-size);
+  line-height: 1.4;
   --bt-radius-small: 3px;
   --bt-radius-large: 6px;
 }
 * { box-sizing: border-box; }
+small { font-size: var(--bt-font-size-small); }
 .react-session-content { height: 100%; min-height: 0; }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; }

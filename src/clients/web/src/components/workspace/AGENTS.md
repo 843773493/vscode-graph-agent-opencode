@@ -9,7 +9,7 @@ WorkspaceEditorHeader
 └── WorkspaceAuxiliaryPanel                 辅助标签导航与视图组合
     ├── fileTree/                            工作区文件树、目录缓存、操作入口
     ├── sessionChanges/                      会话变更集与文件变更树
-    └── 外部注入的资源、任务、调试、附件视图
+    └── 外部注入的资源、Thread 索引、任务、调试、附件视图
 
 WorkspaceFilePreviewArea                    工作区文件和会话 diff 预览、编辑
 ├── preview/                                 Markdown、图片、附件、Mermaid 渲染器

@@ -3,13 +3,17 @@ import { gatewayWorkspaceKey } from '../../web/src/api/workspaceIdentity.js';
 import { onGatewayTokenInvalidated } from '../../web/src/api/http.js';
 import { workspaceContext } from './workspaceContext.js';
 import { t } from '../../shared/core/i18n/index.js';
-import type { ThreadItemContentDTO, ThreadItemInspectionDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
+import type { ContextContentReferenceDTO, ThreadItemContentDTO, ThreadItemInspectionDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 import { URI } from '../upstream/src/vs/base/common/uri.js';
+import { VSBuffer } from '../upstream/src/vs/base/common/buffer.js';
+import type { CancellationToken } from '../upstream/src/vs/base/common/cancellation.js';
+import { newWriteableStream, type ReadableStreamEvents } from '../upstream/src/vs/base/common/stream.js';
 import { Event } from '../upstream/src/vs/base/common/event.js';
 import { Disposable } from '../upstream/src/vs/base/common/lifecycle.js';
 import { IFileService, FileSystemProviderCapabilities, FileType, FilePermission,
-  createFileSystemProviderError, FileSystemProviderErrorCode, type IFileSystemProviderWithFileReadWriteCapability } from '../upstream/src/vs/platform/files/common/files.js';
+  createFileSystemProviderError, FileSystemProviderErrorCode, type IFileSystemProviderWithFileReadStreamCapability, type IFileReadStreamOptions } from '../upstream/src/vs/platform/files/common/files.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../upstream/src/vs/workbench/common/contributions.js';
+import { IEditorService } from '../upstream/src/vs/workbench/services/editor/common/editorService.js';
 
 const scheme = 'boxteam-item-content';
 const mediaSuffixes: Record<string, string> = {
@@ -26,18 +30,46 @@ export function itemContentUri(owner: ThreadOwner, itemId: string, index: number
     itemId, String(index), `${content.name}.${(content.mime_type && mediaSuffixes[content.mime_type]) || suffixes[content.language] || content.language || 'txt'}`].map(encodeURIComponent).join('/') });
 }
 
-export class ItemDocuments extends Disposable implements IFileSystemProviderWithFileReadWriteCapability {
-  readonly capabilities = FileSystemProviderCapabilities.FileReadWrite | FileSystemProviderCapabilities.Readonly | FileSystemProviderCapabilities.PathCaseSensitive;
+/** 上下文来源使用明确的文本格式，选择打开方式不预读正文。 */
+export function contextContentUri(owner: ThreadOwner, reference: ContextContentReferenceDTO): URI {
+  return itemContentUri(owner, 'context', 0, { name: 'context', language: 'plaintext' }).with({
+    query: JSON.stringify({ reference }),
+  });
+}
+
+export class ItemDocuments extends Disposable implements IFileSystemProviderWithFileReadStreamCapability {
+  readonly capabilities = FileSystemProviderCapabilities.FileReadStream | FileSystemProviderCapabilities.Readonly | FileSystemProviderCapabilities.PathCaseSensitive;
   readonly onDidChangeCapabilities = Event.None;
   readonly onDidChangeFile = Event.None;
-  constructor(@IFileService files: IFileService) { super(); this._register(files.registerProvider(scheme, this)); }
+  private readonly pending = new Set<{ resource: URI; controller: AbortController }>();
+  constructor(@IFileService files: IFileService, @IEditorService editors: IEditorService) {
+    super();
+    this._register(files.registerProvider(scheme, this));
+    // 上游文本 resolve 不接收编辑器 token；最后一组关闭时释放尚未完成的网络读取。
+    this._register(editors.onDidCloseEditor(event => {
+      for (const read of this.pending) {
+        if (event.editor.resource?.toString() === read.resource.toString() && editors.findEditors(read.resource).length === 0) {
+          read.controller.abort();
+        }
+      }
+    }));
+  }
+  override dispose(): void {
+    for (const read of this.pending) read.controller.abort();
+    super.dispose();
+  }
   watch() { return Disposable.None; }
-  private async inspect(resource: URI, operation: 'location' | 'content') {
+  private async inspect(resource: URI, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const parts = resource.path.slice(1).split('/').map(decodeURIComponent);
-    if (parts.length !== 6 || parts.some(part => !part) || !resource.authority || resource.query || resource.fragment
+    if (parts.length !== 6 || parts.some(part => !part) || !resource.authority || resource.fragment
       || !/^\d+$/.test(parts[4])) throw new Error('Item 内容引用身份无效');
     const [workspaceId, sessionId, threadId, itemId, index] = parts;
+    const context = this.contextReference(resource);
     const controller = new AbortController();
+    const read = { resource, controller };
+    this.pending.add(read);
+    const reading = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const invalidate = () => controller.abort(new Error(t('quickAccess.resource.identityChanged')));
     const releaseToken = onGatewayTokenInvalidated(0, invalidate);
     let gatewayId = workspaceContext.getSnapshot().gatewayId;
@@ -47,26 +79,49 @@ export class ItemDocuments extends Disposable implements IFileSystemProviderWith
       gatewayId = current;
     });
     try {
-      const target = await gateway.resolveWorkspaceTarget({ gatewayId: resource.authority, workspaceId }, controller.signal);
-      controller.signal.throwIfAborted();
+      const target = await gateway.resolveWorkspaceTarget({ gatewayId: resource.authority, workspaceId }, reading);
+      reading.throwIfAborted();
       if (target.status !== 'ready') throw new Error(`Item 所属工作区不可用：${target.status}`);
       const result = await gateway.request<ThreadItemInspectionDTO>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/threads/${encodeURIComponent(threadId)}/items/inspect`,
-        { signal: controller.signal, method: 'POST', body: JSON.stringify({ item_id: itemId, operation }) }, gatewayWorkspaceKey(target));
-      controller.signal.throwIfAborted();
-      if (result.location?.item_id !== itemId) throw new Error('Item 内容响应身份不一致');
+        { signal: reading, method: 'POST', body: JSON.stringify(context
+          ? { content_ref: context.reference, operation: 'content' } : { item_id: itemId, operation: 'content' }) }, gatewayWorkspaceKey(target));
+      reading.throwIfAborted();
+      if (!context && result.location?.item_id !== itemId) throw new Error('Item 内容响应身份不一致');
       return { result, index: Number(index) };
-    } finally { releaseToken(); releaseGateway(); }
+    } finally { this.pending.delete(read); releaseToken(); releaseGateway(); }
   }
-  async stat(resource: URI) {
-    const { result } = await this.inspect(resource, 'location');
-    return { type: FileType.File, ctime: 0, mtime: 0, size: result.location!.byte_length, permissions: FilePermission.Readonly };
+  private contextReference(resource: URI): { reference: ContextContentReferenceDTO } | undefined {
+    if (!resource.query) return undefined;
+    const value: { reference: ContextContentReferenceDTO } = JSON.parse(resource.query);
+    if (!value.reference || !['item', 'sealed_contribution'].includes(value.reference.kind)) throw new Error('上下文内容引用身份无效');
+    return value;
   }
-  async readFile(resource: URI): Promise<Uint8Array> {
-    const { result, index } = await this.inspect(resource, 'content');
+  async stat() {
+    // 沿用上游虚拟文档的未知大小语义；canonical／封存长度不等于投影文档字节数。
+    return { type: FileType.File, ctime: 0, mtime: 0, size: 0, permissions: FilePermission.Readonly };
+  }
+  private async readBytes(resource: URI, signal?: AbortSignal): Promise<Uint8Array> {
+    const { result, index } = await this.inspect(resource, signal);
     const content = result.contents[index];
     if (!content || content.content === undefined || content.uri) throw new Error('Item 文本已不可用，请重新打开其内容');
     return content.encoding === 'base64' ? Uint8Array.from(atob(content.content), character => character.charCodeAt(0))
       : new TextEncoder().encode(content.content);
+  }
+  readFileStream(resource: URI, options: IFileReadStreamOptions, token: CancellationToken): ReadableStreamEvents<Uint8Array> {
+    const stream = newWriteableStream<Uint8Array>(chunks => VSBuffer.concat(chunks.map(chunk => VSBuffer.wrap(chunk))).buffer);
+    const controller = new AbortController();
+    const cancellation = token.onCancellationRequested(() => controller.abort());
+    if (token.isCancellationRequested) controller.abort();
+    const reading = options.length === 0 ? Promise.resolve(new Uint8Array()) : this.readBytes(resource, controller.signal);
+    void reading.then(bytes => {
+      controller.signal.throwIfAborted();
+      const start = options.position ?? 0;
+      stream.end(bytes.subarray(start, options.length === undefined ? undefined : start + options.length));
+    }).catch(error => {
+      stream.error(error instanceof Error ? error : new Error(String(error)));
+      stream.end();
+    }).finally(() => cancellation.dispose());
+    return stream;
   }
   private deny(): never { throw createFileSystemProviderError('会话历史内容只读', FileSystemProviderErrorCode.NoPermissions); }
   writeFile(): never { return this.deny(); }

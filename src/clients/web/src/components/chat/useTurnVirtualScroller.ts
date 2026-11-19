@@ -61,6 +61,7 @@ export function useTurnVirtualScroller({
   items,
   scopeKey,
   onLoadNewerMessages,
+  onLoadLatestMessages,
   onLoadOlderMessages,
   onLoadAroundTurn,
   hasNewerMessages,
@@ -77,6 +78,7 @@ export function useTurnVirtualScroller({
   items: readonly ChatTranscriptItem[];
   scopeKey: string;
   onLoadNewerMessages: () => Promise<void>;
+  onLoadLatestMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
   onLoadAroundTurn: LoadAroundTurn;
   hasNewerMessages: boolean;
@@ -112,6 +114,7 @@ export function useTurnVirtualScroller({
   const loadOlderMessagesRef = React.useRef<() => Promise<void>>(
     async () => undefined,
   );
+  const loadNewerMessagesRef = React.useRef<() => Promise<void>>(async () => undefined);
   const viewStateTimerRef = React.useRef<number | null>(null);
   const previewRef = React.useRef(false);
   if (virtualIndexRef.current?.scopeKey !== scopeKey) {
@@ -148,10 +151,10 @@ export function useTurnVirtualScroller({
 
   const {
     anchorRef, cancelAnchor, closeMessageNavigation, navigateToTurn, navigation, locatedMessage, locatedTool, locatedItem,
-    scheduleAnchorAlignment, scrollToLatest,
+    preserveViewport, scheduleAnchorAlignment, scrollToLatest,
   } = useTurnAnchorNavigation({
     items, scopeKey, streamRef, scrollerRef, followsLatestRef,
-    onLoadAroundTurn, historyLoading,
+    onLoadAroundTurn, onLoadLatestMessages, hasNewerMessages, historyLoading,
     messageNavigation,
     viewState, onViewStateChange: position => {
       if (!previewRef.current) onViewStateChange?.(position);
@@ -200,6 +203,7 @@ export function useTurnVirtualScroller({
       scrollerRef.current.onwheel = null;
       scrollerRef.current.ontouchstart = null;
       scrollerRef.current.onscroll = null;
+      scrollerRef.current.onkeydown = null;
     }
     scrollEndCleanupRef.current?.();
     scrollEndCleanupRef.current = null;
@@ -213,7 +217,14 @@ export function useTurnVirtualScroller({
     const handleUserWheel = (event: WheelEvent) => {
       previewRef.current = false;
       cancelAnchor();
-      if (event.deltaY >= 0) return;
+      if (event.deltaY >= 0) {
+        if (event.deltaY > 0 && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 2) {
+          void loadNewerMessagesRef.current().catch((error: unknown) => {
+            onViewStateRestoreStatus?.(t("chat.history.loadNewerFailed", errorMessage(error)));
+          });
+        }
+        return;
+      }
       userRequestedOlderRef.current = true;
       followsLatestRef.current = false;
       if (scroller.scrollTop <= 2) {
@@ -257,6 +268,12 @@ export function useTurnVirtualScroller({
       }, 250);
     };
     scroller.ontouchstart = () => {
+      previewRef.current = false;
+      cancelAnchor();
+      followsLatestRef.current = false;
+    };
+    scroller.onkeydown = event => {
+      if (event.defaultPrevented || !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(event.key)) return;
       previewRef.current = false;
       cancelAnchor();
       followsLatestRef.current = false;
@@ -391,12 +408,20 @@ export function useTurnVirtualScroller({
       || !hasOlderMessages
     ) return;
     olderRequestActiveRef.current = true;
+    let releaseViewport: (() => void) | undefined;
     try {
+      // startReached 在 Virtuoso 的滚动提交中触发；等当前 DOM 提交后再取可见行。
+      await Promise.resolve();
+      if (virtualIndexRef.current?.scopeKey !== scopeKey) return;
+      releaseViewport = preserveViewport();
       await onLoadOlderMessages();
+    } catch (error) {
+      releaseViewport?.();
+      throw error;
     } finally {
       olderRequestActiveRef.current = false;
     }
-  }, [hasOlderMessages, loadingOlderMessages, onLoadOlderMessages]);
+  }, [hasOlderMessages, loadingOlderMessages, onLoadOlderMessages, preserveViewport, scopeKey]);
   loadOlderMessagesRef.current = loadOlderMessages;
 
   const loadNewerMessages = React.useCallback(async () => {
@@ -406,12 +431,21 @@ export function useTurnVirtualScroller({
       || !hasNewerMessages
     ) return;
     newerRequestActiveRef.current = true;
+    let releaseViewport: (() => void) | undefined;
     try {
+      await Promise.resolve();
+      if (virtualIndexRef.current?.scopeKey !== scopeKey) return;
+      followsLatestRef.current = false;
+      releaseViewport = preserveViewport();
       await onLoadNewerMessages();
+    } catch (error) {
+      releaseViewport?.();
+      throw error;
     } finally {
       newerRequestActiveRef.current = false;
     }
-  }, [hasNewerMessages, loadingNewerMessages, onLoadNewerMessages]);
+  }, [hasNewerMessages, loadingNewerMessages, onLoadNewerMessages, preserveViewport, scopeKey]);
+  loadNewerMessagesRef.current = loadNewerMessages;
 
   const handleStartReached = React.useCallback(() => {
     if (!userRequestedOlderRef.current || anchorRef.current) return;
@@ -431,10 +465,10 @@ export function useTurnVirtualScroller({
     // 按钮反映真实可见范围；定位和用户手势只决定跟随意图。
     setAtBottom(atBottom);
     if (anchorRef.current || nativeScrollbarDragRef.current) return;
-    if (atBottom) {
+    if (atBottom && !hasNewerMessages) {
       followsLatestRef.current = true;
     }
-  }, [anchorRef]);
+  }, [anchorRef, hasNewerMessages]);
 
   return {
     bindScroller,

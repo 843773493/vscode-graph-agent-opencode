@@ -33,3 +33,5 @@
 - SSE JSON 必须通过 `sseRuntime.js` 中的运行时校验器校验，不能只依赖 TypeScript 类型断言。
 - 生成文件 `sseRuntimeValidators.js` 和对应声明只能由协议生成流程覆盖。
 - 共享模块不得依赖具体客户端入口；新增源码子目录必须包含四段式 `AGENTS.md`。
+
+- `realtime.js` 是 Workbench 与独立终端页面共用的事件连接 owner：按入口 URL 共享 WS、订阅独立反压和取消；已取消的调用不能先创建无人持有的连接。领域游标与凭据获取仍由调用方维护，不允许各业务复制连接实现。

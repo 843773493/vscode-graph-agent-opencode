@@ -7,13 +7,13 @@
 .service-plugin-scope .action-item.select-container { flex: 1; min-width: 0; margin-right: 4px; }
 .service-plugin-scope .action-item .monaco-select-box { width: 100%; min-width: 0; }
 .service-plugin-packages-content { overflow: auto; min-height: 0; flex: 1; }
-.service-plugin-packages-content > p { margin: 6px 12px 6px 20px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+.service-plugin-packages-content > p { margin: 6px 12px 6px 20px; color: var(--vscode-descriptionForeground); }
 .service-plugin-package > h3 { display: flex; align-items: center; padding: 0 12px 0 20px; margin: 0; height: 26px; font-size: 11px; font-weight: 600; background: var(--vscode-sideBarSectionHeader-background); }
 .service-plugin-package > h3 > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .service-plugin-package > h3 > div { flex: none; }
 .service-plugin-package > p { margin: 6px 12px 6px 20px; color: var(--vscode-descriptionForeground); }
 .service-plugin-package-list .extension-list-item { cursor: pointer; }
-.service-plugin-package-list .publisher-name { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.service-plugin-package-list .publisher-name { font-size: 12px; color: var(--vscode-descriptionForeground); }
 .service-plugin-package-list [data-plugin-runtime-error]:not([hidden]) { color: var(--vscode-errorForeground); }
 .service-plugin-editor > .header > .details { min-width: 0; }
 .service-plugin-document { box-sizing: border-box; height: 100%; overflow: auto; padding: 10px 20px 20px; line-height: 1.5; }

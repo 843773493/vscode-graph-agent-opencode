@@ -48,10 +48,10 @@ export function useSessionJobTurnLoader({
     ? state.turnTimelinesBySession.get(sessionCacheKey) : undefined;
   const needsActiveTurn = Boolean(activeTurnId && timeline?.phase === "ready"
     && timeline.scopeKey === sessionCacheKey && !timeline.turnsById[activeTurnId]);
-  // 首个真实输出到达时，读取该请求已消费的来源元数据；没有新增轮询。
+  // model.started 在派发登记提交后发布；快照也携带当前调用，不等待首个输出。
   const activeModelCallId = [...(state.messageStreamsByTurnStream?.values() ?? [])]
-    .find(stream => stream.sessionCacheKey === sessionCacheKey && stream.turnId === activeTurnId)
-    ?.blocks.at(-1)?.model_call_id;
+    .find(stream => stream.sessionCacheKey === sessionCacheKey && stream.turnId === activeTurnId
+      && stream.threadId === timeline?.threadId)?.currentModelCallId;
   const activeReadIdentity = activeTurnId && (needsActiveTurn || activeModelCallId)
     ? `active-turn:${activeTurnId}:${activeModelCallId ?? "root"}` : null;
   useEffect(() => {

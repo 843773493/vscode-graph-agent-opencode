@@ -27,6 +27,7 @@ from app.gateway.routes import (
 from app.gateway.server.mcp_upstream_proxy import router as mcp_upstream_proxy_router
 from app.gateway.server.plugin_commands import router as plugin_commands_router
 from app.gateway.server.port_forwarding import router as port_forwards_router
+from app.gateway.server.realtime import router as realtime_router
 from app.gateway.server.resource_navigation import router as resource_navigation_router
 from app.gateway.server.service_plugin_proxy import (
     router as service_plugin_proxy_router,
@@ -69,6 +70,7 @@ def register_gateway_routes(app: FastAPI) -> None:
     app.include_router(service_plugin_proxy_router)
     app.include_router(federation_router)
     app.include_router(resource_navigation_router)
+    app.include_router(realtime_router)
     app.include_router(text_mutation_router)
     app.include_router(auxiliary_proxy_router)
     app.include_router(workspace_proxy_router)

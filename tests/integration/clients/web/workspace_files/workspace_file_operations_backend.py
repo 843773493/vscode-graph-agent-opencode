@@ -6,13 +6,12 @@ import argparse
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Event
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 
 from app.api import workspace as workspace_api
-from app.api import workspace_observation
 from app.api.deps import (
     get_config_service,
     get_session_service,
@@ -24,6 +23,7 @@ from app.api.deps import (
 from app.core.resource_uri import ParsedResourceUri, resource_display_uri
 from app.core.trace_middleware import TraceMiddleware
 from app.gateway.control.gateway_state import GatewayStateStore
+from app.gateway.server import realtime
 from app.services.infrastructure.config_service import ConfigService
 from app.services.infrastructure.workspace_file_watch_service import (
     WorkspaceFileWatchService,
@@ -87,7 +87,8 @@ def make_app(output_root: Path) -> FastAPI:
         for service in services.values():
             await service.start()
         try:
-            yield
+            with patch.object(realtime, "verify_gateway_token", verify_realtime_token):
+                yield
         finally:
             for gate in gates.values():
                 gate.set()
@@ -101,7 +102,12 @@ def make_app(output_root: Path) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.add_middleware(TraceMiddleware)
     app.include_router(workspace_api.router, prefix="/api/v1")
-    app.include_router(workspace_observation.router, prefix="/api/v1")
+    app.include_router(realtime.router)
+
+    def verify_realtime_token(token: str | None) -> str:
+        if token != "controlled-browser-token":
+            raise HTTPException(401, "invalid local token")
+        return token
 
     def route_for(request: Request) -> str:
         workspace_id = request.headers.get("X-BoxTeam-Workspace-Id")

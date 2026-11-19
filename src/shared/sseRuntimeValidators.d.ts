@@ -1,9 +1,10 @@
 // 该文件由程序生成，请勿手写。
 export const validateTraceEventDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
+export const validateNavigationSnapshotDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
+export const validateWorkspaceResourceChangesDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateUserQuestionSummaryDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateWorkspaceFileChangeBatchDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateSseErrorDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
-export const validateWorkspaceObservationFrameDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validatePersistentTaskListDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validatePersistentTaskChangedDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };
 export const validateFederatedSearchEventDTO: { (value: unknown): boolean; errors?: Array<{ instancePath: string; keyword: string; message?: string }> | null };

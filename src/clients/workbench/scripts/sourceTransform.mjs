@@ -677,7 +677,7 @@ this._register(toDisposable(workspaceContext.subscribe(() => {
       contents = replaceOnce(contents, 'return { meta, content };',
         'const revision = workspaceFileRevisionForBackup(this.fileService, this.resource);\nif (meta && revision !== undefined) meta.boxteamFileRevision = revision;\nconst source = configSourceBackup(this.fileService, this.resource);\nif (meta && source !== undefined) meta.boxteamConfigSource = source;\nreturn { meta, content };');
       const restore = 'private async doResolveFromBackup(backup: IResolvedWorkingCopyBackup<IBackupMetaData>, encoding: string, options?: ITextFileResolveOptions): Promise<void> {';
-      contents = replaceOnce(contents, restore, `${restore}\nrestoreWorkspaceFileRevision(this.fileService, this.resource, backup.meta?.boxteamFileRevision);\nrestoreConfigSourceBackup(this.fileService, this.resource, backup.meta?.boxteamConfigSource);`);
+      contents = replaceOnce(contents, restore, `${restore}\nrestoreWorkspaceFileRevision(this.fileService, this.resource, backup.meta?.boxteamFileRevision);\nawait restoreConfigSourceBackup(this.fileService, this.resource, backup.meta?.boxteamConfigSource);`);
       contents = `import { configSourceBackup, restoreConfigSourceBackup, type ConfigSourceBackup } from ${JSON.stringify(join(root, 'src/settings/sourceEditor.js'))};\nimport { workspaceFileRevisionForBackup, restoreWorkspaceFileRevision } from ${JSON.stringify(join(root, 'src/workspaceFiles.js'))};\n` + contents;
     }
     if (path === join(upstream, 'src/vs/workbench/services/textmodelResolver/common/textModelResolverService.ts')) {

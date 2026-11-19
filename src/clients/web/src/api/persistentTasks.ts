@@ -2,7 +2,7 @@ import type { APIResponse, SessionGoalSnapshotDTO } from "../types/backend";
 import type { PersistentTaskChangedDTO, PersistentTaskConfigurationDTO, PersistentTaskDTO, PersistentTaskListDTO, PersistentTaskRunDTO, PersistentTaskRunSummaryDTO, PersistentTaskRunListDTO, PersistentTaskRunDetailDTO, TaskRuntimeStatusDTO, TaskThreadTargetDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import { validatePersistentTaskChangedDTO, validatePersistentTaskListDTO } from "../../../../shared/sseRuntimeValidators.js";
 import { decodeJsonSseData, defineSseEvent, SseProtocolError } from "../sse/sseClient";
-import { consumeWorkspaceObservation } from "./stream/workspaceObservation";
+import { consumeRealtimeSubscription } from "./stream/realtime";
 import { parseSessionGoalSnapshot } from "../protocol/sessionGoal";
 import { validateSseError } from "../sse/sseRuntimeSchemas";
 import { gatewayWorkspaceRequestHeaders, requestJson, unwrapApiData, HttpRequestError } from "./http";
@@ -39,9 +39,7 @@ export async function listPersistentTasks(port: number, target: GatewayWorkspace
 }
 
 async function streamPersistentTasks(port: number, target: GatewayWorkspaceRequestTarget, signal: AbortSignal, onSnapshot: (value: PersistentTaskSnapshot) => void, onChanged: (value: PersistentTaskChangedDTO) => void, sessionId?: string) {
-  await consumeWorkspaceObservation(port, gatewayWorkspaceRequestHeaders(target), () => ({
-    kind: "persistent_tasks", session_id: sessionId, paths: [],
-  }), { signal, events: {
+  await consumeRealtimeSubscription(port, () => ({ path: root + '/events' + (sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''), headers: gatewayWorkspaceRequestHeaders(target) }), { signal, events: {
     snapshot: defineSseEvent((data, frame) => snapshot(decodeJsonSseData(data, frame), sessionId), onSnapshot),
     changed: defineSseEvent((data, frame) => {
       const value: unknown = decodeJsonSseData(data, frame);

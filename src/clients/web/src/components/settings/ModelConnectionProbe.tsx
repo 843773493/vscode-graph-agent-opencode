@@ -199,6 +199,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
 
   return <section className="configuration-model-probe" aria-label={t('configuration.probe.title')}>
     <h3>{t('configuration.probe.title')}</h3>
+    <details><summary>{t('configuration.probe.options')}</summary>
     <p>{editor.target.gateway_id} · {editor.target.workspace_id} · {providerId}</p>
     <label className="configuration-entity-field">{t('configuration.probe.inputMode')}
       <select value={actualMode} disabled={discovering || testing} onChange={event => setMode(event.target.value as 'draft' | 'active')}>
@@ -224,6 +225,7 @@ export function ModelConnectionProbe({ providerId, models, selectedModelId, docu
           if (editor.autoDiscover && secretScope === 'provider') void discover('draft');
         }} />
       </label>
+    </details>
     </details>
     <h4>{t('configuration.probe.catalog')}</h4>
     <label><input type="checkbox" checked={editor.autoDiscover} onChange={event => editor.onAutoDiscover(event.target.checked)} /> {t('configuration.probe.autoDiscover')}</label>

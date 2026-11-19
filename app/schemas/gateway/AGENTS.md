@@ -4,6 +4,7 @@
 
 ```text
 gateway/
+├── realtime.py           共享实时连接控制信封
 ├── config.py             配置重载、待确认变更与配置来源
 ├── diagnostics.py        健康状态、诊断日志和开发运行时重启结果
 ├── directory.py          Gateway 目录 URI 与目录列表

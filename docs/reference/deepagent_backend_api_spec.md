@@ -2,16 +2,18 @@
 
 > 本文保留了早期设计中的目录和初始化示例。定位当前实现时，入口与边界以 [本目录指引](AGENTS.md)、实际路由和协议为准；不要据此新建旧目录或无参数实例化服务。
 
+> 当前页面到 Gateway 的常驻事件统一走 `/api/gateway/realtime` WebSocket，后端仍提供各领域 SSE owner。下文 SSE 接口表示领域格式／后端入口，不表示每个会话要在浏览器创建独立 HTTP 长连接；早期 EventBuffer、轮询补偿和目录示例也不构成当前实现要求。接入方式见[页面实时订阅](../architecture/runtime-distribution.md#页面实时订阅)。
+
 ## 1. 文档范围
 
 本文档定义 BoxTeam 的本地工作区 Python 后端接口。
 
 运行方式如下：
 
-- 用户打开 VSCode 工作区
-- 前端插件自动在本地拉起 Python 后端进程
-- 后端仅服务当前机器、当前用户、当前工作区
-- 前端通过 HTTP + SSE 与本地后端通信
+- 用户打开共享 Code OSS Workbench
+- Launcher／Gateway 管理后端生命周期，页面不创建后端进程
+- 后端处理显式身份定位的已挂载工作区；Gateway 路由本地或远端目标
+- 页面通过同源 HTTP 与共享实时 WebSocket 访问 Gateway，后端事件继续使用原 SSE 格式
 
 后端能力包含：
 
@@ -1501,7 +1503,7 @@ app.include_router(config_router, prefix="/api/v1")
 
 - 本地运行
 - 单工作区隔离
-- HTTP + SSE 通信
+- 页面 HTTP／共享实时 WebSocket，后端领域 SSE
 - 统一使用 `./workspace` 目录存储本地状态与产物
 - 统一使用 `X-Local-Token` 进行本地鉴权
 - 统一使用 Job 控制接口实现暂停、恢复、取消、插话与跳步

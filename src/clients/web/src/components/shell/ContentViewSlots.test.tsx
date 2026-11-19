@@ -52,6 +52,7 @@ function slotProps(overrides: SlotOverrides = {}): Parameters<typeof ContentView
     sessionViewStates: new Map(),
     onLoadOlderMessages: async () => {},
     onLoadNewerMessages: async () => {},
+    onLoadLatestMessages: async () => {},
     onLoadAroundTurn: async () => {},
     onLoadTurnDetails: async () => {},
     onLoadAgentStateMessageRawContent: async () => "",

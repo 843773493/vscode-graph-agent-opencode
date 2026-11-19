@@ -29,8 +29,8 @@ import { DebugOutputContext, type DebugOutputRenderer } from '../../../web/src/c
 import { createDebugOutputRenderer } from '../debug/output.js';
 import { WorkspaceCodePreviewContext, type WorkspaceCodePreviewRenderer } from '../../../web/src/components/workspace/preview/WorkspaceCodePreview.js';
 import { createCodePreviewRenderer } from './codePreview.js';
-import { ChatItemActions, inspectItem } from './itemActions.js';
-import { ChatItemContentContext, ChatItemMenuContext, type ChatItemContentHost } from '../../../web/src/components/chat/itemContextMenu.js';
+import { ChatItemActions } from './itemActions.js';
+import { ChatItemMenuContext, ContextNoticeContinuationContext } from '../../../web/src/components/chat/itemContextMenu.js';
 import { ChatItemMenu } from './chatItemMenu.js';
 import type { IInstantiationService } from '../../upstream/src/vs/platform/instantiation/common/instantiation.js';
 import { productStyles } from './productStyles.js';
@@ -59,8 +59,8 @@ interface ThreadViewportController extends TurnViewportController {
   capturePresentation(): () => void;
 }
 
-function ThreadConversation({ input, seed, active, editors, commands, onPickModel, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady, toolbar }: {
-  input: ThreadInput; seed: ThreadSessionSeed; active: boolean; editors: IEditorService; onUpdate: () => void;
+function ThreadConversation({ input, seed, active, editors, groupId, commands, onPickModel, onUpdate, onFileOpenMenu, onError, navigation, onViewportReady, onDraftReady, toolbar }: {
+  input: ThreadInput; seed: ThreadSessionSeed; active: boolean; editors: IEditorService; groupId: number; onUpdate: () => void;
   commands: ICommandService;
   onPickModel(request: ModelPickerRequest): Promise<void>;
   onFileOpenMenu: FileOpenMenuHandler;
@@ -121,7 +121,7 @@ function ThreadConversation({ input, seed, active, editors, commands, onPickMode
   if (timeline?.restoredFromCache) return <div className="native-thread-conversation">{toolbar}<CachedThreadHistory owner={owner} timeline={timeline}
     error={timeline.error}
     onRetry={history.refreshTurnHistory} /></div>;
-  return <WarmConfirmProvider><ComposerContext.Provider value={runtime.composerValue}>
+  return <WarmConfirmProvider><ContextNoticeContinuationContext.Provider value={history.loadMoreContext}><ComposerContext.Provider value={runtime.composerValue}>
     <WorkspaceFileReferenceProvider apiPort={0} workspaceId={owner.workspaceKey} onOpen={(file, reference) => {
       const root = resourceFileRootUri(file.path);
       if (!root) throw new Error(t('thread.host.referenceRootMissing'));
@@ -151,7 +151,7 @@ function ThreadConversation({ input, seed, active, editors, commands, onPickMode
         conversations={runtime.conversations} activeTurnTimeline={timeline}
         changesHint={null} changesHintLoading={false} activeChangeset={state.activeChangeset}
         sessionViewStates={state.sessionViewStates}
-        onLoadAroundTurn={history.loadAroundTurn} onLoadNewerMessages={history.loadNewerTurns} onLoadOlderMessages={history.loadOlderTurns}
+        onLoadAroundTurn={history.loadAroundTurn} onLoadNewerMessages={history.loadNewerTurns} onLoadLatestMessages={history.loadLatestTurns} onLoadOlderMessages={history.loadOlderTurns}
         messageNavigation={messageNavigation}
         onViewportReady={connectViewport}
         onViewStateChange={runtime.views.saveSessionViewState} onViewStateRestoreStatus={runtime.setStatus}
@@ -165,7 +165,7 @@ function ThreadConversation({ input, seed, active, editors, commands, onPickMode
         }}
         onOpenChildReport={source => {
           if (source.source_session_id !== owner.sessionId || !source.source_thread_id || !source.source_execution_id) throw new Error(t('thread.host.reportOwnerMismatch'));
-          setReportRequest(source); input.resourcesVisible = true; input.resourceTab = 'connections'; onUpdate();
+          setReportRequest(source); input.resourcesVisible = true; input.resourceTab = 'threads'; onUpdate();
         }}
         onOpenAttachment={(_sessionId, value) => {
           input.selectedAttachment = { file_id: value.file_id, directory_uri: value.directory_uri,
@@ -212,13 +212,13 @@ function ThreadConversation({ input, seed, active, editors, commands, onPickMode
           input.resourceRatio = ratio; setResourceRatio(ratio);
         }, () => { stopResize.current = null; });
       }} /> : null}
-      <ResourceView input={input} runtime={runtime} editors={editors} commands={commands} active={active} attachment={input.selectedAttachment ?? null} ratio={resourceRatio} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError}
+      <ResourceView input={input} runtime={runtime} editors={editors} groupId={groupId} commands={commands} active={active} attachment={input.selectedAttachment ?? null} ratio={resourceRatio} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError}
         reportRequest={reportRequest} onForkThread={(threadId, point) => fork({ ...point, threadId })} /></div></div>
     </WorkspaceFileReferenceProvider>
-  </ComposerContext.Provider></WarmConfirmProvider>;
+  </ComposerContext.Provider></ContextNoticeContinuationContext.Provider></WarmConfirmProvider>;
 }
 
-function ChatView({ input, initialSession, initialWorkspaces, active, editors, commands, onPickModel, onUpdate, onFileOpenMenu, onError, onChooseThread, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; initialSession?: Session; initialWorkspaces: GatewayWorkspace[]; active: boolean; editors: IEditorService; commands: ICommandService; onPickModel(request: ModelPickerRequest): Promise<void>; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; onChooseThread: () => Promise<void>; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
+function ChatView({ input, initialSession, initialWorkspaces, active, editors, groupId, commands, onPickModel, onUpdate, onFileOpenMenu, onError, onChooseThread, navigation, onViewportReady, onDraftReady }: { input: ThreadInput; initialSession?: Session; initialWorkspaces: GatewayWorkspace[]; active: boolean; editors: IEditorService; groupId: number; commands: ICommandService; onPickModel(request: ModelPickerRequest): Promise<void>; onUpdate: () => void; onFileOpenMenu: FileOpenMenuHandler; onError: (message: string) => void; onChooseThread: () => Promise<void>; navigation?: SearchNavigation; onViewportReady: (controller: ThreadViewportController | undefined) => void; onDraftReady: (controller: ComposerDraftController | undefined) => void }) {
   const owner = input.owner;
   const [seed, setSeed] = useState<ThreadSessionSeed | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -285,7 +285,7 @@ function ChatView({ input, initialSession, initialWorkspaces, active, editors, c
     </button>
   </header>;
   return <div className="thread-history-host panel-feedback-host">{cacheError ? <p className="panel-feedback" role="alert">{cacheError}</p> : null}
-    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} commands={commands} onPickModel={onPickModel} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} toolbar={toolbar} />
+    {seed ? <ThreadConversation input={input} seed={seed} active={active} editors={editors} groupId={groupId} commands={commands} onPickModel={onPickModel} onUpdate={onUpdate} onFileOpenMenu={onFileOpenMenu} onError={onError} navigation={navigation} onViewportReady={onViewportReady} onDraftReady={onDraftReady} toolbar={toolbar} />
       : <div className="native-thread-conversation">{toolbar}{cached ? <CachedThreadHistory owner={owner} timeline={cached} error={error ? t('thread.host.syncFailed', error) : null} onRetry={retry} />
         : error ? <p role="alert">{t('thread.host.initializeFailed', error)}</p> : <p role="status">{t('thread.host.restoring')}</p>}</div>}</div>;
 }
@@ -377,11 +377,5 @@ export class ChatSurface {
       else if (result.trace) this.revealTrace(result.trace, true);
     })] });
   };
-  private readonly itemContent: ChatItemContentHost = {
-    read: async (owner, itemId, signal) =>
-      (await inspectItem({ ...this.input.owner, ...owner }, { operation: 'content', item_id: itemId }, signal)).contents,
-    open: (owner, itemId) => this.itemActions.openContent({ ...this.input.owner, ...owner }, this.groupId,
-      { itemIds: [{ id: itemId, kind: t('chat.contextNotice.title') }] }),
-  };
-  private render(): void { this.surface.render(<ChatItemContentContext.Provider value={this.itemContent}><ChatItemMenuContext.Provider value={this.showItemMenu}><ComposerDiagnosticsContext.Provider value={this.reportComposerDiagnostic}><WorkspaceCodePreviewContext.Provider value={this.renderCodePreview}><DebugOutputContext.Provider value={this.renderDebugOutput}><ChatView input={this.input} initialSession={this.initialSession} initialWorkspaces={this.initialWorkspaces} editors={this.editors} commands={this.commands} onPickModel={this.onPickModel} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} onChooseThread={this.onChooseThread} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} /></DebugOutputContext.Provider></WorkspaceCodePreviewContext.Provider></ComposerDiagnosticsContext.Provider></ChatItemMenuContext.Provider></ChatItemContentContext.Provider>); }
+  private render(): void { this.surface.render(<ChatItemMenuContext.Provider value={this.showItemMenu}><ComposerDiagnosticsContext.Provider value={this.reportComposerDiagnostic}><WorkspaceCodePreviewContext.Provider value={this.renderCodePreview}><DebugOutputContext.Provider value={this.renderDebugOutput}><ChatView input={this.input} initialSession={this.initialSession} initialWorkspaces={this.initialWorkspaces} editors={this.editors} groupId={this.groupId} commands={this.commands} onPickModel={this.onPickModel} active={this.active} onUpdate={this.onUpdate} onFileOpenMenu={this.onFileOpenMenu} onError={this.onError} onChooseThread={this.onChooseThread} navigation={this.navigation} onViewportReady={this.onViewportReady} onDraftReady={this.onDraftReady} /></DebugOutputContext.Provider></WorkspaceCodePreviewContext.Provider></ComposerDiagnosticsContext.Provider></ChatItemMenuContext.Provider>); }
 }

@@ -1,3 +1,4 @@
+import { observeRealtime } from "../../../support/workbench/realtime.mjs";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -588,24 +589,15 @@ try {
   const observer = await observePage(page, perf, context);
   if (observer.close) runContext.addCleanup("页面性能观察", () => observer.close());
   page.on("pageerror", (error) => pageErrors.push(String(error)));
-  page.on("response", (response) => {
-    if (
-      response.status() === 200
-      && (response.url().includes("/workspace/observations/stream")
-        || response.url().includes("/message-stream?"))
-    ) {
-      streamResponses.push(response.url());
-      if (response.url().includes("/workspace/observations/stream")) {
-        const subscriptions = response.request().postDataJSON().subscriptions;
-        if (response.headers()["content-type"]?.includes("text/event-stream")) {
-          traceStreams.push(...subscriptions.filter((entry) => entry.kind === "session_trace").map(entry => ({
-            ...entry, gatewayId: response.request().headers()["x-boxteam-target-gateway-id"],
-            workspaceId: response.request().headers()["x-boxteam-workspace-id"],
-          })));
-        }
-      }
-    }
-  });
+  observeRealtime(page, { headers(request, response) {
+    if (response.status !== 200) return;
+    if (request.path.includes('/traces/stream') || request.path.includes('/message-stream?')) streamResponses.push(request.url);
+    const match = new URL(request.url).pathname.match(/\/sessions\/([^/]+)\/traces\/stream$/);
+    if (match && response.headers['content-type']?.includes('text/event-stream')) traceStreams.push({
+      session_id: match[1], thread_id: new URL(request.url).searchParams.get('thread_id'),
+      gatewayId: request.headers['x-boxteam-target-gateway-id'], workspaceId: request.headers['x-boxteam-workspace-id'],
+    });
+  } });
   result.phase = "gateway-bootstrap";
   await openWorkbenchPage(page);
   const gatewayId = requiredEnvironment("BOXTEAM_BROWSER_GATEWAY_ID");

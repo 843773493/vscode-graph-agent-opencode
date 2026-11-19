@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Mapping
 
+from app.domain.itemized.hashing import canonical_json_bytes
 from app.domain.itemized.records import CanonicalItemRecord
 from app.schemas.internal_v2.turn_search import ThreadItemContentDTO
 from app.services.mapping.itemized.content_blocks import (
@@ -25,6 +26,14 @@ def _text_content(name: str, text: str) -> ThreadItemContentDTO:
         else:
             language = "json"
     return ThreadItemContentDTO(name=name, language=language, content=text, encoding="utf-8")
+
+
+def context_source_contents(body: object) -> list[ThreadItemContentDTO]:
+    """冻结来源保留完整原文，不构造不存在的 canonical Item。"""
+    return [ThreadItemContentDTO(
+        name="context", language="plaintext" if isinstance(body, str) else "json",
+        content=body if isinstance(body, str) else canonical_json_bytes(body).decode("utf-8"), encoding="utf-8",
+    )]
 
 
 def item_contents(item: CanonicalItemRecord, *, tool_output: str | None = None) -> list[ThreadItemContentDTO]:

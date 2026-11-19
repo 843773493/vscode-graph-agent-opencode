@@ -37,7 +37,8 @@ export class ConfigurationEntityView extends Disposable {
   private readonly heading: HTMLElement;
   private readonly addAction = this._register(new Action('settings.definition.add', '', ThemeIcon.asClassName(Codicon.add), false, () => this.run(() => this.create())));
   private readonly saveAction = this._register(new Action('settings.definition.save', t('configuration.entities.save'), ThemeIcon.asClassName(Codicon.save), false, () => this.run(async () => {
-    if (!await this.source.model.save()) throw new Error(t('configuration.entities.saveIncomplete'));
+    // 原文本文件保存链负责报告错误；取消或失败时保留草稿，不再弹出第二条笼统提示。
+    await this.source.model.save();
   })));
   private readonly restoreAction = this._register(new Action('settings.definition.restore', t('configuration.entities.restoreProviders'), '', false, () => this.run(() => this.restoreProviders())));
   private readonly secretsAction = this._register(new Action('settings.definition.secrets', t('settings.secrets.manage'), ThemeIcon.asClassName(Codicon.key), true,
@@ -260,20 +261,23 @@ export class ConfigurationEntityView extends Disposable {
   private async create(): Promise<void> {
     const kind = this.kind;
     const version = this.source.model.textEditorModel!.getVersionId();
-    const id = await this.input(t('configuration.entities.newId'), value => /^[a-zA-Z0-9._-]{2,64}$/.test(value) ? undefined : t('configuration.entities.invalidId'),
-      `${kind === 'providers' ? 'provider' : 'agent'}-${generateUuid().slice(0, 8)}`);
-    if (id === undefined) return;
+    const label = await this.input(t(kind === 'providers' ? 'configuration.entities.serviceName' : 'configuration.entities.newId'),
+      kind === 'agents' ? value => /^[a-zA-Z0-9._-]{2,64}$/.test(value) ? undefined : t('configuration.entities.invalidId') : undefined,
+      kind === 'agents' ? `agent-${generateUuid().slice(0, 8)}` : undefined);
+    if (label === undefined) return;
+    let id = label;
     if (kind === 'providers') {
       const providers = definitionObject(definitionValue(this.source.document.source_effective, ['llm', 'providers']));
       const current = definitionObject(definitionValue(this.source.readDraft(), ['llm', 'providers']));
-      if (Object.hasOwn(current, id) || Object.hasOwn(providers, id)) throw new Error(t('configuration.entities.duplicateId', id));
-      const protocol = await this.quick.pick(['chat_completions', 'responses', 'anthropic_messages'].map(label => ({ label })),
+      if (!/^[a-zA-Z0-9._-]{2,64}$/.test(id) || Object.hasOwn(current, id) || Object.hasOwn(providers, id)) id = `provider-${generateUuid()}`;
+      const protocol = await this.quick.pick(['chat_completions', 'responses', 'anthropic_messages'].map(protocol => ({ label: t(`configuration.protocol.${protocol}`), protocol })),
         { title: t('configuration.entities.chooseProtocol') }, this.lifetime.token);
       this.check(); if (!protocol) return;
       if (this.source.model.textEditorModel!.getVersionId() !== version) throw new Error(t('configuration.entities.definitionChanged', id));
       this.source.editPath(['llm', 'providers', id], {
-        defaults: { custom_llm_provider: protocol.label === 'anthropic_messages' ? 'anthropic' : 'openai', api_key: '',
-          api_mode: { protocol: protocol.label, model_info: {}, supports_reasoning: {} } },
+        name: label,
+        defaults: { custom_llm_provider: protocol.protocol === 'anthropic_messages' ? 'anthropic' : 'openai', api_key: '',
+          api_mode: { protocol: protocol.protocol, model_info: {}, supports_reasoning: {} } },
         models: {},
       });
       this.selectedModelId = undefined;
@@ -310,20 +314,19 @@ export class ConfigurationEntityView extends Disposable {
   }
   private async addModel(providerId: string, copyId?: string): Promise<void> {
     const version = this.source.model.textEditorModel!.getVersionId();
-    const id = await this.input(t('configuration.entities.modelId'), value => /^[a-zA-Z0-9._-]{1,64}$/.test(value) ? undefined : t('configuration.entities.invalidId'),
-      `model-${generateUuid().slice(0, 8)}`);
-    if (id === undefined) return;
     const path = ['llm', 'providers', providerId, 'models'];
     const saved = definitionObject(definitionValue(this.source.document.source_effective, path));
     const current = definitionObject(definitionValue(this.source.readDraft(), path));
-    if (Object.hasOwn(saved, id) || Object.hasOwn(current, id)) throw new Error(t('configuration.entities.duplicateId', id));
     const preview = copyId === undefined ? undefined : await this.source.preflightDraft(this.lifetime.signal);
     this.check();
-    if (version !== this.source.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', id));
+    if (version !== this.source.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', providerId));
     const original = copyId === undefined ? undefined : definitionValue(preview?.candidate, [...path, copyId]);
     if (copyId !== undefined && !original) throw new Error(t('configuration.entities.definitionChanged', copyId));
-    const model = original ?? { model: await this.input(t('configuration.entities.model')) };
-    if (!original && definitionObject(model).model === undefined) return;
+    const label = await this.input(t(original ? 'configuration.entities.name' : 'configuration.entities.model'));
+    if (label === undefined) return;
+    const model = original ? { ...definitionObject(original), name: label } : { model: label };
+    const id = /^[a-zA-Z0-9._-]{1,64}$/.test(label) && !Object.hasOwn(saved, label) && !Object.hasOwn(current, label)
+      ? label : `model-${generateUuid()}`;
     if (version !== this.source.model.textEditorModel!.getVersionId()) throw new Error(t('configuration.entities.definitionChanged', id));
     this.source.editPath([...path, id], model);
     this.selectedId = providerId; this.selectedModelId = id; this.render();

@@ -68,6 +68,26 @@ function providerDocument(): ConfigSourceDocumentDTO {
   return document;
 }
 
+test('服务默认配置不提供虚假的重置，显示名称且把模型单独设置收起', () => {
+  const onEdit = mock();
+  const view = create(<ConfigurationEntities kind="providers" selectedId="fresh" selectedModelId="first"
+    draft={{ llm: { providers: { fresh: { name: '我的模型服务', defaults: { endpoint: 'https://example.com/v1' },
+      models: { first: { model: 'upstream-one' }, second: { model: 'upstream-two' } } } } } }}
+    document={providerDocument()} onSelect={() => {}} onEdit={onEdit} onRemove={() => {}}
+    onSetDefaultAgent={() => {}} onOpenSource={() => {}} />);
+  const article = view.root.findByType('article');
+  expect(article.findByType('h2').children).toEqual(['我的模型服务']);
+  const endpoint = article.findAllByProps({ className: 'configuration-entity-field' }).find(label => label.children.includes(t('configuration.entities.endpoint')))!;
+  expect(endpoint.findAllByType('button')).toHaveLength(0);
+  expect(article.findByProps({ className: 'configuration-model-overrides' }).props.open).not.toBe(true);
+  expect(view.root.findByProps({ 'aria-label': t('configuration.entities.models') }).findAllByType('strong').map(node => node.children[0]))
+    .toEqual(['upstream-one', 'upstream-two']);
+  const name = article.findAllByType('input').find(input => input.props.value === '我的模型服务')!;
+  name.props.onChange({ target: { value: '' } });
+  expect(onEdit.mock.calls).toEqual([['fresh', ['name'], undefined]]);
+  view.unmount();
+});
+
 test('稳定键列表保留同 Provider 下的继承模型，局部覆盖不会整体替换目录', () => {
   const html = renderToStaticMarkup(<ConfigurationEntities kind="providers" selectedId="team" selectedModelId="alternate"
     draft={{ llm: { providers: { team: { models: { main: { name: '本层名称' } } } } } }} document={providerDocument()}
@@ -75,7 +95,7 @@ test('稳定键列表保留同 Provider 下的继承模型，局部覆盖不会�
   expect(html).toContain('data-model-id="alternate"');
   expect(html).toContain('placeholder="upstream-alternate"');
   expect(html).toContain('继承值：upstream-alternate');
-  expect(html).toContain('<strong>main</strong>');
+  expect(html).toContain('<strong>本层名称</strong>');
   expect(html).toContain('<strong>other</strong>');
   expect(html).not.toContain('confirmProviderOverride');
 });
@@ -112,7 +132,7 @@ test('协议切换替换本层 reasoning 整块，恢复继承保留独立 strea
   view.unmount();
 });
 
-test('凭据恢复继承只移除本层精确字段，显式无认证也可以恢复', () => {
+test('服务清除密钥保留有效的无认证配置，模型重置只移除本层精确字段', () => {
   const onEdit = mock();
   const document = providerDocument();
   const draft = { llm: { providers: { team: {
@@ -128,7 +148,7 @@ test('凭据恢复继承只移除本层精确字段，显式无认证也可以�
   expect(credentials[1].findByType('code').children).toEqual([t('configuration.entities.noAuthentication')]);
   for (const section of credentials) section.findByType('button').props.onClick();
   expect(onEdit.mock.calls).toEqual([
-    ['team', ['defaults', 'api_key'], undefined],
+    ['team', ['defaults', 'api_key'], ''],
     ['team', ['models', 'main', 'overrides', 'api_key'], undefined],
   ]);
   view.update(render(false));
@@ -194,7 +214,7 @@ test('参数区分null与恢复继承，JSON显式等值覆盖和reasoning整块
   const model = view.root.findByProps({ 'data-model-id': 'main' });
   const parameter = model.findByProps({ 'data-parameter': 'temperature' });
   expect(parameter.findAllByType('p').flatMap(node => node.children)).toContain(t('configuration.options.omitted'));
-  parameter.findAllByType('button').find(button => button.children.includes(t('configuration.entities.restoreField')))!.props.onClick();
+  parameter.findAllByType('button').find(button => button.children.includes(t('configuration.options.clear')))!.props.onClick();
   parameter.findAllByType('button').find(button => button.children.includes(t('configuration.options.omit')))!.props.onClick();
   const value = { value: '0', setCustomValidity: mock(), reportValidity: mock() };
   parameter.findByType('form').props.onSubmit({ preventDefault() {}, currentTarget: { elements: { namedItem: () => value } } });

@@ -1,3 +1,6 @@
+import { useRealtimeSocket } from "../../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
+import { HttpRequestError } from "../../api/http";
 import { afterEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
@@ -6,7 +9,6 @@ import { useSessionMessageStream } from "./useSessionMessageStream";
 import * as messageStreamApi from "../../api/stream/sessionMessageStream";
 import * as api from "../../api";
 import {
-  MessageStreamConnectionError,
   MessageStreamCursorGoneError,
 } from "../../api/stream/sessionMessageStream";
 import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS } from "../sessionEventStream/sessionEventStreamPolicy";
@@ -114,7 +116,7 @@ function sseBlock(event: MessageStreamEvent): string {
 function sseResponse(events: MessageStreamEvent[]): Response {
   return new Response(events.map(sseBlock).join(""), {
     status: 200,
-    headers: { "content-type": "text/event-stream" },
+    headers: { "content-type": "text/event-stream", "X-Message-Stream-ID": events[0]!.turn_stream_id },
   });
 }
 
@@ -128,7 +130,7 @@ function sseStreamResponse(chunks: string[]): Response {
   });
   return new Response(body, {
     status: 200,
-    headers: { "content-type": "text/event-stream" },
+    headers: { "content-type": "text/event-stream", "X-Message-Stream-ID": JSON.parse(chunks[0]!.split("data: ")[1]!).turn_stream_id },
   });
 }
 
@@ -388,7 +390,7 @@ describe("useSessionMessageStream 有界重连", () => {
   test("连续建连失败到达上限后停止重连并写出可见终态", async () => {
     installZeroDelayWindow();
     const streamSpy = spyOn(messageStreamApi, "streamSessionMessageEvents")
-      .mockRejectedValue(new MessageStreamConnectionError(404, "Not Found"));
+      .mockRejectedValue(new HttpRequestError(404, "Not Found", "not found", "/stream", null));
 
     const { mirror, Harness } = streamHarness({
       port: 49_731,
@@ -401,7 +403,7 @@ describe("useSessionMessageStream 有界重连", () => {
 
     expect(streamSpy).toHaveBeenCalledTimes(SESSION_STREAM_MAX_RECONNECT_ATTEMPTS + 1);
     expect(streamOf(mirror)?.connectionStatus).toBe("retry_exhausted");
-    expect(streamOf(mirror)?.protocolError).toContain("无法连接 Turn 消息流");
+    expect(streamOf(mirror)?.protocolError).toContain("请求失败 404");
     streamSpy.mockRestore();
   });
 
@@ -938,7 +940,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
           "id: 1\n"
           + "event: block.delta\n"
           + 'data: {"session_id":"ses_protocol","turn_id":"turn_protocol","event_seq":1,"type":"block.delta","payload":{}}\n\n',
-          { status: 200, headers: { "content-type": "text/event-stream" } },
+          { status: 200, headers: { "content-type": "text/event-stream", "X-Message-Stream-ID": "strm_test" } },
         );
       },
       { token: "ms-protocol-token" },
@@ -992,7 +994,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
     // 「协议/恢复失败」与「单纯断线重连」，不能只标 disconnected 后静默重试。
     expect(snapshotRequests).toBeGreaterThan(0);
     expect(streamOf(mirror)?.connectionStatus).toBe("disconnected");
-    expect(streamOf(mirror)?.protocolError).toBe("请求失败 503 Service Unavailable: 快照服务不可用");
+    expect(streamOf(mirror)?.protocolError).toBe("请求失败 503 Service Unavailable: 快照服务不可用；请求=/api/v1/sessions/ses_gap/turns/turn_gap/message-stream/snapshot?thread_id=thr_00000000400070008000000000000002");
   });
 
   test("interrupted 终态归类为已取消而不是任务失败", async () => {
@@ -1052,7 +1054,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
         // 建立连接后一个字节都不再发送：进程被 SIGSTOP / TCP 半开 / 网络黑洞。
         return new Response(
           new ReadableStream<Uint8Array>({ start() {} }),
-          { status: 200, headers: { "content-type": "text/event-stream" } },
+          { status: 200, headers: { "content-type": "text/event-stream", "X-Message-Stream-ID": "strm_test" } },
         );
       }
       return undefined;
@@ -1150,7 +1152,7 @@ describe("useSessionMessageStream 连接与终态语义", () => {
           }, 150);
           // 之后保持连接不关闭。
         },
-      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }), { status: 200, headers: { "content-type": "text/event-stream", "X-Message-Stream-ID": "strm_gap_rescue" } });
     }, { token: "ms-gap-rescue-token" });
 
     let snapshotRequests = 0;

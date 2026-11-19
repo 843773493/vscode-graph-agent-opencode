@@ -12,6 +12,7 @@ import type { TurnHistoryPage } from "../../types/backend";
 import type { LoadAroundTurn } from "../../api/session/sessionTurnHistory";
 import type { TurnMessageLocationDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 import { useAroundTurnLoader, useInitialTurnLoader, useOlderTurnLoader } from "./page";
+import { useContextNoticeLoader } from "./contextNotices";
 import { turnDetail } from "./testFixtures";
 import { restoreGlobalDescriptor } from "../../tests/testGlobals";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
@@ -784,4 +785,46 @@ describe("Turn 历史分页 epoch 协调", () => {
     expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.beforeCursor).toBeNull();
     expect(result.turnTimelinesBySession.get(SCOPE_KEY)?.hasBefore).toBe(false);
   });
+});
+
+test("上下文续读使用原 history 入口且不自动排空、不推进 Turn 游标", async () => {
+  installWindow(9178);
+  const requests: Record<string, unknown>[] = [];
+  const initial = { ...turnDetail(2), ...HISTORY_SOURCE_BINDING,
+    response_parts: [{ kind: "context_notice" as const, part_id: "context-page-1", projection: "summary" as const,
+      source: { message_sequence: 0 }, context_anchor: "before_user_message" as const,
+      context_content_ref: { kind: "item", item_id: "notice-page-1" }, context_cursor: "context-page-next" }] };
+  let current = state({ ...createSessionTurnTimeline(SCOPE_KEY, 1), threadId: THREAD_ID, phase: "ready",
+    projectionEpoch: 2, historyViewRevision: 1, turnsById: { [initial.turn_id]: initial },
+    orderedTurnIds: [initial.turn_id], beforeCursor: "turn-page-before", hasBefore: true });
+  globalThis.fetch = Object.assign(async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (String(_input).includes("/api/gateway/auth/local-credential")) return Response.json({ data: { token: "token-context" } });
+    expect(String(_input)).toContain(`/sessions/${SESSION_ID}/threads/${THREAD_ID}/history`);
+    requests.push(JSON.parse(String(init?.body)));
+    return aroundResponse(aroundPage(initial.turn_id, { items: [], summaries: [], context_notices: [
+      { owner_id: initial.turn_id, owner_kind: "turn", parts: [{ ...initial.response_parts[0],
+        part_id: "context-page-2", context_cursor: "context-page-last" }] },
+    ] }));
+  }, { preconnect: originalFetch.preconnect });
+  const generationRef = { current: 1 }, controller = new AbortController();
+  const refresh = () => { throw new Error("有效续页不应重新初始化历史"); };
+  let load!: (cursor: string) => Promise<void>;
+  function Harness() {
+    load = useContextNoticeLoader({ apiPort: 9178, sessionId: SESSION_ID, workspaceId: WORKSPACE_KEY,
+      sessionCacheKey: SCOPE_KEY, generationRef, requestSignal: controller.signal,
+      getCurrentTimeline: () => current.turnTimelinesBySession.get(SCOPE_KEY)!, refreshTurnHistory: refresh,
+      setState: update => { current = typeof update === "function" ? update(current) : update; } });
+    return null;
+  }
+  act(() => { aroundRenderer = create(<Harness />); });
+  expect(requests).toHaveLength(0);
+  await act(async () => { await load("context-page-next"); });
+  expect(requests).toEqual([{ context_cursor: "context-page-next" }]);
+  const timeline = current.turnTimelinesBySession.get(SCOPE_KEY)!;
+  expect(timeline.beforeCursor).toBe("turn-page-before");
+  expect(timeline.hasBefore).toBe(true);
+  expect(timeline.turnsById[initial.turn_id].response_parts?.map(part => part.part_id)).toEqual(["context-page-1", "context-page-2"]);
+  expect(timeline.turnsById[initial.turn_id].response_parts?.[0].context_cursor).toBeNull();
+  expect(timeline.turnsById[initial.turn_id].response_parts?.[1].context_cursor).toBe("context-page-last");
+  expect(requests).toHaveLength(1);
 });

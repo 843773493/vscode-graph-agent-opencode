@@ -183,7 +183,7 @@ try {
   await page.getByRole('combobox', { name: '配置范围', exact: true }).selectOption({ label: '工作区' });
   await expect(quick).not.toBeVisible();
   await expect(page.locator('.configuration-entities[data-definition-kind="providers"]')).toBeVisible();
-  await expect(page.locator('.configuration-entities').getByRole('button', { name: '新增 Provider', exact: true })).toBeVisible();
+  await expect(page.locator('.configuration-entities').getByRole('button', { name: '添加模型服务', exact: true })).toBeVisible();
   await command('boxteam.appearance.open');
   await expect(page.locator('[data-key="boxteam.appearance.background"]')).toBeVisible();
   result.appearanceManagement = { ...result.appearanceManagement, command: 'boxteam.appearance.open' };
@@ -259,7 +259,7 @@ try {
   await expect(quick).not.toBeVisible();
   const chineseProviders = page.locator('.configuration-entities[data-definition-kind="providers"]');
   await expect(chineseProviders).toBeVisible();
-  await expect(chineseProviders.getByRole('button', { name: '新增 Provider', exact: true })).toBeVisible();
+  await expect(chineseProviders.getByRole('button', { name: '添加模型服务', exact: true })).toBeVisible();
   await command('workbench.action.closeActiveEditor');
   await openWelcome();
   await welcomeEntries.locator('[x-dispatch="selectStartEntry:boxteam.manageAgents"]').click();
@@ -348,7 +348,7 @@ try {
   await expect(quick).not.toBeVisible();
   const providerEditor = page.locator('.configuration-entities[data-definition-kind="providers"]');
   await expect(providerEditor).toBeVisible();
-  await expect(providerEditor.getByRole('button', { name: '新增 Provider', exact: true })).toBeVisible();
+  await expect(providerEditor.getByRole('button', { name: '添加模型服务', exact: true })).toBeVisible();
   const providerReads = result.configurationReads.slice(providerReadStart);
   assert(providerReads.length > 0, 'Provider 页面必须通过正式配置 owner 读取来源');
   assert(providerReads.every(read => read.gatewayId === fixture.gatewayId && read.workspaceId === fixture.workspaceId), JSON.stringify(providerReads));

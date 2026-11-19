@@ -3009,6 +3009,13 @@ export interface TurnHistoryLoadRequest {
   tool_call_ids: string[];
   anchor_message?: TurnMessageReferenceDTO | undefined;
   anchor_tool_result?: string | undefined;
+  context_cursor?: string | undefined;
+}
+
+export interface ContextNoticeBatchDTO {
+  owner_id: string;
+  owner_kind: string;
+  parts: TurnResponsePartDTO[];
 }
 
 export interface TurnHistoryPageDTO {
@@ -3027,6 +3034,7 @@ export interface TurnHistoryPageDTO {
   source_view_revision?: number | undefined;
   located_message?: TurnMessageLocationDTO | undefined;
   located_tool_result?: TurnToolResultDTO | undefined;
+  context_notices: ContextNoticeBatchDTO[];
 }
 
 export interface InternalExecutionHistoryDTO {
@@ -3116,6 +3124,14 @@ export interface TurnResponsePartDTO {
   context_source_id?: string | undefined;
   context_model_call_id?: string | undefined;
   context_before_item_id?: string | undefined;
+  context_content_ref?: ContextContentReferenceDTO | undefined;
+  context_source_revision?: string | undefined;
+  context_content_length?: number | undefined;
+  context_availability?: string | undefined;
+  context_anchor?: string | undefined;
+  context_anchor_ordinal?: number | undefined;
+  context_plan_ordinal?: number | undefined;
+  context_cursor?: string | undefined;
 }
 
 export interface TurnResponseSourceDTO {
@@ -3395,42 +3411,6 @@ export interface WorkspaceFileUpdateRequest {
 export interface WorkspaceFileWatchRequest {
   paths: string[];
   after_event_id?: number | undefined;
-}
-
-/** 每个逻辑观察者保留独立的 source、恢复游标和生命周期。 */
-export interface WorkspaceObservationSubscription {
-  subscription_id: string;
-  /** 持久任务使用 persistent_tasks；session_id 省略时观察整个工作区。 */
-  kind: string;
-  session_id?: string | undefined;
-  activity_after?: number | undefined;
-  trace_after?: string | undefined;
-  paths: string[];
-  files_after?:
-    | number
-    | undefined;
-  /** 仅 Trace 观察者使用；省略时保留 Session 聚合视图。 */
-  thread_id?: string | undefined;
-}
-
-export interface WorkspaceObservationRequest {
-  subscriptions: WorkspaceObservationSubscription[];
-}
-
-/** frame 携带领域 owner 的完整原 SSE 帧；物理聚合不重编码领域事件。 */
-export interface WorkspaceObservationFrameDTO {
-  subscription_id: string;
-  state: string;
-  frame?: string | undefined;
-  status?: number | undefined;
-  detail_json?:
-    | string
-    | undefined;
-  /**
-   * connected 时逻辑 reader 的续读水位；files 是事件序号的十进制字符串，
-   * Trace/activity 当前不设置。它不是历史分页 cursor 或路由 revision。
-   */
-  cursor?: string | undefined;
 }
 
 export interface WorkspaceIndexRebuildDTO {
@@ -3934,10 +3914,27 @@ export interface LLMRequestLogSummaryDTO {
 }
 
 /** 卡片操作只在用户接受后读取；稳定 Item 引用不冻结正文版本。 */
+export interface ContextContentReferenceDTO {
+  /** item 或 sealed_contribution；引用分支由运行时业务模型校验。 */
+  kind: string;
+  item_id?:
+    | string
+    | undefined;
+  /** 历史 owner 保留原身份，物理存储使用 inspection 路由的目标 Thread。 */
+  session_id?: string | undefined;
+  thread_id?: string | undefined;
+  assembly_id?: string | undefined;
+  contribution_id?: string | undefined;
+}
+
 export interface ThreadItemInspectionRequest {
   item_id?: string | undefined;
-  message_id?: string | undefined;
+  message_id?:
+    | string
+    | undefined;
+  /** content_metadata 仅返回沿原正文投影取得的格式／资源引用，content 才交付正文。 */
   operation: string;
+  content_ref?: ContextContentReferenceDTO | undefined;
 }
 
 export interface ThreadItemLocationDTO {
@@ -3966,6 +3963,12 @@ export interface ThreadItemInspectionDTO {
   contents: ThreadItemContentDTO[];
   request_log?: LLMRequestLogMatchDTO | undefined;
   trace?: TraceMatchDTO | undefined;
+  content_ref?: ContextContentReferenceDTO | undefined;
+}
+
+/** 工作区终端资源失效通知；null 表示重新取得完整列表。 */
+export interface WorkspaceResourceChangesDTO {
+  resource_ids: Array<any> | undefined;
 }
 
 function createBaseAPIResponse(): APIResponse {
@@ -22963,6 +22966,7 @@ function createBaseTurnHistoryLoadRequest(): TurnHistoryLoadRequest {
     tool_call_ids: [],
     anchor_message: undefined,
     anchor_tool_result: undefined,
+    context_cursor: undefined,
   };
 }
 
@@ -22987,6 +22991,7 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
         ? TurnMessageReferenceDTO.fromJSON(object.anchor_message)
         : undefined,
       anchor_tool_result: isSet(object.anchor_tool_result) ? globalThis.String(object.anchor_tool_result) : undefined,
+      context_cursor: isSet(object.context_cursor) ? globalThis.String(object.context_cursor) : undefined,
     };
   },
 
@@ -23028,6 +23033,9 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
     if (message.anchor_tool_result !== undefined) {
       obj.anchor_tool_result = message.anchor_tool_result;
     }
+    if (message.context_cursor !== undefined) {
+      obj.context_cursor = message.context_cursor;
+    }
     return obj;
   },
 
@@ -23050,6 +23058,48 @@ export const TurnHistoryLoadRequest: MessageFns<TurnHistoryLoadRequest> = {
       ? TurnMessageReferenceDTO.fromPartial(object.anchor_message)
       : undefined;
     message.anchor_tool_result = object.anchor_tool_result ?? undefined;
+    message.context_cursor = object.context_cursor ?? undefined;
+    return message;
+  },
+};
+
+function createBaseContextNoticeBatchDTO(): ContextNoticeBatchDTO {
+  return { owner_id: "", owner_kind: "", parts: [] };
+}
+
+export const ContextNoticeBatchDTO: MessageFns<ContextNoticeBatchDTO> = {
+  fromJSON(object: any): ContextNoticeBatchDTO {
+    return {
+      owner_id: isSet(object.owner_id) ? globalThis.String(object.owner_id) : "",
+      owner_kind: isSet(object.owner_kind) ? globalThis.String(object.owner_kind) : "",
+      parts: globalThis.Array.isArray(object?.parts)
+        ? object.parts.map((e: any) => TurnResponsePartDTO.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ContextNoticeBatchDTO): unknown {
+    const obj: any = {};
+    if (message.owner_id !== "") {
+      obj.owner_id = message.owner_id;
+    }
+    if (message.owner_kind !== "") {
+      obj.owner_kind = message.owner_kind;
+    }
+    if (message.parts?.length) {
+      obj.parts = message.parts.map((e) => TurnResponsePartDTO.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ContextNoticeBatchDTO>, I>>(base?: I): ContextNoticeBatchDTO {
+    return ContextNoticeBatchDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ContextNoticeBatchDTO>, I>>(object: I): ContextNoticeBatchDTO {
+    const message = createBaseContextNoticeBatchDTO();
+    message.owner_id = object.owner_id ?? "";
+    message.owner_kind = object.owner_kind ?? "";
+    message.parts = object.parts?.map((e) => TurnResponsePartDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -23071,6 +23121,7 @@ function createBaseTurnHistoryPageDTO(): TurnHistoryPageDTO {
     source_view_revision: undefined,
     located_message: undefined,
     located_tool_result: undefined,
+    context_notices: [],
   };
 }
 
@@ -23102,6 +23153,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
       located_tool_result: isSet(object.located_tool_result)
         ? TurnToolResultDTO.fromJSON(object.located_tool_result)
         : undefined,
+      context_notices: globalThis.Array.isArray(object?.context_notices)
+        ? object.context_notices.map((e: any) => ContextNoticeBatchDTO.fromJSON(e))
+        : [],
     };
   },
 
@@ -23152,6 +23206,9 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     if (message.located_tool_result !== undefined) {
       obj.located_tool_result = TurnToolResultDTO.toJSON(message.located_tool_result);
     }
+    if (message.context_notices?.length) {
+      obj.context_notices = message.context_notices.map((e) => ContextNoticeBatchDTO.toJSON(e));
+    }
     return obj;
   },
 
@@ -23180,6 +23237,7 @@ export const TurnHistoryPageDTO: MessageFns<TurnHistoryPageDTO> = {
     message.located_tool_result = (object.located_tool_result !== undefined && object.located_tool_result !== null)
       ? TurnToolResultDTO.fromPartial(object.located_tool_result)
       : undefined;
+    message.context_notices = object.context_notices?.map((e) => ContextNoticeBatchDTO.fromPartial(e)) || [];
     return message;
   },
 };
@@ -23546,6 +23604,14 @@ function createBaseTurnResponsePartDTO(): TurnResponsePartDTO {
     context_source_id: undefined,
     context_model_call_id: undefined,
     context_before_item_id: undefined,
+    context_content_ref: undefined,
+    context_source_revision: undefined,
+    context_content_length: undefined,
+    context_availability: undefined,
+    context_anchor: undefined,
+    context_anchor_ordinal: undefined,
+    context_plan_ordinal: undefined,
+    context_cursor: undefined,
   };
 }
 
@@ -23576,6 +23642,26 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
       context_before_item_id: isSet(object.context_before_item_id)
         ? globalThis.String(object.context_before_item_id)
         : undefined,
+      context_content_ref: isSet(object.context_content_ref)
+        ? ContextContentReferenceDTO.fromJSON(object.context_content_ref)
+        : undefined,
+      context_source_revision: isSet(object.context_source_revision)
+        ? globalThis.String(object.context_source_revision)
+        : undefined,
+      context_content_length: isSet(object.context_content_length)
+        ? globalThis.Number(object.context_content_length)
+        : undefined,
+      context_availability: isSet(object.context_availability)
+        ? globalThis.String(object.context_availability)
+        : undefined,
+      context_anchor: isSet(object.context_anchor) ? globalThis.String(object.context_anchor) : undefined,
+      context_anchor_ordinal: isSet(object.context_anchor_ordinal)
+        ? globalThis.Number(object.context_anchor_ordinal)
+        : undefined,
+      context_plan_ordinal: isSet(object.context_plan_ordinal)
+        ? globalThis.Number(object.context_plan_ordinal)
+        : undefined,
+      context_cursor: isSet(object.context_cursor) ? globalThis.String(object.context_cursor) : undefined,
     };
   },
 
@@ -23641,6 +23727,30 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
     if (message.context_before_item_id !== undefined) {
       obj.context_before_item_id = message.context_before_item_id;
     }
+    if (message.context_content_ref !== undefined) {
+      obj.context_content_ref = ContextContentReferenceDTO.toJSON(message.context_content_ref);
+    }
+    if (message.context_source_revision !== undefined) {
+      obj.context_source_revision = message.context_source_revision;
+    }
+    if (message.context_content_length !== undefined) {
+      obj.context_content_length = Math.round(message.context_content_length);
+    }
+    if (message.context_availability !== undefined) {
+      obj.context_availability = message.context_availability;
+    }
+    if (message.context_anchor !== undefined) {
+      obj.context_anchor = message.context_anchor;
+    }
+    if (message.context_anchor_ordinal !== undefined) {
+      obj.context_anchor_ordinal = Math.round(message.context_anchor_ordinal);
+    }
+    if (message.context_plan_ordinal !== undefined) {
+      obj.context_plan_ordinal = Math.round(message.context_plan_ordinal);
+    }
+    if (message.context_cursor !== undefined) {
+      obj.context_cursor = message.context_cursor;
+    }
     return obj;
   },
 
@@ -23671,6 +23781,16 @@ export const TurnResponsePartDTO: MessageFns<TurnResponsePartDTO> = {
     message.context_source_id = object.context_source_id ?? undefined;
     message.context_model_call_id = object.context_model_call_id ?? undefined;
     message.context_before_item_id = object.context_before_item_id ?? undefined;
+    message.context_content_ref = (object.context_content_ref !== undefined && object.context_content_ref !== null)
+      ? ContextContentReferenceDTO.fromPartial(object.context_content_ref)
+      : undefined;
+    message.context_source_revision = object.context_source_revision ?? undefined;
+    message.context_content_length = object.context_content_length ?? undefined;
+    message.context_availability = object.context_availability ?? undefined;
+    message.context_anchor = object.context_anchor ?? undefined;
+    message.context_anchor_ordinal = object.context_anchor_ordinal ?? undefined;
+    message.context_plan_ordinal = object.context_plan_ordinal ?? undefined;
+    message.context_cursor = object.context_cursor ?? undefined;
     return message;
   },
 };
@@ -25418,177 +25538,6 @@ export const WorkspaceFileWatchRequest: MessageFns<WorkspaceFileWatchRequest> = 
     const message = createBaseWorkspaceFileWatchRequest();
     message.paths = object.paths?.map((e) => e) || [];
     message.after_event_id = object.after_event_id ?? undefined;
-    return message;
-  },
-};
-
-function createBaseWorkspaceObservationSubscription(): WorkspaceObservationSubscription {
-  return {
-    subscription_id: "",
-    kind: "",
-    session_id: undefined,
-    activity_after: undefined,
-    trace_after: undefined,
-    paths: [],
-    files_after: undefined,
-    thread_id: undefined,
-  };
-}
-
-export const WorkspaceObservationSubscription: MessageFns<WorkspaceObservationSubscription> = {
-  fromJSON(object: any): WorkspaceObservationSubscription {
-    return {
-      subscription_id: isSet(object.subscription_id) ? globalThis.String(object.subscription_id) : "",
-      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
-      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
-      activity_after: isSet(object.activity_after) ? globalThis.Number(object.activity_after) : undefined,
-      trace_after: isSet(object.trace_after) ? globalThis.String(object.trace_after) : undefined,
-      paths: globalThis.Array.isArray(object?.paths)
-        ? object.paths.map((e: any) => globalThis.String(e))
-        : [],
-      files_after: isSet(object.files_after) ? globalThis.Number(object.files_after) : undefined,
-      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
-    };
-  },
-
-  toJSON(message: WorkspaceObservationSubscription): unknown {
-    const obj: any = {};
-    if (message.subscription_id !== "") {
-      obj.subscription_id = message.subscription_id;
-    }
-    if (message.kind !== "") {
-      obj.kind = message.kind;
-    }
-    if (message.session_id !== undefined) {
-      obj.session_id = message.session_id;
-    }
-    if (message.activity_after !== undefined) {
-      obj.activity_after = Math.round(message.activity_after);
-    }
-    if (message.trace_after !== undefined) {
-      obj.trace_after = message.trace_after;
-    }
-    if (message.paths?.length) {
-      obj.paths = message.paths;
-    }
-    if (message.files_after !== undefined) {
-      obj.files_after = Math.round(message.files_after);
-    }
-    if (message.thread_id !== undefined) {
-      obj.thread_id = message.thread_id;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<WorkspaceObservationSubscription>, I>>(
-    base?: I,
-  ): WorkspaceObservationSubscription {
-    return WorkspaceObservationSubscription.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<WorkspaceObservationSubscription>, I>>(
-    object: I,
-  ): WorkspaceObservationSubscription {
-    const message = createBaseWorkspaceObservationSubscription();
-    message.subscription_id = object.subscription_id ?? "";
-    message.kind = object.kind ?? "";
-    message.session_id = object.session_id ?? undefined;
-    message.activity_after = object.activity_after ?? undefined;
-    message.trace_after = object.trace_after ?? undefined;
-    message.paths = object.paths?.map((e) => e) || [];
-    message.files_after = object.files_after ?? undefined;
-    message.thread_id = object.thread_id ?? undefined;
-    return message;
-  },
-};
-
-function createBaseWorkspaceObservationRequest(): WorkspaceObservationRequest {
-  return { subscriptions: [] };
-}
-
-export const WorkspaceObservationRequest: MessageFns<WorkspaceObservationRequest> = {
-  fromJSON(object: any): WorkspaceObservationRequest {
-    return {
-      subscriptions: globalThis.Array.isArray(object?.subscriptions)
-        ? object.subscriptions.map((e: any) => WorkspaceObservationSubscription.fromJSON(e))
-        : [],
-    };
-  },
-
-  toJSON(message: WorkspaceObservationRequest): unknown {
-    const obj: any = {};
-    if (message.subscriptions?.length) {
-      obj.subscriptions = message.subscriptions.map((e) => WorkspaceObservationSubscription.toJSON(e));
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<WorkspaceObservationRequest>, I>>(base?: I): WorkspaceObservationRequest {
-    return WorkspaceObservationRequest.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<WorkspaceObservationRequest>, I>>(object: I): WorkspaceObservationRequest {
-    const message = createBaseWorkspaceObservationRequest();
-    message.subscriptions = object.subscriptions?.map((e) => WorkspaceObservationSubscription.fromPartial(e)) || [];
-    return message;
-  },
-};
-
-function createBaseWorkspaceObservationFrameDTO(): WorkspaceObservationFrameDTO {
-  return {
-    subscription_id: "",
-    state: "",
-    frame: undefined,
-    status: undefined,
-    detail_json: undefined,
-    cursor: undefined,
-  };
-}
-
-export const WorkspaceObservationFrameDTO: MessageFns<WorkspaceObservationFrameDTO> = {
-  fromJSON(object: any): WorkspaceObservationFrameDTO {
-    return {
-      subscription_id: isSet(object.subscription_id) ? globalThis.String(object.subscription_id) : "",
-      state: isSet(object.state) ? globalThis.String(object.state) : "",
-      frame: isSet(object.frame) ? globalThis.String(object.frame) : undefined,
-      status: isSet(object.status) ? globalThis.Number(object.status) : undefined,
-      detail_json: isSet(object.detail_json) ? globalThis.String(object.detail_json) : undefined,
-      cursor: isSet(object.cursor) ? globalThis.String(object.cursor) : undefined,
-    };
-  },
-
-  toJSON(message: WorkspaceObservationFrameDTO): unknown {
-    const obj: any = {};
-    if (message.subscription_id !== "") {
-      obj.subscription_id = message.subscription_id;
-    }
-    if (message.state !== "") {
-      obj.state = message.state;
-    }
-    if (message.frame !== undefined) {
-      obj.frame = message.frame;
-    }
-    if (message.status !== undefined) {
-      obj.status = Math.round(message.status);
-    }
-    if (message.detail_json !== undefined) {
-      obj.detail_json = message.detail_json;
-    }
-    if (message.cursor !== undefined) {
-      obj.cursor = message.cursor;
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<WorkspaceObservationFrameDTO>, I>>(base?: I): WorkspaceObservationFrameDTO {
-    return WorkspaceObservationFrameDTO.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<WorkspaceObservationFrameDTO>, I>>(object: I): WorkspaceObservationFrameDTO {
-    const message = createBaseWorkspaceObservationFrameDTO();
-    message.subscription_id = object.subscription_id ?? "";
-    message.state = object.state ?? "";
-    message.frame = object.frame ?? undefined;
-    message.status = object.status ?? undefined;
-    message.detail_json = object.detail_json ?? undefined;
-    message.cursor = object.cursor ?? undefined;
     return message;
   },
 };
@@ -28996,8 +28945,69 @@ export const LLMRequestLogSummaryDTO: MessageFns<LLMRequestLogSummaryDTO> = {
   },
 };
 
+function createBaseContextContentReferenceDTO(): ContextContentReferenceDTO {
+  return {
+    kind: "",
+    item_id: undefined,
+    session_id: undefined,
+    thread_id: undefined,
+    assembly_id: undefined,
+    contribution_id: undefined,
+  };
+}
+
+export const ContextContentReferenceDTO: MessageFns<ContextContentReferenceDTO> = {
+  fromJSON(object: any): ContextContentReferenceDTO {
+    return {
+      kind: isSet(object.kind) ? globalThis.String(object.kind) : "",
+      item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : undefined,
+      session_id: isSet(object.session_id) ? globalThis.String(object.session_id) : undefined,
+      thread_id: isSet(object.thread_id) ? globalThis.String(object.thread_id) : undefined,
+      assembly_id: isSet(object.assembly_id) ? globalThis.String(object.assembly_id) : undefined,
+      contribution_id: isSet(object.contribution_id) ? globalThis.String(object.contribution_id) : undefined,
+    };
+  },
+
+  toJSON(message: ContextContentReferenceDTO): unknown {
+    const obj: any = {};
+    if (message.kind !== "") {
+      obj.kind = message.kind;
+    }
+    if (message.item_id !== undefined) {
+      obj.item_id = message.item_id;
+    }
+    if (message.session_id !== undefined) {
+      obj.session_id = message.session_id;
+    }
+    if (message.thread_id !== undefined) {
+      obj.thread_id = message.thread_id;
+    }
+    if (message.assembly_id !== undefined) {
+      obj.assembly_id = message.assembly_id;
+    }
+    if (message.contribution_id !== undefined) {
+      obj.contribution_id = message.contribution_id;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ContextContentReferenceDTO>, I>>(base?: I): ContextContentReferenceDTO {
+    return ContextContentReferenceDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ContextContentReferenceDTO>, I>>(object: I): ContextContentReferenceDTO {
+    const message = createBaseContextContentReferenceDTO();
+    message.kind = object.kind ?? "";
+    message.item_id = object.item_id ?? undefined;
+    message.session_id = object.session_id ?? undefined;
+    message.thread_id = object.thread_id ?? undefined;
+    message.assembly_id = object.assembly_id ?? undefined;
+    message.contribution_id = object.contribution_id ?? undefined;
+    return message;
+  },
+};
+
 function createBaseThreadItemInspectionRequest(): ThreadItemInspectionRequest {
-  return { item_id: undefined, message_id: undefined, operation: "" };
+  return { item_id: undefined, message_id: undefined, operation: "", content_ref: undefined };
 }
 
 export const ThreadItemInspectionRequest: MessageFns<ThreadItemInspectionRequest> = {
@@ -29006,6 +29016,7 @@ export const ThreadItemInspectionRequest: MessageFns<ThreadItemInspectionRequest
       item_id: isSet(object.item_id) ? globalThis.String(object.item_id) : undefined,
       message_id: isSet(object.message_id) ? globalThis.String(object.message_id) : undefined,
       operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
+      content_ref: isSet(object.content_ref) ? ContextContentReferenceDTO.fromJSON(object.content_ref) : undefined,
     };
   },
 
@@ -29020,6 +29031,9 @@ export const ThreadItemInspectionRequest: MessageFns<ThreadItemInspectionRequest
     if (message.operation !== "") {
       obj.operation = message.operation;
     }
+    if (message.content_ref !== undefined) {
+      obj.content_ref = ContextContentReferenceDTO.toJSON(message.content_ref);
+    }
     return obj;
   },
 
@@ -29031,6 +29045,9 @@ export const ThreadItemInspectionRequest: MessageFns<ThreadItemInspectionRequest
     message.item_id = object.item_id ?? undefined;
     message.message_id = object.message_id ?? undefined;
     message.operation = object.operation ?? "";
+    message.content_ref = (object.content_ref !== undefined && object.content_ref !== null)
+      ? ContextContentReferenceDTO.fromPartial(object.content_ref)
+      : undefined;
     return message;
   },
 };
@@ -29169,7 +29186,7 @@ export const ThreadItemContentDTO: MessageFns<ThreadItemContentDTO> = {
 };
 
 function createBaseThreadItemInspectionDTO(): ThreadItemInspectionDTO {
-  return { location: undefined, contents: [], request_log: undefined, trace: undefined };
+  return { location: undefined, contents: [], request_log: undefined, trace: undefined, content_ref: undefined };
 }
 
 export const ThreadItemInspectionDTO: MessageFns<ThreadItemInspectionDTO> = {
@@ -29181,6 +29198,7 @@ export const ThreadItemInspectionDTO: MessageFns<ThreadItemInspectionDTO> = {
         : [],
       request_log: isSet(object.request_log) ? LLMRequestLogMatchDTO.fromJSON(object.request_log) : undefined,
       trace: isSet(object.trace) ? TraceMatchDTO.fromJSON(object.trace) : undefined,
+      content_ref: isSet(object.content_ref) ? ContextContentReferenceDTO.fromJSON(object.content_ref) : undefined,
     };
   },
 
@@ -29197,6 +29215,9 @@ export const ThreadItemInspectionDTO: MessageFns<ThreadItemInspectionDTO> = {
     }
     if (message.trace !== undefined) {
       obj.trace = TraceMatchDTO.toJSON(message.trace);
+    }
+    if (message.content_ref !== undefined) {
+      obj.content_ref = ContextContentReferenceDTO.toJSON(message.content_ref);
     }
     return obj;
   },
@@ -29216,6 +29237,36 @@ export const ThreadItemInspectionDTO: MessageFns<ThreadItemInspectionDTO> = {
     message.trace = (object.trace !== undefined && object.trace !== null)
       ? TraceMatchDTO.fromPartial(object.trace)
       : undefined;
+    message.content_ref = (object.content_ref !== undefined && object.content_ref !== null)
+      ? ContextContentReferenceDTO.fromPartial(object.content_ref)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseWorkspaceResourceChangesDTO(): WorkspaceResourceChangesDTO {
+  return { resource_ids: undefined };
+}
+
+export const WorkspaceResourceChangesDTO: MessageFns<WorkspaceResourceChangesDTO> = {
+  fromJSON(object: any): WorkspaceResourceChangesDTO {
+    return { resource_ids: globalThis.Array.isArray(object.resource_ids) ? [...object.resource_ids] : undefined };
+  },
+
+  toJSON(message: WorkspaceResourceChangesDTO): unknown {
+    const obj: any = {};
+    if (message.resource_ids !== undefined) {
+      obj.resource_ids = message.resource_ids;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<WorkspaceResourceChangesDTO>, I>>(base?: I): WorkspaceResourceChangesDTO {
+    return WorkspaceResourceChangesDTO.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WorkspaceResourceChangesDTO>, I>>(object: I): WorkspaceResourceChangesDTO {
+    const message = createBaseWorkspaceResourceChangesDTO();
+    message.resource_ids = object.resource_ids ?? undefined;
     return message;
   },
 };

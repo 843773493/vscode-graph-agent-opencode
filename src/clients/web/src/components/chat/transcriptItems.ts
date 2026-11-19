@@ -95,7 +95,7 @@ export function chatTranscriptItems(
     for (const event of responsePartsToTimelineItems(execution.response_parts)) {
       if (event.kind !== "context_event") continue;
       orderedHistory.push({ item: { kind: "context_event", key: event.id, notices: event.notices },
-        ordinal: logicalItemOrdinal(event.notices[0].source.logical_item_ordinal, "context_notice.logical_item_ordinal") });
+        ordinal: logicalItemOrdinal(event.notices[0].context_anchor_ordinal, "context_notice.anchor_ordinal") });
     }
     for (const displayPart of execution.display_parts) {
       if (!displayPart.item_id || !Number.isSafeInteger(displayPart.item_sequence)

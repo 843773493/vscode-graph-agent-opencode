@@ -10,6 +10,7 @@ from .common import JobStatus
 from .session import SessionDTO
 from .trace import TraceEventDTO
 from .turn_search import (
+    ContextContentReference,
     TurnMessageLocationDTO,
     TurnMessageReferenceDTO,
     TurnToolResultDTO,
@@ -152,6 +153,14 @@ class TurnResponsePartDTO(BaseModel):
     context_source_id: str | None = None
     context_model_call_id: str | None = None
     context_before_item_id: str | None = None
+    context_content_ref: ContextContentReference | None = None
+    context_source_revision: str | None = None
+    context_content_length: int | None = Field(default=None, ge=0)
+    context_availability: str | None = None
+    context_anchor: Literal["before_user_message", "before_model_call"] | None = None
+    context_anchor_ordinal: int | None = Field(default=None, ge=0)
+    context_plan_ordinal: int | None = Field(default=None, ge=0)
+    context_cursor: str | None = None
 
     @model_validator(mode="after")
     def validate_source_identity(self) -> TurnResponsePartDTO:
@@ -159,6 +168,10 @@ class TurnResponsePartDTO(BaseModel):
         if self.projection == "streaming":
             if self.source.item_id is not None or self.source.item_sequence is not None:
                 raise ValueError("live streaming part 不得伪造 canonical item identity")
+            return self
+        if self.kind == "context_notice":
+            if self.context_content_ref is None or self.context_anchor is None:
+                raise ValueError("上下文标记缺少冻结引用或展示锚点")
             return self
         if self.source.item_id is None or self.source.item_sequence is None:
             raise ValueError("历史 response part 缺少 canonical item identity")
@@ -248,7 +261,8 @@ class TurnSummaryDTO(TurnBaseDTO):
     thinking_blocks: list[TurnThinkingBlockDTO] = Field(default_factory=list)
     tool_summary: list[TurnToolSummaryDTO] = Field(default_factory=list, max_length=64)
     tool_summary_truncated: bool = False
-    response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=128)
+    # 普通摘要仍由 mapper 限为 128 项；另有同页最多 128 个无正文来源标记。
+    response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=256)
     activity_stats: TurnActivityStatsDTO = Field(default_factory=TurnActivityStatsDTO)
 
 
@@ -267,7 +281,7 @@ class TurnDetailDTO(TurnBaseDTO):
     tool_summary_truncated: bool = False
     response_parts: list[TurnResponsePartDTO] = Field(
         default_factory=list,
-        max_length=512,
+        max_length=640,
     )
     final_response: str = ""
     items: list[TraceEventDTO] = Field(default_factory=list)
@@ -357,6 +371,7 @@ class TurnHistoryLoadRequest(BaseModel):
 
     direction: TurnCursorDirection = "tail"
     cursor: str | None = None
+    context_cursor: str | None = Field(default=None, min_length=1, max_length=65536)
     anchor_turn_id: str | None = Field(default=None, min_length=1, max_length=256)
     anchor_message: TurnMessageReferenceDTO | None = None
     anchor_tool_result: str | None = Field(default=None, min_length=1, max_length=256)
@@ -374,6 +389,14 @@ class TurnHistoryLoadRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_around_budget(self) -> TurnHistoryLoadRequest:
+        if self.context_cursor is not None:
+            if self.direction != "tail" or any(value is not None for value in (
+                self.cursor, self.anchor_turn_id, self.anchor_message, self.anchor_tool_result,
+                self.turn_ids, self.execution_id, self.tool_call_ids, self.turns,
+                self.before_turns, self.after_turns, self.include,
+            )):
+                raise ValueError("上下文元数据续读不能混用历史页选择器")
+            return self
         if self.anchor_message is not None and self.anchor_tool_result is not None:
             raise ValueError("消息位置与工具结果定位不能混用")
         if (self.anchor_message is not None or self.anchor_tool_result is not None) and (
@@ -489,11 +512,13 @@ class InternalExecutionHistoryDTO(BaseModel):
     display_parts: list[InternalExecutionDisplayPartDTO] = Field(
         max_length=256,
     )
-    response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=512)
+    response_parts: list[TurnResponsePartDTO] = Field(default_factory=list, max_length=640)
 
     @model_validator(mode="after")
     def validate_response_part_identity(self) -> InternalExecutionHistoryDTO:
         for part in self.response_parts:
+            if part.kind == "context_notice":
+                continue
             if part.source.part_ordinal is None:
                 raise ValueError(
                     "internal execution response part 缺少 canonical part_ordinal"
@@ -503,6 +528,14 @@ class InternalExecutionHistoryDTO(BaseModel):
                     "internal execution response part 缺少 membership ordinal"
                 )
         return self
+
+
+class ContextNoticeBatchDTO(BaseModel):
+    """元数据续页只更新已有历史成员，不拆分或重新加载 Turn 正文。"""
+
+    owner_id: str
+    owner_kind: Literal["turn", "execution"]
+    parts: list[TurnResponsePartDTO] = Field(max_length=128)
 
 
 class TurnHistoryPageDTO(BaseModel):
@@ -527,6 +560,7 @@ class TurnHistoryPageDTO(BaseModel):
     projection_epoch: int = Field(ge=1)
     located_message: TurnMessageLocationDTO | None = None
     located_tool_result: TurnToolResultDTO | None = None
+    context_notices: list[ContextNoticeBatchDTO] = Field(default_factory=list, max_length=128)
 
     @model_validator(mode="after")
     def validate_internal_execution_identity(self) -> TurnHistoryPageDTO:

@@ -35,33 +35,11 @@ import type { CatalogRevealRequest } from '../../../web/src/hooks/sessionResourc
 import { workspaceActionCommands, type WorkspaceAction, type WorkspaceActionHandlers } from '../search/workspaceActions.js';
 import { sessionActionCommands, type SessionAction, type SessionActionHandlers } from '../search/sessionActions.js';
 import type { SessionForkSourceSelection } from '../../../web/src/hooks/shell/useSessionForkDialog.js';
-import ChildThreadPanel from '../../../web/src/components/panels/sessionPanels/ChildThreadPanel.js';
-import { useChildThreadLoader } from '../../../web/src/hooks/session/useChildThreadLoader.js';
-import { useChildThreadConversation } from '../../../web/src/hooks/sessionTurnHistory/useChildThreadConversation.js';
-import type { ChildThreadForkPoint } from '../../../web/src/components/panels/sessionPanels/ChildThreadConversation.js';
 
-/** 仅展开的 Session 挂载列表；沿用原 loader 和报告读取，不维护第二份 Thread 状态。 */
-function SessionThreads({ workspaceKey, session, activeThreadId, visible, onOpen, onFork }: {
-  workspaceKey: string; session: Session; activeThreadId: string | null; visible: boolean;
-  onOpen: (threadId: string, title: string, debug?: boolean) => void;
-  onFork: (threadId: string, point: ChildThreadForkPoint) => void;
-}) {
-  const children = useChildThreadLoader({ apiPort: 0, workspaceId: workspaceKey, sessionId: session.session_id, enabled: visible });
-  const conversation = useChildThreadConversation({ apiPort: 0, workspaceId: workspaceKey,
-    sessionId: session.session_id, threads: children.threads, enabled: visible });
-  return <ChildThreadPanel {...children} sessionId={session.session_id} ownerLabel={session.title}
-    mainThreadId={session.thread_id ?? null} activeThreadId={activeThreadId}
-    onRefresh={() => { void children.refresh(); }} conversation={conversation}
-    onOpenMainThread={() => { if (session.thread_id) onOpen(session.thread_id, session.title); }}
-    onOpenThread={thread => onOpen(thread.thread_id, thread.title ?? thread.thread_id)}
-    onSelectThread={threadId => onOpen(threadId, threadId, true)} onForkFromThread={onFork} />;
-}
-
-function NavigationView({ editors, groups, notifications, storage, commands, visible, bindWorkspaceActions, bindSessionActions, bindGatewayActions, catalogReveal }: {
+function NavigationView({ editors, groups, notifications, storage, commands, bindWorkspaceActions, bindSessionActions, bindGatewayActions, catalogReveal }: {
   editors: IEditorService; groups: IEditorGroupsService; notifications: INotificationService;
   storage: IStorageService;
   commands: ICommandService;
-  visible: boolean;
   bindWorkspaceActions: (actions?: WorkspaceActionHandlers) => void;
   bindSessionActions: (actions?: SessionActionHandlers) => void;
   bindGatewayActions: (actions?: GatewayNavigationActions) => void;
@@ -223,20 +201,6 @@ function NavigationView({ editors, groups, notifications, storage, commands, vis
   };
   return <div className="native-session-navigation" onClickCapture={event => { gesture.current = { pinned: event.detail > 1, sideBySide: event.altKey }; }}>
     <AgentSessionsPanel catalogReveal={catalogReveal} apiPort={0} sessions={state.sessions} currentSessionId={state.currentSession?.session_id ?? ''}
-      renderSessionThreads={(workspaceKey, session) => <SessionThreads workspaceKey={workspaceKey} session={session} visible={visible}
-        activeThreadId={activeEditor instanceof ThreadInput && activeEditor.owner.workspaceKey === workspaceKey
-          && activeEditor.owner.sessionId === session.session_id ? activeEditor.owner.threadId : null}
-        onOpen={(threadId, title, debug) => {
-          const group = gesture.current.sideBySide ? SIDE_GROUP : groups.activeGroup.id;
-          openRequests.current.clear();
-          void editors.openEditor(new ThreadInput({ ...workspaceContext.ownerFor(workspaceKey, session.workspace_id),
-            sessionId: session.session_id, threadId, title }), { pinned: debug || gesture.current.pinned,
-            ...(debug ? { viewState: { resourcesVisible: true, resourceTab: 'debug' } } : {}) }, group)
-            .catch(cause => reportError(String(cause)));
-        }} onFork={(threadId, point) => {
-          void commands.executeCommand(sessionActionCommands.fork, { owner: workspaceOwnerFromKey(workspaceKey),
-            sessionId: session.session_id, source: { ...point, threadId } }).catch(cause => reportError(String(cause)));
-        }} />}
       currentSessionWorkspaceId={state.currentSessionWorkspaceId}
       onSelectSession={id => { if (state.activeGatewayWorkspaceId) void openSession(state.activeGatewayWorkspaceId, id).catch(cause => reportError(String(cause))); }}
       onRenameSession={(...args) => runSessionAction('rename', ...args)} onDeleteSession={(...args) => runSessionAction('delete', ...args)} onSetSessionParent={actions.changeSessionParent}
@@ -282,7 +246,6 @@ export interface GatewayNavigationActions {
 }
 
 export class NavigationSurface {
-  private visible: boolean;
   private catalogReveal?: CatalogRevealRequest;
   private readonly surface: ReactSurface;
   private readonly render: (request?: CatalogRevealRequest) => void;
@@ -293,8 +256,7 @@ export class NavigationSurface {
   private actionsReady?: DeferredPromise<WorkspaceActionHandlers>;
   private sessionActions?: SessionActionHandlers;
   private sessionActionsReady?: DeferredPromise<SessionActionHandlers>;
-  constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService, commands: ICommandService, visible: boolean) {
-    this.visible = visible;
+  constructor(container: HTMLElement, editors: IEditorService, groups: IEditorGroupsService, notifications: INotificationService, storage: IStorageService, commands: ICommandService) {
     this.surface = new ReactSurface(container, [...productStyles, style]);
     const bindWorkspaceActions = (actions?: WorkspaceActionHandlers) => {
       this.workspaceActions = actions;
@@ -308,13 +270,12 @@ export class NavigationSurface {
       this.gatewayActions = actions;
       if (actions && this.gatewayReady) { void this.gatewayReady.complete(actions); this.gatewayReady = undefined; }
     };
-    this.render = (catalogReveal = this.catalogReveal) => { this.catalogReveal = catalogReveal; this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups} visible={this.visible}
+    this.render = (catalogReveal = this.catalogReveal) => { this.catalogReveal = catalogReveal; this.surface.render(<WarmConfirmProvider><NavigationView editors={editors} groups={groups}
       notifications={notifications} storage={storage} commands={commands} bindWorkspaceActions={bindWorkspaceActions} bindSessionActions={bindSessionActions}
       bindGatewayActions={bindGatewayActions} catalogReveal={catalogReveal} /></WarmConfirmProvider>); };
     this.render();
   }
   focus(): void { this.surface.focus('.session-resource-main-action, button'); }
-  setVisible(visible: boolean): void { this.visible = visible; this.render(); }
   async runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void, request?: GatewayRuntimeGroupRequest): Promise<void> {
     if (!this.workspaceActions) await (this.actionsReady ??= new DeferredPromise<WorkspaceActionHandlers>()).p;
     assertAccess();

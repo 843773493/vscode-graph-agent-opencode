@@ -131,14 +131,14 @@
 }
 
 .composer-tool-menu-header strong {
-  font-size: 13px;
+  font-size: var(--bt-font-size);
   font-weight: 600;
 }
 
 .composer-tool-menu-header span,
 .composer-tool-group-toggle small {
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .composer-tool-menu button {
@@ -183,7 +183,7 @@
   border-bottom: 1px solid color-mix(in srgb, var(--bt-status-danger) 24%, transparent);
   color: var(--bt-status-danger);
   background: color-mix(in srgb, var(--bt-status-danger) 8%, transparent);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -223,7 +223,7 @@
 
 .composer-tool-group-toggle {
   gap: 7px;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   font-weight: 600;
 }
 
@@ -269,10 +269,6 @@
   border-color: color-mix(in srgb, var(--bt-focus-border) 38%, transparent) !important;
   background: color-mix(in srgb, var(--bt-focus-border) 10%, transparent) !important;
   color: var(--bt-focus-border) !important;
-}
-
-.composer-tool-capability-button[data-state="off"] {
-  opacity: 0.62;
 }
 
 .composer-tool-capability-button .codicon {
@@ -326,7 +322,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--bt-font-family-mono);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   font-weight: 600;
 }
 
@@ -338,14 +334,14 @@
   width: 14px;
   height: 14px;
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .composer-tool-item-copy > span {
   display: -webkit-box;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.35;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -362,7 +358,7 @@
   max-width: 120px;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -399,14 +395,14 @@
   border: 1px solid color-mix(in srgb, var(--bt-text-muted) 18%, transparent);
   border-radius: var(--bt-radius-small);
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .composer-tool-attempt-errors {
   grid-column: 1 / -1;
   margin-left: 22px;
   color: var(--bt-status-danger);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   line-height: 1.35;
 }
 
@@ -442,7 +438,7 @@
 .composer-tool-empty {
   padding: 28px 16px;
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 

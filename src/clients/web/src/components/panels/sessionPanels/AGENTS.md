@@ -1,6 +1,6 @@
 # 目录用途
 
-`components/panels/sessionPanels/` 存放会话与子线程面板族：AgentSessionsPanel（左侧侧边栏会话导航面板，含筛选、搜索、分组与工作区会话目录编排）、ChildThreadPanel（左侧 Session 节点展开后的 Thread 导航）、ChildThreadConversation（选定 child 的历史、报告和直接对话展示）及其渲染测试。业务数据由宿主与对应 hook 通过 props 传入。
+`components/panels/sessionPanels/` 存放会话与子线程面板族：AgentSessionsPanel（左侧侧边栏会话导航面板，含筛选、搜索、分组与工作区会话目录编排）、ChildThreadPanel（会话标签页内独立的 Thread 索引）、ChildThreadConversation（选定 child 的历史、报告和直接对话展示）及其渲染测试。业务数据由宿主与对应 hook 通过 props 传入。
 
 本目录与相邻子包的边界：
 

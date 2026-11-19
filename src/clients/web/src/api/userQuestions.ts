@@ -1,9 +1,10 @@
 import type { APIResponse } from "../types/backend";
 import type { UserQuestionPageDTO, UserQuestionSummaryDTO } from "../types/protocol_generated/boxteam/workspace/v2/public";
 import { validateUserQuestionSummaryDTO } from "../../../../shared/sseRuntimeValidators.js";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent, SseProtocolError } from "../sse/sseClient";
+import { decodeJsonSseData, defineSseEvent, SseProtocolError } from "../sse/sseClient";
 import { validateSseError } from "../sse/sseRuntimeSchemas";
-import { HttpRequestError, requestGatewayResponse, requestJson, unwrapApiData, workspaceHeader } from "./http";
+import { HttpRequestError, requestJson, unwrapApiData, workspaceHeader } from "./http";
+import { consumeRealtimeSubscription } from "./stream/realtime";
 import { SESSION_STREAM_MAX_RECONNECT_ATTEMPTS, sessionStreamReconnectDelay } from "../hooks/sessionEventStream/sessionEventStreamPolicy";
 import { waitForReconnect } from "../hooks/sessionEventStream/waitForReconnect";
 
@@ -27,10 +28,7 @@ export async function watchUserQuestions(owner: UserQuestionOwner, signal: Abort
   let attempt = 0;
   while (!signal.aborted) {
     try {
-      const response = await requestGatewayResponse(owner.port, path(owner) + "/events", {
-        signal, headers: { ...workspaceHeader(owner.workspaceKey), accept: "text/event-stream" }, cache: "no-store",
-      });
-      await consumeSseResponse(response, { signal, readError: cause => new QuestionStreamDisconnected("留言订阅读取失败", { cause }), events: {
+      await consumeRealtimeSubscription(owner.port, () => ({ path: path(owner) + '/events', headers: workspaceHeader(owner.workspaceKey) }), { signal, readError: cause => new QuestionStreamDisconnected("留言订阅读取失败", { cause }), events: {
         changed: defineSseEvent((data, frame) => {
           const value: unknown = decodeJsonSseData(data, frame);
           if (!validateUserQuestionSummaryDTO(value)) throw new SseProtocolError("留言摘要协议无效");

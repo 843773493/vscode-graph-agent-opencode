@@ -29,13 +29,14 @@ import {
 } from "./testFixtures";
 import { useSessionTurnHistory } from "./useSessionTurnHistory";
 import { createMessageStreamState } from "../../state/messageStream/state";
+import { applyMessageStreamEvent } from "../../state/messageStream/eventReducer";
 
 afterEach(() => {
   restoreTurnHistoryTestGlobals();
 });
 
 describe("useSessionTurnHistory pending bootstrap", () => {
-  test("每次模型请求首次输出补读来源 metadata，后续 token 不增加请求", async () => {
+  test("派发后尚无输出即补读来源 metadata，后续 token 不增加请求", async () => {
     const state = appState();
     const turn = { ...bootstrap("ready", 1).latest_turn!, status: "running" as const };
     state.activeJobIdsBySession.set(SCOPE_KEY, turn.job_id);
@@ -59,14 +60,21 @@ describe("useSessionTurnHistory pending bootstrap", () => {
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<Harness value={state} />); });
     const update = async (modelCallId: string, text: string) => {
-      const stream = createMessageStreamState(SESSION_ID, turn.turn_id, "stream-context", SCOPE_KEY, THREAD_ID);
-      stream.blocks = [{ block_id: "block-context", model_call_id: modelCallId, block_index: 0,
+      const stream = applyMessageStreamEvent(
+        createMessageStreamState(SESSION_ID, turn.turn_id, "stream-context", SCOPE_KEY, THREAD_ID), {
+          type: "model.started", event_id: modelCallId, event_seq: 1, session_id: SESSION_ID,
+          thread_id: THREAD_ID, turn_id: turn.turn_id, turn_stream_id: "stream-context",
+          model_call_id: modelCallId, payload: { model_call_id: modelCallId, attempt: 1 },
+        });
+      if (text) stream.blocks = [{ block_id: "block-context", model_call_id: modelCallId, block_index: 0,
         carrier_type: "text", status: "running", text, items: [], redacted: false, projection: "detail" }];
       await act(async () => { renderer.update(<Harness value={{ ...state,
         messageStreamsByTurnStream: new Map([["stream-context", stream]]) }} />); });
     };
     try {
       expect(reads).toHaveLength(0);
+      await update("call-first", "");
+      expect(reads).toHaveLength(1);
       await update("call-first", "第一个 token");
       await update("call-first", "更多 token");
       await update("call-next", "下一次请求");

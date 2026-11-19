@@ -81,13 +81,29 @@ test("空任务不占位；非空任务默认折叠，管理按钮在折叠时�
   act(() => renderer.unmount());
 });
 
-test("任务读取失败保留紧凑入口并记录原始错误，不自动展开详情", () => {
+test("空任务读取失败只记录原始错误，不生成任务入口", () => {
+  const messages: string[] = [];
+  let renderer!: ReactTestRenderer;
+  const report = (message: string) => messages.push(message);
+  const view = (loaded: boolean) => <ComposerDiagnosticsContext.Provider value={report}>
+    <ThreadStatusBar {...props()} tasks={{ ...tasks, items: [], loaded, error: "HTTP 503" }} />
+  </ComposerDiagnosticsContext.Provider>;
+  act(() => { renderer = create(view(false)); });
+  expect(renderer.toJSON()).toBeNull();
+  act(() => renderer.update(view(true)));
+  expect(renderer.toJSON()).toBeNull();
+  expect(messages).toEqual(["持续任务: HTTP 503"]);
+  act(() => renderer.unmount());
+});
+
+test("已有任务同步失败保留任务和折叠状态，并记录原始错误", () => {
   const messages: string[] = [];
   let renderer!: ReactTestRenderer;
   act(() => { renderer = create(<ComposerDiagnosticsContext.Provider value={message => messages.push(message)}>
-    <ThreadStatusBar {...props()} tasks={{ ...tasks, items: [], loaded: false, error: "HTTP 503" }} />
+    <ThreadStatusBar {...props()} tasks={{ ...tasks, error: "HTTP 503" }} />
   </ComposerDiagnosticsContext.Provider>); });
   expect(renderer.root.findByProps({ "data-status-section": "tasks" }).props.className).toContain("needs-attention");
+  expect(renderer.root.findByProps({ "data-status-section": "tasks" }).props["aria-label"]).toBe("持续任务 1");
   expect(visiblePanels(renderer)).toEqual([]);
   expect(messages).toEqual(["持续任务: HTTP 503"]);
   act(() => renderer.unmount());

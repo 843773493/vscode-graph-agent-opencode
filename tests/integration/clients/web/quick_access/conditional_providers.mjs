@@ -27,7 +27,6 @@ try {
   // 库存／地址解析与两类 SSE 订阅使用 POST，但都不接受业务写动作。
   const readonlyPosts = new Set([
     '/api/gateway/service-plugins/inventory', '/api/gateway/resource-addresses/parse',
-    '/api/gateway/service-plugins/commands/events', '/api/v1/workspace/observations/stream',
   ]);
   page.on('request', request => {
     const url = new URL(request.url());

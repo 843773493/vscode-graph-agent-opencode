@@ -1,7 +1,8 @@
 import { stripCommandMarkerLines } from "./shared/commandText.js";
 import { installTerminalUserActions } from "./terminalUserActions.js";
 import { encodeTerminalClientMessage } from "./protocol/messages.js";
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent, parseSseFrameBlock } from "./shared/sse.js";
+import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "./shared/sse.js";
+import { openRealtimeResponse } from "./shared/realtime.js";
 import { validateResourceChanges } from "./shared/sseRuntime.js";
 
 const params = new URLSearchParams(window.location.search);
@@ -414,26 +415,20 @@ async function startStatusObservation() {
       await observeHostResources(controller);
       return;
     }
-    const response = await fetch(`${ownerApiBase}/api/v1/workspace/observations/stream`, {
-      method: "POST", signal: controller.signal,
-      headers: { ...backendRequestHeaders, accept: "text/event-stream", "Content-Type": "application/json" },
-      body: JSON.stringify({ subscriptions: [{ subscription_id: "terminal-state", kind: "terminal_resources" }] }),
-    });
+    const url = new URL('/api/gateway/realtime', ownerApiBase);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const response = await openRealtimeResponse(url.href, gatewayToken, {
+      path: '/api/v1/resources/events', headers: {
+        'X-BoxTeam-Workspace-ID': workspaceId, 'X-BoxTeam-Target-Gateway-ID': targetGatewayId,
+      },
+    }, controller.signal);
     if (!response.ok) throw new Error(`终端状态订阅失败: HTTP ${response.status}`);
     await consumeSseResponse(response, {
       signal: controller.signal, idleTimeoutMs: 45_000,
-      events: { observation: defineSseEvent(decodeJsonSseData, (envelope) => {
-        if (envelope.subscription_id !== "terminal-state") throw new Error("终端状态订阅身份不匹配");
-        if (envelope.state === "error" || envelope.state === "closed") {
-          throw new Error(`终端状态订阅结束: ${envelope.status ?? envelope.state}`);
-        }
-        if (envelope.state !== "frame") return;
-        const frame = parseSseFrameBlock(envelope.frame);
-        if (frame?.event === "resources_changed") {
-          const resourceIds = validateResourceChanges(decodeJsonSseData(frame.data, frame));
-          if (resourceIds === null || resourceIds.includes(terminalId)) {
-            void requestStatusSync().catch(error => setStatus(error.message, true));
-          }
+      events: { resources_changed: defineSseEvent(decodeJsonSseData, value => {
+        const resourceIds = validateResourceChanges(value);
+        if (resourceIds === null || resourceIds.includes(terminalId)) {
+          void requestStatusSync().catch(error => setStatus(error.message, true));
         }
       }) },
     });

@@ -175,7 +175,7 @@ export function useInitialTurnLoader({
           turnTimelinesBySession: writeTurnTimelineCache(
             previous.turnTimelinesBySession,
             sessionCacheKey,
-            applyTurnHistoryPage(timeline, page, "before"),
+            applyTurnHistoryPage(timeline, page, "around"),
           ),
         };
       });

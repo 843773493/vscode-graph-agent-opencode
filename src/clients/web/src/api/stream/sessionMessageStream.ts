@@ -1,8 +1,8 @@
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
+import { consumeRealtimeSubscription } from './realtime';
+import { decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import { SSE_IDLE_TIMEOUT_MS } from "../../sse/sseIdleTimeout";
 import {
   HttpRequestError,
-  requestGatewayResponse,
   requestJson,
   unwrapApiData,
   workspaceHeader,
@@ -29,18 +29,6 @@ export class MessageStreamCursorGoneError extends Error {
   constructor(readonly afterSeq: number) {
     super(`消息流 event_seq 游标已失效: ${afterSeq}`);
     this.name = "MessageStreamCursorGoneError";
-  }
-}
-
-export class MessageStreamConnectionError extends Error {
-  readonly retryable = true;
-
-  constructor(
-    readonly status: number,
-    readonly statusText: string,
-  ) {
-    super(`无法连接 Turn 消息流: ${status} ${statusText}`);
-    this.name = "MessageStreamConnectionError";
   }
 }
 
@@ -101,44 +89,23 @@ export async function streamSessionMessageEvents(
 ): Promise<void> {
   const targetThreadId = options.threadId;
   if (!targetThreadId) throw new Error("消息流请求缺少权威 thread owner");
-  const params = new URLSearchParams();
-  params.set("thread_id", targetThreadId);
-  if (options.turnStreamId) params.set("turn_stream_id", options.turnStreamId);
-  if (options.afterSeq !== undefined) params.set("after_seq", String(options.afterSeq));
-  // SSE 长期连接只共享统一凭据与刷新重试；生命周期内的断线重连由调用方负责。
-  let response: Response;
-  try {
-    response = await requestGatewayResponse(
-      port,
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/message-stream?${params.toString()}`,
-      {
-        signal: options.signal,
-        headers: {
-          accept: "text/event-stream",
-          ...workspaceHeader(options.workspaceId),
-          ...(options.afterSeq !== undefined
-            ? { "Last-Event-ID": String(options.afterSeq) }
-            : {}),
-        },
-      },
-    );
-  } catch (error) {
-    if (error instanceof HttpRequestError && error.status === 410) {
-      throw new MessageStreamCursorGoneError(options.afterSeq ?? 0);
-    }
-    throw error;
-  }
-  if (!response.body) {
-    throw new MessageStreamConnectionError(response.status, response.statusText);
-  }
   const deliveredEventSeqs = new Set<number>();
-  let frozenStreamId = options.turnStreamId ?? response.headers.get("X-Message-Stream-ID");
-  if (options.turnStreamId && response.headers.get("X-Message-Stream-ID")
-    && response.headers.get("X-Message-Stream-ID") !== options.turnStreamId) {
-    throw new Error("消息流响应 stream owner 与请求不一致");
-  }
-  options.onConnected?.(response.headers.get("X-Message-Stream-ID"));
-  await consumeSseResponse(response, {
+  let frozenStreamId = options.turnStreamId;
+  let afterSeq = options.afterSeq;
+  try {
+  await consumeRealtimeSubscription(port, () => {
+    const params = new URLSearchParams({ thread_id: targetThreadId });
+    if (frozenStreamId) params.set("turn_stream_id", frozenStreamId);
+    if (afterSeq !== undefined) params.set("after_seq", String(afterSeq));
+    return { path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/message-stream?${params}`,
+      headers: workspaceHeader(options.workspaceId) };
+  }, {
+    onConnected: headers => {
+      const streamId = headers.get("X-Message-Stream-ID");
+      if (!streamId || frozenStreamId && frozenStreamId !== streamId) throw new Error("消息流响应 stream owner 与请求不一致");
+      frozenStreamId = streamId;
+      options.onConnected?.(streamId);
+    },
     signal: options.signal,
     // 服务端每 15s 发一次 `: heartbeat` 注释；阈值必须大于该间隔，否则健康空闲
     // 流会被误判断线。达到阈值即由 sse.js 统一抛错，绝不让页面在无字节连接上
@@ -172,10 +139,14 @@ export async function streamSessionMessageEvents(
           deliveredEventSeqs.add(frameEventSeq);
           return event;
         },
-        (event) => options.onEvent?.(event),
+        (event) => { options.onEvent?.(event); afterSeq = event.event_seq; },
       ),
     },
   });
+  } catch (error) {
+    if (error instanceof HttpRequestError && error.status === 410) throw new MessageStreamCursorGoneError(afterSeq ?? 0);
+    throw error;
+  }
 }
 
 function validateMessageStreamEvent(value: unknown): MessageStreamEvent {

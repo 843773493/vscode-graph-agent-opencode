@@ -12,7 +12,7 @@ import {
   unwrapApiData,
 } from "../http";
 import type { GatewayWorkspaceRequestTarget } from "../workspaceIdentity";
-import { consumeWorkspaceObservation } from "../stream/workspaceObservation";
+import { consumeRealtimeSubscription } from "../stream/realtime";
 
 export class SessionActivityCursorGoneError extends Error {
   readonly status = 410;
@@ -60,9 +60,7 @@ export async function streamSessionActivity(
 ): Promise<void> {
   let after = options.after ?? 0;
   try {
-    await consumeWorkspaceObservation(port, gatewayWorkspaceRequestHeaders(workspaceTarget), () => ({
-      kind: "session_activity", activity_after: after, paths: [],
-    }), {
+    await consumeRealtimeSubscription(port, () => ({ path: `/api/v1/session-catalog/events/stream?after=${after}`, headers: gatewayWorkspaceRequestHeaders(workspaceTarget) }), {
     signal: options.signal,
     idleTimeoutMs: SSE_IDLE_TIMEOUT_MS,
     onActivity: options.onActivity,

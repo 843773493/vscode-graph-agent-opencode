@@ -11,7 +11,7 @@ import type { IResourceEditorInput } from '../upstream/src/vs/platform/editor/co
 import type { GatewayWorkspace, WebUiLayoutSettings } from '../../web/src/types/backend.js';
 import type { TurnAttachmentDTO } from '../../web/src/types/protocol_generated/boxteam/workspace/v2/public.js';
 
-export type ThreadResourceTab = 'files' | 'changes' | 'tasks' | 'connections' | 'debug';
+export type ThreadResourceTab = 'files' | 'changes' | 'tasks' | 'connections' | 'threads' | 'debug';
 interface ThreadViewState {
   resourcesVisible: boolean;
   resourceTab: ThreadResourceTab;

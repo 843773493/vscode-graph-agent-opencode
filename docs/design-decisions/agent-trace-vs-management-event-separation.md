@@ -4,6 +4,8 @@
 > 
 > **适用范围**：会话消息发送、DeepAgent 执行、前端进度展示、轨迹回放
 
+> **历史方案边界**：本文中的 JSONL、全局事件记录器和实施顺序是早期设计记录，不作为恢复旧实现的依据。当前持久化以各 owner 和 OpenSpec 为准；后端 Trace SSE 格式保留，页面经共享 `/api/gateway/realtime` 订阅，不为每个会话创建 HTTP SSE。见[页面实时订阅](../architecture/runtime-distribution.md#页面实时订阅)。
+
 ---
 
 ## 1. 背景

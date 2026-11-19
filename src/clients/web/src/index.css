@@ -39,7 +39,7 @@ body > #root {
   align-items: center;
   padding: 2px 8px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   white-space: nowrap;
   border: 1px solid transparent;
   line-height: 1;
@@ -98,7 +98,7 @@ body > #root {
   gap: 8px;
   padding: 0 12px;
   border-bottom: var(--bt-surface-border);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -121,7 +121,7 @@ body > #root {
 .agent-sessions-section-title {
   margin: 0 0 6px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
 }
 .session-list {
@@ -245,7 +245,7 @@ body > #root {
 .agent-sessions-menu-disabled-note {
   padding: 7px 9px;
   color: var(--bt-text-subtle);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 16px;
 }
 
@@ -338,7 +338,7 @@ body > #root {
   flex-direction: column;
   gap: 6px;
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .session-name-field input {
@@ -359,7 +359,7 @@ body > #root {
 
 .session-name-error {
   color: var(--bt-status-danger);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.35;
 }
 
@@ -421,7 +421,7 @@ body > #root {
 
 .session-meta {
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .session-attachment-badge {
@@ -435,7 +435,7 @@ body > #root {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .event-card {
@@ -557,7 +557,7 @@ body > #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 .composer-attachment {
   display: flex;
@@ -588,7 +588,7 @@ body > #root {
   gap: 3px;
   background: var(--bt-surface-raised);
   color: var(--bt-text-secondary);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
   font-weight: 600;
 }
 .composer-attachment-name {
@@ -596,7 +596,7 @@ body > #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-input-foreground);
 }
 .composer-attachment-remove {
@@ -610,13 +610,13 @@ body > #root {
 .composer-attachment-error {
   padding: 4px 4px 0;
   color: var(--bt-status-danger);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.35;
 }
 .composer-attachment-notice {
   padding: 4px 4px 0;
   color: var(--bt-status-success);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.35;
 }
 .composer-slash-menu {
@@ -680,7 +680,7 @@ body > #root {
     "Liberation Mono",
     monospace
   );
-  font-size: 13px;
+  font-size: var(--bt-font-size);
   color: var(--bt-link-foreground);
 }
 .composer-slash-copy {
@@ -690,14 +690,14 @@ body > #root {
   min-width: 0;
 }
 .composer-slash-title {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   line-height: 1.25;
 }
 .composer-slash-description {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-text-muted);
 }
 .composer-slash-more {
@@ -708,7 +708,7 @@ body > #root {
   border-top: 1px solid var(--bt-border);
   background: color-mix(in srgb, var(--bt-input-background), var(--bt-surface-raised) 8%);
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.3;
   text-align: center;
 }
@@ -717,7 +717,7 @@ body > #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-text-muted);
 }
 .composer-actions {
@@ -801,12 +801,13 @@ body > #root {
 .composer-agent-menu {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   width: min(220px, var(--anchored-overlay-available-width, 220px));
-  padding: 6px;
-  border: 1px solid var(--bt-border);
-  border-radius: 12px;
-  background: var(--bt-input-background);
+  padding: 4px;
+  border: 1px solid var(--bt-menu-border);
+  border-radius: var(--bt-radius-small);
+  background: var(--bt-menu-background);
+  color: var(--bt-menu-foreground);
   box-shadow: var(--bt-surface-shadow);
   overflow: auto;
   max-height: min(70vh, 520px, var(--anchored-overlay-available-height, 520px));
@@ -816,31 +817,34 @@ body > #root {
 }
 .composer-view-menu-item,
 .composer-agent-menu-item {
+  display: flex;
   width: 100%;
   height: auto !important;
-  min-height: 46px;
+  min-height: 28px;
   justify-content: flex-start !important;
   align-items: flex-start !important;
   flex-direction: column;
-  gap: 4px !important;
-  padding: 8px 10px !important;
-  border-radius: 10px !important;
-  color: var(--bt-text-primary) !important;
+  gap: 2px !important;
+  padding: 6px 8px !important;
+  border: 0;
+  border-radius: var(--bt-radius-small) !important;
+  color: inherit !important;
   background: transparent !important;
+  font: inherit;
   text-align: left;
+  cursor: pointer;
 }
-.composer-agent-menu-item {
+div.composer-agent-menu-item {
   position: relative;
   padding: 0 !important;
-  display: flex;
   flex-direction: row;
   align-items: stretch !important;
 }
 .composer-menu-item-main {
   width: 100%;
   height: auto !important;
-  min-height: 46px;
-  padding: 8px 42px 8px 10px !important;
+  min-height: 28px;
+  padding: 6px 40px 6px 8px !important;
   border: 0 !important;
   border-radius: inherit !important;
   background: transparent !important;
@@ -849,18 +853,28 @@ body > #root {
   flex-direction: column;
   align-items: flex-start !important;
   justify-content: flex-start !important;
-  gap: 4px !important;
+  gap: 2px !important;
+  font: inherit;
   text-align: left;
+  cursor: pointer;
 }
 .composer-workspace-default-button {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 4px;
+  right: 4px;
   width: 28px !important;
   min-width: 28px !important;
   height: 28px !important;
   padding: 0 !important;
-  border-radius: 8px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--bt-radius-small) !important;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
@@ -873,22 +887,32 @@ body > #root {
 .workspace-default .composer-workspace-default-button {
   color: var(--bt-status-success);
 }
-.composer-view-menu-item:hover,
+.composer-view-menu-item:hover:not(:disabled),
 .composer-view-menu-item.active,
-.composer-agent-menu-item:hover,
+.composer-agent-menu-item:hover:not(:disabled),
 .composer-agent-menu-item.active {
   background: var(--bt-hover-background) !important;
 }
+.composer-view-menu-item:focus-visible,
+.composer-agent-menu button:focus-visible {
+  outline: 1px solid var(--bt-focus-border);
+  outline-offset: -1px;
+}
+.composer-view-menu-item:disabled,
+.composer-agent-menu button:disabled {
+  color: var(--bt-text-disabled) !important;
+  cursor: default;
+}
 .composer-view-menu-label,
 .composer-agent-menu-label {
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.2;
+  font-size: var(--bt-font-size);
+  font-weight: 600;
+  line-height: 1.4;
 }
 .composer-view-menu-description,
 .composer-agent-menu-description {
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.35;
 }
 .composer-model-pill.configuration-error {
@@ -1025,7 +1049,7 @@ body > #root {
 
 .bootstrap-retry-error {
   color: var(--bt-status-danger);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 /* --- 事件卡片补充样式（聚合版 ChatPanel 依赖） --- */
@@ -1042,7 +1066,7 @@ body > #root {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .event-card-toggle {
@@ -1055,7 +1079,7 @@ body > #root {
   color: var(--bt-text-primary);
   cursor: pointer;
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1;
 }
 
@@ -1065,7 +1089,7 @@ body > #root {
 
 .event-card-details {
   margin-top: 2px;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-text-muted);
 }
 
@@ -1106,14 +1130,14 @@ body > #root {
     "Liberation Mono",
     monospace
   );
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .event-card-content table {
   width: 100%;
   border-collapse: collapse;
   margin: 6px 0 10px;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .event-card-content th,
@@ -1170,7 +1194,7 @@ body {
   padding: 0 10px;
   border-bottom: 0;
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
@@ -1182,7 +1206,7 @@ body {
 }
 
 .panel-title {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .panel-body {
@@ -1227,7 +1251,7 @@ body {
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .sidebar-icon-button,
@@ -1310,7 +1334,7 @@ body {
 .sessions-menu-group-title {
   padding: 4px 8px 2px;
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
 }
 
@@ -1329,7 +1353,7 @@ body {
   color: var(--bt-text-primary);
   text-align: left;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -1344,7 +1368,7 @@ body {
   gap: 4px;
   padding: 0 2px 2px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .sessions-search-box input {
@@ -1382,7 +1406,7 @@ body {
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   text-align: left;
   cursor: pointer;
 }
@@ -1404,7 +1428,7 @@ body {
 
 .agent-sessions-nav-count {
   color: var(--bt-text-subtle);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .session-view-surface:has(.chat-stream-blank) {
@@ -1445,7 +1469,7 @@ body {
 .chat-stream-empty-detail {
   margin-top: 4px;
   color: var(--bt-text-subtle);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.5;
 }
 
@@ -1460,7 +1484,7 @@ body {
   border-radius: 6px;
   background: color-mix(in srgb, var(--bt-surface-raised) 90%, transparent);
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   cursor: pointer;
 }
 
@@ -1517,7 +1541,7 @@ body {
   max-height: 180px;
   padding: 0;
   color: var(--bt-chat-input-foreground);
-  font-size: 13px;
+  font-size: var(--bt-font-size);
   line-height: 20px;
 }
 
@@ -1547,7 +1571,7 @@ body {
   border-radius: var(--bt-radius-small);
   background: transparent;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .composer-actions button:hover:not(:disabled) {
@@ -1568,7 +1592,7 @@ body {
 
 .composer-hint {
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .composer-agent-button,
@@ -1652,7 +1676,7 @@ body {
 }
 
 .event-card-body {
-  font-size: 13px;
+  font-size: var(--bt-font-size);
   line-height: 1.65;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1686,7 +1710,7 @@ body {
 }
 
 .badge.neutral.event-card-time {
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-text-muted);
 }
 
@@ -1716,7 +1740,7 @@ body {
 
 .conversation-marker-label {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   font-weight: 600;
   color: var(--bt-text-muted);
   text-transform: none;

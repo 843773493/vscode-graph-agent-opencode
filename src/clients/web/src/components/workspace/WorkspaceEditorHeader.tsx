@@ -47,6 +47,12 @@ const WORKSPACE_COMPONENT_OPTIONS: ReadonlyArray<{
     description: t("workspace.editor.runtimeAndConnectionsDescription"),
     icon: "codicon-server-process",
   },
+  {
+    tab: "threads",
+    label: t("workspace.editor.threads"),
+    description: t("workspace.editor.threadsDescription"),
+    icon: "codicon-git-branch",
+  },
 ];
 
 export default function WorkspaceEditorHeader({

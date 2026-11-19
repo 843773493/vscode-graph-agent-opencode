@@ -4,25 +4,25 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   scrollbar-gutter: stable;
   container-type: inline-size;
 }
 
 .agent-state-header {
-  min-height: 40px;
+  min-height: 30px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 0 12px;
+  padding: 0 8px;
   border-bottom: var(--bt-surface-border);
   flex: 0 0 auto;
   min-width: 0;
 }
 
 .agent-state-title {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   font-weight: 700;
   min-width: 0;
   overflow: hidden;
@@ -37,7 +37,7 @@
   flex: 0 1 auto;
   min-width: 0;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   white-space: nowrap;
 }
 
@@ -53,7 +53,7 @@
   border-radius: 6px;
   background: var(--bt-selection-muted-background);
   color: var(--bt-text-muted);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.5;
   flex: 0 0 auto;
 }
@@ -67,7 +67,7 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--bt-status-danger) 8%, transparent);
   color: var(--bt-status-danger);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   line-height: 1.45;
 }
 
@@ -115,14 +115,14 @@
 .agent-state-summary span {
   margin-bottom: 4px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .agent-state-summary strong {
   max-height: 7.5em;
   overflow: auto;
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 @container (max-width: 760px) {
@@ -132,12 +132,15 @@
 }
 
 .agent-state-raw {
-  flex: 1 1 auto;
+  flex: 1 0 120px;
   min-height: 0;
   margin: 0 12px 12px;
   border: var(--bt-surface-border);
   border-radius: 6px;
-  overflow: hidden;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bt-scrollbar-background) transparent;
   background: var(--bt-surface-background);
 }
 
@@ -145,30 +148,20 @@
   flex: 0 0 auto;
 }
 
-.agent-state-raw[open] {
-  display: flex;
-  flex-direction: column;
-}
-
 .agent-state-raw summary {
+  position: sticky;
+  top: 0;
   cursor: pointer;
   padding: 8px 10px;
   color: var(--bt-text-muted);
   background: var(--bt-input-background);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
 }
 
 .agent-state-jsonl {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
   box-sizing: border-box;
   margin: 0;
   padding: 12px;
-  overflow: auto;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: var(--bt-scrollbar-background) transparent;
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--bt-surface-background);
@@ -181,25 +174,25 @@
     "Liberation Mono",
     monospace
   );
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   line-height: 1.55;
 }
 
-.agent-state-jsonl::-webkit-scrollbar {
+.agent-state-raw::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
-.agent-state-jsonl::-webkit-scrollbar-track {
+.agent-state-raw::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.agent-state-jsonl::-webkit-scrollbar-thumb {
+.agent-state-raw::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: var(--bt-scrollbar-background);
 }
 
-.agent-state-jsonl::-webkit-scrollbar-thumb:hover {
+.agent-state-raw::-webkit-scrollbar-thumb:hover {
   background: var(--bt-scrollbar-hover-background);
 }
 
@@ -243,7 +236,7 @@
 }
 
 .agent-state-role {
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
   color: var(--bt-text-primary);
 }
@@ -257,7 +250,7 @@
   white-space: nowrap;
   border-radius: 999px;
   padding: 2px 7px;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-text-muted);
   background: color-mix(in srgb, var(--bt-text-primary) 7%, transparent);
 }
@@ -286,7 +279,7 @@
   flex-wrap: wrap;
   gap: 6px;
   padding: 7px 8px;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-text-muted);
 }
 
@@ -323,7 +316,7 @@
   gap: 4px;
   min-width: 0;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .agent-state-image-meta span {
@@ -339,7 +332,7 @@
 
 .agent-state-block-label {
   padding: 5px 8px;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
   color: var(--bt-text-muted);
   border-bottom: var(--bt-surface-border);
@@ -361,7 +354,7 @@
     "Liberation Mono",
     monospace
   );
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   line-height: 1.5;
 }
 
@@ -384,13 +377,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
   color: var(--bt-button-background);
 }
 
 .agent-state-tool-result-id {
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   color: var(--bt-text-muted);
   word-break: break-all;
 }

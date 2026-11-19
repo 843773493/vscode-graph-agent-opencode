@@ -136,7 +136,7 @@
 .gateway-theme-assets > p {
   margin-top: 4px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.5;
 }
 
@@ -170,7 +170,7 @@
   display: grid;
   gap: 5px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-theme-background-options label.wide {
@@ -239,7 +239,7 @@
 
 .gateway-theme-assets small {
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-theme-config-help code {
@@ -267,7 +267,7 @@
     transparent
   );
   color: var(--bt-status-danger);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-console-notice {
@@ -318,7 +318,7 @@
   padding: 0 9px;
   border: 1px solid;
   border-radius: 9px;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   white-space: nowrap;
 }
 
@@ -422,7 +422,7 @@
 
 .gateway-overview-primary strong {
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-overview-primary small,
@@ -430,7 +430,7 @@
   margin-top: 4px;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -441,7 +441,7 @@
 
 .gateway-overview-strip article span {
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-overview-strip article strong {
@@ -512,20 +512,20 @@
 .gateway-surface-header h2 {
   margin: 0;
   color: var(--bt-text-primary);
-  font-size: 13px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-surface-header p {
   margin: 4px 0 0;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.4;
 }
 
 .gateway-surface-header > span {
   flex: 0 0 auto;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-route-groups {
@@ -583,7 +583,7 @@
 
 .gateway-route-group-header strong {
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-route-group-header small {
@@ -591,7 +591,7 @@
   overflow: hidden;
   color: var(--bt-text-muted);
   font-family: var(--bt-font-family-mono);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -599,7 +599,7 @@
 .gateway-compact-button {
   min-height: 27px;
   padding: 0 8px;
-  font-size: 9px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-connection-pill {
@@ -611,7 +611,7 @@
   border: 1px solid var(--gateway-border);
   border-radius: 999px;
   color: var(--bt-text-muted);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
   white-space: nowrap;
 }
 
@@ -692,7 +692,7 @@
   overflow: hidden;
   margin: 0;
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -704,7 +704,7 @@
   border-radius: 999px;
   background: var(--gateway-accent-soft);
   color: var(--gateway-accent);
-  font-size: 7px;
+  font-size: var(--bt-font-size-small);
   font-weight: 650;
 }
 
@@ -724,18 +724,14 @@
 .gateway-route-workspace-path {
   margin-top: 4px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-route-workspace-id {
   margin-top: 3px;
-  color: color-mix(
-    in srgb,
-    var(--bt-text-muted) 76%,
-    transparent
-  );
+  color: var(--bt-text-muted);
   font-family: var(--bt-font-family-mono);
-  font-size: 7px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-route-workspace-actions {
@@ -749,7 +745,7 @@
 .gateway-route-workspace-actions > button {
   min-height: 29px;
   padding: 0 9px;
-  font-size: 9px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-workspace-menu {
@@ -797,7 +793,7 @@
   background: transparent;
   color: var(--bt-menu-foreground);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   text-align: left;
   cursor: pointer;
 }
@@ -836,7 +832,7 @@
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 7px;
+  font-size: var(--bt-font-size-small);
   cursor: pointer;
 }
 
@@ -870,7 +866,7 @@
   background: var(--bt-menu-background);
   color: var(--bt-text-muted);
   box-shadow: var(--bt-surface-shadow);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-route-service-content strong {
@@ -885,7 +881,7 @@
   gap: 6px;
   margin-top: 7px;
   color: var(--bt-status-danger);
-  font-size: 8px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-inline-warning {
@@ -934,13 +930,13 @@
 
 .gateway-route-flow strong {
   color: var(--bt-text-primary);
-  font-size: 9px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-route-flow small {
   margin-top: 3px;
   color: var(--bt-text-muted);
-  font-size: 7px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-route-flow > .codicon {
@@ -962,7 +958,7 @@
 
 .gateway-route-details dt {
   color: var(--bt-text-muted);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-route-details dd {
@@ -970,7 +966,7 @@
   margin: 0;
   color: var(--bt-text-primary);
   font-family: var(--bt-font-family-mono);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -988,7 +984,7 @@
     transparent
   );
   color: var(--bt-link-foreground);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.45;
 }
 
@@ -1011,7 +1007,7 @@
 .gateway-console-empty p {
   margin: 5px 0 0;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-managed-panel {
@@ -1035,13 +1031,13 @@
 .gateway-managed-heading h2 {
   margin: 0;
   color: var(--bt-text-primary);
-  font-size: 13px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-managed-heading p {
   margin: 4px 0 0;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-managed-list-heading {
@@ -1061,7 +1057,7 @@
 .gateway-managed-list-heading p {
   margin: 0;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-inbound-peer-list {
@@ -1096,7 +1092,7 @@
 .gateway-inbound-peer-list strong {
   overflow: hidden;
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1105,7 +1101,7 @@
 .gateway-inbound-peer-list small {
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1120,7 +1116,7 @@
 .gateway-managed-workspace-list article code,
 .gateway-managed-workspace-list article small {
   color: var(--bt-text-muted);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-managed-workspace-list {
@@ -1151,7 +1147,7 @@
 .gateway-managed-workspace-title h3 {
   margin: 0;
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-managed-workspace-title span {
@@ -1159,14 +1155,14 @@
   border-radius: 999px;
   background: var(--gateway-panel-soft);
   color: var(--bt-text-muted);
-  font-size: 7px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-managed-workspace-list article p {
   overflow: hidden;
   margin: 4px 0;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

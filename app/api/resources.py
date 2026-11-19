@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from asyncio import timeout
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import aclosing, contextmanager
 from typing import Annotated, Literal
 from urllib.error import URLError
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from app.abstractions.browser_resources import BrowserRequestError
 from app.api.deps import (
@@ -24,6 +26,11 @@ from app.api.deps import (
     get_workspace_resource_owner,
     get_workspace_service,
     verify_local_token,
+)
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    SSE_NO_CACHE_HEADERS,
+    stream_sse_with_heartbeat,
 )
 from app.core.resource_uri import (
     ResourceUriGrammarError,
@@ -45,6 +52,7 @@ from app.schemas.internal_v2.skill_sources import (
     SkillSourcesMetadataDTO,
     SkillSourcesRefreshDTO,
 )
+from app.schemas.internal_v2.sse import sse_responses
 from app.schemas.internal_v2.text_mutation import (
     TextMutationReceiptDTO,
     TextMutationRequest,
@@ -55,6 +63,7 @@ from app.schemas.internal_v2.workspace_resource import (
     BrowserResourceOperationRequest,
     ResourceTransportGrantDTO,
     TerminalResourceCreateRequest,
+    WorkspaceResourceChangesDTO,
     WorkspaceResourceCommandRequest,
     WorkspaceResourceDTO,
     WorkspaceResourceListDTO,
@@ -94,6 +103,25 @@ from app.services.infrastructure.workspace_files.text_transfer import (
 from app.services.infrastructure.workspace_service import WorkspaceService
 
 router = APIRouter(prefix="/resources", tags=["resources"])
+
+@router.get("/events", response_class=StreamingResponse, responses=sse_responses("终端资源变更", {"resources_changed": WorkspaceResourceChangesDTO}))
+async def terminal_resource_events(
+    _: Annotated[str, Depends(verify_local_token)],
+    owner: Annotated[TerminalResourceOwner, Depends(get_terminal_resource_owner)],
+):
+    return StreamingResponse(_stream_terminal_changes(owner), media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+
+
+async def _stream_terminal_changes(owner: TerminalResourceOwner):
+    async with aclosing(stream_sse_with_heartbeat(
+        owner.changes(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS, close_source_on_exit=True,
+    )) as changes:
+        async for item in changes:
+            if isinstance(item, str):
+                yield item
+            else:
+                payload = json.dumps({"resource_ids": None if item is None else sorted(item)}, separators=(",", ":"))
+                yield f'event: resources_changed\ndata: {payload}\n\n'
 
 
 @contextmanager

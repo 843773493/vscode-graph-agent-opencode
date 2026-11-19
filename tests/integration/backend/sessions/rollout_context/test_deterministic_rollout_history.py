@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from statistics import median
+from statistics import median, quantiles
 from time import perf_counter
 
 import pytest
 
 from app.schemas.internal_v2.turn import TurnHistoryLoadRequest
+from app.services.infrastructure.rollout_context.assembly import content_store
 from app.services.infrastructure.rollout_context.checkpoint.message_codec import (
     LangChainMessageCodec,
 )
@@ -19,6 +20,7 @@ from app.services.infrastructure.rollout_context.storage.schema import (
 )
 from app.services.infrastructure.rollout_context.store import RolloutContextStore
 from app.services.infrastructure.rollout_history.reader import RolloutHistoryReader
+from tests.harness.python.run_context import TestRunContext
 from tests.integration.backend.sessions.rollout_context.deterministic_rollout_fixture_helpers import (
     seed_deterministic_v2_rollout,
 )
@@ -80,6 +82,7 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
     integration_workspace_root_path: str,
     deterministic_v2_rollout,
     monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
 ) -> None:
     session_id, tool_bodies = deterministic_v2_rollout
     reader = _reader(Path(integration_workspace_root_path))
@@ -99,7 +102,16 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
         assert connection.execute(
             "SELECT schema_version, rollout_format_version FROM database_meta"
         ).fetchone() == (ROLLOUT_SCHEMA_VERSION, 2)
-    source_by_sequence = {item.item_sequence: item for item in items}
+        # message 序号不等于 canonical item 序号：独立 runtime notice 不占消息序号。
+        items_by_id = {item.item_id: item for item in items}
+        source_by_sequence = {
+            sequence: items_by_id[item_id]
+            for sequence, item_id in connection.execute(
+                "SELECT message.message_sequence, item.item_id FROM messages message "
+                "JOIN item_catalog item ON item.jsonl_offset=message.jsonl_offset "
+                "AND item.jsonl_length=message.jsonl_length"
+            )
+        }
     accessed: list[int] = []
     original_read = storage.checkpoints._read_record_envelopes
 
@@ -113,6 +125,28 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
 
     monkeypatch.setattr(storage.checkpoints, "_read_record_envelopes", capture_read)
     monkeypatch.setattr(storage.checkpoints, "materialize_messages", reject_full_scan)
+    monkeypatch.setattr(content_store, "load_snapshot", reject_full_scan)
+    statements: list[str] = []
+    connect = storage.storage._connect
+
+    def trace_connection(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(storage.storage, "_connect", trace_connection)
+    source_page = reader.load(session_id, thread_id, TurnHistoryLoadRequest(turn_ids=["deterministic-turn-0002"]))
+    notices = [part for part in source_page.items[0].response_parts if part.kind == "context_notice"]
+    assert len(notices) == 1 and notices[0].context_content_length > 300_000
+    assert notices[0].text == ""
+    assert all(source_by_sequence[seq].semantic_kind != "runtime_notice" for seq in accessed)
+    notice_sql = next(sql for sql in statements if "WITH bounds AS" in sql)
+    with connect(thread_id, "", session_id=session_id, read_only=True) as connection:
+        query_plan = connection.execute("EXPLAIN QUERY PLAN " + notice_sql).fetchall()
+    assert not any("SCAN context_assemblies" in str(row) for row in query_plan)
+    assert not any("MATERIALIZE context_view_items" in str(row) for row in query_plan), "定点锚点查询不能物化整个可见历史"
+    assert any("SEARCH selected USING INDEX" in str(row) and "assembly_id=?" in str(row) for row in query_plan)
+    accessed.clear()
     tail = reader.load(session_id, thread_id, TurnHistoryLoadRequest(direction="tail", turns=1))
     assert [item.ordinal for item in tail.items] == [128]
     assert tail.items[0].final_response == "确定性集成回答 128"
@@ -163,8 +197,10 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
     )
     cursor = _advance_to_64_cursor(reader, session_id, thread_id)
     samples = []
-    for _ in range(8):
+    measurements = []
+    for _ in range(20):
         accessed.clear()
+        statements.clear()
         started = perf_counter()
         page = reader.load(
             session_id,
@@ -172,9 +208,19 @@ def test_deterministic_v2_128_turn_history_is_bounded_and_preserves_tool_body(
             TurnHistoryLoadRequest(direction="before", cursor=cursor, turns=64),
         )
         samples.append((perf_counter() - started) * 1000)
+        measurements.append({"elapsed_ms": samples[-1], "canonical_body_reads": len(accessed),
+            "sql_statements": len(statements), "response_bytes": len(page.model_dump_json().encode("utf-8"))})
         assert len(accessed) <= 128
         assert all(
             source_by_sequence[seq].semantic_kind != "tool_result" for seq in accessed
         )
     assert [item.ordinal for item in page.items] == list(range(45, 109))
-    assert median(samples) < 200
+    p95 = quantiles(samples, n=100, method="inclusive")[94]
+    context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    (context.artifacts_dir / "context-history-performance.json").write_text(json.dumps({
+        "turns": 128, "source_bytes": notices[0].context_content_length,
+        "samples": measurements, "p50_ms": median(samples), "p95_ms": p95, "max_ms": max(samples),
+        "marker_query_plan": query_plan,
+        "boundary": "真实 Saver 生成的查询材料；不替代产品执行、Fork 或恢复验收",
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    assert p95 <= 200

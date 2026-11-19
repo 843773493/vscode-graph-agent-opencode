@@ -1,6 +1,6 @@
 """历史消息查询与独立定位的业务约束；公开结构以 proto 为准。"""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -108,16 +108,41 @@ class ThreadToolResultListDTO(BaseModel):
     source_view_revision: int
 
 
+class CanonicalContextContentReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["item"] = "item"
+    item_id: str = Field(min_length=1, max_length=256)
+
+
+class SealedContextContentReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["sealed_contribution"] = "sealed_contribution"
+    session_id: str = Field(min_length=1, max_length=256)
+    thread_id: str = Field(min_length=1, max_length=256)
+    assembly_id: str = Field(min_length=1, max_length=256)
+    contribution_id: str = Field(min_length=1, max_length=256)
+
+
+ContextContentReference = Annotated[
+    CanonicalContextContentReference | SealedContextContentReference, Field(discriminator="kind"),
+]
+
+
 class ThreadItemInspectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     item_id: str | None = Field(default=None, min_length=1, max_length=256)
     message_id: str | None = Field(default=None, min_length=1, max_length=256)
-    operation: Literal["location", "content", "request", "trace"]
+    operation: Literal["location", "content_metadata", "content", "request", "trace"]
+    content_ref: ContextContentReference | None = None
 
     @model_validator(mode="after")
     def validate_selector(self) -> "ThreadItemInspectionRequest":
-        if (self.item_id is None) == (self.message_id is None):
-            raise ValueError("必须且只能提供一个真实 Item 或消息 ID")
+        if sum(value is not None for value in (self.item_id, self.message_id, self.content_ref)) != 1:
+            raise ValueError("必须且只能提供一个真实 Item、消息 ID 或冻结内容引用")
+        if isinstance(self.content_ref, SealedContextContentReference) and self.operation != "content":
+            raise ValueError("冻结 contribution 引用仅用于读取来源正文")
         return self
 
 
@@ -143,7 +168,8 @@ class ThreadItemContentDTO(BaseModel):
 
 
 class ThreadItemInspectionDTO(BaseModel):
-    location: ThreadItemLocationDTO
+    location: ThreadItemLocationDTO | None = None
     contents: list[ThreadItemContentDTO] = Field(default_factory=list)
     request_log: "LLMRequestLogMatchDTO | None" = None
     trace: "TraceMatchDTO | None" = None
+    content_ref: ContextContentReference | None = None

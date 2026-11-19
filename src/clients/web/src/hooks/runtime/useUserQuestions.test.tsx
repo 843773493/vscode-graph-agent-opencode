@@ -1,3 +1,5 @@
+import { useRealtimeSocket } from "../../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
 import { afterEach, expect, test } from "bun:test";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
@@ -23,12 +25,11 @@ test("折叠只订阅摘要，展开分页与逐条删除，切换 Thread 废弃
     const url = new URL(String(input));
     if (url.pathname.endsWith("/local-credential")) return json({ token: "test-token" });
     requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
-    if (url.pathname.endsWith("/events")) {
-      const stream = new ReadableStream<Uint8Array>({ start(controller) {
-        streams.set(url.pathname, data => controller.enqueue(new TextEncoder().encode(`event: changed\ndata: ${JSON.stringify(data)}\n\n`)));
-        init?.signal?.addEventListener("abort", () => controller.close(), { once: true });
-      } });
-      return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname.endsWith("/questions/events")) {
+      const threadId = url.pathname.split('/').at(-3)!;
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        streams.set(threadId, data => controller.enqueue(new TextEncoder().encode(`event: changed\ndata: ${JSON.stringify(data)}\n\n`)));
+      } }), { headers: { "Content-Type": "text/event-stream" } });
     }
     if (init?.method === "DELETE") { count = 1; rev++; return json(summary()); }
     const older = url.searchParams.has("before");
@@ -41,7 +42,7 @@ test("折叠只订阅摘要，展开分页与逐条删除，切换 Thread 废弃
   await act(async () => firstStream(summary()));
   expect(value.count).toBe(2);
   expect(value.items).toEqual([]);
-  expect(requests.filter(path => !path.endsWith("/events"))).toEqual([]);
+  expect(requests).toEqual([`GET /api/v1/sessions/${owner.sessionId}/threads/${owner.threadId}/questions/events`]);
   await act(async () => { expanded = true; renderer.update(<Harness />); });
   expect(value.items.map(item => item.question_id)).toEqual(["newer"]);
   await act(async () => value.loadMore());

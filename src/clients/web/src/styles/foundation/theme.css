@@ -2,11 +2,11 @@
   color-scheme: var(--boxteam-color-scheme);
 
   /* 字体与排版 */
-  --bt-font-family: var(--vscode-font-family);
+  --bt-font-family: var(--vscode-font-family, inherit);
   --bt-font-family-mono: var(--monaco-monospace-font);
   --bt-font-size: 13px;
+  --bt-font-size-small: 12px;
   --bt-font-size-heading: 18px;
-  --bt-font-size-label: 11px;
   --bt-font-weight: 400;
 
   /* 配色仅来自 Workbench；--bt-* 是共享组件的语义别名。 */

@@ -195,6 +195,14 @@ async def test_item_inspection_uses_exact_owner_and_reads_only_selected_body(
         assert location["item_id"] and location["turn_id"]
         assert location["semantic_kind"] == "user_input"
         assert reads == [], "复制定位地址只查身份索引"
+        metadata = await history_client.post(endpoint, json={"operation": "content_metadata", "item_id": location["item_id"]})
+        assert metadata.status_code == 200, metadata.text
+        assert metadata.json()["data"]["contents"] == [{
+            "name": "content", "language": "markdown", "encoding": "utf-8",
+            "content": None, "uri": None, "mime_type": None,
+        }]
+        assert reads == [(location["item_id"],)], "仅定点解析所选 Item 的格式"
+        reads.clear()
         response = await history_client.post(endpoint, json={"operation": "content", "item_id": location["item_id"]})
         assert response.status_code == 200, response.text
         data = response.json()["data"]

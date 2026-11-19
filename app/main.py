@@ -37,7 +37,6 @@ from app.api.sessions import router as sessions_router
 from app.api.tools import router as tools_router
 from app.api.user_questions import router as user_questions_router
 from app.api.workspace import router as workspace_router
-from app.api.workspace_observation import router as workspace_observation_router
 from app.backend_lifecycle import BackendLifespan
 from app.container import WorkspaceContainerRegistry
 from app.core.backend_identity import load_or_create_backend_id
@@ -253,7 +252,6 @@ workspace_routers = (
     workspace_router,
     persistent_tasks_router,
     session_activity_router,
-    workspace_observation_router,
     runtime_router,
     resources_router,
     sessions_router,

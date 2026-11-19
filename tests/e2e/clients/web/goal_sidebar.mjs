@@ -1,3 +1,4 @@
+import { observeRealtime } from "../../../support/workbench/realtime.mjs";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -18,11 +19,12 @@ const writes = [];
 const legacyReads = [];
 const taskSubscriptions = [];
 const standaloneTaskStreams = [];
+observeRealtime(page, { subscribe(request) {
+  const url = new URL(request.url);
+  if (url.pathname === '/api/v1/persistent-tasks/events') taskSubscriptions.push([{ session_id: url.searchParams.get('session_id') }]);
+} });
 page.on("request", (request) => {
   if (new URL(request.url()).pathname === "/api/v1/persistent-tasks/events") standaloneTaskStreams.push(request.url());
-  if (new URL(request.url()).pathname === "/api/v1/workspace/observations/stream") {
-    taskSubscriptions.push(request.postDataJSON().subscriptions.filter(item => item.kind === "persistent_tasks"));
-  }
   if (request.method() === "GET" && new URL(request.url()).pathname.endsWith("/goal")) legacyReads.push(request.url());
   if (request.method() === "PUT" && new URL(request.url()).pathname.endsWith("/goal")) {
     writes.push(request.postDataJSON());

@@ -2,7 +2,7 @@
   flex: 0 0 auto;
   padding: 2px 8px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 
@@ -64,12 +64,12 @@
 .request-log-card-heading > :last-child {
   margin-left: auto;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .request-log-card-stats {
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .request-log-card-stats > span,
@@ -147,7 +147,7 @@
   border-radius: 50%;
   color: var(--bt-badge-foreground);
   background: var(--bt-badge-background);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
 }
 
@@ -166,12 +166,12 @@
 .request-log-key-flow-list li > div > span {
   margin-bottom: 4px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .request-log-key-flow-list strong {
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -182,7 +182,7 @@
   border-radius: 6px;
   padding: 8px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -191,7 +191,7 @@
 .request-log-summary-label {
   margin-bottom: 4px;
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
 }
 
@@ -213,7 +213,7 @@
 .request-replay-tools > .request-log-collapse-summary,
 .request-replay-tool > .request-log-collapse-summary {
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .request-log-tool-list,
@@ -235,7 +235,7 @@
   padding: 4px 6px;
   background: var(--bt-surface-background);
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -248,7 +248,7 @@
 .request-log-tool-empty {
   padding: 0 8px 8px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .request-log-replay > .request-log-collapse-summary > .request-log-summary-title {
@@ -277,7 +277,7 @@
 .request-log-upstream-attempt > .request-log-collapse-summary {
   padding: 7px 8px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .request-log-upstream-attempt > .request-log-collapse-summary > :not(:first-child) {
@@ -293,7 +293,7 @@
 .request-log-upstream-payloads strong {
   display: block;
   margin-bottom: 4px;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .request-log-upstream-payloads pre {

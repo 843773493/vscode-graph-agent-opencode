@@ -1,5 +1,5 @@
 .thread-status-region { flex: 0 0 auto; min-width: 0; max-width: 100%; margin-bottom: 8px; }
-.thread-history-sync { display: flex; align-items: center; gap: 6px; height: 26px; color: var(--bt-text-muted); font-size: 12px; }
+.thread-history-sync { display: flex; align-items: center; gap: 6px; height: 26px; color: var(--bt-text-muted); font-size: var(--bt-font-size-small); }
 .thread-history-sync button { margin-left: auto; border: 0; padding: 2px; color: inherit; background: transparent; }
 .thread-status { container: composer-status / inline-size; min-width: 0; max-width: 100%; overflow: hidden; border: 1px solid var(--bt-panel-border); border-radius: 12px; color: var(--bt-text-muted); background: var(--bt-page-background); }
 .thread-status-stack { max-height: 48dvh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
@@ -12,7 +12,7 @@
 .thread-status-trigger .codicon { flex: 0 0 auto; font-size: 16px; }
 .thread-status-trigger.needs-attention { color: var(--vscode-editorWarning-foreground); }
 .thread-status-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.thread-status-detail-body { min-width: 0; padding: 8px 12px; color: var(--bt-text-primary); font-size: 13px; overflow-wrap: anywhere; }
+.thread-status-detail-body { min-width: 0; padding: 8px 12px; color: var(--bt-text-primary); font-size: var(--bt-font-size); overflow-wrap: anywhere; }
 .thread-status-detail-body[hidden] { display: none; }
 .thread-status-detail-body:not([hidden]) ~ .thread-status-detail-body:not([hidden]) { border-top: 1px solid var(--bt-panel-border); }
 .thread-status-detail-body p { margin: 0 0 8px; white-space: pre-wrap; }
@@ -21,7 +21,7 @@
 .thread-status-detail-body .chat-pending-composer-item-row { grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; min-height: 32px; }
 .thread-status-detail-body .chat-pending-composer-item-content { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .thread-status-detail-body .chat-pending-composer-item-actions { margin-left: auto; }
-.chat-pending-composer-item-status { flex: 0 0 auto; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--bt-text-muted); }
+.chat-pending-composer-item-status { flex: 0 0 auto; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--bt-font-size-small); color: var(--bt-text-muted); }
 .thread-status .needs-attention { color: var(--vscode-editorWarning-foreground); }
 .composer-submission-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 3px 4px; }
 .thread-status :is(.composer-status-icon, .composer-submission-action, .chat-pending-icon-button, .chat-pending-composer-clear, .chat-pending-direction-button) { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; color: var(--bt-text-muted); background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
@@ -33,7 +33,7 @@
 .thread-status-row .composer-task-manage { margin-left: auto; }
 .composer-task-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 36px; }
 .composer-task-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.composer-task-status { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--bt-text-muted); }
+.composer-task-status { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--bt-font-size-small); color: var(--bt-text-muted); }
 .composer-task-actions { display: flex; align-items: center; }
 .composer-submission-message { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-submission-message textarea { display: block; box-sizing: border-box; width: 100%; min-height: 26px; resize: vertical; font: inherit; color: inherit; background: transparent; border: 1px solid var(--bt-panel-border); }
@@ -42,8 +42,8 @@
   .composer-task-row { gap: 4px; }
 }
 .composer-question { min-width: 0; padding: 8px 0; border-top: 1px solid var(--bt-panel-border); overflow-wrap: anywhere; }
-.composer-question-heading { display: flex; align-items: center; justify-content: space-between; color: var(--bt-text-muted); font-size: 12px; }
-.composer-questions-hint { margin: 4px 0 8px; font-size: 12px; color: var(--bt-text-muted); }
+.composer-question-heading { display: flex; align-items: center; justify-content: space-between; color: var(--bt-text-muted); font-size: var(--bt-font-size-small); }
+.composer-questions-hint { margin: 4px 0 8px; font-size: var(--bt-font-size-small); color: var(--bt-text-muted); }
 .composer-question .markdown-content { color: var(--bt-text); }
 .chat-pending-drag-handle { cursor: grab; touch-action: none; }
 .chat-pending-composer-item[draggable] { cursor: default; }

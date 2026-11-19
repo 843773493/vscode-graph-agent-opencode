@@ -1,5 +1,7 @@
 import { ChatItemOwnerContext } from "../itemContextMenu";
 import React from "react";
+import ContextNotice from "../ContextNotice";
+import { contextNoticeGroups } from "../../../state/timeline/responseParts";
 import { MessageSearchLocation } from "../messageSearchLocation";
 import type { TurnHistoryInclude } from "../../../api/session/sessionTurnHistory";
 import type { AttachmentRef } from "../../../types/backend";
@@ -59,6 +61,8 @@ function ChatTurn({
   return (
     <ChatItemOwnerContext.Provider value={conversation.threadId ? { sessionId: conversation.sessionId, threadId: conversation.threadId } : null}><article className="chat-turn" data-conversation-id={conversation.conversationId} data-turn-id={conversation.turnId} data-root-logical-item-ordinal={conversation.rootLogicalItemOrdinal}>
       <MessageSearchLocation turnId={conversation.turnId} />
+      {contextNoticeGroups(conversation.responseParts ?? [], "before_user_message")
+        .map(group => <ContextNotice key={group.id} notices={group.notices} />)}
       <ChatTurnUserSection
         apiPort={apiPort}
         workspaceId={workspaceId}
@@ -135,6 +139,12 @@ function responsePartsEqual(
       && part.outcome_unknown === other.outcome_unknown
       && part.completion_reason === other.completion_reason
       && part.partial === other.partial
+      && part.context_content_ref === other.context_content_ref
+      && part.context_cursor === other.context_cursor
+      && part.context_anchor === other.context_anchor
+      && part.context_before_item_id === other.context_before_item_id
+      && part.context_anchor_ordinal === other.context_anchor_ordinal
+      && part.context_source_revision === other.context_source_revision
       && part.source.message_sequence === other.source.message_sequence
       && part.source.content_block_index === other.source.content_block_index
       && part.source.item_index === other.source.item_index

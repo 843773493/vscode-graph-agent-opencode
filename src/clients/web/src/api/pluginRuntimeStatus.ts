@@ -1,15 +1,14 @@
-import { requestGatewayResponse } from './http.js';
-import { consumeSseResponse, decodeJsonSseData, defineSseEvent } from '../sse/sseClient.js';
+import { consumeRealtimeSubscription } from './stream/realtime.js';
+import { decodeJsonSseData, defineSseEvent } from '../sse/sseClient.js';
 import { validatePluginRuntimeStatusDTO } from '../../../../shared/sseRuntimeValidators.js';
 import { PluginRuntimeStatusDTO, type PluginTarget } from '../types/protocol_generated/boxteam/gateway/v2/service_plugin.js';
 
 /** 观察目标 Gateway 的完整运行状态快照；订阅取消即释放原 SSE 响应。 */
 export async function watchPluginRuntimeStatus(target: PluginTarget, signal: AbortSignal,
   onSnapshot: (snapshot: PluginRuntimeStatusDTO) => void): Promise<void> {
-  const response = await requestGatewayResponse(0, '/api/gateway/service-plugins/status/events', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(target), signal,
-  });
-  await consumeSseResponse(response, { signal, events: {
+  await consumeRealtimeSubscription(0, () => ({ path: '/api/gateway/service-plugins/status/events',
+    method: 'POST', body: JSON.stringify(target),
+  }), { signal, events: {
     snapshot: defineSseEvent((data, frame) => {
       const value = decodeJsonSseData(data, frame);
       if (!validatePluginRuntimeStatusDTO(value)) {

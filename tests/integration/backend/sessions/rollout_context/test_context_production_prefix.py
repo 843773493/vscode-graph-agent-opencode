@@ -67,6 +67,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
 from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
     DetailUnavailableError,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.context_notices import (
+    context_notice_metadata,
+)
 from app.services.mapping.itemized.canonical_langchain import (
     project_summary_source,
     summary_source_groups,
@@ -1218,7 +1221,7 @@ async def test_prepare_source_cut_uses_owner_view_with_same_id_sibling(
 def test_prefix_preserves_same_id_canonical_and_request_only_on_inheritance_and_cold_read(
     production_context, target_format,
 ):
-    saver, session, thread, _connection, _manager, prepare = production_context
+    saver, session, thread, connection, _manager, prepare = production_context
     item = next(item for item in saver._storage.storage.read_items(session, thread)
                 if item.semantic_kind == "user_input")
     overlay_body = "同名 request-only 的独立正文"
@@ -1237,6 +1240,19 @@ def test_prefix_preserves_same_id_canonical_and_request_only_on_inheritance_and_
     )
     first = prepare("same-id-first", target_format=target_format)
     second = prepare("same-id-inherited", target_format=target_format)
+    for attempt, result in enumerate((first, second), 1):
+        snapshot = result["snapshot"]
+        saver.register_model_call(session, thread_id=thread, execution_id=snapshot.execution_id,
+            model_call_id=snapshot.model_call_id, attempt=attempt, provider="same-id-provider",
+            assembly_id=snapshot.assembly_id, dispatch_state="dispatched")
+    markers = context_notice_metadata(connection, second["snapshot"].active_view_id,
+        turn_ids=[second["snapshot"].turn_id], execution_ids=[])
+    overlay_markers = [row for row in markers if row.kind == "overlay:workspace_policy"]
+    assert len(overlay_markers) == 1
+    assert overlay_markers[0].model_call_id == first["snapshot"].model_call_id
+    assert overlay_markers[0].item_id is None
+    assert saver.read_context_contribution(session, thread, historical_owner=(session, thread),
+        assembly_id=overlay_markers[0].assembly_id, contribution_id=overlay_markers[0].contribution_id) == overlay_body
     for result in (first, second):
         selection = tuple(entry for entry in result["snapshot"].selection if entry.ref.ref_id == item.item_id)
         assert tuple(selection_ref_identity(entry.ref) for entry in selection) == expected_keys

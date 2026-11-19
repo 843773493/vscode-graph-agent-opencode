@@ -14,6 +14,7 @@ from app.core.history_loading import (
     default_history_loading_config,
 )
 from app.schemas.internal_v2.turn import (
+    ContextNoticeBatchDTO,
     TurnDetailDTO,
     TurnHistoryLoadRequest,
     TurnHistoryPageDTO,
@@ -36,6 +37,10 @@ from app.services.infrastructure.rollout_context.storage.primitives import (
     RolloutReadSnapshot,
 )
 from app.services.infrastructure.rollout_context.storage.transaction import strict_text
+from app.services.infrastructure.rollout_history.context_notices import (
+    decode_context_cursor,
+    read_notice_parts,
+)
 from app.services.infrastructure.rollout_history.errors import (
     InvalidTurnCursorError,
     StaleTurnCursorError,
@@ -57,9 +62,6 @@ from app.services.infrastructure.rollout_history.tool_result import (
     read_tool_result_output,
 )
 from app.services.infrastructure.tool_output_store import ToolOutputStore
-from app.services.mapping.itemized.history_turns.context_notices import (
-    context_notice_parts,
-)
 from app.services.mapping.itemized.history_turns.detail import build_detail
 from app.services.mapping.itemized.history_turns.internal_execution import (
     build_internal_execution_history,
@@ -115,7 +117,7 @@ class RolloutHistoryReader(HistoryPageReadMixin):
             location = ThreadItemLocationDTO(**dict(zip(("item_id", "turn_id", "execution_id", "job_id",
                 "model_call_id", "message_id", "semantic_kind", "content_hash", "byte_length"), row, strict=True)))
             result = ThreadItemInspectionDTO(location=location)
-            if request.operation == "content":
+            if request.operation in {"content_metadata", "content"}:
                 if location.byte_length > 8 * 1024 * 1024:
                     raise ValueError("单个 Item 超过 8 MiB 内容读取上限，请打开其原始资源")
                 item, = self._context_reader.read_canonical_items(indexed.snapshot, item_ids=[location.item_id])
@@ -123,6 +125,9 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 if output is not None and output[0] is None:
                     raise ValueError("此工具结果超过 8 MiB 内容读取上限，请打开其原始输出资源")
                 result.contents = item_contents(item, tool_output=output[0] if output is not None else None)
+                if request.operation == "content_metadata":
+                    # 格式沿同一 canonical 投影推导；选择打开方式不向客户端预传正文。
+                    result.contents = [content.model_copy(update={"content": None}) for content in result.contents]
             return result
         finally:
             indexed.snapshot.close()
@@ -241,6 +246,8 @@ class RolloutHistoryReader(HistoryPageReadMixin):
     ) -> TurnHistoryPageDTO:
         indexed = self._snapshots.read(session_id, thread_id)
         if indexed is None:
+            if request.context_cursor is not None:
+                raise InvalidTurnCursorError("尚未物化的历史不能续读上下文元数据")
             if request.turn_ids is not None and request.cursor is not None:
                 raise InvalidTurnCursorError("按 turn_ids 加载详情不能使用历史分页游标")
             if request.cursor is not None:
@@ -264,6 +271,16 @@ class RolloutHistoryReader(HistoryPageReadMixin):
                 items=[], next_cursor=None, has_more=False, projection_epoch=1
             )
         try:
+            if request.context_cursor is not None:
+                cursor = decode_context_cursor(request.context_cursor, indexed.snapshot, indexed.view_id)
+                notices = read_notice_parts(self._context_reader, indexed.snapshot, indexed.chain,
+                    turn_ids=cursor.turn_ids, execution_ids=cursor.execution_ids, cursor=cursor)
+                return TurnHistoryPageDTO(items=[], projection_epoch=indexed.projection_epoch,
+                    source_view_id=indexed.view_id,
+                    source_view_revision=indexed.snapshot.manifest.history_view_revision,
+                    context_notices=[ContextNoticeBatchDTO(owner_id=owner,
+                        owner_kind="turn" if owner in cursor.turn_ids else "execution", parts=parts)
+                        for owner, parts in notices.items()])
             located = (
                 verify_message_reference(self._context_reader, indexed, request.anchor_turn_id, request.anchor_message,
                                          tool_outputs=self._tool_outputs)
@@ -504,9 +521,9 @@ class RolloutHistoryReader(HistoryPageReadMixin):
         )
         items: list[TurnDetailDTO] = []
         summaries: list[TurnSummaryDTO] = []
-        notices = context_notice_parts(self._context_reader.read_context_notices(snapshot, chain,
+        notices = read_notice_parts(self._context_reader, snapshot, chain,
             turn_ids=[span.turn_id for span in spans],
-            execution_ids=list(dict.fromkeys(entry.execution_id for entry in internal_entries))))
+            execution_ids=list(dict.fromkeys(entry.execution_id for entry in internal_entries)))
         for span in spans:
             detail = self._load_indexed_span(
                 session_id,

@@ -4,8 +4,9 @@
 
 与相邻文件的边界：
 
-- `api/http.ts`（上级目录）：共享 HTTP 传输基础设施（`requestJson`、`unwrapApiData`、`workspaceHeader`、`HttpRequestError`）。本包所有模块都基于它发起请求，不再自带传输层。
-- `api/sessionMessageStream.ts`、`api/sessionTraceStream.ts`、`api/messageStreamSnapshot.ts`、`api/workspaceFileEvents.ts`（上级目录，属 stream 组）：SSE 实时流与快照校验，与本包的会话快照/分页语义不同，不得互相内联复制。
+- `api/http.ts`（上级目录）：共享 HTTP 请求、凭据、JSON 解包与目标身份；一次性请求基于它发起，不自带传输层。
+- `api/stream/realtime.ts`：页面常驻事件唯一订阅入口，本包活动与目录事件经它共用 Gateway WebSocket。
+- `api/stream/sessionMessageStream.ts`、`sessionTraceStream.ts`、`messageStreamSnapshot.ts`、`workspaceFileEvents.ts`：领域事件与快照校验，与本包的会话快照／分页语义不同，不得互相内联复制。
 - `types/`：后端协议类型的权威来源，本包只消费不定义。
 
 ## 文件职责树
@@ -39,7 +40,7 @@ API 测试共享 fetch 桩按会话 API 域命名，不按某一个具体端点�
 
 - 不维护 React 展示状态或会话业务状态；本包只做请求与响应转换。
 - 不在客户端推导后端协议中不存在的默认业务数据。
-- 不把共享 HTTP 传输逻辑复制进本包；传输能力只来自 `api/http.ts`。
+- 不复制共享 HTTP 传输或实时连接逻辑；分别复用 `api/http.ts` 与 `api/stream/realtime.ts`。
 - 专用 HTTP 错误定义在其所属业务客户端中，不上移到共享层。
 
 # 规范

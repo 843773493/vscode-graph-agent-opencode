@@ -17,6 +17,8 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 
 import httpx
 from fastapi import HTTPException, WebSocket
+from starlette.responses import StreamingResponse
+from starlette.types import Receive, Scope, Send
 from websockets.asyncio.client import ClientConnection
 
 from app.core.failures import HTTP_FAILURE_HEADER, mark_http_failure
@@ -27,6 +29,7 @@ __all__ = [
     "GATEWAY_PROXY_DROPPED_HEADERS",
     "TARGET_GATEWAY_ID_HEADER",
     "UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS",
+    "ProxyStreamingResponse",
     "UpstreamResponseBody",
     "build_upstream_url",
     "build_upstream_websocket_url",
@@ -322,3 +325,13 @@ async def relay_websocket_upstream_to_client(
             await websocket.send_text(message)
         else:
             await websocket.send_bytes(message)
+
+
+class ProxyStreamingResponse(StreamingResponse):
+    """发送被取消时也关闭上游迭代器，释放路由租约与反压中的连接。"""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await run_cleanup_shielded(self.body_iterator.aclose)

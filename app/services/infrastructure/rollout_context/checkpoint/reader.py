@@ -54,9 +54,12 @@ class RolloutContextReader:
         self._storage = storage
 
     def read_context_notices(self, snapshot: RolloutReadSnapshot, chain: ContextChain, *,
-                             turn_ids: list[str], execution_ids: list[str]) -> list[ContextNoticeMetadata]:
+                             turn_ids: list[str], execution_ids: list[str],
+                             after: tuple[int, int] = (0, -1),
+                             call_upper_bound: int | None = None) -> list[ContextNoticeMetadata]:
         return context_notice_metadata(self._storage.storage._snapshot_connection(snapshot),
-            self.context_view_id(chain), turn_ids=turn_ids, execution_ids=execution_ids)
+            self.context_view_id(chain), turn_ids=turn_ids, execution_ids=execution_ids,
+            after=after, call_upper_bound=call_upper_bound)
 
     @asynccontextmanager
     async def read_lease(

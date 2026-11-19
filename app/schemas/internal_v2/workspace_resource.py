@@ -96,3 +96,7 @@ class BrowserResourceOperationRequest(WorkspaceResourceCommandRequest):
         "resource-policy", "freeze", "wake", "discard", "device-profile", "agent-lock",
     ]
     payload: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkspaceResourceChangesDTO(BaseModel):
+    resource_ids: list[str] | None

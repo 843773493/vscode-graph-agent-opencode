@@ -4,7 +4,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import type { JsonObject, Message } from "@bufbuild/protobuf";
-import type { Timestamp, Value } from "@bufbuild/protobuf/wkt";
+import type { ListValue, Timestamp, Value } from "@bufbuild/protobuf/wkt";
 import type { AttachmentRef } from "./message_pb.js";
 import type { PluginServiceReference } from "../../gateway/v2/service_plugin_pb.js";
 
@@ -12885,6 +12885,11 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
    * @generated from field: optional string anchor_tool_result = 12;
    */
   anchorToolResult?: string | undefined;
+
+  /**
+   * @generated from field: optional string context_cursor = 13;
+   */
+  contextCursor?: string | undefined;
 };
 
 /**
@@ -12892,6 +12897,32 @@ export declare type TurnHistoryLoadRequest = Message<"boxteam.workspace.v2.TurnH
  * Use `create(TurnHistoryLoadRequestSchema)` to create a new message.
  */
 export declare const TurnHistoryLoadRequestSchema: GenMessage<TurnHistoryLoadRequest>;
+
+/**
+ * @generated from message boxteam.workspace.v2.ContextNoticeBatchDTO
+ */
+export declare type ContextNoticeBatchDTO = Message<"boxteam.workspace.v2.ContextNoticeBatchDTO"> & {
+  /**
+   * @generated from field: string owner_id = 1;
+   */
+  ownerId: string;
+
+  /**
+   * @generated from field: string owner_kind = 2;
+   */
+  ownerKind: string;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.TurnResponsePartDTO parts = 3;
+   */
+  parts: TurnResponsePartDTO[];
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ContextNoticeBatchDTO.
+ * Use `create(ContextNoticeBatchDTOSchema)` to create a new message.
+ */
+export declare const ContextNoticeBatchDTOSchema: GenMessage<ContextNoticeBatchDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.TurnHistoryPageDTO
@@ -12971,6 +13002,11 @@ export declare type TurnHistoryPageDTO = Message<"boxteam.workspace.v2.TurnHisto
    * @generated from field: optional boxteam.workspace.v2.TurnToolResultDTO located_tool_result = 15;
    */
   locatedToolResult?: TurnToolResultDTO | undefined;
+
+  /**
+   * @generated from field: repeated boxteam.workspace.v2.ContextNoticeBatchDTO context_notices = 16;
+   */
+  contextNotices: ContextNoticeBatchDTO[];
 };
 
 /**
@@ -13328,6 +13364,46 @@ export declare type TurnResponsePartDTO = Message<"boxteam.workspace.v2.TurnResp
    * @generated from field: optional string context_before_item_id = 20;
    */
   contextBeforeItemId?: string | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ContextContentReferenceDTO context_content_ref = 21;
+   */
+  contextContentRef?: ContextContentReferenceDTO | undefined;
+
+  /**
+   * @generated from field: optional string context_source_revision = 22;
+   */
+  contextSourceRevision?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 context_content_length = 23;
+   */
+  contextContentLength?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string context_availability = 24;
+   */
+  contextAvailability?: string | undefined;
+
+  /**
+   * @generated from field: optional string context_anchor = 25;
+   */
+  contextAnchor?: string | undefined;
+
+  /**
+   * @generated from field: optional int64 context_anchor_ordinal = 26;
+   */
+  contextAnchorOrdinal?: bigint | undefined;
+
+  /**
+   * @generated from field: optional int64 context_plan_ordinal = 27;
+   */
+  contextPlanOrdinal?: bigint | undefined;
+
+  /**
+   * @generated from field: optional string context_cursor = 28;
+   */
+  contextCursor?: string | undefined;
 };
 
 /**
@@ -14500,125 +14576,6 @@ export declare type WorkspaceFileWatchRequest = Message<"boxteam.workspace.v2.Wo
  * Use `create(WorkspaceFileWatchRequestSchema)` to create a new message.
  */
 export declare const WorkspaceFileWatchRequestSchema: GenMessage<WorkspaceFileWatchRequest>;
-
-/**
- * 每个逻辑观察者保留独立的 source、恢复游标和生命周期。
- *
- * @generated from message boxteam.workspace.v2.WorkspaceObservationSubscription
- */
-export declare type WorkspaceObservationSubscription = Message<"boxteam.workspace.v2.WorkspaceObservationSubscription"> & {
-  /**
-   * @generated from field: string subscription_id = 1;
-   */
-  subscriptionId: string;
-
-  /**
-   * 持久任务使用 persistent_tasks；session_id 省略时观察整个工作区。
-   *
-   * @generated from field: string kind = 2;
-   */
-  kind: string;
-
-  /**
-   * @generated from field: optional string session_id = 3;
-   */
-  sessionId?: string | undefined;
-
-  /**
-   * @generated from field: optional int64 activity_after = 4;
-   */
-  activityAfter?: bigint | undefined;
-
-  /**
-   * @generated from field: optional string trace_after = 5;
-   */
-  traceAfter?: string | undefined;
-
-  /**
-   * @generated from field: repeated string paths = 6;
-   */
-  paths: string[];
-
-  /**
-   * @generated from field: optional int64 files_after = 7;
-   */
-  filesAfter?: bigint | undefined;
-
-  /**
-   * 仅 Trace 观察者使用；省略时保留 Session 聚合视图。
-   *
-   * @generated from field: optional string thread_id = 8;
-   */
-  threadId?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.WorkspaceObservationSubscription.
- * Use `create(WorkspaceObservationSubscriptionSchema)` to create a new message.
- */
-export declare const WorkspaceObservationSubscriptionSchema: GenMessage<WorkspaceObservationSubscription>;
-
-/**
- * @generated from message boxteam.workspace.v2.WorkspaceObservationRequest
- */
-export declare type WorkspaceObservationRequest = Message<"boxteam.workspace.v2.WorkspaceObservationRequest"> & {
-  /**
-   * @generated from field: repeated boxteam.workspace.v2.WorkspaceObservationSubscription subscriptions = 1;
-   */
-  subscriptions: WorkspaceObservationSubscription[];
-};
-
-/**
- * Describes the message boxteam.workspace.v2.WorkspaceObservationRequest.
- * Use `create(WorkspaceObservationRequestSchema)` to create a new message.
- */
-export declare const WorkspaceObservationRequestSchema: GenMessage<WorkspaceObservationRequest>;
-
-/**
- * frame 携带领域 owner 的完整原 SSE 帧；物理聚合不重编码领域事件。
- *
- * @generated from message boxteam.workspace.v2.WorkspaceObservationFrameDTO
- */
-export declare type WorkspaceObservationFrameDTO = Message<"boxteam.workspace.v2.WorkspaceObservationFrameDTO"> & {
-  /**
-   * @generated from field: string subscription_id = 1;
-   */
-  subscriptionId: string;
-
-  /**
-   * @generated from field: string state = 2;
-   */
-  state: string;
-
-  /**
-   * @generated from field: optional string frame = 3;
-   */
-  frame?: string | undefined;
-
-  /**
-   * @generated from field: optional int32 status = 4;
-   */
-  status?: number | undefined;
-
-  /**
-   * @generated from field: optional string detail_json = 5;
-   */
-  detailJson?: string | undefined;
-
-  /**
-   * connected 时逻辑 reader 的续读水位；files 是事件序号的十进制字符串，
-   * Trace/activity 当前不设置。它不是历史分页 cursor 或路由 revision。
-   *
-   * @generated from field: optional string cursor = 6;
-   */
-  cursor?: string | undefined;
-};
-
-/**
- * Describes the message boxteam.workspace.v2.WorkspaceObservationFrameDTO.
- * Use `create(WorkspaceObservationFrameDTOSchema)` to create a new message.
- */
-export declare const WorkspaceObservationFrameDTOSchema: GenMessage<WorkspaceObservationFrameDTO>;
 
 /**
  * @generated from message boxteam.workspace.v2.WorkspaceIndexRebuildDTO
@@ -16792,6 +16749,51 @@ export declare const LLMRequestLogSummaryDTOSchema: GenMessage<LLMRequestLogSumm
 /**
  * 卡片操作只在用户接受后读取；稳定 Item 引用不冻结正文版本。
  *
+ * @generated from message boxteam.workspace.v2.ContextContentReferenceDTO
+ */
+export declare type ContextContentReferenceDTO = Message<"boxteam.workspace.v2.ContextContentReferenceDTO"> & {
+  /**
+   * item 或 sealed_contribution；引用分支由运行时业务模型校验。
+   *
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+
+  /**
+   * @generated from field: optional string item_id = 2;
+   */
+  itemId?: string | undefined;
+
+  /**
+   * 历史 owner 保留原身份，物理存储使用 inspection 路由的目标 Thread。
+   *
+   * @generated from field: optional string session_id = 3;
+   */
+  sessionId?: string | undefined;
+
+  /**
+   * @generated from field: optional string thread_id = 4;
+   */
+  threadId?: string | undefined;
+
+  /**
+   * @generated from field: optional string assembly_id = 5;
+   */
+  assemblyId?: string | undefined;
+
+  /**
+   * @generated from field: optional string contribution_id = 6;
+   */
+  contributionId?: string | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.ContextContentReferenceDTO.
+ * Use `create(ContextContentReferenceDTOSchema)` to create a new message.
+ */
+export declare const ContextContentReferenceDTOSchema: GenMessage<ContextContentReferenceDTO>;
+
+/**
  * @generated from message boxteam.workspace.v2.ThreadItemInspectionRequest
  */
 export declare type ThreadItemInspectionRequest = Message<"boxteam.workspace.v2.ThreadItemInspectionRequest"> & {
@@ -16806,9 +16808,16 @@ export declare type ThreadItemInspectionRequest = Message<"boxteam.workspace.v2.
   messageId?: string | undefined;
 
   /**
+   * content_metadata 仅返回沿原正文投影取得的格式／资源引用，content 才交付正文。
+   *
    * @generated from field: string operation = 3;
    */
   operation: string;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ContextContentReferenceDTO content_ref = 4;
+   */
+  contentRef?: ContextContentReferenceDTO | undefined;
 };
 
 /**
@@ -16937,6 +16946,11 @@ export declare type ThreadItemInspectionDTO = Message<"boxteam.workspace.v2.Thre
    * @generated from field: optional boxteam.workspace.v2.TraceMatchDTO trace = 4;
    */
   trace?: TraceMatchDTO | undefined;
+
+  /**
+   * @generated from field: optional boxteam.workspace.v2.ContextContentReferenceDTO content_ref = 5;
+   */
+  contentRef?: ContextContentReferenceDTO | undefined;
 };
 
 /**
@@ -16944,4 +16958,22 @@ export declare type ThreadItemInspectionDTO = Message<"boxteam.workspace.v2.Thre
  * Use `create(ThreadItemInspectionDTOSchema)` to create a new message.
  */
 export declare const ThreadItemInspectionDTOSchema: GenMessage<ThreadItemInspectionDTO>;
+
+/**
+ * 工作区终端资源失效通知；null 表示重新取得完整列表。
+ *
+ * @generated from message boxteam.workspace.v2.WorkspaceResourceChangesDTO
+ */
+export declare type WorkspaceResourceChangesDTO = Message<"boxteam.workspace.v2.WorkspaceResourceChangesDTO"> & {
+  /**
+   * @generated from field: google.protobuf.ListValue resource_ids = 1;
+   */
+  resourceIds?: ListValue | undefined;
+};
+
+/**
+ * Describes the message boxteam.workspace.v2.WorkspaceResourceChangesDTO.
+ * Use `create(WorkspaceResourceChangesDTOSchema)` to create a new message.
+ */
+export declare const WorkspaceResourceChangesDTOSchema: GenMessage<WorkspaceResourceChangesDTO>;
 

@@ -164,6 +164,27 @@ describe("批量文件操作的条目上限前置校验", () => {
 });
 
 describe("原文件逐块读取", () => {
+  test("响应头前 401 沿统一屏障刷新一次，仍能完整读取正文", async () => {
+    const port = 48_325;
+    invalidateGatewayToken(port);
+    let credentials = 0, requests = 0;
+    globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new URL(String(input)).pathname.endsWith("/local-credential")) {
+        return Response.json({ data: { token: ++credentials === 1 ? "stale" : "fresh" } });
+      }
+      requests++;
+      expect(init?.signal?.aborted).toBe(false);
+      return new Headers(init?.headers).get("X-Local-Token") === "stale"
+        ? Response.json({ detail: "invalid local token" }, { status: 401 })
+        : new Response("完整正文");
+    }, { preconnect: originalFetch.preconnect });
+    const chunks: Uint8Array<ArrayBuffer>[] = [];
+    await readWorkspaceRawFile(port, ROOT + "/refresh.txt", WORKSPACE_KEY, chunk => { chunks.push(new Uint8Array(chunk)); });
+    expect(await new Blob(chunks).text()).toBe("完整正文");
+    expect(credentials).toBe(2);
+    expect(requests).toBe(2);
+  });
+
   test("正文结束前就交付首块，Blob 沿同一链路保留 MIME", async () => {
     let body!: ReadableStreamDefaultController<Uint8Array>;
     installFetchMock(() => new Response(new ReadableStream({ start(controller) { body = controller; } }),

@@ -38,7 +38,6 @@ import { errorMessage } from "../../utils/errorMessage";
 import { useCatalogReveal, type CatalogRevealRequest } from "../../hooks/sessionResourceExplorer/useCatalogReveal";
 
 interface SessionResourceExplorerProps {
-  renderSessionThreads?: (workspaceId: string, session: Session) => ReactNode;
   catalogReveal?: CatalogRevealRequest;
   apiPort: number;
   workspaces: GatewayWorkspace[];
@@ -93,7 +92,6 @@ function Chevron({ expanded }: { expanded: boolean }) {
 }
 
 export default function SessionResourceExplorer({
-  renderSessionThreads,
   catalogReveal,
   apiPort,
   workspaces,
@@ -448,8 +446,7 @@ export default function SessionResourceExplorer({
     const expansionId = `catalog:${workspaceId}:${node.node_id}`;
     const expanded = explorer.expandedIds.has(expansionId);
     const isFolder = node.kind === "folder";
-    const hasThreads = !isFolder && Boolean(node.session?.thread_id && renderSessionThreads);
-    const canExpand = node.state !== "deleting" && (isFolder || node.has_children || hasThreads);
+    const canExpand = node.state !== "deleting" && (isFolder || node.has_children);
     const isCurrent = node.session_id === currentSessionId && workspaceId === currentSessionWorkspaceId;
     const sessionCacheKey = node.session_id
       ? sessionScopeKey(workspaceId, node.session_id)
@@ -630,9 +627,6 @@ export default function SessionResourceExplorer({
             ) : null}
           </button>
         </div>
-        {canExpand && expanded && hasThreads ? <div className="session-thread-navigation" style={{ paddingLeft: `${(depth + 1) * 14 + 8}px` }}>
-          {renderSessionThreads?.(workspaceId, node.session!)}
-        </div> : null}
         {canExpand && expanded && (isFolder || node.has_children) ? renderCatalogBranch(workspaceId, node, depth + 1) : null}
       </li>
     );

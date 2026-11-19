@@ -6,6 +6,29 @@ import { chatTurnProps, conversation } from "./chatTurnTestFixtures";
 import { ChatItemMenuContext, type ChatItemMenuRequest } from "../itemContextMenu";
 
 describe("ChatTurn memo 比较", () => {
+  test("同 revision 新增来源标记不会被复用挡住，标记位于真实用户消息前", () => {
+    const previous = conversation("done");
+    previous.turnId = "turn-context";
+    previous.threadId = "thread-context";
+    previous.turnRevision = 1;
+    const next = { ...previous, responseParts: [...previous.responseParts!, {
+      part_id: "context-first", kind: "context_notice" as const, projection: "summary" as const,
+      source: { message_sequence: 0 }, context_model_call_id: "call-context",
+      context_content_ref: { kind: "sealed_contribution", session_id: "session", thread_id: "thread",
+        assembly_id: "assembly", contribution_id: "prompt" },
+      context_anchor: "before_user_message", context_before_item_id: "root-context", context_anchor_ordinal: 0,
+    }] };
+    expect(areChatTurnPropsEqual(chatTurnProps(previous), chatTurnProps(next))).toBe(false);
+    let renderer!: ReactTestRenderer;
+    act(() => { renderer = create(<ChatTurn {...chatTurnProps(next)} />); });
+    try {
+      const nodes = renderer.root.findAll(node => typeof node.type === "string"
+        && (node.props["data-context-marker"] || node.props.className === "chat-user-row"));
+      expect(nodes.map(node => node.props["data-context-marker"] ?? "user")).toEqual(["context-first", "user"]);
+      expect(renderer.root.findAllByProps({ "data-context-marker": "context-first" })).toHaveLength(1);
+    } finally { act(() => renderer.unmount()); }
+  });
+
   test("历史回答点击携带展示 owner 与快照，同 Turn revision 更新绑定后不复用旧回调", () => {
     const value = conversation("done");
     value.turnId = "turn-visible-final";

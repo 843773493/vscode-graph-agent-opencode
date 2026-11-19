@@ -15,6 +15,8 @@ from app.schemas.internal_v2.turn import (
     TurnJobSummaryDTO,
 )
 from app.schemas.internal_v2.turn_search import (
+    CanonicalContextContentReference,
+    SealedContextContentReference,
     ThreadItemInspectionDTO,
     ThreadItemInspectionRequest,
     ThreadToolResultListDTO,
@@ -30,6 +32,9 @@ from app.services.infrastructure.rollout_history.message_search import (
 )
 from app.services.infrastructure.session_trace.store import TraceEventStore
 from app.services.infrastructure.session_trace.trace_cursor import bind_trace_cursor
+from app.services.mapping.itemized.history_turns.item_content import (
+    context_source_contents,
+)
 
 _BOOTSTRAP_ACTIVE_JOB_LIMIT = 8
 
@@ -147,8 +152,21 @@ class SessionTurnHistoryService:
                            *, request_logs: LLMRequestLogReader) -> ThreadItemInspectionDTO:
         async with self._session_service.session_read_admission(session_id):
             thread_id = await self._session_service.resolve_thread(session_id, thread_id)
+            reference = request.content_ref
+            if isinstance(reference, SealedContextContentReference):
+                body = await run_sync_shielded(
+                    self._checkpointer.read_context_contribution, session_id, thread_id,
+                    historical_owner=(reference.session_id, reference.thread_id),
+                    assembly_id=reference.assembly_id, contribution_id=reference.contribution_id,
+                )
+                return ThreadItemInspectionDTO(content_ref=reference, contents=context_source_contents(body))
+            if isinstance(reference, CanonicalContextContentReference):
+                request = request.model_copy(update={"item_id": reference.item_id, "content_ref": None})
             result = await run_sync_shielded(self._checkpointer.inspect_history_item, session_id, thread_id, request)
             location = result.location
+            if location is None:
+                raise RuntimeError("canonical Item inspection 缺少真实位置")
+            result.content_ref = CanonicalContextContentReference(item_id=location.item_id)
             if request.operation == "trace":
                 if not location.job_id:
                     raise NotFoundError("此 Item 没有所属执行 Trace")

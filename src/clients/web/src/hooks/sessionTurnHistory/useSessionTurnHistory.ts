@@ -15,6 +15,7 @@ import {
 } from "../../state/session/turnTimeline";
 import { useTurnBootstrap } from "./bootstrap";
 import { useTurnDetailLoader } from "./details";
+import { useContextNoticeLoader } from "./contextNotices";
 import {
   useAroundTurnLoader,
   useInitialTurnLoader,
@@ -176,9 +177,13 @@ export function useSessionTurnHistory({
     requestSignal: requestScopeController.signal,
     setState,
   });
+  const loadMoreContext = useContextNoticeLoader({ apiPort, sessionId, threadId, workspaceId, sessionCacheKey,
+    getCurrentTimeline, generationRef, requestSignal: requestScopeController.signal, setState, refreshTurnHistory });
   return {
+    loadMoreContext,
     loadAroundTurn,
     loadNewerTurns,
+    loadLatestTurns: loadInitialTurns,
     loadOlderTurns,
     loadTurnDetails,
     refreshTurnHistory,

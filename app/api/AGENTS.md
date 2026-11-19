@@ -36,7 +36,6 @@ app/api/
 │   └── artifacts.py            执行产物
 ├── 工作区能力
 │   ├── workspace.py            工作区信息与设置
-│   ├── workspace_observation.py 工作区观察事件
 │   ├── resources.py            可发布资源
 │   ├── tools.py                工具目录与选择
 │   └── mcp.py                  MCP 配置与状态
@@ -65,6 +64,7 @@ app/api/
 
 - 路由域文件名与 `APIRouter(prefix=..., tags=[...])` 的语义保持一致；新增路由域必须在 `app/main.py` 注册。
 - 统一使用 `APIResponse(data=..., request_id=request_id)` 封装响应；SSE 端点统一走 `sse_heartbeat.stream_sse_with_heartbeat`，空闲间隔取 `SSE_HEARTBEAT_INTERVAL_SECONDS`。
+- SSE 端点是领域事件 owner，页面由 Gateway `/api/gateway/realtime` 复用传输；新增常驻事件须同步 Gateway 允许列表与共享客户端，不要求页面直接建立 HTTP 长连接。快照／游标／权限仍归本领域，不新增跨领域聚合器。
 - 处理函数签名中的依赖参数应按仓库既有顺序排列：路径/查询参数、请求体、`Depends(verify_local_token)`、`Depends(get_request_id)`、服务依赖。
 - 失败必须显式抛出 `HTTPException` 或业务异常，禁止用虚假默认值或静默降级掩盖错误。
 - 本目录的单元测试放在 `tests/unit/api/`，公开协议契约测试放在 `tests/contracts/api/`。

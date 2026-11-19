@@ -1,3 +1,4 @@
+import { observeRealtime } from "../../../../../support/workbench/realtime.mjs";
 // Integration：SSH 执行与隧道由既有 loopback 装具替换，其余 owner、HTTP 和 Workbench 均为产品。
 import { writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
@@ -69,6 +70,7 @@ try {
   page.on('close', () => networkEvent('page-closed', {}));
   page.on('pageerror', error => result.pageErrors.push(String(error)));
   page.on('console', message => { if (message.type() === 'error') result.consoleErrors.push({ phase: result.phase, text: message.text() }); });
+  const realtime = observeRealtime(page);
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
     if (!path.startsWith('/api/')) return;
@@ -175,8 +177,7 @@ try {
     await phase('connection-capacity-open-two-owners');
     await open(publicFile(a)); await expect(text(0)).toContainText('REMOTE-TEXT-A');
     await open(publicFile(b), true); await expect(text(1)).toContainText('REMOTE-TEXT-B');
-    await expect.poll(() => [...network.values()].filter(item => !item.terminal
-      && item.url.includes('/workspace/observations/stream') && item.response?.status === 200).length).toBe(2);
+    await expect.poll(() => [...realtime.active.keys()].filter(item => item.path.startsWith('/api/v1/workspace/files/events')).length).toBe(2);
     await phase('connection-capacity-probe');
     result.activeBeforeProbe = structuredClone([...network.values()].filter(item => !item.terminal));
     // 独立连接只作诊断对照，产品请求仍必须经页面的同源 fetch 完成。

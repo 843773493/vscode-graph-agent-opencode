@@ -14,7 +14,7 @@ import {
   unwrapApiData,
   workspaceHeader,
 } from "../http";
-import { consumeWorkspaceObservation } from "./workspaceObservation";
+import { consumeRealtimeSubscription } from "./realtime";
 
 const SESSION_TRACE_TIMEOUT_MS = 10_000;
 
@@ -91,15 +91,13 @@ export async function streamSessionEvents(
   const idleTimeoutMs = options?.idleTimeoutMs ?? SSE_IDLE_TIMEOUT_MS;
   const deliveredCursors = new Set<string>();
   try {
-    await consumeWorkspaceObservation(port, workspaceHeader(options?.workspaceId), () => ({
-      kind: "session_trace", session_id: sessionId, trace_after: afterCursor, paths: [],
-      thread_id: options?.threadId,
-    }), {
+    await consumeRealtimeSubscription(port, () => ({ path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/traces/stream?${new URLSearchParams({ ...(afterCursor ? { after_event_id: afterCursor } : {}), ...(options?.threadId ? { thread_id: options.threadId } : {}) })}`, headers: workspaceHeader(options?.workspaceId) }), {
       signal: options?.signal,
       idleTimeoutMs,
       idleTimeoutError: (timeoutMs) => new SessionStreamIdleTimeoutError(timeoutMs),
       onActivity: options?.onActivity,
-      onConnected: (routeRevision) => {
+      onConnected: (headers) => {
+        const routeRevision = headers.get("X-BoxTeam-Route-Revision");
         connected = true;
         options?.onConnected?.(routeRevision);
       },

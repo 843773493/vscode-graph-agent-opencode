@@ -48,7 +48,7 @@ function deferred() {
 
 function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, signal?: AbortSignal) => Promise<TurnMessageLocationDTO | TurnToolResultDTO | void> = async () => {}, mountOnScroll = true,
   messageTarget?: { dataset: { messageItemId?: string; toolResultItemId?: string; chatItemId?: string; responseSources?: string }; animate: HTMLElement["animate"]; scrollIntoView: (options: ScrollIntoViewOptions) => void; getBoundingClientRect: () => { top: number; bottom: number }; closest?: () => HTMLElement | null },
-  historyLoaders: { hasOlderMessages?: boolean; hasNewerMessages?: boolean; loadOlderMessages?: () => Promise<void>; loadNewerMessages?: () => Promise<void> } = {}) {
+  historyLoaders: { hasOlderMessages?: boolean; hasNewerMessages?: boolean; loadOlderMessages?: () => Promise<void>; loadNewerMessages?: () => Promise<void>; loadLatestMessages?: () => Promise<void> } = {}) {
   let items = initial;
   let scopeKey = "workspace/session/thread";
   let viewState: { turn_anchor: string | null; scroll_offset: number; follow_latest: boolean } | null = null;
@@ -71,6 +71,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
     parentElement: Scroller | null = null;
     onwheel: unknown;
     ontouchstart: (() => void) | null = null;
+    onkeydown: ((event: { key: string; defaultPrevented: boolean }) => void) | null = null;
     onscroll: (() => void) | null = null;
     listeners = new Map<string, Set<(event: { deltaY: number }) => void>>();
     get scrollHeight() { return items.reduce((sum, item) => sum + (heights.get(item.key) ?? 150), 0); }
@@ -111,6 +112,7 @@ function navigationHarness(initial: ChatTranscriptItem[], loader: (id: string, s
   function Harness() {
     current = useTurnVirtualScroller({
       items, scopeKey, onLoadAroundTurn: loader, onLoadNewerMessages: historyLoaders.loadNewerMessages ?? (async () => {}),
+      onLoadLatestMessages: historyLoaders.loadLatestMessages ?? (async () => {}),
       onLoadOlderMessages: historyLoaders.loadOlderMessages ?? (async () => {}),
       hasNewerMessages: historyLoaders.hasNewerMessages ?? false, hasOlderMessages: historyLoaders.hasOlderMessages ?? false,
       loadingNewerMessages: false, loadingOlderMessages: false,
@@ -197,6 +199,21 @@ describe("Turn 虚拟列表滚动跟随", () => {
     const h = navigationHarness([turn("older-page", 1)], undefined, true, undefined, { hasNewerMessages: true });
     h.settle();
     expect(h.state().showJumpToLatest).toBe(true);
+    h.userScroll(100, "wheel");
+    act(() => h.state().handleAtBottomChange(true));
+    expect(h.state().followOutput(true)).toBe(false);
+  });
+
+  test("历史窗口返回最新时读取 tail，不能把窗口末尾当成最新消息", async () => {
+    let loaded = 0;
+    const h = navigationHarness([turn("older", 2)], undefined, true, undefined, {
+      hasNewerMessages: true, loadLatestMessages: async () => { loaded += 1; },
+    });
+    h.settle();
+    await act(async () => h.state().scrollToLatest());
+    expect(loaded).toBe(1);
+    h.update([turn("latest", 128)]);
+    expect(h.scrolls.at(-1)).toMatchObject({ index: "LAST", align: "end" });
   });
 
   test("一次上滚只加载一批，前插布局回调不能继续读取历史", async () => {
@@ -216,10 +233,58 @@ describe("Turn 虚拟列表滚动跟随", () => {
     expect(loaded).toBe(2);
   });
 
+  test("around 定位在窗口底部时，新的下滚手势能加载一批并保持阅读位置", async () => {
+    let loaded = 0;
+    const h = navigationHarness([turn("first", 1), turn("last", 2)], undefined, true, undefined, {
+      hasNewerMessages: true, loadNewerMessages: async () => { loaded += 1; },
+    });
+    h.settle();
+    act(() => h.state().navigateToTurn("last"));
+    h.settle();
+    act(() => h.state().handleEndReached());
+    expect(loaded).toBe(0);
+    await act(async () => {
+      for (const listener of h.scroller.listeners.get("wheel") ?? []) listener({ deltaY: 10 });
+      await Promise.resolve();
+    });
+    expect(loaded).toBe(1);
+    expect(h.state().followOutput(true)).toBe(false);
+    h.update([turn("first", 1), turn("last", 2), turn("newer", 3)]);
+    act(() => h.state().handleEndReached());
+    expect(loaded).toBe(1);
+  });
+
   test("无滚动视口的空历史没有可保存位置", () => {
     const h = navigationHarness([]);
     act(() => h.state().bindScroller(null));
     expect(h.viewport().capture()).toBeUndefined();
+  });
+
+  test.each(["wheel", "keydown", "touchstart"] as const)("前插与迟到高度测量保留可见Turn，后续%s释放保位", async input => {
+    const initial = [turn("visible", 3), turn("next", 4), turn("last", 5)];
+    const h = navigationHarness(initial, undefined, true, undefined, { hasOlderMessages: true });
+    h.settle();
+    h.userScroll(0, "wheel");
+    // startReached 先发布，Virtuoso 在同一次滚动提交中再换成顶部 DOM。
+    act(() => h.state().handleStartReached());
+    h.scroller.mountedId = "visible";
+    await act(async () => { await Promise.resolve(); });
+    h.update([turn("first", 1), turn("second", 2), ...initial]);
+    h.settle();
+    expect(h.scroller.scrollTop).toBe(300);
+    // 模拟 Virtuoso 在首次补偿之后又调整估算尺寸，不能使原锚点再次漂移。
+    h.scroller.scrollTop = 77;
+    h.heights.set("first", 180);
+    h.resize();
+    expect(h.scroller.scrollTop).toBe(330);
+    expect(h.state().navigation).toBeNull();
+    expect(h.positions).toEqual([{ turn_anchor: "visible", scroll_offset: 0, follow_latest: false }]);
+    if (input === "keydown") act(() => h.scroller.onkeydown?.({ key: "PageDown", defaultPrevented: false }));
+    if (input === "touchstart") act(() => h.scroller.ontouchstart?.());
+    h.userScroll(100, input === "wheel" ? "wheel" : undefined);
+    h.heights.set("first", 220);
+    h.resize();
+    expect(h.scroller.scrollTop).toBe(100);
   });
   test("大纲预览和取消恢复只修改本视口，接受才发布真实定位状态", () => {
     const h = navigationHarness([turn('first', 1), turn('second', 2), turn('last', 3)]);

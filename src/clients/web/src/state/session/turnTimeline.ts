@@ -7,6 +7,7 @@ import type {
   TurnPage,
   TurnSummary,
   InternalExecutionHistory,
+  TurnResponsePart,
 } from "../../types/backend";
 import { compareInternalResponseParts } from "../timeline/responseParts";
 
@@ -796,6 +797,10 @@ export function applyTurnHistoryPage(
   }
   const pageTimeline: SessionTurnTimeline = {
     ...timeline,
+    // around 的双向游标只描述返回窗口；不能把远处旧页拼成带空洞的连续列表。
+    ...(direction === "around" ? {
+      turnsById: {}, orderedTurnIds: [], summaryTurnsById: {}, detailAccessOrder: [], loadingDetailIds: [], internalExecutions: [],
+    } : {}),
     threadId: page.thread_id,
     historyViewRevision: hasPageBinding
       ? page.source_view_revision!
@@ -914,6 +919,41 @@ export function applyTurnHistoryPage(
     loadingAfter: isBefore ? timeline.loadingAfter : false,
     error: null,
   };
+}
+
+/** 子分页只合并来源元数据，保留真实 Turn 游标、正文及活动统计。 */
+export function applyContextNoticePage(
+  timeline: SessionTurnTimeline, page: TurnHistoryPage, consumedCursor: string,
+): SessionTurnTimeline {
+  requireMatchingEpoch(timeline, page.projection_epoch);
+  if (page.thread_id !== timeline.threadId || page.source_view_revision !== timeline.historyViewRevision) {
+    throw new Error("上下文元数据续页不属于当前历史视图");
+  }
+  const batches = page.context_notices ?? [];
+  const merge = (parts: TurnResponsePart[], additions: TurnResponsePart[] = []) => {
+    if (!additions.length && !parts.some(part => part.context_cursor === consumedCursor)) return parts;
+    const result = new Map(parts.map(part => [part.part_id, part.context_cursor === consumedCursor
+      ? { ...part, context_cursor: null } : part]));
+    for (const part of additions) result.set(part.part_id, part);
+    return [...result.values()];
+  };
+  const turnsById = { ...timeline.turnsById };
+  const summaryTurnsById = { ...timeline.summaryTurnsById };
+  for (const [id, turn] of Object.entries(turnsById)) {
+    const additions = batches.find(batch => batch.owner_kind === "turn" && batch.owner_id === id)?.parts;
+    const parts = merge(turn.response_parts ?? [], additions);
+    if (parts !== turn.response_parts) turnsById[id] = { ...turn, response_parts: parts };
+    const summary = summaryTurnsById[id];
+    if (summary) {
+      const parts = merge(summary.response_parts ?? [], additions);
+      if (parts !== summary.response_parts) summaryTurnsById[id] = { ...summary, response_parts: parts };
+    }
+  }
+  return { ...timeline, turnsById, summaryTurnsById,
+    internalExecutions: timeline.internalExecutions.map(execution => ({ ...execution,
+      response_parts: merge(execution.response_parts ?? [], batches.find(batch =>
+        batch.owner_kind === "execution" && batch.owner_id === execution.execution_id)?.parts),
+    })) };
 }
 
 export function markTurnsLoading(

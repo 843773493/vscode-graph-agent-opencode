@@ -9,7 +9,7 @@ import {
   validateWorkspaceFileChangeBatch,
 } from "../../sse/sseRuntimeSchemas";
 import { workspaceHeader } from "../http";
-import { consumeWorkspaceObservation } from "./workspaceObservation";
+import { consumeRealtimeSubscription } from "./realtime";
 
 export async function streamWorkspaceFileEvents(
   port: number,
@@ -23,17 +23,16 @@ export async function streamWorkspaceFileEvents(
   },
 ): Promise<void> {
   let afterEventId = options?.afterEventId;
-  await consumeWorkspaceObservation(port, workspaceHeader(options?.workspaceId), () => ({
-    kind: "workspace_files", paths: [...paths], files_after: afterEventId,
-  }), {
+  await consumeRealtimeSubscription(port, () => ({ path: '/api/v1/workspace/files/events', method: 'POST', headers: workspaceHeader(options?.workspaceId), body: JSON.stringify({ paths: [...paths], after_event_id: afterEventId }) }), {
     signal: options?.signal,
     idleTimeoutMs: SSE_IDLE_TIMEOUT_MS,
     idleTimeoutError: (timeoutMs) => new Error(
       `文件监听流超过 ${timeoutMs}ms 未收到任何数据`,
     ),
-    onConnected: (_routeRevision, cursor) => {
+    onConnected: (headers) => {
+      const cursor = headers.get("X-Workspace-File-Cursor");
       const value = Number(cursor);
-      if (cursor === undefined || !Number.isSafeInteger(value) || value < 0) {
+      if (cursor === null || !Number.isSafeInteger(value) || value < 0) {
         throw new Error(`文件观察者连接缺少有效持久游标: ${cursor}`);
       }
       afterEventId = value;

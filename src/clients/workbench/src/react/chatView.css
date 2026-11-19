@@ -22,7 +22,7 @@
 .native-file-tree-back { display: none; }
 .preserve-mounted-hidden { display: none !important; }
 
-.native-inspection-scope { flex: 0 0 auto; padding: 6px 12px; color: var(--bt-text-muted); font-size: 11px; border-bottom: var(--bt-surface-border); }
+.native-inspection-scope { flex: 0 0 auto; padding: 6px 12px; color: var(--bt-text-muted); font-size: var(--bt-font-size-small); border-bottom: var(--bt-surface-border); }
 /* 窄组一次查看聊天或资源；上方原切换按钮始终可返回，不把区域上下堆叠。 */
 @container thread-editor (width < 560px) {
   .native-thread-layout.has-resources > .native-thread-conversation,

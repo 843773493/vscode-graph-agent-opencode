@@ -1,3 +1,4 @@
+import { observeRealtime } from "../../../support/workbench/realtime.mjs";
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
@@ -89,12 +90,6 @@ function streamKind(request) {
   const url = request.url();
   if (url.includes("/traces/stream")) return "trace";
   if (url.includes("/message-stream?")) return "message";
-  if (new URL(url).pathname === "/api/v1/workspace/observations/stream") {
-    const body = request.postDataJSON();
-    if (body?.subscriptions?.some((subscription) => subscription.kind === "session_trace")) {
-      return "trace";
-    }
-  }
   return null;
 }
 
@@ -186,7 +181,7 @@ async function waitForTurnFinalText(page, prompt, finalText) {
   return finalMessage.innerText();
 }
 
-/** 通过当前 Session 的树节点进入 Thread 导航。 */
+/** 通过当前会话标签页的 Thread 子标签进入索引。 */
 async function openThreadNavigation() {
   return openSessionThreads(page, { gatewayId: expectedGatewayId, workspaceId: expectedWorkspaceId, sessionId: result.sessionId });
 }
@@ -272,6 +267,12 @@ try {
     if (isExpectedBrowserAbort(request)) return;
     failedRequests.push({ url: request.url(), error: request.failure()?.errorText || "unknown" });
   });
+  observeRealtime(page, { headers(request, response) {
+    if (response.status === 200) {
+      const observed = { url: () => request.url };
+      if (streamKind(observed)) streamResponses.push(observed);
+    }
+  } });
   page.on("response", (response) => {
     if (response.status() === 200 && streamKind(response.request())) {
       streamResponses.push(response.request());
@@ -341,7 +342,7 @@ try {
     toolText: await completedTaskToolRow.innerText(),
   };
 
-  // 展开左侧 Session 节点，等待 Thread 导航渲染 child 项。
+  // 打开会话资源栏的 Thread 标签，等待索引渲染 child 项。
   const panel = await openThreadNavigation();
   const item = await waitForChildThreadItem(panel);
   const title = (await item.locator(".child-thread-copy strong").innerText()).trim();
@@ -354,7 +355,11 @@ try {
   const childThreadId = (childThreadIdCopyLabel ?? "").replace(/^复制 child thread ID: /, "").trim();
   assert.match(title, /^委派：/, "child 项标题必须以「委派：」开头");
   assert.ok(title.includes(delegateDescription), `child 项标题缺少委派描述: ${title}`);
-  assert.equal(statusText, "运行中", "已启动的 child 项必须显示「运行中」");
+  const childState = (await api(page, `/api/v1/sessions/${result.sessionId}/child-threads`, { headers: workspaceHeaders }))
+    .data.items.find(child => child.thread_id === childThreadId);
+  assert.equal(childState?.report_status, "completed", "固定回放的子线程报告必须已完成");
+  assert.equal(childState.status, "completed", "子线程状态必须反映已完成的报告");
+  assert.equal(statusText, "已完成", "索引状态必须与后端报告终态一致");
   assert.ok(metaText.includes("general-purpose"), `child 项元信息缺少 subagent_type: ${metaText}`);
   result.childThread = {
     childThreadId,

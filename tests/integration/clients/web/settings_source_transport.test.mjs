@@ -67,6 +67,38 @@ function fixture({ confirm, respond } = { confirm: async () => ({ confirmed: tru
 }
 const options = { create: false, overwrite: true, unlock: false };
 
+test('备份恢复先取得来源和相对 schema，保留草稿的旧 CAS 而非采用当前服务端基线', async () => {
+  const f = fixture();
+  f.document.jsonc = '{"$schema":"gateway_schema.jsonc"}';
+  f.document.json_schema = { type: 'object', properties: { enabled: { type: 'boolean' } } };
+  const restored = f.createFiles();
+  const baseline = { base_file_digest: 'before-external-change', base_layer_revision: 0, base_layer_digest: 'old-layer', expected_active_revision: 0, expected_active_digest: 'old-active' };
+  const backup = { baseline };
+  await restored.restore(f.resource, backup);
+  expect(restored.currentDocument(f.resource)).toBe(f.document);
+  expect(restored.backup(f.resource)).toEqual(backup);
+  const schema = resolvePath(dirname(f.resource), 'gateway_schema.jsonc');
+  expect(JSON.parse(VSBuffer.wrap(await restored.readFile(schema)).toString())).toEqual(f.document.json_schema);
+  expect((await restored.stat(schema)).permissions).toBe(FilePermission.Readonly);
+  restored.prepareEditor(f.target, f.sourceKey, { ...f.document, file_digest: 'later-document' });
+  expect(restored.currentDocument(f.resource)).toBe(f.document);
+  expect(restored.backup(f.resource)).toEqual(backup);
+  expect(f.calls.map(call => call.path)).toEqual(['/api/gateway/config/sources/' + f.sourceKey]);
+  expect(f.calls[0].headers['X-BoxTeam-Target-Gateway-Id']).toBe(f.target.gateway_id);
+  restored.dispose(); f.files.dispose();
+});
+
+test('先登记的来源在打开表单时补齐文档，保留待查询提交身份', () => {
+  const f = fixture(), restored = f.createFiles();
+  f.stored.set('boxteam.configurationSource.submission:' + f.resource.toString(), { key: 'pending-save', gatewayConnectionId: 'saved-route' });
+  expect(restored.pendingSubmission(f.resource)).toBe('pending-save');
+  restored.prepareEditor(f.target, f.sourceKey, f.document);
+  expect(restored.currentDocument(f.resource)).toBe(f.document);
+  expect(restored.pendingSubmission(f.resource)).toBe('pending-save');
+  expect(f.calls).toEqual([]);
+  restored.dispose(); f.files.dispose();
+});
+
 test('工作区配置列表、读取、预检和保存向 HTTP 层传递选定连接', async () => {
   const target = { gateway_id: 'gateway-b', workspace_id: 'workspace-b', gateway_connection_id: 'selected-route-b' };
   const document = { ...target, source_key: 'workspace_user', jsonc: '{}', edit: { idempotency_key: 'original-edit' } };

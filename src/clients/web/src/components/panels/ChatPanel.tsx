@@ -93,11 +93,11 @@ function ChatPanelFooter({
   context: ChatPanelVirtuosoContext;
 }): React.ReactNode {
   const { pendingActionError } = currentChatPanelRenderState(context);
-  return pendingActionError ? (
+  return <div className="chat-history-page-footer">{pendingActionError ? (
     <div className="chat-turn-action-error" role="alert">
       {pendingActionError}
     </div>
-  ) : null;
+  ) : null}</div>;
 }
 
 const CHAT_PANEL_VIRTUOSO_COMPONENTS: VirtuosoComponents<
@@ -191,6 +191,7 @@ export default function ChatPanel({
   historyError,
   onLoadAroundTurn,
   onLoadNewerMessages,
+  onLoadLatestMessages,
   onLoadOlderMessages,
   onLoadTurnDetails,
   onLoadToolDetails,
@@ -228,6 +229,7 @@ export default function ChatPanel({
   historyError: string | null;
   onLoadAroundTurn: LoadAroundTurn;
   onLoadNewerMessages: () => Promise<void>;
+  onLoadLatestMessages: () => Promise<void>;
   onLoadOlderMessages: () => Promise<void>;
   onLoadTurnDetails: LoadTurnDetails;
   onLoadToolDetails?: LoadToolDetails;
@@ -289,6 +291,7 @@ export default function ChatPanel({
     items: transcriptItems,
     scopeKey,
     onLoadNewerMessages,
+  onLoadLatestMessages,
     onLoadOlderMessages,
     onLoadAroundTurn,
     hasNewerMessages,

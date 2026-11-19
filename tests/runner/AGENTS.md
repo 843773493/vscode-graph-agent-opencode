@@ -1,5 +1,7 @@
 # 目录用途
 
+`integration-context-history-markers` 经真实消息执行、原 Fork 服务和 SQLite／冻结正文验证来源元数据、续页及三个 Fork 模式的独立冷读，固定180秒／4GiB，沿原 Fork watchdog。`integration-web-context-history-markers` 经正式 Workbench 和真实 Gateway／Backend 验证新建、打断续发、查看／复制、刷新重开及20个暖正文样本，固定300秒／4GiB。两者复用集成独占闸门与 model_stream，不替代真实 Provider、Windows 或128 Turn浏览器锚点预算。
+
 `unit-named-secrets` 核对目标侧密文存储、命名引用及受信批量解析，固定60秒／4GiB；`integration-web-configuration-entities` 经真实 Gateway 和完整 Workbench 验证原设置表单、密钥复用、轮换与 Gateway 重启恢复，固定300秒／4GiB。后者不调用真实模型，不替代远端服务或原生客户端验收。
 
 Quick Access 的 `contracts-search-publication`、`unit-search-federation` 和 `unit-search-providers` 分别核公开结构、联邦调度及领域 owner；定向上限90秒／4GiB。`integration-search-headless-tools`、`integration-search-provider-lifecycle` 和 `integration-search-federation` 保留真实 Gateway／Backend、模型入口及原集成独占闸门，分别限600／240／480秒，不代替页面或真实 Provider 验收。

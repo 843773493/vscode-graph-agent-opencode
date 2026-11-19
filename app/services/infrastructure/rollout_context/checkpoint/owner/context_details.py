@@ -8,6 +8,7 @@ from datetime import datetime
 from app.agents.providers.wire_finalize import ChatWireProfile, ResponsesWireProfile
 from app.domain.itemized.assembly_snapshot import ContextAssemblySnapshot
 from app.domain.itemized.epoch.seal_binding import ContextSealPreparation
+from app.domain.itemized.hashing import contribution_content_hash_and_length
 from app.domain.itemized.identity.detail_ref import DetailRef
 from app.domain.itemized.plans.request import ContextRequestPlan
 from app.domain.itemized.resource_activation import (
@@ -26,6 +27,27 @@ from app.services.infrastructure.rollout_context.runtime.detail_store import (
 
 class ContextDetailOwnerMixin:
     """只负责 detail 文件的 seal、读取、权限和 retention GC。"""
+
+    def read_context_contribution(
+        self, session_id: str, thread_id: str, *, historical_owner: tuple[str, str],
+        assembly_id: str, contribution_id: str, checkpoint_ns: str = "",
+    ) -> object:
+        """读取一份冻结来源；沿原 detail owner 校验、保护及目标本地 fork 解析。"""
+        with self._storage.storage.open_read_snapshot(session_id, thread_id, checkpoint_ns) as snapshot:
+            record, kind, content_hash = self._storage.assemblies.get_context_contribution_detail(
+                snapshot, historical_owner=historical_owner,
+                assembly_id=assembly_id, contribution_id=contribution_id,
+            )
+            if record.protection != "public":
+                raise ValueError("此上下文来源的受保护正文不可打开")
+            if record.length > 8 * 1024 * 1024:
+                raise ValueError("单个上下文来源超过 8 MiB 内容读取上限，请打开其原始资源")
+            body = self._detail_store.read(
+                session_id=session_id, thread_id=thread_id, record=record, snapshot=snapshot,
+            )["detail"]
+            if contribution_content_hash_and_length(kind, body) != (content_hash, record.length):
+                raise ValueError("source-mismatch: contribution 正文与封存版本不一致")
+            return body
 
     def seal_context_plan(
         self,

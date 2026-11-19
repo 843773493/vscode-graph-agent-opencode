@@ -1,6 +1,6 @@
 # 统一 Trace 事件流与回放接口重构计划
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **历史计划**：不作为当前实施指令。文中的逐会话 SSE、JSONL 和事件记录器方案不能用于恢复旧链路；当前页面实时接入以[页面实时订阅](../architecture/runtime-distribution.md#页面实时订阅)为准，持久化与领域协议以各 owner 及现行 OpenSpec 为准。
 
 **Goal:** 让后端的事件总线、Trace 持久化、实时 SSE 与历史回放接口使用同一套事件模型，前端只需按 `session_id` 订阅一条 SSE 流即可实时渲染 Agent 完整执行过程。
 

@@ -77,8 +77,5 @@ async def test_packaged_electron_management_save_and_restart(
     assert all(exit_status["code"] == 0 and exit_status["signal"] is None for exit_status in native["exits"])
     assert native["launches"][0]["location"] == native["launches"][1]["location"]
     assert all(value["requestId"] for value in result["backendValues"])
-    # 工作区观察在订阅变化时也会主动中止旧流；插件流只允许正常关窗取消。
-    assert all(error.get("failure") == "net::ERR_ABORTED"
-        and (error.get("request", "").endswith("/observations/stream")
-            or (error.get("closing") and error.get("request", "").endswith(("/configuration-schemas/events", "/commands/events"))))
-        for error in result["pageErrors"])
+    # 常驻订阅已走 WS；HTTP 请求失败没有旧 SSE 的中断豁免。
+    assert result["pageErrors"] == []

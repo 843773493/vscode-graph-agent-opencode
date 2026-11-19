@@ -205,7 +205,7 @@
 
 内置 ask_user_async SHALL 仅接受 Markdown 正文，一次调用持久保存一条留言并立即返回原 question_id 和 saved，不等待答案。仅主 Agent 可用；子 Agent 经父 Agent 转达。留言只负责留存，不暂停任务、不创建审批或等待执行；用户通过原 Composer 发送普通消息回复，不建立答案 API 或自动已回答状态。
 
-Composer 上方 SHALL 提供默认折叠的留言入口，折叠时仅观察数量／revision，展开才有界分页读取正文；复用现有 Markdown 渲染器，文件引用仅在点击后读取正文。列表只提供逐条删除；删除墓碑阻止原工具操作重放复活留言。失效通知沿既有 EventChannel SSE，不轮询、不从 Trace 重建。Tab 的工作区／Session／Thread 归属显式固定，迟到响应不得写到别的 Tab。
+Composer 上方 SHALL 提供默认折叠的留言入口，折叠时仅观察数量／revision，展开才有界分页读取正文；复用现有 Markdown 渲染器，文件引用仅在点击后读取正文。列表只提供逐条删除；删除墓碑阻止原工具操作重放复活留言。失效通知沿既有 EventChannel owner 的 SSE 格式，由页面共享 `/api/gateway/realtime` WebSocket 逻辑订阅传输，不逐 Thread 创建 HTTP 长连接、不轮询、不从 Trace 重建。Tab 的工作区／Session／Thread 归属显式固定，迟到响应不得写到别的 Tab。
 
 #### Scenario: 用户隔日阅读和普通回复
 

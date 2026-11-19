@@ -60,7 +60,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .debug-refresh-button,
@@ -72,7 +72,7 @@
   background: color-mix(in srgb, var(--bt-surface-raised) 68%, transparent);
   color: var(--bt-text-primary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -110,12 +110,12 @@
 
 .debug-section-title-row h3 {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   font-weight: 600;
 }
 
 .debug-section-title-row > span {
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .debug-status {
@@ -135,13 +135,13 @@
   background: var(--bt-input-background, var(--bt-surface-raised));
   color: var(--bt-text-primary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .debug-shared-control-note {
   margin: 0;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.45;
 }
 
@@ -178,7 +178,7 @@
   padding: 3px 5px;
   border: 1px solid color-mix(in srgb, var(--bt-panel-border) 70%, transparent);
   border-radius: var(--bt-radius-small);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .debug-breakpoint-row > span:nth-child(2) {
@@ -225,18 +225,18 @@
 
 .debug-stop-card strong {
   display: block;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .debug-stop-card p {
   margin: 5px 0 8px;
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.45;
 }
 
 .debug-stop-card details {
   margin-top: 6px;
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .debug-stop-card pre {
@@ -246,7 +246,7 @@
   overflow: auto;
   border-radius: 3px;
   background: color-mix(in srgb, var(--bt-surface-base) 70%, transparent);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -254,7 +254,7 @@
 .debug-empty-state {
   padding: 18px 4px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.55;
 }
 
@@ -274,7 +274,7 @@
   grid-template-columns: 8px auto minmax(0, 1fr);
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .debug-timeline-row small,
@@ -295,7 +295,7 @@
 
 .debug-audit-details {
   margin-top: 5px;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .debug-audit-row {
@@ -315,7 +315,7 @@
   border: 1px solid color-mix(in srgb, var(--bt-status-danger) 48%, var(--bt-panel-border));
   border-radius: var(--bt-radius-small);
   color: var(--bt-status-danger);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   line-height: 1.4;
 }
 
@@ -324,7 +324,7 @@
   border: 1px solid color-mix(in srgb, var(--bt-status-warning) 48%, var(--bt-panel-border));
   border-radius: var(--bt-radius-small);
   color: var(--bt-status-warning);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   line-height: 1.4;
 }
 
@@ -360,7 +360,7 @@
 .node-debug-header span,
 .node-debug-frame-card small {
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-section {
@@ -390,7 +390,7 @@
   color: var(--bt-text-primary);
   background: var(--bt-surface-raised);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-controls button:hover,
@@ -419,7 +419,7 @@
 .node-debug-breakpoint-row {
   min-width: 0;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-breakpoint-row button:first-of-type {
@@ -444,11 +444,11 @@
 }
 
 .node-debug-breakpoint-row .verified {
-  color: #55c88a;
+  color: var(--bt-status-success);
 }
 
 .node-debug-breakpoint-row .unverified {
-  color: #d69d4f;
+  color: var(--bt-status-warning);
 }
 
 .node-debug-frame-card {
@@ -474,7 +474,7 @@
   border-radius: 4px;
   padding: 5px 7px;
   background: var(--bt-surface-raised);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-variables > div {
@@ -488,7 +488,7 @@
 .node-debug-section pre {
   overflow: auto;
   color: var(--bt-text-primary);
-  font: 11px/1.45 var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.45 var(--bt-font-family-mono);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -532,13 +532,13 @@
 }
 
 .debug-workbench-header strong {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .debug-workbench-header span {
   margin-top: 2px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .debug-workbench-header nav,
@@ -564,7 +564,7 @@
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -614,7 +614,7 @@
   background: var(--bt-surface-raised);
   color: var(--bt-text-primary);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -647,7 +647,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--bt-text-muted) 12%, transparent);
   color: var(--bt-text-muted) !important;
-  font-size: 9px !important;
+  font-size: var(--bt-font-size-small) !important;
 }
 
 .node-debug-status.running,
@@ -670,7 +670,7 @@
   max-width: 100%;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -754,7 +754,7 @@
 
 .node-debug-scheme-list small {
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-scheme-list .danger {
@@ -775,7 +775,7 @@
 
 .node-debug-scheme-section > p {
   margin: 0;
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.45;
 }
 
@@ -784,7 +784,7 @@
   border-radius: 5px;
   padding: 6px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-scheme-transfer[open] summary {
@@ -818,7 +818,7 @@
   gap: 6px;
   min-width: 0;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-source-preview > header > span {
@@ -840,7 +840,7 @@
   background: transparent;
   color: var(--bt-text-primary);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -850,7 +850,7 @@
   border: 1px solid var(--bt-panel-border);
   border-radius: var(--bt-radius-small);
   background: color-mix(in srgb, var(--bt-surface-base) 82%, transparent);
-  font: 10px/1.55 var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.55 var(--bt-font-family-mono);
 }
 
 .node-debug-code-line {
@@ -909,7 +909,7 @@
 
 .node-debug-source-preview > small {
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.4;
 }
 
@@ -923,7 +923,7 @@
   align-items: center;
   justify-content: space-between;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   cursor: pointer;
 }
 
@@ -964,7 +964,7 @@
   background: var(--bt-input-background, var(--bt-surface-raised));
   color: var(--bt-text-primary);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-breakpoint-row {
@@ -1009,7 +1009,7 @@
 .node-debug-variable-list small,
 .node-debug-action-list small {
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-variable-list > div {
@@ -1020,7 +1020,7 @@
   min-width: 0;
   padding: 4px 6px;
   border-bottom: 1px solid color-mix(in srgb, var(--bt-panel-border) 65%, transparent);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-variable-list code,
@@ -1064,7 +1064,7 @@
 
 .node-debug-evaluation-list strong {
   color: var(--bt-accent);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-section pre,
@@ -1077,7 +1077,7 @@
   border-radius: var(--bt-radius-small);
   background: var(--bt-surface-raised);
   color: var(--bt-text-primary);
-  font: 10px/1.45 var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.45 var(--bt-font-family-mono);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1088,7 +1088,7 @@
   gap: 5px;
   align-items: center;
   min-width: 0;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-action-list > div > span {
@@ -1096,7 +1096,7 @@
   border-radius: 3px;
   background: color-mix(in srgb, var(--bt-text-muted) 14%, transparent);
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-action-list > div > span.agent {
@@ -1113,7 +1113,7 @@
   display: grid;
   gap: 4px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-path-field {
@@ -1172,7 +1172,7 @@
 
 .debug-workbench-header > div span {
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .debug-workbench-header nav,
@@ -1196,7 +1196,7 @@
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   white-space: nowrap;
 }
 
@@ -1248,14 +1248,14 @@
 }
 
 .node-debug-header strong {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-header small {
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1265,7 +1265,7 @@
   border-radius: 999px;
   color: var(--bt-text-muted);
   background: color-mix(in srgb, var(--bt-text-muted) 11%, transparent);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-status.running,
@@ -1303,7 +1303,7 @@
   background: color-mix(in srgb, var(--bt-surface-raised) 88%, transparent);
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-header button:hover,
@@ -1391,7 +1391,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1408,7 +1408,7 @@
   background: var(--bt-surface-raised);
   color: var(--bt-text-primary);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -1439,7 +1439,7 @@
 .node-debug-source-preview > header > span {
   min-width: 0;
   overflow: hidden;
-  font: 10px var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.4 var(--bt-font-family-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1448,7 +1448,7 @@
   display: block;
   padding: 7px 9px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.4;
 }
 
@@ -1458,7 +1458,7 @@
   max-height: 310px;
   overflow: auto;
   padding: 5px 0;
-  font: 11px/1.55 var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.55 var(--bt-font-family-mono);
 }
 
 .node-debug-source-state {
@@ -1467,7 +1467,9 @@
   min-height: 100%;
   padding: 8px;
   color: var(--bt-text-muted);
-  font: 10px/1.5 var(--bt-font-ui, sans-serif);
+  font: inherit;
+  font-size: var(--bt-font-size-small);
+  line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -1533,7 +1535,7 @@
   border-radius: 6px;
   padding: 7px;
   background: color-mix(in srgb, var(--bt-surface-raised) 72%, transparent);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-secondary summary {
@@ -1567,7 +1569,7 @@
   color: var(--bt-text-primary);
   background: var(--bt-input-background, var(--bt-surface-raised));
   font: inherit;
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-breakpoint-list,
@@ -1582,7 +1584,7 @@
   min-width: 0;
   min-height: 24px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-breakpoint-row > span {
@@ -1650,7 +1652,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font: 10px var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.4 var(--bt-font-family-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1663,14 +1665,14 @@
   min-width: 0;
   padding: 4px 6px;
   border-bottom: 1px solid color-mix(in srgb, var(--bt-panel-border) 65%, transparent);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-variable-list code {
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-primary);
-  font: 10px var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.4 var(--bt-font-family-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1692,7 +1694,7 @@
   gap: 8px;
   color: var(--bt-text-muted);
   cursor: pointer;
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-variable-group[open] summary {
@@ -1703,7 +1705,7 @@
   display: block;
   padding-top: 6px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-evaluate-row,
@@ -1725,7 +1727,7 @@
   padding: 8px;
   color: var(--bt-text-primary);
   background: color-mix(in srgb, var(--bt-surface-base) 82%, transparent);
-  font: 10px/1.55 var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.55 var(--bt-font-family-mono);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1741,7 +1743,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-action-list > div > span {
@@ -1767,14 +1769,14 @@
 
 .node-debug-action-list time {
   color: var(--bt-text-muted);
-  font: 9px var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.4 var(--bt-font-family-mono);
 }
 
 .node-debug-configuration-view label {
   display: grid;
   gap: 4px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-start-button {
@@ -1813,7 +1815,7 @@
     gap: 3px;
     padding-right: 2px;
     padding-left: 2px;
-    font-size: 10px;
+    font-size: var(--bt-font-size);
   }
 
   .node-debug-code-line {
@@ -1883,7 +1885,9 @@
   color: var(--bt-text-primary);
   background: color-mix(in srgb, var(--bt-surface-raised) 97%, black 3%);
   box-shadow: 0 12px 32px rgb(0 0 0 / 32%);
-  font: 12px/1.35 var(--bt-font-family, sans-serif);
+  font: inherit;
+  font-size: var(--bt-font-size-small);
+  line-height: 1.35;
 }
 
 .node-debug-breakpoint-menu.editing {
@@ -1909,12 +1913,12 @@
 }
 
 .node-debug-breakpoint-menu header strong {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .node-debug-breakpoint-menu header span {
   color: var(--bt-text-muted);
-  font: 10px var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.4 var(--bt-font-family-mono);
 }
 
 .node-debug-breakpoint-menu > button {
@@ -1975,7 +1979,7 @@
   gap: 4px;
   margin: 0 7px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-breakpoint-menu form details {
@@ -2002,7 +2006,7 @@
   padding: 4px 7px;
   color: var(--bt-text-primary);
   background: var(--bt-input-background, var(--bt-surface-base));
-  font: 11px var(--bt-font-mono, monospace);
+  font: var(--bt-font-size)/1.4 var(--bt-font-family-mono);
 }
 
 .node-debug-breakpoint-menu form input:focus {
@@ -2013,7 +2017,7 @@
 .node-debug-breakpoint-menu form p {
   margin: 0 7px;
   color: var(--bt-status-danger);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
 }
 
 .node-debug-breakpoint-menu form footer {

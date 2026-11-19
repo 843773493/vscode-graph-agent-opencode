@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -20,17 +21,27 @@ from app.services.infrastructure.rollout_context.assembly.content_store import (
     load_snapshot,
     store_snapshot,
 )
+from app.services.infrastructure.rollout_context.assembly.detail_identity import (
+    detail_ref_key,
+)
 from app.services.infrastructure.rollout_context.checkpoint.saver import (
     RolloutCheckpointSaver,
 )
+from app.services.infrastructure.rollout_context.runtime import detail_store
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_control_state import (
     ContextSourceOwnerKey,
 )
 from app.services.infrastructure.rollout_context.runtime.context_sources.context_source_manager import (
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.runtime.detail_manifest import (
+    DetailUnavailableError,
+)
 from app.services.infrastructure.rollout_context.storage import (
     rollout_maintenance_owner,
+)
+from app.services.infrastructure.rollout_context.storage.catalog.context_notices import (
+    context_notice_metadata,
 )
 from app.services.infrastructure.rollout_context.storage.schema import (
     ASSEMBLY_CONTENT_SCHEMA_SQL,
@@ -54,6 +65,49 @@ from tests.support.rollout.context_registry import (
 )
 
 pytestmark = pytest.mark.parametrize("registry_db", ["protected"], indirect=True)
+
+
+def test_context_markers_follow_dispatched_versions_without_loading_bodies(production_context, monkeypatch):
+    saver, session, thread, connection, manager, prepare = production_context
+    snapshots = []
+    for attempt, revision in enumerate(("instructions:1", "instructions:1", "instructions:2", "instructions:1"), 1):
+        if attempt > 2:
+            manager.observe("instruction:R01", "基础规则第二版" if attempt == 3 else "基础规则第一版", revision=revision)
+        snapshot = prepare(f"marker-version-{attempt}")["snapshot"]
+        saver.register_model_call(session, thread_id=thread, execution_id=snapshot.execution_id,
+            model_call_id=snapshot.model_call_id, attempt=attempt, provider="marker-provider",
+            assembly_id=snapshot.assembly_id, dispatch_state="ready" if attempt == 1 else "dispatched")
+        if attempt == 1:
+            assert context_notice_metadata(connection, snapshot.active_view_id,
+                turn_ids=[snapshot.turn_id], execution_ids=[]) == []
+            saver.update_model_call_outcome(session, thread_id=thread, model_call_id=snapshot.model_call_id,
+                outcome="unknown", dispatch_state="dispatched")
+        if attempt == 3:
+            saver.update_model_call_outcome(session, thread_id=thread, model_call_id=snapshot.model_call_id,
+                outcome="failed", dispatch_state="failed")
+        snapshots.append(snapshot)
+    # 同一冻结请求的真实重试绑定不应产生第二组标记。
+    saver.update_model_call_outcome(session, thread_id=thread, model_call_id=snapshot.model_call_id,
+        outcome="failed", dispatch_state="failed")
+    saver.register_model_call(session, thread_id=thread, execution_id=snapshot.execution_id,
+        model_call_id="marker-version-retry", retry_of_model_call_id=snapshot.model_call_id,
+        attempt=5, provider="marker-provider", assembly_id=snapshot.assembly_id, dispatch_state="dispatched")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("标记元数据不得读取正文或恢复 assembly")
+
+    monkeypatch.setattr(content_store, "load_snapshot", forbidden)
+    rows = context_notice_metadata(connection, snapshots[-1].active_view_id,
+        turn_ids=[snapshots[-1].turn_id], execution_ids=[])
+    assert [(row.model_call_id, row.source_revision) for row in rows] == [
+        (snapshots[0].model_call_id, "instructions:1"),
+        (snapshots[2].model_call_id, "instructions:2"),
+        (snapshots[3].model_call_id, "instructions:1"),
+    ]
+    assert rows[0].anchor == "before_user_message"
+    assert [row.anchor for row in rows[1:]] == ["before_model_call", "before_model_call"]
+    assert rows[1].before_item_id is None
+    assert rows[1].anchor_ordinal > rows[0].anchor_ordinal
 
 
 @pytest.fixture
@@ -134,6 +188,109 @@ def test_cold_assembly_fetches_snapshot_body_once(shared_assemblies, monkeypatch
     )
     # header 只消费标量；整份历史正文只交给 registry 读取与校验一次。
     assert body_reads == 1
+
+
+def test_contribution_cold_read_uses_only_selected_frozen_detail(shared_assemblies, monkeypatch):
+    saver, session, thread, connection, manager, first, _second, _before = shared_assemblies
+    contribution_id = "source-full:instruction:R01:instructions:1"
+    manager.observe("instruction:R01", "已修改的当前来源不能替代历史", revision="instructions:changed")
+    before = connection.execute("SELECT * FROM assembly_content_nodes ORDER BY node_id").fetchall()
+    reads = []
+
+    def metadata_only(action, table, column, _database, _trigger):
+        if action == sqlite3.SQLITE_READ and (
+            (table, column) == ("context_assemblies", "snapshot_json") or table == "assembly_content_nodes"
+        ):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        connect = cold._storage.storage._connect
+        read = cold._detail_store._files.read
+
+        def observed_connection(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            db.set_authorizer(metadata_only)
+            return db
+
+        def observed_detail(ref, **kwargs):
+            reads.append(ref)
+            return read(ref, **kwargs)
+
+        monkeypatch.setattr(cold._storage.storage, "_connect", observed_connection)
+        monkeypatch.setattr(cold._detail_store._files, "read", observed_detail)
+        assert cold.read_context_contribution(
+            session, thread, historical_owner=(session, thread),
+            assembly_id=first.assembly_id, contribution_id=contribution_id,
+        ) == "基础规则第一版"
+    expected = next(entry.detail_ref for entry in first.selection if entry.included
+                    and entry.contribution_id == contribution_id)
+    assert reads == [expected]
+    assert connection.execute("SELECT * FROM assembly_content_nodes ORDER BY node_id").fetchall() == before
+
+
+def test_retained_contribution_remains_readable_after_gc_retention(shared_assemblies, monkeypatch):
+    saver, session, thread, _connection, _manager, first, _second, _before = shared_assemblies
+    cutoff = datetime.now(UTC) + timedelta(days=31)
+
+    class AfterRetention(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cutoff.astimezone(tz)
+
+    monkeypatch.setattr(detail_store, "datetime", AfterRetention)
+    with RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold:
+        assert cold.gc_context_plan_details(session, thread, expired_before=cutoff) == ()
+        assert cold.read_context_contribution(
+            session, thread, historical_owner=(session, thread),
+            assembly_id=first.assembly_id, contribution_id="source-full:instruction:R01:instructions:1",
+        ) == "基础规则第一版"
+
+
+@pytest.mark.parametrize("damage", ["owner", "excluded", "version", "protected", "oversized", "missing", "corrupt", "content_hash"])
+def test_contribution_read_rejects_invalid_binding_or_body_without_repair(shared_assemblies, damage):
+    saver, session, thread, connection, _manager, first, _second, _before = shared_assemblies
+    contribution_id = "source-full:instruction:R01:instructions:1"
+    selection = next(entry for entry in first.selection if entry.included and entry.contribution_id == contribution_id)
+    record = saver._storage.assemblies.get_context_plan_detail(session, thread, detail_ref=selection.detail_ref)
+    target = saver._detail_store._files.path(record.detail_ref)
+    owner = (session, thread)
+    expected = "source-mismatch"
+    if damage == "owner":
+        owner = (session, "other-thread")
+    elif damage == "excluded":
+        connection.execute("UPDATE context_assembly_selections SET included=0,source_cut_position_kind=NULL,source_cut_item_id=NULL WHERE assembly_id=? AND contribution_id=?",
+                           (first.assembly_id, contribution_id))
+        expected = "没有选入"
+    elif damage == "version":
+        connection.execute("UPDATE context_assembly_contributions SET source_revision='changed' WHERE assembly_id=? AND contribution_id=?",
+                           (first.assembly_id, contribution_id))
+    elif damage in {"protected", "oversized"}:
+        field, value = ("protection", "protected") if damage == "protected" else ("content_length", 8 * 1024 * 1024 + 1)
+        for table in ("context_assembly_contributions", "context_assembly_selections"):
+            connection.execute(f"UPDATE {table} SET {field}=? WHERE assembly_id=? AND contribution_id=?",
+                               (value, first.assembly_id, contribution_id))
+        # detail_ref 的 SQL key 由原 owner 编码，不从正文或当前来源重建。
+        connection.execute(f"UPDATE context_plan_details SET {field}=? WHERE detail_ref=?", (value, detail_ref_key(record.detail_ref)))
+        if damage == "protected":
+            connection.execute("UPDATE context_plan_details SET sensitive=1 WHERE detail_ref=?", (detail_ref_key(record.detail_ref),))
+        expected = "受保护" if damage == "protected" else "8 MiB"
+    elif damage == "missing":
+        target.unlink()
+        expected = "FileNotFoundError, errno=2"
+    elif damage == "corrupt":
+        target.write_bytes(b"{}")
+        expected = "manifest"
+    else:
+        connection.execute("UPDATE context_assembly_contributions SET content_hash=? WHERE assembly_id=? AND contribution_id=?",
+                           (sha256_jcs("different-body"), first.assembly_id, contribution_id))
+    connection.commit()
+    before = connection.execute("SELECT * FROM context_assembly_contributions ORDER BY assembly_id,contribution_ordinal").fetchall()
+    with (RolloutCheckpointSaver(saver._storage.storage.sessions_dir) as cold,
+          pytest.raises((ValueError, KeyError, DetailUnavailableError), match=expected)):
+        cold.read_context_contribution(session, thread, historical_owner=owner,
+                                       assembly_id=first.assembly_id, contribution_id=contribution_id)
+    assert connection.execute("SELECT * FROM context_assembly_contributions ORDER BY assembly_id,contribution_ordinal").fetchall() == before
 
 
 @pytest.fixture

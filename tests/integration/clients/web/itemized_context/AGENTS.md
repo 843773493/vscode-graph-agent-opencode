@@ -24,4 +24,4 @@
 
 - `test_mixed_source_freezing.py` 使用自己的配置、Skill/AGENTS 文件、端口及正式产物目录，复用唯一来源冻结浏览器驱动；两次模型响应屏障内同时改真实来源，等待 watcher 的精确 URI/原始 SHA/available 发布后放行。两轮五次请求验证 Turn AGENTS 与 model_call Skill 独立冻结、原调用的三次 Skill 选择、metadata 语义不变而 lineage 更新；删除当前 Skill、改写 AGENTS 后，经公开安全重启检查完整 API/UI selection/provenance 及冷 Saver 正文/hash。不替代唯一 Section 8 总验收、策略热更新、Windows或真实 Provider。
 - `test_policy_source_freezing.py`复用同一驱动，经真实Composer在首模型响应屏障内改工作区配置与AGENTS；由原watcher发布next_job后才放行，核原assembly不变、同Turn保留原策略、新Turn采用model_call。安全重启后逐项核完整API/UI来源与冷Saver策略、正文和request hash，不代替唯一Section8、Windows或外部Provider。
-- 本场景先等待并通过原版按钮关闭Welcome，再执行唯一一次精确owner导航；product-006请求200但目标Tab缺席的启动导航时序仍留TODO，不把原因当作已证，也不代替初始化时序验收。新增五调用/五份UI整段400秒，原三调用仍240秒，业务内期限保持。
+- 来源冻结场景等待真实会话目录完成初始化，再用原关闭全部编辑器命令结清初始展示并导航精确 owner，不依赖欢迎页的语言和预览标签文案。分页以原 inspector 的 `aria-busy` 等待加载结清；保留五调用／五份 UI 的400秒及原三调用240秒期限。显式 `BOXTEAM_SOURCE_WEB_ASSETS` 可复用同批已成功构建的不可变产物，记录路径、版本与主包指纹；未设置时仍使用正式构建 fixture。

@@ -42,6 +42,9 @@ from app.services.infrastructure.rollout_context.runtime.context_sources.context
     ContextSourceDescriptor,
     ContextSourceManager,
 )
+from app.services.infrastructure.rollout_context.storage.catalog.context_notices import (
+    context_notice_metadata,
+)
 from app.services.infrastructure.rollout_context.storage.schema import (
     ROLLOUT_SCHEMA_VERSION,
 )
@@ -146,6 +149,27 @@ def notice_case(request, session_bundle_factory, frozen_provider_wire, frozen_pr
     saver = RolloutCheckpointSaver(sessions)
     return NoticeCase(saver, session, saver._storage.storage.main_thread_id(session), sessions,
                       frozen_provider_wire, frozen_provider_activation)
+
+
+def test_internal_context_marker_has_execution_boundary_without_turn_root(notice_case):
+    case = notice_case
+    admission, _intent = case.internal("marker-boundary")
+    manager = ContextSourceManager(owner=ContextSourceOwnerKey(case.session, case.thread), control_state_port=case.saver)
+    manager.register(ContextSourceDescriptor(source_id="instruction:internal-marker", source_kind="agent_instructions",
+        name="内部执行指引", description="内部执行指引", internal_locator="instruction-producer://internal-marker",
+        root_placement="root_eligible"), tracking_status="tracked")
+    manager.observe("instruction:internal-marker", "内部执行当时的冻结规则", revision="internal:1")
+    snapshot = case.prepare(admission, "internal-marker-prepare", manager=manager)
+    case.saver.update_model_call_outcome(case.session, thread_id=case.thread,
+        model_call_id=snapshot.model_call_id, outcome="unknown", dispatch_state="dispatched")
+    with case.saver._storage.storage.read_connection(case.session, case.thread, "") as connection:
+        rows = context_notice_metadata(connection, snapshot.active_view_id, turn_ids=[],
+            execution_ids=[admission.execution_id])
+    assert len(rows) == 1
+    assert rows[0].turn_id is None
+    assert rows[0].anchor == "before_model_call"
+    assert rows[0].anchor_ordinal is not None
+    assert rows[0].item_id is None
 
 
 @pytest.fixture(params=["user_turn", "internal"])

@@ -14,6 +14,7 @@ def test_sse_endpoints_publish_event_contracts() -> None:
     assert task_response["x-sse-events"] == {
         "changed": {"$ref": "#/components/schemas/PersistentTaskChangedDTO",
                     "x-protobuf-message": "boxteam.workspace.v2.PersistentTaskChangedDTO"},
+        "error": {"$ref": "#/components/schemas/SseErrorDTO", "x-protobuf-message": "boxteam.workspace.v2.SseError"},
         "snapshot": {"$ref": "#/components/schemas/PersistentTaskListDTO",
                      "x-protobuf-message": "boxteam.workspace.v2.PersistentTaskListDTO"},
     }
@@ -46,14 +47,14 @@ def test_sse_endpoints_publish_event_contracts() -> None:
     }
     assert set(trace_response["content"]) == {"text/event-stream"}
 
-    observation_response = paths["/api/v1/workspaces/{workspace_id}/workspace/observations/stream"]["post"]["responses"]["200"]
-    assert observation_response["x-sse-events"] == {
-        "observation": {
-            "$ref": "#/components/schemas/WorkspaceObservationFrameDTO",
-            "x-protobuf-message": "boxteam.workspace.v2.WorkspaceObservationFrameDTO",
-        },
-    }
-    assert set(observation_response["content"]) == {"text/event-stream"}
+    assert "/api/v1/workspaces/{workspace_id}/workspace/observations/stream" not in paths
+    for path, event, model in [
+        ("/session-catalog/snapshot/events", "session_navigation", "NavigationSnapshotDTO"),
+        ("/resources/events", "resources_changed", "WorkspaceResourceChangesDTO"),
+    ]:
+        response = paths["/api/v1/workspaces/{workspace_id}" + path]["get"]["responses"]["200"]
+        assert response["x-sse-events"][event]["$ref"] == "#/components/schemas/" + model
+        assert set(response["content"]) == {"text/event-stream"}
 
     assert "/api/v1/workspaces/{workspace_id}/jobs/{job_id}/events" not in paths
     assert "/api/v1/workspaces/{workspace_id}/jobs/{job_id}/events/stream" not in paths
@@ -82,7 +83,9 @@ def test_every_sse_event_model_is_resolvable_and_generated() -> None:
 
     assert declared_models == {
         "TraceEventDTO", "PersistentTaskListDTO", "PersistentTaskChangedDTO",
-        "WorkspaceFileChangeBatchDTO", "SseErrorDTO", "WorkspaceObservationFrameDTO", "ConfigEventDTO",
+        "WorkspaceFileChangeBatchDTO", "SseErrorDTO", "ConfigEventDTO",
+        "UserQuestionSummaryDTO", "LlmTestStartDTO", "LlmTestDeltaDTO", "LlmTestResultDTO",
+        "NavigationSnapshotDTO", "WorkspaceResourceChangesDTO",
     }
 
     runtime_schema_path = (

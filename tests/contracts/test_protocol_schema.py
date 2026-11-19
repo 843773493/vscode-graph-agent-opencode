@@ -85,7 +85,7 @@ def test_business_union_still_rejects_public_field_drift(mutation: str) -> None:
 
 
 @pytest.mark.parametrize("message_name", [
-    "TraceEvent", "WorkspaceObservationFrameDTO", "TaskActionDTO",
+    "TraceEvent", "TaskActionDTO",
     "WorkspaceFileChangeBatch", "WorkspaceDirectoryKeyDTO", "WorkspaceFileNodeDTO",
 ])
 def test_export_checks_fresh_proto_descriptor_before_publishing(

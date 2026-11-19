@@ -41,7 +41,7 @@ function isTargetTurn(item: ChatTranscriptItem, turnId: string): boolean {
 /** 用户跳转与保存位置恢复共用同一稳定 Turn 锚点；索引和尺寸只在定位时读取。 */
 export function useTurnAnchorNavigation({
   items, scopeKey, streamRef, scrollerRef, followsLatestRef,
-  onLoadAroundTurn, historyLoading, viewState, onViewStateChange, onViewStateRestoreStatus,
+  onLoadAroundTurn, onLoadLatestMessages, hasNewerMessages, historyLoading, viewState, onViewStateChange, onViewStateRestoreStatus,
   messageNavigation,
 }: {
   items: readonly ChatTranscriptItem[];
@@ -50,6 +50,8 @@ export function useTurnAnchorNavigation({
   scrollerRef: React.MutableRefObject<HTMLElement | null>;
   followsLatestRef: React.MutableRefObject<boolean>;
   onLoadAroundTurn: LoadAroundTurn;
+  onLoadLatestMessages: () => Promise<void>;
+  hasNewerMessages: boolean;
   historyLoading: boolean;
   viewState?: TurnViewportPosition | null;
   onViewStateChange?: (position: TurnViewportPosition) => void;
@@ -87,12 +89,40 @@ export function useTurnAnchorNavigation({
   }, []);
   const closeMessageNavigation = React.useCallback(() => cancelAnchor(true), [cancelAnchor]);
 
+  const preserveViewport = React.useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller || anchorRef.current) return;
+    const viewport = scroller.getBoundingClientRect();
+    const element = Array.from(scroller.querySelectorAll<HTMLElement>("[data-turn-id]"))
+      .find(candidate => {
+        const bounds = candidate.getBoundingClientRect();
+        return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+      });
+    if (!element?.dataset.turnId) return;
+    // 前插与后续高度测量共用原锚点；保留首行留白，不发布导航或业务状态。
+    const anchor: TurnAnchor = { scopeKey: currentRef.current.scopeKey, turnId: element.dataset.turnId,
+      offset: viewport.top - element.getBoundingClientRect().top, restoring: false,
+      controller: new AbortController(), loading: false, located: true };
+    anchorRef.current = anchor;
+    currentRef.current.onViewStateChange?.({ turn_anchor: anchor.turnId,
+      scroll_offset: Math.max(0, anchor.offset), follow_latest: false });
+    return () => { if (anchorRef.current === anchor) cancelAnchor(); };
+  }, [cancelAnchor, scrollerRef]);
+
   const scrollToLatest = React.useCallback((behavior: "auto" | "smooth" = "auto", rememberIntent = true) => {
     if (rememberIntent) cancelAnchor(true);
     else if (anchorRef.current) return;
     followsLatestRef.current = true;
+    if (rememberIntent && hasNewerMessages) {
+      void onLoadLatestMessages().catch((error: unknown) => {
+        if (currentRef.current.scopeKey !== scopeKey) return;
+        followsLatestRef.current = false;
+        currentRef.current.onViewStateRestoreStatus?.(t("chat.history.loadNewerFailed", errorMessage(error)));
+      });
+      return;
+    }
     streamRef.current?.scrollToIndex({ index: "LAST", align: "end", behavior });
-  }, [cancelAnchor, followsLatestRef, streamRef]);
+  }, [cancelAnchor, followsLatestRef, hasNewerMessages, onLoadLatestMessages, scopeKey, streamRef]);
 
   const failAnchor = React.useCallback((anchor: TurnAnchor, message: string) => {
     if (anchorRef.current !== anchor || anchor.scopeKey !== currentRef.current.scopeKey) return;
@@ -267,7 +297,7 @@ export function useTurnAnchorNavigation({
   }, []);
 
   return {
-    anchorRef, cancelAnchor, navigateToTurn, scheduleAnchorAlignment, scrollToLatest,
+    anchorRef, cancelAnchor, navigateToTurn, preserveViewport, scheduleAnchorAlignment, scrollToLatest,
     closeMessageNavigation,
     locatedMessage: located?.scopeKey === scopeKey && "reference" in located.value ? located.value : undefined,
     locatedItem,

@@ -1,4 +1,4 @@
-import type { FormEvent } from 'react';
+import type { FormEvent, ReactNode } from 'react';
 import { t } from '../../../../shared/core/i18n/index.js';
 
 interface OptionSchema {
@@ -43,14 +43,15 @@ function JsonOption({ label, value, inherited, disabled, objectOnly = false, onE
       <button type="submit" disabled={disabled}>{t('configuration.options.applyValue')}</button>
     </form>
     {inherited !== undefined ? <small>{t('configuration.options.lowerDefinition', shown(inherited))}</small> : null}
-    {value !== undefined ? <button type="button" disabled={disabled} onClick={() => onEdit(undefined)}>{t('configuration.entities.restoreField')}</button> : null}
+    {value !== undefined ? <button type="button" disabled={disabled} onClick={() => onEdit(undefined)}>{t(inherited === undefined ? 'configuration.options.clear' : 'configuration.entities.restoreField')}</button> : null}
   </div>;
 }
 
 /** 只编辑当前来源的明确选项；有效选项和协议一致性仍由原 Backend resolver 决定。 */
-export function ModelOptionFields({ schema, read, inherited, disabled, onEdit }: {
+export function ModelOptionFields({ schema, read, inherited, disabled, onEdit, scope, advanced }: {
   schema: OptionSchema; read: (path: OptionPath) => unknown; inherited: (path: OptionPath) => unknown;
   disabled: boolean; onEdit: (path: OptionPath, value: unknown) => void;
+  scope: 'provider' | 'model'; advanced?: ReactNode;
 }) {
   const apiMode = schema.properties?.api_mode.properties;
   const protocol = read(['api_mode', 'protocol']);
@@ -60,7 +61,7 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit }:
     return <label key={name} className="configuration-entity-field">{name}
       <select value={typeof value === 'boolean' ? String(value) : ''} disabled={disabled}
         onChange={event => onEdit(path, event.target.value === '' ? undefined : event.target.value === 'true')}>
-        <option value="">{t('configuration.entities.inherit')}</option>
+        <option value="">{t('configuration.entities.defaultValue')}</option>
         <option value="true">true</option><option value="false">false</option>
       </select>
       {description ? <small>{description}</small> : null}
@@ -93,21 +94,22 @@ export function ModelOptionFields({ schema, read, inherited, disabled, onEdit }:
         else { delete next.protocol; delete next.supports_reasoning; }
         onEdit(['api_mode'], Object.keys(next).length ? next : undefined);
       }}>
-        <option value="">{t('configuration.entities.inherit')}</option>
-        {apiMode?.protocol.enum?.filter((value): value is string => typeof value === 'string').map(value => <option key={value} value={value}>{value}</option>)}
+        <option value="">{t(scope === 'model' ? 'configuration.entities.useServiceDefault' : 'configuration.entities.defaultValue')}</option>
+        {apiMode?.protocol.enum?.filter((value): value is string => typeof value === 'string').map(value => <option key={value} value={value}>{t(`configuration.protocol.${value}`)}</option>)}
       </select>
-      <small>{t('configuration.entities.protocolReplacement')}</small>
     </label>
     <label className="configuration-entity-field">{t('configuration.entities.streaming')}
       <select value={typeof stream === 'boolean' ? String(stream) : ''} disabled={disabled}
         onChange={event => onEdit(['api_mode', 'streaming'], event.target.value === '' ? undefined : event.target.value === 'true')}>
-        <option value="">{t('configuration.entities.inherit')}</option>
+        <option value="">{t(scope === 'model' ? 'configuration.entities.useServiceDefault'
+          : inherited(['api_mode', 'streaming']) === undefined ? 'configuration.entities.defaultStreaming' : 'configuration.entities.defaultValue')}</option>
         <option value="true">{t('configuration.entities.streamEnabled')}</option>
         <option value="false">{t('configuration.entities.streamDisabled')}</option>
       </select>
     </label>
     <details className="configuration-model-options">
       <summary>{t('configuration.options.advanced')}</summary>
+      {advanced}
       <h4>{t('configuration.options.capabilities')}</h4>
       {Object.entries(apiMode?.model_info.properties ?? {}).map(([key, field]) => {
         const path = ['api_mode', 'model_info', key], value = read(path);

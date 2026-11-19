@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package boxteam.gateway.v2;
+
+// 页面到入口 Gateway 的统一订阅控制帧；业务正文仍由原 HTTP owner 校验。
+message RealtimeRequest {
+  string type = 1;
+  optional string token = 2;
+  optional uint32 subscription_id = 3;
+  optional string path = 4;
+  optional string method = 5;
+  map<string, string> headers = 6;
+  optional string body = 7;
+  optional uint32 consumed_bytes = 8;
+}
+
+// ready、headers、end、error 使用 JSON；正文使用 uint32 大端订阅 ID + 原字节的二进制帧。
+message RealtimeResponse {
+  string type = 1;
+  optional uint32 subscription_id = 2;
+  optional uint32 status = 3;
+  map<string, string> headers = 4;
+  optional string message = 5;
+  optional string request_id = 6;
+}

@@ -1,3 +1,5 @@
+import { useRealtimeSocket } from "../../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
 import { afterEach, expect, test } from 'bun:test';
 import { watchPluginConfigurationSchemas } from '../pluginConfigurationSchemas';
 import { installSessionApiFetchMock, unwrapSessionApiFetch } from '../session/sessionApiFetchMock';

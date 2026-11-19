@@ -32,13 +32,13 @@
 }
 
 .gateway-local-connection-card strong {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-local-connection-card small {
   margin-top: 4px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-device-icon {
@@ -58,7 +58,7 @@
   min-height: 20px;
   padding: 0 7px;
   border-radius: 999px;
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
   font-weight: 650;
 }
 
@@ -100,14 +100,14 @@
 
 .gateway-connection-section-heading h2 {
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-connection-section-heading p,
 .gateway-connection-section-heading > span {
   margin-top: 4px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-remote-connection-list article,
@@ -137,7 +137,7 @@
 .gateway-device-copy strong {
   overflow: hidden;
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -147,7 +147,7 @@
   overflow: hidden;
   margin-top: 4px;
   color: var(--bt-text-muted);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -160,7 +160,7 @@
 
 .gateway-remote-connection-meta > span {
   color: var(--bt-text-muted);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-remote-connection-meta button,
@@ -172,7 +172,7 @@
   background: var(--gateway-input);
   color: var(--bt-text-primary);
   font: inherit;
-  font-size: 9px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -205,12 +205,12 @@
 
 .gateway-connection-empty strong {
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-connection-empty p {
   margin: 5px 0 0;
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-federation-peers {
@@ -220,7 +220,7 @@
 .gateway-federation-peers h3 {
   margin: 14px 0 8px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-federation-peers article {
@@ -239,13 +239,13 @@
 }
 
 .gateway-federation-peers strong {
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-federation-peers small {
   margin-top: 3px;
   color: var(--bt-text-muted);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-connection-overlay {
@@ -324,13 +324,13 @@
 }
 
 .gateway-connection-dialog > header h2 {
-  font-size: 13px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-connection-dialog > header p {
   margin-top: 5px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.5;
 }
 
@@ -340,7 +340,7 @@
   border-radius: 7px;
   background: color-mix(in srgb, var(--bt-status-danger) 9%, transparent);
   color: var(--bt-status-danger);
-  font-size: 9px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-connection-dialog-content {
@@ -391,14 +391,14 @@
 
 .gateway-connection-choice-list strong,
 .gateway-connection-host-row strong {
-  font-size: 11px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-connection-choice-list small,
 .gateway-connection-host-row small {
   margin-top: 4px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-connection-selection > input,
@@ -449,7 +449,7 @@
 
 .gateway-ssh-host-list .gateway-connection-state small {
   margin-top: 5px;
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-ssh-picker-footer,
@@ -519,7 +519,7 @@
   display: block;
   margin-bottom: 5px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-manual-ssh-form input {
@@ -547,7 +547,7 @@
   display: block;
   margin-bottom: 5px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-device-addresses {
@@ -562,7 +562,7 @@
 .gateway-device-addresses legend {
   margin-bottom: 5px;
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-device-addresses > button {
@@ -592,13 +592,13 @@
 }
 
 .gateway-device-addresses strong {
-  font-size: 10px;
+  font-size: var(--bt-font-size);
 }
 
 .gateway-device-addresses small {
   margin-top: 3px;
   color: var(--bt-text-muted);
-  font-size: 8px;
+  font-size: var(--bt-font-size-small);
 }
 
 .gateway-device-addresses > button > .codicon:last-child {
@@ -615,7 +615,7 @@
   border-radius: 8px;
   background: var(--gateway-panel-soft);
   color: var(--bt-text-muted);
-  font-size: 9px;
+  font-size: var(--bt-font-size);
   line-height: 1.5;
 }
 
@@ -672,7 +672,7 @@
   background: var(--bt-code-background);
   color: var(--bt-text-primary);
   font-family: var(--bt-font-family-mono);
-  font-size: 9px;
+  font-size: var(--bt-font-size);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;

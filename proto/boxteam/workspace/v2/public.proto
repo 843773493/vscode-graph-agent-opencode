@@ -2954,6 +2954,13 @@ message TurnHistoryLoadRequest {
   repeated string tool_call_ids = 10;
   optional TurnMessageReferenceDTO anchor_message = 11;
   optional string anchor_tool_result = 12;
+  optional string context_cursor = 13;
+}
+
+message ContextNoticeBatchDTO {
+  string owner_id = 1;
+  string owner_kind = 2;
+  repeated TurnResponsePartDTO parts = 3;
 }
 
 message TurnHistoryPageDTO {
@@ -2972,6 +2979,7 @@ message TurnHistoryPageDTO {
   optional int64 source_view_revision = 13;
   optional TurnMessageLocationDTO located_message = 14;
   optional TurnToolResultDTO located_tool_result = 15;
+  repeated ContextNoticeBatchDTO context_notices = 16;
 }
 
 message InternalExecutionHistoryDTO {
@@ -3057,6 +3065,14 @@ message TurnResponsePartDTO {
   optional string context_source_id = 18;
   optional string context_model_call_id = 19;
   optional string context_before_item_id = 20;
+  optional ContextContentReferenceDTO context_content_ref = 21;
+  optional string context_source_revision = 22;
+  optional int64 context_content_length = 23;
+  optional string context_availability = 24;
+  optional string context_anchor = 25;
+  optional int64 context_anchor_ordinal = 26;
+  optional int64 context_plan_ordinal = 27;
+  optional string context_cursor = 28;
 }
 
 message TurnResponseSourceDTO {
@@ -3332,34 +3348,6 @@ message WorkspaceFileWatchRequest {
 }
 
 // 每个逻辑观察者保留独立的 source、恢复游标和生命周期。
-message WorkspaceObservationSubscription {
-  string subscription_id = 1;
-  // 持久任务使用 persistent_tasks；session_id 省略时观察整个工作区。
-  string kind = 2;
-  optional string session_id = 3;
-  optional int64 activity_after = 4;
-  optional string trace_after = 5;
-  repeated string paths = 6;
-  optional int64 files_after = 7;
-  // 仅 Trace 观察者使用；省略时保留 Session 聚合视图。
-  optional string thread_id = 8;
-}
-
-message WorkspaceObservationRequest {
-  repeated WorkspaceObservationSubscription subscriptions = 1;
-}
-
-// frame 携带领域 owner 的完整原 SSE 帧；物理聚合不重编码领域事件。
-message WorkspaceObservationFrameDTO {
-  string subscription_id = 1;
-  string state = 2;
-  optional string frame = 3;
-  optional int32 status = 4;
-  optional string detail_json = 5;
-  // connected 时逻辑 reader 的续读水位；files 是事件序号的十进制字符串，
-  // Trace/activity 当前不设置。它不是历史分页 cursor 或路由 revision。
-  optional string cursor = 6;
-}
 
 message WorkspaceIndexRebuildDTO {
   string status = 1;
@@ -3848,10 +3836,23 @@ message LLMRequestLogSummaryDTO {
 }
 
 // 卡片操作只在用户接受后读取；稳定 Item 引用不冻结正文版本。
+message ContextContentReferenceDTO {
+  // item 或 sealed_contribution；引用分支由运行时业务模型校验。
+  string kind = 1;
+  optional string item_id = 2;
+  // 历史 owner 保留原身份，物理存储使用 inspection 路由的目标 Thread。
+  optional string session_id = 3;
+  optional string thread_id = 4;
+  optional string assembly_id = 5;
+  optional string contribution_id = 6;
+}
+
 message ThreadItemInspectionRequest {
   optional string item_id = 1;
   optional string message_id = 2;
+  // content_metadata 仅返回沿原正文投影取得的格式／资源引用，content 才交付正文。
   string operation = 3;
+  optional ContextContentReferenceDTO content_ref = 4;
 }
 
 message ThreadItemLocationDTO {
@@ -3880,4 +3881,10 @@ message ThreadItemInspectionDTO {
   repeated ThreadItemContentDTO contents = 2;
   optional LLMRequestLogMatchDTO request_log = 3;
   optional TraceMatchDTO trace = 4;
+  optional ContextContentReferenceDTO content_ref = 5;
+}
+
+// 工作区终端资源失效通知；null 表示重新取得完整列表。
+message WorkspaceResourceChangesDTO {
+  google.protobuf.ListValue resource_ids = 1;
 }

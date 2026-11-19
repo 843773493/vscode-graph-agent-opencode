@@ -1,3 +1,5 @@
+import { useRealtimeSocket } from "../../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
 import { gatewayWorkspaceKey } from "../../api/workspaceIdentity";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { act } from "react-test-renderer";
@@ -836,7 +838,7 @@ describe("navigation 事件的真实 runtime 消费", () => {
   });
 
   test("真实观察连接闲置不轮询；推送和断线首帧补齐目录，dispose释放reader", async () => {
-    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout } });
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout, location: { origin: "http://127.0.0.1:49827" } } });
     const connections: { controller: ReadableStreamDefaultController<Uint8Array>; id: string; cancelled: boolean }[] = [];
     const refreshed: number[] = [];
     const errors: string[] = [];
@@ -846,18 +848,13 @@ describe("navigation 事件的真实 runtime 消费", () => {
     const encoder = new TextEncoder();
     installGatewayFetch(({ path, url, init }) => {
       if (path === "/api/gateway/health") return apiSuccessResponse({ gateway_id: GATEWAY_ID });
-      if (path === "/api/v1/workspace/observations/stream") {
-        const { subscriptions } = JSON.parse(String(init?.body)) as {
-          subscriptions: { subscription_id: string; kind: string }[];
-        };
-        expect(subscriptions.map(item => item.kind)).toEqual(["session_navigation"]);
-        const id = subscriptions[0].subscription_id;
+      if (path === "/api/v1/session-catalog/snapshot/events") {
+        const id = "navigation";
         let connection!: (typeof connections)[number];
         return new Response(new ReadableStream<Uint8Array>({
           start(controller) {
             connection = { controller, id, cancelled: false };
             connections.push(connection);
-            controller.enqueue(encoder.encode(`event: observation\ndata: ${JSON.stringify({ subscription_id: id, state: "connected" })}\n\n`));
           },
           cancel() { connection.cancelled = true; },
         }), { headers: { "Content-Type": "text/event-stream" } });
@@ -887,9 +884,7 @@ describe("navigation 事件的真实 runtime 消费", () => {
       const connection = connections[connections.length - 1];
       const frame = `event: session_navigation\ndata: ${JSON.stringify({ workspace_id: WORKSPACE_ID,
         catalog_revision: 7 + watermark, event_seq_watermark: watermark, generation: 1 })}\n\n`;
-      connection.controller.enqueue(encoder.encode(`event: observation\ndata: ${JSON.stringify({
-        subscription_id: connection.id, state: "frame", frame,
-      })}\n\n`));
+      connection.controller.enqueue(encoder.encode(frame));
     }
     const runtime = createSessionCatalogOutboxRuntime({ apiPort: API_PORT,
       onError: message => errors.push(message),
@@ -1110,7 +1105,7 @@ describe("navigation 对账中的已打开会话 owner", () => {
       await pendingError;
       expect(mirror.current().currentSession).toEqual(fresh);
       expect(errors.some((message) => message.includes("会话日期目录正在隔离"))).toBe(true);
-      expect(errors).toContain(`对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : 会话日期目录正在隔离 [request_id=request-catalog-owner-409]`);
+      expect(errors).toContain(`对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : 会话日期目录正在隔离；请求=/api/v1/sessions/ses_catalog_owner；request_id=request-catalog-owner-409 [request_id=request-catalog-owner-409]`);
       status = 404; revision = 9;
       await notifications.send();
       await removed;
@@ -1171,7 +1166,7 @@ describe("navigation 对账中的已打开会话 owner", () => {
         responses[attempt - 1]!.release(response);
         await flushReactEffects();
         expect(errors).toEqual(Array.from({ length: attempt }, (_, index) =>
-          `对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : session_deletion_pending [request_id=request-owner-pending-${index + 1}]`));
+          `对账会话目录操作失败 (${GATEWAY_WORKSPACE_ID}): 请求失败 409 : session_deletion_pending；请求=/api/v1/sessions/ses_catalog_owner；request_id=request-owner-pending-${index + 1} [request_id=request-owner-pending-${index + 1}]`));
         expect(mirror.current().currentSession).toEqual(owner);
       }
       tick();

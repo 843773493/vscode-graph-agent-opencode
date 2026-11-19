@@ -1,13 +1,13 @@
 # 客户端源码与测试架构
 
 > **决策状态**：采纳  
-> **当前实施范围**：纯 Web 客户端、共享边界、Workspace 辅助服务与测试基础设施
+> **当前实施范围**：共享 Workbench、Web／Electron 容器、Workspace 辅助服务与测试基础设施
 
 ## 1. 当前开发范围
 
-当前唯一开发、构建和验证的客户端是 `src/clients/web/`。Electron、Electron renderer parity、React Native 和移动 Web parity 只预留目录与依赖方向，都是 TODO；当前功能不要求同步实现这些客户端。
+完整界面入口是 `src/clients/workbench/`，Web 与 Electron 共用原版 Workbench 外层及 `src/clients/web/` 的 React 会话产品。`electron/` 已实现窗口、生命周期和固定存储宿主，`electron-web/` 是其 renderer 入口；React Native 和移动 Web parity 仍是 TODO。浏览器验证不能代替打包 Electron 的原生验收。
 
-纯 Web 代码仍需考虑未来兼容性：跨进程协议和纯业务模型不得无故绑定浏览器全局对象。但兼容性只约束边界设计，不代表要提前编写 Electron preload、React Native adapter 或 VS Code bridge。
+跨进程协议和纯业务模型不得无故绑定浏览器全局对象。Electron 的文件和网络继续走 Web 的后端 URI、虚拟文件系统及 Gateway；不为未来客户端预写原生 IPC、adapter 或第二套产品实现。
 
 ## 2. 源码结构
 
@@ -18,10 +18,11 @@ src/
 │   │   ├── core/                  # 纯 TypeScript；无 UI/平台运行时依赖
 │   │   ├── web-ui/                # 可复用桌面 React DOM 层
 │   │   └── mobile-web-ui/         # 可复用移动 React DOM 层
-│   ├── web/                        # 当前唯一维护的客户端
-│   ├── electron/                   # TODO
+│   ├── workbench/                  # Web／Electron 共用工作台入口与外层布局
+│   ├── web/                        # React 会话组件、业务 Hook 与共享状态
+│   ├── electron/                   # 窗口、生命周期、固定存储宿主
 │   ├── mobile/                     # TODO
-│   ├── electron-web/               # TODO，Electron renderer 浏览器 parity
+│   ├── electron-web/               # Electron renderer 及浏览器 parity 入口
 │   └── mobile-web/                 # TODO，移动布局浏览器 parity
 ├── workspace-services/
 │   ├── browser/
@@ -39,6 +40,10 @@ src/clients/shared/core
 src/clients/shared/web-ui
     ↓
 src/clients/web
+    ↓
+src/clients/workbench
+    ↓
+src/clients/electron-web
 ```
 
 `src/workspace-services/` 可以依赖 `src/shared/`，不能依赖客户端。共享代码只在复用需求已出现时提取；空的预留目录不应产生占位实现。
@@ -53,7 +58,7 @@ src/clients/web
 
 验证跨进程、跨语言稳定协议，位于 `tests/contracts/`：
 
-- `api/`：Gateway、Workspace HTTP、OpenAPI、认证、`request_id` 和 SSE；
+- `api/`：Gateway、Workspace HTTP、OpenAPI、认证、`request_id` 与领域 SSE 格式；页面连接另核共享实时 WebSocket 控制及字节合同；
 - `clients/`：共享类型、生成类型和客户端状态协议；
 - `workspace_services/`：Browser、Terminal 等辅助服务公开边界。测试目录使用下划线以保持 Python 可导入；源码仍使用 `src/workspace-services/`。
 
@@ -69,6 +74,8 @@ src/clients/web
 - React Native Web 替代原生运行面。
 
 浏览器本身是真的、Gateway/后端大部分是真的，均不能抵消关键链路存在替身这一事实。
+
+常驻事件的网络证据观察 `/api/gateway/realtime` 的真实订阅、响应头、字节、结束与取消帧，复用 `tests/support/workbench/realtime.mjs`；不能等待已删除的 observation HTTP 请求，或把多个逻辑订阅计为多条物理连接。后端 SSE owner、有限请求流和 PTY／DAP 等专用连接分别验证，不能把取消或连接建立当成业务完成。多视图验收须同时保留普通 HTTP 请求可达与原 owner／游标隔离证据；架构边界见[页面实时订阅](../architecture/runtime-distribution.md#页面实时订阅)。
 
 ### E2E
 

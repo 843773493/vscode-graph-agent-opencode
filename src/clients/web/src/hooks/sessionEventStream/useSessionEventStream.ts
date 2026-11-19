@@ -1,3 +1,4 @@
+import { RealtimeConnectionExhaustedError } from "../../api/stream/realtime";
 import {
   useCallback,
   useEffect,
@@ -233,6 +234,10 @@ export function useSessionEventStream({
           });
         } catch (error) {
           if (controller.signal.aborted) {
+            return;
+          }
+          if (error instanceof RealtimeConnectionExhaustedError) {
+            setState(previous => ({ ...previous, status: error.message }));
             return;
           }
           if (error instanceof TraceCursorGoneError) {

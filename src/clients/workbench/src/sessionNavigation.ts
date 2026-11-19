@@ -41,11 +41,10 @@ export class SessionNavigation extends ViewPane {
     @ICommandService private readonly commands: ICommandService,
   ) {
     super(options, keybindings, menus, configuration, contexts, views, instantiation, opener, themes, hover);
-    this._register(this.onDidChangeBodyVisibility(visible => this.surface?.setVisible(visible)));
   }
   protected override renderBody(container: HTMLElement): void {
     super.renderBody(container);
-    this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage, this.commands, this.isBodyVisible());
+    this.surface = new NavigationSurface(container, this.editors, this.groups, this.notifications, this.storage, this.commands);
   }
   override focus(): void { this.surface?.focus(); }
   runWorkspaceAction(action: WorkspaceAction, workspaceKey: string, assertAccess: () => void, request?: GatewayRuntimeGroupRequest): Promise<void> {

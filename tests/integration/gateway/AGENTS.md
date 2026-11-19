@@ -33,4 +33,4 @@
 
 - Gateway 测试组合包装产品 lifespan 时必须原样 yield `state`，保留 `after_http_startup` 与 `before_http_shutdown` 回调供 runner 调用；不得用已退役的 Extension Management owner 替代生命周期状态合同。Backend 测试组合仍沿 Workspace 生命周期。
 
-- `terminal_plugin_page.mjs` 还用实际 React 观察 hook 和正式 attach 页面验证六个嵌入终端：同工作区单source与单物理SSE、跨真实60秒对账静止65秒零补读、增减单项不扰动其它视图、按资源变化、一次摘要读取503后的提示恢复、卸载释放及普通请求可达。503仅注入指定资源的一次读取，健康请求仍限3秒；测试宿主页只负责装配，不替换Gateway、Backend、插件或资源请求，不代替完整Workbench布局验收。
+- `terminal_plugin_page.mjs` 还用实际 React 观察 hook 和正式 attach 页面验证六个嵌入终端：同工作区单逻辑source与页面单业务WebSocket、跨真实60秒对账静止65秒零补读、增减单项不扰动其它视图、按资源变化、一次摘要读取503后的提示恢复、卸载释放及普通请求可达。PTY字节连接独立，不计作事件订阅；503仅注入指定资源的一次读取，健康请求仍限3秒。测试宿主页只负责装配，不替换Gateway、Backend、插件或资源请求，不代替完整Workbench布局验收。

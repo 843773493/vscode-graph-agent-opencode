@@ -37,6 +37,17 @@ def _provider(api_mode: dict[str, object]) -> dict[str, object]:
     }
 
 
+def test_provider_connection_can_be_saved_before_adding_models(
+    provider_validator: jsonschema.Draft202012Validator,
+) -> None:
+    provider = _provider({"protocol": "chat_completions", "model_info": {}, "supports_reasoning": {}})
+    provider["models"] = {}
+    provider_validator.validate(provider)
+    provider["models"] = {"broken": {"model": ""}}
+    with pytest.raises(jsonschema.ValidationError):
+        provider_validator.validate(provider)
+
+
 def test_schema_accepts_chat_completions_model_info_and_reasoning_content(
     provider_validator: jsonschema.Draft202012Validator,
 ) -> None:

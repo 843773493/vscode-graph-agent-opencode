@@ -19,7 +19,7 @@
 
 ### Requirement: 工作区事件流和断线追赶
 
-系统 SHALL 提供经 Gateway 透明代理的工作区级活动事件读取和 SSE 流；客户端必须可以使用最后收到的事件游标补取断线期间的事件。
+系统 SHALL 提供经 Gateway 透明代理的工作区级活动事件读取和 SSE owner；页面 SHALL 通过统一 `/api/gateway/realtime` WebSocket 逻辑订阅访问该 owner，不独占 HTTP 长连接。客户端必须可以使用最后收到的事件游标补取断线期间的事件；共享传输不得合并不同工作区的游标或改变事件语义。
 
 #### Scenario: 实时接收活动
 

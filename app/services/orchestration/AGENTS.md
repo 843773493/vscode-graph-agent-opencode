@@ -38,7 +38,6 @@ orchestration/
 ├── session_title_service.py               首条用户消息的标题生成与规范化
 ├── session_turn_replay_service.py         按 Message/Turn 定位、回退上下文并重新派发
 ├── terminal_steering_service.py            Terminal 完成后的执行引导
-├── workspace_observation.py               工作区观察流接线
 ├── workspace_runtime_lifecycle.py         工作区执行启动恢复、Job 准入排空和强制中断
 ├── communication/                         Session 间 Inbox admission 与冷观察
 ├── resource_activation/                    Execution/ModelCall 资源快照冻结

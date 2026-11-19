@@ -1,3 +1,5 @@
+import { useRealtimeSocket } from "../../../../../../tests/harness/js/realtime-socket";
+useRealtimeSocket();
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
@@ -16,7 +18,7 @@ const businessRequests: string[] = [];
 
 function installTraceBackend(...[handler, options]: Parameters<typeof installSessionApiFetchMock>): void {
   installSessionApiFetchMock((request) => {
-    expect(request.path === "/api/v1/workspace/observations/stream"
+    expect(/^\/api\/v1\/sessions\/[^/]+\/traces\/stream$/.test(request.path)
       || /^\/api\/v1\/sessions\/[^/]+\/traces$/.test(request.path)).toBe(true);
     const headers = new Headers(request.init?.headers);
     expect(headers.get("X-BoxTeam-Target-Gateway-Id")).toBe(OWNER.gatewayId);
@@ -53,19 +55,9 @@ function installStreamBackend(
 ): Headers[] {
   const streamRequestHeaders: Headers[] = [];
   installTraceBackend(({ path, init }) => {
-      expect(path).toBe("/api/v1/workspace/observations/stream");
+      expect(path).toMatch(/^\/api\/v1\/sessions\/[^/]+\/traces\/stream$/);
       streamRequestHeaders.push(new Headers(init?.headers));
-      const response = responseFactory();
-      const subscriptionId = (JSON.parse(String(init?.body)) as { subscriptions: [{ subscription_id: string }] }).subscriptions[0].subscription_id;
-      const encoder = new TextEncoder();
-      const envelope = (state: string, frame?: string) => encoder.encode(`event: observation\ndata: ${JSON.stringify({
-        subscription_id: subscriptionId, state, ...(frame === undefined ? {} : { frame }),
-      })}\n\n`);
-      const body = response.body!.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-        start(controller) { controller.enqueue(envelope("connected")); },
-        transform(chunk, controller) { controller.enqueue(envelope("frame", new TextDecoder().decode(chunk))); },
-      }));
-      return new Response(body, { headers: response.headers });
+      return responseFactory();
     }, { credentialToken: `test-local-token-${port}` });
   return streamRequestHeaders;
 }
@@ -147,7 +139,7 @@ describe("会话 SSE 客户端", () => {
     expect(streamCancelled).toBe(true);
   });
 
-  test("重连请求携带独立trace_after且只交付服务端返回的新事件", async () => {
+  test("重连请求携带独立after_event_id且只交付服务端返回的新事件", async () => {
     const port = 49_003;
     const newEvent = traceEvent("evt_new");
     const requestHeaders = installStreamBackend(
@@ -188,7 +180,7 @@ describe("会话 SSE 客户端", () => {
     ).rejects.toThrow("SSE trace 重复 cursor: tc1.duplicate");
   });
 
-  test("真实 observation 请求拒绝其它会话的 trace，且不交付事件", async () => {
+  test("真实 WS 订阅请求拒绝其它会话的 trace，且不交付事件", async () => {
     const port = 49_008;
     installStreamBackend(port, () => streamResponse([traceBlock({
       ...traceEvent("evt_foreign"), session_id: "ses_foreign",
@@ -211,7 +203,7 @@ describe("会话 SSE 客户端", () => {
     expect(received).toEqual([]);
   });
 
-  test("聚合观察者也拒绝缺少 Thread 身份的事件", async () => {
+  test("事件订阅也拒绝缺少 Thread 身份的事件", async () => {
     const port = 49_010;
     const event: Record<string, unknown> = { ...traceEvent("evt_missing_thread") };
     delete event.thread_id;

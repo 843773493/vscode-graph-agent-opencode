@@ -1,4 +1,4 @@
-import { consumeWorkspaceObservation } from "../stream/workspaceObservation";
+import { consumeRealtimeSubscription } from "../stream/realtime";
 import { decodeJsonSseData, defineSseEvent } from "../../sse/sseClient";
 import type { APIResponse } from "../../types/backend";
 import {
@@ -239,9 +239,7 @@ export function streamSessionCatalogSnapshots(
   workspaceTarget: GatewayWorkspaceRequestTarget,
   options: { signal: AbortSignal; onSnapshot: (snapshot: SessionCatalogSnapshot) => void },
 ): Promise<void> {
-  return consumeWorkspaceObservation(port, gatewayWorkspaceRequestHeaders(workspaceTarget), () => ({
-    kind: "session_navigation", paths: [],
-  }), {
+  return consumeRealtimeSubscription(port, () => ({ path: '/api/v1/session-catalog/snapshot/events', headers: gatewayWorkspaceRequestHeaders(workspaceTarget) }), {
     signal: options.signal,
     events: {
       session_navigation: defineSseEvent(

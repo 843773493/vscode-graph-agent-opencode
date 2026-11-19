@@ -45,6 +45,7 @@ try {
   const form = page.locator('.configuration-entities[data-definition-kind="providers"]');
   const panel = form.getByRole('region', { name: '发现与测试模型', exact: true });
   await expect(panel).toBeVisible();
+  await panel.getByText('测试选项', { exact: true }).click();
   assert.equal(result.requests.filter(item => item.path.includes('/llm/')).length, 0, '打开设置不能探测');
   result.phase = 'connection-commit';
   const endpoint = form.getByLabel('API 地址').first();
@@ -58,14 +59,14 @@ try {
   assert.equal(connectionDraft.llm.providers.primary.defaults.endpoint, fixture.endpoint + '/');
   assert.equal(connectionDraft.llm.providers.primary.models.default.overrides?.endpoint, undefined);
   await expect(panel.getByText('完整目录：2 个模型', { exact: true })).toBeVisible();
-  await panel.getByRole('button', { name: '刷新目录', exact: true }).focus();
+  await panel.getByRole('button', { name: '获取上游模型', exact: true }).focus();
   await panel.getByRole('button', { name: '刷新观察版本', exact: true }).focus();
   assert.equal(result.requests.filter(item => item.path.includes('/llm/discover')).length, 1, '纯焦点变化不能重复发现');
   result.phase = 'draft-import';
   await panel.getByLabel('搜索上游模型', { exact: true }).fill('upstream-new');
   await panel.getByRole('button', { name: '选择全部匹配项', exact: true }).click();
-  await panel.getByRole('button', { name: '将所选模型加入草稿', exact: true }).click();
-  await expect(form.getByRole('button', { name: 'upstream-new 本层定义', exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: '添加选中的模型', exact: true }).click();
+  await expect(form.getByRole('button', { name: '目录新模型', exact: true })).toBeVisible();
   assert.equal(result.requests.filter(item => item.method === 'PUT').length, 0);
   result.phase = 'schema-options-edit-original-draft';
   const addParameter = async (options, name, value) => {
@@ -80,6 +81,7 @@ try {
   await addParameter(providerOptions, 'extra_body', { extension_switch: false, extension_value: null });
   assert.equal(result.requests.filter(item => item.path.endsWith('/llm/discover')).length, 1, '参数编辑不能自动探测');
   result.phase = 'inspect-original-model-draft';
+  await form.locator('[data-model-id="default"] > details > summary').click();
   const inspection = form.locator('.configuration-model-inspection');
   const inspect = async (expectedStatus = 200) => {
     const [response] = await Promise.all([
@@ -114,7 +116,7 @@ try {
   const overriddenCredential = await inspect();
   assert.equal(overriddenCredential.options.api_key, '');
   assert.equal(overriddenCredential.origins.find(origin => origin.path === '/api_key').definition, 'overrides');
-  await modelCredential.getByRole('button', { name: '恢复继承', exact: true }).click();
+  await modelCredential.getByRole('button', { name: '使用服务默认设置', exact: true }).click();
   const inheritedCredential = await inspect();
   assert.equal(inheritedCredential.options.api_key, providerReceipt.options.api_key);
   assert.equal(inheritedCredential.origins.find(origin => origin.path === '/api_key').definition, 'defaults');
@@ -126,7 +128,7 @@ try {
   result.phase = 'model-protocol-and-streaming-inheritance';
   const modelSection = form.locator('[data-model-id="default"]');
   const modelProtocol = modelSection.getByRole('combobox', { name: /^协议/ });
-  const modelStreaming = modelSection.getByRole('combobox', { name: /^上游传输模式/ });
+  const modelStreaming = modelSection.getByRole('combobox', { name: /^响应方式/ });
   await modelStreaming.selectOption('false');
   await modelProtocol.selectOption('responses');
   const incompleteProtocol = await inspect(422);
@@ -164,9 +166,9 @@ try {
   result.phase = 'nonstream-real-http';
   await addParameter(modelOptions, 'temperature', 0.25);
   await modelOptions.locator('[data-parameter="temperature"]').getByRole('button', { name: '不发送此参数', exact: true }).click();
-  await modelOptions.getByRole('button', { name: '使用显式空块', exact: true }).click();
+  await modelOptions.getByRole('button', { name: '清空推理格式', exact: true }).click();
   const wireForm = modelOptions.locator('.configuration-option-json').filter({ has: page.getByLabel('api_mode.supports_reasoning', { exact: true }) });
-  await wireForm.getByRole('button', { name: '恢复继承', exact: true }).click();
+  await wireForm.getByRole('button', { name: '清除设置', exact: true }).click();
   await expect(inspection.getByRole('status')).toContainText('草稿已改变');
   const modelReceipt = await inspect();
   assert.equal(modelReceipt.options.request_options.parameters.temperature, null);
@@ -190,7 +192,7 @@ try {
   await expect(page.locator('.editor-instance:visible .monaco-editor .view-lines').last()).toContainText('upstream-new');
   result.phase = 'create-provider-without-model';
   await command('boxteam.settings.modelsProviders', location);
-  await form.getByRole('button', { name: '新增 Provider', exact: true }).click();
+  await form.getByRole('button', { name: '添加模型服务', exact: true }).click();
   const quick = page.locator('.quick-input-widget');
   const input = async value => {
     await expect(quick).toBeVisible();
@@ -198,8 +200,9 @@ try {
     await expect(control).toBeFocused(); await control.fill(value); await control.press('Enter');
   };
   await input('new-probe');
-  await quick.locator('.monaco-list-row').filter({ hasText: 'chat_completions' }).click();
+  await quick.locator('.monaco-list-row').filter({ hasText: 'OpenAI 兼容' }).click();
   await expect(form.locator('[data-definition-id="new-probe"]')).toBeVisible();
+  await panel.getByText('测试选项', { exact: true }).click();
   await expect(panel.getByRole('button', { name: '测试配置模式', exact: true })).toBeDisabled();
   const beforeNewConnection = result.requests.filter(item => item.path.endsWith('/llm/discover')).length;
   await form.getByLabel('API 地址').first().fill(fixture.endpoint);
@@ -225,7 +228,7 @@ try {
   assert.equal(JSON.parse(keyInput.jsonc).llm.providers['new-probe'].defaults.api_key, 'secret:' + key.id);
   await expect(panel.getByText('完整目录：2 个模型', { exact: true })).toBeVisible();
   await panel.getByRole('button', { name: '选择全部匹配项', exact: true }).click();
-  await panel.getByRole('button', { name: '将所选模型加入草稿', exact: true }).click();
+  await panel.getByRole('button', { name: '添加选中的模型', exact: true }).click();
   await panel.getByRole('button', { name: '测试两种模式', exact: true }).click();
   const newStream = panel.locator('.configuration-probe-result').filter({ hasText: '测试流式' });
   const newComplete = panel.locator('.configuration-probe-result').filter({ hasText: '测试非流式' });
@@ -271,10 +274,10 @@ try {
   result.phase = 'cancel-before-first-content';
   for (const model of ['blocked-1', 'blocked-2', 'blocked-3', 'blocked-4', 'slow-content']) {
     await form.getByRole('button', { name: '添加模型', exact: true }).click();
-    await input(model); await input(model);
-    await expect(form.getByRole('button', { name: model + ' 本层定义', exact: true })).toBeVisible();
+    await input(model);
+    await expect(form.getByRole('button', { name: model, exact: true })).toBeVisible();
   }
-  await form.getByRole('button', { name: 'blocked-4 本层定义', exact: true }).click();
+  await form.getByRole('button', { name: 'blocked-4', exact: true }).click();
   const connections = async () => (await readFile(fixture.modelEvents, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
   for (const [mode, ordinal] of [['流式', 1], ['非流式', 2]]) {
     await panel.getByRole('button', { name: '测试' + mode, exact: true }).click();
@@ -300,7 +303,7 @@ try {
   await expect(panel.locator('.configuration-probe-result[data-probe-model="blocked-4"]').filter({ hasText: '测试配置模式' })).toHaveCount(0);
   assert.equal(result.requests.filter(item => item.path.endsWith('/llm/test')).length, beforeBatch + 3);
   result.phase = 'slow-first-content-retains-test-deadline';
-  await form.getByRole('button', { name: 'slow-content 本层定义', exact: true }).click();
+  await form.getByRole('button', { name: 'slow-content', exact: true }).click();
   const slowResponse = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/test'));
   await panel.getByRole('button', { name: '测试配置模式', exact: true }).click();
   const slow = panel.locator('.configuration-probe-result[data-probe-model="slow-content"]');
@@ -339,12 +342,12 @@ try {
   };
   await page.route('**/api/v1/config/llm/discover', delayOldResponse);
   try {
-    await panel.getByRole('button', { name: '刷新目录', exact: true }).click();
+    await panel.getByRole('button', { name: '获取上游模型', exact: true }).click();
     await lateReady;
     await form.getByLabel('API 地址').first().fill(currentEndpoint);
     await panel.getByRole('button', { name: '刷新观察版本', exact: true }).focus();
     const currentDirectory = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/discover'));
-    await panel.getByRole('button', { name: '刷新目录', exact: true }).click();
+    await panel.getByRole('button', { name: '获取上游模型', exact: true }).click();
     assert.equal((await currentDirectory).status(), 200);
     await panel.getByLabel('搜索上游模型', { exact: true }).fill('');
     await expect(panel.locator('.configuration-probe-models').first()).toContainText('current-only');
@@ -358,21 +361,22 @@ try {
   result.phase = 'partial-directory-retains-models-and-manual-entry';
   await form.getByLabel('API 地址').first().fill(fixture.endpoint.replace('/v1', '/partial/v1'));
   const partialDirectory = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/discover'));
-  await panel.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await panel.getByRole('button', { name: '获取上游模型', exact: true }).click();
   const partial = (await (await partialDirectory).json()).data;
   assert.equal(partial.complete, false);
   assert.equal(partial.models.length, 0, '单页超过上限时不能把截取的前缀冒充完整页');
   assert.equal(partial.error.category, 'count_limit');
   await expect(panel.getByText('目录不完整：0 个模型，已有模型继续保留', { exact: true })).toBeVisible();
-  await expect(form.getByRole('button', { name: 'blocked-4 本层定义', exact: true })).toBeVisible();
+  await expect(form.getByRole('button', { name: 'blocked-4', exact: true })).toBeVisible();
   await form.getByRole('button', { name: '添加模型', exact: true }).click();
-  await input('manual-after-partial'); await input('manual-after-partial');
-  await expect(form.getByRole('button', { name: 'manual-after-partial 本层定义', exact: true })).toBeVisible();
+  await input('manual-after-partial');
+  await expect(form.getByRole('button', { name: 'manual-after-partial', exact: true })).toBeVisible();
   assert.equal(discoveredCount(), beforeManual + 3, '手填模型不重新发现');
   result.directoryBoundary = { delayedRealResponse: true, partialModels: partial.models.length, manualEntryRetained: true };
 
   await command('boxteam.settings.modelsProviders', location, 'primary', 'default');
   await expect(form.locator('[data-definition-id="primary"] [data-model-id="default"]')).toBeVisible();
+  await panel.getByText('测试选项', { exact: true }).click();
   await panel.getByLabel(/^本次操作使用的输入/).selectOption('draft');
   const sourcePath = '/api/v1/config/sources/workspace_mutable_override';
   const sourceExchange = (method, url, body) => page.evaluate(async ({ method, url, body, fixture }) => {
@@ -402,7 +406,7 @@ try {
   assert.equal(savedActive.edit.source_saved, true);
   assert.equal(savedActive.edit.state, 'active');
   const staleActiveCatalog = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/discover'));
-  await panel.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await panel.getByRole('button', { name: '获取上游模型', exact: true }).click();
   assert.equal((await staleActiveCatalog).status(), 409);
   const staleActiveInput = result.requests.filter(item => item.path.endsWith('/llm/discover')).at(-1).body;
   const staleActiveTest = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/test'));
@@ -415,7 +419,7 @@ try {
   assert.equal(result.requests.filter(item => item.path.includes('/llm/')).length, beforeActiveRefresh,
     '刷新观察版本不得自动发现或推理');
   const activeCatalog = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/discover'));
-  await panel.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await panel.getByRole('button', { name: '获取上游模型', exact: true }).click();
   const activeDirectoryResponse = await activeCatalog;
   assert.equal(activeDirectoryResponse.status(), 200);
   const activeObservation = (await activeDirectoryResponse.json()).data.observation;
@@ -439,7 +443,7 @@ try {
   assert.equal(savedPending.edit.source_saved, true);
   assert.equal(savedPending.edit.state, 'pending_restart');
   const rejected = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/discover'));
-  await panel.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await panel.getByRole('button', { name: '获取上游模型', exact: true }).click();
   assert.equal((await rejected).status(), 409, '另一来源已保存后，旧浏览器基线必须在联网前拒绝');
   const staleInput = result.requests.filter(item => item.path.endsWith('/llm/discover')).at(-1).body;
   await panel.getByLabel(/^本次操作使用的输入/).selectOption('active');
@@ -449,7 +453,7 @@ try {
   await expect(panel.getByRole('button', { name: '刷新观察版本', exact: true })).toBeEnabled();
   await panel.getByLabel(/^本次操作使用的输入/).selectOption('draft');
   const refreshed = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/llm/discover'));
-  await panel.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await panel.getByRole('button', { name: '获取上游模型', exact: true }).click();
   assert.equal((await refreshed).status(), 200);
   const currentInput = result.requests.filter(item => item.path.endsWith('/llm/discover')).at(-1).body;
   assert.equal(currentInput.edit_version, staleInput.edit_version, '显式刷新基线不冒充本页编辑');

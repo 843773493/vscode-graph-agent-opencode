@@ -23,7 +23,7 @@
   padding: 0 10px;
   overflow: auto;
   border-bottom: 1px solid var(--bt-panel-border);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 18px;
 }
 
@@ -59,7 +59,7 @@
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -80,7 +80,7 @@
   background: transparent;
   color: var(--bt-text-muted);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--bt-font-size);
   cursor: pointer;
 }
 
@@ -150,7 +150,7 @@
   padding: 0 8px;
   border: 0;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--bt-font-size);
   background: transparent;
   color: inherit;
   line-height: 16px;
@@ -204,7 +204,7 @@
   flex: 0 0 auto;
   margin-left: auto;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
 
 .terminal-panel-list-name {
@@ -225,7 +225,7 @@
 .terminal-panel-empty-list {
   padding: 18px 12px;
   color: var(--bt-text-muted);
-  font-size: 10px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 
@@ -268,13 +268,13 @@
   overflow: auto;
   background: var(--bt-terminal-background);
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 
 .terminal-panel-frame-fallback strong {
   color: var(--bt-status-danger);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 .terminal-panel-viewer-empty {
@@ -287,13 +287,13 @@
   flex-direction: column;
   padding: 24px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 
 .terminal-panel-viewer-empty strong {
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size);
 }
 
 /* 端口面板复用工作区端口转发能力，但以底部面板的标签结构承载。 */

@@ -25,10 +25,11 @@ from app.schemas.internal_v2.persistent_task import (
     PersistentTaskChangedDTO,
     PersistentTaskListDTO,
 )
+from app.schemas.internal_v2.session_navigation.operations import NavigationSnapshotDTO
 from app.schemas.internal_v2.trace import TraceEventDTO
 from app.schemas.internal_v2.user_question import UserQuestionSummaryDTO
 from app.schemas.internal_v2.workspace import WorkspaceFileChangeBatchDTO
-from app.schemas.internal_v2.workspace_observation import WorkspaceObservationFrameDTO
+from app.schemas.internal_v2.workspace_resource import WorkspaceResourceChangesDTO
 from app.schemas.search_federation import FederatedSearchEventDTO
 
 
@@ -40,10 +41,11 @@ SSE_EVENT_MODELS: dict[str, type[BaseModel]] = {
     model.__name__: model
     for model in (
         TraceEventDTO,
+        NavigationSnapshotDTO,
+        WorkspaceResourceChangesDTO,
         UserQuestionSummaryDTO,
         WorkspaceFileChangeBatchDTO,
         SseErrorDTO,
-        WorkspaceObservationFrameDTO,
         PersistentTaskListDTO,
         PersistentTaskChangedDTO,
         FederatedSearchEventDTO,

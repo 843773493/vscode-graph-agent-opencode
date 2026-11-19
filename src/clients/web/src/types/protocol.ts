@@ -636,11 +636,12 @@ export type TurnHistoryLoadRequest = Omit<WorkspaceProtocol.TurnHistoryLoadReque
 };
 export type TurnHistoryPage = Omit<
   WorkspaceProtocol.TurnHistoryPageDTO,
-  "items" | "summaries" | "next_cursor" | "before_cursor" | "after_cursor" | "internal_executions"
+  "items" | "summaries" | "next_cursor" | "before_cursor" | "after_cursor" | "internal_executions" | "context_notices"
 > & {
   items: TurnDetail[];
   summaries?: TurnSummary[];
   internal_executions?: InternalExecutionHistory[];
+  context_notices?: Array<Omit<WorkspaceProtocol.ContextNoticeBatchDTO, "parts"> & { parts: TurnResponsePart[] }>;
   next_cursor?: string | null;
   before_cursor?: string | null;
   after_cursor?: string | null;
@@ -699,7 +700,8 @@ export type TurnSummary = Omit<
   activity_stats?: TurnActivityStats;
 };
 export type TurnResponseSource = WorkspaceProtocol.TurnResponseSourceDTO;
-export type TurnResponsePart = Omit<WorkspaceProtocol.TurnResponsePartDTO, "kind" | "projection" | "status" | "source" | "carrier_type" | "tool_call_id" | "tool_name" | "arguments" | "result"> & {
+export type TurnResponsePart = Omit<WorkspaceProtocol.TurnResponsePartDTO, "kind" | "projection" | "status" | "source" | "carrier_type" | "tool_call_id" | "tool_name" | "arguments" | "result" | "context_cursor"> & {
+  context_cursor?: string | null;
   kind: "text" | "reasoning" | "reasoning_summary" | "reasoning_encrypted" | "compaction_summary" | "tool_call" | "tool_result" | "final_text" | "context_notice";
   projection: "summary" | "detail" | "streaming";
   status?: "pending" | "running" | "completed" | "failed" | "cancelled";

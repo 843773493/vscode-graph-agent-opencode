@@ -18,7 +18,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
@@ -41,6 +41,7 @@ from app.gateway.proxy_upstream import (
     GATEWAY_PROXY_DROPPED_HEADERS,
     TARGET_GATEWAY_ID_HEADER,
     UPSTREAM_RESPONSE_HEADERS_TIMEOUT_SECONDS,
+    ProxyStreamingResponse,
     UpstreamResponseBody,
     build_upstream_url,
     close_upstream_response,
@@ -116,13 +117,11 @@ def _http_client(request: Request, *, streaming: bool = False) -> httpx.AsyncCli
 
 def _is_streaming_workspace_path(path: str) -> bool:
     """判断工作区 API 是否会返回长期占用连接的 SSE。"""
-    return (
-        path.endswith("/traces/stream")
-        or path.endswith("/events/stream")
-        or path.endswith("/files/events")
-        or path.endswith("/message-stream")
-        or path.endswith("/observations/stream")
-    )
+    path = "/" + path.lstrip("/")
+    return path.endswith((
+        "/traces/stream", "/events/stream", "/files/events", "/message-stream",
+        "/snapshot/events", "/resources/events", "/persistent-tasks/events", "/questions/events",
+    ))
 
 
 def _workspace_path_segments(path: str) -> list[str]:
@@ -653,7 +652,7 @@ async def _proxy_workspace_request(
             reference_streaming = True
             route_reference_released = False
             route_reference_handed_off = True
-            return StreamingResponse(
+            return ProxyStreamingResponse(
                 _stream_proxy_response(
                     response,
                     route_lease,
@@ -680,7 +679,7 @@ async def _proxy_workspace_request(
         headers = _response_headers(response)
         # 非 SSE 的流式响应体仍持有这份引用，直到 body 真正结束才由 on_close 归还。
         route_reference_handed_off = True
-        return StreamingResponse(
+        return ProxyStreamingResponse(
             UpstreamResponseBody(response, release_route_reference),
             status_code=response.status_code,
             headers=headers,

@@ -21,7 +21,7 @@ export function CachedThreadHistory({ owner, timeline, error, onRetry }: {
         conversations={conversations} internalExecutions={timeline.internalExecutions} expandDetails={false}
         hasActiveSession={false} hasNewerMessages={false} hasOlderMessages={timeline.hasBefore} loadingNewerMessages={false}
         loadingOlderMessages={false} historyLoading projectionState="ready" historyError={null}
-        onLoadAroundTurn={cachedOnly} onLoadNewerMessages={cachedOnly} onLoadOlderMessages={cachedOnly}
+        onLoadAroundTurn={cachedOnly} onLoadNewerMessages={cachedOnly} onLoadLatestMessages={cachedOnly} onLoadOlderMessages={cachedOnly}
         onLoadTurnDetails={cachedOnly} onLoadAgentStateMessageRawContent={unavailable}
         onRetryHistory={onRetry} onReplayTurn={unavailable} onRemovePending={unavailable} onChangePendingPolicy={unavailable} />
     </fieldset>

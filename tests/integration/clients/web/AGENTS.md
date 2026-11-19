@@ -35,6 +35,8 @@ web/
 
 ## 规范
 
+- 页面常驻事件使用 `tests/support/workbench/realtime.mjs` 观察共享 WS 的真实逻辑订阅；按原 owner 核字节、游标、错误和回收，不再等待旧 observation 或独立插件 SSE 的 HTTP 请求。有限搜索／模型测试流和后端 SSE owner 的 HTTP 验证仍保留，不以全局忽略网络中断的方式迁移测试。
+
 - 完整产品页面场景必须通过真实 Gateway 访问；局部组件 harness 必须明确标识为 Integration。
 - 完整 Workbench 页面使用 Gateway 默认根 URL，不依赖测试专用的 Agent 查询参数；独立 MCP 授权仍使用既有授权路由。
 - 服务替身和页面路由拦截必须显式记录，不能伪造成功状态。

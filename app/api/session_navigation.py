@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from contextlib import aclosing
 from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import FiniteFloat, ValidationError
 
 from app.api.deps import (
@@ -17,6 +19,11 @@ from app.api.errors import (
     client_error_message,
     not_found_http_error,
     state_conflict_http_error,
+)
+from app.api.sse_heartbeat import (
+    SSE_HEARTBEAT_INTERVAL_SECONDS,
+    SSE_NO_CACHE_HEADERS,
+    stream_sse_with_heartbeat,
 )
 from app.core.exceptions import NotFoundError
 from app.core.failures import report_failure
@@ -55,6 +62,7 @@ from app.schemas.internal_v2.session_navigation.operations import (
 from app.schemas.internal_v2.session_navigation.thread_search import (
     SessionThreadSearchResultsDTO,
 )
+from app.schemas.internal_v2.sse import sse_responses
 from app.services.business.search.service import WorkspaceSearchService
 from app.services.business.session_generation import SessionGenerationService
 from app.services.business.session_navigation.catalog_query import CatalogCursorError
@@ -417,3 +425,28 @@ async def search_session_catalog(
     except (TypeError, ValueError, RuntimeError, TimeoutError) as error:
         raise state_conflict_http_error(error) from error
     return APIResponse(data=result, request_id=request_id)
+
+
+@router.get("/session-catalog/snapshot/events", response_class=StreamingResponse, responses=sse_responses("目录快照变更", {"session_navigation": NavigationSnapshotDTO}))
+async def session_catalog_snapshot_events(
+    _: Annotated[str, Depends(verify_local_token)],
+    service: Annotated[SessionCatalogService, Depends(get_session_catalog_service)],
+):
+    return StreamingResponse(_stream_navigation_changes(service), media_type="text/event-stream", headers=SSE_NO_CACHE_HEADERS)
+
+
+async def _stream_navigation_changes(service: SessionCatalogService):
+    confirmed = None
+    async with aclosing(stream_sse_with_heartbeat(
+        service.operations.changes(), heartbeat_interval_seconds=SSE_HEARTBEAT_INTERVAL_SECONDS,
+        close_source_on_exit=True,
+    )) as changes:
+        async for snapshot in changes:
+            heartbeat = isinstance(snapshot, str)
+            if heartbeat:
+                yield snapshot
+                # 复用原心跳确认权威标量；通知丢失或配置投影变化也使已加载范围失效。
+            snapshot = service.navigation_snapshot()
+            if not heartbeat or snapshot != confirmed:
+                confirmed = snapshot
+                yield f"event: session_navigation\ndata: {snapshot.model_dump_json()}\n\n"

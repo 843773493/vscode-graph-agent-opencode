@@ -19,6 +19,7 @@ def _terminal_asset(path: str) -> FileResponse:
         "terminalUserActions.js": client / "terminalUserActions.js",
         "terminalShortcuts.js": client / "terminalShortcuts.js",
         "shared/commandText.js": root / "src/workspace-services/terminal/shared/commandText.js",
+        "shared/realtime.js": root / "src/shared/realtime.js",
         "shared/sse.js": root / "src/shared/sse.js",
         "shared/sseRuntime.js": root / "src/shared/sseRuntime.js",
         "shared/sseRuntimeValidators.js": root / "src/shared/sseRuntimeValidators.js",

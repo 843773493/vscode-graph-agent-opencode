@@ -190,9 +190,9 @@ async function measureProbeBudget(panel) {
     const button = panel.getByRole('button', { name: '测试流式', exact: true });
     // 首次读取单列且保留原样，随后二十个暖样本不删慢值。
     for (let index = 0; index < 21; index++) {
-      for (const action of ['刷新目录', '测试流式']) {
+      for (const action of ['获取上游模型', '测试流式']) {
         const response = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(
-          action === '刷新目录' ? '/llm/discover' : '/llm/test'));
+          action === '获取上游模型' ? '/llm/discover' : '/llm/test'));
         await panel.getByRole('button', { name: action, exact: true }).click();
         const requestId = (await response).headers()['x-request-id'];
         await expect.poll(() => page.evaluate(requestId => globalThis.__modelProbeBudget.samples

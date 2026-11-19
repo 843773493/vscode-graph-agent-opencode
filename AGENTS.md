@@ -210,7 +210,7 @@
 3. 工作区后端中，`JobService` 调度 `AgentExecutionService`，`AgentExecutionService` 驱动 `DeepAgent` 执行内置工具。
 4. Gateway 自有接口使用 `/api/gateway/*`，工作区业务接口使用 `/api/v1/*`；浏览器访问后者时仍先经过 Gateway。
 5. Gateway 与工作区后端都必须安装 `TraceMiddleware`。Gateway 生成或接受本次请求唯一的 `request_id`，自有 API 在响应体和 `X-Request-ID` 响应头中返回它，代理 API 通过 `X-Request-ID` 向工作区后端透传同一值；任何一层不得补造第二个请求 ID。
-6. 事件总线通过 SSE 向前端推送实时更新。
+6. 常驻业务事件在页面到入口 Gateway 之间统一复用 `/api/gateway/realtime` WebSocket；各领域保留原 SSE owner、鉴权和游标，经统一通道传输。业务模块不得自行创建常驻事件连接；有限请求流、终端字节、DAP 和浏览器画面等专用协议保留各自传输。
 
 ### 前端状态管理原则
 

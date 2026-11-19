@@ -15,6 +15,7 @@ js/
 ## 可修改内容
 
 - ESM 运行上下文、产物 manifest、进程和浏览器资源生命周期。
+- `realtime-socket.ts` 是进程内测试的显式 WS 装具，逻辑订阅交给各用例的 owner HTTP fake；不能用于声称真实 Gateway 或网络验收。
 - `workbench-locale.ts` 为没有产品 bootstrap 的进程内测试显式初始化中文资源；独立打包的组件入口也须在业务模块前导入它，不改变生产启动顺序。
 
 ## 不可修改内容

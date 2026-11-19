@@ -1,15 +1,4 @@
 .native-session-navigation { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .native-session-navigation .agent-sessions-panel { border: 0; }
-.session-thread-navigation { min-width: 0; }
-.session-thread-navigation .child-thread-panel { border: 0; min-height: 0; overflow: visible; }
-.session-thread-navigation .panel-header { min-height: 24px; padding: 0 4px; }
-.session-thread-navigation .panel-title { font-size: 11px; font-weight: normal; }
-.session-thread-navigation [data-child-owner-session] { display: none; }
-.session-thread-navigation .child-thread-notice-slot:empty { display: none; }
-.session-thread-navigation .child-thread-list { flex: 0 0 auto; margin: 0; gap: 0; overflow: visible; }
-.session-thread-navigation .child-thread-item { border: 0; border-radius: 0; background: transparent; }
-.session-thread-navigation .child-thread-main { padding: 3px 4px; min-height: 24px; }
-.session-thread-navigation .child-thread-copy strong { font-size: 13px; font-weight: normal; }
-.session-thread-navigation .child-thread-main[aria-current="page"] { background: var(--vscode-list-inactiveSelectionBackground); color: var(--vscode-list-inactiveSelectionForeground); }
 /* 导航诊断只展示当前操作详情；配置管理由原生设置页承载。 */
 .native-navigation-dialog { position: fixed; z-index: 100; inset: 8vh 12vw; padding: 16px; overflow: auto; border: var(--bt-surface-border); border-radius: var(--bt-radius-large); background: var(--bt-panel-background); box-shadow: var(--bt-surface-shadow); }

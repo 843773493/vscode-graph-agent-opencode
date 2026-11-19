@@ -11,6 +11,7 @@ rollout_history/
 ├── cursor.py    HistoryCursorBinding、请求绑定、游标校验和编解码
 ├── errors.py    无效游标、过期视图与失效 Turn 引用的统一异常
 ├── paging.py    HistoryPageReadMixin、基于单一 snapshot 的有界读取
+├── context_notices.py  原历史页范围内的上下文元数据游标与续读，不读取正文
 ├── message_search.py  同一 snapshot 按明确类别查询消息／工具结果及核验位置
 └── tool_result.py     复用历史调用身份与原 ToolOutputStore 的不可变完整输出
 ```

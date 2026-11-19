@@ -12,10 +12,14 @@ import {
 import ChildThreadPanel from "./ChildThreadPanel";
 import { ChatItemMenuContext, type ChatItemMenuRequest } from "../../chat/itemContextMenu";
 
-test("跨 Gateway 的子线程面板显示目标工作区和会话归属", () => {
-  const html = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} ownerLabel="gateway_remote · 目标工作区 · 目标会话" />);
-  expect(html).toContain("gateway_remote · 目标工作区 · 目标会话");
+test("会话展开后直接展示 Thread，不插入标题、计数、归属说明或空提示栏", () => {
+  const html = renderToStaticMarkup(<ChildThreadPanel {...panelProps()} />);
   expect(html).toContain('data-child-owner-session="ses_parent"');
+  expect(html).toContain('data-thread-id="thr_main_canonical"');
+  for (const name of ["panel-header", "resource-total-count", "child-thread-notice-slot"]) {
+    expect(html).not.toContain(`class="${name}"`);
+  }
+  expect(html).not.toContain("刷新会话线程");
 });
 
 /** 递归提取 react-test-renderer 节点的全部文本。 */
@@ -53,13 +57,11 @@ function panelProps(overrides: {
   return {
     threads: [] as ChildThreadSummary[],
     teams: [] as ChildThreadList["teams"],
-    total: 0,
     loading: false,
     error: null as string | null,
     loadedAt: "2026-09-15T12:30:00Z",
     sessionId: "ses_parent",
     mainThreadId: "thr_main_canonical",
-    ownerLabel: "本机 Gateway · 测试工作区 · 测试会话",
     activeThreadId: "thr_main_canonical",
     onRefresh: overrides.onRefresh ?? (() => {}),
     onSelectThread: overrides.onSelectThread ?? (() => {}),
@@ -86,7 +88,7 @@ describe("子会话线程面板", () => {
     const props = panelProps();
     let renderer!: ReactTestRenderer;
     try {
-      act(() => { renderer = create(<ChildThreadPanel {...props} threads={children} total={2}
+      act(() => { renderer = create(<ChildThreadPanel {...props} threads={children}
         onOpenThread={value => opened.push(value)}
         onForkFromThread={(threadId, point) => forks.push({ threadId, point })}
         conversation={{ ...props.conversation, selectThread: id => selected.push(id) }} />); });
@@ -106,7 +108,7 @@ describe("子会话线程面板", () => {
     const props = panelProps();
     let renderer!: ReactTestRenderer;
     try {
-      act(() => { renderer = create(<ChildThreadPanel {...props} threads={[child]} total={1}
+      act(() => { renderer = create(<ChildThreadPanel {...props} threads={[child]}
         onOpenThread={value => opened.push(value)} conversation={{ ...props.conversation,
           selectThread: id => embedded.push(id),
         }} />); });
@@ -245,7 +247,6 @@ describe("子会话线程面板", () => {
             status: "failed",
           }),
         ]}
-        total={3}
       />,
     );
 
@@ -284,7 +285,7 @@ describe("子会话线程面板", () => {
     expect(noSessionHtml).toContain("选择会话后查看其 Thread");
   });
 
-  test("主 Thread 计入列表数量；打开对话不触发调试或内嵌历史", () => {
+  test("主 Thread 直接展示为列表项；打开对话不触发调试或内嵌历史", () => {
     const opened: string[] = [];
     const debugged: string[] = [];
     const props = panelProps();
@@ -292,7 +293,7 @@ describe("子会话线程面板", () => {
     try {
       act(() => { tree = create(<ChildThreadPanel {...props}
         onOpenMainThread={() => opened.push(props.mainThreadId)} onSelectThread={id => debugged.push(id)} />); });
-      expect(textOf(tree.root.findByProps({ className: "resource-total-count" }))).toBe("1");
+      expect(tree.root.findAllByProps({ "data-thread-id": props.mainThreadId })).toHaveLength(1);
       expect(tree.root.findAllByProps({ className: "empty-state" })).toHaveLength(0);
       act(() => tree.root.findByProps({ "aria-label": "打开主 Thread 对话" }).props.onClick());
       expect(opened).toEqual([props.mainThreadId]);
@@ -300,7 +301,7 @@ describe("子会话线程面板", () => {
     } finally { act(() => tree?.unmount()); }
   });
 
-  test("刷新按钮触发 onRefresh，会话缺失时禁用", () => {
+  test("只在加载失败时显示重试按钮，会话缺失时禁用", () => {
     let refreshes = 0;
     let renderer: ReactTestRenderer;
     act(() => {
@@ -308,6 +309,7 @@ describe("子会话线程面板", () => {
         <ChildThreadPanel
           {...panelProps({ onRefresh: () => { refreshes += 1; } })}
           threads={[thread(1)]}
+          error="请求失败"
         />,
       );
     });
@@ -323,7 +325,7 @@ describe("子会话线程面板", () => {
     let disabledRenderer: ReactTestRenderer;
     act(() => {
       disabledRenderer = create(
-        <ChildThreadPanel {...panelProps()} sessionId="" />,
+        <ChildThreadPanel {...panelProps()} sessionId="" error="请求失败" />,
       );
     });
     const disabledButton = disabledRenderer!.root.findByProps({
@@ -412,7 +414,7 @@ describe("子会话线程面板", () => {
         );
       });
       expect(
-        renderer!.root.findByProps({ className: "child-thread-notice-slot" }).children,
+        renderer!.root.findAllByProps({ className: "child-thread-notice-slot" }),
       ).toHaveLength(0);
       const copyButton = renderer!.root.findByProps({
         "aria-label": "复制 child thread ID: thr_child_1",
@@ -436,7 +438,7 @@ describe("子会话线程面板", () => {
         renderer!.root.findByProps({ "aria-label": "关闭提示" }).props.onClick();
       });
       expect(
-        renderer!.root.findByProps({ className: "child-thread-notice-slot" }).children,
+        renderer!.root.findAllByProps({ className: "child-thread-notice-slot" }),
       ).toHaveLength(0);
       renderer!.unmount();
     } finally {

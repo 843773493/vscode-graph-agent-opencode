@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -39,20 +40,29 @@ def prefix_runtime(
     request: pytest.FixtureRequest,
     integration_workspace_root_path: str,
     integration_workspace_config_path: str,
-    web_workbench_assets: Path,
 ) -> Generator[tuple[str, Path, ModelStreamReplay, int], None, None]:
     """独立受管服务组；Backend 的停启必须由真实 Gateway 生命周期执行。"""
     context = TestRunContext.from_test_file(Path(request.node.path)).prepare()
+    prepared_assets = os.getenv("BOXTEAM_SOURCE_WEB_ASSETS")
+    web_assets = Path(prepared_assets) if prepared_assets else request.getfixturevalue("web_workbench_assets")
+    assert (web_assets / "version.json").is_file(), web_assets
+    if prepared_assets:
+        with (web_assets / "out/main.js").open("rb") as main:
+            (context.artifacts_dir / "workbench-reused-assets.json").write_text(json.dumps({
+                "assets": str(web_assets), "main_sha256": hashlib.file_digest(main, "sha256").hexdigest(),
+                "version": json.loads((web_assets / "version.json").read_text()),
+            }), encoding="utf-8")
     ports = integration_port_block_for_file(Path(request.node.path))
     workspace = Path(integration_workspace_root_path)
     config_path = Path(integration_workspace_config_path)
     config = commentjson.loads(config_path.read_text(encoding="utf-8"))
-    provider = next(item for item in config["llm"]["providers"] if item["id"] == "primary")
-    provider.update({
+    provider = config["llm"]["providers"]["primary"]
+    provider["defaults"].update({
         "endpoint": f"http://127.0.0.1:{ports.port(10)}/v1",
-        "model": "browser-chat-tool-loop-stub", "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
+        "api_key": "${BOXTEAM_TEST_MODEL_API_KEY}",
         "custom_llm_provider": "openai",
     })
+    provider["models"]["default"]["model"] = "browser-chat-tool-loop-stub"
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     runtime = context.runtime_root_for_node(request.node.nodeid)
     with ExitStack() as lifetime:
@@ -67,7 +77,7 @@ def prefix_runtime(
             artifacts_dir=context.artifacts_dir / "gateway",
             asgi_app="tests.support.e2e_control.gateway_app:app",
             extra_env=replay.environment | {
-                "BOXTEAM_WEB_ASSETS": str(web_workbench_assets),
+                "BOXTEAM_WEB_ASSETS": str(web_assets),
                 "BOXTEAM_DEFAULT_BACKEND_PORT": str(ports.port(0)),
                 "BOXTEAM_TEST_MODEL_API_KEY": "e2e-local-model-key",
             },

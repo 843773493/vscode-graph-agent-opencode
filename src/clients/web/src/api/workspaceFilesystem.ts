@@ -323,7 +323,13 @@ export async function readWorkspaceRawFile(
   const { query } = fileTreeLocationQuery(path);
   const controller = new AbortController();
   const reading = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-  let release: (() => void) | undefined;
+  let connected = false;
+  // 外部撤销覆盖响应头等待期；本请求的 401 刷新仍由 HTTP 屏障完成一次。
+  const release = onGatewayTokenInvalidated(port, reason => {
+    if (connected || reason !== "refresh") controller.abort(
+      new DOMException("Gateway 或访问凭据已改变，请重新读取文件", "AbortError"),
+    );
+  });
   try {
     // 复用本机凭据刷新链；凭据撤销时取消整个正文读取。
     const response = await requestGatewayResponse(
@@ -334,10 +340,7 @@ export async function readWorkspaceRawFile(
         signal: reading,
       },
     );
-    // 响应头前由统一请求屏障完成一次凭据刷新；成功建连后，撤销必须中止正文。
-    release = onGatewayTokenInvalidated(port, () => controller.abort(
-      new DOMException("Gateway 或访问凭据已改变，请重新读取文件", "AbortError"),
-    ));
+    connected = true;
     if (range && response.status !== 206) {
       const error = new Error("目标文件服务没有按请求返回字节范围");
       controller.abort(error);
@@ -360,7 +363,7 @@ export async function readWorkspaceRawFile(
     }
     reading.throwIfAborted();
     return response.headers.get("Content-Type") ?? "";
-  } finally { release?.(); }
+  } finally { release(); }
 }
 
 /** 与原件 GET 共用 owner 和权限，仅取得 MIME，不下载正文。 */

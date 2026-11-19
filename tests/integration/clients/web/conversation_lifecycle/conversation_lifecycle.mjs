@@ -1,3 +1,4 @@
+import { observeRealtime } from '../../../../support/workbench/realtime.mjs';
 import assert from "node:assert/strict";
 import { appendFile, chmod, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -608,7 +609,6 @@ function controlledRestartEndpoint(url, window, pageBinding) {
   if (parsed.pathname === "/api/v1/workspace/files" && parsed.search === "?scope=workspace") return "workspace-files";
   if (parsed.pathname === "/api/v1/workspace" && !parsed.search) return "workspace-bootstrap";
   if (parsed.pathname === "/api/v1/session-catalog/children" && parsed.search === "?limit=100") return "catalog-children";
-  if (parsed.pathname === "/api/v1/workspace/observations/stream" && !parsed.search) return "observations";
   if (parsed.pathname === "/api/v1/session-catalog/events" && parsed.search === "?after=0&limit=1000") return "catalog-events";
   if (parsed.pathname === "/api/v1/session-catalog/navigation-events") {
     const after = parsed.searchParams.get("after");
@@ -687,6 +687,17 @@ function validControlledRestartWindow(window) {
     && window.endedAt >= restart.startedAt;
 }
 
+function describeRealtimeSubscription(request) {
+  const url = new URL(request.url), body = request.body ? JSON.parse(request.body) : {};
+  const trace = /^\/api\/v1\/sessions\/([^/]+)\/traces\/stream$/.exec(url.pathname);
+  return { subscription_id: request.subscription_id,
+    kind: trace ? 'session_trace' : url.pathname === '/api/v1/workspace/files/events' ? 'workspace_files'
+      : url.pathname === '/api/v1/session-catalog/events/stream' ? 'session_activity'
+      : url.pathname === '/api/v1/persistent-tasks/events' ? 'persistent_tasks' : url.pathname,
+    session_id: trace?.[1] ?? url.searchParams.get('session_id') ?? undefined,
+    thread_id: url.searchParams.get('thread_id') ?? undefined, paths: body.paths ?? [] };
+}
+
 function hasConnectedObservationTargets(response, subscriptions) {
   // subscription_id 属于一次登记；重建后核同一领域目标和过滤范围，并绑定新 ID 的 connected 回执。
   return subscriptions.length > 0 && subscriptions.every((original) => {
@@ -695,8 +706,10 @@ function hasConnectedObservationTargets(response, subscriptions) {
       && (candidate.session_id ?? null) === (original.session_id ?? null)
       && (candidate.thread_id ?? null) === (original.thread_id ?? null)
       && JSON.stringify(candidate.paths ?? []) === JSON.stringify(original.paths ?? [])) ?? [];
-    const expected = original.kind === "persistent_tasks" ? subscriptions.filter(candidate =>
-      candidate.kind === original.kind && (candidate.session_id ?? null) === (original.session_id ?? null)).length : 1;
+    const expected = subscriptions.filter(candidate => candidate.kind === original.kind
+      && (candidate.session_id ?? null) === (original.session_id ?? null)
+      && (candidate.thread_id ?? null) === (original.thread_id ?? null)
+      && JSON.stringify(candidate.paths ?? []) === JSON.stringify(original.paths ?? [])).length;
     return recovered.length === expected && recovered.every(candidate => response.connectedSubscriptions?.includes(candidate.subscription_id));
   });
 }
@@ -721,7 +734,7 @@ function hasRecoveredRestartObservations(response, request, window) {
   const sourceTrace = subscription => subscription.session_id === window.sourceSessionId
     && (subscription.kind === "persistent_tasks" || subscription.kind === "session_trace" && subscription.thread_id === window.sourceThreadId);
   const surviving = deleted ? original.filter(subscription => !sourceTrace(subscription)) : original;
-  return hasConnectedObservationTargets(response, surviving)
+  return (surviving.length ? hasConnectedObservationTargets(response, surviving) : deleted && response.subscriptions.length > 0)
     && (!deleted || !response.subscriptions.some(sourceTrace));
 }
 
@@ -762,51 +775,6 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
     const endpoint = controlledRestartEndpoint(error.url, window, pageBinding);
     if (!endpoint) continue;
     const isBadGateway = error.text === "Failed to load resource: the server responded with a status of 502 (Bad Gateway)";
-    const isObservationsPostBadGateway = endpoint === "observations" && isBadGateway;
-    const isIncompleteObservationStream = endpoint === "observations"
-      && error.text === "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING";
-    if (isObservationsPostBadGateway) {
-      const responses = responseFacts.filter((response) => !consumedResponses.has(response)
-        && response.restartWindowId === window.operationId && response.method === "POST" && response.status === 502
-        && typeof error.cdpRequestId === "string" && error.cdpRequestId.length > 0
-        && response.cdpRequestId === error.cdpRequestId
-        && response.url === error.url && response.pageId === error.pageId && response.documentId === error.documentId
-        && response.pageRole === pageBinding.role && typeof response.requestFactId === "string"
-        && response.requestFactId.length > 0 && typeof response.requestId === "string" && response.requestId.length > 0
-        && response.body && typeof response.body === "object" && response.body.request_id === response.requestId
-        && response.bodyRequestId === response.requestId && response.bodyError === undefined
-        && isControlledRestartUpstreamFailure(response.body.detail, window.workspaceId)
-        && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
-        && Number.isFinite(response.requestedAt) && Number.isFinite(response.receivedAt)
-        && response.requestedAt <= response.receivedAt && response.receivedAt >= window.backendRestart.stopRequestedAt
-        && response.receivedAt <= window.backendRestart.startedAt
-        && Math.abs(response.receivedAt - error.receivedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
-      if (responses.length !== 1) continue;
-      const [response] = responses;
-      if (responseFacts.filter((candidate) => candidate.requestFactId === response.requestFactId).length !== 1) continue;
-      const requests = requestFacts.filter((request) => request.requestFactId === response.requestFactId
-        && request.restartWindowId === window.operationId && request.url === response.url
-        && request.method === "POST" && request.pageId === response.pageId
-        && request.documentId === response.documentId && request.pageRole === response.pageRole
-        && request.requestedAt === response.requestedAt && (request.workspaceHeader === response.workspaceHeader && request.targetGatewayHeader === response.targetGatewayHeader)
-        && request.bodyError === undefined && request.body && typeof request.body === "object"
-        && !Array.isArray(request.body) && Array.isArray(request.body.subscriptions)
-        && request.body.subscriptions.length > 0);
-      if (requests.length !== 1
-          || requestFacts.filter((candidate) => candidate.requestFactId === response.requestFactId).length !== 1) continue;
-      const [request] = requests;
-      const competingErrors = consoleErrorFacts.filter((candidate) =>
-        candidate.text === error.text && candidate.restartWindowId === window.operationId
-        && candidate.cdpRequestId === error.cdpRequestId
-        && candidate.pageId === response.pageId && candidate.documentId === response.documentId
-        && candidate.pageRole === response.pageRole && candidate.url === response.url
-        && Number.isInteger(candidate.index) && Number.isFinite(candidate.receivedAt)
-        && candidate.receivedAt >= window.startedAt && candidate.receivedAt <= window.endedAt
-        && Math.abs(candidate.receivedAt - response.receivedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
-      if (competingErrors.length !== 1 || competingErrors[0] !== error) continue;
-      recordResponseError(error, window, "observations-post-502", request, response);
-      continue;
-    }
     if (isBadGateway) {
       const responses = responseFacts.filter((response) => !consumedResponses.has(response)
         && response.restartWindowId === window.operationId
@@ -850,60 +818,7 @@ function classifyControlledRestartErrors(consoleErrorFacts, consoleErrors, faile
       recordResponseError(error, window, endpoint, request, response);
       continue;
     }
-    if (!isIncompleteObservationStream) continue;
-    const failures = failedRequests.map((failure, index) => ({ failure, index })).filter(({ failure, index }) =>
-      !consumedFailureIndexes.has(index) && failure.error === "net::ERR_INCOMPLETE_CHUNKED_ENCODING"
-      && failure.method === "POST"
-      && failure.restartWindowId === window.operationId && failure.pageRole === pageBinding.role
-      && failure.url === error.url && failure.pageId === error.pageId && failure.documentId === error.documentId
-      && Number.isFinite(failure.requestedAt) && Number.isFinite(failure.failedAt)
-      && failure.requestedAt <= window.startedAt && failure.failedAt >= window.backendRestart.stopRequestedAt
-      && failure.failedAt <= window.backendRestart.startedAt && Math.abs(failure.failedAt - error.receivedAt) <= 5_000);
-    if (failures.length !== 1) continue;
-    const [{ failure, index }] = failures;
-    const requests = requestFacts.filter((request) => request.requestFactId === failure.requestFactId
-      && request.method === "POST" && request.url === error.url && request.pageId === error.pageId
-      && request.documentId === error.documentId
-      && (request.restartWindowId === null || request.restartWindowId === window.operationId)
-      && (request.workspaceHeader === window.workspaceId && request.targetGatewayHeader === window.gatewayId) && request.requestedAt <= window.startedAt
-      && request.body && typeof request.body === "object" && Array.isArray(request.body.subscriptions)
-      && request.body.subscriptions.length > 0
-      && request.body.subscriptions.every((subscription) => typeof subscription.subscription_id === "string"
-        && subscription.subscription_id.length > 0)
-      && requestFacts.filter((candidate) => candidate.requestFactId === request.requestFactId).length === 1);
-    if (requests.length !== 1) continue;
-    const [request] = requests;
-    const recoveries = responseFacts.filter((response) => response.method === "POST" && response.status === 200
-      && response.url === error.url && response.pageId === error.pageId && response.documentId === error.documentId
-      && response.restartWindowId === window.operationId && response.pageRole === pageBinding.role
-      && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
-      && Number.isFinite(response.requestedAt) && response.requestedAt >= window.backendRestart.startedAt
-      && Number.isFinite(response.receivedAt) && response.receivedAt >= response.requestedAt
-      && response.receivedAt <= window.endedAt
-      && typeof response.requestId === "string" && response.requestId.length > 0
-      && typeof response.contentType === "string"
-      && response.contentType.split(";", 1)[0].trim().toLowerCase() === "text/event-stream"
-      && responseFacts.filter((candidate) => candidate.requestId === response.requestId).length === 1
-      && Array.isArray(response.connectedSubscriptions)
-      && hasRecoveredRestartObservations(response, request, window))
-      .sort((left, right) => left.requestedAt - right.requestedAt);
-    if (recoveries.length === 0) continue;
-    const competingErrors = consoleErrorFacts.filter((candidate) => candidate.text === error.text
-      && candidate.url === error.url && candidate.pageId === error.pageId && candidate.documentId === error.documentId
-      && Number.isFinite(candidate.receivedAt) && candidate.receivedAt >= window.backendRestart.stopRequestedAt
-      && candidate.receivedAt <= window.backendRestart.startedAt);
-    if (competingErrors.length !== 1) continue;
-    consumedFailureIndexes.add(index);
-    consumedConsoleIndexes.add(error.index);
-    handled.push({ consoleIndex: error.index, failedRequestIndex: index, requestFactId: request.requestFactId,
-      recoveryRequestId: recoveries[0].requestId, recoveredSubscriptions: recoveries[0].subscriptions,
-      operationId: window.operationId,
-      phase: window.phase, sourceSessionId: window.sourceSessionId, sourceThreadId: window.sourceThreadId,
-      targetSessionId: window.targetSessionId, activeSessionId: window.activeSessionId, endpoint,
-      targetName: window.targetName, backendPort: window.backendRestart.port,
-      backendBeforePid: window.backendRestart.beforePid, backendAfterPid: window.backendRestart.afterPid,
-      pageId: error.pageId, documentId: error.documentId, pageRole: pageBinding.role,
-      requestedAt: failure.requestedAt, failedAt: failure.failedAt });
+
   }
   const consumedNotifications = new Set();
   for (const error of consoleErrorFacts) {
@@ -1060,13 +975,13 @@ function runMessageStreamDiagnosticsSelfTest() {
   const basicOwner = { page: { diagnosticId: 1 }, sessionId: "ses_owner", threadId: "thr_owner",
     gatewayId: "gateway-owner", workspaceId: "workspace-owner" };
   const trace = { pageId: 1, documentId: 2, status: 200, workspaceHeader: "workspace-owner", targetGatewayHeader: "gateway-owner",
-    contentType: "text/event-stream; charset=utf-8", requestId: "trace-request", cdpRequestId: "cdp-trace",
+    contentType: "text/event-stream; charset=utf-8", requestId: "trace-request", transportId: "ws-trace",
     subscriptions: [{ kind: "session_trace", session_id: "ses_owner", subscription_id: "trace-1" }],
     connectedSubscriptions: ["trace-1"] };
   assert.equal(basicStreamConnections(basicOwner, [trace, { ...trace, requestId: "physical-reconnect" }], [recovery]).trace.length, 1);
   assert.equal(basicStreamConnections(basicOwner, [trace, { ...trace, documentId: 3 }], [recovery]).trace.length, 2);
   for (const changed of [{ pageId: 2 }, { workspaceHeader: "other" }, { status: 502 },
-    { connectedSubscriptions: [] }, { requestId: null }, { cdpRequestId: null },
+    { connectedSubscriptions: [] }, { requestId: null }, { transportId: null },
     { subscriptions: [{ kind: "session_trace", session_id: "other", subscription_id: "trace-1" }] }]) {
     assert.equal(basicStreamConnections(basicOwner, [{ ...trace, ...changed }], []).trace.length, 0);
   }
@@ -1395,22 +1310,20 @@ function runMessageStreamDiagnosticsSelfTest() {
       `/api/v1/sessions/${pageRouteSessionId}/bootstrap`, "/api/v1/session-catalog/events?after=0&limit=1000",
       `/api/v1/sessions/${pageRouteSessionId}/file-tree-settings`, `/api/v1/persistent-tasks?session_id=${pageRouteSessionId}`,
       "/api/v1/session-catalog/children?limit=100", "/api/v1/workspace", "/api/v1/session-catalog/snapshot"] },
-    { windowIndex: 1, pageRole: "foreground-before-restart", paths: ["/api/v1/workspace/observations/stream"] },
+    { windowIndex: 1, pageRole: "foreground-before-restart", paths: ["/api/v1/workspace"] },
     { windowIndex: 2, pageRole: "foreground-after-restart",
-      paths: [`/api/v1/sessions/${pageRouteSessionId}/history`, "/api/v1/workspace/observations/stream"] },
+      paths: [`/api/v1/sessions/${pageRouteSessionId}/history`, "/api/v1/workspace"] },
   ];
   for (const { windowIndex, pageRole, paths } of restartTargets) {
     const window = restartWindows[windowIndex];
     for (const path of paths) {
       const errorIndex = restartConsoleFacts.length;
       const targetUrl = `${window.origin}${path}`;
-      const method = path.endsWith("/history") || path === OBSERVATION_STREAM_PATH ? "POST" : "GET";
+      const method = path.endsWith("/history") ? "POST" : "GET";
       const pageBinding = window.pageBindings.find((binding) => binding.role === pageRole);
       const requestFactId = `browser-request-${errorIndex}`;
       const requestId = `request-${errorIndex}`;
-      const requestBody = path === OBSERVATION_STREAM_PATH
-        ? { subscriptions: [{ subscription_id: `sub-${errorIndex}`, kind: "workspace_files" }] }
-        : method === "POST" ? { direction: "tail", turns: 20 } : null;
+      const requestBody = method === "POST" ? { direction: "tail", turns: 20 } : null;
       restartConsoleFacts.push({ index: errorIndex, text: status502Text, url: targetUrl, cdpRequestId: `cdp-${errorIndex}`,
         pageId: pageBinding.pageId, documentId: 1, pageRole: pageBinding.role,
         receivedAt: 150, restartWindowId: window.operationId });
@@ -1426,36 +1339,10 @@ function runMessageStreamDiagnosticsSelfTest() {
         workspaceHeader: window.workspaceId, targetGatewayHeader: window.gatewayId });
     }
   }
-  const observationsUrl = "http://127.0.0.1:19001/api/v1/workspace/observations/stream";
-  const observationErrorIndex = restartConsoleFacts.length;
-  const observationPageBinding = restartWindows[0].pageBindings.find((binding) => binding.role === "copy-request");
-  restartConsoleFacts.push({ index: observationErrorIndex,
-    text: "Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING", url: observationsUrl,
-    pageId: observationPageBinding.pageId, documentId: 1, pageRole: observationPageBinding.role, receivedAt: 150,
-    restartWindowId: restartWindows[0].operationId });
-  restartConsoleErrors.push(restartConsoleFacts.at(-1).text);
-  const observationRequestFactId = "browser-request-observation-stream-interrupted";
-  const observationSubscriptionId = "sub-observation-restart";
-  restartFailures.push({ requestFactId: observationRequestFactId, url: observationsUrl, method: "POST",
-    error: "net::ERR_INCOMPLETE_CHUNKED_ENCODING", pageId: observationPageBinding.pageId,
-    documentId: 1, pageRole: observationPageBinding.role, requestedAt: 90, failedAt: 150,
-    restartWindowId: restartWindows[0].operationId });
-  restartRequests.push({ requestFactId: observationRequestFactId, restartWindowId: null, url: observationsUrl,
-    method: "POST", pageId: observationPageBinding.pageId, documentId: 1, pageRole: observationPageBinding.role,
-    requestedAt: 90, workspaceHeader: restartWindows[0].workspaceId, targetGatewayHeader: restartWindows[0].gatewayId,
-    body: { subscriptions: [{ subscription_id: observationSubscriptionId, kind: "workspace_files" }] } });
-  const recoveryRequestId = "request-observation-stream-recovered";
-  restartResponses.push({ requestFactId: "browser-request-observation-stream-recovery",
-    restartWindowId: restartWindows[0].operationId, url: observationsUrl, method: "POST", status: 200,
-    pageId: observationPageBinding.pageId, documentId: 1, pageRole: observationPageBinding.role,
-    requestedAt: 181, receivedAt: 183, workspaceHeader: restartWindows[0].workspaceId, targetGatewayHeader: restartWindows[0].gatewayId,
-    requestId: recoveryRequestId, contentType: "text/event-stream", subscriptions: [
-      { subscription_id: observationSubscriptionId, kind: "workspace_files" },
-    ], connectedSubscriptions: [observationSubscriptionId] });
   const classifiedRestart = classifyControlledRestartErrors(restartConsoleFacts, restartConsoleErrors,
     restartFailures, restartRequests, restartResponses, restartWindows);
-  assert.equal(classifiedRestart.handled.length, 14,
-    "三次受控 capture 重启应逐条绑定十三条 502 与一条 observations stream chunked failure");
+  assert.equal(classifiedRestart.handled.length, 13,
+    "三次受控 capture 重启应逐条绑定十三条真实 HTTP 502");
   assert.deepEqual(classifiedRestart.unhandledConsoleErrors, []);
   assert.deepEqual(classifiedRestart.unhandledFailedRequests, []);
   assert.deepEqual(new Set(classifiedRestart.handled.filter((fact) => fact.responseRequestId)
@@ -1712,14 +1599,6 @@ function runMessageStreamDiagnosticsSelfTest() {
     "同一 response 附近有多个 console error 时不得猜测匹配对象");
   assert.deepEqual(competingConsoleErrors.unhandledConsoleErrors,
     [baseRestartError.text, competingConsoleError.text], "console 配对歧义时两个原错误都必须保留");
-  const observationConsoleError = restartConsoleFacts.at(-1);
-  const observationFailure = restartFailures[0];
-  assertRestartRemainsUnhandled({ error: observationConsoleError,
-    failure: { ...observationFailure, restartWindowId: "fork-op-other" } },
-  "观察流失败事实不能借用另一个重启窗口");
-  assertRestartRemainsUnhandled({ error: observationConsoleError,
-    failure: { ...observationFailure, pageRole: "foreground-after-restart" } },
-  "观察流失败事实必须保留实际页面角色");
   assertRestartRemainsUnhandled({ error: { ...baseRestartError, cdpRequestId: "cdp-other" } },
   "网络日志必须与 HTTP 响应的 CDP 请求身份相同");
   assertRestartRemainsUnhandled({ error: { ...baseRestartError, cdpRequestId: null } },
@@ -1734,123 +1613,6 @@ function runMessageStreamDiagnosticsSelfTest() {
       requestFactId: anotherRequestId, requestId: anotherResponseId, bodyRequestId: anotherResponseId,
       body: { ...baseRestartResponse.body, request_id: anotherResponseId } }], [restartWindows[0]]);
   assert.equal(distinctErrors.handled.length, 2, "连续重试即使 URL 与时间相近，也必须按各自网络请求身份分别处理");
-  assertRestartRemainsUnhandled({ error: observationConsoleError,
-    failure: { ...observationFailure, error: "net::ERR_CONNECTION_RESET" } },
-  "受控 observations stream 不得豁免其它网络错误类型");
-  assertRestartRemainsUnhandled({ error: observationConsoleError,
-    failure: { ...observationFailure, restartWindowId: "fork-op-other" } },
-  "observations stream failure 的 operation ID 必须精确匹配受控窗口");
-  const assertObservationRemainsUnhandled = (response, request = restartRequests.at(-1), error = observationConsoleError) => {
-    const responses = response === null ? [] : [response];
-    const classified = classifyControlledRestartErrors([error], [error.text], [observationFailure],
-      [request], responses, [restartWindows[0]]);
-    assert.equal(classified.handled.length, 0, "observations stream 恢复证据不足时不能分类");
-    assert.deepEqual(classified.unhandledConsoleErrors, [error.text]);
-    assert.deepEqual(classified.unhandledFailedRequests, [observationFailure]);
-  };
-  const recoveredObservation = restartResponses.at(-1);
-  const reRegisteredObservation = { ...recoveredObservation,
-    subscriptions: [{ ...recoveredObservation.subscriptions[0], subscription_id: "sub-new-registration" }],
-    connectedSubscriptions: ["sub-new-registration"] };
-  const reRegistered = classifyControlledRestartErrors([observationConsoleError], [observationConsoleError.text],
-    [observationFailure], [restartRequests.at(-1)], [reRegisteredObservation], [restartWindows[0]]);
-  assert.equal(reRegistered.handled.length, 1, "同一观察目标重新登记后应按新 ID 的真实 connected 回执证明恢复");
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation, connectedSubscriptions: [observationSubscriptionId] });
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation,
-    subscriptions: [{ ...reRegisteredObservation.subscriptions[0], kind: "session_activity" }] });
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation,
-    subscriptions: [{ ...reRegisteredObservation.subscriptions[0], paths: ["other/path"] }] });
-  const taskSubscriptions = ["composer", "sidebar"].map(subscription_id => ({ subscription_id,
-    kind: "persistent_tasks", session_id: "ses_task_owner" }));
-  const taskRecovery = { ...reRegisteredObservation, subscriptions: taskSubscriptions,
-    connectedSubscriptions: taskSubscriptions.map(item => item.subscription_id) };
-  assert(hasConnectedObservationTargets(taskRecovery, taskSubscriptions), "任务的两个逻辑入口均须有连接回执");
-  assert(!hasConnectedObservationTargets({ ...taskRecovery, connectedSubscriptions: ["composer"] }, taskSubscriptions));
-  assert(!hasConnectedObservationTargets({ ...taskRecovery, subscriptions: taskSubscriptions.slice(1) }, taskSubscriptions));
-  const traceRequest = { ...restartRequests.at(-1), body: { subscriptions: [
-    { subscription_id: "trace-before", kind: "session_trace", session_id: "ses_trace_owner", thread_id: "thr_trace_owner" },
-  ] } };
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation, subscriptions: [
-    { subscription_id: "sub-new-registration", kind: "session_trace", session_id: "ses_other" },
-  ] }, traceRequest);
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation, subscriptions: [
-    { subscription_id: "sub-new-registration", kind: "session_trace", session_id: "ses_trace_owner", thread_id: "thr_other" },
-  ] }, traceRequest);
-  const deletionWindow = restartWindows[0];
-  const deletedTrace = { subscription_id: "source-trace-before", kind: "session_trace",
-    session_id: deletionWindow.sourceSessionId, thread_id: deletionWindow.sourceThreadId };
-  const deleteRequest = { ...restartRequests.at(-1), body: { subscriptions: [
-    ...restartRequests.at(-1).body.subscriptions, deletedTrace,
-  ] } };
-  const sourceDeletionProof = { operationId: "source-delete", terminalRequestId: "source-delete-terminal",
-    pageId: deleteRequest.pageId, documentId: deleteRequest.documentId,
-    origin: deletionWindow.origin, workspaceHeader: deletionWindow.workspaceId, targetGatewayHeader: deletionWindow.gatewayId,
-    receipt: { state: "committed", settlement: "settled" },
-    journal: { subtree_delete_idempotency_key: "source-delete", root_node_id: deletionWindow.sourceSessionId, state: "completed" },
-    remaining: [], sessionIds: [deletionWindow.sourceSessionId],
-    absentDomNodeIds: [deletionWindow.sourceSessionId], absentChatSessionIds: [deletionWindow.sourceSessionId],
-    absentThreadIds: [deletionWindow.sourceThreadId], verifiedAt: 190 };
-  const classifyDeletedTrace = (proof = sourceDeletionProof, response = reRegisteredObservation, operationId = "source-delete") =>
-    classifyControlledRestartErrors([observationConsoleError], [observationConsoleError.text], [observationFailure],
-      [deleteRequest], [response], [{ ...deletionWindow, sourceDeletionOperationId: operationId, sourceDeletionProof: proof }]);
-  assert.equal(classifyDeletedTrace().handled.length, 1,
-    "同页原删除完整完成、Tab 释放且存活观察 connected 后，应允许已删除 source Trace 释放");
-  for (const proof of [null,
-    { ...sourceDeletionProof, operationId: "another-deletion" },
-    { ...sourceDeletionProof, terminalRequestId: null },
-    { ...sourceDeletionProof, pageId: deleteRequest.pageId + 1 },
-    { ...sourceDeletionProof, documentId: deleteRequest.documentId + 1 },
-    { ...sourceDeletionProof, origin: "http://127.0.0.1:19002" },
-    { ...sourceDeletionProof, workspaceHeader: "another-workspace" },
-    { ...sourceDeletionProof, targetGatewayHeader: "another-gateway" },
-    { ...sourceDeletionProof, targetGatewayHeader: null },
-    { ...sourceDeletionProof, receipt: { state: "running", settlement: null } },
-    { ...sourceDeletionProof, receipt: { state: "committed", settlement: "repair_required" } },
-    { ...sourceDeletionProof, journal: { ...sourceDeletionProof.journal, subtree_delete_idempotency_key: "another-deletion" } },
-    { ...sourceDeletionProof, journal: { ...sourceDeletionProof.journal, root_node_id: "another-session" } },
-    { ...sourceDeletionProof, journal: { ...sourceDeletionProof.journal, state: "deleting" } },
-    { ...sourceDeletionProof, remaining: [deletionWindow.sourceSessionId] },
-    { ...sourceDeletionProof, sessionIds: ["another-session"] },
-    { ...sourceDeletionProof, absentDomNodeIds: [] },
-    { ...sourceDeletionProof, absentChatSessionIds: [] },
-    { ...sourceDeletionProof, absentThreadIds: ["another-thread"] },
-    { ...sourceDeletionProof, verifiedAt: 179 },
-    { ...sourceDeletionProof, verifiedAt: 201 },
-  ]) {
-    assert.deepEqual(classifyDeletedTrace(proof).unhandledConsoleErrors, [observationConsoleError.text],
-      "删除归属、完整终态或真实页面释放证明不完整时，原 Trace 缺失必须失败");
-  }
-  assert.equal(classifyDeletedTrace(sourceDeletionProof, reRegisteredObservation, null).handled.length, 0,
-    "未在重启前冻结原删除 operation，不得借用事后的删除证明");
-  assert.equal(classifyDeletedTrace(sourceDeletionProof, { ...reRegisteredObservation, connectedSubscriptions: [] }).handled.length, 0,
-    "source 删除不能代替存活目标的真实 connected");
-  assert.equal(classifyDeletedTrace(sourceDeletionProof, { ...reRegisteredObservation,
-    subscriptions: [...reRegisteredObservation.subscriptions, deletedTrace] }).handled.length, 0,
-  "source 删除完成后，恢复连接不得继续持有已删除 source Trace");
-  assertObservationRemainsUnhandled({ ...reRegisteredObservation,
-    subscriptions: [...reRegisteredObservation.subscriptions, ...reRegisteredObservation.subscriptions] });
-  const consecutiveRecoveries = classifyControlledRestartErrors([observationConsoleError], [observationConsoleError.text],
-    [observationFailure], [restartRequests.at(-1)], [reRegisteredObservation, {
-      ...reRegisteredObservation, requestId: "request-later-reconfiguration", requestedAt: 185, receivedAt: 187,
-    }], [restartWindows[0]]);
-  assert.equal(consecutiveRecoveries.handled.length, 1, "后续合法连接重配不应抹去首次恢复事实");
-  assert.equal(consecutiveRecoveries.handled[0].recoveryRequestId, reRegisteredObservation.requestId);
-  assertObservationRemainsUnhandled({ ...recoveredObservation, connectedSubscriptions: [] });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, connectedSubscriptions: ["sub-other"] });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, pageId: recoveredObservation.pageId + 1 });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, documentId: recoveredObservation.documentId + 1 });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, workspaceHeader: "workspace-other" });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, restartWindowId: "fork-op-other" });
-  assertObservationRemainsUnhandled({ ...recoveredObservation, requestId: null });
-  assertObservationRemainsUnhandled(null);
-  const duplicateObservationErrors = classifyControlledRestartErrors(
-    [observationConsoleError, { ...observationConsoleError, index: observationConsoleError.index + 1 }],
-    [observationConsoleError.text, observationConsoleError.text], [observationFailure],
-    [restartRequests.at(-1)], [recoveredObservation], [restartWindows[0]]);
-  assert.equal(duplicateObservationErrors.handled.length, 0,
-    "重复 observations console error 必须保持歧义并全部未处理");
-  assert.deepEqual(duplicateObservationErrors.unhandledFailedRequests, [observationFailure]);
-
   const controlledStreamWindow = { ...restartWindows[0], origin: "http://127.0.0.1:19000",
     pageId: 1, documentIds: [2], startedAt: 60, endedAt: 140 };
   const afterTwentyConsoleErrors = [chunkedConsoleError, secondChunkedConsoleError].map((error) => ({
@@ -1889,11 +1651,11 @@ function basicStreamConnections(owner, observations = controlledRestartResponses
     if (response.pageId !== owner.page.diagnosticId || response.status !== 200
         || response.workspaceHeader !== owner.workspaceId || response.targetGatewayHeader !== owner.gatewayId
         || response.contentType?.split(";", 1)[0] !== "text/event-stream"
-        || !response.requestId || !response.cdpRequestId) continue;
+        || !response.requestId || !response.transportId) continue;
     const subscriptions = response.subscriptions?.filter((subscription) => subscription.kind === "session_trace"
       && subscription.session_id === owner.sessionId
       && response.connectedSubscriptions.includes(subscription.subscription_id)) ?? [];
-    // 同页增减其它 observer 会重建物理连接；每个 document 只计已确认连接的会话逻辑订阅。
+    // 每个 document 只计已确认连接的会话逻辑订阅，不能把 WS 重连误计为新增视图。
     if (subscriptions.length === 1 && !traceByDocument.has(response.documentId)) {
       traceByDocument.set(response.documentId, { ...response, subscriptionId: subscriptions[0].subscription_id });
     }
@@ -4935,17 +4697,6 @@ async function runNavigationOptimism(surfaces) {
           return;
         }
         if (entry.responseStatusCode === undefined) {
-          if (url.pathname === "/api/v1/workspace/observations/stream") {
-            assert.equal(entry.request.method, "POST");
-            const { subscriptions } = JSON.parse(entry.request.postData);
-            assert.ok(Array.isArray(subscriptions));
-            if (subscriptions.some((subscription) => subscription.kind === "session_activity")) {
-              // 活动观察者已合并到唯一工作区传输；只取消包含它的真实目标请求。
-              await eventTransport.send("Fetch.failRequest", { requestId: entry.requestId, errorReason: "Aborted" });
-              eventWire.activitySseDropped.push({ url: entry.request.url, workspaceId, gatewayId, subscriptions, at: Date.now() });
-              return;
-            }
-          }
           if (url.pathname === "/api/v1/session-catalog/navigation-events" && queryAfter !== undefined) {
             const originalUrl = url.href;
             url.searchParams.delete("cursor");
@@ -4992,11 +4743,27 @@ async function runNavigationOptimism(surfaces) {
       });
     });
     await eventTransport.send("Fetch.enable", { patterns: [
-      { urlPattern: "*/api/v1/workspace/observations/stream*", requestStage: "Request" },
       { urlPattern: "*/api/v1/session-catalog/navigation-events*", requestStage: "Request" },
       { urlPattern: "*/api/v1/session-catalog/navigation-events*", requestStage: "Response" },
       { urlPattern: "*/api/v1/session-catalog/snapshot*", requestStage: "Response" },
     ] });
+    await peerPage.routeWebSocket('**/api/gateway/realtime', route => {
+      const server = route.connectToServer();
+      server.onMessage(message => route.send(message));
+      route.onMessage(message => {
+        if (typeof message === 'string') {
+          const command = JSON.parse(message), headers = new Headers(command.headers);
+          if (command.type === 'subscribe' && new URL(command.path, peerPage.url()).pathname === '/api/v1/session-catalog/events/stream'
+            && headers.get('X-BoxTeam-Workspace-Id') === surface.workspaceId
+            && headers.get('X-BoxTeam-Target-Gateway-Id') === surface.gatewayId) {
+            route.send(JSON.stringify({ type: 'error', subscription_id: command.subscription_id, message: '测试受控中断活动订阅' }));
+            eventWire.activitySseDropped.push({ command, at: Date.now() });
+            return;
+          }
+        }
+        server.send(message);
+      });
+    });
     await drainPageResponseBodies(peerPage);
     await peerPage.goto(eventPageUrl, { waitUntil: "domcontentloaded" });
     await openCatalogWorkspace(peer);
@@ -11628,16 +11395,7 @@ async function closeControlledRestartRequestPage(page, window) {
   // 保留发起请求的页面，直到被杀后端恢复，避免关闭页面截断错误正文或 SSE 恢复证据。
   const binding = controlledRestartPageBinding(window, page.diagnosticId);
   assert.equal(binding?.role, "copy-request");
-  const interrupted = failedRequests.filter((failure) => failure.pageId === page.diagnosticId
-    && failure.restartWindowId === window.operationId && failure.method === "POST"
-    && failure.url === `${window.origin}/api/v1/workspace/observations/stream`
-    && failure.error === "net::ERR_INCOMPLETE_CHUNKED_ENCODING");
   const originals = new Map(binding.observationRequests.map((request) => [request.requestFactId, request]));
-  for (const failure of interrupted) {
-    const request = controlledRestartRequests.find((request) => request.requestFactId === failure.requestFactId);
-    assert.ok(request?.body?.subscriptions?.length, "中断的观察流必须保留原请求订阅");
-    originals.set(request.requestFactId, request);
-  }
   assert.ok(originals.size > 0, "重启前必须冻结原请求页的观察订阅，不能依赖中断事件是否已派发");
   for (const original of originals.values()) {
     assert.equal(original.pageId, page.diagnosticId);
@@ -11645,16 +11403,20 @@ async function closeControlledRestartRequestPage(page, window) {
     assert.equal(original.workspaceHeader, window.workspaceId);
     assert.equal(original.targetGatewayHeader, window.gatewayId);
     assert.ok(original.body?.subscriptions?.length, "重启前冻结的订阅不能为空");
-    await waitUntil(() => controlledRestartResponses.some((response) => response.pageId === original.pageId
-      && response.documentId === original.documentId && response.url === original.url
-      && response.restartWindowId === window.operationId && response.pageRole === "copy-request"
-      && response.status === 200 && (response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId)
-      && response.requestId && response.cdpRequestId
-      && response.contentType?.split(";", 1)[0].trim().toLowerCase() === "text/event-stream"
-      && response.requestedAt >= window.backendRestart.startedAt
-      && hasRecoveredRestartObservations(response, original, window)),
-    "受控重启后，原请求页面必须重连存活目标，并释放已完成删除的精确 source Trace");
   }
+  const original = { ...originals.values().next().value,
+    body: { subscriptions: [...originals.values()].flatMap(item => item.body.subscriptions) } };
+  await waitUntil(() => {
+      const active = controlledRestartResponses.filter(response => response.pageId === original.pageId
+        && response.documentId === original.documentId && response.restartWindowId === window.operationId
+        && response.pageRole === 'copy-request' && response.status === 200 && !response.endedAt
+        && response.workspaceHeader === window.workspaceId && response.targetGatewayHeader === window.gatewayId
+        && response.requestId && response.transportId
+        && response.contentType?.split(';', 1)[0].trim().toLowerCase() === 'text/event-stream'
+        && response.requestedAt >= window.backendRestart.startedAt);
+      return hasRecoveredRestartObservations({ subscriptions: active.flatMap(item => item.subscriptions),
+        connectedSubscriptions: active.flatMap(item => item.connectedSubscriptions) }, original, window);
+    }, '重启后原页必须恢复精确存活订阅，释放已完成删除的 source Trace');
   await page.evaluate(() => globalThis.boxteamWorkbenchLifecycle.prepareToClose());
   await drainPageResponseBodies(page);
   await page.close();
@@ -11662,7 +11424,7 @@ async function closeControlledRestartRequestPage(page, window) {
 
 async function runControlledRestartPageCloseSelfTest() {
   const request = { requestFactId: "close-proof-original", pageId: -1, documentId: 1,
-    url: "http://127.0.0.1:19001/api/v1/workspace/observations/stream", workspaceHeader: "workspace-close", targetGatewayHeader: "gateway-close",
+    url: "http://127.0.0.1:19001/api/v1/workspace/files/events", workspaceHeader: "workspace-close", targetGatewayHeader: "gateway-close",
     body: { subscriptions: [{ subscription_id: "original", kind: "workspace_files" }] } };
   const window = { operationId: "close-proof-operation", workspaceId: request.workspaceHeader, gatewayId: request.targetGatewayHeader,
     origin: "http://127.0.0.1:19001", backendRestart: { startedAt: 100 },
@@ -11684,7 +11446,7 @@ async function runControlledRestartPageCloseSelfTest() {
     assert.equal(closed, false, "稍晚派发的中断不能被关页绕过");
     controlledRestartResponses.push({ ...request, status: 200, requestedAt: 101,
       restartWindowId: window.operationId, pageRole: "copy-request", contentType: "text/event-stream",
-      requestId: "recovered-request", cdpRequestId: "recovered-cdp-request",
+      requestId: "recovered-request", transportId: "recovered-ws-subscription",
       subscriptions: [{ subscription_id: "recovered", kind: "workspace_files" }],
       connectedSubscriptions: ["recovered"] });
     await closing;
@@ -11819,7 +11581,6 @@ function badGatewayConsoleAuditDifferences() {
   return [...counts.values()].filter((count) => count.playwright !== count.cdp);
 }
 const controlledRestartCdpSetups = new Set();
-const OBSERVATION_STREAM_PATH = "/api/v1/workspace/observations/stream";
 let diagnosticPageId = 0;
 let diagnosticObservationOrder = 0;
 let controlledRestartRequestOrdinal = 0;
@@ -12053,9 +11814,6 @@ async function installPageDiagnostics(page) {
   const requestDocuments = new WeakMap();
   const streamResponseByRequest = new WeakMap();
   const diagnosticResponseFacts = new WeakMap();
-  const cdpStreamCaptures = new Map();
-  const pendingCdpRequests = [];
-  const pendingPlaywrightRequests = [];
   const pendingCdpResponses = new Map();
   const cdpNetworkRequests = new Map();
   const bindBadGatewayResponse = () => {
@@ -12071,91 +11829,62 @@ async function installPageDiagnostics(page) {
       if (candidates.length === 1) response.cdpRequestId = candidates[0][0];
     }
   };
-  const pendingPlaywrightResponses = new Map();
   let cdpSession = null;
   const readBody = response => readDiagnosticResponseBody(response, pendingCdpResponses, cdpSession, waitUntil);
-  const bindObservationRequest = () => {
-    for (const cdpRequest of pendingCdpRequests) {
-      if (cdpRequest.bound) continue;
-      const candidates = pendingPlaywrightRequests.filter((item) => !item.bound
-        && item.fact.pageId === page.diagnosticId && item.fact.documentId === cdpRequest.documentId
-        && item.fact.url === cdpRequest.url && item.fact.method === "POST"
-        && (item.fact.workspaceHeader === cdpRequest.workspaceHeader && item.fact.targetGatewayHeader === cdpRequest.targetGatewayHeader)
-        && JSON.stringify(item.fact.body) === JSON.stringify(cdpRequest.body)
-        && Math.abs(item.fact.requestedAt - cdpRequest.requestedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
-      if (candidates.length !== 1) continue;
-      const [playwrightRequest] = candidates;
-      const reverse = pendingCdpRequests.filter((candidate) => !candidate.bound
-        && candidate.documentId === playwrightRequest.fact.documentId
-        && candidate.url === playwrightRequest.fact.url
-        && (candidate.workspaceHeader === playwrightRequest.fact.workspaceHeader && candidate.targetGatewayHeader === playwrightRequest.fact.targetGatewayHeader)
-        && JSON.stringify(candidate.body) === JSON.stringify(playwrightRequest.fact.body)
-        && Math.abs(candidate.requestedAt - playwrightRequest.fact.requestedAt) <= CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS);
-      if (reverse.length !== 1) continue;
-      cdpRequest.bound = true;
-      playwrightRequest.bound = true;
-      playwrightRequest.fact.cdpRequestId = cdpRequest.requestId;
-      cdpStreamCaptures.set(cdpRequest.requestId, { requestFactId: playwrightRequest.fact.requestFactId,
-        subscriptions: new Set(cdpRequest.subscriptions.map((item) => item.subscription_id)), pending: "",
-        bufferedReady: false, queuedChunks: [] });
-      bindObservationResponse(cdpRequest.requestId);
-    }
-  };
-  const bindObservationResponse = (requestId) => {
-    const capture = cdpStreamCaptures.get(requestId);
-    const cdpResponse = pendingCdpResponses.get(requestId);
-    const playwrightResponse = pendingPlaywrightResponses.get(capture?.requestFactId);
-    if (!capture || !cdpResponse || !playwrightResponse || cdpResponse.bound || playwrightResponse.bound) return;
-    if (cdpResponse.status !== playwrightResponse.fact.status
-        || cdpResponse.status !== 200
-        || cdpResponse.contentType !== playwrightResponse.fact.contentType
-        || Math.abs(cdpResponse.receivedAt - playwrightResponse.fact.receivedAt) > CONTROLLED_RESTART_EVENT_MATCH_WINDOW_MS) return;
-    cdpResponse.bound = true;
-    playwrightResponse.bound = true;
-    const responseFact = playwrightResponse.fact;
-    responseFact.cdpRequestId = requestId;
-    responseFact.connectedSubscriptions = [];
-    const parseChunk = (encoded) => {
-      capture.pending += Buffer.from(encoded, "base64").toString("utf8");
-      const blocks = capture.pending.split(/\r?\n\r?\n/);
-      capture.pending = blocks.pop() ?? "";
-      for (const block of blocks) {
-        const data = block.split(/\r?\n/).filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart()).join("\n");
-        if (!data) continue;
-        try {
-          const envelope = JSON.parse(data);
-          if (envelope.state === "connected" && capture.subscriptions.has(envelope.subscription_id)
-              && !responseFact.connectedSubscriptions.includes(envelope.subscription_id)) {
-            responseFact.connectedSubscriptions.push(envelope.subscription_id);
-          }
-        } catch (error) {
-          controlledRestartStreamDiagnostics.push({ pageId: page.diagnosticId,
-            requestFactId: capture.requestFactId, phase: "sse-envelope", error: String(error) });
+  const realtimeFacts = new Map();
+  observeRealtime(page, {
+    subscribe(request) {
+      const descriptor = describeRealtimeSubscription(request);
+      const restartWindow = page.controlledRestartWindow;
+      const binding = restartWindow && controlledRestartPageBinding(restartWindow, page.diagnosticId);
+      const fact = { requestFactId: `ws-subscription-${++controlledRestartRequestOrdinal}`,
+        transport: 'websocket', transportId: `ws-subscription-${controlledRestartRequestOrdinal}`,
+        url: request.url, method: request.method, body: { subscriptions: [descriptor] },
+        pageId: page.diagnosticId, documentId: page.diagnosticDocumentId, requestedAt: Date.now(),
+        workspaceHeader: request.headers['x-boxteam-workspace-id'] ?? null,
+        targetGatewayHeader: request.headers['x-boxteam-target-gateway-id'] ?? null,
+        restartWindowId: restartWindow?.operationId ?? null, pageRole: binding?.role ?? null };
+      realtimeFacts.set(request, { request: fact });
+      controlledRestartRequests.push(fact);
+      page.diagnosticObservationRequests.set(request, fact);
+    },
+    headers(request, frame) {
+      const entry = realtimeFacts.get(request), original = entry.request;
+      const headers = frame.headers;
+      const fact = { ...original, status: frame.status, receivedAt: Date.now(),
+        requestId: headers['x-request-id'] ?? null, contentType: headers['content-type'] ?? null,
+        subscriptions: original.body.subscriptions,
+        connectedSubscriptions: frame.status === 200 ? [request.subscription_id] : [] };
+      entry.response = fact;
+      controlledRestartResponses.push(fact);
+      const target = messageStreamTarget(request.url);
+      if (target) {
+        Object.assign(fact, target, { messageStreamId: headers['x-message-stream-id'] ?? null,
+          headers: { requestId: fact.requestId, messageStreamId: headers['x-message-stream-id'] ?? null,
+            contentType: fact.contentType, contentLength: headers['content-length'] ?? null } });
+        messageStreamResponses.push(fact);
+      }
+    },
+    data(request, bytes) {
+      const fact = realtimeFacts.get(request)?.response;
+      if (fact && fact.status !== 200) {
+        fact.bodyText = (fact.bodyText ?? '') + bytes.toString('utf8');
+        assert.ok(Buffer.byteLength(fact.bodyText) <= 65536, '订阅错误正文不得无界缓存');
+      }
+    },
+    end(request, frame) {
+      const fact = realtimeFacts.get(request)?.response;
+      if (fact) {
+        fact.endedAt = Date.now(); fact.endType = frame?.type ?? 'unsubscribe';
+        if (fact.status !== 200 && fact.bodyText) {
+          try { fact.body = JSON.parse(fact.bodyText); }
+          catch (error) { fact.bodyError = String(error); }
         }
       }
-    };
-    const drain = () => {
-      while (capture.queuedChunks.length) parseChunk(capture.queuedChunks.shift());
-    };
-    if (!cdpSession) {
-      controlledRestartStreamDiagnostics.push({ pageId: page.diagnosticId,
-        requestFactId: capture.requestFactId, phase: "cdp-session-unavailable" });
-      return;
-    }
-    void cdpSession.send("Network.streamResourceContent", { requestId }).then((result) => {
-      if (result.bufferedData) parseChunk(result.bufferedData);
-      capture.bufferedReady = true;
-      drain();
-    }, (error) => {
-      controlledRestartStreamDiagnostics.push({ pageId: page.diagnosticId,
-        requestFactId: capture.requestFactId, phase: "streamResourceContent", error: String(error) });
-    });
-    capture.receiveChunk = (encoded) => {
-      if (!capture.bufferedReady) capture.queuedChunks.push(encoded);
-      else parseChunk(encoded);
-    };
-  };
+      page.diagnosticObservationRequests.delete(request);
+      realtimeFacts.delete(request);
+    },
+  });
   const cdpSetup = page.context().newCDPSession(page).then(async (cdp) => {
     cdpSession = cdp;
     await cdp.send("Network.enable");
@@ -12179,19 +11908,7 @@ async function installPageDiagnostics(page) {
         name.toLowerCase() === "x-boxteam-target-gateway-id")?.[1] ?? null;
       cdpNetworkRequests.set(event.requestId, { method: event.request.method,
         documentId: page.diagnosticDocumentId, workspaceHeader, targetGatewayHeader });
-      if (event.request.method !== "POST" || new URL(event.request.url).pathname !== OBSERVATION_STREAM_PATH) return;
-      let body;
-      try {
-        body = JSON.parse(event.request.postData ?? "{}");
-      } catch (error) {
-        controlledRestartStreamDiagnostics.push({ pageId: page.diagnosticId, requestId: event.requestId,
-          phase: "request-body", error: String(error) });
-        return;
-      }
-      pendingCdpRequests.push({ requestId: event.requestId, url: event.request.url, body,
-        subscriptions: body.subscriptions,
-        workspaceHeader, targetGatewayHeader, documentId: page.diagnosticDocumentId, requestedAt: Date.now(), bound: false });
-      bindObservationRequest();
+
     });
     cdp.on("Network.responseReceived", (event) => {
       const request = cdpNetworkRequests.get(event.requestId);
@@ -12203,12 +11920,7 @@ async function installPageDiagnostics(page) {
         serverRequestId: Object.entries(event.response.headers ?? {}).find(([name]) => name.toLowerCase() === "x-request-id")?.[1] ?? null,
         contentType: event.response.headers?.["content-type"] ?? event.response.headers?.["Content-Type"] ?? null,
         receivedAt: Date.now(), bound: false });
-      bindObservationResponse(event.requestId);
       if (event.response.status === 502) bindBadGatewayResponse();
-    });
-    cdp.on("Network.dataReceived", (event) => {
-      const capture = cdpStreamCaptures.get(event.requestId);
-      if (capture?.receiveChunk && event.data) capture.receiveChunk(event.data);
     });
     cdp.on("Network.loadingFinished", (event) => {
       const response = pendingCdpResponses.get(event.requestId);
@@ -12283,20 +11995,7 @@ page.on("request", (request) => {
     url: requestUrl, method: request.method(), workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
     restartWindowId: restartWindow?.operationId ?? null, pageRole: pageBinding?.role ?? null };
   requestDocuments.set(request, requestDocument);
-  if (request.method() === "POST" && new URL(requestUrl).pathname === OBSERVATION_STREAM_PATH) {
-    try {
-      requestDocument.body = request.postDataJSON();
-    } catch (error) {
-      requestDocument.bodyError = String(error);
-    }
-    controlledRestartRequests.push(requestDocument);
-    page.diagnosticObservationRequests.set(request, requestDocument);
-    if (requestDocument.bodyError === undefined) {
-      pendingPlaywrightRequests.push({ fact: requestDocument,
-        subscriptions: requestDocument.body?.subscriptions ?? [], bound: false });
-      bindObservationRequest();
-    }
-  }
+
 });
 page.on("requestfinished", (request) => {
   page.diagnosticSessionReads.delete(request);
@@ -12324,8 +12023,6 @@ page.on("requestfailed", (request) => {
     restartWindowId: requestDocument?.restartWindowId ?? page.controlledRestartWindow?.operationId ?? null,
     pageRole: requestDocument?.pageRole ?? (page.controlledRestartWindow
       ? controlledRestartPageBinding(page.controlledRestartWindow, page.diagnosticId)?.role ?? null : null),
-    ...(requestDocument?.url === new URL(request.url()).origin + OBSERVATION_STREAM_PATH
-      ? { requestFactId: requestDocument.requestFactId } : {}),
     ...(streamResponse ? { responseRequestId: streamResponse.requestId, status: streamResponse.status,
       sessionId: streamResponse.sessionId, turnId: streamResponse.turnId, threadId: streamResponse.threadId,
       turnStreamId: streamResponse.turnStreamId, afterSeq: streamResponse.afterSeq,
@@ -12334,33 +12031,6 @@ page.on("requestfailed", (request) => {
 });
 page.on("response", (response) => {
   const url = new URL(response.url());
-  if (response.request().method() === "POST" && url.pathname === OBSERVATION_STREAM_PATH && !url.search) {
-    const request = response.request();
-    const requestDocument = requestDocuments.get(request);
-    const restartWindow = page.controlledRestartWindow;
-    const pageBinding = restartWindow && controlledRestartPageBinding(restartWindow, page.diagnosticId);
-    const subscriptions = requestDocument?.body?.subscriptions;
-    controlledRestartResponses.push({ requestFactId: requestDocument?.requestFactId ?? null,
-      restartWindowId: requestDocument?.restartWindowId ?? restartWindow?.operationId ?? null,
-      url: response.url(), method: "POST", status: response.status(), pageId: page.diagnosticId,
-      documentId: requestDocument?.documentId ?? null,
-      pageRole: requestDocument?.pageRole ?? pageBinding?.role ?? null,
-      requestedAt: requestDocument?.requestedAt ?? null, receivedAt: Date.now(),
-      workspaceHeader: request.headers()["x-boxteam-workspace-id"] ?? null, targetGatewayHeader: request.headers()["x-boxteam-target-gateway-id"] ?? null,
-      requestId: response.headers()["x-request-id"] ?? null,
-      contentType: response.headers()["content-type"] ?? null,
-      subscriptions: Array.isArray(subscriptions) ? subscriptions : null,
-      connectedSubscriptions: [] });
-    const responseFact = controlledRestartResponses.at(-1);
-    if (responseFact.requestFactId !== null) {
-      pendingPlaywrightResponses.set(responseFact.requestFactId, { fact: responseFact, bound: false });
-      const capture = [...cdpStreamCaptures.values()].find((item) => item.requestFactId === responseFact.requestFactId);
-      if (capture) {
-        const cdpRequestId = [...cdpStreamCaptures.entries()].find(([, item]) => item === capture)?.[0];
-        if (cdpRequestId) bindObservationResponse(cdpRequestId);
-      }
-    }
-  }
   if (response.status() === 502) {
     const request = response.request();
     const requestDocument = requestDocuments.get(request);

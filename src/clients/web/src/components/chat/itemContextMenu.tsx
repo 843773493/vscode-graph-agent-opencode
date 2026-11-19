@@ -2,7 +2,7 @@ import React from "react";
 import { t } from "../../../../shared/core/i18n/index.js";
 import type { TimelineItem } from "../../state/timeline/timelineTypes";
 import { copyTextToClipboard } from "../../utils/clipboard";
-import type { ThreadItemContentDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
+import type { ContextContentReferenceDTO } from "../../types/protocol_generated/boxteam/workspace/v2/public";
 
 export interface ChatItemMenuAction {
   id: string;
@@ -14,14 +14,11 @@ export interface ChatItemMenuAction {
 
 export interface ChatItemTarget {
   itemIds?: Array<{ id: string; kind: string }>;
+  contextSources?: Array<{ reference: ContextContentReferenceDTO; name: string }>;
   messageId?: string;
 }
 export const ChatItemOwnerContext = React.createContext<{ sessionId: string; threadId: string } | null>(null);
-export interface ChatItemContentHost {
-  read: (owner: { sessionId: string; threadId: string }, itemId: string, signal?: AbortSignal) => Promise<ThreadItemContentDTO[]>;
-  open: (owner: { sessionId: string; threadId: string }, itemId: string) => Promise<void>;
-}
-export const ChatItemContentContext = React.createContext<ChatItemContentHost | null>(null);
+export const ContextNoticeContinuationContext = React.createContext<((cursor: string) => Promise<void>) | null>(null);
 
 /** 聚合卡片的最后一个真实 Item 是定位边界；来源未提交时不倒退到较早来源。 */
 export function responseItemTarget(item: TimelineItem): ChatItemTarget | undefined {

@@ -128,6 +128,7 @@ function panelProps(
     historyError: null,
     onLoadAroundTurn: async () => {},
     onLoadNewerMessages: async () => {},
+    onLoadLatestMessages: async () => {},
     onLoadOlderMessages: async () => {},
     onLoadTurnDetails: async () => {},
     onLoadAgentStateMessageRawContent: async () => "",

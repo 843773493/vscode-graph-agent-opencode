@@ -45,7 +45,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -68,7 +68,7 @@
   flex: 0 0 auto;
   padding: 2px 8px;
   color: var(--bt-text-muted);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   text-align: center;
 }
 
@@ -85,7 +85,7 @@
 
 .event-queue-key-trace-title {
   color: var(--bt-text-primary);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   font-weight: 700;
 }
 
@@ -102,7 +102,7 @@
   padding: 3px 8px;
   background: var(--bt-surface-background);
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -119,7 +119,7 @@
   padding: 2px 7px;
   background: var(--bt-selection-muted-background);
   color: var(--bt-text-primary);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -133,7 +133,7 @@
   border: 1px solid color-mix(in srgb, var(--bt-focus-border) 32%, var(--bt-border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--bt-hover-background) 58%, transparent);
-  font-size: 12px;
+  font-size: var(--bt-font-size-small);
   line-height: 1.5;
 }
 
@@ -160,7 +160,7 @@
 }
 
 .event-queue-input-text {
-  font-size: 12px;
+  font-size: var(--bt-font-size);
   line-height: 1.5;
   color: var(--bt-text-primary);
   overflow-wrap: anywhere;
@@ -177,5 +177,5 @@
   padding: 2px 7px;
   background: var(--bt-button-background);
   color: var(--bt-button-foreground);
-  font-size: 11px;
+  font-size: var(--bt-font-size-small);
 }
