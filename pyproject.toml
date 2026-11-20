@@ -32,7 +32,7 @@ dependencies = [
     "protobuf>=7.36.2,<8",
     "psutil>=5.9.0",
     "langchain-litellm==0.7.0",
-    "litellm>=1.100.0",
+    "litellm>=1.110.2",
     "langchain-community>=0.4.2",
     "langchain-mcp-adapters==0.3.0",
     "mcp>=1.27,<2",
