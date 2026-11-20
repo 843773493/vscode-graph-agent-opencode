@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -52,12 +54,36 @@ def v10_catalog(store, capture, captured_point, external_catalog_connection, req
     if state in {"materialized", "aborted"}:
         store.finish_fork_source_capture(capture.copy_operation_id, state=state)
     capture = store.get_fork_source_capture(copy_operation_id=capture.copy_operation_id)
-    path = store.database_path
+    current_path = store.database_path
     store.close()
-    # 旧结构只在迁移测试装具中重建；执行/fork 的关键状态由产品验收另行生成。
+    path = current_path.with_name("v10.sqlite")
+    # 结构来自固定旧源码；当前 owner 只为字段转换测试提供合法行，不冒充旧版历史执行。
+    with closing(external_catalog_connection(current_path)) as current:
+        current.row_factory = sqlite3.Row
+        tables = [row[0] for row in current.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        )]
+        rows = {table: [dict(row) for row in current.execute(f"SELECT * FROM {table}")] for table in tables}
     with closing(external_catalog_connection(path)) as connection:
-        connection.execute("ALTER TABLE fork_source_captures DROP COLUMN source_point_json")
-        connection.execute("PRAGMA user_version=10")
+        # 固定旧产品的 catalog 也以 WAL 运行。
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        fixtures = Path.cwd() / "tests/unit/core/session_catalog_store"
+        connection.executescript((fixtures / "schema_v10.sql").read_text(encoding="utf-8"))
+        # 原 owner 用 execute 保留索引 SQL 的末尾换行；不能用脚本分句改写 sqlite_master。
+        for asset in ("schema_v10_queue_index.sql", "schema_v10_pending_index.sql"):
+            connection.execute((fixtures / asset).read_text(encoding="utf-8"))
+        # 旧 nodes 触发器要求先有导航 revision 单例。
+        for table in ("catalog_metadata", *(table for table in tables if table != "catalog_metadata")):
+            records = rows[table]
+            for record in records:
+                if table == "nodes":
+                    assert record.pop("current_model_json") is None
+                    record["current_provider_id"] = "v10-provider" if record["kind"] == "session" else None
+                if table == "fork_source_captures":
+                    record.pop("source_point_json")
+                columns = ",".join(record)
+                parameters = ",".join("?" for _ in record)
+                connection.execute(f"INSERT INTO {table} ({columns}) VALUES ({parameters})", tuple(record.values()))
         connection.commit()
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     return path, capture, state
@@ -68,6 +94,10 @@ def test_explicit_v10_conversion_preserves_source_and_frozen_requests(v10_catalo
     path, original, state = v10_catalog
     before = path.read_bytes()
     destination = path.with_name("converted.sqlite")
+    with closing(external_catalog_connection(path)) as source:
+        source_nodes = source.execute("SELECT * FROM nodes ORDER BY node_id").fetchall()
+        assert "current_provider_id" in {row[1] for row in source.execute("PRAGMA table_info(nodes)")}
+        assert "current_model_json" not in {row[1] for row in source.execute("PRAGMA table_info(nodes)")}
     with pytest.raises(CatalogMaintenanceRequiredError, match="拒绝自动迁移"):
         SessionCatalogStore(path, sessions_root)
     migration.convert_catalog_v10(path, destination)
@@ -87,6 +117,8 @@ def test_explicit_v10_conversion_preserves_source_and_frozen_requests(v10_catalo
             ),
         )
         assert converted.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert converted.execute("SELECT * FROM nodes ORDER BY node_id").fetchall() == source_nodes
+        assert "current_model_json" not in {row[1] for row in converted.execute("PRAGMA table_info(nodes)")}
 
 
 def test_v10_conversion_failure_after_sql_preserves_original_and_removes_only_own_output(v10_catalog, monkeypatch):
@@ -110,6 +142,38 @@ def test_v10_conversion_failure_after_sql_preserves_original_and_removes_only_ow
     with pytest.raises(FileExistsError):
         migration.convert_catalog_v10(path, destination)
     assert destination.read_bytes() == b"existing-output"
+
+
+def test_v10_conversion_rejects_current_model_schema_with_old_version_label(
+    store, capture, external_catalog_connection,
+):
+    path = store.database_path
+    store.close()
+    with closing(external_catalog_connection(path)) as connection:
+        connection.execute("PRAGMA user_version=10")
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    before = path.read_bytes()
+    destination = path.with_name("wrong-version.sqlite")
+    with pytest.raises(CatalogMaintenanceRequiredError, match="缺少权威会话字段"):
+        migration.convert_catalog_v10(path, destination)
+    assert path.read_bytes() == before and not destination.exists()
+
+
+def test_v10_conversion_rejects_revision_trigger_from_another_version(v10_catalog, external_catalog_connection):
+    path, _, _ = v10_catalog
+    with closing(external_catalog_connection(path)) as connection:
+        connection.execute("DROP TRIGGER nodes_navigation_revision_update")
+        connection.execute(migration.load_sql(
+            "app.core.session_catalog_store", "migrations/nodes_navigation_revision_update.sql",
+        ))
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    before = path.read_bytes()
+    destination = path.with_name("wrong-trigger.sqlite")
+    with pytest.raises(CatalogMaintenanceRequiredError, match="缺少导航 revision triggers 或定义不符"):
+        migration.convert_catalog_v10(path, destination)
+    assert path.read_bytes() == before and not destination.exists()
 
 
 @pytest.mark.parametrize("v10_catalog", ["source_captured", "materialized"], indirect=True)

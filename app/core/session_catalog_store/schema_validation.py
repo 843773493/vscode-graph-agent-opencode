@@ -1,4 +1,4 @@
-"""catalog启动与只读备份共用的当前物理schema闸门，不建表或修复数据。"""
+"""catalog 启动、只读备份与显式版本转换共用的物理 schema 闸门，不修复数据。"""
 
 from __future__ import annotations
 
@@ -16,12 +16,13 @@ from app.core.session_catalog_store._schema import (
 )
 from app.core.session_catalog_store.contracts import CatalogMaintenanceRequiredError
 from app.core.session_catalog_store.diagnostics import catalog_failure
+from app.core.sqlite_state import load_sql
 
 
 def require_catalog_schema(
     connection: sqlite3.Connection, *, database_path: Path, current: int, database_label: str,
 ) -> None:
-    """校验当前 schema 的必需表确实存在；缺表说明库被外部改写。
+    """校验登记版本的必需结构；缺表说明库被外部改写。
 
     绝不允许用 ``CREATE TABLE IF NOT EXISTS`` 把权威表当空表重建：
     ``nodes`` 一空，所有会话位置与父子关系即静默丢失。缺表一律响亮
@@ -59,8 +60,12 @@ def require_catalog_schema(
             "PRAGMA table_info(session_creation_records)"
         ).fetchall()
     }
+    # TODO：显式 v10→v11 转换退出支持范围后移除此旧字段合同；普通 Store 仍只接受当前版本。
+    model_column = "current_provider_id" if current in {10, 11} else "current_model_json"
+    other_model_column = "current_model_json" if current in {10, 11} else "current_provider_id"
     if (
-        not {"title_source", "session_kind", "current_agent_id", "current_model_json",
+        other_model_column in node_columns
+        or not {"title_source", "session_kind", "current_agent_id", model_column,
              "context_source_session_id", "generation_origin_json", "updated_at"}
         <= node_columns
         or not {"title_source", "purpose", "session_metadata_json", "request_intent_json",
@@ -121,7 +126,12 @@ def require_catalog_schema(
     try:
         canonical.execute(_NODES_TABLE_DDL)
         canonical.execute(_CATALOG_METADATA_TABLE_DDL)
-        for trigger_ddl in _NAVIGATION_REVISION_TRIGGER_DDLS:
+        for trigger_name, trigger_ddl in zip(
+            _REQUIRED_NAVIGATION_REVISION_TRIGGERS, _NAVIGATION_REVISION_TRIGGER_DDLS, strict=True,
+        ):
+            if current in {10, 11} and trigger_name == "nodes_navigation_revision_update":
+                # 同一旧列也属于 revision 触发器合同；不能拿 v12 定义校验旧库。
+                trigger_ddl = load_sql(__package__, "migrations/nodes_navigation_revision_update_v10_v11.sql")
             canonical.execute(trigger_ddl)
         for queue_ddl in _NAVIGATION_QUEUE_DDLS:
             canonical.execute(queue_ddl)
