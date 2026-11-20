@@ -1214,6 +1214,25 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["tool_id"],
+                "if": {"properties": {"tool_id": {"const": "fetch_webpage"}}},
+                "then": {
+                  "properties": {
+                    "options": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "embedding": {
+                          "type": ["object", "null"],
+                          "additionalProperties": false,
+                          "required": ["model_ref"],
+                          "properties": {
+                            "model_ref": {"$ref": "#/$defs/modelReference"},
+                            "model": {"type": ["string", "null"], "minLength": 1}
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
                 "properties": {
                   "tool_id": {
                     "type": "string",

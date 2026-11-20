@@ -46,6 +46,19 @@ def migrate_workspace_models(payload: dict[str, object]) -> None:
     if not isinstance(agents, dict):
         return
     for agent_id, agent in agents.items():
+        tools = agent.get("tools") if isinstance(agent, dict) else None
+        custom = tools.get("custom", []) if isinstance(tools, dict) else []
+        for tool in custom:
+            if not isinstance(tool, dict) or tool.get("tool_id") != "fetch_webpage":
+                continue
+            options = tool.get("options")
+            embedding = options.get("embedding") if isinstance(options, dict) else None
+            if not isinstance(embedding, dict) or "provider_id" not in embedding:
+                continue
+            provider_id = embedding["provider_id"]
+            if "model_ref" in embedding or not isinstance(provider_id, str) or not provider_id:
+                raise ValueError(f"Agent 网页工具嵌入模型引用无效或混用新旧结构: {agent_id}")
+            embedding["model_ref"] = {"provider_id": embedding.pop("provider_id"), "model_id": "default"}
         model = agent.get("model") if isinstance(agent, dict) else None
         if not isinstance(model, dict):
             continue

@@ -249,6 +249,10 @@ def _read_database(
             unsettled.append({"source": str(path), "kind": "claim", "id": apply_id[0], "state": "claimed"})
         recovery = plan_stopped_config_recovery(connection, domain)
         recoveries = [{"source": str(path), **action} for action in recovery.actions]
+        discarded = {action["id"] for action in recovery.actions
+                     if action["kind"] == "candidate" and action["state"] == "discarded"}
+        # 已被较新 active 替代的候选仅结算归档，原文不再作为待生效配置校验或转换。
+        inputs = [item for item in inputs if item.kind != "pending" or item.key not in discarded]
         if not recovery.blockers:
             unsettled = []
         else:

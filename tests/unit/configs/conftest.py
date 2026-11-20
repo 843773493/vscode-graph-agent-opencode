@@ -33,7 +33,10 @@ def legacy_model_configuration() -> dict[str, object]:
             ("backup_1", "backup-model", "secret:sec_0123456789abcdef0123456789abcdef"),
             ("backup_2", "second-backup", "${SECOND_MODEL_KEY}"),
         )]},
-        "agents": {"default": {"model": {
+        "agents": {"default": {"tools": {"custom": [{
+            "tool_id": "fetch_webpage",
+            "options": {"embedding": {"provider_id": "backup_2", "model": "openai/text-embedding-3-small"}},
+        }]}, "model": {
             "primary_provider": "primary", "fallback_providers": ["backup_2", "backup_1"], "temperature": 0.2,
         }}},
     }

@@ -443,6 +443,51 @@ def _legacy_payload() -> dict[str, object]:
     return {**payload, "config_version": 1, "logger": {"level": "info", "pretty": True}}
 
 
+def test_workspace_config_rejects_old_web_embedding_before_execution() -> None:
+    from configs.runtime import validate_config_payload
+
+    payload = read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
+    schema = read_jsonc_object(Path.cwd() / "configs/workspace_schema.jsonc")
+    validate_config_payload(payload, schema=schema)
+    tool = next(tool for tool in payload["agents"]["default"]["tools"]["custom"]
+                if tool["tool_id"] == "fetch_webpage")
+    embedding = tool["options"]["embedding"]
+    embedding["provider_id"] = embedding.pop("model_ref")["provider_id"]
+    with pytest.raises(ValueError, match="配置验证失败"):
+        validate_config_payload(payload, schema=schema)
+
+
+def test_superseded_candidate_keeps_original_without_blocking_startup(
+    migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
+) -> None:
+    original = {"config_version": 3, "agents": {"default": {"tools": {"custom": [{
+        "tool_id": "fetch_webpage", "options": {"embedding": {"provider_id": "backup_2"}},
+    }]}}}}
+    workspace_store.create_pending_config_candidate(
+        config_domain="workspace", candidate_id="superseded", idempotency_key="superseded",
+        payload=original, source_baseline={}, candidate_digest=config_revision(original),
+        effective_digest=config_revision(original), target_generation=None, fencing_token=None, state="candidate_validated",
+    )
+    current = read_jsonc_object(Path.cwd() / "configs/workspace_inline.jsonc")
+    workspace_store.ensure_active_config_snapshot(
+        config_domain="workspace", payload=current, source_baseline={}, source_generation=0,
+        layer_revisions={}, layer_digests={}, effective_digest=config_revision(current), secret_bindings={}, schema_version=3,
+    )
+    before = _database_dump(workspace_store.path)
+    plan = preview_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
+    assert not plan.unsettled
+    assert _database_dump(workspace_store.path) == before
+    workspace_store.close()
+    result = commit_runtime_logging_migration(boxteam_home=migration_home, workspaces=(migration_workspaces[0],))
+    assert result["state"] == "completed"
+    with closing(sqlite3.connect(workspace_store.path)) as connection:
+        state, content = connection.execute(
+            "SELECT state,payload_json FROM config_pending_candidate WHERE candidate_id='superseded'",
+        ).fetchone()
+    assert state == "discarded"
+    assert json.loads(content) == original
+
+
 @pytest.mark.parametrize("old_models", [False, True])
 def test_migration_preserves_active_business_state_and_source_cas(
     migration_home: Path, migration_workspaces: tuple[Path, Path], workspace_store: WorkspaceStateStore,
@@ -487,6 +532,12 @@ def test_migration_preserves_active_business_state_and_source_cas(
                 assert migrated.payload["llm"]["providers"][provider_id] == provider
             assert migrated.payload["agents"]["default"]["model"] == converted["agents"]["default"]["model"]
             assert "primary_provider" not in migrated.payload["agents"]["default"]["model"]
+            expected_tools = [{"tool_id": "fetch_webpage", "options": {"embedding": {
+                "model_ref": {"provider_id": "backup_2", "model_id": "default"},
+                "model": "openai/text-embedding-3-small",
+            }}}]
+            assert converted["agents"]["default"]["tools"]["custom"] == expected_tools
+            assert migrated.payload["agents"]["default"]["tools"]["custom"] == expected_tools
         else:
             assert migrated.payload == expected
         assert migrated.active_revision > original.active_revision
