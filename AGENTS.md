@@ -273,7 +273,7 @@
 3. 开发数据不匹配时明确报告；优先使用新的隔离 Home/测试工作区。清理或重建只适用于已确认可丢弃且属于本任务的数据，不自动覆盖用户数据、身份、凭据或授权账本。
 4. 缺少可核验 release 基线时，继续当前功能实现并报告缺口，不根据开发残留推测旧版契约。也不得因此直接删除既有迁移；移除前先核对两个 release 提交中的调用方、持久化契约和历史迁移依赖。
 5. 两个 release 提交限定默认支持评估范围，不等于配置版本号只允许相邻或可随意截断 SQLite 历史。保留从支持基线到目标的必要链路；未知版本明确拒绝，需要更旧版本支持时由用户明确授权。
-6. 配置迁移按配置域组织；SQLite 有序迁移放在各数据库 owner 的 `migrations/`，复用既有执行原语。日期用于实验与产物，不决定迁移顺序。已有结构 SQL 与离线维护保持 owner 归属；本次整理范围和发布基线登记见 [worktree 与发布迁移约定](docs/architecture/worktree-and-release-policy.md)。
+6. 配置迁移按配置域组织；SQLite 有序迁移放在各数据库 owner 的 `migrations/`，复用既有执行原语。日期用于实验与产物，不决定迁移顺序。已有结构 SQL 与离线维护保持 owner 归属；本次整理范围和发布基线登记见 [worktree 与发布迁移约定](docs/architecture/worktree-and-release-policy.md)。设计、实现或审查版本升级与迁移恢复时，使用 [版本升级与迁移约定技能](.codex/skills/version-upgrade-conventions/SKILL.md)。
 
 ## 代理协作
 
